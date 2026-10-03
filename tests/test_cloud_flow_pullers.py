@@ -641,3 +641,47 @@ def test_sanitize_cloud_flow_sync_config():
     cfg = state._sanitize_cloud_flow_sync_config({"interval_seconds": 9999, "lookback_minutes": 9999})
     assert cfg["interval_seconds"] == 3600  # max
     assert cfg["lookback_minutes"] == 1440  # max
+
+
+@pytest.mark.asyncio
+async def test_aws_puller_all_regions_skips_regions_without_the_log_group(tmp_path, monkeypatch):
+    await _init(tmp_path, monkeypatch)
+    account = await db_module.create_cloud_account(
+        provider="aws",
+        name="AWS All Regions",
+        auth_config_json={"log_group_name": "/aws/vpc/flow-logs"},
+        region_scope="all",
+    )
+
+    class _ClientError(Exception):
+        response = {"Error": {"Code": "ResourceNotFoundException"}}
+
+    session = MagicMock()
+    session.client.side_effect = lambda service, region_name=None, config=None: region_name
+
+    async def _mock_cw_query(client, log_group, start, end):
+        if client != "us-east-1":
+            raise _ClientError()
+        return [], False
+
+    monkeypatch.setattr(pullers_mod, "_cw_insights_query", _mock_cw_query)
+    monkeypatch.setattr(pullers_mod, "_aws_enabled_regions", lambda session, config=None: ["eu-west-1", "us-east-1"])
+    fake_botocore_exc = type("module", (), {"BotoCoreError": _ClientError, "ClientError": _ClientError})()
+    monkeypatch.setitem(sys.modules, "boto3", MagicMock())
+    monkeypatch.setitem(sys.modules, "botocore", MagicMock())
+    monkeypatch.setitem(sys.modules, "botocore.exceptions", fake_botocore_exc)
+    monkeypatch.setitem(sys.modules, "botocore.config", type("module", (), {"Config": MagicMock()})())
+    monkeypatch.setattr(pullers_mod, "_build_boto3_session", lambda auth: session)
+
+    result = await pullers_mod.pull_aws_flow_logs(account)
+    assert result["ok"] is True
+    assert result["regions"] == ["us-east-1"]
+
+    # The log group in no region at all is an error, not a silent success.
+    async def _missing_everywhere(client, log_group, start, end):
+        raise _ClientError()
+
+    monkeypatch.setattr(pullers_mod, "_cw_insights_query", _missing_everywhere)
+    result = await pullers_mod.pull_aws_flow_logs(account)
+    assert result["ok"] is False
+    assert result["errors"] == ["AWS flow log group was not found in any region"]

@@ -16,11 +16,14 @@ accounts discovered by Cloud Visibility join the map as well; see
 
 ## Quick start
 
-1. Open **Network → Topology** and click **Meraki / Cato** in the toolbar.
-2. **Preview without a key.** Click **Load Meraki Sample**. A demo
+1. Open **Network → Topology** and click **Sources** in the toolbar. The
+   dialog lists everything that feeds the map (neighbor discovery of the
+   inventory, Meraki organizations, Cato accounts, AWS accounts) with its last
+   collection; **Collect All** refreshes every source in one click.
+2. **Preview without a key.** Click **Load Sample**, then **Meraki**. A demo
    organization is added to the map so you can see the result before
    connecting anything. Delete it from the same dialog when you are done.
-3. **Add your organization.** Click **Add Meraki Organization** and enter a name and
+3. **Add your organization.** Click **Add Source**, then **Meraki Organization**, and enter a name and
    a Meraki Dashboard API key. Leave *Organization ID* blank if the key can see
    only one organization; otherwise click **Test Key** afterwards to list the
    organization IDs the key can see, and enter the one you want.

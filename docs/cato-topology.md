@@ -18,10 +18,10 @@ different.
 
 ## Quick start
 
-1. Open **Network → Topology** and click **Meraki / Cato** in the toolbar.
-2. **Preview without a key.** Click **Load Cato Sample**. A demo account is
-   added to the map. Delete it from the same dialog when you are done.
-3. **Add your account.** Click **Add Cato Account** and enter a name, the
+1. Open **Network → Topology** and click **Sources** in the toolbar.
+2. **Preview without a key.** Click **Load Sample**, then **Cato**. A demo
+   account is added to the map. Delete it from the same dialog when you are done.
+3. **Add your account.** Click **Add Source**, then **Cato Account**, and enter a name, the
    account ID and an API key.
 4. **Check the key.** Click **Test Key**. It runs one small query against the
    account and reports what Cato answered.

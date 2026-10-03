@@ -19,6 +19,7 @@ from typing import Any
 
 import routes.database as db
 
+from netcontrol.routes.cloud_collectors import _aws_enabled_regions, _is_all_regions
 from netcontrol.routes.cloud_visibility import (
     _FLOW_TYPE_BY_PROVIDER,
     _build_flow_rows_for_ingest,
@@ -156,7 +157,11 @@ async def pull_aws_flow_logs(account: dict, *, lookback_minutes: int = _DEFAULT_
 
     # Session build may call sts.assume_role (blocking network I/O)
     session = await asyncio.to_thread(_build_boto3_session, auth)
-    regions = _parse_regions(account)
+    try:
+        regions = await asyncio.to_thread(_resolve_regions, account, session)
+    except Exception:
+        LOGGER.warning("cloud account %s: failed to list AWS regions", account_id, exc_info=True)
+        return {"ok": False, "error": "region_list_failed", "ingested": 0}
     cursor = await _get_cursor(account_id)
     extra = _parse_cursor_extra(cursor)
     regions_set = set(regions)
@@ -168,6 +173,9 @@ async def pull_aws_flow_logs(account: dict, *, lookback_minutes: int = _DEFAULT_
     total_ingested = 0
     errors: list[str] = []
     warnings: list[str] = []
+    # With every region in scope, most of them have no such log group.
+    all_regions = _is_all_regions(account.get("region_scope"))
+    without_log_group: list[str] = []
 
     for region in regions:
         # Each region keeps its own watermark so a failure in one region
@@ -198,6 +206,9 @@ async def pull_aws_flow_logs(account: dict, *, lookback_minutes: int = _DEFAULT_
                     total_ingested += await db.create_flow_records_batch(rows)
             region_marks[region] = region_end.isoformat()
         except (BotoCoreError, ClientError) as exc:
+            if all_regions and _aws_error_code(exc) == "ResourceNotFoundException":
+                without_log_group.append(region)
+                continue
             msg = f"AWS flow pull failed region={region}: {type(exc).__name__}"
             LOGGER.warning(msg)
             errors.append(msg)
@@ -205,6 +216,9 @@ async def pull_aws_flow_logs(account: dict, *, lookback_minutes: int = _DEFAULT_
             msg = f"AWS flow pull unexpected error region={region}: {type(exc).__name__}"
             LOGGER.warning(msg, exc_info=True)
             errors.append(msg)
+
+    if without_log_group and len(without_log_group) == len(regions):
+        errors.append("AWS flow log group was not found in any region")
 
     # Failed regions keep their old watermark (or the global one) so the
     # missed window is retried next cycle instead of silently skipped.
@@ -223,10 +237,16 @@ async def pull_aws_flow_logs(account: dict, *, lookback_minutes: int = _DEFAULT_
         "ok": not errors,
         "partial": bool(errors) and total_ingested > 0,
         "ingested": total_ingested,
-        "regions": regions,
+        "regions": [r for r in regions if r not in without_log_group],
         "errors": errors,
         "warnings": warnings,
     }
+
+
+def _aws_error_code(exc: Exception) -> str:
+    response = getattr(exc, "response", None)
+    error = response.get("Error") if isinstance(response, dict) else None
+    return str(error.get("Code") or "") if isinstance(error, dict) else ""
 
 
 def _build_boto3_session(auth: dict):
@@ -363,7 +383,7 @@ def _parse_insights_timestamp(value) -> datetime | None:
     if text.isdigit():
         try:
             return datetime.fromtimestamp(int(text), tz=UTC)
-        except (ValueError, OSError, OverflowError):
+        except ValueError, OSError, OverflowError:
             return None
     try:
         parsed = datetime.fromisoformat(text)
@@ -485,7 +505,7 @@ def _azure_tuple_epoch(flow_tuple) -> int | None:
     """Epoch seconds from an NSG flow tuple (first comma-separated field)."""
     try:
         return int(str(flow_tuple).split(",", 1)[0])
-    except (ValueError, IndexError):
+    except ValueError, IndexError:
         return None
 
 
@@ -520,7 +540,7 @@ def _read_azure_blobs(container_client, start: datetime, end: datetime) -> tuple
         blob_data = container_client.download_blob(blob_props.name).readall()
         try:
             parsed = json.loads(blob_data)
-        except (json.JSONDecodeError, UnicodeDecodeError):
+        except json.JSONDecodeError, UnicodeDecodeError:
             continue
 
         # NSG flow log JSON structure: { records: [ { properties: { flows: [...] } } ] }
@@ -796,3 +816,10 @@ def _parse_regions(account: dict) -> list[str]:
         )
         return ["us-east-1"]
     return [r.strip() for r in raw.split(",") if r.strip()]
+
+
+def _resolve_regions(account: dict, session) -> list[str]:
+    """The regions to pull: the listed ones, or every enabled region for a scope of ``all``."""
+    if _is_all_regions(account.get("region_scope")):
+        return _aws_enabled_regions(session, _boto3_client_config())
+    return _parse_regions(account)

@@ -15,6 +15,8 @@ what feeds and surrounds that merge:
   - Stored snapshots: list / fetch JSON / delete, and an in-memory cache of
     the latest one per organization
   - Per-node Meraki detail sections and whole-map deep search
+  - The list of everything that feeds the map (``/api/topology/sources``):
+    neighbor discovery, organizations and accounts, with their last collection
   - Self-contained interactive HTML export of the whole topology
 
 Registered under the ``topology`` feature: reads need ``topology``, builds
@@ -685,6 +687,119 @@ async def delete_meraki_snapshot_api(snapshot_id: int, request: Request):
         correlation_id=_corr_id(request),
     )
     return {"ok": True}
+
+
+# ── Map sources ──────────────────────────────────────────────────────────────
+
+SOURCE_NEIGHBORS = "neighbors"
+
+
+def _count_text(count: object, noun: str) -> str:
+    number = int(count or 0)
+    return f"{number} {noun}" if number == 1 else f"{number} {noun}s"
+
+
+def _utc_iso(stamp: object) -> str | None:
+    """A stored timestamp as ISO 8601; the database default has no zone."""
+    text = str(stamp or "").strip()
+    if not text:
+        return None
+    if "T" not in text:
+        text = text.replace(" ", "T")
+    return text if text.endswith("Z") or "+" in text[10:] or "-" in text[10:] else f"{text}+00:00"
+
+
+def _source(key: str, kind: str, name: str, **fields: Any) -> dict[str, Any]:
+    return {
+        "key": key,
+        "type": kind,
+        "id": None,
+        "name": name,
+        "status": "never",
+        "last_collected_at": None,
+        "message": "",
+        "detail": "",
+        "warning_count": 0,
+        "collecting": False,
+        "can_collect": True,
+        "enabled": True,
+        "demo": False,
+        **fields,
+    }
+
+
+def _neighbor_source(stats: dict) -> dict[str, Any]:
+    links, hosts = stats["links"], stats["hosts"]
+    return _source(
+        SOURCE_NEIGHBORS,
+        SOURCE_NEIGHBORS,
+        "Inventory devices (CDP / LLDP neighbors)",
+        status="success" if links else "never",
+        last_collected_at=_utc_iso(stats["last_discovered_at"]),
+        detail=(
+            f"{_count_text(links, 'link')} from {stats['hosts_with_links']} of {_count_text(hosts, 'device')}"
+            if links
+            else f"{_count_text(hosts, 'device')} in inventory"
+        ),
+        can_collect=hosts > 0,
+    )
+
+
+def _org_source(org: dict, newest: dict | None) -> dict[str, Any]:
+    provider = _provider_of(org)
+    summary = (newest or {}).get("summary") or {}
+    return _source(
+        f"org:{org['id']}",
+        provider,
+        org["name"],
+        id=org["id"],
+        status=str(org.get("last_build_status") or "never"),
+        last_collected_at=org.get("last_build_at"),
+        message=str(org.get("last_build_message") or ""),
+        detail=(
+            f"{_count_text(summary.get('sites'), 'site')}, {_count_text(summary.get('devices'), 'device')}"
+            if newest
+            else ""
+        ),
+        warning_count=int((newest or {}).get("warning_count") or 0),
+        collecting=org["id"] in _running_builds,
+        can_collect=bool(org.get("has_api_key")),
+        demo=org["name"] in (SAMPLE_ORG_NAME, SAMPLE_CATO_NAME) and not org.get("has_api_key"),
+    )
+
+
+def _aws_source(account: dict) -> dict[str, Any]:
+    status = str(account.get("last_sync_status") or "never")
+    demo = account.get("auth_type") == SAMPLE_AWS_AUTH_TYPE
+    resources = int(account.get("resource_count") or 0)
+    return _source(
+        f"aws:{account['id']}",
+        PROVIDER_AWS,
+        str(account.get("name") or ""),
+        id=account["id"],
+        status="failed" if status == "error" else status,
+        last_collected_at=_utc_iso(account.get("last_sync_at")),
+        message=str(account.get("last_sync_message") or "") if status == "error" else "",
+        detail=_count_text(resources, "resource") if resources else "",
+        # The demo account has nothing to discover; its data is reloaded as a sample.
+        can_collect=not demo,
+        enabled=bool(account.get("enabled")),
+        demo=demo,
+    )
+
+
+@router.get("/api/topology/sources")
+async def list_topology_sources_api():
+    """Everything that feeds the topology map, with its last collection:
+    neighbor discovery of the inventory, Meraki organizations, Cato accounts
+    and the AWS accounts of Cloud Visibility. Credentials are never included."""
+    newest: dict[int, dict] = {}
+    for snapshot in await db.list_meraki_snapshots(limit=500):
+        newest.setdefault(snapshot["org_ref"], snapshot)  # newest first
+    sources = [_neighbor_source(await db.get_topology_link_stats())]
+    sources.extend(_org_source(org, newest.get(org["id"])) for org in await db.list_meraki_orgs())
+    sources.extend(_aws_source(account) for account in await db.list_cloud_accounts(provider=PROVIDER_AWS))
+    return {"sources": sources}
 
 
 # ── Node details and whole-map search ────────────────────────────────────────

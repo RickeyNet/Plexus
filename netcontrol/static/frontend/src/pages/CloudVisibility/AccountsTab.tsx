@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router';
 
 import {
   type CloudAccount,
@@ -11,15 +12,14 @@ import {
   useValidateCloudAccount,
 } from '@/api/cloud';
 import { Modal } from '@/components/Modal';
-import { authHintContent, formatTimestamp, providerLabel } from './helpers';
+import { ALL_REGIONS, type AuthField, authMethod, buildAuthConfig, isAllRegions, providerForm } from './accountForm';
+import { formatTimestamp, providerLabel } from './helpers';
 
 interface Props {
   accounts: CloudAccount[];
   providerOptions: string[];
   isLoading: boolean;
 }
-
-const AUTH_TYPES = ['manual', 'api_keys', 'assume_role', 'service_principal', 'workload_identity'];
 
 export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
   const [modalAccount, setModalAccount] = useState<CloudAccount | null | undefined>(undefined);
@@ -168,10 +168,19 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
                 };
                 return (
                   <tr key={a.id}>
-                    <td>{a.name}</td>
+                    <td>
+                      {a.name}
+                      {a.provider === 'aws' && Boolean(a.enabled) && (a.resource_count ?? 0) > 0 && (
+                        <small style={{ display: 'block' }}>
+                          <Link to="/topology" title="This account's VPCs, gateways and VPNs are on the Topology map">
+                            Shown on Topology map
+                          </Link>
+                        </small>
+                      )}
+                    </td>
                     <td>{providerLabel(a.provider)}</td>
                     <td>{a.account_identifier ?? '-'}</td>
-                    <td>{a.region_scope ?? '-'}</td>
+                    <td>{isAllRegions(a.region_scope) ? 'All regions' : (a.region_scope ?? '-')}</td>
                     <td>
                       <span className={`badge badge-${a.enabled ? 'success' : 'secondary'}`}>
                         {a.enabled ? 'enabled' : 'disabled'}
@@ -308,71 +317,58 @@ function AccountFormModal({ account, providerOptions, onClose, onSaved }: FormPr
   const [provider, setProvider] = useState(String(account?.provider ?? providerOptions[0] ?? '').toLowerCase());
   const [name, setName] = useState(account?.name ?? '');
   const [accountIdentifier, setAccountIdentifier] = useState(account?.account_identifier ?? '');
-  const [regionScope, setRegionScope] = useState(account?.region_scope ?? '');
-  const [authType, setAuthType] = useState(account?.auth_type ?? 'manual');
-  // The API never returns the stored auth_config (write-only credentials),
-  // so on edit this always starts blank; blank means "keep stored config".
-  const [authConfigText, setAuthConfigText] = useState('');
+  const [allRegions, setAllRegions] = useState(isAllRegions(account?.region_scope));
+  const [regionScope, setRegionScope] = useState(isAllRegions(account?.region_scope) ? '' : (account?.region_scope ?? ''));
+  // The API never returns the stored auth_config (write-only credentials), so
+  // an existing account keeps what is stored until a change is asked for, and
+  // a change replaces all of it.
+  const [replaceAuth, setReplaceAuth] = useState(!account?.id);
+  const [methodKey, setMethodKey] = useState('');
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [extraText, setExtraText] = useState('');
   const [notes, setNotes] = useState(account?.notes ?? '');
   const [enabled, setEnabled] = useState(account ? Boolean(account.enabled) : true);
   const [error, setError] = useState<string | null>(null);
 
-  const hint = authHintContent(provider);
-
-  const [prevProvider, setPrevProvider] = useState(provider);
-  const [prevName, setPrevName] = useState(name);
-  const [prevAccountIdentifier, setPrevAccountIdentifier] = useState(accountIdentifier);
-  const [prevAuthConfigText, setPrevAuthConfigText] = useState(authConfigText);
-  // Clear the error when any of the editable identity fields change.
-  if (
-    provider !== prevProvider ||
-    name !== prevName ||
-    accountIdentifier !== prevAccountIdentifier ||
-    authConfigText !== prevAuthConfigText
-  ) {
-    setPrevProvider(provider);
-    setPrevName(name);
-    setPrevAccountIdentifier(accountIdentifier);
-    setPrevAuthConfigText(authConfigText);
-    setError(null);
-  }
+  const form = providerForm(provider);
+  const method = authMethod(form, methodKey);
+  const setValue = (key: string, value: string) => setValues((current) => ({ ...current, [key]: value }));
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    setError(null);
     if (!name.trim()) {
       setError('Account name is required');
       return;
-    }
-    let authConfig: Record<string, unknown> | undefined;
-    const text = authConfigText.trim();
-    if (text) {
-      try {
-        authConfig = JSON.parse(text);
-      } catch {
-        setError('Invalid JSON in auth config');
-        return;
-      }
     }
     const payload = {
       provider,
       name: name.trim(),
       account_identifier: accountIdentifier.trim(),
-      region_scope: regionScope.trim(),
-      auth_type: authType || 'manual',
+      region_scope: allRegions && form.allRegionsHelp ? ALL_REGIONS : regionScope.trim(),
       notes: notes.trim(),
       enabled,
     };
+    let auth: { auth_type: string; auth_config: Record<string, unknown> } | null = null;
+    if (replaceAuth) {
+      const built = buildAuthConfig(form, method.key, values, accountIdentifier, extraText);
+      if (!('config' in built)) {
+        setError(built.error);
+        return;
+      }
+      auth = { auth_type: method.authType, auth_config: built.config };
+    }
     try {
       if (account?.id) {
-        // Omit auth_config when the field was left blank so stored
-        // credentials are kept (they are write-only and can't be re-shown).
-        await update.mutateAsync({
-          id: account.id,
-          data: authConfig ? { ...payload, auth_config: authConfig } : payload,
-        });
+        // Without a change the sign-in is left out, so what is stored is kept.
+        // An empty config has to be asked for explicitly to wipe the old one.
+        const data = auth
+          ? { ...payload, ...auth, clear_auth_config: Object.keys(auth.auth_config).length === 0 }
+          : payload;
+        await update.mutateAsync({ id: account.id, data });
         onSaved(`Cloud account "${payload.name}" updated`);
       } else {
-        await create.mutateAsync({ ...payload, auth_config: authConfig ?? {} });
+        await create.mutateAsync({ ...payload, auth_type: auth?.auth_type, auth_config: auth?.auth_config ?? {} });
         onSaved(`Cloud account "${payload.name}" created`);
       }
     } catch (err) {
@@ -393,59 +389,121 @@ function AccountFormModal({ account, providerOptions, onClose, onSaved }: FormPr
         </label>
         <label>
           Name
-          <input className="form-input" type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Prod AWS Core" required />
+          <input className="form-input" type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder={`Prod ${providerLabel(provider)}`} required />
         </label>
         <label>
-          Account / Subscription / Project
-          <input className="form-input" type="text" value={accountIdentifier} onChange={(e) => setAccountIdentifier(e.target.value)} placeholder="123456789012 / sub-id / project-id" />
+          {form.identifierLabel}
+          <input className="form-input" type="text" value={accountIdentifier} onChange={(e) => setAccountIdentifier(e.target.value)} placeholder={form.identifierPlaceholder} />
+          {form.identifierHelp && <small className="text-muted" style={{ display: 'block' }}>{form.identifierHelp}</small>}
         </label>
-        <label>
-          Region Scope
-          <input className="form-input" type="text" value={regionScope} onChange={(e) => setRegionScope(e.target.value)} placeholder="us-east-1,us-west-2" />
-        </label>
-        <label>
-          Auth Type
-          <select className="form-select" value={authType} onChange={(e) => setAuthType(e.target.value)}>
-            {AUTH_TYPES.map((t) => (
-              <option key={t} value={t}>{t}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Auth Config (JSON, stored encrypted and write-only)
-          <textarea
-            className="form-input"
-            rows={4}
-            value={authConfigText}
-            onChange={(e) => setAuthConfigText(e.target.value)}
-            placeholder={account?.id && account?.has_auth_config
-              ? 'Credentials are stored. Leave blank to keep them; paste a full config to replace.'
-              : '{"log_group_name":"/aws/vpc/flow-logs"}'}
-          />
-          {account?.id && (
-            <small className="text-muted">
-              {account?.has_auth_config
-                ? 'A credential config is stored for this account (never shown). Leave blank to keep it unchanged.'
-                : 'No credential config stored yet.'}
+        {form.regionHelp && (
+          <label>
+            Regions
+            <input
+              className="form-input"
+              type="text"
+              value={allRegions && form.allRegionsHelp ? '' : regionScope}
+              onChange={(e) => setRegionScope(e.target.value)}
+              placeholder={allRegions && form.allRegionsHelp ? 'All regions' : 'us-east-1, us-west-2'}
+              disabled={allRegions && Boolean(form.allRegionsHelp)}
+            />
+            <small className="text-muted" style={{ display: 'block' }}>
+              {allRegions && form.allRegionsHelp ? form.allRegionsHelp : form.regionHelp}
             </small>
-          )}
-        </label>
-        <div className="card" style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)' }}>
-          <div style={{ fontWeight: 600, marginBottom: '0.35rem' }}>Provider Sync Requirements</div>
-          {hint.discovery && (
-            <div className="text-muted" style={{ fontSize: '0.9em', marginBottom: '0.25rem' }}>{hint.discovery}</div>
-          )}
-          <div className="text-muted" style={{ fontSize: '0.9em', marginBottom: '0.25rem' }}>{hint.flow}</div>
-          <div className="text-muted" style={{ fontSize: '0.9em', marginBottom: '0.45rem' }}>{hint.traffic}</div>
-          {Object.keys(hint.example).length > 0 && (
-            <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: '0.82em' }}>
-              {JSON.stringify(hint.example, null, 2)}
-            </pre>
-          )}
-        </div>
+          </label>
+        )}
+        {form.regionHelp && form.allRegionsHelp && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <input type="checkbox" checked={allRegions} onChange={(e) => setAllRegions(e.target.checked)} />
+            All regions
+          </label>
+        )}
+
+        {!replaceAuth && (
+          <div className="card" style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)' }}>
+            <div style={{ fontWeight: 600, marginBottom: '0.35rem' }}>Sign-in and sync settings</div>
+            <div className="text-muted" style={{ fontSize: '0.9em', marginBottom: '0.5rem' }}>
+              {account?.has_auth_config
+                ? 'Stored encrypted and never shown. They stay as they are unless you change them.'
+                : 'Nothing is stored: Plexus signs in with the credentials of its own server.'}
+            </div>
+            <button type="button" className="btn btn-sm btn-secondary" onClick={() => setReplaceAuth(true)}>
+              Change sign-in and sync settings
+            </button>
+          </div>
+        )}
+
+        {replaceAuth && (
+          <>
+            <fieldset style={{ border: '1px solid var(--border)', borderRadius: 6, padding: '0.75rem', margin: 0, display: 'grid', gap: '0.6rem' }}>
+              <legend style={{ padding: '0 0.35rem', fontWeight: 600 }}>How Plexus signs in</legend>
+              {account?.id && (
+                <div className="text-muted" style={{ fontSize: '0.9em' }}>
+                  Saving replaces everything stored for this account, flow log and traffic settings included: fill in
+                  all that apply.{' '}
+                  <button type="button" className="btn btn-sm btn-secondary" onClick={() => setReplaceAuth(false)}>
+                    Keep what is stored
+                  </button>
+                </div>
+              )}
+              {form.methods.map((m) => (
+                <label key={m.key} style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
+                  <input
+                    type="radio"
+                    name="cloud-account-sign-in"
+                    checked={method.key === m.key}
+                    onChange={() => setMethodKey(m.key)}
+                    style={{ marginTop: '0.2rem' }}
+                  />
+                  <span>
+                    <span style={{ fontWeight: 600 }}>{m.label}</span>
+                    <small className="text-muted" style={{ display: 'block' }}>{m.help}</small>
+                  </span>
+                </label>
+              ))}
+              {method.fields.map((f) => (
+                <AuthFieldInput key={f.key} field={f} value={values[f.key] ?? ''} onChange={(v) => setValue(f.key, v)} />
+              ))}
+              {method.fields.length > 0 && (
+                <small className="text-muted">Stored encrypted and never shown again.</small>
+              )}
+            </fieldset>
+
+            {form.sections.length > 0 && (
+              <details>
+                <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Flow logs and traffic metrics (optional)</summary>
+                <div style={{ display: 'grid', gap: '0.6rem', marginTop: '0.6rem' }}>
+                  <small className="text-muted">Discovery and the Topology map need none of these.</small>
+                  {form.sections.map((section) => (
+                    <div key={section.title} style={{ display: 'grid', gap: '0.5rem' }}>
+                      <div>
+                        <div style={{ fontWeight: 600 }}>{section.title}</div>
+                        <small className="text-muted">{section.help}</small>
+                      </div>
+                      {section.fields.map((f) => (
+                        <AuthFieldInput key={f.key} field={f} value={values[f.key] ?? ''} onChange={(v) => setValue(f.key, v)} />
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+
+            <details>
+              <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Additional settings (JSON, rarely needed)</summary>
+              <label style={{ display: 'block', marginTop: '0.6rem' }}>
+                <small className="text-muted" style={{ display: 'block' }}>
+                  A JSON object of settings without a field above; it is saved on top of them.
+                </small>
+                <textarea className="form-input" rows={3} value={extraText} onChange={(e) => setExtraText(e.target.value)} placeholder='{"session_token": "..."}' />
+              </label>
+            </details>
+          </>
+        )}
+
         <label>
           Notes
-          <textarea className="form-input" rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional notes" />
+          <textarea className="form-input" rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional notes" />
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
@@ -460,5 +518,28 @@ function AccountFormModal({ account, providerOptions, onClose, onSaved }: FormPr
         </div>
       </form>
     </Modal>
+  );
+}
+
+function AuthFieldInput({ field, value, onChange }: { field: AuthField; value: string; onChange: (value: string) => void }) {
+  return (
+    <label>
+      {field.label}
+      {field.optional && <span className="text-muted"> (optional)</span>}
+      {field.json ? (
+        <textarea className="form-input" rows={4} value={value} onChange={(e) => onChange(e.target.value)} placeholder={field.placeholder} />
+      ) : (
+        <input
+          className="form-input"
+          type={field.secret ? 'password' : 'text'}
+          autoComplete={field.secret ? 'new-password' : 'off'}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={field.placeholder}
+        />
+      )}
+      {field.list && <small className="text-muted" style={{ display: 'block' }}>Separate several with commas.</small>}
+      {field.help && <small className="text-muted" style={{ display: 'block' }}>{field.help}</small>}
+    </label>
   );
 }

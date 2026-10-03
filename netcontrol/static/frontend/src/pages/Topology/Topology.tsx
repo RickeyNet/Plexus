@@ -55,8 +55,8 @@ import { crowdedGroups, tidyLabel, tidyTreeLayout, type XY } from './layout';
 import { EdgeDetails } from './EdgeDetails';
 import { AwsPathCheck } from './AwsPathCheck';
 import { MAX_PATH_ENDPOINTS, connectPicks, findSubnets, isAddressText, parseTraffic, pathSites, reachabilityQuery, subnetOptionLabel, type PathPick } from './paths';
-import { MerakiModal } from './MerakiModal';
 import { NodeDetails } from './NodeDetails';
+import { SourcesModal } from './SourcesModal';
 import { StpEventsModal } from './StpEventsModal';
 import {
   TopologySearchPanel,
@@ -134,7 +134,7 @@ export function Topology() {
   const [searchPanelOpen, setSearchPanelOpen] = useState(false);
   const [statusOverlay, setStatusOverlay] = useState(false);
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
-  const [merakiOpen, setMerakiOpen] = useState(false);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
   const [debouncedSearch, setDebouncedSearch] = useState('');
   // Search text behind the current highlight / open details pane, so the
   // Meraki tabs can mark the rows that matched.
@@ -1547,7 +1547,7 @@ export function Topology() {
       <PageHelp
         pageKey="topology"
         title="Interactive Network Map"
-        text="Visualize your network as an interactive graph. Drag nodes to rearrange, zoom in/out, and click devices to view details. Connections are discovered from device data (CDP/LLDP/OSPF/BGP) and, for Meraki organizations, Cato accounts and AWS accounts, from their APIs. Search finds devices by name or address and Meraki devices by anything collected for them - VLANs, subnets, routes, VPN peers, firewall rules. Export HTML saves the whole map as one shareable interactive file."
+        text="Visualize your network as an interactive graph. Drag nodes to rearrange, zoom in/out, and click devices to view details. Connections are discovered from device data (CDP/LLDP/OSPF/BGP) and, for Meraki organizations, Cato accounts and AWS accounts, from their APIs. Search finds devices by name or address and Meraki devices by anything collected for them - VLANs, subnets, routes, VPN peers, firewall rules. Sources lists everything that feeds the map and collects it again. Export HTML saves the whole map as one shareable interactive file."
       />
 
       {actionMsg && (
@@ -1650,8 +1650,7 @@ export function Topology() {
           )}
         </div>
 
-        <button className="btn btn-primary btn-sm" onClick={() => setDiscoveryOpen(true)}>Discover Neighbors</button>
-        <button className="btn btn-secondary btn-sm" onClick={() => setMerakiOpen(true)} title="Meraki organizations and Cato accounts: add, collect, history. AWS accounts are added under Cloud Visibility.">Meraki / Cato</button>
+        <button className="btn btn-primary btn-sm" onClick={() => setSourcesOpen(true)} title="Everything that feeds the map - neighbor discovery, Meraki, Cato, AWS: add, collect, history">Sources</button>
         <button className="btn btn-secondary btn-sm" onClick={handleRefresh}>Refresh</button>
         <button className="btn btn-secondary btn-sm" onClick={handleFit}>Fit</button>
         <button className={`btn btn-sm ${pathMode ? 'btn-primary' : 'btn-secondary'}`} onClick={togglePathMode} title="Pick devices or sites and see how they reach one another">{pathMode ? 'Exit Path' : 'Path Mode'}</button>
@@ -1863,7 +1862,8 @@ export function Topology() {
 
       {data && !data.nodes.length && (
         <div className="card" style={{ padding: '1.5rem', textAlign: 'center' }}>
-          <p className="text-muted" style={{ margin: 0 }}>No topology data. Run discovery to populate links, add a Meraki organization or Cato account with the Meraki / Cato button, or discover an AWS account under Cloud Visibility.</p>
+          <p className="text-muted" style={{ marginTop: 0 }}>No topology data. Open Sources to discover the neighbors of your inventory devices, or to add a Meraki organization, a Cato account or an AWS account.</p>
+          <button className="btn btn-primary btn-sm" onClick={() => setSourcesOpen(true)}>Sources</button>
         </div>
       )}
 
@@ -2011,9 +2011,14 @@ export function Topology() {
         onClose={() => setDiscoveryOpen(false)}
         onComplete={() => {
           qc.invalidateQueries({ queryKey: ['topology'] });
+          qc.invalidateQueries({ queryKey: ['meraki', 'sources'] });
         }}
       />
-      <MerakiModal isOpen={merakiOpen} onClose={() => setMerakiOpen(false)} />
+      <SourcesModal
+        isOpen={sourcesOpen}
+        onClose={() => setSourcesOpen(false)}
+        onDiscoverNeighbors={() => setDiscoveryOpen(true)}
+      />
       <ChangesModal
         isOpen={changesOpen}
         onClose={() => setChangesOpen(false)}
