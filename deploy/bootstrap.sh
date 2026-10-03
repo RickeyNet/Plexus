@@ -191,9 +191,11 @@ cat <<EOF
   Plexus is up.
 
   Browse to:  https://${IP}
-  Login:      admin / <one-time password printed to the app log on first boot>
-              Retrieve it with:  docker compose logs plexus | grep -A3 'default admin'
+  Login:      admin / netcontrol
               You will be forced to change it at first login.
+              (Initial password comes from PLEXUS_INITIAL_ADMIN_PASSWORD in .env;
+              if that line was removed, the random one is in the app log:
+              docker compose logs plexus | grep -A3 'default admin')
 
   Useful commands (run as ${TARGET_USER}). Your current shell does not yet
   have the docker group - log out and back in first, or prefix with sudo:
