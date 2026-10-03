@@ -61,6 +61,20 @@ def _parse_region_scope(region_scope: str | None) -> list[str]:
     return [r.strip() for r in raw.split(",") if r.strip()]
 
 
+def _is_all_regions(region_scope: str | None) -> bool:
+    """A region scope of ``all`` (or ``*``) reads every region enabled for the account."""
+    return str(region_scope or "").strip().lower() in {"all", "*"}
+
+
+def _aws_enabled_regions(session, config=None) -> list[str]:
+    """The regions enabled for the account of ``session`` (``ec2:DescribeRegions``)."""
+    home = getattr(session, "region_name", None)
+    ec2 = session.client("ec2", region_name=home if isinstance(home, str) and home else "us-east-1", config=config)
+    # Without AllRegions only the regions the account can use are returned.
+    listed = ec2.describe_regions().get("Regions") or []
+    return sorted({str(r.get("RegionName") or "").strip() for r in listed} - {""})
+
+
 def _normalize_resource(
     provider: str,
     resource_uid: str,
@@ -571,10 +585,6 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
         except Exception as exc:
             raise CloudCollectorAuthError("Failed to assume AWS IAM role") from exc
 
-    regions = _parse_region_scope(str(account.get("region_scope") or ""))
-    if not regions:
-        regions = ["us-east-1"]
-
     # Validate credentials early.
     try:
         session.client("sts", config=_cfg).get_caller_identity()
@@ -582,6 +592,17 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
         raise CloudCollectorAuthError("AWS credentials are invalid or unauthorized") from exc
     except Exception as exc:
         raise CloudCollectorExecutionError("Failed to validate AWS credentials") from exc
+
+    region_scope = str(account.get("region_scope") or "")
+    if _is_all_regions(region_scope):
+        try:
+            regions = _aws_enabled_regions(session, _cfg)
+        except Exception as exc:
+            raise CloudCollectorExecutionError("Failed to list the AWS regions (ec2:DescribeRegions)") from exc
+        if not regions:
+            raise CloudCollectorExecutionError("AWS returned no enabled regions")
+    else:
+        regions = _parse_region_scope(region_scope) or ["us-east-1"]
 
     resources: list[dict] = []
     connections: list[dict] = []

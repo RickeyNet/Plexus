@@ -75,3 +75,30 @@ def test_metric_direction_helpers_exported():
     # The collectors module must keep raising typed errors for dispatch
     assert issubclass(collectors_mod.CloudCollectorAuthError, collectors_mod.CloudCollectorError)
     assert issubclass(collectors_mod.CloudCollectorExecutionError, collectors_mod.CloudCollectorError)
+
+
+class _RegionEc2:
+    def describe_regions(self):
+        return {"Regions": [{"RegionName": "us-west-2"}, {"RegionName": "eu-west-1"}, {"RegionName": ""}]}
+
+
+class _RegionSession:
+    region_name = None
+
+    def __init__(self):
+        self.asked: list[str] = []
+
+    def client(self, name, region_name=None, config=None):
+        assert name == "ec2"
+        self.asked.append(region_name)
+        return _RegionEc2()
+
+
+def test_all_regions_scope_lists_the_enabled_regions():
+    assert collectors_mod._is_all_regions(" All ")
+    assert collectors_mod._is_all_regions("*")
+    assert not collectors_mod._is_all_regions("us-east-1,us-west-2")
+    assert not collectors_mod._is_all_regions("")
+    session = _RegionSession()
+    assert collectors_mod._aws_enabled_regions(session) == ["eu-west-1", "us-west-2"]
+    assert session.asked == ["us-east-1"]
