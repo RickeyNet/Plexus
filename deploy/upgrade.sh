@@ -29,7 +29,9 @@
 #   bash deploy/upgrade.sh --skip-backup             # skip the db snapshot
 # ═══════════════════════════════════════════════════════════════════════
 
-set -euo pipefail
+# -E so the ERR trap below also fires for failures inside functions; without
+# it a failed `compose build` in apply_git would exit silently.
+set -Eeuo pipefail
 
 # ── Project root ──────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -73,13 +75,30 @@ run() {
         eval "$@"
     fi
 }
-die() { echo "ERROR: $*" >&2; exit 1; }
+# `exit` does not trigger the ERR trap, so print the rollback hint here too.
+die() { echo "ERROR: $*" >&2; rollback_hint 1; exit 1; }
 
-# Read a value from .env. Returns empty string if missing.
+# Read a value from .env. Returns empty string if missing. The `|| true`
+# matters: grep exits 1 on no match and pipefail would turn that into a
+# script-ending error under set -e.
 env_get() {
     local key="$1"
     [[ -f .env ]] || return 0
-    grep -E "^${key}=" .env | head -n1 | cut -d= -f2- | tr -d '"' | tr -d "'"
+    { grep -E "^${key}=" .env || true; } | head -n1 | cut -d= -f2- | tr -d '"' | tr -d "'"
+}
+
+# Set KEY=value in .env, replacing an existing line or appending. Compose
+# reads .env for ${VAR} interpolation, so this is how image-mode deploys
+# persist PLEXUS_IMAGE across later `docker compose up` / `restart` calls.
+env_set() {
+    local key="$1" value="$2"
+    touch .env
+    if grep -qE "^${key}=" .env; then
+        # sed -i with a temp file keeps this portable across GNU/BSD sed.
+        sed "s|^${key}=.*|${key}=${value}|" .env > .env.tmp && mv .env.tmp .env
+    else
+        printf '%s=%s\n' "${key}" "${value}" >> .env
+    fi
 }
 
 compose() { docker compose "$@"; }
@@ -117,7 +136,10 @@ do_rollback() {
         # holds unless the operator ran `docker image prune -a` between
         # upgrade and rollback.
         run "docker pull ${PREV_IMAGE} || true"
-        run "PLEXUS_IMAGE=${PREV_IMAGE} compose up -d plexus"
+        if ! $DRY_RUN; then env_set PLEXUS_IMAGE "${PREV_IMAGE}"; fi
+        run "compose up -d plexus"
+        wait_healthy
+        log "Rollback complete"
         return
     fi
     run "compose up -d plexus"
@@ -185,9 +207,7 @@ PREV_REF=${prev_ref}
 PREV_AT=$(date -Iseconds)
 EOF
     else
-        # Capture currently-running image tag. `docker compose images` is
-        # more reliable than `inspect` on systems where the container may
-        # be paused/restarting at this moment.
+        # Capture the image tag the running container was created from.
         local prev_image
         prev_image="$(docker inspect --format='{{.Config.Image}}' plexus-app 2>/dev/null || true)"
         if [[ -z "${prev_image}" ]]; then
@@ -207,20 +227,38 @@ apply_git() {
     log "Fetching from origin"
     run "git fetch --tags --prune origin"
 
-    local target="${REF:-}"
-    if [[ -z "${target}" ]]; then
-        # No --ref given: fast-forward to upstream of current branch.
+    if [[ -z "${REF:-}" ]]; then
+        # No --ref given: fast-forward the current branch to its upstream.
+        # Stay *on* the branch (merge --ff-only) rather than checking out
+        # origin/<branch>, which detaches HEAD and breaks the next
+        # `git pull` in bootstrap.sh.
         local branch
-        branch="$(git rev-parse --abbrev-ref HEAD)"
-        target="origin/${branch}"
-        log "No --ref given - pulling latest of ${branch}"
+        branch="$(git symbolic-ref -q --short HEAD || true)"
+        if [[ -z "${branch}" ]]; then
+            # Detached HEAD - earlier versions of this script left repos this
+            # way. Re-attach to the remote's default branch.
+            branch="$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+            branch="${branch#origin/}"
+            [[ -n "${branch}" ]] || die "HEAD is detached and origin/HEAD is unset - run 'git checkout <branch>' or pass --ref"
+            log "HEAD is detached - re-attaching to ${branch}"
+            run "git checkout '${branch}'"
+        fi
+        log "No --ref given - fast-forwarding ${branch} to origin/${branch}"
+        run "git merge --ff-only 'origin/${branch}'"
+    else
+        run "git checkout '${REF}'"
+        # If --ref named a branch, also ff to its tip. A tag/SHA checkout is
+        # detached by design and there is nothing to pull.
+        if git symbolic-ref -q HEAD >/dev/null 2>&1; then
+            run "git pull --ff-only"
+        fi
     fi
 
-    run "git checkout '${target}'"
-    # If target was a branch reference, also ff to its tip. checkout of a
-    # tag/SHA goes detached and there's nothing to pull.
-    if git symbolic-ref -q HEAD >/dev/null 2>&1; then
-        run "git pull --ff-only"
+    # A previous --image deploy may have pinned PLEXUS_IMAGE in .env; clear
+    # it so the build below is tagged plexus-app:local and `up` uses it.
+    if [[ -n "$(env_get PLEXUS_IMAGE)" ]]; then
+        log "Clearing PLEXUS_IMAGE from .env (switching back to local build)"
+        if ! $DRY_RUN; then env_set PLEXUS_IMAGE ""; fi
     fi
 
     log "Building plexus image"
@@ -231,10 +269,15 @@ apply_image() {
     [[ -n "${IMAGE}" ]] || die "--image requires a value"
     log "Pulling ${IMAGE}"
     run "docker pull '${IMAGE}'"
-    # The compose file builds locally; for image mode we override the
-    # image tag at runtime via the PLEXUS_IMAGE env var. The operator
-    # must have already wired this into their compose override, or use
-    # the inline form. Document this in DEPLOYMENT.md.
+    # docker-compose.yml sets `image: ${PLEXUS_IMAGE:-plexus-app:local}`.
+    # Persisting the tag in .env (compose's interpolation source) means a
+    # later plain `docker compose up -d` or `restart` keeps the pulled image
+    # instead of falling back to a local build.
+    if $DRY_RUN; then
+        echo "  DRY-RUN: set PLEXUS_IMAGE=${IMAGE} in .env"
+    else
+        env_set PLEXUS_IMAGE "${IMAGE}"
+    fi
     export PLEXUS_IMAGE="${IMAGE}"
 }
 
@@ -265,19 +308,25 @@ wait_healthy() {
 }
 
 # ── Failure handler ───────────────────────────────────────────────────
+rollback_hint() {
+    local rc="$1"
+    # Only meaningful once record_rollback has run and we are not rolling
+    # back already (a failed rollback has nothing further to offer).
+    if [[ -f "${ROLLBACK_FILE}" ]] && ! $DRY_RUN && ! $ROLLBACK; then
+        echo "" >&2
+        echo "════════════════════════════════════════════════════════════════" >&2
+        echo "  Upgrade failed (exit ${rc}). Rollback target captured at:" >&2
+        echo "    ${ROLLBACK_FILE}" >&2
+        echo "  To roll back:" >&2
+        echo "    bash deploy/upgrade.sh --rollback" >&2
+        echo "  Database snapshot for this upgrade: ${BACKUP_DIR}/" >&2
+        echo "════════════════════════════════════════════════════════════════" >&2
+    fi
+}
 on_failure() {
     local rc=$?
-    if (( rc != 0 )) && [[ -f "${ROLLBACK_FILE}" ]] && ! $DRY_RUN; then
-        echo ""
-        echo "════════════════════════════════════════════════════════════════"
-        echo "  Upgrade failed (exit ${rc}). Rollback target captured at:"
-        echo "    ${ROLLBACK_FILE}"
-        echo "  To roll back:"
-        echo "    bash deploy/upgrade.sh --rollback"
-        echo "  Database snapshot for this upgrade: ${BACKUP_DIR}/"
-        echo "════════════════════════════════════════════════════════════════"
-    fi
-    exit $rc
+    rollback_hint "${rc}"
+    exit "${rc}"
 }
 trap on_failure ERR
 

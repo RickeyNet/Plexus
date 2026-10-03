@@ -246,6 +246,9 @@ device_configs/
 # Software images (IOS-XE upgrade binaries)
 software_images/
 
+# Host-side deploy state (deploy/upgrade.sh rollback pointer + DB snapshots)
+state/
+
 # Floor plan images (uploaded by users, not source assets)
 floor_plans/
 *.cfg.backup

@@ -67,6 +67,14 @@ mkdir -p "${INSTALL_DIR}"
 chown -R "${TARGET_USER}:${TARGET_USER}" "${INSTALL_DIR}"
 if [[ -d "${INSTALL_DIR}/.git" ]]; then
     log "Repo already cloned at ${INSTALL_DIR} - pulling latest"
+    # Older upgrade.sh builds left the repo on a detached HEAD, where
+    # `git pull` refuses to run. Re-attach to the remote default branch first.
+    if ! sudo -u "${TARGET_USER}" git -C "${INSTALL_DIR}" symbolic-ref -q HEAD >/dev/null; then
+        DEFAULT_BRANCH=$(sudo -u "${TARGET_USER}" git -C "${INSTALL_DIR}" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || echo "origin/main")
+        DEFAULT_BRANCH="${DEFAULT_BRANCH#origin/}"
+        log "HEAD is detached - checking out ${DEFAULT_BRANCH}"
+        sudo -u "${TARGET_USER}" git -C "${INSTALL_DIR}" checkout "${DEFAULT_BRANCH}"
+    fi
     sudo -u "${TARGET_USER}" git -C "${INSTALL_DIR}" pull --ff-only
 else
     log "Cloning ${REPO_URL} into ${INSTALL_DIR}"
@@ -85,10 +93,11 @@ sudo -u "${TARGET_USER}" docker compose up -d --build
 
 # ── 8. Open firewall (only if ufw is enabled) ─────────────────────────
 if ufw status | grep -q "Status: active"; then
-    log "Opening firewall ports (443, 80, 2055/udp, 162/udp, 1514/udp)"
+    log "Opening firewall ports (443, 80, 2055/udp, 6343/udp, 162/udp, 1514/udp)"
     ufw allow 443/tcp >/dev/null
     ufw allow 80/tcp >/dev/null
     ufw allow 2055/udp >/dev/null
+    ufw allow 6343/udp >/dev/null
     ufw allow 162/udp >/dev/null
     ufw allow 1514/udp >/dev/null
 else
@@ -115,6 +124,6 @@ cat <<EOF
     docker compose ps             # status
     docker compose logs -f plexus # tail app logs
     docker compose restart        # restart all
-    git pull && docker compose up -d --build   # update to latest
+    bash deploy/upgrade.sh        # update to latest (snapshots DB, supports --rollback)
 ═══════════════════════════════════════════════════
 EOF
