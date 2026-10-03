@@ -619,7 +619,7 @@ CREATE TABLE IF NOT EXISTS config_drift_event_history (
 );
 
 -- config_snapshots is queried by host_id ordered by capture time (drift
--- capture, snapshot history) and grows unbounded; without this index each
+-- capture, snapshot history) and grows unbounded - without this index each
 -- bulk-scan host lookup full-scans an ever-larger table.
 CREATE INDEX IF NOT EXISTS idx_config_snapshots_host_captured
 ON config_snapshots(host_id, captured_at DESC);
@@ -2329,7 +2329,58 @@ def _extract_postgres_fks(stmt: str) -> tuple[str, list[str]]:
 
 
 def _split_sql_statements(schema: str) -> list[str]:
-    return [stmt.strip() for stmt in schema.split(";") if stmt.strip()]
+    """Split a SQL script into individual statements for asyncpg.
+
+    Quote- and comment-aware: a ``;`` inside a string literal or a ``--``
+    comment does not end a statement, and comments are dropped so a
+    comment-only chunk is never sent. Postgres answers an empty query with
+    EmptyQueryResponse, which asyncpg's simple-query path turns into
+    ``AttributeError: 'NoneType' object has no attribute 'decode'`` and
+    takes the whole app down at startup. SQLite's executescript tolerates
+    all of this, so the bug only surfaced on Postgres deploys.
+    """
+    statements: list[str] = []
+    buf: list[str] = []
+    i = 0
+    n = len(schema)
+    in_quote = False
+    while i < n:
+        ch = schema[i]
+        if in_quote:
+            buf.append(ch)
+            if ch == "'":
+                # '' is an escaped quote inside a literal, not the end of it.
+                if i + 1 < n and schema[i + 1] == "'":
+                    buf.append("'")
+                    i += 1
+                else:
+                    in_quote = False
+            i += 1
+            continue
+        if ch == "'":
+            in_quote = True
+            buf.append(ch)
+        elif ch == "-" and i + 1 < n and schema[i + 1] == "-":
+            # Line comment: skip to end of line (keep the newline as whitespace).
+            nl = schema.find("\n", i)
+            i = n if nl == -1 else nl
+            continue
+        elif ch == "/" and i + 1 < n and schema[i + 1] == "*":
+            end = schema.find("*/", i + 2)
+            i = n if end == -1 else end + 2
+            continue
+        elif ch == ";":
+            stmt = "".join(buf).strip()
+            if stmt:
+                statements.append(stmt)
+            buf = []
+        else:
+            buf.append(ch)
+        i += 1
+    tail = "".join(buf).strip()
+    if tail:
+        statements.append(tail)
+    return statements
 
 
 def _convert_qmark_to_dollar_params(query: str) -> str:
