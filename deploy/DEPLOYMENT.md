@@ -692,6 +692,23 @@ After this, the box is back to a stock Ubuntu state. Re-run
 
 ## Troubleshooting
 
+### `apt` sits on "Waiting for cache lock ... held by process NNNN (unattended-upgr)"
+
+Not hung. A fresh Ubuntu starts `unattended-upgrades` a minute or two after
+first boot and it holds the dpkg lock while it applies security updates,
+which can take 10+ minutes on a new install. `bootstrap.sh` waits for it
+automatically (up to 15 minutes). If you are running `apt` by hand, either
+wait it out or stop the background run cleanly - never `kill -9` apt/dpkg:
+
+```bash
+sudo systemctl stop unattended-upgrades  # finishes the current package, then stops
+sudo dpkg --configure -a                 # complete anything left half-configured
+sudo apt upgrade
+```
+
+A full-screen pink dialog ("Pending kernel upgrade" / "Which services should
+be restarted?") is `needrestart`, not an error - Tab to `<Ok>`, Enter.
+
 ### App won't start
 
 ```bash
