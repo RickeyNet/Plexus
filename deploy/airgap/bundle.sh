@@ -20,6 +20,9 @@ OUT_DIR="${OUT_DIR:-$REPO_ROOT/plexus-airgap-bundle}"
 PLATFORM="${PLATFORM:-linux/amd64}"
 UBUNTU_CODENAME="${UBUNTU_CODENAME:-resolute}"   # 26.04 LTS suite
 PLEXUS_IMAGE_TAG="${PLEXUS_IMAGE_TAG:-plexus:airgap}"
+# Bake the cloud SDKs in: the target has no PyPI access, so this is the only
+# chance to install them. Set to false for a smaller bundle.
+INSTALL_CLOUD_SDKS="${INSTALL_CLOUD_SDKS:-true}"
 POSTGRES_IMAGE="${POSTGRES_IMAGE:-postgres:16-alpine}"
 NGINX_IMAGE="${NGINX_IMAGE:-nginx:alpine}"
 
@@ -37,7 +40,8 @@ mkdir -p "$OUT_DIR"/{images,debs,desktop-debs,repo,repo/deploy}
 echo ""
 echo "[1/6] Building Plexus image ($PLEXUS_IMAGE_TAG) for $PLATFORM..."
 # --load requires a single-platform build with the docker driver.
-docker buildx build --platform "$PLATFORM" --load -t "$PLEXUS_IMAGE_TAG" .
+docker buildx build --platform "$PLATFORM" --load -t "$PLEXUS_IMAGE_TAG" \
+    --build-arg "INSTALL_CLOUD_SDKS=$INSTALL_CLOUD_SDKS" .
 
 # ── 2. Pull supporting images for the target platform ────────────────
 echo ""

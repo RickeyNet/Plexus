@@ -57,19 +57,23 @@ echo "[3/5] Staging compose project at $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
 cp -r "$BUNDLE_DIR"/repo/. "$INSTALL_DIR"/
 
-# Pin compose to use the locally-loaded image instead of trying to build.
-# We rewrite 'build: .' to 'image: plexus:airgap' in the staged compose file.
-COMPOSE_FILE="$INSTALL_DIR/docker-compose.yml"
-if grep -q '^\s*build: \.' "$COMPOSE_FILE"; then
-    sed -i 's|^\(\s*\)build: \.|\1image: plexus:airgap|' "$COMPOSE_FILE"
-    echo "  Pinned plexus service to image: plexus:airgap"
-fi
-
 # ── 4. Run setup.sh (generates .env + self-signed cert) ──────────────
 echo ""
 echo "[4/5] Running deploy/setup.sh..."
 cd "$INSTALL_DIR"
 bash deploy/setup.sh
+
+# Pin compose to the locally-loaded image instead of trying to build.
+# docker-compose.yml reads `image: ${PLEXUS_IMAGE:-plexus-app:local}`, so
+# setting PLEXUS_IMAGE in .env is enough - compose only builds when the
+# named image is absent. Must run after setup.sh, which only writes .env
+# when the file does not exist yet.
+if grep -q '^PLEXUS_IMAGE=' .env; then
+    sed -i 's|^PLEXUS_IMAGE=.*|PLEXUS_IMAGE=plexus:airgap|' .env
+else
+    printf 'PLEXUS_IMAGE=plexus:airgap\n' >> .env
+fi
+echo "  Pinned plexus service to image: plexus:airgap (PLEXUS_IMAGE in .env)"
 
 # ── 5. Bring the stack up ────────────────────────────────────────────
 echo ""

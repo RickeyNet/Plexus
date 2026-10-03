@@ -122,12 +122,17 @@ still lives in `/app/state`.
 ## Cloud Visibility (AWS / Azure / GCP)
 
 The Cloud Visibility feature (topology discovery, flow-log pulls, traffic
-metrics) is disabled-by-dependency out of the box: the provider SDKs are
-**not** in `requirements.txt`. To enable live collection:
+metrics) and the AWS layer of the topology map need the provider SDKs,
+which are **not** in `requirements.txt`. The compose stack
+(`bootstrap.sh`, `upgrade.sh`, the air-gap bundle) builds with
+`INSTALL_CLOUD_SDKS=true` by default, so they are present there; set
+`INSTALL_CLOUD_SDKS=false` in `.env` for a smaller image. Published release
+images are built from the hashed lock only and do not include them. For a
+bare-metal install:
 
 ```bash
 pip install -r requirements-cloud.txt
-# or in Docker:
+# or a manual Docker build:
 docker build --build-arg INSTALL_CLOUD_SDKS=true .
 ```
 

@@ -67,6 +67,7 @@ You can override any of these via env vars before running `bundle.sh`:
 | `UBUNTU_CODENAME`    | `resolute`           | Apt suite for Docker repo. Set to `noble` for 24.04, `jammy` for 22.04, `questing` for 25.10. |
 | `APT_BASE_IMAGE`     | `ubuntu:$UBUNTU_CODENAME` | Base image used to download `.deb`s. Override only if `ubuntu:resolute` isn't on Docker Hub yet - fall back to `ubuntu:noble` and accept the libc-version mismatch risk. |
 | `PLEXUS_IMAGE_TAG`   | `plexus:airgap`      | Image tag for the built app                        |
+| `INSTALL_CLOUD_SDKS` | `true`               | Bake boto3/azure/google SDKs into the image (needed for cloud accounts and the AWS topology layer; the target can't pip install later). `false` for a smaller bundle. |
 
 ## Step 2 - Transfer to the VM
 
@@ -88,11 +89,11 @@ The installer:
    Docker is already present).
 2. Loads `plexus`, `postgres:16-alpine`, and `nginx:alpine` images via
    `docker load`.
-3. Stages the compose project into `/opt/plexus` and rewrites
-   `build: .` → `image: plexus:airgap` so compose uses the loaded image
-   instead of trying to build (no internet, can't reach Docker Hub).
+3. Stages the compose project into `/opt/plexus`.
 4. Runs `deploy/setup.sh` to generate `.env` (random DB password + API token)
-   and a self-signed TLS cert from the VM's hostname.
+   and a self-signed TLS cert from the VM's hostname, then pins
+   `PLEXUS_IMAGE=plexus:airgap` in `.env` so compose uses the loaded image
+   instead of trying to build (no internet, can't reach Docker Hub).
 5. `docker compose up -d` to start `plexus`, `postgres`, and `nginx`.
 6. Opens firewall ports if `ufw` is active.
 
@@ -156,10 +157,9 @@ match, or stage the missing `.deb`s manually under `debs/` before re-running
 `install.sh`.
 
 ### `docker compose up -d` tries to pull images
-That means the compose file still says `build: .` - the rewrite step in
-`install.sh` didn't fire. Manually edit `/opt/plexus/docker-compose.yml`
-and replace `build: .` with `image: plexus:airgap`, then re-run
-`docker compose up -d`.
+That means `PLEXUS_IMAGE=plexus:airgap` is missing from `/opt/plexus/.env`
+(the pin step in `install.sh` didn't fire). Add the line, confirm
+`docker images` lists `plexus:airgap`, then re-run `docker compose up -d`.
 
 ### Bundle build fails on `buildx --load`
 Older Docker installs don't have buildx by default. Either upgrade Docker on
