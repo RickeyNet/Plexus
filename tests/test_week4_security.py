@@ -76,6 +76,71 @@ async def test_default_admin_creation_sets_must_change_password(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_force_admin_password_reset_is_one_shot(monkeypatch):
+    """PLEXUS_FORCE_ADMIN_PASSWORD_RESET fires once per arming.
+
+    A flag left in .env must not reset the admin (and re-flag must-change)
+    on every restart; a boot without the flag re-arms it.
+    """
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.delenv("PLEXUS_DEV_BOOTSTRAP", raising=False)
+    monkeypatch.delenv("PLEXUS_INITIAL_ADMIN_PASSWORD", raising=False)
+    monkeypatch.setenv("PLEXUS_INITIAL_ADMIN_USERNAME", "admin")
+
+    settings: dict[str, dict] = {}
+    resets: list[bool] = []
+    admin_row = {"id": 1, "username": "admin", "role": "admin"}
+
+    async def fake_get_all_users():
+        return [admin_row]
+
+    async def fake_get_user_by_username(username):
+        return admin_row if username == "admin" else None
+
+    async def fake_update_user_admin(user_id, **kwargs):
+        return None
+
+    async def fake_update_user_password(user_id, pw_hash, salt, must_change_password=False):
+        resets.append(must_change_password)
+
+    async def fake_get_auth_setting(key):
+        return settings.get(key)
+
+    async def fake_set_auth_setting(key, value):
+        settings[key] = value
+
+    async def boot(flag: str | None):
+        if flag is None:
+            monkeypatch.delenv("PLEXUS_FORCE_ADMIN_PASSWORD_RESET", raising=False)
+        else:
+            monkeypatch.setenv("PLEXUS_FORCE_ADMIN_PASSWORD_RESET", flag)
+        with (
+            patch.object(app_module.db, "get_all_users", fake_get_all_users),
+            patch.object(app_module.db, "get_user_by_username", fake_get_user_by_username),
+            patch.object(app_module.db, "update_user_admin", fake_update_user_admin),
+            patch.object(app_module.db, "update_user_password", fake_update_user_password),
+            patch.object(app_module.db, "get_auth_setting", fake_get_auth_setting),
+            patch.object(app_module.db, "set_auth_setting", fake_set_auth_setting),
+            patch.object(app_module, "_emit_bootstrap_admin_credentials", lambda *a, **k: None),
+        ):
+            await app_module._ensure_default_admin()
+
+    await boot("true")
+    assert resets == [True], "first boot with the flag resets the admin (must-change)"
+    assert settings[app_module._FORCE_RESET_MARKER_KEY]["applied"] is True
+
+    await boot("true")
+    assert resets == [True], "flag left set: no second reset on restart"
+
+    await boot(None)
+    assert settings[app_module._FORCE_RESET_MARKER_KEY]["applied"] is False, "boot without flag re-arms"
+    assert resets == [True]
+
+    await boot("true")
+    assert resets == [True, True], "re-set flag fires again after re-arming"
+
+
+@pytest.mark.asyncio
 async def test_require_auth_blocks_when_must_change_password(monkeypatch):
     """Protected paths should return 403 when must_change_password is set."""
 
