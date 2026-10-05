@@ -65,6 +65,12 @@ const ic = {
       <line x1="12" y1="17" x2="12" y2="21" />
     </svg>
   ),
+  software: (
+    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 2l7 4v6c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6l7-4z" />
+      <path d="M9 12l2 2 4-4" />
+    </svg>
+  ),
   playbooks: (
     <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
@@ -251,6 +257,7 @@ const NAV: TopItem[] = [
     children: [
       { label: 'Topology', icon: ic.topology, to: '/topology', feature: 'topology' },
       { label: 'IPAM', icon: ic.ipam, to: '/ipam', feature: 'ipam' },
+      { label: 'Software', icon: ic.software, to: '/software', feature: 'software' },
       { label: 'Cloud Visibility', icon: ic.cloud, to: '/cloud-visibility', feature: 'cloud-visibility' },
       { label: 'Monitoring', icon: ic.monitoring, to: '/monitoring', feature: 'monitoring' },
       { label: 'Configuration', icon: ic.config, to: '/configuration', feature: 'config-drift', visKey: 'configuration' },

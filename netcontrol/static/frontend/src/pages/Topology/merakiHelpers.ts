@@ -1,4 +1,5 @@
 import type {
+  AnyConnectBuildOptions,
   CatoBuildOptions,
   DetailSection,
   MerakiBuildJob,
@@ -43,6 +44,30 @@ export const CATO_OPTION_TOGGLES: { key: CatoToggleKey; label: string; hint: str
   { key: 'inventory_enrich', label: 'Correlate with Plexus inventory', hint: 'Attach SNMP/SSH data Plexus already holds for a Socket that is also an inventory host.' },
 ];
 
+export const FMC_URL_PLACEHOLDER = 'https://fmc.example.com';
+
+export const FALLBACK_ANYCONNECT_OPTIONS: AnyConnectBuildOptions = {
+  username: '',
+  device_name_contains: '',
+  include_all_devices: false,
+  include_interfaces: true,
+  include_sessions: true,
+  verify_tls: true,
+  inventory_enrich: true,
+};
+
+type AnyConnectToggleKey = {
+  [K in keyof AnyConnectBuildOptions]: AnyConnectBuildOptions[K] extends boolean ? K : never;
+}[keyof AnyConnectBuildOptions];
+
+export const ANYCONNECT_OPTION_TOGGLES: { key: AnyConnectToggleKey; label: string; hint: string }[] = [
+  { key: 'include_interfaces', label: 'Device interfaces', hint: 'The interfaces of each headend, for the address of its VPN access interface. Two API calls per device.' },
+  { key: 'include_sessions', label: 'Connected users', hint: 'Users connected with AnyConnect / Secure Client when the collection runs (FMC 7.3 or later): user, assigned IP, public IP, profile, client. Shown as one node per headend.' },
+  { key: 'include_all_devices', label: 'Every managed device', hint: 'Draw every FTD the FMC manages, not only those with a remote access VPN policy.' },
+  { key: 'inventory_enrich', label: 'Correlate with Plexus inventory', hint: 'Attach SNMP/SSH data Plexus already holds for an FTD that is also an inventory host.' },
+  { key: 'verify_tls', label: 'Verify the FMC certificate', hint: 'Turn off only for an FMC with a self-signed certificate.' },
+];
+
 type ToggleKey = {
   [K in keyof MerakiBuildOptions]: MerakiBuildOptions[K] extends boolean ? K : never;
 }[keyof MerakiBuildOptions];
@@ -70,6 +95,7 @@ export function formatWhen(iso?: string | null): string {
 export function sourceTypeLabel(type: string): string {
   if (type === 'neighbors') return 'Neighbor discovery';
   if (type === 'aws') return 'AWS';
+  if (type === 'anyconnect') return 'AnyConnect (FMC)';
   return type === 'cato' ? 'Cato' : 'Meraki';
 }
 
@@ -91,6 +117,12 @@ const PHASE_LABELS: Record<string, string> = {
   'cato sites': 'Reading Cato sites and Sockets',
   'cato users': 'Reading connected remote users',
   'cato ranges': 'Reading site network ranges',
+  'fmc login': 'Signing in to the FMC',
+  'fmc devices': 'Reading managed devices',
+  'fmc vpn policies': 'Reading remote access VPN policies',
+  'fmc pools': 'Reading VPN address pools',
+  'fmc interfaces': 'Reading device interfaces',
+  'fmc sessions': 'Reading connected users',
   'building map': 'Building the map',
   saving: 'Saving snapshot',
 };
@@ -140,8 +172,17 @@ const VIEW_TITLES: Record<Exclude<MerakiView, 'meraki'>, string[]> = {
     'WAN links',
     'Site interfaces',
     'Network interfaces',
+    'FTD interfaces',
   ],
-  vlans: ['VLANs', 'Single LAN', 'VLANs on ports', 'Layer 3 interfaces (SVIs)', 'Network ranges', 'Subnets'],
+  vlans: [
+    'VLANs',
+    'Single LAN',
+    'VLANs on ports',
+    'Layer 3 interfaces (SVIs)',
+    'Network ranges',
+    'Subnets',
+    'VPN address pools',
+  ],
   mac: ['Clients (MAC/ARP)', 'Network clients (MAC/ARP)'],
   routing: [
     'Effective routes (derived)',
@@ -153,7 +194,17 @@ const VIEW_TITLES: Record<Exclude<MerakiView, 'meraki'>, string[]> = {
     'Route tables',
     'Transit gateway routes',
   ],
-  vpn: ['Site-to-site VPN', 'VPN peers', 'VPN local subnets', 'IPsec tunnel', 'VPN connections'],
+  vpn: [
+    'Site-to-site VPN',
+    'VPN peers',
+    'VPN local subnets',
+    'IPsec tunnel',
+    'VPN connections',
+    'Remote access VPN',
+    'Connection profiles',
+    'Access interfaces',
+    'Connected users',
+  ],
   firewall: ['Layer 3 firewall rules', 'Port forwarding', '1:1 NAT', 'Security group rules', 'Network ACL rules'],
   switching: ['Switch stacks', 'Spanning tree', 'STP bridge priority'],
   wireless: ['Wireless SSIDs'],

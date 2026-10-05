@@ -4,7 +4,7 @@ import { type DetailSection, useMerakiNodeDetails } from '@/api/meraki';
 import type { TopologyMerakiRef } from '@/api/topology';
 import { Modal } from '@/components/Modal';
 
-import { providerSourceName } from './helpers';
+import { DETAIL_CELL_STYLE, providerSourceName } from './helpers';
 import { formatWhen, type MerakiView, merakiViewSections, rowMatches, searchTerms } from './merakiHelpers';
 
 interface Props {
@@ -165,7 +165,7 @@ function Section({ section, filterTerms, highlightTerms }: SectionProps) {
             <thead>
               <tr>
                 {(section.columns ?? []).map((c) => (
-                  <th key={c} style={{ textAlign: 'left', whiteSpace: 'nowrap' }}>{c}</th>
+                  <th key={c} style={{ ...DETAIL_CELL_STYLE, textAlign: 'left', whiteSpace: 'nowrap' }}>{c}</th>
                 ))}
               </tr>
             </thead>
@@ -177,7 +177,11 @@ function Section({ section, filterTerms, highlightTerms }: SectionProps) {
                 style={rowMatches(row, highlightTerms) ? { background: 'rgba(255, 196, 0, 0.18)' } : undefined}
               >
                 {row.map((cell, j) => (
-                  <td key={j} className={isKv && j === 0 ? 'text-muted' : undefined} style={isKv && j === 0 ? { whiteSpace: 'nowrap' } : undefined}>
+                  <td
+                    key={j}
+                    className={isKv && j === 0 ? 'text-muted' : undefined}
+                    style={isKv && j === 0 ? { ...DETAIL_CELL_STYLE, whiteSpace: 'nowrap' } : DETAIL_CELL_STYLE}
+                  >
                     {cell}
                   </td>
                 ))}

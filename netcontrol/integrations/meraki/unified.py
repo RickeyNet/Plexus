@@ -51,7 +51,9 @@ _CATEGORY = {
 NON_DEVICE_KINDS = ("external", "wan", "vpn_peer", "cloud", "users")
 _GRAPH_STATUS = {"online": "up", "offline": "down", "alerting": "alerting"}
 # Snapshot edge kind -> Topology edge protocol.
-# ``attach`` is a cloud attachment (VPC to transit gateway, peering...).
+# ``attach`` is a cloud attachment (VPC to transit gateway, peering...);
+# ``manage`` is a management relationship (an FMC and the FTD it manages),
+# which carries no traffic and is left out of Path Mode and the tree layout.
 _PROTOCOL = {
     "lan": "lldp",
     "stack": "stack",
@@ -59,8 +61,16 @@ _PROTOCOL = {
     "vpn": "vpn",
     "vpn3p": "vpn-ipsec",
     "attach": "cloud",
+    "manage": "management",
 }
-_EDGE_KIND = {"stack": "stack", "wan": "uplink", "vpn": "vpn", "vpn-ipsec": "vpn3p", "cloud": "attach"}
+_EDGE_KIND = {
+    "stack": "stack",
+    "wan": "uplink",
+    "vpn": "vpn",
+    "vpn-ipsec": "vpn3p",
+    "cloud": "attach",
+    "management": "manage",
+}
 # Inventory device_category -> viewer node kind.
 _VIEWER_KIND = {
     "router": "router",
@@ -73,7 +83,7 @@ _VIEWER_KIND = {
 }
 
 EXTERNAL_SITE_ID = "__external__"
-_SOURCE_NAME = {"meraki": "Meraki Dashboard", "cato": "Cato API", "aws": "AWS API"}
+_SOURCE_NAME = {"meraki": "Meraki Dashboard", "cato": "Cato API", "aws": "AWS API", "anyconnect": "FMC API"}
 
 
 def meraki_graph_id(org_ref: int, node_id: str) -> str:
@@ -111,13 +121,21 @@ def _global_ips(*values: Any) -> list[str]:
 
 def _uplink_address(wan: dict) -> str:
     """The address a WAN uplink has on its own interface: behind a NAT it is
-    not the public address the uplink is known by."""
+    not the public address the uplink is known by. A stub that only knows
+    its interface address (an FTD access interface) reports that."""
     for section in wan.get("sections") or []:
         if section.get("title") == "WAN uplink" and section.get("kind") == "kv":
             for row in section.get("rows") or []:
                 if len(row) > 1 and row[0] == "IP":
                     return str(row[1] or "").strip()
-    return ""
+    own = str(wan.get("ip") or "").strip()
+    return own if own and _is_ip(own) and not _global_ips(own) else ""
+
+
+def _is_virtual_model(model: Any) -> bool:
+    """A virtual appliance (Meraki vMX, FTDv, "Threat Defense for AWS")."""
+    lowered = str(model or "").lower()
+    return lowered.startswith("vmx") or any(t in lowered for t in ("ftdv", "threat defense for", "virtual"))
 
 
 def virtual_appliance_pairs(snapshots: list[tuple[int, dict]]) -> dict[tuple[int, str], tuple[int, str]]:
@@ -159,7 +177,7 @@ def virtual_appliance_pairs(snapshots: list[tuple[int, dict]]) -> dict[tuple[int
                         {
                             "ref": (org_ref, device_id),
                             "public": known_by,
-                            "virtual": str(device.get("model") or "").lower().startswith("vmx"),
+                            "virtual": _is_virtual_model(device.get("model")),
                         }
                     )
 
@@ -437,7 +455,7 @@ def merge_meraki_into_graph(
 # ── Node details and search ──────────────────────────────────────────────────
 
 
-SITE_ADDRESSING_TITLES = ("VLANs", "Single LAN", "Network ranges", "Subnets")
+SITE_ADDRESSING_TITLES = ("VLANs", "Single LAN", "Network ranges", "Subnets", "VPN address pools")
 
 
 def node_details(snapshot: dict, node_id: str) -> dict | None:

@@ -32,6 +32,7 @@ export const pageLoaders = {
   reports: () => import('@/pages/Reports/Reports'),
   riskAnalysis: () => import('@/pages/RiskAnalysis/RiskAnalysis'),
   settings: () => import('@/pages/Settings/Settings'),
+  software: () => import('@/pages/Software/Software'),
   topology: () => import('@/pages/Topology/Topology'),
 } satisfies Record<string, Loader>;
 
@@ -51,6 +52,7 @@ const ROUTE_TO_PAGE: Record<string, PageKey> = {
   '/credentials': 'jobs',
   '/topology': 'topology',
   '/ipam': 'ipam',
+  '/software': 'software',
   '/cloud-visibility': 'cloudVisibility',
   '/monitoring': 'monitoring',
   '/configuration': 'configuration',

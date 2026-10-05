@@ -9,6 +9,9 @@ export function formatSubnetPreview(item: IpamSubnet): string {
   const external = Array.isArray(item.external_source_names_preview)
     ? item.external_source_names_preview
     : [];
+  const topology = Array.isArray(item.topology_sites_preview)
+    ? item.topology_sites_preview
+    : [];
   const available = Array.isArray(item.available_preview) ? item.available_preview : [];
   if (hosts.length) {
     parts.push(
@@ -20,6 +23,11 @@ export function formatSubnetPreview(item: IpamSubnet): string {
       `Cloud: ${cloud.join(', ')}${item.cloud_preview_truncated ? ` +${item.cloud_preview_truncated}` : ''}`,
     );
   }
+  if (topology.length) {
+    parts.push(
+      `Sites: ${topology.join(', ')}${item.topology_preview_truncated ? ` +${item.topology_preview_truncated}` : ''}`,
+    );
+  }
   if (external.length) {
     parts.push(
       `External: ${external.join(', ')}${item.external_source_preview_truncated ? ` +${item.external_source_preview_truncated}` : ''}`,
@@ -29,6 +37,26 @@ export function formatSubnetPreview(item: IpamSubnet): string {
     parts.push(`Available: ${available.join(', ')}`);
   }
   return parts.join(' | ') || 'No preview';
+}
+
+/** "Meraki", "Cato", "AnyConnect", "AWS"... for a topology / cloud provider id. */
+export function providerLabel(provider: string | undefined): string {
+  switch ((provider ?? '').toLowerCase()) {
+    case 'meraki':
+      return 'Meraki';
+    case 'cato':
+      return 'Cato';
+    case 'anyconnect':
+      return 'AnyConnect';
+    case 'aws':
+      return 'AWS';
+    case 'azure':
+      return 'Azure';
+    case 'gcp':
+      return 'GCP';
+    default:
+      return provider ?? '';
+  }
 }
 
 export function driftLabel(driftType: string): string {

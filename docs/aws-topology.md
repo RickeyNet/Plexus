@@ -5,8 +5,8 @@ Cloud Visibility discovers. VPCs, their subnets, internet / NAT / virtual
 private gateways, transit gateways, VPC peerings, site-to-site VPN
 connections, Direct Connect and the instances that forward traffic appear on
 the same map as the devices Plexus discovers itself and any Meraki
-organizations and Cato accounts. They are covered by the same search box and
-Path Mode, and are included in the HTML export.
+organizations, Cato accounts and AnyConnect FMCs. They are covered by the
+same search box and Path Mode, and are included in the HTML export.
 
 AWS accounts are not managed on the Topology page. An account is added,
 validated and discovered under **Cloud Visibility**; every enabled AWS
@@ -142,6 +142,11 @@ as a node marked *Not collected*.
   Meraki model is a vMX or the public IP Meraki reports is a NAT gateway of
   the instance's VPC. An appliance that meets none of this stays two nodes:
   the Meraki device in its site and the instance in its VPC.
+- **AnyConnect headends.** An FTDv that an FMC manages is matched the same
+  way, by the private address of its VPN access interface, when its FMC
+  model is a virtual one; see
+  [anyconnect-topology.md](anyconnect-topology.md). A headend that is a
+  Plexus inventory host collapses into that host together with its instance.
 - **The same VPN seen from the other side.** A Meraki non-Meraki VPN peer or
   a Cato IPsec site configured with an AWS tunnel address is joined to the
   AWS gateway that owns the address.
@@ -264,7 +269,9 @@ not include the check.
 Not collected: prefix lists, load balancers,
 VPC endpoints, Client VPN endpoints, and the on-premises router behind a
 Direct Connect (a Direct Connect is the edge of the map). The subnets also
-appear in IPAM's cloud CIDR view.
+appear in IPAM's cloud CIDR view, where each VPC's range is checked against
+the ranges of every Meraki, Cato and AnyConnect site under **Overlapping
+Ranges** (see the [Meraki guide](meraki-topology.md#ipam)).
 
 ## API reference
 

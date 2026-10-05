@@ -9,6 +9,8 @@ what feeds and surrounds that merge:
   - Meraki organization CRUD (Dashboard API key is write-only, stored encrypted)
   - Cato Networks accounts, which are stored and collected like an
     organization (``provider`` "cato") and produce the same snapshot format
+  - Cisco FMCs for AnyConnect remote access VPN, stored and collected the
+    same way (``provider`` "anyconnect")
   - AWS: the accounts Cloud Visibility discovers are turned into one more
     snapshot (``provider`` "aws") whenever their discovery changes
   - On-demand collection builds as background jobs with pollable progress
@@ -36,6 +38,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
+from netcontrol.integrations.anyconnect.client import (
+    FmcApiError,
+    FmcClient,
+    validate_base_url as validate_fmc_base_url,
+)
+from netcontrol.integrations.anyconnect.collector import (
+    DEFAULT_OPTIONS as ANYCONNECT_DEFAULT_OPTIONS,
+    collect_fmc,
+    sanitize_options as sanitize_anyconnect_options,
+)
+from netcontrol.integrations.anyconnect.normalize import build_snapshot as build_anyconnect_snapshot
+from netcontrol.integrations.anyconnect.sample import build_sample_raw as build_anyconnect_sample_raw
 from netcontrol.integrations.aws.normalize import build_snapshot as build_aws_snapshot
 from netcontrol.integrations.aws.reachability import Reachability
 from netcontrol.integrations.aws.sample import build_sample as build_aws_sample
@@ -86,13 +100,19 @@ _JOB_KIND = "meraki-topology-build"
 _SNAPSHOTS_KEPT_PER_ORG = 10
 SAMPLE_ORG_NAME = "Sample Organization (demo data)"
 SAMPLE_CATO_NAME = "Sample Cato Account (demo data)"
+SAMPLE_ANYCONNECT_NAME = "Sample AnyConnect FMC (demo data)"
 SAMPLE_AWS_NAME = "Sample AWS Account (demo data)"
 # Marks the demo AWS account, which scheduled discovery leaves alone.
 SAMPLE_AWS_AUTH_TYPE = "sample"
+# The demo FMC address: a documentation range, never contacted.
+SAMPLE_FMC_URL = "https://10.210.2.20"
 
 PROVIDER_MERAKI = "meraki"
 PROVIDER_CATO = "cato"
-PROVIDERS = (PROVIDER_MERAKI, PROVIDER_CATO)
+# A Cisco FMC whose FTDs terminate AnyConnect remote access VPN.
+PROVIDER_ANYCONNECT = "anyconnect"
+PROVIDERS = (PROVIDER_MERAKI, PROVIDER_CATO, PROVIDER_ANYCONNECT)
+SAMPLE_ORG_NAMES = (SAMPLE_ORG_NAME, SAMPLE_CATO_NAME, SAMPLE_ANYCONNECT_NAME)
 # Not an organization provider: AWS accounts are Cloud Visibility accounts.
 PROVIDER_AWS = "aws"
 
@@ -178,11 +198,47 @@ async def latest_snapshots() -> list[tuple[int, dict]]:
     return [(org_ref, entry["snapshot"]) for org_ref, entry in await _latest_entries()]
 
 
+async def _subnets_of(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    """The subnet index of a cached snapshot, built once per snapshot."""
+    if entry.get("subnets") is None:
+        entry["subnets"] = await asyncio.to_thread(subnet_index, entry["snapshot"])
+    return entry["subnets"]
+
+
+async def ipam_subnets() -> list[dict[str, Any]]:
+    """The subnets of the latest snapshot of every organization and account,
+    for the IPAM overview: the ``subnet_index`` rows (Meraki VLANs, single
+    LANs, SVIs and static routes, Cato network ranges, AnyConnect address
+    pools) with their organization and provider. AWS is left out: its VPCs
+    and subnets reach IPAM as Cloud Visibility resources already."""
+    rows: list[dict[str, Any]] = []
+    for org_ref, entry in await _latest_entries():
+        if org_ref == AWS_ORG_REF:
+            continue
+        snapshot = entry["snapshot"]
+        org = snapshot.get("org") or {}
+        provider = str(snapshot.get("provider") or PROVIDER_MERAKI)
+        org_name = str(org.get("name") or "")
+        rows.extend(
+            {"org_ref": org_ref, "org_name": org_name, "provider": provider, **subnet}
+            for subnet in await _subnets_of(entry)
+        )
+    return rows
+
+
 def _topology_changed() -> None:
     """Meraki data feeding the merged graph changed; drop the graph cache."""
     from netcontrol.routes.topology import invalidate_topology_cache
 
     invalidate_topology_cache()
+
+
+async def _software_changed() -> None:
+    """A collection was stored: bring the software version tracker up to
+    date with it. Best-effort; the snapshot is already saved."""
+    from netcontrol.routes.software import refresh_after_collection
+
+    await refresh_after_collection()
 
 
 def init_meraki_topology(require_admin):
@@ -202,7 +258,7 @@ def _session_user(request: Request) -> str:
 
 class MerakiOrgCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
-    # "meraki" (organization) or "cato" (account). Fixed once created.
+    # "meraki" (organization), "cato" (account) or "anyconnect" (FMC). Fixed once created.
     provider: str = Field(default=PROVIDER_MERAKI, max_length=20)
     org_id: str = Field(default="", max_length=64)
     base_url: str = Field(default="", max_length=200)
@@ -225,6 +281,14 @@ def _provider_of(org: dict) -> str:
 
 
 def _clean_base_url(raw: str | None, provider: str = PROVIDER_MERAKI) -> str:
+    if provider == PROVIDER_ANYCONNECT:
+        try:
+            return validate_fmc_base_url(raw or "")
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="FMC address must be an https URL of the FMC host only (for example https://fmc.example.com)",
+            ) from None
     if provider == PROVIDER_CATO:
         try:
             return validate_cato_base_url(raw or CATO_BASE_URL)
@@ -243,7 +307,11 @@ def _clean_base_url(raw: str | None, provider: str = PROVIDER_MERAKI) -> str:
 
 
 def _options_for(provider: str, raw: object) -> dict[str, Any]:
-    return sanitize_cato_options(raw) if provider == PROVIDER_CATO else sanitize_options(raw)
+    if provider == PROVIDER_CATO:
+        return sanitize_cato_options(raw)
+    if provider == PROVIDER_ANYCONNECT:
+        return sanitize_anyconnect_options(raw)
+    return sanitize_options(raw)
 
 
 def _serialize_org(org: dict) -> dict:
@@ -272,6 +340,17 @@ def _cato_error_message(exc: CatoApiError) -> str:
     return f"Cato API error (HTTP {exc.status_code})"
 
 
+def _fmc_error_message(exc: FmcApiError) -> str:
+    # ``detail`` is the description the FMC answered with.
+    detail = f": {exc.detail}" if exc.detail else ""
+    if exc.status_code in (401, 403):
+        return f"The FMC rejected the credentials (HTTP {exc.status_code}){detail}"
+    if exc.status_code is None:
+        # Transport failures and client-side checks (unknown domain).
+        return f"{exc}{detail}"
+    return f"FMC API error (HTTP {exc.status_code}){detail}"
+
+
 def _api_error_message(exc: MerakiApiError) -> str:
     if exc.status_code == 401:
         return "Meraki rejected the API key (HTTP 401)"
@@ -292,6 +371,7 @@ async def list_meraki_orgs_api():
         "orgs": [_serialize_org(o) for o in orgs],
         "default_options": dict(DEFAULT_OPTIONS),
         "cato_default_options": dict(CATO_DEFAULT_OPTIONS),
+        "anyconnect_default_options": dict(ANYCONNECT_DEFAULT_OPTIONS),
     }
 
 
@@ -300,7 +380,7 @@ async def create_meraki_org_api(body: MerakiOrgCreate, request: Request):
     user = _session_user(request)
     provider = body.provider.strip().lower() or PROVIDER_MERAKI
     if provider not in PROVIDERS:
-        raise HTTPException(status_code=400, detail="Provider must be meraki or cato")
+        raise HTTPException(status_code=400, detail="Provider must be meraki, cato or anyconnect")
     org = await db.create_meraki_org(
         body.name.strip(),
         provider=provider,
@@ -375,6 +455,8 @@ async def validate_meraki_org_api(org_ref: int):
         return {"ok": False, "message": "No API key is stored for this organization", "organizations": []}
     if _provider_of(org) == PROVIDER_CATO:
         return await _validate_cato(org, api_key)
+    if _provider_of(org) == PROVIDER_ANYCONNECT:
+        return await _validate_anyconnect(org, api_key)
     try:
         async with MerakiClient(api_key, base_url=org["base_url"] or DEFAULT_BASE_URL, max_retries=1) as client:
             visible = await client.get_all("organizations")
@@ -415,7 +497,47 @@ async def _validate_cato(org: dict, api_key: str) -> dict:
     }
 
 
+def _fmc_client(org: dict, password: str, options: dict, **kwargs: Any) -> FmcClient:
+    """An FMC client for an entry. The username lives in the options, the
+    password is the entry's write-only secret."""
+    username = str(options.get("username") or "").strip()
+    if not username:
+        raise ValueError("Set the FMC username on this entry")
+    return FmcClient(
+        org.get("base_url") or "",
+        username,
+        password,
+        verify_tls=bool(options.get("verify_tls", True)),
+        **kwargs,
+    )
+
+
+async def _validate_anyconnect(org: dict, password: str) -> dict:
+    options = sanitize_anyconnect_options(org.get("options"))
+    try:
+        async with _fmc_client(org, password, options, max_retries=1) as client:
+            await client.login()
+            domain = client.resolve_domain(str(org.get("org_id") or ""))
+            domains = [{"id": d["uuid"], "name": d["name"]} for d in client.domains]
+    except FmcApiError as exc:
+        return {"ok": False, "message": _fmc_error_message(exc), "organizations": []}
+    except ValueError as exc:
+        return {"ok": False, "message": str(exc), "organizations": []}
+    return {
+        "ok": True,
+        "message": f"Signed in to the FMC; collecting domain {domain['name']}",
+        "organizations": domains,
+    }
+
+
 # ── Builds ───────────────────────────────────────────────────────────────────
+
+
+async def _collect_anyconnect(org: dict, password: str, options: dict, progress) -> dict:
+    async with _fmc_client(org, password, options) as client:
+        raw = await collect_fmc(client, str(org.get("org_id") or ""), options, progress)
+    raw["fmc"]["name"] = org["name"]
+    return raw
 
 
 async def _collect_cato(org: dict, api_key: str, options: dict, progress) -> dict:
@@ -454,6 +576,7 @@ async def _store_snapshot(org: dict, snapshot: dict, *, user: str, started: floa
         last_build_message=f"{warnings} collection warning(s)" if warnings else "",
     )
     _topology_changed()
+    await _software_changed()
     return {
         "snapshot_id": snapshot_id,
         "summary": snapshot.get("summary") or {},
@@ -469,6 +592,13 @@ async def _track_clients(org: dict, raw: dict) -> int:
     except Exception as exc:  # noqa: BLE001 - the map is already stored
         LOGGER.warning("meraki: could not store clients of org %s: %s", org["name"], type(exc).__name__)
         return 0
+
+
+_SNAPSHOT_BUILDERS = {
+    PROVIDER_MERAKI: build_snapshot,
+    PROVIDER_CATO: build_cato_snapshot,
+    PROVIDER_ANYCONNECT: build_anyconnect_snapshot,
+}
 
 
 async def _run_build(job_id: str, org: dict, user: str) -> None:
@@ -488,6 +618,8 @@ async def _run_build(job_id: str, org: dict, user: str) -> None:
             raise ValueError("No API key is stored for this organization")
         if provider == PROVIDER_CATO:
             raw = await _collect_cato(org, api_key, options, progress)
+        elif provider == PROVIDER_ANYCONNECT:
+            raw = await _collect_anyconnect(org, api_key, options, progress)
         else:
             async with MerakiClient(
                 api_key,
@@ -501,7 +633,7 @@ async def _run_build(job_id: str, org: dict, user: str) -> None:
         progress({"phase": "building map"})
         inventory = await load_inventory_index() if options["inventory_enrich"] else None
         # Layout of a large organization is CPU-bound; keep it off the event loop.
-        builder = build_cato_snapshot if provider == PROVIDER_CATO else build_snapshot
+        builder = _SNAPSHOT_BUILDERS.get(provider, build_snapshot)
         snapshot = await asyncio.to_thread(builder, raw, inventory)
         if options["inventory_enrich"]:
             await enrich_snapshot(snapshot, ssh=bool(options.get("ssh_enrich")), progress=progress)
@@ -524,6 +656,9 @@ async def _run_build(job_id: str, org: dict, user: str) -> None:
     except CatoApiError as exc:
         error = _cato_error_message(exc)
         LOGGER.warning("cato: build failed for account %s: %s", org["name"], redact_value(f"{exc} {exc.detail}"))
+    except FmcApiError as exc:
+        error = _fmc_error_message(exc)
+        LOGGER.warning("anyconnect: build failed for FMC %s: %s", org["name"], redact_value(f"{exc} {exc.detail}"))
     except ValueError as exc:
         error = str(exc)
     except Exception as exc:  # noqa: BLE001 - job must always reach a terminal state
@@ -579,6 +714,26 @@ async def _build_cato_sample(user: str) -> dict:
     return {"ok": True, "org_ref": org["id"], **result}
 
 
+async def _build_anyconnect_sample(user: str) -> dict:
+    started = time.monotonic()
+    org = await db.get_meraki_org_by_name(SAMPLE_ANYCONNECT_NAME)
+    if not org:
+        org = await db.create_meraki_org(
+            SAMPLE_ANYCONNECT_NAME,
+            provider=PROVIDER_ANYCONNECT,
+            org_id="Global",
+            base_url=SAMPLE_FMC_URL,
+            options=sanitize_anyconnect_options({"username": "plexus-readonly"}),
+            created_by=user,
+        )
+    if not org:
+        raise HTTPException(status_code=500, detail="Could not create the sample FMC")
+    raw = build_anyconnect_sample_raw()
+    raw["fmc"]["name"] = org["name"]
+    result = await _store_snapshot(org, build_anyconnect_snapshot(raw), user=user, started=started)
+    return {"ok": True, "org_ref": org["id"], **result}
+
+
 async def _build_aws_sample(user: str) -> dict:
     """Discover the demo AWS account. It is a Cloud Visibility account like
     any other AWS account (and is deleted there); only its data is bundled."""
@@ -626,10 +781,13 @@ async def _build_aws_sample(user: str) -> dict:
 async def build_sample_topology_api(request: Request, provider: str = Query(default=PROVIDER_MERAKI)):
     """Build a snapshot from bundled demo data (no API key needed).
     ``provider=cato`` builds the demo Cato account instead of the Meraki one,
+    ``provider=anyconnect`` the demo FMC with its AnyConnect headends,
     ``provider=aws`` the demo AWS account in Cloud Visibility."""
     user = _session_user(request)
     if provider == PROVIDER_CATO:
         return await _build_cato_sample(user)
+    if provider == PROVIDER_ANYCONNECT:
+        return await _build_anyconnect_sample(user)
     if provider == PROVIDER_AWS:
         return await _build_aws_sample(user)
     started = time.monotonic()
@@ -764,7 +922,7 @@ def _org_source(org: dict, newest: dict | None) -> dict[str, Any]:
         warning_count=int((newest or {}).get("warning_count") or 0),
         collecting=org["id"] in _running_builds,
         can_collect=bool(org.get("has_api_key")),
-        demo=org["name"] in (SAMPLE_ORG_NAME, SAMPLE_CATO_NAME) and not org.get("has_api_key"),
+        demo=org["name"] in SAMPLE_ORG_NAMES and not org.get("has_api_key"),
     )
 
 
@@ -791,8 +949,9 @@ def _aws_source(account: dict) -> dict[str, Any]:
 @router.get("/api/topology/sources")
 async def list_topology_sources_api():
     """Everything that feeds the topology map, with its last collection:
-    neighbor discovery of the inventory, Meraki organizations, Cato accounts
-    and the AWS accounts of Cloud Visibility. Credentials are never included."""
+    neighbor discovery of the inventory, Meraki organizations, Cato accounts,
+    AnyConnect FMCs and the AWS accounts of Cloud Visibility. Credentials are
+    never included."""
     newest: dict[int, dict] = {}
     for snapshot in await db.list_meraki_snapshots(limit=500):
         newest.setdefault(snapshot["org_ref"], snapshot)  # newest first
@@ -823,10 +982,8 @@ async def list_meraki_subnets_api():
     resolved to nodes on the merged graph by the Topology page."""
     subnets: list[dict] = []
     for org_ref, entry in await _latest_entries():
-        if entry.get("subnets") is None:
-            entry["subnets"] = await asyncio.to_thread(subnet_index, entry["snapshot"])
         provider = str(entry["snapshot"].get("provider") or PROVIDER_MERAKI)
-        subnets.extend({"org_ref": org_ref, "provider": provider, **subnet} for subnet in entry["subnets"])
+        subnets.extend({"org_ref": org_ref, "provider": provider, **subnet} for subnet in await _subnets_of(entry))
     return {"subnets": subnets}
 
 

@@ -5,6 +5,7 @@ import {
   driftLabel,
   formatSubnetPreview,
   formatSyncTime,
+  providerLabel,
   statusBadgeClass,
 } from './helpers';
 
@@ -37,6 +38,25 @@ describe('formatSubnetPreview', () => {
     });
     expect(out).toContain('Hosts: a +5');
     expect(out).toContain('Cloud: vpc +3');
+  });
+
+  it('lists the topology sites that hold the subnet', () => {
+    const out = formatSubnetPreview({
+      subnet: '192.168.10.0/24',
+      topology_sites_preview: ['Branch-A (VLAN 10 Users)', 'Branch-B (VLAN 10 Users)'],
+      topology_preview_truncated: 2,
+    });
+    expect(out).toBe('Sites: Branch-A (VLAN 10 Users), Branch-B (VLAN 10 Users) +2');
+  });
+});
+
+describe('providerLabel', () => {
+  it('names the topology and cloud providers', () => {
+    expect(providerLabel('meraki')).toBe('Meraki');
+    expect(providerLabel('anyconnect')).toBe('AnyConnect');
+    expect(providerLabel('aws')).toBe('AWS');
+    expect(providerLabel('other')).toBe('other');
+    expect(providerLabel(undefined)).toBe('');
   });
 });
 

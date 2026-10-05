@@ -94,6 +94,10 @@ function edgeCost(edge: TopologyEdge): number {
   return edge.protocol === 'vpn-ipsec' ? THIRD_PARTY_VPN_COST : 1;
 }
 
+// A management relationship (an FMC and the FTDs it manages) carries no
+// traffic: two headends are not joined through their FMC.
+const NO_TRAFFIC_PROTOCOLS = new Set(['management']);
+
 /** Trace every pair of `endpoints` over the links that are up. */
 export function connectEndpoints(endpoints: NodeId[], edges: TopologyEdge[]): PathResult {
   const result: PathResult = { legs: [], nodeIds: new Set(endpoints), edgeIds: new Set() };
@@ -110,7 +114,7 @@ export function connectEndpoints(endpoints: NodeId[], edges: TopologyEdge[]): Pa
   const cheapest = new Map<string, { cost: number; protocol: string }>();
   const pairKey = (a: NodeId, b: NodeId) => (String(a) < String(b) ? `${a}|${b}` : `${b}|${a}`);
   for (const edge of edges) {
-    if (edge.from === edge.to || isEdgeDown(edge)) continue;
+    if (edge.from === edge.to || isEdgeDown(edge) || NO_TRAFFIC_PROTOCOLS.has(edge.protocol ?? '')) continue;
     const cost = edgeCost(edge);
     link(edge.from, edge.to, cost);
     link(edge.to, edge.from, cost);

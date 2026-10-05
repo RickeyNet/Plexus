@@ -21,6 +21,7 @@ from netcontrol.routes.ipam_reconciliation import (
     resolve_diff as reconcile_resolve_diff,
     run_reconciliation,
 )
+from netcontrol.routes.meraki_topology import ipam_subnets as topology_subnets
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 
 router = APIRouter()
@@ -132,13 +133,20 @@ async def ipam_overview_api(
     group_id: int | None = Query(default=None),
     include_cloud: bool = Query(default=True),
     include_external: bool = Query(default=True),
+    include_topology: bool = Query(default=True),
 ):
+    """The address space of every source: inventory hosts, cloud resources,
+    external and local IPAM prefixes and, with ``include_topology``, the
+    subnets of the latest Topology collections (Meraki VLANs and routes, Cato
+    network ranges, AnyConnect pools), with the ranges two sites or VPCs both
+    claim listed under ``overlaps``."""
     if group_id is not None and group_id <= 0:
         raise HTTPException(status_code=400, detail="Invalid inventory group id")
     return await db.get_ipam_overview(
         group_id=group_id,
         include_cloud=include_cloud,
         include_external=include_external,
+        topology_subnets=await topology_subnets() if include_topology else None,
     )
 
 
