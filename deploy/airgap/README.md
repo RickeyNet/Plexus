@@ -114,8 +114,10 @@ sudo docker compose -f /opt/plexus/docker-compose.yml logs plexus | grep -A3 'de
 ```
 
 If the admin password is ever lost, set `PLEXUS_FORCE_ADMIN_PASSWORD_RESET=true`
-in `.env`, restart once, log in, then remove the flag (otherwise every
-restart resets it again).
+in `.env`, restart once, log in with the bootstrap password, change it, then
+remove the flag. The reset fires only once per arming: if the flag is left in
+`.env`, later restarts log a warning and leave the account alone. To reset
+again, remove the flag, restart, then set it to `true` again.
 
 ## Common follow-ups
 

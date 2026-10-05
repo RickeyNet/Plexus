@@ -500,6 +500,10 @@ def _is_dev_bootstrap_mode() -> bool:
     return _env_flag("PLEXUS_DEV_BOOTSTRAP", False)
 
 
+# auth_settings row that records a PLEXUS_FORCE_ADMIN_PASSWORD_RESET having fired.
+_FORCE_RESET_MARKER_KEY = "bootstrap_admin_force_reset"
+
+
 async def _ensure_default_admin():
     """Ensure at least one local admin account exists.
 
@@ -511,7 +515,13 @@ async def _ensure_default_admin():
 
     Recovery behavior:
       - If ``PLEXUS_FORCE_ADMIN_PASSWORD_RESET=true`` is set, reset the
-        configured bootstrap admin account password on startup.
+        configured bootstrap admin account password on startup. The reset
+        fires once: a marker row records that it was applied, and later boots
+        with the flag still set log a warning and leave the account alone.
+        Booting once without the flag clears the marker and re-arms it.
+        Without this, a flag forgotten in .env re-flags the account
+        must-change (and reverts it to the bootstrap password) on every
+        restart, which looks like "my password change never sticks".
     """
     users = await db.get_all_users()
     has_admin = any((u.get("role") or "").lower() == "admin" for u in users)
@@ -521,6 +531,22 @@ async def _ensure_default_admin():
     default_bootstrap_password = os.getenv("PLEXUS_DEFAULT_ADMIN_PASSWORD", "netcontrol").strip() or "netcontrol"
     force_reset = _env_flag("PLEXUS_FORCE_ADMIN_PASSWORD_RESET", False)
     dev_bootstrap = _is_dev_bootstrap_mode()
+
+    if force_reset:
+        marker = await db.get_auth_setting(_FORCE_RESET_MARKER_KEY)
+        if marker and marker.get("applied"):
+            LOGGER.warning(
+                "PLEXUS_FORCE_ADMIN_PASSWORD_RESET is still set but the reset was already "
+                "applied at %s; skipping. Remove the flag from .env - leaving it set would "
+                "reset the admin password on every restart.",
+                marker.get("applied_at", "an earlier boot"),
+            )
+            force_reset = False
+    else:
+        # Flag absent: re-arm so a future PLEXUS_FORCE_ADMIN_PASSWORD_RESET=true
+        # boot performs a reset again.
+        if await db.get_auth_setting(_FORCE_RESET_MARKER_KEY):
+            await db.set_auth_setting(_FORCE_RESET_MARKER_KEY, {"applied": False})
 
     if has_admin and not force_reset:
         if dev_bootstrap:
@@ -562,11 +588,19 @@ async def _ensure_default_admin():
             salt,
             must_change_password=must_change_password,
         )
+        await db.set_auth_setting(
+            _FORCE_RESET_MARKER_KEY,
+            {"applied": True, "applied_at": datetime.now(UTC).isoformat(timespec="seconds")},
+        )
         _emit_bootstrap_admin_credentials(
             target["username"],
             password,
             "Reset admin bootstrap password",
             must_change_password,
+        )
+        LOGGER.warning(
+            "Admin password reset applied via PLEXUS_FORCE_ADMIN_PASSWORD_RESET. "
+            "Remove the flag from .env now; it will not fire again until it is removed and re-set."
         )
         return
 
