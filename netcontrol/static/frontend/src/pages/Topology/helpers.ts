@@ -154,18 +154,31 @@ export function isManagedNode(node: TopologyNode): boolean {
 /** Display name of the integration a snapshot node came from. */
 export function providerLabel(provider?: string | null): string {
   if (provider === 'aws') return 'AWS';
+  if (provider === 'anyconnect') return 'AnyConnect';
   return provider === 'cato' ? 'Cato' : 'Meraki';
 }
+
+/**
+ * Cell padding for the tables in the device details panel. The shared
+ * `.data-table` class sets no padding, so without this the columns run
+ * together. Right padding only, so the first column stays flush left.
+ */
+export const DETAIL_CELL_STYLE = {
+  padding: '0.3rem 1rem 0.3rem 0',
+  verticalAlign: 'top',
+} as const;
 
 /** Where the integration's data is read from. */
 export function providerSourceName(provider?: string | null): string {
   if (provider === 'aws') return 'AWS API';
+  if (provider === 'anyconnect') return 'FMC API';
   return provider === 'cato' ? 'Cato API' : 'Meraki Dashboard';
 }
 
 /** What one entry of the integration is called. */
 export function providerScopeName(provider?: string | null): string {
   if (provider === 'aws') return 'AWS account';
+  if (provider === 'anyconnect') return 'Cisco FMC';
   return provider === 'cato' ? 'Cato account' : 'Meraki organization';
 }
 
@@ -244,6 +257,8 @@ export function edgeProtocolColor(protocol: string | null | undefined, tc: TopoT
   if (protocol === 'ospf') return tc.edgeOspf;
   if (protocol === 'bgp') return tc.edgeBgp;
   if (protocol === 'inferred-fdb') return tc.edgeInferred;
+  // A management relationship (FMC to FTD): no traffic, drawn faintly.
+  if (protocol === 'management') return tc.edgeInferred;
   if (protocol === 'vpn' || protocol === 'vpn-ipsec') return tc.edgeVpn;
   if (protocol === 'wan') return tc.edgeWan;
   if (protocol === 'cloud') return tc.edgeCloud;

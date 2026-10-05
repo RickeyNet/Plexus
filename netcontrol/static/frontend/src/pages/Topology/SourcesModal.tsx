@@ -23,10 +23,12 @@ import {
 import { useDialogs } from '@/components/DialogProvider-context';
 import { Modal } from '@/components/Modal';
 
+import { AnyConnectFormModal } from './AnyConnectFormModal';
 import { CatoAccountFormModal } from './CatoAccountFormModal';
 import { MerakiOrgFormModal } from './MerakiOrgFormModal';
 import { providerLabel } from './helpers';
 import {
+  FALLBACK_ANYCONNECT_OPTIONS,
   FALLBACK_CATO_OPTIONS,
   FALLBACK_OPTIONS,
   buildStatusBadge,
@@ -36,6 +38,13 @@ import {
 } from './merakiHelpers';
 
 const CLOUD_ACCOUNTS_PATH = '/cloud-visibility';
+
+/** Sources that are entries of the organization dialog (collected as a tracked build). */
+const ORG_SOURCE_TYPES = new Set<string>(['meraki', 'cato', 'anyconnect']);
+
+function isOrgSource(source: TopologySource): boolean {
+  return ORG_SOURCE_TYPES.has(source.type);
+}
 
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -161,7 +170,7 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
     setJobId(null);
     const failures: string[] = [];
     try {
-      for (const source of targets.filter((s) => s.type === 'meraki' || s.type === 'cato')) {
+      for (const source of targets.filter(isOrgSource)) {
         try {
           await startOrgBuild(source);
         } catch (err) {
@@ -211,7 +220,8 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
     <Modal isOpen={isOpen} onClose={onClose} title="Map Sources" size="large">
       <p className="text-muted" style={{ marginTop: 0, fontSize: '0.9rem' }}>
         Everything on the map comes from one of these sources. Inventory devices are scanned for their CDP
-        and LLDP neighbors. Meraki organizations, Cato accounts and AWS accounts are read from their APIs.
+        and LLDP neighbors. Meraki organizations, Cato accounts, AnyConnect FMCs and AWS accounts are read from
+        their APIs.
         Collect again whenever you want a fresh picture.
       </p>
 
@@ -260,6 +270,14 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
             <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleAdd('cato')}>
               Cato Account
             </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              title="A Cisco FMC whose FTDs terminate AnyConnect / Secure Client remote access VPN"
+              onClick={() => handleAdd('anyconnect')}
+            >
+              AnyConnect (FMC)
+            </button>
             <Link className="btn btn-secondary btn-sm" to={CLOUD_ACCOUNTS_PATH} onClick={onClose}>
               AWS Account
             </Link>
@@ -274,7 +292,7 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
         <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '0.75rem' }}>
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
             <strong>Load demo data for:</strong>
-            {(['meraki', 'cato', 'aws'] as const).map((provider) => (
+            {(['meraki', 'cato', 'anyconnect', 'aws'] as const).map((provider) => (
               <button
                 key={provider}
                 type="button"
@@ -321,7 +339,7 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
                   canCollect(source) &&
                   !allBusy &&
                   // One tracked organization collection at a time, as its progress is shown below.
-                  !((source.type === 'meraki' || source.type === 'cato') && (isJobRunning || startBuild.isPending))
+                  !(isOrgSource(source) && (isJobRunning || startBuild.isPending))
                 }
                 isBusy={source.collecting || (source.type === 'aws' && awsBusy.includes(source.id as number))}
                 isSampleBusy={buildSample.isPending}
@@ -346,7 +364,7 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
       {isJobRunning && <BuildProgress job={job.data} provider={jobProvider} />}
       {isJobSettled && <BuildOutcome job={job.data} onDismiss={() => setJobId(null)} />}
 
-      <h4 style={{ margin: '1.25rem 0 0.5rem' }}>Collection history (Meraki and Cato)</h4>
+      <h4 style={{ margin: '1.25rem 0 0.5rem' }}>Collection history (Meraki, Cato and AnyConnect)</h4>
       {snapshots.isPending && <div className="loading">Loading history…</div>}
       {snapshots.error && (
         <div className="error">
@@ -369,6 +387,16 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
         <CatoAccountFormModal
           existing={editing}
           defaultOptions={orgs.data?.cato_default_options ?? FALLBACK_CATO_OPTIONS}
+          onClose={() => {
+            setAdding(null);
+            setEditing(null);
+          }}
+        />
+      )}
+      {(adding ?? editing?.provider) === 'anyconnect' && (
+        <AnyConnectFormModal
+          existing={editing}
+          defaultOptions={orgs.data?.anyconnect_default_options ?? FALLBACK_ANYCONNECT_OPTIONS}
           onClose={() => {
             setAdding(null);
             setEditing(null);
@@ -405,7 +433,8 @@ function collectTitle(source: TopologySource, isAdmin: boolean): string {
     if (!source.enabled) return 'This account is disabled in Cloud Visibility';
     return isAdmin ? 'Discover this AWS account and update the map' : 'AWS discovery needs an administrator';
   }
-  return source.can_collect ? `Collect from ${providerLabel(source.type)} and update the map` : 'No API key stored';
+  if (source.can_collect) return `Collect from ${providerLabel(source.type)} and update the map`;
+  return source.type === 'anyconnect' ? 'No password stored' : 'No API key stored';
 }
 
 function SourceRow({
@@ -424,7 +453,7 @@ function SourceRow({
   const { confirm, alert } = useDialogs();
   const validate = useValidateMerakiOrg();
   const remove = useDeleteMerakiOrg();
-  const isOrg = source.type === 'meraki' || source.type === 'cato';
+  const isOrg = isOrgSource(source);
 
   const handleValidate = async () => {
     try {
@@ -432,9 +461,11 @@ function SourceRow({
       const visible = result.organizations.map((o) => `${o.name} (ID ${o.id})`).join('\n');
       void alert({
         message:
-          visible && source.type !== 'cato'
+          visible && source.type === 'meraki'
             ? `${result.message}\n\nVisible organizations:\n${visible}`
-            : result.message,
+            : visible && source.type === 'anyconnect'
+              ? `${result.message}\n\nDomains the account can see:\n${visible}`
+              : result.message,
         variant: result.ok ? undefined : 'error',
       });
     } catch (err) {
@@ -535,7 +566,7 @@ function SourceRow({
                 disabled={!source.can_collect || validate.isPending}
                 onClick={handleValidate}
               >
-                {validate.isPending ? '…' : 'Test Key'}
+                {validate.isPending ? '…' : source.type === 'anyconnect' ? 'Test Login' : 'Test Key'}
               </button>
               <button
                 type="button"
@@ -607,7 +638,9 @@ function BuildProgress({ job, provider }: { job: MerakiBuildJob | undefined; pro
       <div className="text-muted" style={{ fontSize: '0.85em', marginTop: '0.35rem' }}>
         {provider === 'cato'
           ? 'A Cato account takes a few queries, sent slowly to stay inside the Cato API rate limits.'
-          : 'Large organizations take several minutes: Meraki limits the API to 10 requests per second.'}{' '}
+          : provider === 'anyconnect'
+            ? 'An FMC takes a few requests per headend, sent slowly to stay inside the FMC limit of 120 requests per minute.'
+            : 'Large organizations take several minutes: Meraki limits the API to 10 requests per second.'}{' '}
         You can close this dialog; the map updates when collection finishes.
       </div>
     </div>

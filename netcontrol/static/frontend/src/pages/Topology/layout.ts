@@ -37,7 +37,8 @@ const PACK_ASPECT = 1.7;
 
 // Logical adjacencies ride on top of the physical network; the tree follows
 // cables first and only uses these to reach parts nothing else connects.
-const OVERLAY_PROTOCOLS = new Set(['vpn', 'vpn-ipsec', 'ospf', 'bgp']);
+// A management link (an FMC and the FTD it manages) is one of them.
+const OVERLAY_PROTOCOLS = new Set(['vpn', 'vpn-ipsec', 'ospf', 'bgp', 'management']);
 
 const GATEWAY_TYPES = new Set(['fortinet', 'paloalto_panos', 'cisco_asa', 'cisco_ftd']);
 

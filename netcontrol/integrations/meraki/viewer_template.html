@@ -175,7 +175,8 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     uplink: { name: 'WAN uplink', color: '#4dabf7', dash: [4, 4] },
     vpn: { name: 'VPN tunnel', color: '#ae3ec9', dash: [10, 6] },
     attach: { name: 'Cloud attachment', color: '#f08c00', dash: [] },
-    vpn3p: { name: 'Non-Meraki VPN', color: '#d6336c', dash: [3, 5] }
+    vpn3p: { name: 'Non-Meraki VPN', color: '#d6336c', dash: [3, 5] },
+    manage: { name: 'Managed by (FMC)', color: '#868e96', dash: [2, 4] }
   };
   // A large organization has thousands of tunnels; drawn together they bury
   // the map. Past this many, only the selection's tunnels are drawn unless
@@ -301,7 +302,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     return true;
   }
   function edgeVisible(e) {
-    var layer = e.kind === 'stack' || e.kind === 'attach' ? 'lan' : (e.kind === 'vpn3p' ? 'vpn' : e.kind);
+    var layer = e.kind === 'stack' || e.kind === 'attach' || e.kind === 'manage' ? 'lan' : (e.kind === 'vpn3p' ? 'vpn' : e.kind);
     if (e.onPath && pathActive()) return true;
     if (!layers[layer] || !nodeVisible(e.na) || !nodeVisible(e.nb)) return false;
     return !isCurved(e) || layers.vpnAll || touchesSelection(e);
@@ -652,7 +653,8 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
         if (done[item.n.id] || dist[item.n.id] !== d) return;
         done[item.n.id] = item;
         edgesByNode[item.n.id].forEach(function (e) {
-          if (edgeDown(e) || e.na === e.nb) return;
+          // A management link (FMC to FTD) carries no traffic.
+          if (edgeDown(e) || e.na === e.nb || e.kind === 'manage') return;
           var next = e.na === item.n ? e.nb : e.na, nd = d + (e.kind === 'vpn3p' ? 2 : 1);
           if (done[next.id] || (dist[next.id] !== undefined && dist[next.id] <= nd)) return;
           dist[next.id] = nd;

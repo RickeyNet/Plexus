@@ -213,6 +213,135 @@ def test_ipam_overview_returns_subnets_and_duplicates(tmp_path, monkeypatch, req
         client._client.__exit__(None, None, None)
 
 
+def _topology_rows() -> list[dict]:
+    """What the Topology feature's subnet index says, for three sites."""
+
+    def row(org_ref, provider, site, cidr, kind, name, in_vpn=None, site_id=None):
+        return {
+            "org_ref": org_ref,
+            "org_name": f"Org {org_ref}",
+            "provider": provider,
+            "site_id": site_id or site,
+            "site_name": site,
+            "node_id": f"n:{site}",
+            "cidr": cidr,
+            "kind": kind,
+            "name": name,
+            "in_vpn": in_vpn,
+        }
+
+    return [
+        # Two Meraki branches with the same user VLAN, both in AutoVPN.
+        row(7, "meraki", "Branch-A", "192.168.10.0/24", "vlan", "VLAN 10 Users", True),
+        row(7, "meraki", "Branch-B", "192.168.10.0/24", "vlan", "VLAN 10 Users", True),
+        # The same range at Branch-B again as the switch SVI: not a pair.
+        row(7, "meraki", "Branch-B", "192.168.10.0/24", "svi", "VLAN 10 Users", None),
+        # The hub's summary route covers the branches: routes are not owners.
+        row(7, "meraki", "Hub", "192.168.0.0/16", "static", "Static route Branches", True),
+        # A Cato site range that overlaps the inventory's cloud VPC, not in VPN terms.
+        row(8, "cato", "Denver", "10.0.0.128/25", "range", "Users (VLAN 20)", True),
+        # An AnyConnect pool on its own.
+        row(9, "anyconnect", "ftdv-1", "10.250.0.0/22", "pool", "VPN pool Corp", None),
+        # Not a network.
+        row(9, "anyconnect", "ftdv-1", "garbage", "pool", "VPN pool Broken", None),
+    ]
+
+
+def test_find_subnet_overlaps_pairs_ranges_held_by_different_owners():
+    find = db_module.find_subnet_overlaps
+    entries = [
+        {"cidr": "10.0.0.0/16", "owner": "vpc-1", "label": "prod-vpc", "source": "cloud", "in_vpn": None},
+        {"cidr": "10.0.5.0/24", "owner": "site-a", "label": "A", "source": "topology", "in_vpn": True},
+        {"cidr": "10.0.5.0/24", "owner": "site-b", "label": "B", "source": "topology", "in_vpn": True},
+        {"cidr": "10.0.5.0/24", "owner": "site-b", "label": "B", "source": "topology", "in_vpn": False},  # SVI
+        {"cidr": "10.0.5.128/25", "owner": "site-c", "label": "C", "source": "topology", "in_vpn": False},
+        {"cidr": "10.9.0.0/24", "owner": "site-d", "label": "D", "source": "topology", "in_vpn": True},
+        {"cidr": "0.0.0.0/0", "owner": "site-d", "label": "D", "source": "topology", "in_vpn": True},
+        {"cidr": "nope", "owner": "site-d", "label": "D", "source": "topology", "in_vpn": True},
+    ]
+    pairs, total, vpn_total = find(entries)
+    assert total == len(pairs) == 6 and vpn_total == 1
+    as_text = {(p["a"]["owner"], p["b"]["owner"], p["relation"], p["vpn_conflict"]) for p in pairs}
+    assert as_text == {
+        ("prod-vpc", "A", "contains", False),
+        ("prod-vpc", "B", "contains", False),
+        ("prod-vpc", "C", "contains", False),
+        ("A", "B", "same", True),
+        ("A", "C", "contains", False),
+        ("B", "C", "contains", False),
+    }
+    # The limit caps the list, not the count.
+    pairs, total, _vpn = find(entries, limit=2)
+    assert len(pairs) == 2 and total == 6
+    assert find([]) == ([], 0, 0)
+
+
+def test_ipam_overview_lists_topology_subnets_and_overlaps(tmp_path, monkeypatch, request):
+    client = _auth_client(tmp_path, monkeypatch, request)
+    try:
+        import asyncio
+
+        asyncio.run(_seed_ipam_data())
+
+        async def _fake_topology_subnets():
+            return _topology_rows()
+
+        monkeypatch.setattr(ipam_routes, "topology_subnets", _fake_topology_subnets)
+
+        body = client.get("/api/ipam/overview").json()
+        summary = body["summary"]
+        assert summary["topology_subnets"] == 4
+        assert summary["total_subnets"] == 3 + 4
+        # Branch-A/Branch-B share a VLAN (a VPN conflict); the Cato range sits
+        # inside the AWS VPC; the hub's route and the SVI duplicate count for nothing.
+        assert summary["overlap_count"] == 2 and summary["vpn_overlap_count"] == 1
+        pairs = body["overlaps"]
+        assert [(p["a"]["owner"], p["b"]["owner"], p["relation"], p["vpn_conflict"]) for p in pairs] == [
+            ("Branch-A", "Branch-B", "same", True),
+            ("prod-vpc (Prod AWS)", "Denver", "contains", False),
+        ]
+        assert pairs[0]["a"] == {
+            "subnet": "192.168.10.0/24",
+            "owner": "Branch-A",
+            "source": "topology",
+            "provider": "meraki",
+            "name": "VLAN 10 Users",
+            "in_vpn": True,
+        }
+        assert pairs[1]["a"]["source"] == "cloud" and pairs[1]["a"]["provider"] == "aws"
+        assert pairs[1]["b"]["subnet"] == "10.0.0.128/25" and pairs[1]["b"]["provider"] == "cato"
+
+        subnet_map = {item["subnet"]: item for item in body["subnets"]}
+        users = subnet_map["192.168.10.0/24"]
+        assert users["source_types"] == ["topology"]
+        assert users["topology_count"] == 3 and users["topology_providers"] == ["meraki"]
+        assert users["topology_sites_preview"] == [
+            "Branch-A (VLAN 10 Users)",
+            "Branch-B (VLAN 10 Users)",
+            "Branch-B (VLAN 10 Users)",
+        ]
+        assert users["vlan_ids"] == ["10"] and users["overlap_count"] == 1
+        assert subnet_map["192.168.0.0/16"]["source_types"] == ["topology"]
+        assert subnet_map["192.168.0.0/16"]["overlap_count"] == 0
+        assert subnet_map["10.0.0.128/25"]["vlan_ids"] == ["20"] and subnet_map["10.0.0.128/25"]["overlap_count"] == 1
+        assert subnet_map["10.250.0.0/22"]["source_types"] == ["topology"]
+        assert "garbage" not in subnet_map
+        # Cloud rows now carry their resource names and VPC ranges are checked.
+        vpc = subnet_map["10.0.0.0/24"]
+        assert vpc["source_types"] == ["inventory", "cloud"]
+        assert vpc["cloud_resource_names_preview"] == ["prod-vpc"] and vpc["overlap_count"] == 1
+        assert vpc["version"] == 4 and vpc["prefix_length"] == 24 and vpc["total_addresses"] == 256
+        assert vpc["allocated_address_count"] == 2 and vpc["available_address_count"] == 252
+
+        # Topology can be left out, like cloud.
+        body = client.get("/api/ipam/overview?include_topology=false").json()
+        assert body["summary"]["topology_subnets"] == 0 and body["summary"]["total_subnets"] == 3
+        assert body["overlaps"] == [] and body["summary"]["overlap_count"] == 0
+        assert "192.168.10.0/24" not in {item["subnet"] for item in body["subnets"]}
+    finally:
+        client._client.__exit__(None, None, None)
+
+
 def test_ipam_overview_group_filter_scopes_inventory_only(tmp_path, monkeypatch, request):
     client = _auth_client(tmp_path, monkeypatch, request)
     try:

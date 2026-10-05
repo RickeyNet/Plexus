@@ -6,6 +6,8 @@ import { useDialogs } from '@/components/DialogProvider-context';
 
 import {
   type DhcpServer,
+  type IpamOverlap,
+  type IpamOverlapSide,
   type IpamSource,
   useDeleteDhcpServer,
   useDeleteIpamSource,
@@ -35,6 +37,7 @@ import {
   driftLabel,
   formatSubnetPreview,
   formatSyncTime,
+  providerLabel,
   statusBadgeClass,
 } from './helpers';
 
@@ -49,11 +52,12 @@ export function Ipam() {
   const qc = useQueryClient();
   const [groupId, setGroupId] = useState<number | null>(null);
   const [includeCloud, setIncludeCloud] = useState(true);
+  const [includeTopology, setIncludeTopology] = useState(true);
   const [selectedSubnet, setSelectedSubnet] = useState<string>('');
   const [modal, setModal] = useState<ModalState>({ kind: 'none' });
 
   const groups = useInventoryGroups();
-  const overview = useIpamOverview(groupId, includeCloud);
+  const overview = useIpamOverview(groupId, includeCloud, includeTopology);
   const sources = useIpamSources();
   const syncConfig = useIpamSyncConfig();
   const reconcileRuns = useReconcileRuns();
@@ -71,6 +75,7 @@ export function Ipam() {
   const summary = overview.data?.summary ?? {};
   const subnets = overview.data?.subnets ?? [];
   const duplicates = overview.data?.duplicate_ips ?? [];
+  const overlaps = overview.data?.overlaps ?? [];
   const sourceList = sources.data?.sources ?? [];
   const config = syncConfig.data?.config ?? { enabled: true, interval_seconds: 1800 };
   const intervalMin = Math.round((config.interval_seconds ?? 1800) / 60);
@@ -93,6 +98,7 @@ export function Ipam() {
     { label: 'Tracked Hosts', value: summary.inventory_host_count ?? 0 },
     { label: 'Total Subnets', value: summary.total_subnets ?? 0 },
     { label: 'Cloud CIDRs', value: summary.cloud_subnets ?? 0 },
+    { label: 'Topology Subnets', value: summary.topology_subnets ?? 0 },
     { label: 'External Subnets', value: summary.external_subnets ?? 0 },
     {
       label: 'Duplicate IPs',
@@ -106,6 +112,11 @@ export function Ipam() {
       label: 'Inventory / Cloud Overlaps',
       value: summary.exact_source_overlap_count ?? 0,
       color: 'var(--warning-color)',
+    },
+    {
+      label: 'Overlapping Ranges',
+      value: summary.overlap_count ?? 0,
+      color: (summary.vpn_overlap_count ?? 0) > 0 ? 'var(--danger-color)' : 'var(--warning-color)',
     },
   ];
 
@@ -165,6 +176,21 @@ export function Ipam() {
             />
             Include Cloud CIDRs
           </label>
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              margin: '0 0 0.2rem',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={includeTopology}
+              onChange={(e) => setIncludeTopology(e.target.checked)}
+            />
+            Include Topology Subnets
+          </label>
           <button
             type="button"
             className="btn btn-secondary"
@@ -178,7 +204,7 @@ export function Ipam() {
       <PageHelp
         pageKey="ipam"
         title="Address Space, Utilization & Conflicts"
-        text="Review inferred on-prem subnets, discovered cloud CIDRs, and duplicate IP conflicts in one place so addressing issues are visible before they become outages."
+        text="Review inferred on-prem subnets, discovered cloud CIDRs, the subnets of your Meraki, Cato and AnyConnect topology collections, duplicate IPs and ranges two sites both claim in one place so addressing issues are visible before they become outages."
       />
 
       <div style={{ marginBottom: '1rem' }}>
@@ -280,8 +306,17 @@ export function Ipam() {
                           IPv{item.version ?? ''} /{item.prefix_length ?? ''} ·{' '}
                           {item.total_addresses ?? 0} addresses
                         </div>
-                        {(item.vrf_name || vlans.length > 0) && (
+                        {(item.vrf_name || vlans.length > 0 || (item.overlap_count ?? 0) > 0) && (
                           <div style={{ marginTop: '0.25rem' }}>
+                            {(item.overlap_count ?? 0) > 0 && (
+                              <span
+                                className="badge badge-warning"
+                                style={{ fontSize: '0.7em', marginRight: '0.3rem' }}
+                                title="This range is also held by another site or VPC; see Overlapping Ranges"
+                              >
+                                {item.overlap_count} overlap{item.overlap_count === 1 ? '' : 's'}
+                              </span>
+                            )}
                             {item.vrf_name && (
                               <span
                                 className="badge"
@@ -430,6 +465,13 @@ export function Ipam() {
             onEdit={(s) => setModal({ kind: 'dhcp', server: s })}
           />
 
+          <OverlapsCard
+            overlaps={overlaps}
+            total={summary.overlap_count ?? 0}
+            vpnTotal={summary.vpn_overlap_count ?? 0}
+            includeTopology={includeTopology}
+          />
+
           <div className="card" style={{ padding: '1rem' }}>
             <h3 style={{ margin: '0 0 0.75rem' }}>Duplicate IP Conflicts</h3>
             {duplicates.length === 0 ? (
@@ -524,6 +566,15 @@ export function Ipam() {
                 VNets, and subnets.
               </div>
               <div>
+                Topology subnets come from the latest collection of each
+                Meraki organization (VLANs, single LANs, switch SVIs, static
+                routes), Cato account (network ranges) and AnyConnect FMC
+                (address pools) on the Topology page. Overlapping Ranges lists
+                the ranges two sites, or a site and a VPC, both hold; static
+                routes are listed but not checked, since a hub's summary route
+                legitimately covers its spokes.
+              </div>
+              <div>
                 Available-address calculations subtract reserved ranges before
                 utilization is computed, and the drilldown shows any
                 allocations that collide with reserved space.
@@ -558,6 +609,90 @@ export function Ipam() {
           config={config}
           onClose={() => setModal({ kind: 'none' })}
         />
+      )}
+    </div>
+  );
+}
+
+interface OverlapsCardProps {
+  overlaps: IpamOverlap[];
+  total: number;
+  vpnTotal: number;
+  includeTopology: boolean;
+}
+
+function OverlapSide({ side }: { side: IpamOverlapSide }) {
+  const where = side.source === 'cloud' ? 'VPC' : 'site';
+  return (
+    <div style={{ lineHeight: 1.45 }}>
+      <strong style={{ color: 'var(--text-primary)' }}>{side.subnet}</strong>
+      <span className="text-muted">
+        {' '}
+        {side.name ? `${side.name} at ` : `${where} `}
+        {side.owner || 'unknown'}
+        {side.provider ? ` (${providerLabel(side.provider)})` : ''}
+        {side.in_vpn ? ' · in VPN' : ''}
+      </span>
+    </div>
+  );
+}
+
+function OverlapsCard({ overlaps, total, vpnTotal, includeTopology }: OverlapsCardProps) {
+  return (
+    <div className="card" style={{ padding: '1rem' }}>
+      <h3 style={{ margin: '0 0 0.75rem' }}>Overlapping Ranges</h3>
+      {overlaps.length === 0 ? (
+        <p className="text-muted" style={{ margin: 0 }}>
+          {includeTopology
+            ? 'No range is held by two sites or VPCs.'
+            : 'Topology subnets are excluded; include them to check sites against each other.'}
+        </p>
+      ) : (
+        <>
+          <div className="text-muted" style={{ fontSize: '0.9em', marginBottom: '0.5rem' }}>
+            {total} overlapping pair{total === 1 ? '' : 's'}
+            {vpnTotal > 0
+              ? `, ${vpnTotal} between ranges both advertised into a VPN`
+              : ''}
+            {total > overlaps.length ? ` (first ${overlaps.length} shown)` : ''}
+          </div>
+          {overlaps.map((pair, i) => (
+            <div
+              key={`${pair.a.subnet}-${pair.a.owner}-${pair.b.subnet}-${pair.b.owner}-${i}`}
+              style={{
+                padding: '0.8rem 0',
+                borderBottom: '1px solid rgba(255,255,255,0.08)',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  gap: '0.75rem',
+                  alignItems: 'flex-start',
+                }}
+              >
+                <div style={{ display: 'grid', gap: '0.3rem' }}>
+                  <OverlapSide side={pair.a} />
+                  <div className="text-muted" style={{ fontSize: '0.85em' }}>
+                    {pair.relation === 'same' ? 'is the same range as' : 'contains'}
+                  </div>
+                  <OverlapSide side={pair.b} />
+                </div>
+                <span
+                  className={`badge ${pair.vpn_conflict ? 'badge-danger' : 'badge-warning'}`}
+                  title={
+                    pair.vpn_conflict
+                      ? 'Both ranges are advertised into a VPN: traffic for one of them is routed to the wrong site'
+                      : 'Two owners claim this range'
+                  }
+                >
+                  {pair.vpn_conflict ? 'VPN conflict' : 'Overlap'}
+                </span>
+              </div>
+            </div>
+          ))}
+        </>
       )}
     </div>
   );

@@ -99,6 +99,11 @@ A Cato site that connects to AWS is joined to the AWS side of the map by
 public address: a vSocket to its instance, an IPsec site to the AWS VPN
 gateway it terminates on. See [aws-topology.md](aws-topology.md).
 
+The network ranges of every site also appear on the **IPAM** page as subnets
+of source **topology**, with their VLAN tag and site, and a range two sites
+both hold, or that sits inside a VPC, is listed under **Overlapping Ranges**
+(see the [Meraki guide](meraki-topology.md#ipam)).
+
 ## What is collected
 
 | Data | Cato API query | Option |

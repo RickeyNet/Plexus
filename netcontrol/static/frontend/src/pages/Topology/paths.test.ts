@@ -161,6 +161,33 @@ describe('path mode with a Cato account', () => {
   });
 });
 
+describe('path mode with an AnyConnect FMC', () => {
+  it('offers each headend as a site, but neither the FMC nor the users node', () => {
+    const nodes = [
+      meraki('ftd-1', 'dev:1', 'appliance'),
+      meraki('wan-1', 'dev:1', 'wan'),
+      meraki('users-1', 'dev:1', 'users'),
+      meraki('ftd-2', 'dev:2', 'appliance'),
+      meraki('fmc', 'fmc', 'cloud'),
+    ];
+    expect(pathSites(nodes).map((s) => [s.name, s.gateway])).toEqual([
+      ['Site dev:1', 'ftd-1'],
+      ['Site dev:2', 'ftd-2'],
+    ]);
+  });
+
+  it('does not join two headends through the FMC that manages them', () => {
+    const edges = [
+      edge('m-1', 'fmc', 'ftd-1', 'management'),
+      edge('m-2', 'fmc', 'ftd-2', 'management'),
+      edge('u-1', 'users-1', 'ftd-1', 'vpn'),
+    ];
+    expect(connectEndpoints(['ftd-1', 'ftd-2'], edges).legs[0].path).toBeNull();
+    // A VPN link to the headend still counts.
+    expect(connectEndpoints(['users-1', 'ftd-1'], edges).legs[0].path).toEqual(['users-1', 'ftd-1']);
+  });
+});
+
 describe('path mode with AWS', () => {
   it('offers each VPC with its router as the gateway, not the firewall inside it', () => {
     const nodes = [

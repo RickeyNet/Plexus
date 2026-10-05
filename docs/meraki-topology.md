@@ -10,16 +10,19 @@ the same search box, and are included in the HTML export.
 - API: `/api/meraki/*`, `/api/topology/search/deep`, `/api/topology/export.html`
 
 A Cato Networks account is added from the same dialog and shares the map,
-search, Path Mode and export; see [cato-topology.md](cato-topology.md). AWS
-accounts discovered by Cloud Visibility join the map as well; see
+search, Path Mode and export; see [cato-topology.md](cato-topology.md), as is
+a Cisco FMC whose FTDs terminate AnyConnect remote access VPN; see
+[anyconnect-topology.md](anyconnect-topology.md). AWS accounts discovered by
+Cloud Visibility join the map as well; see
 [aws-topology.md](aws-topology.md).
 
 ## Quick start
 
 1. Open **Network → Topology** and click **Sources** in the toolbar. The
    dialog lists everything that feeds the map (neighbor discovery of the
-   inventory, Meraki organizations, Cato accounts, AWS accounts) with its last
-   collection; **Collect All** refreshes every source in one click.
+   inventory, Meraki organizations, Cato accounts, AnyConnect FMCs, AWS
+   accounts) with its last collection; **Collect All** refreshes every source
+   in one click.
 2. **Preview without a key.** Click **Load Sample**, then **Meraki**. A demo
    organization is added to the map so you can see the result before
    connecting anything. Delete it from the same dialog when you are done.
@@ -29,8 +32,9 @@ accounts discovered by Cloud Visibility join the map as well; see
    organization IDs the key can see, and enter the one you want.
 4. **Collect.** Click **Collect Now**. Progress is shown while Plexus
    collects; when it finishes the map updates.
-5. **Share.** Click **HTML** in the toolbar to download the whole map as one
-   file, or **Open HTML Map** to view it in a new tab.
+5. **Share.** Click **Export** in the toolbar, then **HTML map (download)** to
+   download the whole map as one file, or **Open HTML map** to view it in a
+   new tab.
 
 Collection runs when you click **Collect Now**; it is not scheduled. The map
 shows the most recent collection for each organization until you run another.
@@ -175,6 +179,35 @@ tracking cleanup once it has not been seen for the chosen number of days.
 Meraki clients are refreshed only by a Meraki collection (**Collect Now** on
 the MAC tracking page polls inventory switches), need the **Clients (MAC /
 IP)** collection option (on by default), and have no move history.
+
+### IPAM
+
+The subnets of the latest collection of every organization also appear on
+the **IPAM** page, next to the subnets inferred from inventory hosts, the
+cloud CIDRs of Cloud Visibility and external IPAM prefixes: each VLAN,
+single LAN, switch SVI and static route is a row with source **topology**,
+its VLAN ID, and the sites that hold it in the **Preview** column (the same
+goes for Cato network ranges and AnyConnect address pools). Untick **Include
+Topology Subnets** to leave them out (`GET /api/ipam/overview?include_topology=false`).
+
+**Overlapping Ranges** lists every range two sites both hold, or a site holds
+inside a VPC or VNet of Cloud Visibility: the same subnet, or one inside the
+other. A pair whose two sides are both advertised into the VPN is a **VPN
+conflict**, the usual AutoVPN problem where two branches use the same user
+VLAN and traffic for it reaches the wrong site; the summary card turns red
+when there is one. Static routes and the subnets behind non-Meraki VPN peers
+are listed but not checked, since a hub's summary route legitimately covers
+its spokes, and the same range listed twice by one site (its VLAN and the L3
+switch's SVI) is not a pair. Subnets in the overlap list carry an **N
+overlaps** badge in the subnet table. The first 500 pairs are returned
+(`overlaps`, VPN conflicts first); `summary.overlap_count` has the total.
+
+### Software versions
+
+The firmware of every device of the latest collection is also tracked on
+the **Software** page (**Network → Software**), classified by product
+(Meraki MX, MS, MR, ...), compared across the fleet and checked against
+security advisories. See [software-versions.md](software-versions.md).
 
 ## What is collected
 

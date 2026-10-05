@@ -12,12 +12,18 @@ export interface IpamSummary {
   inventory_host_count?: number;
   total_subnets?: number;
   cloud_subnets?: number;
+  /** Distinct subnets of the latest Topology collections (Meraki, Cato, AnyConnect). */
+  topology_subnets?: number;
   external_subnets?: number;
   duplicate_ip_count?: number;
   inventory_subnets?: number;
   local_subnets?: number;
   external_allocation_count?: number;
   exact_source_overlap_count?: number;
+  /** Pairs of ranges two sites or VPCs both hold (same range, or one inside the other). */
+  overlap_count?: number;
+  /** Of those, pairs where both sides are advertised into a VPN. */
+  vpn_overlap_count?: number;
 }
 
 export interface IpamSubnet {
@@ -38,8 +44,32 @@ export interface IpamSubnet {
   host_preview_truncated?: number;
   cloud_preview_truncated?: number;
   external_source_preview_truncated?: number;
+  /** Topology entries for the subnet: "Site (VLAN 10 Data)". */
+  topology_count?: number;
+  topology_sites_preview?: string[];
+  topology_preview_truncated?: number;
+  topology_providers?: string[];
+  /** Overlap pairs this subnet takes part in. */
+  overlap_count?: number;
   vrf_name?: string | null;
   vlan_ids?: Array<string | number>;
+}
+
+/** One side of an overlap: the range and who holds it. */
+export interface IpamOverlapSide {
+  subnet: string;
+  owner: string;
+  source: 'topology' | 'cloud' | string;
+  provider?: string;
+  name?: string;
+  in_vpn?: boolean | null;
+}
+
+export interface IpamOverlap {
+  relation: 'same' | 'contains';
+  vpn_conflict: boolean;
+  a: IpamOverlapSide;
+  b: IpamOverlapSide;
 }
 
 export interface IpamDuplicateHost {
@@ -59,6 +89,8 @@ export interface IpamOverview {
   summary?: IpamSummary;
   subnets?: IpamSubnet[];
   duplicate_ips?: IpamDuplicate[];
+  /** The first 500 overlap pairs, VPN conflicts first; summary.overlap_count has the total. */
+  overlaps?: IpamOverlap[];
 }
 
 export interface IpamReservation {
@@ -211,8 +243,8 @@ export interface DhcpCorrelation {
 // ── Query keys ─────────────────────────────────────────────────────────────
 
 const KEYS = {
-  overview: (groupId: number | null, includeCloud: boolean) =>
-    ['ipam-overview', groupId ?? 'all', includeCloud] as const,
+  overview: (groupId: number | null, includeCloud: boolean, includeTopology: boolean) =>
+    ['ipam-overview', groupId ?? 'all', includeCloud, includeTopology] as const,
   subnetDetail: (subnet: string, groupId: number | null, includeCloud: boolean) =>
     ['ipam-subnet-detail', subnet, groupId ?? 'all', includeCloud] as const,
   providers: ['ipam-providers'] as const,
@@ -248,13 +280,18 @@ function invalidateDhcp(qc: ReturnType<typeof useQueryClient>) {
 
 // ── Queries ────────────────────────────────────────────────────────────────
 
-export function useIpamOverview(groupId: number | null, includeCloud: boolean) {
+export function useIpamOverview(
+  groupId: number | null,
+  includeCloud: boolean,
+  includeTopology = true,
+) {
   return useQuery<IpamOverview>({
-    queryKey: KEYS.overview(groupId, includeCloud),
+    queryKey: KEYS.overview(groupId, includeCloud, includeTopology),
     queryFn: () => {
       const params: Record<string, string> = {};
       if (groupId) params.group_id = String(groupId);
       if (!includeCloud) params.include_cloud = 'false';
+      if (!includeTopology) params.include_topology = 'false';
       const qs = new URLSearchParams(params).toString();
       return apiRequest(`/ipam/overview${qs ? `?${qs}` : ''}`);
     },

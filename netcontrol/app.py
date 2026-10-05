@@ -269,6 +269,7 @@ from netcontrol.routes.snmp import (
     _snmp_get,
     _snmp_walk,
 )
+from netcontrol.routes.software import _software_refresh_loop, init_software, router as software_router
 from netcontrol.routes.templates import TemplateCreate, TemplateUpdate, router as templates_router
 from netcontrol.routes.topology import (
     _calc_interface_utilization,
@@ -1478,6 +1479,7 @@ async def lifespan(app: FastAPI):
             federation_sync_loop,
             _ipam_sync_loop,
             _dhcp_sync_loop,
+            _software_refresh_loop,
             lab_runtime_ttl_loop,
             lab_drift_scheduler_loop,
         )
@@ -2040,6 +2042,7 @@ init_deployments(verify_session_token, _get_user_features)
 init_cloud_visibility(require_admin)
 init_meraki_topology(require_admin)
 init_ipam(require_admin)
+init_software(require_admin)
 init_dhcp(require_admin)
 init_federation(require_admin)
 init_upgrades(verify_session_token, _get_user_features)
@@ -2213,6 +2216,11 @@ app.include_router(
 app.include_router(
     ipam_router,
     dependencies=[Depends(require_auth), Depends(require_feature_method("ipam"))],
+)
+# Software versions and vulnerability alerts
+app.include_router(
+    software_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("software"))],
 )
 # DHCP Scope/Lease Integration
 app.include_router(
