@@ -3,7 +3,8 @@
 Path mode lets a user pick subnets instead of devices. The index is derived
 from the detail sections a snapshot already carries (VLANs, single LAN,
 static routes, switch SVIs, VPN participation, non-Meraki VPN peers, the
-network ranges of a Cato site, the subnets of an AWS VPC), so it
+network ranges of a Cato site, the subnets of an AWS VPC, the address pools
+of an AnyConnect headend), so it
 works on snapshots collected before the index existed and on the merged
 snapshot of the HTML export alike.
 """
@@ -95,6 +96,9 @@ def subnet_index(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
         for row in _rows(sections, "Network ranges"):
             vlan = f" (VLAN {_cell(row, 3)})" if _cell(row, 3) else ""
             add(_cidr(_cell(row, 0)), gateway, site["id"], "range", f"{_cell(row, 1)}{vlan}", True)
+        # An AnyConnect headend: the address pools its VPN clients get.
+        for row in _rows(sections, "VPN address pools"):
+            add(_cidr(_cell(row, 0)), gateway, site["id"], "pool", f"VPN pool {_cell(row, 1)}", None)
         # An AWS VPC: Subnet, Name, Availability zone...
         for row in _rows(sections, "Subnets"):
             zone = f" ({_cell(row, 2)})" if _cell(row, 2) else ""

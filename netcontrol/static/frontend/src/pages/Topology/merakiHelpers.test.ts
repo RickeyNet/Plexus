@@ -78,6 +78,30 @@ describe('cato detail tabs', () => {
   });
 });
 
+describe('anyconnect detail tabs', () => {
+  it('files headend and policy sections under the shared tabs', () => {
+    const ftd = details({
+      sections: [table('Overview'), table('FTD interfaces')],
+      site_sections: [
+        table('Remote access VPN'),
+        table('Connection profiles'),
+        table('VPN address pools'),
+        table('Access interfaces'),
+      ],
+    });
+    expect(merakiViewsWithData(ftd)).toEqual(['meraki', 'interfaces', 'vlans', 'vpn']);
+    expect(merakiViewSections(ftd, 'vlans').siteSections.map((s) => s.title)).toEqual(['VPN address pools']);
+    expect(merakiViewSections(ftd, 'vpn').siteSections.map((s) => s.title)).toEqual([
+      'Remote access VPN',
+      'Connection profiles',
+      'Access interfaces',
+    ]);
+    // Every other device of the site sees the pools too.
+    const users = details({ sections: [table('Remote access users'), table('Connected users')], site_addressing: [table('VPN address pools')] });
+    expect(merakiViewsWithData(users)).toEqual(['meraki', 'vlans', 'vpn']);
+  });
+});
+
 describe('aws detail tabs', () => {
   it('files VPC sections under the shared tabs', () => {
     const vpc = details({
@@ -99,10 +123,11 @@ describe('aws detail tabs', () => {
 
 describe('sourceTypeLabel', () => {
   it('names every kind of map source', () => {
-    expect(['neighbors', 'meraki', 'cato', 'aws'].map(sourceTypeLabel)).toEqual([
+    expect(['neighbors', 'meraki', 'cato', 'anyconnect', 'aws'].map(sourceTypeLabel)).toEqual([
       'Neighbor discovery',
       'Meraki',
       'Cato',
+      'AnyConnect (FMC)',
       'AWS',
     ]);
   });

@@ -2759,17 +2759,23 @@ _sqlite_read_sem: asyncio.Semaphore | None = None
 _sqlite_read_rebuild_lock = asyncio.Lock()
 
 
-def _stop_sqlite_read_pool() -> None:
-    """Stop every idle pooled read connection (loop-independent)."""
+def _stop_sqlite_read_pool() -> list:
+    """Stop every idle pooled read connection (loop-independent).
+
+    Returns the futures ``stop()`` handed back (one per connection when a
+    loop is running) so a caller on that loop can wait for the closes.
+    """
     global _sqlite_read_pool, _sqlite_read_pool_key, _sqlite_read_sem
+    futures = []
     for conn in _sqlite_read_pool:
         try:
-            conn.stop()
+            futures.append(conn.stop())
         except Exception as exc:
             _LOGGER.debug("Failed to stop pooled SQLite read connection: %s", exc)
     _sqlite_read_pool = []
     _sqlite_read_pool_key = None
     _sqlite_read_sem = None
+    return futures
 
 
 async def _acquire_sqlite_read_conn():
@@ -2963,13 +2969,21 @@ async def close_db_pool() -> None:
             await pool.close()
         except Exception as exc:
             _LOGGER.warning("close_db_pool: failed to close pg pool: %s", exc)
+    futures = []
     conn = _sqlite_conn
     if conn is not None:
         try:
-            conn.stop()
+            futures.append(conn.stop())
         except Exception as exc:
             _LOGGER.debug("close_db_pool: failed to stop sqlite connection: %s", exc)
-    _stop_sqlite_read_pool()
+    futures.extend(_stop_sqlite_read_pool())
+    # Each worker thread reports the close back to this loop via the future
+    # stop() returned. Wait for those: if shutdown returns first, the loop is
+    # closed before the workers report and each one dies with
+    # "RuntimeError: Event loop is closed" on the way out.
+    pending = [f for f in futures if f is not None]
+    if pending:
+        await asyncio.wait(pending, timeout=5)
 
 
 async def get_db(*, read_only: bool = False):
@@ -3177,5 +3191,6 @@ from routes.db.metrics import *  # noqa: E402,F403
 from routes.db.monitoring import *  # noqa: E402,F403
 from routes.db.playbooks import *  # noqa: E402,F403
 from routes.db.reporting import *  # noqa: E402,F403
+from routes.db.software import *  # noqa: E402,F403
 from routes.db.topology import *  # noqa: E402,F403
 from routes.db.users import *  # noqa: E402,F403

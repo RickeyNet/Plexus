@@ -19,7 +19,7 @@ export interface MerakiBuildOptions {
 }
 
 /** Integrations that feed the map through the same organization pipeline. */
-export type CloudProvider = 'meraki' | 'cato';
+export type CloudProvider = 'meraki' | 'cato' | 'anyconnect';
 
 export interface CatoBuildOptions {
   site_name_contains: string;
@@ -28,17 +28,31 @@ export interface CatoBuildOptions {
   inventory_enrich: boolean;
 }
 
-/** A Meraki organization, or a Cato account (`provider` 'cato'). */
+/** A Cisco FMC whose FTDs terminate AnyConnect remote access VPN. */
+export interface AnyConnectBuildOptions {
+  /** The FMC API user; the password is the entry's write-only secret. */
+  username: string;
+  device_name_contains: string;
+  include_all_devices: boolean;
+  include_interfaces: boolean;
+  include_sessions: boolean;
+  verify_tls: boolean;
+  inventory_enrich: boolean;
+}
+
+export type OrgBuildOptions = MerakiBuildOptions | CatoBuildOptions | AnyConnectBuildOptions;
+
+/** A Meraki organization, a Cato account (`provider` 'cato') or an FMC (`provider` 'anyconnect'). */
 export interface MerakiOrg {
   id: number;
   name: string;
   provider: CloudProvider;
-  /** Meraki organization ID or Cato account ID. */
+  /** Meraki organization ID, Cato account ID or FMC domain. */
   org_id: string;
   base_url: string;
-  /** The API key is write-only: the API only reports whether one is stored. */
+  /** The API key / password is write-only: the API only reports whether one is stored. */
   has_api_key: boolean;
-  options: MerakiBuildOptions | CatoBuildOptions;
+  options: OrgBuildOptions;
   building: boolean;
   snapshot_count?: number;
   last_build_at?: string | null;
@@ -53,7 +67,7 @@ export interface MerakiOrgInput {
   org_id: string;
   base_url: string;
   api_key?: string;
-  options: MerakiBuildOptions | CatoBuildOptions;
+  options: OrgBuildOptions;
 }
 
 export interface MerakiSnapshotSummary {
@@ -252,6 +266,7 @@ export function useMerakiOrgs() {
         orgs: MerakiOrg[];
         default_options: MerakiBuildOptions;
         cato_default_options: CatoBuildOptions;
+        anyconnect_default_options: AnyConnectBuildOptions;
       }>('/meraki/orgs'),
     // Keeps the "Building" badge honest for builds this tab isn't tracking
     // (started in another tab, or before a page reload).

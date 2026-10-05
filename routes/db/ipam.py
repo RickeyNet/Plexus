@@ -26,6 +26,7 @@ from routes.database import (
 )
 
 __all__ = [
+    "find_subnet_overlaps",
     "get_ipam_overview",
     "get_ipam_subnet_detail",
     "list_ipam_sources",
@@ -120,12 +121,100 @@ def _ip_in_reservation(addr: ipaddress.IPv4Address | ipaddress.IPv6Address, rsv:
         return False
 
 
+# Cloud resources that own an address range (a VPC, a VNet), as opposed to
+# the subnets carved out of one. Only these take part in overlap detection,
+# so a VPC and its own subnets are not reported against each other.
+_CLOUD_CONTAINER_TYPES = ("vpc", "vnet")
+# Topology subnet kinds that are address space a site owns. Static routes and
+# the subnets behind a VPN peer are routes to someone else's space and are
+# listed but not checked for overlaps (a hub's summary route legitimately
+# covers its spokes' VLANs).
+_TOPOLOGY_OWNED_KINDS = ("vlan", "lan", "svi", "range", "pool", "subnet")
+_VLAN_IN_NAME = re.compile(r"\bVLAN (\d+)\b")
+_PREVIEW = 3
+OVERLAP_LIMIT = 500
+
+
+def find_subnet_overlaps(entries: list[dict], limit: int = OVERLAP_LIMIT) -> tuple[list[dict], int, int]:
+    """Pairs of ranges with different owners that overlap: the same network,
+    or one inside the other.
+
+    Each entry is ``{"cidr", "owner", "label", "source", "provider", "name",
+    "in_vpn"}``; ``owner`` identifies who holds the range (a site, a VPC), so
+    the same range listed twice by one site (its VLAN and the switch SVI) is
+    not a pair. Returns the first ``limit`` pairs, the total count, and how
+    many pairs have both sides advertised into a VPN, which is when two sites
+    sharing a range breaks routing.
+    """
+    nets: list[tuple[int, int, int, int, dict]] = []
+    seen: dict[tuple[str, str], dict] = {}
+    for entry in entries:
+        try:
+            net = ipaddress.ip_network(str(entry.get("cidr") or "").strip(), strict=False)
+        except ValueError:
+            continue
+        if net.prefixlen == 0:
+            continue
+        key = (str(net), str(entry.get("owner") or ""))
+        if key in seen:
+            if entry.get("in_vpn"):
+                seen[key]["in_vpn"] = True
+            continue
+        side = {
+            "subnet": str(net),
+            "owner": str(entry.get("label") or entry.get("owner") or ""),
+            "source": str(entry.get("source") or ""),
+            "provider": str(entry.get("provider") or ""),
+            "name": str(entry.get("name") or ""),
+            "in_vpn": entry.get("in_vpn"),
+            "_owner": key[1],
+        }
+        seen[key] = side
+        nets.append((net.version, int(net.network_address), int(net.broadcast_address), net.prefixlen, side))
+    # Sorted by start address then by size (largest first), a range overlaps
+    # exactly the earlier ranges whose end has not been passed; CIDR blocks
+    # never partially overlap, so each pair is "same" or "contains".
+    nets.sort(key=lambda t: (t[0], t[1], t[3]))
+    active: list[tuple[int, int, int, int, dict]] = []
+    pairs: list[dict] = []
+    total = vpn_total = 0
+    for current in nets:
+        version, start, _end, prefixlen, side = current
+        active = [a for a in active if a[0] == version and a[2] >= start]
+        for other in active:
+            if other[4]["_owner"] == side["_owner"]:
+                continue
+            total += 1
+            vpn_conflict = bool(other[4]["in_vpn"]) and bool(side["in_vpn"])
+            vpn_total += int(vpn_conflict)
+            if len(pairs) < limit:
+                pairs.append(
+                    {
+                        "relation": "same" if other[3] == prefixlen else "contains",
+                        "vpn_conflict": vpn_conflict,
+                        "a": {k: v for k, v in other[4].items() if k != "_owner"},
+                        "b": {k: v for k, v in side.items() if k != "_owner"},
+                    }
+                )
+        active.append(current)
+    return pairs, total, vpn_total
+
+
 async def get_ipam_overview(
     group_id: int | None = None,
     include_cloud: bool = True,
     include_external: bool = True,
+    topology_subnets: list[dict] | None = None,
 ) -> dict:
-    """Return a merged IPAM overview across inventory, cloud, and external sources."""
+    """Return a merged IPAM overview across inventory, cloud, external and
+    topology sources.
+
+    ``topology_subnets`` are the rows of the topology subnet index (Meraki
+    VLANs, single LANs, SVIs and static routes, Cato network ranges,
+    AnyConnect address pools), each with ``org_ref``, ``org_name`` and
+    ``provider``; ``None`` leaves topology out. They have no VRF and are keyed
+    with vrf="", like cloud resources.
+    """
     db = await _dbcore.get_db(read_only=True)
     try:
         # ── 1. Inventory hosts ──────────────────────────────────────────────
@@ -171,16 +260,22 @@ async def get_ipam_overview(
         # ── 2. Cloud resources (no VRF concept - keyed with vrf="") ─────────
         cloud_keys: set[tuple[str, str]] = set()
         subnet_cloud_count: dict[tuple[str, str], int] = {}
+        cloud_names: dict[tuple[str, str], list[str]] = {}
+        # Ranges checked for overlaps: cloud containers and owned topology subnets.
+        owned_ranges: list[dict] = []
 
         if include_cloud:
             cursor = await db.execute(
-                """SELECT DISTINCT cr.cidr
+                """SELECT cr.cidr, cr.name, cr.provider, cr.resource_type, cr.resource_uid,
+                          a.name AS account_name
                    FROM cloud_resources cr
-                   WHERE cr.cidr != '' AND cr.cidr IS NOT NULL"""
+                   LEFT JOIN cloud_accounts a ON a.id = cr.account_id
+                   WHERE cr.cidr != '' AND cr.cidr IS NOT NULL
+                   ORDER BY cr.provider, cr.name"""
             )
-            cloud_rows = await cursor.fetchall()
+            cloud_rows = rows_to_list(await cursor.fetchall())
             for row in cloud_rows:
-                cidr = row[0].strip()
+                cidr = str(row.get("cidr") or "").strip()
                 try:
                     net = ipaddress.ip_network(cidr, strict=False)
                     sn = str(net)
@@ -189,6 +284,72 @@ async def get_ipam_overview(
                 k = (sn, "")
                 cloud_keys.add(k)
                 subnet_cloud_count[k] = subnet_cloud_count.get(k, 0) + 1
+                name = str(row.get("name") or row.get("resource_uid") or "").strip()
+                if name:
+                    cloud_names.setdefault(k, []).append(name)
+                if str(row.get("resource_type") or "").lower() in _CLOUD_CONTAINER_TYPES:
+                    provider = str(row.get("provider") or "")
+                    account = str(row.get("account_name") or "")
+                    owned_ranges.append(
+                        {
+                            "cidr": sn,
+                            "owner": f"cloud:{provider}:{row.get('resource_uid') or name}",
+                            "label": f"{name} ({account})" if account else name,
+                            "source": "cloud",
+                            "provider": provider,
+                            "name": str(row.get("resource_type") or ""),
+                            "in_vpn": None,
+                        }
+                    )
+
+        # ── 2b. Topology subnets (Meraki, Cato, AnyConnect; vrf="") ────────
+        topology_keys: set[tuple[str, str]] = set()
+        subnet_topology_count: dict[tuple[str, str], int] = {}
+        topology_names: dict[tuple[str, str], list[str]] = {}
+        topology_providers: dict[tuple[str, str], set[str]] = {}
+        topology_vlans: dict[tuple[str, str], set[str]] = {}
+
+        for row in topology_subnets or []:
+            if not isinstance(row, dict):
+                continue
+            try:
+                sn = str(ipaddress.ip_network(str(row.get("cidr") or "").strip(), strict=False))
+            except ValueError:
+                continue
+            k = (sn, "")
+            kind = str(row.get("kind") or "")
+            name = str(row.get("name") or "").strip()
+            site = str(row.get("site_name") or row.get("site_id") or "").strip()
+            provider = str(row.get("provider") or "")
+            topology_keys.add(k)
+            subnet_topology_count[k] = subnet_topology_count.get(k, 0) + 1
+            topology_names.setdefault(k, []).append(f"{site} ({name})" if site and name else site or name)
+            if provider:
+                topology_providers.setdefault(k, set()).add(provider)
+            vlan_match = _VLAN_IN_NAME.search(name)
+            if vlan_match and kind in ("vlan", "svi", "range"):
+                topology_vlans.setdefault(k, set()).add(vlan_match.group(1))
+            if kind in _TOPOLOGY_OWNED_KINDS:
+                owned_ranges.append(
+                    {
+                        "cidr": sn,
+                        "owner": f"topology:{row.get('org_ref')}:{row.get('site_id')}",
+                        "label": site,
+                        "source": "topology",
+                        "provider": provider,
+                        "name": name,
+                        "in_vpn": row.get("in_vpn"),
+                    }
+                )
+
+        overlaps, overlap_total, vpn_overlap_total = find_subnet_overlaps(owned_ranges)
+        subnet_overlap_count: dict[str, int] = {}
+        for pair in overlaps:
+            for side in ("a", "b"):
+                sn = pair[side]["subnet"]
+                subnet_overlap_count[sn] = subnet_overlap_count.get(sn, 0) + 1
+            if pair["a"]["subnet"] == pair["b"]["subnet"]:
+                subnet_overlap_count[pair["a"]["subnet"]] -= 1
 
         # ── 3. External IPAM prefixes (carry their own VRF) ─────────────────
         external_keys: set[tuple[str, str]] = set()
@@ -230,9 +391,20 @@ async def get_ipam_overview(
                 k = (row["subnet"], (row.get("vrf") or "").strip())
                 subnet_ext_alloc_count[k] = subnet_ext_alloc_count.get(k, 0) + int(row.get("cnt") or 0)
 
+        # ── 3b. Reserved ranges, for the capacity of each subnet ────────────
+        cursor = await db.execute("SELECT subnet, start_ip, end_ip FROM ipam_reservations")
+        subnet_reserved: dict[str, int] = {}
+        for row in rows_to_list(await cursor.fetchall()):
+            try:
+                span = int(ipaddress.ip_address(row["end_ip"])) - int(ipaddress.ip_address(row["start_ip"])) + 1
+            except ValueError, KeyError, TypeError:
+                continue
+            sn = str(row.get("subnet") or "")
+            subnet_reserved[sn] = subnet_reserved.get(sn, 0) + max(0, span)
+
         # ── 4. Merge all (subnet, vrf) keys ─────────────────────────────────
         inventory_keys = set(subnet_hosts.keys())
-        all_keys: set[tuple[str, str]] = inventory_keys | cloud_keys | external_keys | local_keys
+        all_keys: set[tuple[str, str]] = inventory_keys | cloud_keys | external_keys | local_keys | topology_keys
         # Exact overlap is now inventory∩cloud per (subnet, vrf); cloud always vrf=""
         exact_overlaps = {sn for (sn, v) in inventory_keys if (sn, "") in cloud_keys and v == ""}
 
@@ -242,37 +414,61 @@ async def get_ipam_overview(
             hosts_in = subnet_hosts.get(k, [])
             unique_ips = {h["ip"] for h in hosts_in}
             group_names = sorted({h["group"] for h in hosts_in})
-            vlans = sorted(subnet_vlans.get(k, set()) | key_vlans.get(k, set()))
+            vlans = sorted(
+                subnet_vlans.get(k, set()) | key_vlans.get(k, set()) | topology_vlans.get(k, set()),
+                key=lambda v: (not v.isdigit(), int(v) if v.isdigit() else 0, v),
+            )
             src_types: list[str] = []
             if k in inventory_keys:
                 src_types.append("inventory")
             if k in cloud_keys:
                 src_types.append("cloud")
+            if k in topology_keys:
+                src_types.append("topology")
             if k in local_keys:
                 src_types.append("local")
             if k in external_keys:
                 src_types.append("external")
             try:
                 net = ipaddress.ip_network(sn, strict=False)
+                version = net.version
+                prefix_length = net.prefixlen
                 total = net.num_addresses
                 usable = max(0, total - 2) if net.prefixlen < 31 else total
             except ValueError:
+                version = prefix_length = 0
                 total = usable = 0
             used = len(unique_ips)
+            reserved = min(subnet_reserved.get(sn, 0), usable)
             utilization_pct = round((used / usable * 100), 1) if usable else 0.0
+            cloud_preview = cloud_names.get(k, [])
+            topology_preview = topology_names.get(k, [])
             subnets_out.append(
                 {
                     "subnet": sn,
+                    "version": version,
+                    "prefix_length": prefix_length,
+                    "total_addresses": total,
                     "vrf_name": vrf,
                     "vlan_ids": vlans,
                     "inventory_host_count": len(hosts_in),
                     "cloud_resource_count": subnet_cloud_count.get(k, 0),
+                    "cloud_resource_names_preview": cloud_preview[:_PREVIEW],
+                    "cloud_preview_truncated": max(0, len(cloud_preview) - _PREVIEW),
+                    "topology_count": subnet_topology_count.get(k, 0),
+                    "topology_sites_preview": topology_preview[:_PREVIEW],
+                    "topology_preview_truncated": max(0, len(topology_preview) - _PREVIEW),
+                    "topology_providers": sorted(topology_providers.get(k, set())),
+                    "overlap_count": subnet_overlap_count.get(sn, 0) if vrf == "" else 0,
                     "external_prefix_count": subnet_ext_prefix_count.get(k, 0),
                     "external_allocation_count": subnet_ext_alloc_count.get(k, 0),
                     "group_names": group_names,
                     "source_types": src_types,
                     "used_count": used,
                     "total_count": usable,
+                    "allocated_address_count": used,
+                    "reserved_address_count": reserved,
+                    "available_address_count": max(0, usable - used - reserved),
                     "utilization_pct": utilization_pct,
                 }
             )
@@ -305,10 +501,13 @@ async def get_ipam_overview(
             "total_subnets": len(all_keys),
             "inventory_subnets": len(inventory_keys),
             "cloud_subnets": len(cloud_keys),
+            "topology_subnets": len(topology_keys),
             "local_subnets": len(local_keys),
             "external_subnets": len(external_keys),
             "duplicate_ip_count": len(duplicates_out),
             "exact_source_overlap_count": len(exact_overlaps),
+            "overlap_count": overlap_total,
+            "vpn_overlap_count": vpn_overlap_total,
             "external_allocation_count": total_ext_allocs,
             "vrf_names": distinct_vrfs,
             "vrf_count": len(distinct_vrfs),
@@ -320,6 +519,9 @@ async def get_ipam_overview(
             "summary": summary,
             "subnets": subnets_out,
             "duplicate_ips": duplicates_out,
+            # Ranges held by two owners (sites, VPCs): the first OVERLAP_LIMIT
+            # pairs, VPN conflicts first; summary.overlap_count has the total.
+            "overlaps": sorted(overlaps, key=lambda pair: not pair["vpn_conflict"]),
         }
     finally:
         await db.close()

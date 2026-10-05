@@ -24,6 +24,7 @@ import { useConfigBackupDetail } from '@/api/configuration';
 import { Modal } from '@/components/Modal';
 import {
   abbreviateInterface,
+  DETAIL_CELL_STYLE,
   formatBps,
   providerLabel,
   providerScopeName,
@@ -317,7 +318,7 @@ function OverviewTab(props: {
         style={{
           display: 'grid',
           gridTemplateColumns: 'auto 1fr',
-          gap: '0.35rem 0.75rem',
+          gap: '0.5rem 1.5rem',
           fontSize: '0.85rem',
           alignItems: 'center',
         }}
@@ -799,29 +800,32 @@ function CompactTable(props: {
 }) {
   return (
     <>
-      <table
-        className="data-table"
-        style={{ fontSize: '0.75rem', width: '100%' }}
-      >
-        <thead>
-          <tr>
-            {props.columns.map((c) => (
-              <th key={c} style={{ textAlign: 'left' }}>
-                {c}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {props.rows.map((cells, i) => (
-            <tr key={i}>
-              {cells.map((cell, j) => (
-                <td key={j}>{cell}</td>
+      {/* Wider than the panel when a table has many columns; scroll, don't squeeze. */}
+      <div style={{ overflowX: 'auto' }}>
+        <table
+          className="data-table"
+          style={{ fontSize: '0.75rem', width: '100%' }}
+        >
+          <thead>
+            <tr>
+              {props.columns.map((c) => (
+                <th key={c} style={{ ...DETAIL_CELL_STYLE, textAlign: 'left', whiteSpace: 'nowrap' }}>
+                  {c}
+                </th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {props.rows.map((cells, i) => (
+              <tr key={i}>
+                {cells.map((cell, j) => (
+                  <td key={j} style={DETAIL_CELL_STYLE}>{cell}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       {props.footer && (
         <div
           className="text-muted"

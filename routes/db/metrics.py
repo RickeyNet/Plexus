@@ -397,8 +397,11 @@ async def get_top_interfaces_by_bandwidth(
                       MAX(t.if_name) AS if_name,
                       MAX(t.if_speed_mbps) AS if_speed_mbps,
                       MAX(h.hostname) AS hostname,
-                      MAX(GREATEST(COALESCE(t.in_rate_bps, 0),
-                                   COALESCE(t.out_rate_bps, 0))) AS peak_bps
+                      -- CASE instead of GREATEST(): SQLite has no GREATEST
+                      -- and Postgres has no two-argument scalar MAX.
+                      MAX(CASE WHEN COALESCE(t.in_rate_bps, 0) >= COALESCE(t.out_rate_bps, 0)
+                               THEN COALESCE(t.in_rate_bps, 0)
+                               ELSE COALESCE(t.out_rate_bps, 0) END) AS peak_bps
                FROM interface_ts t
                JOIN hosts h ON h.id = t.host_id
                WHERE t.sampled_at >= ?

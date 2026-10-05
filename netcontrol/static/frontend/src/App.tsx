@@ -34,6 +34,7 @@ const ChangeManagement = lazy(() => pageLoaders.changeManagement().then(m => ({ 
 const CloudVisibility = lazy(() => pageLoaders.cloudVisibility().then(m => ({ default: m.CloudVisibility })));
 const Inventory = lazy(() => pageLoaders.inventory().then(m => ({ default: m.Inventory })));
 const Ipam = lazy(() => pageLoaders.ipam().then(m => ({ default: m.Ipam })));
+const Software = lazy(() => pageLoaders.software().then(m => ({ default: m.Software })));
 const Jobs = lazy(() => pageLoaders.jobs().then(m => ({ default: m.Jobs })));
 const Lab = lazy(() => pageLoaders.lab().then(m => ({ default: m.Lab })));
 const MaintenanceWindows = lazy(() => pageLoaders.maintenanceWindows().then(m => ({ default: m.MaintenanceWindows })));
@@ -56,6 +57,7 @@ const BREADCRUMBS: Record<string, string> = {
   '/floor-plan': 'Floor Plans',
   '/inventory': 'Inventory',
   '/ipam': 'IPAM',
+  '/software': 'Software Versions',
   '/compliance': 'Compliance',
   '/configuration': 'Configuration',
   '/change-management': 'Changes',
@@ -206,6 +208,7 @@ export function App() {
           <Route path="/floor-plan" element={<FloorPlan />} />
           <Route path="/inventory" element={<Inventory />} />
           <Route path="/ipam" element={<Ipam />} />
+          <Route path="/software" element={<Software />} />
           <Route path="/compliance" element={<Compliance />} />
           <Route path="/configuration" element={<Configuration />} />
           <Route path="/change-management" element={<ChangeManagement />} />

@@ -28,6 +28,7 @@ import { PageHelp } from '@/components/PageHelp';
 import { AddToInventoryModal } from './AddToInventoryModal';
 import { ChangesModal } from './ChangesModal';
 import { DiscoveryProgressModal } from './DiscoveryProgressModal';
+import { ExportMenu } from './ExportMenu';
 import { exportJSON, exportPNG, exportSVG } from './exporters';
 import {
   abbreviateInterface,
@@ -616,6 +617,7 @@ export function Topology() {
       : edge.protocol === 'vpn' ? [10, 6]
       : edge.protocol === 'vpn-ipsec' ? [3, 5]
       : edge.protocol === 'wan' ? [4, 4]
+      : edge.protocol === 'management' ? [2, 4]
       : false;
     // A Meraki VPN tunnel / WAN uplink the Dashboard reports as down.
     const downColor = isEdgeDown(edge) ? DOWN_EDGE_COLOR : null;
@@ -1547,7 +1549,7 @@ export function Topology() {
       <PageHelp
         pageKey="topology"
         title="Interactive Network Map"
-        text="Visualize your network as an interactive graph. Drag nodes to rearrange, zoom in/out, and click devices to view details. Connections are discovered from device data (CDP/LLDP/OSPF/BGP) and, for Meraki organizations, Cato accounts and AWS accounts, from their APIs. Search finds devices by name or address and Meraki devices by anything collected for them - VLANs, subnets, routes, VPN peers, firewall rules. Sources lists everything that feeds the map and collects it again. Export HTML saves the whole map as one shareable interactive file."
+        text="Visualize your network as an interactive graph. Drag nodes to rearrange, zoom in/out, and click devices to view details. Connections are discovered from device data (CDP/LLDP/OSPF/BGP) and, for Meraki organizations, Cato accounts, AnyConnect FMCs and AWS accounts, from their APIs. Search finds devices by name or address and Meraki devices by anything collected for them - VLANs, subnets, routes, VPN peers, firewall rules. Sources lists everything that feeds the map and collects it again. Export HTML saves the whole map as one shareable interactive file."
       />
 
       {actionMsg && (
@@ -1582,7 +1584,7 @@ export function Topology() {
           >
             <option value="all">All sources</option>
             <option value="inventory">Inventory only</option>
-            <option value="meraki">Meraki / Cato / AWS only</option>
+            <option value="meraki">Meraki / Cato / AnyConnect / AWS only</option>
           </select>
         )}
 
@@ -1650,7 +1652,7 @@ export function Topology() {
           )}
         </div>
 
-        <button className="btn btn-primary btn-sm" onClick={() => setSourcesOpen(true)} title="Everything that feeds the map - neighbor discovery, Meraki, Cato, AWS: add, collect, history">Sources</button>
+        <button className="btn btn-primary btn-sm" onClick={() => setSourcesOpen(true)} title="Everything that feeds the map - neighbor discovery, Meraki, Cato, AnyConnect, AWS: add, collect, history">Sources</button>
         <button className="btn btn-secondary btn-sm" onClick={handleRefresh}>Refresh</button>
         <button className="btn btn-secondary btn-sm" onClick={handleFit}>Fit</button>
         <button className={`btn btn-sm ${pathMode ? 'btn-primary' : 'btn-secondary'}`} onClick={togglePathMode} title="Pick devices or sites and see how they reach one another">{pathMode ? 'Exit Path' : 'Path Mode'}</button>
@@ -1681,26 +1683,13 @@ export function Topology() {
         </button>
         <button className="btn btn-secondary btn-sm" onClick={handleResetPositions}>Reset Positions</button>
         <button className="btn btn-secondary btn-sm" onClick={() => setSettingsOpen((v) => !v)}>Settings</button>
-        <button className="btn btn-secondary btn-sm" onClick={handleExportPNG}>PNG</button>
-        <button className="btn btn-secondary btn-sm" onClick={handleExportSVG}>SVG</button>
-        <button className="btn btn-secondary btn-sm" onClick={handleExportJSON}>JSON</button>
-        <a
-          className="btn btn-secondary btn-sm"
-          href={topologyExportUrl(groupId, true)}
-          download
-          title="Download the whole map, with every device's details, as one interactive HTML file"
-        >
-          HTML
-        </a>
-        <a
-          className="btn btn-secondary btn-sm"
-          href={topologyExportUrl(groupId)}
-          target="_blank"
-          rel="noopener noreferrer"
-          title="Open the interactive HTML map in a new tab"
-        >
-          Open HTML Map
-        </a>
+        <ExportMenu
+          onPNG={handleExportPNG}
+          onSVG={handleExportSVG}
+          onJSON={handleExportJSON}
+          htmlDownloadUrl={topologyExportUrl(groupId, true)}
+          htmlOpenUrl={topologyExportUrl(groupId)}
+        />
       </div>
 
       {highlightCount > 0 && (
@@ -1862,7 +1851,7 @@ export function Topology() {
 
       {data && !data.nodes.length && (
         <div className="card" style={{ padding: '1.5rem', textAlign: 'center' }}>
-          <p className="text-muted" style={{ marginTop: 0 }}>No topology data. Open Sources to discover the neighbors of your inventory devices, or to add a Meraki organization, a Cato account or an AWS account.</p>
+          <p className="text-muted" style={{ marginTop: 0 }}>No topology data. Open Sources to discover the neighbors of your inventory devices, or to add a Meraki organization, a Cato account, an AnyConnect FMC or an AWS account.</p>
           <button className="btn btn-primary btn-sm" onClick={() => setSourcesOpen(true)}>Sources</button>
         </div>
       )}
@@ -1926,10 +1915,11 @@ export function Topology() {
           <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-bgp" /> BGP</span>
           {hasMeraki && sourceFilter !== 'inventory' && (
             <>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#8bc34a' }} /> Meraki / Cato / AWS</span>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#8bc34a' }} /> Meraki / Cato / AnyConnect / AWS</span>
               <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#ba68c8' }} /> VPN Tunnel</span>
               <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#ff9800' }} /> Cloud Attachment</span>
               <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#4fc3f7' }} /> WAN Uplink</span>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#9e9e9e' }} /> Managed by FMC</span>
               <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#f44336' }} /> Offline / Unreachable</span>
             </>
           )}
