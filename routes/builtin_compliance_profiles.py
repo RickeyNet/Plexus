@@ -713,33 +713,66 @@ BUILTIN_PROFILES = [
     ),
     (
         "Meraki Wireless Security Baseline",
-        "Meraki MR SSID hardening - no open SSIDs, WPA2 or stronger, 802.1X on "
-        "corporate SSIDs and LAN isolation (or NAT mode) on guest SSIDs.",
+        "Meraki MR SSID hardening, evaluated per SSID - no open SSIDs (and a splash "
+        "page where one is open), WPA2 or stronger, 802.1X with redundant RADIUS on "
+        "corporate SSIDs, 802.11w, and for guest SSIDs LAN isolation, an SSID firewall "
+        "denying the LAN, mandatory DHCP and a per-client bandwidth cap.",
         "high",
         [
             {
-                "name": "No open SSIDs",
+                "name": "SSID requires authentication (not open)",
                 "type": "meraki",
-                "check": "wifi_no_open_ssids",
+                "check": "ssid_requires_auth",
                 "params": {"exempt_name_pattern": ""},
             },
             {
                 "name": "WPA2 or stronger encryption",
                 "type": "meraki",
-                "check": "wifi_wpa2_or_better",
+                "check": "ssid_wpa2_or_better",
                 "params": {"minimum": "WPA2 only"},
             },
             {
-                "name": "Corporate SSIDs use 802.1X",
+                "name": "Corporate SSID uses 802.1X",
                 "type": "meraki",
-                "check": "wifi_enterprise_auth",
+                "check": "ssid_enterprise_auth",
                 "params": {"guest_name_pattern": "guest|visitor|public"},
             },
             {
-                "name": "Guest SSIDs isolated from the LAN",
+                "name": "802.1X SSID has redundant RADIUS servers",
                 "type": "meraki",
-                "check": "wifi_guest_isolation",
+                "check": "ssid_radius_redundancy",
+                "params": {"min_servers": 2, "require_accounting": False},
+            },
+            {
+                "name": "Management frame protection (802.11w) enabled",
+                "type": "meraki",
+                "check": "ssid_pmf_enabled",
+                "params": {"require_mandatory": False},
+            },
+            {"name": "Open SSID has a splash page", "type": "meraki", "check": "ssid_splash_on_open"},
+            {
+                "name": "Guest SSID isolated from the LAN",
+                "type": "meraki",
+                "check": "ssid_guest_isolated",
                 "params": {"guest_name_pattern": "guest|visitor|public"},
+            },
+            {
+                "name": "Guest SSID firewall denies the LAN",
+                "type": "meraki",
+                "check": "ssid_guest_lan_firewall",
+                "params": {"guest_name_pattern": "guest|visitor|public"},
+            },
+            {
+                "name": "Mandatory DHCP enabled",
+                "type": "meraki",
+                "check": "ssid_mandatory_dhcp",
+                "params": {"guest_only": True, "guest_name_pattern": "guest|visitor|public"},
+            },
+            {
+                "name": "Guest SSID has a per-client bandwidth limit",
+                "type": "meraki",
+                "check": "ssid_guest_bandwidth_limit",
+                "params": {"guest_name_pattern": "guest|visitor|public", "require_upload_limit": False},
             },
         ],
     ),

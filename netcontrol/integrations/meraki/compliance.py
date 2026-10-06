@@ -35,7 +35,8 @@ A profile rule that names a check looks like::
 ``evaluate_profile`` is pure: it takes the payloads ``collect_compliance_data``
 gathered (or :func:`build_sample_compliance_raw`) and returns one result per
 *target* - the organization for organization-level checks, each network for
-network-level checks, each switch for port checks - with a finding per check.
+network-level checks, each switch for port checks, each enabled SSID for
+wireless checks - with a finding per check.
 Plexus stays a read-only observer of the organization: there is no
 remediation for Meraki findings; the finding says what to change in the
 Dashboard.
@@ -62,7 +63,8 @@ RULE_TYPE = "meraki"
 SCOPE_ORG = "org"
 SCOPE_NETWORK = "network"
 SCOPE_DEVICE = "device"
-SCOPES = (SCOPE_ORG, SCOPE_NETWORK, SCOPE_DEVICE)
+SCOPE_SSID = "ssid"
+SCOPES = (SCOPE_ORG, SCOPE_NETWORK, SCOPE_DEVICE, SCOPE_SSID)
 
 CATEGORIES = {
     "switching": "Switching (MS)",
@@ -127,8 +129,15 @@ ENDPOINTS: dict[str, tuple[str, str, bool, tuple[str, ...]]] = {
     "one_to_one_nat": (SCOPE_NETWORK, "networks/{net}/appliance/firewall/oneToOneNatRules", False, ("appliance",)),
     "l3_firewall": (SCOPE_NETWORK, "networks/{net}/appliance/firewall/l3FirewallRules", False, ("appliance",)),
     "content_filtering": (SCOPE_NETWORK, "networks/{net}/appliance/contentFiltering", False, ("appliance",)),
-    # network - wireless
+    # network - wireless (the SSID list; SSID checks are evaluated per enabled SSID)
     "ssids": (SCOPE_NETWORK, "networks/{net}/wireless/ssids", False, ("wireless",)),
+    # SSID - one call per enabled SSID; only when a check needs it
+    "ssid_l3_firewall": (
+        SCOPE_SSID,
+        "networks/{net}/wireless/ssids/{number}/firewall/l3FirewallRules",
+        False,
+        ("wireless",),
+    ),
     # network - services (any product)
     "syslog": (SCOPE_NETWORK, "networks/{net}/syslogServers", False, ()),
     "net_snmp": (SCOPE_NETWORK, "networks/{net}/snmp", False, ()),
@@ -154,6 +163,9 @@ class Check:
     # Network product types (network scope) or device kinds (device scope)
     # the check applies to. Empty = every network / device.
     products: tuple[str, ...] = ()
+    # Payloads the check uses when available but can do without (``None`` in
+    # ``data`` when not collected, not applicable or unreadable).
+    optional: tuple[str, ...] = ()
 
 
 CHECKS: dict[str, Check] = {}
@@ -164,8 +176,8 @@ def _check(**kwargs: Any) -> Callable[[Evaluator], Evaluator]:
         check = Check(evaluate=fn, **kwargs)
         if check.scope not in SCOPES:
             raise ValueError(f"check {check.id}: bad scope {check.scope}")
-        for key in check.requires:
-            if key not in ENDPOINTS and key not in ("device", "ports", "network"):
+        for key in check.requires + check.optional:
+            if key not in ENDPOINTS and key not in ("device", "ports", "network", "ssid"):
                 raise ValueError(f"check {check.id}: unknown endpoint {key}")
         CHECKS[check.id] = check
         return fn
@@ -852,15 +864,20 @@ def _eval_content_filtering(data: dict, params: dict, _ctx: dict) -> tuple[bool,
     return False, f"Only {_plural(len(categories), 'URL category')} blocked (minimum {minimum})", _cap(names)
 
 
-# ── Wireless: network scope ──────────────────────────────────────────────────
+# ── Wireless: SSID scope (one target per enabled SSID) ───────────────────────
+#
+# ``data["ssid"]`` is the SSID object from ``networks/{net}/wireless/ssids``;
+# per-SSID endpoints (the SSID's own L3 firewall) are collected only for
+# enabled SSIDs and only when a check asks for them. A check that does not
+# concern this SSID (a guest check on a corporate SSID) returns ``None`` as
+# its verdict and leaves no finding.
+
+_OPEN_AUTH_MODES = ("open", "open-enhanced", "open-with-radius", "open-with-nac")
+_GUEST_PATTERN = "guest|visitor|public"
 
 
-def _enabled_ssids(data: dict) -> list[dict]:
-    return [s for s in data["ssids"] or [] if isinstance(s, dict) and s.get("enabled")]
-
-
-def _ssid_label(ssid: dict) -> str:
-    return f"SSID {ssid.get('number', '?')} '{ssid.get('name') or ''}'"
+def _ssid_is_open(ssid: dict) -> bool:
+    return str(ssid.get("authMode") or "open").lower() in _OPEN_AUTH_MODES
 
 
 def _ssid_matches(ssid: dict, pattern: str) -> bool:
@@ -872,42 +889,57 @@ def _ssid_matches(ssid: dict, pattern: str) -> bool:
         return False
 
 
+def _ssid_is_guest(ssid: dict, params: dict) -> bool:
+    return _ssid_matches(ssid, str(params.get("guest_name_pattern") or ""))
+
+
+def _lan_access_rule(l3: dict | None) -> dict | None:
+    """The SSID firewall's "Wireless clients accessing LAN" rule (destination
+    ``Local LAN``), or ``None`` when the payload has no such rule."""
+    for rule in (l3 or {}).get("rules") or []:
+        if isinstance(rule, dict) and str(rule.get("destCidr") or "").strip().lower() == "local lan":
+            return rule
+    return None
+
+
+_NA: tuple[None, str, list[str]] = (None, "", [])
+
+
 @_check(
-    id="wifi_no_open_ssids",
-    name="No open SSIDs",
-    scope=SCOPE_NETWORK,
+    id="ssid_requires_auth",
+    name="SSID requires authentication (not open)",
+    scope=SCOPE_SSID,
     category="wireless",
-    description="Every enabled SSID must require authentication (not open); a splash page alone is not authentication.",
+    description=(
+        "The SSID must authenticate clients (PSK, 802.1X, identity PSK); an open SSID, even with a "
+        "splash page, does not. SSIDs whose name matches the exempt pattern are skipped."
+    ),
     ios_equivalent="no open WLAN",
-    requires=("ssids",),
+    requires=("ssid",),
     params={"exempt_name_pattern": ""},
     products=("wireless",),
 )
-def _eval_no_open(data: dict, params: dict, _ctx: dict) -> tuple[bool, str, list[str]]:
-    pattern = str(params.get("exempt_name_pattern") or "")
-    ssids = _enabled_ssids(data)
-    bad = [
-        _ssid_label(s)
-        for s in ssids
-        if str(s.get("authMode") or "open").lower() in ("open", "open-enhanced") and not _ssid_matches(s, pattern)
-    ]
-    if bad:
-        return False, f"{len(bad)} of {_plural(len(ssids), 'enabled SSID')} open", bad
-    return True, f"All {_plural(len(ssids), 'enabled SSID')} require authentication", []
+def _eval_ssid_auth(data: dict, params: dict, _ctx: dict) -> tuple[bool | None, str, list[str]]:
+    ssid = data["ssid"]
+    if _ssid_matches(ssid, str(params.get("exempt_name_pattern") or "")):
+        return _NA
+    if _ssid_is_open(ssid):
+        return False, f"Authentication mode is '{ssid.get('authMode') or 'open'}'", []
+    return True, f"Authentication mode {ssid.get('authMode')}", []
 
 
 @_check(
-    id="wifi_wpa2_or_better",
+    id="ssid_wpa2_or_better",
     name="WPA2 or stronger encryption",
-    scope=SCOPE_NETWORK,
+    scope=SCOPE_SSID,
     category="wireless",
-    description="Enabled SSIDs must not permit WEP or WPA1 (TKIP). Requires 'WPA2 only' or a WPA3 mode by default.",
+    description="A secured SSID must not permit WEP or WPA1 (TKIP); 'WPA2 only' or a WPA3 mode is required by default.",
     ios_equivalent="security wpa wpa2 / wpa3",
-    requires=("ssids",),
+    requires=("ssid",),
     params={"minimum": "WPA2 only"},
     products=("wireless",),
 )
-def _eval_wpa(data: dict, params: dict, _ctx: dict) -> tuple[bool, str, list[str]]:
+def _eval_ssid_wpa(data: dict, params: dict, _ctx: dict) -> tuple[bool | None, str, list[str]]:
     rank = {
         "wpa1 only": 0,
         "wpa1 and wpa2": 0,
@@ -916,85 +948,231 @@ def _eval_wpa(data: dict, params: dict, _ctx: dict) -> tuple[bool, str, list[str
         "wpa3 only": 3,
         "wpa3 192-bit security": 4,
     }
-    minimum = rank.get(str(params.get("minimum") or "WPA2 only").lower(), 1)
-    bad: list[str] = []
-    checked = 0
-    for s in _enabled_ssids(data):
-        enc = str(s.get("encryptionMode") or "").lower()
-        auth = str(s.get("authMode") or "").lower()
-        if auth in ("open", "open-enhanced"):
-            continue  # open SSIDs are reported by wifi_no_open_ssids
-        checked += 1
-        if enc == "wep":
-            bad.append(f"{_ssid_label(s)}: WEP")
-            continue
-        wpa_mode = str(s.get("wpaEncryptionMode") or "").lower()
-        # Meraki omits wpaEncryptionMode on some auth modes; absence is the
-        # dashboard default (WPA2 only), not a weakness.
-        if wpa_mode and rank.get(wpa_mode, 1) < minimum:
-            bad.append(f"{_ssid_label(s)}: {s.get('wpaEncryptionMode')}")
-    if bad:
-        return False, f"{len(bad)} of {_plural(checked, 'secured SSID')} below the required WPA mode", bad
-    return True, f"All {_plural(checked, 'secured SSID')} at or above {params.get('minimum') or 'WPA2 only'}", []
+    ssid = data["ssid"]
+    if _ssid_is_open(ssid):
+        return _NA  # reported by ssid_requires_auth
+    minimum_name = str(params.get("minimum") or "WPA2 only")
+    minimum = rank.get(minimum_name.lower(), 1)
+    if str(ssid.get("encryptionMode") or "").lower() == "wep":
+        return False, "WEP encryption", []
+    wpa_mode = str(ssid.get("wpaEncryptionMode") or "")
+    # Meraki omits wpaEncryptionMode on some auth modes; absence is the
+    # dashboard default (WPA2 only), not a weakness.
+    if wpa_mode and rank.get(wpa_mode.lower(), 1) < minimum:
+        return False, f"WPA mode '{wpa_mode}' is below '{minimum_name}'", []
+    return True, f"WPA mode {wpa_mode or 'WPA2 only (default)'}", []
 
 
 @_check(
-    id="wifi_enterprise_auth",
-    name="Corporate SSIDs use 802.1X",
-    scope=SCOPE_NETWORK,
+    id="ssid_enterprise_auth",
+    name="Corporate SSID uses 802.1X",
+    scope=SCOPE_SSID,
     category="wireless",
     description=(
-        "Enabled SSIDs other than guest SSIDs (name matches the guest pattern) must authenticate "
-        "with 802.1X (RADIUS, Meraki Cloud, local RADIUS or NAC), not a pre-shared key."
+        "An SSID that is not a guest SSID (name matches the guest pattern) must authenticate with "
+        "802.1X (RADIUS, Meraki Cloud, local RADIUS or NAC), not a pre-shared key."
     ),
     ios_equivalent="dot1x / aaa authentication on the WLAN",
-    requires=("ssids",),
-    params={"guest_name_pattern": "guest|visitor|public"},
+    requires=("ssid",),
+    params={"guest_name_pattern": _GUEST_PATTERN},
     products=("wireless",),
 )
-def _eval_enterprise_auth(data: dict, params: dict, _ctx: dict) -> tuple[bool, str, list[str]]:
-    pattern = str(params.get("guest_name_pattern") or "")
-    corp = [s for s in _enabled_ssids(data) if not _ssid_matches(s, pattern)]
-    bad = [
-        f"{_ssid_label(s)}: {s.get('authMode') or 'open'}"
-        for s in corp
-        if not str(s.get("authMode") or "").lower().startswith("8021x")
-    ]
-    if not corp:
-        return True, "No corporate SSIDs enabled", []
-    if bad:
-        return False, f"{len(bad)} of {_plural(len(corp), 'corporate SSID')} not using 802.1X", bad
-    return True, f"All {_plural(len(corp), 'corporate SSID')} use 802.1X", []
+def _eval_ssid_enterprise(data: dict, params: dict, _ctx: dict) -> tuple[bool | None, str, list[str]]:
+    ssid = data["ssid"]
+    if _ssid_is_guest(ssid, params):
+        return _NA
+    auth = str(ssid.get("authMode") or "open")
+    if auth.lower().startswith("8021x"):
+        return True, f"802.1X ({auth})", []
+    return False, f"Authentication mode is '{auth}'", []
 
 
 @_check(
-    id="wifi_guest_isolation",
-    name="Guest SSIDs isolated from the LAN",
-    scope=SCOPE_NETWORK,
+    id="ssid_radius_redundancy",
+    name="802.1X SSID has redundant RADIUS servers",
+    scope=SCOPE_SSID,
     category="wireless",
     description=(
-        "Enabled guest SSIDs (name matches the guest pattern) must use NAT mode or have LAN "
-        "isolation enabled in bridge mode."
+        "An SSID authenticating against RADIUS must list at least the configured number of RADIUS "
+        "servers (two by default) so one server failing does not take the SSID down; RADIUS "
+        "accounting can be required as well."
     ),
-    ios_equivalent="peer-to-peer blocking / guest ACL on the WLAN",
-    requires=("ssids",),
-    params={"guest_name_pattern": "guest|visitor|public"},
+    ios_equivalent="radius server group with two servers / aaa accounting",
+    requires=("ssid",),
+    params={"min_servers": 2, "require_accounting": False},
     products=("wireless",),
 )
-def _eval_guest_isolation(data: dict, params: dict, _ctx: dict) -> tuple[bool, str, list[str]]:
-    pattern = str(params.get("guest_name_pattern") or "")
-    guests = [s for s in _enabled_ssids(data) if _ssid_matches(s, pattern)]
-    bad: list[str] = []
-    for s in guests:
-        mode = str(s.get("ipAssignmentMode") or "").lower()
-        if mode.startswith("nat") or s.get("lanIsolationEnabled"):
-            continue
-        bad.append(f"{_ssid_label(s)}: {s.get('ipAssignmentMode') or 'bridge'} without LAN isolation")
-    if not guests:
-        return True, "No guest SSIDs enabled", []
-    if bad:
-        return False, f"{len(bad)} of {_plural(len(guests), 'guest SSID')} can reach the LAN", bad
-    return True, f"All {_plural(len(guests), 'guest SSID')} isolated", []
+def _eval_ssid_radius(data: dict, params: dict, _ctx: dict) -> tuple[bool | None, str, list[str]]:
+    ssid = data["ssid"]
+    auth = str(ssid.get("authMode") or "").lower()
+    if auth not in ("8021x-radius", "ipsk-with-radius", "open-with-radius"):
+        return _NA
+    servers = [r for r in ssid.get("radiusServers") or [] if isinstance(r, dict)]
+    minimum = int(params.get("min_servers", 2))
+    listed = [f"{r.get('host')}:{r.get('port')}" for r in servers]
+    problems: list[str] = []
+    if len(servers) < minimum:
+        problems.append(f"{_plural(len(servers), 'RADIUS server')} (minimum {minimum})")
+    if params.get("require_accounting") and not ssid.get("radiusAccountingEnabled"):
+        problems.append("RADIUS accounting disabled")
+    if problems:
+        return False, "; ".join(problems), listed
+    return True, _plural(len(servers), "RADIUS server"), listed
+
+
+@_check(
+    id="ssid_pmf_enabled",
+    name="Management frame protection (802.11w) enabled",
+    scope=SCOPE_SSID,
+    category="wireless",
+    description=(
+        "A secured SSID must enable protected management frames; 'required' can be demanded for WPA3-only SSIDs."
+    ),
+    ios_equivalent="security pmf optional / mandatory",
+    requires=("ssid",),
+    params={"require_mandatory": False},
+    products=("wireless",),
+)
+def _eval_ssid_pmf(data: dict, params: dict, _ctx: dict) -> tuple[bool | None, str, list[str]]:
+    ssid = data["ssid"]
+    if _ssid_is_open(ssid):
+        return _NA
+    pmf = ssid.get("dot11w") or {}
+    if not pmf.get("enabled"):
+        return False, "802.11w is disabled", []
+    if params.get("require_mandatory") and not pmf.get("required"):
+        return False, "802.11w is optional, not required", []
+    return True, f"802.11w {'required' if pmf.get('required') else 'enabled'}", []
+
+
+@_check(
+    id="ssid_splash_on_open",
+    name="Open SSID has a splash page",
+    scope=SCOPE_SSID,
+    category="wireless",
+    description="An open SSID must at least present a splash page (click-through, sponsored, sign-on) before granting access.",
+    ios_equivalent="web authentication on the WLAN",
+    requires=("ssid",),
+    products=("wireless",),
+)
+def _eval_ssid_splash(data: dict, params: dict, _ctx: dict) -> tuple[bool | None, str, list[str]]:
+    ssid = data["ssid"]
+    if not _ssid_is_open(ssid):
+        return _NA
+    splash = str(ssid.get("splashPage") or "None")
+    if splash.lower() in ("none", ""):
+        return False, "Open SSID without a splash page", []
+    return True, f"Splash page: {splash}", []
+
+
+@_check(
+    id="ssid_guest_isolated",
+    name="Guest SSID isolated from the LAN",
+    scope=SCOPE_SSID,
+    category="wireless",
+    description=(
+        "A guest SSID (name matches the guest pattern) must keep clients off the LAN: NAT mode, LAN "
+        "isolation in bridge mode, or an SSID firewall rule denying 'Local LAN'."
+    ),
+    ios_equivalent="guest ACL / peer-to-peer blocking on the WLAN",
+    requires=("ssid",),
+    optional=("ssid_l3_firewall",),
+    params={"guest_name_pattern": _GUEST_PATTERN},
+    products=("wireless",),
+)
+def _eval_ssid_guest_isolated(data: dict, params: dict, _ctx: dict) -> tuple[bool | None, str, list[str]]:
+    ssid = data["ssid"]
+    if not _ssid_is_guest(ssid, params):
+        return _NA
+    mode = str(ssid.get("ipAssignmentMode") or "Bridge mode")
+    if mode.lower().startswith("nat"):
+        return True, "NAT mode", []
+    if ssid.get("lanIsolationEnabled"):
+        return True, f"{mode} with LAN isolation", []
+    rule = _lan_access_rule(data.get("ssid_l3_firewall"))
+    if rule is not None and str(rule.get("policy") or "").lower() == "deny":
+        return True, f"{mode}; SSID firewall denies Local LAN", []
+    return False, f"{mode} without LAN isolation" + ("" if rule is None else "; SSID firewall allows Local LAN"), []
+
+
+@_check(
+    id="ssid_guest_lan_firewall",
+    name="Guest SSID firewall denies the LAN",
+    scope=SCOPE_SSID,
+    category="wireless",
+    description=(
+        "The SSID firewall of a guest SSID must set 'Wireless clients accessing LAN' to deny "
+        "(the Local LAN rule), whatever the IP assignment mode. Read per SSID."
+    ),
+    ios_equivalent="ip access-group on the WLAN denying internal ranges",
+    requires=("ssid", "ssid_l3_firewall"),
+    params={"guest_name_pattern": _GUEST_PATTERN},
+    products=("wireless",),
+)
+def _eval_ssid_guest_lan_fw(data: dict, params: dict, _ctx: dict) -> tuple[bool | None, str, list[str]]:
+    ssid = data["ssid"]
+    if not _ssid_is_guest(ssid, params):
+        return _NA
+    rule = _lan_access_rule(data["ssid_l3_firewall"])
+    if rule is None:
+        return False, "SSID firewall has no 'Local LAN' rule", []
+    policy = str(rule.get("policy") or "").lower()
+    if policy == "deny":
+        return True, "Wireless clients accessing LAN: deny", []
+    return False, f"Wireless clients accessing LAN: {policy or 'allow'}", []
+
+
+@_check(
+    id="ssid_mandatory_dhcp",
+    name="Mandatory DHCP enabled",
+    scope=SCOPE_SSID,
+    category="wireless",
+    description=(
+        "Clients must obtain their address by DHCP (a static address is dropped), which stops a "
+        "client from taking another host's IP. Applies to guest SSIDs by default, or to all."
+    ),
+    ios_equivalent="ip dhcp snooping + ip source guard on the WLAN",
+    requires=("ssid",),
+    params={"guest_only": True, "guest_name_pattern": _GUEST_PATTERN},
+    products=("wireless",),
+)
+def _eval_ssid_mandatory_dhcp(data: dict, params: dict, _ctx: dict) -> tuple[bool | None, str, list[str]]:
+    ssid = data["ssid"]
+    if params.get("guest_only", True) and not _ssid_is_guest(ssid, params):
+        return _NA
+    if ssid.get("mandatoryDhcpEnabled"):
+        return True, "Mandatory DHCP enabled", []
+    return False, "Mandatory DHCP disabled", []
+
+
+@_check(
+    id="ssid_guest_bandwidth_limit",
+    name="Guest SSID has a per-client bandwidth limit",
+    scope=SCOPE_SSID,
+    category="wireless",
+    description="A guest SSID must cap each client's download (and optionally upload) bandwidth.",
+    ios_equivalent="QoS policing on the WLAN",
+    requires=("ssid",),
+    params={"guest_name_pattern": _GUEST_PATTERN, "require_upload_limit": False},
+    products=("wireless",),
+)
+def _eval_ssid_guest_bandwidth(data: dict, params: dict, _ctx: dict) -> tuple[bool | None, str, list[str]]:
+    ssid = data["ssid"]
+    if not _ssid_is_guest(ssid, params):
+        return _NA
+
+    def _kbps(key: str) -> int:
+        try:
+            return int(ssid.get(key) or 0)
+        except TypeError, ValueError:
+            return 0
+
+    down, up = _kbps("perClientBandwidthLimitDown"), _kbps("perClientBandwidthLimitUp")
+    if down <= 0:
+        return False, "No per-client download limit", []
+    if params.get("require_upload_limit") and up <= 0:
+        return False, f"Download limited to {down} kbps but upload unlimited", []
+    return True, f"Per-client limit {down} kbps down" + (f", {up} kbps up" if up > 0 else ""), []
 
 
 # ── Network services: network scope ──────────────────────────────────────────
@@ -1339,7 +1517,9 @@ def required_endpoints(rules: Any) -> set[str]:
         check = CHECKS.get(str(rule.get("check") or ""))
         if check is None:
             continue
-        for key in check.requires:
+        if check.scope == SCOPE_SSID:
+            needed.add("ssids")
+        for key in check.requires + check.optional:
             if key == "ports":
                 needed.add("switch_ports")
             elif key in ENDPOINTS:
@@ -1439,6 +1619,8 @@ async def collect_compliance_data(
         "networks_detail": {n["id"]: {} for n in networks},
         "devices_detail": {d["serial"]: {} for d in devices},
         "switch_ports": {},
+        # network id -> SSID number (str) -> {endpoint key: payload}
+        "ssids_detail": {},
         "options": opts,
     }
     has_switches = any(_device_kind(d) == "switch" for d in devices)
@@ -1485,6 +1667,29 @@ async def collect_compliance_data(
                 (detail, key, fetcher.fetch(f"device:{dev.get('name') or dev['serial']}", path, paginated=paginated))
             )
     await fetcher.run(dev_jobs)
+
+    # Per-SSID endpoints, for the enabled SSIDs of each wireless network only
+    # (the SSID list was fetched in the network phase).
+    ssid_keys = [k for k in sorted(needed) if ENDPOINTS[k][0] == SCOPE_SSID]
+    if ssid_keys:
+        fetcher.phase = "ssids"
+        ssid_jobs: list[tuple[dict, str, Awaitable[Any]]] = []
+        for net in networks:
+            ssids = raw["networks_detail"][net["id"]].get("ssids")
+            if not isinstance(ssids, list):
+                continue
+            per_net = raw["ssids_detail"].setdefault(net["id"], {})
+            for ssid in ssids:
+                if not isinstance(ssid, dict) or not ssid.get("enabled") or ssid.get("number") is None:
+                    continue
+                number = str(ssid["number"])
+                detail = per_net.setdefault(number, {})
+                scope = f"ssid:{net.get('name') or net['id']}/{ssid.get('name') or number}"
+                for key in ssid_keys:
+                    _scope, template, paginated, _products = ENDPOINTS[key]
+                    path = template.format(net=net["id"], number=number)
+                    ssid_jobs.append((detail, key, fetcher.fetch(scope, path, paginated=paginated)))
+        await fetcher.run(ssid_jobs)
 
     ports_payload = raw["org"].pop("switch_ports", None)
     if isinstance(ports_payload, Unreadable):
@@ -1540,6 +1745,9 @@ def _resolve(check: Check, sources: dict[str, Any]) -> tuple[dict[str, Any] | No
         if value is None:
             return None, None
         data[key] = value
+    for key in check.optional:
+        value = sources.get(key)
+        data[key] = None if isinstance(value, Unreadable) else value
     return data, None
 
 
@@ -1565,6 +1773,8 @@ def _evaluate_target(
                 _finding(rule, check, passed=False, unreadable=True, detail=f"Check failed: {type(exc).__name__}")
             )
             continue
+        if passed is None:
+            continue  # the check does not concern this target (e.g. a guest check on a corporate SSID)
         findings.append(
             _finding(rule, check, passed=bool(passed), detail=str(detail), evidence=[str(e) for e in evidence])
         )
@@ -1696,6 +1906,61 @@ def evaluate_profile(rules: Any, raw: dict[str, Any]) -> list[dict[str, Any]]:
             )
             if summary:
                 results.append(summary)
+
+    if by_scope[SCOPE_SSID]:
+        ssids_detail = raw.get("ssids_detail") or {}
+        for net in networks:
+            if "wireless" not in set(net.get("productTypes") or []):
+                continue
+            net_name = str(net.get("name") or net["id"])
+            ssids = (networks_detail.get(net["id"]) or {}).get("ssids")
+            base = {"network_id": str(net["id"]), "network_name": net_name, "model": "", "serial": ""}
+            if isinstance(ssids, Unreadable):
+                # The SSID list itself could not be read: one target says so.
+                findings = [
+                    _finding(
+                        rule, check, passed=False, unreadable=True, detail=f"Could not read ssids: {ssids.message}"
+                    )
+                    for rule, check in by_scope[SCOPE_SSID]
+                ]
+                summary = _summarise(
+                    {
+                        **base,
+                        "target_kind": SCOPE_SSID,
+                        "target_id": f"{net['id']}:*",
+                        "target_name": f"SSIDs of {net_name}",
+                    },
+                    findings,
+                )
+                if summary:
+                    results.append(summary)
+                continue
+            if not isinstance(ssids, list):
+                continue
+            per_net = ssids_detail.get(net["id"]) or {}
+            for ssid in sorted(
+                (x for x in ssids if isinstance(x, dict) and x.get("enabled") and x.get("number") is not None),
+                key=lambda x: int(x["number"]) if str(x["number"]).isdigit() else 99,
+            ):
+                number = str(ssid["number"])
+                sources: dict[str, Any] = dict(per_net.get(number) or {})
+                sources["ssid"] = ssid
+                sources["network"] = net
+                findings = _evaluate_target(
+                    by_scope[SCOPE_SSID], sources, {"ssid": ssid, "network": net, "organization": org}
+                )
+                summary = _summarise(
+                    {
+                        **base,
+                        "target_kind": SCOPE_SSID,
+                        "target_id": f"{net['id']}:{number}",
+                        "target_name": str(ssid.get("name") or f"SSID {number}"),
+                        "model": f"SSID {number}",
+                    },
+                    findings,
+                )
+                if summary:
+                    results.append(summary)
     return results
 
 
@@ -1750,6 +2015,7 @@ def build_sample_compliance_raw() -> dict[str, Any]:
                 port["vlan"] = 1
 
     networks_detail: dict[str, dict] = {}
+    ssids_detail: dict[str, dict] = {}
     for idx, net in enumerate(networks):
         topo_detail = topo["networks_detail"].get(net["id"], {})
         is_hub = idx < 2
@@ -1833,12 +2099,47 @@ def build_sample_compliance_raw() -> dict[str, Any]:
         }
         if detail["l3_firewall"].get("rules"):
             detail["l3_firewall"]["rules"][-1]["syslogEnabled"] = not weak_branch
+        per_ssid: dict[str, dict] = {}
         for ssid in detail["ssids"]:
+            ssid["mandatoryDhcpEnabled"] = True
             if ssid["name"] == "Guest":
-                ssid["ipAssignmentMode"] = "NAT mode"
+                # Bridge mode on the weak branch (and its SSID firewall still lets guests onto the LAN)
+                ssid["ipAssignmentMode"] = "Bridge mode" if weak_branch else "NAT mode"
+                ssid["lanIsolationEnabled"] = False
                 ssid["wpaEncryptionMode"] = "WPA2 only"
+                ssid["dot11w"] = {"enabled": True, "required": False}
+                ssid["perClientBandwidthLimitDown"] = 0 if weak_branch else 5000
+                ssid["perClientBandwidthLimitUp"] = 0 if weak_branch else 2000
+                lan_policy = "allow" if weak_branch else "deny"
             else:
                 ssid["wpaEncryptionMode"] = "WPA1 and WPA2" if weak_branch else "WPA3 Transition Mode"
+                ssid["dot11w"] = {"enabled": not weak_branch, "required": False}
+                ssid["radiusServers"] = [{"host": "10.0.0.30", "port": 1812}] + (
+                    [] if weak_branch else [{"host": "10.0.0.31", "port": 1812}]
+                )
+                ssid["radiusAccountingEnabled"] = not weak_branch
+                lan_policy = "allow"
+            per_ssid[str(ssid["number"])] = {
+                "ssid_l3_firewall": {
+                    "rules": [
+                        {
+                            "comment": "Wireless clients accessing LAN",
+                            "policy": lan_policy,
+                            "protocol": "Any",
+                            "destPort": "Any",
+                            "destCidr": "Local LAN",
+                        },
+                        {
+                            "comment": "Default rule",
+                            "policy": "allow",
+                            "protocol": "Any",
+                            "destPort": "Any",
+                            "destCidr": "Any",
+                        },
+                    ]
+                }
+            }
+        ssids_detail[net["id"]] = per_ssid
         networks_detail[net["id"]] = detail
 
     now = datetime.now(UTC)
@@ -1897,6 +2198,7 @@ def build_sample_compliance_raw() -> dict[str, Any]:
         "networks_detail": networks_detail,
         "devices_detail": {d["serial"]: {} for d in devices},
         "switch_ports": switch_ports,
+        "ssids_detail": ssids_detail,
         "errors": [],
         "stats": {"requests": 0, "retries": 0, "rate_limited": 0},
         "options": {"sample": True},
