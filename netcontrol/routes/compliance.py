@@ -14,6 +14,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 import netcontrol.routes.state as state
+from netcontrol.integrations.meraki.compliance import is_meraki_rule
+from netcontrol.routes.meraki_compliance import (
+    run_due_assignments as _run_due_meraki_assignments,
+    validate_meraki_rules,
+)
 from netcontrol.routes.shared import (
     _audit,
     _capture_running_config,
@@ -146,6 +151,9 @@ def _evaluate_rule(rule: dict, config_text: str) -> dict:
       - must_contain: config must contain the pattern (substring or regex)
       - must_not_contain: config must NOT contain the pattern
       - regex_match: config must match the regex pattern
+      - meraki: not a config rule - evaluated by a Meraki compliance scan
+        (see netcontrol.routes.meraki_compliance); filtered out before this
+        function is reached by host scans.
     """
     _re = re
 
@@ -258,6 +266,11 @@ async def _evaluate_host_compliance(host: dict, profile: dict, credentials: dict
     else:
         rules = rules_json
 
+    # Rules of type "meraki" are evaluated by a Meraki compliance scan of an
+    # organization (netcontrol.routes.meraki_compliance), never against a
+    # host's running config; a mixed profile simply skips them here.
+    rules = [r for r in rules if not is_meraki_rule(r)]
+
     findings = []
     passed = 0
     failed = 0
@@ -296,7 +309,17 @@ async def _run_compliance_check_once(*, force: bool = False) -> dict:
     import asyncio
 
     if not force and not state.COMPLIANCE_CHECK_CONFIG.get("enabled"):
-        return {"enabled": False, "assignments_run": 0, "hosts_scanned": 0, "violations": 0, "errors": 0}
+        return {
+            "enabled": False,
+            "assignments_run": 0,
+            "hosts_scanned": 0,
+            "violations": 0,
+            "errors": 0,
+            "meraki_assignments_run": 0,
+            "meraki_targets_scanned": 0,
+            "meraki_violations": 0,
+            "meraki_errors": 0,
+        }
 
     due_assignments = await db.get_compliance_assignments_due()
     assignments_run = 0
@@ -368,22 +391,31 @@ async def _run_compliance_check_once(*, force: bool = False) -> dict:
             errors += 1
             LOGGER.warning("compliance: assignment %s failed: %s", assignment["id"], exc)
 
+    # Meraki organizations: assignments of profiles with "meraki" rules.
+    meraki = await _run_due_meraki_assignments()
+
     # Retention cleanup
     retention_days = int(
         state.COMPLIANCE_CHECK_CONFIG.get("retention_days", state.COMPLIANCE_CHECK_DEFAULTS["retention_days"])
     )
     try:
         await db.delete_old_compliance_scan_results(retention_days)
+        await db.delete_old_meraki_compliance_results(retention_days)
     except Exception as exc:
         LOGGER.warning("compliance: retention cleanup failed: %s", exc)
 
-    if assignments_run > 0:
+    if assignments_run > 0 or meraki["assignments_run"] > 0:
         LOGGER.info(
-            "compliance: ran %d assignments, scanned %d hosts, %d violations, %d errors",
+            "compliance: ran %d assignments, scanned %d hosts, %d violations, %d errors; "
+            "meraki: %d assignments, %d targets, %d violations, %d errors",
             assignments_run,
             hosts_scanned,
             violations,
             errors,
+            meraki["assignments_run"],
+            meraki["targets_scanned"],
+            meraki["violations"],
+            meraki["errors"],
         )
         increment_metric("compliance.check.scheduled.success")
 
@@ -393,6 +425,10 @@ async def _run_compliance_check_once(*, force: bool = False) -> dict:
         "hosts_scanned": hosts_scanned,
         "violations": violations,
         "errors": errors,
+        "meraki_assignments_run": meraki["assignments_run"],
+        "meraki_targets_scanned": meraki["targets_scanned"],
+        "meraki_violations": meraki["violations"],
+        "meraki_errors": meraki["errors"],
     }
 
 
@@ -430,6 +466,9 @@ async def list_compliance_profiles():
 async def create_compliance_profile(body: ComplianceProfileCreate, request: Request):
     if body.severity not in ("low", "medium", "high", "critical"):
         raise HTTPException(status_code=400, detail="Severity must be low, medium, high, or critical")
+    rule_error = validate_meraki_rules(body.rules)
+    if rule_error:
+        raise HTTPException(status_code=400, detail=rule_error)
     session = _get_session(request)
     profile_id = await db.create_compliance_profile(
         name=body.name,
@@ -467,6 +506,9 @@ async def update_compliance_profile(profile_id: int, body: ComplianceProfileUpda
     if body.description is not None:
         updates["description"] = body.description
     if body.rules is not None:
+        rule_error = validate_meraki_rules(body.rules)
+        if rule_error:
+            raise HTTPException(status_code=400, detail=rule_error)
         updates["rules"] = json.dumps(body.rules)
     if body.severity is not None:
         if body.severity not in ("low", "medium", "high", "critical"):

@@ -220,6 +220,7 @@ from netcontrol.routes.mac_tracking import _mac_move_retention_loop, router as m
 from netcontrol.routes.maintenance_windows import (
     router as maintenance_windows_router,
 )
+from netcontrol.routes.meraki_compliance import router as meraki_compliance_router
 from netcontrol.routes.meraki_topology import init_meraki_topology, router as meraki_topology_router
 from netcontrol.routes.metrics_engine import (
     _downsampling_loop,
@@ -2139,6 +2140,11 @@ app.include_router(
 app.include_router(
     compliance_admin_router,
     dependencies=[Depends(require_admin)],
+)
+# Meraki organizations scanned against profiles with "meraki" rules
+app.include_router(
+    meraki_compliance_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("compliance"))],
 )
 # Risk Analysis
 app.include_router(

@@ -57,6 +57,7 @@ All API endpoints and their required authentication/authorization levels.
 | `config-drift` | `/api/config-drift/*` | config_drift |
 | `config-backups` | `/api/config-backups/*` | config_backups |
 | `compliance` | `/api/compliance/*` | compliance |
+| `compliance` | `/api/compliance/meraki/*` (scans use the organization's stored Dashboard API key, read-only; organizations themselves are managed under `/api/meraki/orgs*`, admin-only) | meraki_compliance |
 | `risk-analysis` | `/api/risk-analysis/*` | risk_analysis |
 | `deployments` | `/api/deployments/*` | deployments |
 | `monitoring` | `/api/monitoring/*`, `/api/sla/*` | monitoring |

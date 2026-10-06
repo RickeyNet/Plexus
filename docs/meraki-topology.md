@@ -16,6 +16,10 @@ a Cisco FMC whose FTDs terminate AnyConnect remote access VPN; see
 Cloud Visibility join the map as well; see
 [aws-topology.md](aws-topology.md).
 
+A registered organization can also be audited by the Compliance page against
+the Meraki equivalents of DHCP snooping, port security, BPDU guard and the
+other hardening controls; see [meraki-compliance.md](meraki-compliance.md).
+
 ## Quick start
 
 1. Open **Network → Topology** and click **Sources** in the toolbar. The

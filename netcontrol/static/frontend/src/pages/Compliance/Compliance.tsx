@@ -13,6 +13,7 @@ import {
   useDeleteAssignment,
   useDeleteProfile,
   useLoadBuiltinProfiles,
+  useMerakiSummary,
   useScanAssignmentNow,
   useUpdateAssignment,
 } from '@/api/compliance';
@@ -23,6 +24,7 @@ import { parseBackendDate } from '@/pages/Dashboard/helpers';
 
 import { AssignProfileModal, EditProfileModal, NewProfileModal } from './ProfileModals';
 import { FindingsModal } from './FindingsModal';
+import { MerakiTab } from './MerakiTab';
 import { RunScanModal } from './RunScanModal';
 
 function formatBackendStamp(iso: string | null | undefined, fallback = '-'): string {
@@ -30,13 +32,14 @@ function formatBackendStamp(iso: string | null | undefined, fallback = '-'): str
   return d ? d.toLocaleString() : fallback;
 }
 
-type Tab = 'profiles' | 'assignments' | 'results' | 'status';
+type Tab = 'profiles' | 'assignments' | 'results' | 'status' | 'meraki';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'profiles', label: 'Profiles' },
   { id: 'assignments', label: 'Assignments' },
   { id: 'results', label: 'Scan Results' },
   { id: 'status', label: 'Host Status' },
+  { id: 'meraki', label: 'Meraki' },
 ];
 
 const TAB_HELP: Record<Tab, { title: string; text: string }> = {
@@ -55,6 +58,10 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   status: {
     title: 'Per-Host Compliance Status',
     text: 'Latest status for each host across all profiles assigned to it. Use this when you want to answer "is this device clean?" without digging through scan history.',
+  },
+  meraki: {
+    title: 'Meraki Organizations',
+    text: 'Meraki has no running config, so profiles carry rules of type "meraki" that check the Dashboard API configuration: DHCP server policy (DHCP snooping), port access policies (port security), BPDU/root guard, storm control, IPS/AMP, SSID security, dashboard login security. Assign such a profile to an organization registered on the Topology page; scans use its stored API key, read-only, and report per organization, network and switch. Load Built-in adds four Meraki baselines.',
   },
 };
 
@@ -80,6 +87,7 @@ export function Compliance() {
   const assignments = useComplianceAssignments();
   const results = useComplianceScanResults(200);
   const status = useComplianceHostStatus();
+  const merakiSummary = useMerakiSummary();
   const loadBuiltin = useLoadBuiltinProfiles();
 
   return (
@@ -141,7 +149,7 @@ export function Compliance() {
         text="Define compliance rules and run audits against your devices. Check configurations against security policies, best practices, and industry standards."
       />
 
-      <SummaryStrip summary={summary.data} />
+      <SummaryStrip summary={summary.data} meraki={merakiSummary.data} />
 
       <PageHelp pageKey={`compliance.${tab}`} title={TAB_HELP[tab].title} text={TAB_HELP[tab].text} />
 
@@ -201,6 +209,7 @@ export function Compliance() {
           {tab === 'status' && (
             <StatusTab status={status.data || []} loading={status.isLoading} query={query} />
           )}
+          {tab === 'meraki' && <MerakiTab query={query} />}
         </div>
       </div>
 
@@ -229,15 +238,30 @@ export function Compliance() {
   );
 }
 
-function SummaryStrip({ summary }: { summary?: { total_profiles?: number; active_assignments?: number; hosts_scanned?: number; hosts_non_compliant?: number; last_scan_at?: string | null } }) {
+function SummaryStrip({
+  summary,
+  meraki,
+}: {
+  summary?: { total_profiles?: number; active_assignments?: number; hosts_scanned?: number; hosts_non_compliant?: number; last_scan_at?: string | null };
+  meraki?: { active_assignments: number; targets_scanned: number; targets_non_compliant: number; last_scan_at: string | null };
+}) {
+  const lastHost = parseBackendDate(summary?.last_scan_at);
+  const lastMeraki = parseBackendDate(meraki?.last_scan_at);
+  const last =
+    lastHost && lastMeraki ? (lastHost > lastMeraki ? lastHost : lastMeraki) : lastHost || lastMeraki;
   const items: { label: string; value: string }[] = [
     { label: 'Profiles', value: String(summary?.total_profiles ?? '-') },
-    { label: 'Assignments', value: String(summary?.active_assignments ?? '-') },
+    {
+      label: 'Assignments',
+      value: `${summary?.active_assignments ?? '-'}${meraki && meraki.active_assignments > 0 ? ` + ${meraki.active_assignments} Meraki` : ''}`,
+    },
     { label: 'Hosts scanned', value: String(summary?.hosts_scanned ?? '-') },
     { label: 'Non-compliant', value: String(summary?.hosts_non_compliant ?? '-') },
+    { label: 'Meraki targets', value: String(meraki?.targets_scanned ?? '-') },
+    { label: 'Meraki non-compliant', value: String(meraki?.targets_non_compliant ?? '-') },
     {
       label: 'Last scan',
-      value: formatBackendStamp(summary?.last_scan_at, 'Never'),
+      value: last ? last.toLocaleString() : 'Never',
     },
   ];
   return (
