@@ -18,7 +18,7 @@ import { MerakiFindingsModal } from './MerakiFindingsModal';
 import { MerakiScanProgress } from './MerakiScanProgress';
 import { statusColor } from './merakiHelpers';
 
-const KIND_LABEL: Record<string, string> = { org: 'Org', network: 'Network', device: 'Switch' };
+const KIND_LABEL: Record<string, string> = { org: 'Org', network: 'Network', device: 'Switch', ssid: 'SSID' };
 
 function stamp(iso: string | null | undefined, fallback = '-'): string {
   const d = parseBackendDate(iso);
@@ -291,7 +291,7 @@ function TargetLine({ r }: { r: MerakiResult }) {
       {r.model && (
         <span style={{ marginLeft: '0.5rem', fontSize: '0.85em', color: 'var(--text-muted)' }}>{r.model}</span>
       )}
-      {r.target_kind === 'device' && r.network_name && (
+      {(r.target_kind === 'device' || r.target_kind === 'ssid') && r.network_name && (
         <span style={{ marginLeft: '0.5rem', fontSize: '0.85em', color: 'var(--text-muted)' }}>
           in {r.network_name}
         </span>

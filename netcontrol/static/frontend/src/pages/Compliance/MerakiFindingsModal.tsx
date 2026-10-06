@@ -25,7 +25,10 @@ export function MerakiFindingsModal({ resultId, onClose }: { resultId: number; o
           <div style={{ marginBottom: '1rem', fontSize: '0.9em' }}>
             <strong>{KIND_LABEL[data.target_kind] || data.target_kind}:</strong> {data.target_name}
             {data.model ? ` (${data.model}${data.serial ? `, ${data.serial}` : ''})` : ''}
-            {data.target_kind === 'device' && data.network_name ? ` in ${data.network_name}` : ''} ·{' '}
+            {(data.target_kind === 'device' || data.target_kind === 'ssid') && data.network_name
+              ? ` in ${data.network_name}`
+              : ''}{' '}
+            ·{' '}
             <strong>Organization:</strong> {data.org_name || '?'} · <strong>Profile:</strong>{' '}
             {data.profile_name || '?'} · <strong>Status:</strong>{' '}
             <span style={{ color: `var(--${statusColor(data.status)})`, fontWeight: 600 }}>{data.status}</span> ·{' '}
