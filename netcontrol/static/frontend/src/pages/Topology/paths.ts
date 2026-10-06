@@ -1,4 +1,4 @@
-import type { AwsReachabilityQuery, MerakiSubnet } from '@/api/meraki';
+import { isCloudAccountProvider, type CloudReachabilityQuery, type MerakiSubnet } from '@/api/meraki';
 import type { TopologyEdge, TopologyNode } from '@/api/topology';
 
 import { isEdgeDown } from './helpers';
@@ -6,8 +6,8 @@ import { layoutGroupKey } from './layout';
 
 // Path mode: how a set of picked devices / sites reach one another over the
 // links on the map. This follows topology (cables, uplinks, VPN tunnels that
-// are up), not route tables. Where a leg has an end in AWS, the server also
-// checks the route tables, network ACLs and security groups (reachabilityQuery).
+// are up), not route tables. Where a leg has an end in AWS or Azure, the
+// server also checks that cloud's routes and filtering rules (reachabilityQueries).
 
 type NodeId = number | string;
 
@@ -228,22 +228,26 @@ export function parseTraffic(text: string): TrafficFilter | null {
 }
 
 /**
- * The check AWS can make for a leg: both ends are subnets or addresses and
- * at least one is in a VPC. Null when there is nothing for AWS to check.
+ * The checks the clouds can make for a leg: both ends are subnets or
+ * addresses, and one check per cloud (AWS, Azure) that holds an end. Empty
+ * when there is nothing for a cloud to check.
  */
-export function reachabilityQuery(from: PathPick, to: PathPick, traffic: TrafficFilter): AwsReachabilityQuery | null {
-  if (!from.subnet || !to.subnet) return null;
-  const inAws = (pick: PathPick) => pick.subnet?.provider === 'aws';
-  if (!inAws(from) && !inAws(to)) return null;
-  return {
-    source: from.address ?? from.subnet.cidr,
-    destination: to.address ?? to.subnet.cidr,
-    // An AWS subnet's site is its VPC.
-    source_vpc: inAws(from) ? from.subnet.site_id : undefined,
-    destination_vpc: inAws(to) ? to.subnet.site_id : undefined,
-    protocol: traffic.protocol,
-    port: traffic.port,
-  };
+export function reachabilityQueries(from: PathPick, to: PathPick, traffic: TrafficFilter): CloudReachabilityQuery[] {
+  if (!from.subnet || !to.subnet) return [];
+  const clouds = [from.subnet.provider, to.subnet.provider].filter(isCloudAccountProvider);
+  return [...new Set(clouds)].map((cloud) => {
+    const inCloud = (pick: PathPick) => pick.subnet?.provider === cloud;
+    return {
+      cloud,
+      source: from.address ?? from.subnet!.cidr,
+      destination: to.address ?? to.subnet!.cidr,
+      // A cloud subnet's site is its VPC / VNet.
+      source_network: inCloud(from) ? from.subnet!.site_id : undefined,
+      destination_network: inCloud(to) ? to.subnet!.site_id : undefined,
+      protocol: traffic.protocol,
+      port: traffic.port,
+    };
+  });
 }
 
 /** Text of a subnet in the picker; unique per (subnet, owner). */

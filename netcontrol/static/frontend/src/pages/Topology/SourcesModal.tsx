@@ -5,6 +5,7 @@ import { Link } from 'react-router';
 import { useAuthStatus } from '@/api/auth';
 import { useDiscoverCloudAccount } from '@/api/cloud';
 import {
+  CloudAccountProvider,
   CloudProvider,
   MerakiBuildJob,
   MerakiOrg,
@@ -19,6 +20,7 @@ import {
   useStartMerakiBuild,
   useTopologySources,
   useValidateMerakiOrg,
+  isCloudAccountProvider,
 } from '@/api/meraki';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { Modal } from '@/components/Modal';
@@ -46,6 +48,11 @@ function isOrgSource(source: TopologySource): boolean {
   return ORG_SOURCE_TYPES.has(source.type);
 }
 
+/** AWS accounts and Azure subscriptions: Cloud Visibility accounts. */
+function isCloudSource(source: TopologySource): boolean {
+  return isCloudAccountProvider(source.type);
+}
+
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -70,7 +77,7 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
   const snapshots = useMerakiSnapshots();
   const startBuild = useStartMerakiBuild();
   const buildSample = useBuildMerakiSample();
-  const discoverAws = useDiscoverCloudAccount();
+  const discoverCloud = useDiscoverCloudAccount();
 
   const [menu, setMenu] = useState<'add' | 'sample' | null>(null);
   const [editing, setEditing] = useState<MerakiOrg | null>(null);
@@ -78,8 +85,8 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
   const [jobId, setJobId] = useState<string | null>(null);
   // Which integration the tracked collection talks to, for the progress text.
   const [jobProvider, setJobProvider] = useState<CloudProvider>('meraki');
-  // AWS accounts whose discovery request is in flight.
-  const [awsBusy, setAwsBusy] = useState<number[]>([]);
+  // AWS / Azure accounts whose discovery request is in flight.
+  const [cloudBusy, setCloudBusy] = useState<number[]>([]);
   const [allBusy, setAllBusy] = useState(false);
   const [allNote, setAllNote] = useState<{ text: string; failed: boolean } | null>(null);
 
@@ -122,16 +129,16 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
   };
 
   /** Resolves to an error message, or null when the discovery succeeded. */
-  const runAwsDiscovery = async (source: TopologySource): Promise<string | null> => {
+  const runCloudDiscovery = async (source: TopologySource): Promise<string | null> => {
     const id = source.id as number;
-    setAwsBusy((busy) => [...busy, id]);
+    setCloudBusy((busy) => [...busy, id]);
     try {
-      const result = await discoverAws.mutateAsync(id);
+      const result = await discoverCloud.mutateAsync(id);
       return result?.ok === false ? (result.message ?? 'Discovery failed') : null;
     } catch (err) {
       return errorText(err);
     } finally {
-      setAwsBusy((busy) => busy.filter((item) => item !== id));
+      setCloudBusy((busy) => busy.filter((item) => item !== id));
       refreshMap();
     }
   };
@@ -142,8 +149,8 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
       onDiscoverNeighbors();
       return;
     }
-    if (source.type === 'aws') {
-      const failure = await runAwsDiscovery(source);
+    if (isCloudAccountProvider(source.type)) {
+      const failure = await runCloudDiscovery(source);
       if (failure) void alert({ message: `${source.name}: ${failure}`, variant: 'error' });
       return;
     }
@@ -158,8 +165,8 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
 
   const canCollect = (source: TopologySource): boolean => {
     if (!source.can_collect || !source.enabled || source.collecting) return false;
-    // AWS discovery belongs to Cloud Visibility, where it is an administrator action.
-    return source.type === 'aws' ? isAdmin && !awsBusy.includes(source.id as number) : canWrite;
+    // AWS / Azure discovery belongs to Cloud Visibility, where it is an administrator action.
+    return isCloudSource(source) ? isAdmin && !cloudBusy.includes(source.id as number) : canWrite;
   };
 
   const handleCollectAll = async () => {
@@ -178,10 +185,10 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
         }
       }
       if (targets.some((s) => s.type === 'neighbors')) onDiscoverNeighbors();
-      const aws = targets.filter((s) => s.type === 'aws');
-      const outcomes = await Promise.all(aws.map(runAwsDiscovery));
+      const cloud = targets.filter(isCloudSource);
+      const outcomes = await Promise.all(cloud.map(runCloudDiscovery));
       outcomes.forEach((failure, i) => {
-        if (failure) failures.push(`${aws[i].name}: ${failure}`);
+        if (failure) failures.push(`${cloud[i].name}: ${failure}`);
       });
     } finally {
       setAllBusy(false);
@@ -197,7 +204,7 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
     );
   };
 
-  const handleSample = async (provider: CloudProvider | 'aws') => {
+  const handleSample = async (provider: CloudProvider | CloudAccountProvider) => {
     setJobId(null);
     setMenu(null);
     try {
@@ -220,8 +227,8 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
     <Modal isOpen={isOpen} onClose={onClose} title="Map Sources" size="large">
       <p className="text-muted" style={{ marginTop: 0, fontSize: '0.9rem' }}>
         Everything on the map comes from one of these sources. Inventory devices are scanned for their CDP
-        and LLDP neighbors. Meraki organizations, Cato accounts, AnyConnect FMCs and AWS accounts are read from
-        their APIs.
+        and LLDP neighbors. Meraki organizations, Cato accounts, AnyConnect FMCs, AWS accounts and Azure
+        subscriptions are read from their APIs.
         Collect again whenever you want a fresh picture.
       </p>
 
@@ -281,10 +288,13 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
             <Link className="btn btn-secondary btn-sm" to={CLOUD_ACCOUNTS_PATH} onClick={onClose}>
               AWS Account
             </Link>
+            <Link className="btn btn-secondary btn-sm" to={CLOUD_ACCOUNTS_PATH} onClick={onClose}>
+              Azure Subscription
+            </Link>
           </div>
           <div className="text-muted" style={{ fontSize: '0.85em', marginTop: '0.4rem' }}>
-            AWS accounts are added under Cloud Visibility, which also uses them for flow logs and policy. Inventory
-            devices are added under Inventory.
+            AWS accounts and Azure subscriptions are added under Cloud Visibility, which also uses them for flow logs
+            and policy. Inventory devices are added under Inventory.
           </div>
         </div>
       )}
@@ -292,7 +302,7 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
         <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '0.75rem' }}>
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
             <strong>Load demo data for:</strong>
-            {(['meraki', 'cato', 'anyconnect', 'aws'] as const).map((provider) => (
+            {(['meraki', 'cato', 'anyconnect', 'aws', 'azure'] as const).map((provider) => (
               <button
                 key={provider}
                 type="button"
@@ -305,8 +315,8 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
             ))}
           </div>
           <div className="text-muted" style={{ fontSize: '0.85em', marginTop: '0.4rem' }}>
-            Each adds a demo source to the map. Delete it from this list when you are done (the AWS one under
-            Cloud Visibility).
+            Each adds a demo source to the map. Delete it from this list when you are done (the AWS and Azure ones
+            under Cloud Visibility).
           </div>
         </div>
       )}
@@ -332,7 +342,7 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
               <SourceRow
                 key={source.key}
                 source={source}
-                org={source.id != null && source.type !== 'aws' ? orgById.get(source.id) : undefined}
+                org={source.id != null && !isCloudSource(source) ? orgById.get(source.id) : undefined}
                 isAdmin={isAdmin}
                 canWrite={canWrite}
                 canCollect={
@@ -341,10 +351,10 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
                   // One tracked organization collection at a time, as its progress is shown below.
                   !(isOrgSource(source) && (isJobRunning || startBuild.isPending))
                 }
-                isBusy={source.collecting || (source.type === 'aws' && awsBusy.includes(source.id as number))}
+                isBusy={source.collecting || (isCloudSource(source) && cloudBusy.includes(source.id as number))}
                 isSampleBusy={buildSample.isPending}
                 onCollect={() => handleCollect(source)}
-                onReloadSample={() => handleSample(source.type as CloudProvider | 'aws')}
+                onReloadSample={() => handleSample(source.type as CloudProvider | CloudAccountProvider)}
                 onEdit={setEditing}
                 onNavigate={onClose}
               />
@@ -429,9 +439,10 @@ function collectTitle(source: TopologySource, isAdmin: boolean): string {
       ? 'Scan inventory devices over SNMP for their CDP and LLDP neighbors (the group selected on the map, or all groups)'
       : 'No devices in inventory';
   }
-  if (source.type === 'aws') {
+  if (isCloudSource(source)) {
+    const cloud = providerLabel(source.type);
     if (!source.enabled) return 'This account is disabled in Cloud Visibility';
-    return isAdmin ? 'Discover this AWS account and update the map' : 'AWS discovery needs an administrator';
+    return isAdmin ? `Discover this ${cloud} account and update the map` : `${cloud} discovery needs an administrator`;
   }
   if (source.can_collect) return `Collect from ${providerLabel(source.type)} and update the map`;
   return source.type === 'anyconnect' ? 'No password stored' : 'No API key stored';
@@ -546,7 +557,7 @@ function SourceRow({
               Reload Sample
             </button>
           ) : (
-            (source.type === 'aws' ? isAdmin : canWrite) && (
+            (isCloudSource(source) ? isAdmin : canWrite) && (
               <button
                 type="button"
                 className="btn btn-sm btn-primary"
@@ -586,11 +597,11 @@ function SourceRow({
               </button>
             </>
           )}
-          {source.type === 'aws' && (
+          {isCloudSource(source) && (
             <Link
               className="btn btn-sm btn-secondary"
               to={CLOUD_ACCOUNTS_PATH}
-              title="AWS accounts are edited, validated and deleted under Cloud Visibility"
+              title={`${providerLabel(source.type)} accounts are edited, validated and deleted under Cloud Visibility`}
               onClick={onNavigate}
             >
               Manage
