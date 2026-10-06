@@ -1282,7 +1282,7 @@ async def run_scheduled_discovery() -> dict:
             refreshed += 1
             _topology_changed()
         except CloudCollectorError as exc:
-            message = str(exc) or type(exc).__name__
+            message = getattr(exc, "user_message", "") or str(exc) or type(exc).__name__
             LOGGER.warning(
                 "scheduled cloud discovery failed account_id=%s: %s",
                 account_id,
@@ -1462,10 +1462,10 @@ async def validate_cloud_account_api(account_id: int, request: Request, body: Cl
             valid = False
             status = "unavailable"
             message = "Live collector dependencies are not installed"
-        except CloudCollectorAuthError:
+        except CloudCollectorAuthError as exc:
             valid = False
             status = "auth_error"
-            message = "Live provider authentication/configuration failed"
+            message = exc.user_message or "Live provider authentication/configuration failed"
         except CloudCollectorExecutionError:
             valid = False
             status = "execution_error"
@@ -1691,9 +1691,9 @@ async def discover_cloud_account_api(account_id: int, request: Request, body: Cl
                 sync_status = "error"
                 sync_message = "Live discovery dependencies are not installed"
                 failure_status_code = 503
-            except CloudCollectorAuthError:
+            except CloudCollectorAuthError as exc:
                 sync_status = "error"
-                sync_message = "Live discovery authentication/configuration failed"
+                sync_message = exc.user_message or "Live discovery authentication/configuration failed"
                 failure_status_code = 400
             except CloudCollectorExecutionError:
                 sync_status = "error"

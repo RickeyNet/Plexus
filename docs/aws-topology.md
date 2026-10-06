@@ -53,17 +53,37 @@ To refresh the map, run **Discover** again. Scheduled discovery
 ### Signing in
 
 The form has a field for each common sign-in and saves them as one settings
-object, stored encrypted and never shown again. `session_token`,
-`role_session_name` and `profile_name` have no field: enter them as JSON under
-**Additional settings**. Editing an account keeps what is stored unless you
+object, stored encrypted and never shown again. `role_session_name` has no
+field: enter it as JSON under **Additional settings**. Editing an account keeps what is stored unless you
 click **Change sign-in and sync settings**, which replaces all of it.
 
 | Settings | Sign-in |
 |---|---|
 | `access_key_id`, `secret_access_key` (optional `session_token`) | An IAM user's access key |
 | `role_arn` (optional `external_id`, `role_session_name`) | Assume an IAM role. Combine with an access key, or leave the key out to assume the role from the server's own credentials |
-| `profile_name` | A named profile from the AWS configuration of the Plexus server |
-| none of these | The server's own credentials (instance profile, environment) |
+| `profile_name` | A named profile from the AWS configuration of the Plexus server (**Credentials of the Plexus server → Profile name**) |
+| none of these | The server's own credentials (instance profile, environment variables, `~/.aws/credentials`) |
+
+### Temporary credentials and session tokens
+
+Temporary credentials (an access key starting with `ASIA`, as copied from the
+AWS access portal or returned by STS) come with a **session token**. Enter
+all three under **Access key**; the token goes in **Session token**. They
+expire, usually after 1 to 12 hours, and Plexus cannot renew a token it was
+given: discovery then fails with *The AWS session token has expired*, and the
+account needs a fresh set (**Edit → Change sign-in and sync settings**).
+
+When Plexus runs on your own machine, it is easier to leave the credentials
+on the machine: choose **Credentials of the Plexus server**, and refresh them
+the way you normally do (`aws sso login`, or new values in
+`~/.aws/credentials` or the `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` /
+`AWS_SESSION_TOKEN` environment variables of the Plexus process). Every
+discovery reads them again, so nothing has to be re-entered in Plexus. Put an
+SSO profile's name in **Profile name**; when its sign-in has expired,
+discovery says so.
+
+For unattended discovery, prefer a role Plexus assumes itself (**IAM role**):
+it gets a fresh token from STS at every discovery, so nothing expires.
 
 One Plexus account entry reads one AWS account. To cover several AWS
 accounts, add one entry per account (typically one role per account); they
@@ -115,11 +135,30 @@ map. An instance is drawn when it forwards traffic or when it is a Plexus
 inventory host. Every other instance is listed in its VPC's details (name,
 ID, private and public IP, type, state, subnet) and found by the search box.
 
+To see AWS alone, pick **AWS only** in the source selector of the Topology
+toolbar. The map then keeps the VPCs, the transit and VPN box and the links
+between them, and hides inventory, Meraki, Cato and AnyConnect devices with
+the tunnels that join them to AWS (a customer gateway that is a Meraki or
+Cato appliance goes with its own integration).
+
 A VPN connection is drawn as up when at least one of its tunnels is up, and
 down (red, not used by Path Mode) when all are down. A failed or deleted
 attachment is drawn down in the same way. An attachment to a VPC or transit
 gateway that belongs to an account or region Plexus does not collect is kept
-as a node marked *Not collected*.
+as a node marked *Not collected*: a VPC is drawn as a VPC in a box of its
+own, named `vpc-… (us-east-2, not collected)`, so a peering looks the same
+whichever account the far end is in; a transit or Direct Connect gateway
+joins the **AWS transit and VPN** box. These nodes are not counted as
+devices.
+
+A VPC peering records both of its VPCs, so a peered VPC that is not
+collected still shows its CIDR ranges, region and account number, why it
+is not collected (its account is not in Cloud Visibility, its region is not
+among the account's regions, or it has not been discovered yet), its
+peerings and, on the **Routing** tab, the routes of the collected VPCs that
+lead to it. Its subnets, route tables and instances can only be read from its
+own account: add that account to Cloud Visibility to collect them. Every VPC
+lists its peerings on the **Routing** tab.
 
 ### How AWS joins the rest of the map
 
@@ -133,7 +172,11 @@ as a node marked *Not collected*.
   tunnel is drawn to that device and there is no separate gateway node.
 - **Virtual appliances.** An instance whose public IP is the WAN address of a
   Meraki appliance or Cato Socket is that device (a vMX or vSocket): it stays
-  in its Meraki or Cato site and gains a link to its VPC.
+  in its Meraki or Cato site and gains a link to its VPC. With the source
+  selector on **AWS only** it is still shown, and a vSocket keeps its tunnel
+  to the Cato PoP it connects to. A Cato Socket is known by the public
+  addresses of its WAN links: if the Cato site query falls back to the basic
+  site list (see the collection warnings), vSockets are not matched.
 - **Virtual appliances behind a NAT gateway.** A vMX in a private subnet has
   no public IP of its own: Meraki knows it by the NAT gateway's address. It
   is then matched by the private IP of its WAN uplink, under conditions that

@@ -64,6 +64,34 @@ describe('buildAuthConfig', () => {
   });
 });
 
+describe('AWS temporary credentials', () => {
+  it('saves a session token with the access key, and leaves it out when empty', () => {
+    const aws = providerForm('aws');
+    expect(
+      buildAuthConfig(
+        aws,
+        'access_key',
+        { access_key_id: 'ASIA123', secret_access_key: 's3cret', session_token: ' IQoJtoken ' },
+        '',
+        '',
+      ),
+    ).toEqual({ config: { access_key_id: 'ASIA123', secret_access_key: 's3cret', session_token: 'IQoJtoken' } });
+    expect(buildAuthConfig(aws, 'access_key', { access_key_id: 'AKIA123', secret_access_key: 's3cret' }, '', '')).toEqual({
+      config: { access_key_id: 'AKIA123', secret_access_key: 's3cret' },
+    });
+    expect(
+      buildAuthConfig(aws, 'assume_role', { role_arn: 'arn:aws:iam::1:role/r', session_token: 'tok' }, '', ''),
+    ).toEqual({ config: { role_arn: 'arn:aws:iam::1:role/r', session_token: 'tok' } });
+  });
+
+  it('saves a server profile name only when one is given', () => {
+    const aws = providerForm('aws');
+    expect(buildAuthConfig(aws, 'server', { profile_name: 'corp-sso' }, '', '')).toEqual({
+      config: { profile_name: 'corp-sso' },
+    });
+  });
+});
+
 describe('authMethod', () => {
   it('falls back to the first sign-in of the provider', () => {
     expect(authMethod(providerForm('azure'), 'access_key').key).toBe('service_principal');

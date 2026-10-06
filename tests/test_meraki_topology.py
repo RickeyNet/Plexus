@@ -647,6 +647,33 @@ def test_graph_to_snapshot_covers_inventory_and_meraki(snapshot):
     assert "topology-data" in render_topology_html(unified)
 
 
+def test_graph_to_snapshot_tags_sources_for_the_viewer_picker():
+    def ref(node_id: str, provider: str) -> dict:
+        return {"org_ref": 1, "node_id": node_id, "site_id": "S", "site_name": "S", "kind": "vpc", "provider": provider}
+
+    graph = {
+        "nodes": [
+            {"id": 7, "label": "core", "in_inventory": True, "group_id": 1, "group_name": "HQ"},
+            {"id": "m:1:hq", "label": "matched", "in_inventory": True, "meraki": ref("hq", "")},
+            {"id": "m:1:v1", "label": "vpc-a", "source": "meraki", "meraki": ref("v1", "aws")},
+            {"id": "m:1:v2", "label": "vpc-b", "source": "meraki", "meraki": ref("v2", "aws")},
+        ],
+        "edges": [
+            {"from": "m:1:v1", "to": "m:1:v2", "protocol": "attach", "source": "meraki", "provider": "aws"},
+            {"from": 7, "to": "m:1:hq", "protocol": "cdp"},
+        ],
+    }
+    unified = graph_to_snapshot(graph, {}, {})
+    nodes = {n["id"]: n for n in unified["nodes"]}
+    # An inventory host has no provider; one matched to an integration keeps
+    # it but stays in the inventory view; an integration-only node is marked.
+    assert "provider" not in nodes["7"] and "integration_only" not in nodes["7"]
+    assert nodes["m:1:hq"]["provider"] == "meraki" and "integration_only" not in nodes["m:1:hq"]
+    assert nodes["m:1:v1"]["provider"] == "aws" and nodes["m:1:v1"]["integration_only"] is True
+    assert [e.get("provider") for e in unified["edges"]] == ["aws", None]
+    assert 'id="source"' in render_topology_html(unified)
+
+
 # ── HTTP API ─────────────────────────────────────────────────────────────────
 
 

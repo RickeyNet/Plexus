@@ -20,7 +20,8 @@ body.light {
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--text); font: 13px/1.45 "Segoe UI", system-ui, -apple-system, Roboto, sans-serif; display: flex; flex-direction: column; overflow: hidden; }
-button, input { font: inherit; color: inherit; }
+button, input, select { font: inherit; color: inherit; }
+select option { background: var(--surface); color: var(--text); }
 header { display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: var(--surface); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 header h1 { font-size: 15px; margin: 0; white-space: nowrap; }
 .meta { color: var(--muted); font-size: 12px; }
@@ -88,6 +89,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
 <header>
   <h1 id="title"></h1>
   <div class="chips" id="chips"></div>
+  <select class="btn" id="source" title="Which devices to show" style="display:none"></select>
   <div class="search">
     <input id="q" type="search" placeholder="Search devices, IPs, VLANs, subnets, serials, VPN peers, routes...  ( / )" autocomplete="off" spellcheck="false">
     <button id="q-clear" title="Clear search" aria-label="Clear search">&#10005;</button>
@@ -137,15 +139,18 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   'use strict';
 
   var DATA = JSON.parse(document.getElementById('topology-data').textContent);
-  var nodes = DATA.nodes || [], edges = DATA.edges || [], sites = DATA.sites || [];
-  var nodeById = {}, siteById = {}, edgesByNode = {};
-  nodes.forEach(function (n) { nodeById[n.id] = n; edgesByNode[n.id] = []; });
-  sites.forEach(function (s) { siteById[s.id] = s; });
-  edges.forEach(function (e) {
+  var allNodes = DATA.nodes || [], allSites = DATA.sites || [];
+  var nodeById = {}, siteById = {};
+  // Where the export placed each site and device; the Source picker packs the
+  // sites it keeps together and puts them back for "All sources".
+  allNodes.forEach(function (n) { nodeById[n.id] = n; n.homeX = n.x; n.homeY = n.y; });
+  allSites.forEach(function (s) { siteById[s.id] = s; s.homeX = s.x; s.homeY = s.y; });
+  var allEdges = (DATA.edges || []).filter(function (e) {
     e.na = nodeById[e.a]; e.nb = nodeById[e.b];
-    if (e.na && e.nb) { edgesByNode[e.a].push(e); edgesByNode[e.b].push(e); }
+    return e.na && e.nb;
   });
-  edges = edges.filter(function (e) { return e.na && e.nb; });
+  // What the map shows now: the part of the export the Source picker keeps.
+  var nodes = allNodes, edges = allEdges, sites = allSites, edgesByNode = {};
 
   var KIND = {
     appliance: { tag: 'FW', name: 'Security appliance', color: '#e8590c', shape: 'square' },
@@ -165,7 +170,8 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     vpn_peer: { tag: 'VPN', name: 'VPN peer', color: '#ae3ec9', shape: 'pill' },
     cloud: { tag: 'CLD', name: 'Cloud gateway / PoP', color: '#ae3ec9', shape: 'pill' },
     vpc: { tag: 'VPC', name: 'AWS VPC / Azure VNet', color: '#f08c00', shape: 'square' },
-    users: { tag: 'USR', name: 'Remote users', color: '#0ca678', shape: 'pill' }
+    users: { tag: 'USR', name: 'Remote users', color: '#0ca678', shape: 'pill' },
+    user: { tag: 'USR', name: 'Remote user', color: '#0ca678', shape: 'circle' }
   };
   var OTHER = { tag: 'DEV', name: 'Device', color: '#868e96', shape: 'square' };
   var STATUS = { online: '#2fb344', alerting: '#f59f00', offline: '#e5484d', dormant: '#8892a6', unknown: '#8892a6' };
@@ -182,7 +188,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   // the map. Past this many, only the selection's tunnels are drawn unless
   // "all tunnels" is switched on in Layers.
   var MAX_AUTO_TUNNELS = 300;
-  var tunnelCount = edges.filter(function (e) { return e.kind === 'vpn' || e.kind === 'vpn3p'; }).length;
+  var tunnelCount = edges.filter(optionalTunnel).length;
   var layers = { lan: true, vpn: true, vpnAll: tunnelCount <= MAX_AUTO_TUNNELS, uplink: true, external: true,
     labels: true, problems: false };
 
@@ -210,15 +216,21 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     return { type: type, ref: ref, title: title, sub: sub, head: head, rows: rows,
       blob: head + '\n' + rows.map(function (r) { return r.lower; }).join('\n') };
   }
-  var index = [];
-  sites.forEach(function (s) {
-    index.push(buildEntry('site', s, s.name, 'Site · ' + s.device_count + ' devices · VPN ' + s.vpn_mode, (s.tags || []).join(' ')));
+  // Built once per site and device; search looks only at what the map shows.
+  var indexById = {};
+  allSites.forEach(function (s) {
+    indexById['s:' + s.id] = buildEntry('site', s, s.name, 'Site · ' + s.device_count + ' devices · VPN ' + s.vpn_mode, (s.tags || []).join(' '));
   });
-  nodes.forEach(function (n) {
+  allNodes.forEach(function (n) {
     var site = siteById[n.site];
     var sub = kindOf(n).name + (n.model ? ' · ' + n.model : '') + (site ? ' · ' + site.name : '');
-    index.push(buildEntry('node', n, n.label, sub, [n.serial, n.mac, n.ip, n.status].join(' ')));
+    indexById['n:' + n.id] = buildEntry('node', n, n.label, sub, [n.serial, n.mac, n.ip, n.status].join(' '));
   });
+  var index = [];
+  function buildIndex() {
+    index = sites.map(function (s) { return indexById['s:' + s.id]; })
+      .concat(nodes.map(function (n) { return indexById['n:' + n.id]; }));
+  }
 
   var query = '', tokens = [], results = [], matchNodes = null, matchSites = null;
   function runSearch(text) {
@@ -297,7 +309,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   function nodeVisible(n) {
     if (n.kind === 'external' && !layers.external) return false;
     if (n.kind === 'wan' && !layers.uplink) return false;
-    if ((n.kind === 'vpn_peer' || n.kind === 'cloud' || n.kind === 'users') && !layers.vpn) return false;
+    if ((n.kind === 'vpn_peer' || n.kind === 'cloud' || n.kind === 'users' || n.kind === 'user') && !layers.vpn) return false;
     if (layers.problems && (n.status === 'online' || n.status === 'unknown')) return false;
     return true;
   }
@@ -305,7 +317,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     var layer = e.kind === 'stack' || e.kind === 'attach' || e.kind === 'manage' ? 'lan' : (e.kind === 'vpn3p' ? 'vpn' : e.kind);
     if (e.onPath && pathActive()) return true;
     if (!layers[layer] || !nodeVisible(e.na) || !nodeVisible(e.nb)) return false;
-    return !isCurved(e) || layers.vpnAll || touchesSelection(e);
+    return !optionalTunnel(e) || layers.vpnAll || touchesSelection(e);
   }
   // The edge is selected, or belongs to the selected site. Selecting any
   // device counts as its site: zoomed out, a click on a site lands on
@@ -324,6 +336,9 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     return { x: (ax + bx) / 2 - dy / len * off, y: (ay + by) / 2 + dx / len * off };
   }
   function isCurved(e) { return e.kind === 'vpn' || e.kind === 'vpn3p'; }
+  // The Cato Cloud's links to its PoPs are drawn however many tunnels are
+  // hidden: a handful of links that show the shape of the Cato backbone.
+  function optionalTunnel(e) { return isCurved(e) && !e.backbone; }
   function roundRect(x, y, w, h, r) {
     ctx.beginPath();
     ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
@@ -637,7 +652,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   function siteGateway(s) {
     var best = null, bestRank = 99, order = ['vpc', 'appliance', 'switch', 'wireless'];
     nodes.forEach(function (n) {
-      if (n.site !== s.id || n.kind === 'wan' || n.kind === 'external' || n.kind === 'vpn_peer' || n.kind === 'cloud' || n.kind === 'users') return;
+      if (n.site !== s.id || n.kind === 'wan' || n.kind === 'external' || n.kind === 'vpn_peer' || n.kind === 'cloud' || n.kind === 'users' || n.kind === 'user') return;
       var rank = order.indexOf(n.kind); if (rank === -1) rank = order.length;
       if (rank < bestRank) { bestRank = rank; best = n; }
     });
@@ -749,9 +764,15 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   }
 
   // Subnet picker: the index Plexus embedded, limited to owners on this map.
-  var subnets = (DATA.subnets || []).filter(function (s) { return nodeById[s.node_id]; }), subnetByLabel = {}, subnetOptionsFilled = false;
+  var allSubnets = (DATA.subnets || []).filter(function (s) { return nodeById[s.node_id]; });
+  var subnets = [], subnetByLabel = {}, subnetOptionsFilled = false;
   function subnetLabel(s) { return s.cidr + ' - ' + (s.site_name || 'VPN peer') + ' - ' + s.name; }
-  subnets.forEach(function (s) { subnetByLabel[subnetLabel(s)] = s; });
+  function setSubnets(shown) {
+    subnets = allSubnets.filter(function (s) { return shown[s.node_id]; });
+    subnetByLabel = {};
+    subnets.forEach(function (s) { subnetByLabel[subnetLabel(s)] = s; });
+    subnetOptionsFilled = false; $('subnet-options').textContent = '';
+  }
   function fillSubnetOptions() {
     if (subnetOptionsFilled) return;
     subnetOptionsFilled = true;
@@ -833,9 +854,22 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   }
 
   // ── Chrome: header, legend, layers ───────────────────────────────────────
-  function buildChrome() {
-    var s = DATA.summary || {}, st = s.devices_by_status || {}, chips = $('chips');
-    $('title').textContent = DATA.org.name + ' · Network Topology';
+  var NON_DEVICE = { external: true, wan: true, vpn_peer: true, cloud: true, users: true, user: true };
+  // The counts of what the map shows: the export's own summary for
+  // everything, counted again for one source.
+  function shownSummary() {
+    if (source === 'all') return DATA.summary || {};
+    var byStatus = {}, devices = 0;
+    nodes.forEach(function (n) {
+      if (NON_DEVICE[n.kind]) return;
+      devices++; byStatus[n.status] = (byStatus[n.status] || 0) + 1;
+    });
+    return { sites: sites.length, devices: devices, devices_by_status: byStatus,
+      vpn_tunnels: edges.filter(isCurved).length };
+  }
+  function renderChips() {
+    var s = shownSummary(), st = s.devices_by_status || {}, chips = $('chips');
+    chips.textContent = '';
     function chip(label, value, status) {
       var c = el('span', 'chip');
       if (status) c.appendChild(el('span', 'dot s-' + status));
@@ -849,9 +883,10 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     chip('VPN tunnels', s.vpn_tunnels || 0);
     if (!layers.vpnAll) chips.appendChild(el('span', 'meta', 'Select a device or site to see its tunnels'));
     chips.appendChild(el('span', 'meta', 'Generated ' + String(DATA.generated_at || '').replace('T', ' ').replace('+00:00', ' UTC')));
-    if (((DATA.collection || {}).errors || []).length) $('btn-report').classList.add('warn');
-
+  }
+  function renderLegend() {
     var legend = $('legend');
+    legend.textContent = '';
     Object.keys(KIND).forEach(function (k) {
       if (!nodes.some(function (n) { return n.kind === k; })) return;
       var row = el('div'); var tag = el('b', null, KIND[k].tag + ' '); tag.style.color = KIND[k].color;
@@ -870,7 +905,10 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
       var row = el('div'), dot = el('span', 'dot'); dot.style.background = 'var(--accent)';
       row.appendChild(dot); row.appendChild(document.createTextNode('in Plexus inventory')); legend.appendChild(row);
     }
-
+  }
+  function buildChrome() {
+    $('title').textContent = DATA.org.name + ' · Network Topology';
+    if (((DATA.collection || {}).errors || []).length) $('btn-report').classList.add('warn');
     var box = $('layers');
     [['lan', 'LAN links'], ['vpn', 'VPN tunnels'], ['vpnAll', 'All tunnels at once (off: selection only)'],
       ['uplink', 'WAN uplinks'], ['external', 'Non-Meraki neighbors'],
@@ -880,6 +918,68 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
       input.addEventListener('change', function () { layers[pair[0]] = input.checked; dirty(); });
       label.appendChild(input); label.appendChild(document.createTextNode(' ' + pair[1])); box.appendChild(label);
     });
+  }
+
+  // ── Source picker ────────────────────────────────────────────────────────
+  // As on the Topology page: everything, the inventory, every integration,
+  // or one integration (provider:aws, provider:cato...).
+  var PROVIDERS = ['meraki', 'cato', 'anyconnect', 'aws', 'azure'];
+  var PROVIDER_NAME = { meraki: 'Meraki', cato: 'Cato', anyconnect: 'AnyConnect', aws: 'AWS', azure: 'Azure' };
+  var SITE_GAP = 90, source = 'all';
+  function keepNode(n) {
+    if (source === 'all') return true;
+    if (source.indexOf('provider:') === 0) return n.provider === source.slice(9);
+    return source === 'integrations' ? !!n.provider : !n.integration_only;
+  }
+  function keepEdge(e) {
+    if (source === 'all') return true;
+    if (source.indexOf('provider:') === 0) return !e.provider || e.provider === source.slice(9);
+    return source === 'integrations' || !e.provider;
+  }
+  // The same row packing the export uses, over the sites left.
+  function packSites() {
+    var area = 0, widest = 0, x = 0, y = 0, rowH = 0, shift = {};
+    sites.forEach(function (s) { area += (s.w + SITE_GAP) * (s.h + SITE_GAP); widest = Math.max(widest, s.w); });
+    var limit = Math.max(Math.sqrt(area) * 1.5, widest);
+    sites.forEach(function (s) {
+      if (x > 0 && x + s.w > limit) { x = 0; y += rowH + SITE_GAP; rowH = 0; }
+      shift[s.id] = { x: x - s.homeX, y: y - s.homeY };
+      s.x = x; s.y = y; x += s.w + SITE_GAP; rowH = Math.max(rowH, s.h);
+    });
+    return shift;
+  }
+  function applySource(value) {
+    if (pathMode) setPathMode(false);
+    selected = null; source = value;
+    var shown = {}, used = {};
+    nodes = allNodes.filter(keepNode);
+    nodes.forEach(function (n) { shown[n.id] = true; used[n.site] = true; });
+    edges = allEdges.filter(function (e) { return shown[e.a] && shown[e.b] && keepEdge(e); });
+    sites = source === 'all' ? allSites : allSites.filter(function (s) { return used[s.id]; });
+    allSites.forEach(function (s) { s.x = s.homeX; s.y = s.homeY; });
+    var shift = source === 'all' ? {} : packSites();
+    allNodes.forEach(function (n) {
+      var d = shift[n.site] || { x: 0, y: 0 };
+      n.x = n.homeX + d.x; n.y = n.homeY + d.y;
+    });
+    edgesByNode = {};
+    nodes.forEach(function (n) { edgesByNode[n.id] = []; });
+    edges.forEach(function (e) { edgesByNode[e.a].push(e); edgesByNode[e.b].push(e); });
+    setSubnets(shown); buildIndex(); renderChips(); renderLegend();
+    runSearch($('q').value); renderPanel(); fitAll();
+  }
+  function buildSourcePicker() {
+    var found = {};
+    allNodes.forEach(function (n) { if (n.provider) found[n.provider] = true; });
+    var providers = PROVIDERS.filter(function (p) { return found[p]; })
+      .concat(Object.keys(found).filter(function (p) { return PROVIDERS.indexOf(p) === -1; }).sort());
+    if (!providers.length) return;  // an export from before the picker, or inventory only
+    var picker = $('source');
+    [['all', 'All sources'], ['inventory', 'Inventory only'], ['integrations', 'All integrations']]
+      .concat(providers.map(function (p) { return ['provider:' + p, (PROVIDER_NAME[p] || p) + ' only']; }))
+      .forEach(function (pair) { var o = el('option', null, pair[1]); o.value = pair[0]; picker.appendChild(o); });
+    picker.style.display = '';
+    picker.addEventListener('change', function () { applySource(picker.value); });
   }
 
   // ── Input ────────────────────────────────────────────────────────────────
@@ -991,7 +1091,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   window.addEventListener('resize', resize);
 
   if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) document.body.classList.add('light');
-  readTheme(); buildChrome(); setTab('sites'); resize(); fitAll();
+  readTheme(); buildChrome(); buildSourcePicker(); resize(); applySource('all');
 })();
 </script>
 </body>

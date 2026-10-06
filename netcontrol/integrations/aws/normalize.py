@@ -55,6 +55,10 @@ SUBNET_COLUMNS = [
     "Network ACL",
 ]
 
+PEERING_SECTION_TITLE = "VPC peerings"
+PEERING_COLUMNS = ["Peering", "Peered with", "CIDR", "Region", "Account", "State"]
+ROUTES_TO_SECTION_TITLE = "Routes to this VPC"
+
 # Detail tables are capped so one large VPC cannot bloat the snapshot.
 MAX_SITE_ROWS = 3000
 
@@ -109,6 +113,23 @@ def _rid(uid: str) -> str:
     return parts[2] if len(parts) == 3 else uid
 
 
+def _peering_end(uid: str, meta: dict, side: str) -> dict:
+    """One VPC of a peering as the peering records it (``side`` is
+    ``requester`` or ``accepter``): the only view there is of a VPC in an
+    account or region Plexus does not collect."""
+    cidrs = [_text(c) for c in meta.get(f"{side}_cidrs") or [] if _text(c)]
+    first = _text(meta.get(f"{side}_cidr"))
+    if first and first not in cidrs:
+        cidrs.insert(0, first)
+    return {
+        "uid": uid,
+        "rid": _rid(uid),
+        "cidrs": cidrs,
+        "owner": _text(meta.get(f"{side}_owner_id")),
+        "region": _text(meta.get(f"{side}_region")),
+    }
+
+
 def _status(state: Any) -> str:
     state = _text(state).lower()
     if state in _UP_STATES:
@@ -152,6 +173,9 @@ class _Builder:
         # Resource uid -> node id, for the resources that are nodes.
         self._node_of: dict[str, str] = {}
         self._account_names = {a.get("id"): _text(a.get("name")) for a in accounts}
+        self._accounts_by_identifier = {
+            _text(a.get("account_identifier")): a for a in accounts if _text(a.get("account_identifier"))
+        }
 
         # A resource shared between accounts is discovered by each of them.
         self.resources: dict[str, dict] = {}
@@ -174,6 +198,19 @@ class _Builder:
             if all(key) and key not in seen:
                 seen.add(key)
                 self.connections.append({"src": key[0], "dst": key[1], "type": key[2], **row, "meta": _meta(row)})
+        # VPC uid -> its peerings, each with what the peering records of both ends.
+        self._peerings: dict[str, list[dict]] = {}
+        for conn in self.connections:
+            if conn["type"] != "vpc_peering":
+                continue
+            ends = (
+                _peering_end(conn["src"], conn["meta"], "requester"),
+                _peering_end(conn["dst"], conn["meta"], "accepter"),
+            )
+            for own, far in (ends, ends[::-1]):
+                self._peerings.setdefault(own["uid"], []).append(
+                    {"id": _text(conn["meta"].get("peering_id")), "state": conn.get("state"), "own": own, "far": far}
+                )
 
         self.vpcs = self._of_type("vpc")
         self._vpc_uid_by_rid = {v["rid"]: _text(v["resource_uid"]) for v in self.vpcs}
@@ -211,6 +248,66 @@ class _Builder:
 
     def _account(self, resource: dict) -> str:
         return _text(resource.get("account_name")) or self._account_names.get(resource.get("account_id"), "")
+
+    def _owner(self, owner_id: str) -> str:
+        """An AWS account number, with its name when Plexus collects it."""
+        name = _text((self._accounts_by_identifier.get(owner_id) or {}).get("name"))
+        return f"{name} ({owner_id})" if name and owner_id else owner_id
+
+    def _peering_rows(self, uid: str) -> list[list[Any]]:
+        rows = []
+        for peering in self._peerings.get(uid, []):
+            far = peering["far"]
+            name = _text((self.resources.get(far["uid"]) or {}).get("name")) or far["rid"]
+            rows.append(
+                [
+                    peering["id"],
+                    name,
+                    ", ".join(far["cidrs"]),
+                    far["region"],
+                    self._owner(far["owner"]),
+                    peering["state"],
+                ]
+            )
+        return sorted(rows, key=str)
+
+    def _routes_to(self, uid: str) -> list[list[Any]]:
+        """The routes of the collected VPCs that lead to a VPC over its peerings."""
+        targets = {p["id"] for p in self._peerings.get(uid, []) if p["id"]}
+        rows = []
+        for table in self._of_type("route_table"):
+            vpc = self.resources.get(self._vpc_uid(table)) or {}
+            for route in table["meta"].get("routes") or []:
+                if isinstance(route, dict) and _text(route.get("target")) in targets:
+                    rows.append(
+                        [
+                            _text(vpc.get("name")) or vpc.get("rid"),
+                            table.get("name") or table["rid"],
+                            route.get("destination"),
+                            route.get("target"),
+                            route.get("state"),
+                        ]
+                    )
+        return rows[:MAX_SITE_ROWS]
+
+    def _not_collected_reason(self, owner_id: str, region: str) -> str:
+        account = self._accounts_by_identifier.get(owner_id)
+        if not owner_id:
+            return "It belongs to an account or region Plexus does not collect"
+        if account is None:
+            return (
+                f"Account {owner_id} is not added to Cloud Visibility. Add it (a read-only role is enough) "
+                "to see the VPC's subnets, route tables and instances"
+            )
+        name = _text(account.get("name")) or owner_id
+        scope = _text(account.get("region_scope"))
+        # The collector reads every region for "all", else the listed ones (us-east-1 when none are).
+        regions = [r.strip() for r in scope.split(",") if r.strip()] or ["us-east-1"]
+        if region and scope.lower() not in ("all", "*") and region not in regions:
+            return (
+                f"Region {region} is not among the regions {name} discovers; add it to the account in Cloud Visibility"
+            )
+        return f"{name} has not discovered it yet; run Discover again in Cloud Visibility"
 
     # ── Graph primitives ───────────────────────────────────────────────────
 
@@ -346,6 +443,7 @@ class _Builder:
                     ][:MAX_SITE_ROWS],
                 ),
             )
+            _add(sections, table_section(PEERING_SECTION_TITLE, PEERING_COLUMNS, self._peering_rows(uid)))
             _add(
                 sections,
                 table_section(
@@ -783,7 +881,7 @@ class _Builder:
                 return known
             label = f"TGW {rid}"
         elif kind == "vpc":
-            label = f"VPC {rid}"
+            return self._vpc_stub(uid, rid)
         elif kind == "direct-connect-gateway":
             label = f"DXGW {rid}"
         else:
@@ -801,6 +899,61 @@ class _Builder:
                     ),
                 ],
             ),
+        )
+        return node["id"]
+
+    def _vpc_stub(self, uid: str, rid: str) -> str:
+        """A VPC like any other, in a box of its own, so a peering looks the
+        same whether or not its far end is collected. What its peerings
+        record (CIDR, region, account) and the routes the collected VPCs
+        send to it are all there is to show."""
+        peerings = self._peerings.get(uid, [])
+        seen = peerings[0]["own"] if peerings else _peering_end(uid, {}, "")
+        cidrs, owner, region = ", ".join(seen["cidrs"]), seen["owner"], seen["region"]
+        node = self._node(
+            uid,
+            f"x:vpc:{rid}",
+            "vpc",
+            f"VPC {rid}",
+            rid,
+            "unknown",
+            model=" ".join(p for p in ("AWS VPC", cidrs, "(not collected)") if p),
+            site_sections=True,
+            not_collected=True,
+        )
+        _add(
+            node["sections"],
+            kv_section(
+                "Overview",
+                [
+                    ("VPC ID", rid),
+                    ("CIDR", cidrs),
+                    ("Region", region),
+                    ("Account", self._owner(owner)),
+                    ("Not collected", self._not_collected_reason(owner, region)),
+                    ("Source", "The VPC peering records of the collected VPCs" if peerings else "An attachment"),
+                ],
+            ),
+        )
+        sections: list[dict] = []
+        _add(sections, table_section(PEERING_SECTION_TITLE, PEERING_COLUMNS, self._peering_rows(uid)))
+        _add(
+            sections,
+            table_section(
+                ROUTES_TO_SECTION_TITLE, ["VPC", "Route table", "Destination", "Target", "State"], self._routes_to(uid)
+            ),
+        )
+        self.sites.append(
+            {
+                "id": rid,
+                "name": f"{rid} ({region}, not collected)" if region else f"{rid} (not collected)",
+                "tags": [t for t in (region, owner) if t],
+                "vpn_mode": "spoke",
+                "status": "unknown",
+                "device_count": 0,
+                "sections": sections,
+                "not_collected": True,
+            }
         )
         return node["id"]
 
@@ -993,7 +1146,7 @@ def build_snapshot(
     by_kind: dict[str, int] = {}
     by_status: dict[str, int] = {}
     for node in nodes:
-        if node["kind"] in ("wan", "cloud", "vpn_peer"):
+        if node["kind"] in ("wan", "cloud", "vpn_peer") or node.get("not_collected"):
             continue
         by_kind[node["kind"]] = by_kind.get(node["kind"], 0) + 1
         by_status[node["status"]] = by_status.get(node["status"], 0) + 1
@@ -1009,7 +1162,7 @@ def build_snapshot(
         "generated_at": synced[-1] if synced else "",
         "org": {"id": "", "name": "AWS" + (f" ({', '.join(names)})" if names else ""), "url": ""},
         "summary": {
-            "sites": len(builder.sites),
+            "sites": sum(1 for s in builder.sites if not s.get("not_collected")),
             "devices": sum(by_kind.values()),
             "devices_by_kind": by_kind,
             "devices_by_status": by_status,

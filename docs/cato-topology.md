@@ -56,17 +56,33 @@ Cato data appears when the group filter is **All groups**.
 | Site box | One Cato site, named as in Cato |
 | Socket (firewall icon) | Each Socket of the site. An HA pair shows both, labelled primary / secondary. A site with no Socket (IPsec, cloud interconnect) shows one node standing for its connection |
 | WAN triangle | Each connected WAN link of a Socket, with its public IP |
-| **Cato Cloud** box | The PoPs in use, joined to one **Cato Cloud** backbone node |
-| PoP (hexagon) | A PoP that at least one site or remote user is connected to |
-| **Remote users (N)** (star) | The remote users connected when the collection ran, as one node |
-| Dashed tunnel | A Socket's tunnel to its PoP, and each PoP's link to the backbone |
+| **Cato Cloud** box | The **Cato Cloud** backbone node every PoP is joined to |
+| **PoP** box | A PoP that at least one site or remote user is connected to, with the remote users connected to it when the collection ran, one person icon per user, drawn as a grid under the PoP |
+| Remote user (person icon) | One user connected with the Cato Client, labelled with their name, linked to their PoP |
+| Dashed tunnel | A Socket's tunnel to its PoP, the remote users' links to their PoPs, and each PoP's link to the backbone |
 
 A site that is disconnected keeps a red (down) tunnel to the **Cato Cloud**
 node so it stays attached to the map.
 
-Remote users are one node, not one node per user: the users are listed in the
-node's details (name, email, device, VPN IP, public IP, PoP, location, OS,
-client version) and found by the search box.
+Every connected remote user is a node of its own, in the box of its PoP. Users
+Cato reports without a PoP are in a **Remote users** box tied to the backbone.
+Their links to the PoP are tunnels, so like the other tunnels they show when
+you select the user or the PoP (or turn on all tunnels).
+
+Click a remote user for:
+
+- **Remote user**: name, email, phone, user ID, connectivity and account
+  status, directory and authentication method
+- **Connecting from**: whether they are remote or in an office (and which
+  office, when their public IP is a site's WAN address), public IP, ISP, city,
+  state, country and coordinates
+- **Connected to (Cato)**: PoP, VPN IP (the address Cato gave the client),
+  the path into the backbone, uptime and last connection
+- **Device**: device name, OS and Cato Client version
+- **Recent connections**: when, how long, device, interface, PoP, public IP,
+  location and ISP of their last connections
+
+Click a **PoP** box for a table of all of its users.
 
 ### Device details
 
@@ -78,13 +94,15 @@ Click a Socket for its tabs:
 - **VLANs**: the site's network ranges (subnet, name, interface, VLAN)
 - **VPN**: IPsec tunnel settings, for an IPsec site
 
-Click a PoP for the sites and the number of remote users connected to it, and
-the **Cato Cloud** node for the account summary.
+Click a PoP for the sites and the remote users connected to it (a PoP only
+remote users are on has no site tunnel, just its users), and the **Cato
+Cloud** node for the account summary.
 
 ### Search and Path Mode
 
 The toolbar search covers everything collected: site names, serials, public
-IPs, subnets, PoP names, and remote users by name, email, device or VPN IP.
+IPs, subnets, PoP names, and remote users by name, email, device, VPN IP or
+public IP.
 
 In **Path Mode** a Cato site or one of its subnets can be picked like a
 Meraki one. A path between two Cato sites runs Socket → PoP → Cato Cloud →
@@ -120,11 +138,13 @@ The site list is required. Everything else is best-effort: if a query fails,
 the collection finishes as **partial**, the map is still built, and the
 failure with Cato's own error message is listed under **Report** in the HTML
 map. If Cato refuses the detailed site query, Plexus falls back to a reduced
-one, so the sites still appear, without WAN links and HA state.
+one, so the sites still appear, without WAN links and HA state. The same goes
+for the user query: the users still appear, without recent connections, state,
+coordinates and phone number.
 
-Only users connected at collection time are read. Their traffic, the
-firewall and routing policy of the account, and hosts behind a site are not
-collected.
+Only users connected at collection time are read. Their traffic (which
+applications and sites they reach), the firewall and routing policy of the
+account, and hosts behind a site are not collected.
 
 ## API reference
 

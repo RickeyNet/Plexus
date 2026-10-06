@@ -330,7 +330,9 @@ def test_snapshot_links_vnets_gateways_and_vpns(snapshot):
     assert _node(snapshot, vgw)["endpoint_ips"] == ["203.0.113.201"]
     # A peering to a VNet of another subscription keeps its far end.
     stub = next(n for n in snapshot["nodes"] if n["id"].startswith("x:vnet:"))
-    assert stub["site"] == TRANSIT_SITE_ID and stub["model"] == "Not collected"
+    assert stub["kind"] == "vpc" and stub["model"] == "Not collected"
+    site = next(s for s in snapshot["sites"] if s["id"] == stub["site"])
+    assert site["name"].endswith("(not collected)") and site["not_collected"]
 
 
 def test_snapshot_subnets_name_their_default_route(snapshot):
