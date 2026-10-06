@@ -313,6 +313,8 @@ export interface TopologySource {
   /** What the last collection found, e.g. "12 sites, 80 devices". */
   detail: string;
   warning_count: number;
+  /** The snapshot on the map (Meraki, Cato, AnyConnect), whose warnings can be listed. */
+  snapshot_id?: number | null;
   collecting: boolean;
   can_collect: boolean;
   /** False for an AWS or Azure account switched off in Cloud Visibility. */
@@ -334,6 +336,24 @@ export function useMerakiSnapshots() {
   return useQuery({
     queryKey: ['meraki', 'snapshots'],
     queryFn: () => apiRequest<{ snapshots: MerakiSnapshot[] }>('/meraki/snapshots'),
+  });
+}
+
+/** An API call a collection could not make (refused, not licensed, timed out...). */
+export interface CollectionWarning {
+  scope: string;
+  /** The API path or query that failed. */
+  path: string;
+  status: number | null;
+  message: string;
+}
+
+export function useSnapshotWarnings(snapshotId: number | null) {
+  return useQuery({
+    queryKey: ['meraki', 'snapshot-warnings', snapshotId],
+    queryFn: () =>
+      apiRequest<{ snapshot_id: number; warnings: CollectionWarning[] }>(`/meraki/snapshots/${snapshotId}/warnings`),
+    enabled: snapshotId != null,
   });
 }
 

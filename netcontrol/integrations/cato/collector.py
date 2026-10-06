@@ -8,15 +8,18 @@ What is read:
 
   - ``accountSnapshot.sites``   sites, their Sockets, WAN links and the PoP
                                 each one is connected to (required)
-  - ``accountSnapshot.users``   remote (SDP client) users that are connected
+  - ``accountSnapshot.users``   remote (SDP client) users that are connected:
+                                where they connect from, their PoP, VPN IP,
+                                device and recent connections
   - ``entityLookup``            the network ranges and LAN interfaces of every
                                 site, for subnets
 
 Failure policy: the site list is required; everything else is best-effort and
 a failure is recorded in ``errors`` and surfaced in the map's collection
 report. GraphQL rejects a whole query when it names one field the schema does
-not have, so the site query has a reduced fallback: a schema difference costs
-detail (WAN links, HA state), not the map.
+not have, so the site and user queries have reduced fallbacks: a schema
+difference costs detail (HA state, recent connections, and only as a last
+resort the WAN links), not the map.
 """
 
 from __future__ import annotations
@@ -50,7 +53,7 @@ _MAX_LOOKUP_ITEMS = 100_000
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 
-_INTERFACE_INFO = "id name upBandwidth downBandwidth destType wanRole"
+_INTERFACE_INFO = "id name upstreamBandwidth downstreamBandwidth destType wanRole"
 
 SITES_QUERY = """
 query plexusSites($accountID: ID!) {
@@ -65,7 +68,7 @@ query plexusSites($accountID: ID!) {
       connectedSince
       popName
       hostCount
-      haStatus { readiness wanConnectivity keys routes }
+      haStatus { readiness wanConnectivity keepalive socketVersion }
       info {
         name type description countryCode countryName countryStateName cityName address isHA connType
         interfaces { @IFACE@ }
@@ -87,7 +90,29 @@ query plexusSites($accountID: ID!) {
 }
 """.replace("@IFACE@", _INTERFACE_INFO)
 
-# Used when Cato refuses the full query: the fields every schema version has.
+# Used when Cato refuses the full query: the Sockets and their WAN links
+# without the detail (HA state, bandwidth, provider) a schema may lack. The
+# WAN links' public addresses tie a vSocket to its AWS or Azure instance.
+SITES_QUERY_WAN = """
+query plexusSitesWan($accountID: ID!) {
+  accountSnapshot(accountID: $accountID) {
+    id
+    sites {
+      id
+      connectivityStatus
+      popName
+      info { name type description connType isHA }
+      devices {
+        id name connected haRole lastPopName internalIP
+        socketInfo { serial isPrimary platform }
+        interfaces { id name connected popName tunnelRemoteIP }
+      }
+    }
+  }
+}
+"""
+
+# Used when Cato refuses that too: the fields every schema version has.
 SITES_QUERY_BASIC = """
 query plexusSitesBasic($accountID: ID!) {
   accountSnapshot(accountID: $accountID) {
@@ -105,6 +130,24 @@ query plexusSitesBasic($accountID: ID!) {
 
 USERS_QUERY = """
 query plexusUsers($accountID: ID!) {
+  accountSnapshot(accountID: $accountID) {
+    users {
+      id name connectivityStatus operationalStatus deviceName uptime lastConnected version
+      popName remoteIP internalIP osType osVersion connectedInOffice
+      remoteIPInfo { ip countryCode countryName city state provider latitude longitude }
+      info { name status email phoneNumber origin authMethod }
+      recentConnections {
+        duration interfaceName deviceName lastConnected popName remoteIP
+        remoteIPInfo { countryName city state provider }
+      }
+    }
+  }
+}
+"""
+
+# Used when Cato refuses the full query: the user fields every schema has.
+USERS_QUERY_BASIC = """
+query plexusUsersBasic($accountID: ID!) {
   accountSnapshot(accountID: $accountID) {
     users {
       id name connectivityStatus operationalStatus deviceName uptime lastConnected version
@@ -201,7 +244,13 @@ async def collect_account(
         if not exc.graphql:
             raise
         errors.append(_error("account", "accountSnapshot.sites (full detail)", exc))
-        data = await client.query("plexusSitesBasic", SITES_QUERY_BASIC, variables)
+        try:
+            data = await client.query("plexusSitesWan", SITES_QUERY_WAN, variables)
+        except CatoApiError as exc:
+            if not exc.graphql:
+                raise
+            errors.append(_error("account", "accountSnapshot.sites (WAN links)", exc))
+            data = await client.query("plexusSitesBasic", SITES_QUERY_BASIC, variables)
     done += 1
     snapshot = scrub_secrets(data.get("accountSnapshot") or {})
     needle = opts["site_name_contains"].lower()
@@ -218,7 +267,13 @@ async def collect_account(
     if opts["include_users"]:
         report("cato users")
         try:
-            data = await client.query("plexusUsers", USERS_QUERY, variables)
+            try:
+                data = await client.query("plexusUsers", USERS_QUERY, variables)
+            except CatoApiError as exc:
+                if not exc.graphql:
+                    raise
+                errors.append(_error("account", "accountSnapshot.users (full detail)", exc))
+                data = await client.query("plexusUsersBasic", USERS_QUERY_BASIC, variables)
             found = scrub_secrets((data.get("accountSnapshot") or {}).get("users") or [])
             users = [u for u in found if isinstance(u, dict)]
         except CatoApiError as exc:

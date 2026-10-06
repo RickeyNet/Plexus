@@ -34,6 +34,8 @@ export interface TopologyNode {
   source?: 'meraki' | string;
   /** Present when the node is (or matches) a node of a Meraki snapshot. */
   meraki?: TopologyMerakiRef | null;
+  /** Other integrations that know this node (an AWS instance that is a Cato vSocket). */
+  also_providers?: string[];
   /** Layout hint: Meraki sites arrive pre-arranged instead of using physics. */
   x?: number;
   y?: number;
@@ -47,7 +49,7 @@ export interface TopologyMerakiRef {
   kind: string;
   status: string;
   serial?: string;
-  /** Integration the snapshot came from: 'meraki' (default) or 'cato'. */
+  /** Integration the snapshot came from: 'meraki' (default), 'cato', 'anyconnect', 'aws' or 'azure'. */
   provider?: string;
 }
 
@@ -62,6 +64,8 @@ export interface TopologyEdge {
   protocol?: string | null;
   utilization?: TopologyEdgeUtilization | null;
   source?: 'meraki' | string;
+  /** Integration a 'meraki'-source link came from: 'meraki', 'cato', 'anyconnect', 'aws', 'azure'. */
+  provider?: string;
   /** Meraki link state: VPN reachability or WAN uplink status. */
   status?: string | null;
 }

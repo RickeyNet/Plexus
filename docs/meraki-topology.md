@@ -59,27 +59,50 @@ only within the same Meraki domain, so the key cannot be sent elsewhere.
 Meraki data appears when the group filter is **All groups** (Meraki devices
 belong to no inventory group).
 
-- The map opens in the **Tidy tree** layout: each connected network is a
-  tree growing left to right from its busiest gateway (for a hub-and-spoke
-  VPN, the hub), following cables first and VPN tunnels only to reach other
-  sites. Every device gets its own row, so nothing overlaps and nothing
-  needs arranging; devices with no links are listed in a grid underneath.
-  The other layouts (physics, circular, hierarchical) remain in the layout
-  menu.
-- **Large maps.** When the trees would stack into one very tall strip
-  (hundreds of sites behind a VPN hub), every site is drawn as its own small
-  tree and the sites are arranged in columns, in name order. With more than
+- The map opens in the **Tidy tree** layout, top to bottom. Each source is
+  a region of its own, framed and titled, side by side from left to right: the
+  inventory, then Meraki, Cato, AnyConnect, AWS and Azure. Links between
+  sources are still drawn, but they do not pull a device into another
+  source's region, and they go around the sources rather than through them:
+  up from each end, in a column clear of the devices above it, to a lane
+  over the tops of the regions, then across and down (a vSocket to its VPC,
+  for example). Links whose stretches overlap get lanes of their own, the
+  shorter one lower; click one for its details as usual. Within a source each connected network is a tree growing
+  down from its busiest gateway (for a hub-and-spoke VPN, the hub; for Cato,
+  the backbone, then the PoPs), following cables first and VPN tunnels only
+  to reach other sites. Every device gets its own spot, so nothing overlaps
+  and nothing needs arranging; devices with no links are listed in a grid
+  underneath. An appliance's WAN uplinks (and a VPC's internet gateway) are
+  drawn in a row just above it. Eight or more devices of one site with
+  nothing below them (access points on a switch, remote users on a PoP) are
+  drawn as a grid under their parent. The other layouts (physics, circular,
+  hierarchical) remain in the layout menu. A node you dragged stays where
+  you put it; **Reset Positions** puts every node back in the tree.
+- **Large maps.** When a device's children would make one very wide row
+  (hundreds of sites behind a VPN hub), they wrap onto several rows under
+  it, in site name order, so the hub stays on top. The Cato PoPs are the
+  exception: they stay in one row under the Cato Cloud, dropped further the
+  wider the row is, so the backbone links reach every PoP without crossing
+  another node. With more than
   300 VPN tunnels, tunnels are not all drawn at once: click a device to see
   its tunnels, or turn on **VPN Tunnels** in the toolbar to draw them all.
+  The links from the Cato Cloud to its PoPs are always drawn and are not
+  counted, so the Cato backbone stays visible.
   Above roughly 600 devices the map also drops the glow behind nodes and
-  links and hides links while you pan or zoom, which keeps it responsive.
+  links and the hover highlight, which keeps it responsive; links stay
+  drawn while you pan or zoom.
   The HTML export follows the same rule: tunnels run behind the site boxes,
   and past 300 of them only the selected site's tunnels are drawn,
   highlighted (selecting any device selects its site's tunnels;
   **Layers > All tunnels at once** draws every one).
-- Each Meraki network is framed as a labelled site box. A site whose frame
-  would enclose other sites' devices (typically the VPN hub, which sits in
-  the middle of its spokes) is left unframed.
+- Each Meraki network is framed as a labelled site box. A device with
+  links into other sites (a VPN hub, a VPC peered with others) sits level
+  with the devices of its own site, not in the middle of the sites hanging
+  off it, so its box stays clear of them. A site whose devices the tree
+  places in more than one spot (the gateways of the **AWS transit and VPN**
+  box, some under a VPC and some with no links) gets a box in each spot,
+  with the same title. A box that would still enclose another site's
+  devices is left out.
 - You can still drag a node to pin it; right-click returns it to its place
   in the tree, and **Reset Positions** returns the whole map to the tidy
   arrangement.
@@ -135,7 +158,15 @@ belong to no inventory group).
   same name ("Unknown neighbor", a phone model).
 - Where Plexus and Meraki both report the same link, the Plexus-discovered
   link is shown, since it carries utilization and spanning-tree state.
-- The **All sources / Inventory only / Meraki only** selector narrows the map.
+- The source selector narrows the map: **All sources**, **Inventory only**,
+  **All integrations** (every Meraki, Cato, AnyConnect and AWS device), or
+  one integration alone (**Meraki only**, **Cato only**, **AnyConnect only**,
+  **AWS only**; only the integrations on the map are offered). A single
+  integration keeps its own devices and the links between them; a link to
+  another integration (a Cato or Meraki VPN to an AWS gateway, a headend's
+  **Managed by FMC** link to an FMC in another box) is hidden with the other
+  side. An inventory host matched to an integration's device counts as that
+  integration.
 
 ### Device details
 
@@ -297,12 +328,18 @@ contains the API key, pre-shared keys, or VPN/RADIUS shared secrets.
 | Zoom to a site or device | Double-click it, or pick it in the Sites list |
 | Open details | Click a device, link, WAN uplink, VPN peer, or site |
 | Search | Type in the search box (`/` focuses it), `Enter` zooms to matches |
+| Show one source | The source selector next to the counts (**All sources**, **Inventory only**, **All integrations**, **AWS only**...) |
 | Show or hide link types | **Layers** |
 | Light / dark | **Theme** |
 | Statistics and collection warnings | **Report** |
 
 The export uses its own layout (sites as boxes in a grid); positions you have
 pinned on the Topology page are not carried over.
+
+The file always holds every source; its source selector works like the one on
+the Topology page. One source packs its sites together, recounts the sites,
+devices and tunnels in the header, and limits search and Path to what it
+shows. The selector appears only when the export includes an integration.
 
 ## API reference
 
@@ -321,4 +358,5 @@ pinned on the Topology page are not carried over.
 | `POST` | `/api/meraki/sample` | Add / refresh the demo organization |
 | `GET` | `/api/meraki/snapshots` | List snapshots (`?org_ref=` to filter) |
 | `GET` | `/api/meraki/snapshots/{id}/data` | Snapshot as JSON |
+| `GET` | `/api/meraki/snapshots/{id}/warnings` | Collection warnings of a snapshot (scope, request, HTTP status, message) |
 | `DELETE` | `/api/meraki/snapshots/{id}` | Delete a snapshot |

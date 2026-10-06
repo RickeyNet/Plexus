@@ -24,6 +24,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from netcontrol.integrations.cato.normalize import CLOUD_NODE_ID as CATO_CLOUD_NODE_ID
 from netcontrol.integrations.meraki.normalize import (
     SCHEMA_VERSION,
     _add,
@@ -47,8 +48,8 @@ _CATEGORY = {
     "cellularGateway": "router",
 }
 # Snapshot kinds that are not devices: neighbors, WAN stubs, VPN peers and the
-# nodes of a SASE cloud (its PoPs and backbone, and the remote-user group).
-NON_DEVICE_KINDS = ("external", "wan", "vpn_peer", "cloud", "users")
+# nodes of a SASE cloud (its PoPs and backbone, and its remote users).
+NON_DEVICE_KINDS = ("external", "wan", "vpn_peer", "cloud", "users", "user")
 _GRAPH_STATUS = {"online": "up", "offline": "down", "alerting": "alerting"}
 # Snapshot edge kind -> Topology edge protocol.
 # ``attach`` is a cloud attachment (VPC to transit gateway, peering...);
@@ -302,6 +303,12 @@ def merge_meraki_into_graph(
         target.setdefault("meraki", ref)
         target.setdefault("x", x)
         target.setdefault("y", y)
+        # A node of another integration that is this one (a vSocket or vMX
+        # instance, a VPN peer): the map's source filter shows it under both.
+        if ref["provider"] != target["meraki"].get("provider"):
+            also = target.setdefault("also_providers", [])
+            if ref["provider"] not in also:
+                also.append(ref["provider"])
         return target["id"]
 
     # Pass 1: devices. VPN peers wait until every device has claimed its addresses.
@@ -620,6 +627,7 @@ def graph_to_snapshot(
         return EXTERNAL_SITE_ID
 
     nodes: dict[str, dict] = {}
+    cato_ids: dict[str, str] = {}  # graph id -> Cato snapshot node id
     for g in graph.get("nodes") or []:
         ref = g.get("meraki")
         src = snap_nodes.get((ref["org_ref"], ref["node_id"])) if ref else None
@@ -682,6 +690,14 @@ def graph_to_snapshot(
             nodes[node_id]["site_sections"] = True
         if g.get("in_inventory"):
             nodes[node_id]["inventory"] = {"host_id": g["id"]}
+        # The viewer's Source picker: which integration drew the node, and
+        # whether only that integration knows it (the Topology page's filter).
+        if ref:
+            nodes[node_id]["provider"] = ref.get("provider") or "meraki"
+            if ref.get("provider") == "cato":
+                cato_ids[node_id] = str(ref.get("node_id") or "")
+        if g.get("source") == "meraki":
+            nodes[node_id]["integration_only"] = True
 
     edges: list[dict] = []
     for index, g in enumerate(graph.get("edges") or [], start=1):
@@ -701,6 +717,13 @@ def graph_to_snapshot(
             "status": g.get("status") or "",
             "sections": [],
         }
+        if g.get("source") == "meraki":
+            edge["provider"] = g.get("provider") or "meraki"
+        # The Cato Cloud's links to its PoPs: drawn however many tunnels the
+        # viewer hides.
+        ends = {cato_ids.get(a, ""), cato_ids.get(b, "")}
+        if CATO_CLOUD_NODE_ID in ends and any(end.startswith("pop:") for end in ends):
+            edge["backbone"] = True
         _add(
             edge["sections"],
             kv_section(
@@ -728,8 +751,12 @@ def graph_to_snapshot(
         site["status"] = _worst([m["status"] for m in members]) if members else "unknown"
         site["device_count"] = len(members)
 
-    # Inside a cloud site, attachments shape the box like cables do.
-    _layout(site_list, nodes, [{**e, "kind": "lan"} if e["kind"] == "attach" else e for e in edges])
+    # Inside a cloud site, attachments shape the box like cables do, and so
+    # do the tunnels inside a Cato PoP's box (its users, under the PoP).
+    def shapes_box(e: dict) -> bool:
+        return e["kind"] == "attach" or (e.get("provider") == "cato" and nodes[e["a"]]["site"] == nodes[e["b"]]["site"])
+
+    _layout(site_list, nodes, [{**e, "kind": "lan"} if shapes_box(e) else e for e in edges])
     node_list = list(nodes.values())
     for node in node_list:
         node.pop("parent", None)

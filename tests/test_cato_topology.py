@@ -18,11 +18,18 @@ import netcontrol.app as app_module
 import pytest
 import routes.database as db_module
 from netcontrol.integrations.cato.client import CatoApiError, CatoClient, validate_base_url
-from netcontrol.integrations.cato.collector import collect_account, sanitize_options
-from netcontrol.integrations.cato.normalize import CLOUD_NODE_ID, CLOUD_SITE_ID, USERS_NODE_ID, build_snapshot
+from netcontrol.integrations.cato.collector import SITES_QUERY_WAN, collect_account, sanitize_options
+from netcontrol.integrations.cato.normalize import (
+    CLOUD_NODE_ID,
+    CLOUD_SITE_ID,
+    POP_SITE_ID,
+    USER_NODE_PREFIX,
+    USERS_SITE_ID,
+    build_snapshot,
+)
 from netcontrol.integrations.cato.sample import build_sample_raw
 from netcontrol.integrations.meraki.subnets import subnet_index
-from netcontrol.integrations.meraki.unified import merge_meraki_into_graph, node_details
+from netcontrol.integrations.meraki.unified import graph_to_snapshot, merge_meraki_into_graph, node_details
 
 # ── Client ───────────────────────────────────────────────────────────────────
 
@@ -54,13 +61,22 @@ async def test_client_posts_query_with_api_key_header():
 @pytest.mark.asyncio
 async def test_client_turns_graphql_errors_into_exceptions_with_detail():
     def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"errors": [{"message": 'Cannot query field "nope" on type "SiteSnapshot".'}]})
+        return httpx.Response(
+            200,
+            json={
+                "errors": [
+                    {"message": 'Cannot query field "nope" on type "SiteSnapshot".'},
+                    {"message": 'Cannot query field "keys" on type "HaStatus".'},
+                ]
+            },
+        )
 
     async with _client(handler) as client:
         with pytest.raises(CatoApiError) as excinfo:
             await client.query("q", "query q { x }")
     assert excinfo.value.graphql is True and excinfo.value.status_code is None
-    assert "nope" in excinfo.value.detail
+    # Every refused field is reported, so one collection names them all.
+    assert '"nope"' in excinfo.value.detail and '"keys"' in excinfo.value.detail
 
 
 @pytest.mark.asyncio
@@ -132,6 +148,8 @@ async def test_collect_account_falls_back_and_stays_best_effort():
         seen.append((name, variables))
         if name == "plexusSites":
             return httpx.Response(200, json={"errors": [{"message": 'Cannot query field "hostCount"'}]})
+        if name == "plexusSitesWan":
+            return httpx.Response(200, json={"errors": [{"message": 'Cannot query field "haRole"'}]})
         if name == "plexusSitesBasic":
             return httpx.Response(200, json={"data": {"accountSnapshot": {"id": "42", "sites": sample["sites"]}}})
         if name == "plexusUsers":
@@ -151,11 +169,64 @@ async def test_collect_account_falls_back_and_stays_best_effort():
     assert raw["users"] == []
     assert len(raw["ranges"]) == len(sample["ranges"]) and len(raw["interfaces"]) == len(sample["interfaces"])
     scopes = [e["path"] for e in raw["errors"]]
-    assert scopes == ["accountSnapshot.sites (full detail)", "accountSnapshot.users"]
-    assert "hostCount" in raw["errors"][0]["message"] and raw["errors"][1]["status"] == 403
+    assert scopes == [
+        "accountSnapshot.sites (full detail)",
+        "accountSnapshot.sites (WAN links)",
+        "accountSnapshot.users",
+    ]
+    assert "hostCount" in raw["errors"][0]["message"] and raw["errors"][2]["status"] == 403
     assert progress[-1]["phase"] == "collected" and progress[-1]["calls_done"] == progress[-1]["calls_total"]
     # The reduced snapshot still builds a map.
     assert build_snapshot(raw)["summary"]["sites"] == 2
+
+
+@pytest.mark.asyncio
+async def test_collect_account_keeps_the_wan_links_when_the_full_query_is_refused():
+    # The WAN links' public addresses are what tie a vSocket to its cloud instance.
+    sample = build_sample_raw()
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        name = _operation(request)["operationName"]
+        seen.append(name)
+        if name == "plexusSites":
+            return httpx.Response(200, json={"errors": [{"message": 'Cannot query field "keys" on type "HaStatus"'}]})
+        if name == "plexusSitesWan":
+            return httpx.Response(200, json={"data": {"accountSnapshot": {"id": "42", "sites": sample["sites"]}}})
+        raise AssertionError(name)
+
+    async with _client(handler) as client:
+        raw = await collect_account(client, "42", {"include_users": False, "include_ranges": False})
+
+    assert seen == ["plexusSites", "plexusSitesWan"]
+    assert [e["path"] for e in raw["errors"]] == ["accountSnapshot.sites (full detail)"]
+    wans = [n for n in build_snapshot(raw)["nodes"] if n["kind"] == "wan"]
+    assert wans and all(n["ip"] for n in wans if n["status"] == "online")
+    assert "tunnelRemoteIP" in SITES_QUERY_WAN and "haStatus" not in SITES_QUERY_WAN
+
+
+@pytest.mark.asyncio
+async def test_collect_account_falls_back_to_the_basic_user_query():
+    sample = build_sample_raw()
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        name = _operation(request)["operationName"]
+        seen.append(name)
+        if name == "plexusSites":
+            return httpx.Response(200, json={"data": {"accountSnapshot": {"id": "42", "sites": sample["sites"]}}})
+        if name == "plexusUsers":
+            return httpx.Response(200, json={"errors": [{"message": 'Cannot query field "recentConnections"'}]})
+        if name == "plexusUsersBasic":
+            return httpx.Response(200, json={"data": {"accountSnapshot": {"users": sample["users"]}}})
+        raise AssertionError(name)
+
+    async with _client(handler) as client:
+        raw = await collect_account(client, "42", {"include_ranges": False})
+
+    assert seen == ["plexusSites", "plexusUsers", "plexusUsersBasic"]
+    assert len(raw["users"]) == 3
+    assert [e["path"] for e in raw["errors"]] == ["accountSnapshot.users (full detail)"]
 
 
 @pytest.mark.asyncio
@@ -209,6 +280,29 @@ def test_snapshot_joins_sockets_to_their_pop_and_pops_to_the_cloud(snapshot):
     assert down["status"] == "offline"
 
 
+def test_an_ipsec_site_reads_cato_list_of_tunnels():
+    # Cato returns a site's IPsec settings as a list, one per tunnel (the
+    # sample has the primary second); older captures hold a single object.
+    site = next(s for s in build_snapshot(build_sample_raw())["sites"] if s["id"] == "1004")
+    rows = _section(site, "IPsec tunnel")["rows"]
+    assert [r[1] for r in rows] == ["192.0.2.90", "192.0.2.91"]
+    raw = build_sample_raw()
+    for item in raw["sites"]:
+        if item["info"]["ipsec"]:
+            item["info"]["ipsec"] = item["info"]["ipsec"][1]
+        # Object fields that come back as a list of objects are read too.
+        item["haStatus"] = [item["haStatus"]]
+        for device in item["devices"]:
+            device["socketInfo"] = [device["socketInfo"]]
+            for iface in device["interfaces"]:
+                iface["tunnelRemoteIPInfo"] = [iface["tunnelRemoteIPInfo"]]
+    built = build_snapshot(raw)
+    node = next(n for n in built["nodes"] if n["id"] == "s:1004")
+    assert node["ip"] == "192.0.2.90"
+    primary = next(n for n in built["nodes"] if n["id"] == "d:5001")
+    assert primary["serial"] == "X1700-0001-AAAA" and primary.get("site_sections") is True
+
+
 def test_snapshot_ha_pair_and_wan_links(snapshot):
     labels = {n["id"]: n["label"] for n in snapshot["nodes"]}
     assert labels["d:5001"] == "HQ-DataCenter (primary)" and labels["d:5002"] == "HQ-DataCenter (secondary)"
@@ -220,14 +314,77 @@ def test_snapshot_ha_pair_and_wan_links(snapshot):
     assert sorted(n["ip"] for n in wans) == ["198.51.100.10", "198.51.100.11", "198.51.100.30", "203.0.113.10"]
 
 
-def test_snapshot_lists_remote_users_behind_one_node(snapshot):
-    users = next(n for n in snapshot["nodes"] if n["id"] == USERS_NODE_ID)
-    assert users["kind"] == "users" and users["label"] == "Remote users (3)"
-    rows = _section(users, "Connected users")["rows"]
-    assert [r[0] for r in rows] == ["Dana Reyes", "Priya Nair", "Sam Okafor"]
-    assert rows[0][1] == "dana.reyes@example.com" and rows[0][3] == "10.41.0.11"
+def test_every_remote_user_is_a_node_in_the_box_of_its_pop(snapshot):
+    users = {n["label"]: n for n in snapshot["nodes"] if n["kind"] == "user"}
+    assert sorted(users) == ["Dana Reyes", "Priya Nair", "Sam Okafor"]
+    dana = users["Dana Reyes"]
+    assert dana["id"] == f"{USER_NODE_PREFIX}9001" and dana["ip"] == "10.41.0.11"
+    assert dana["site"] == f"{POP_SITE_ID}:New York" and users["Sam Okafor"]["site"] == f"{POP_SITE_ID}:Ashburn"
+    boxes = {s["id"]: s for s in snapshot["sites"]}
+    ashburn = boxes[f"{POP_SITE_ID}:Ashburn"]
+    assert ashburn["name"] == "PoP Ashburn" and ashburn["device_count"] == 3
+    assert [r[0] for r in _section(ashburn, "Connected remote users")["rows"]] == ["Priya Nair", "Sam Okafor"]
+    # The PoPs' boxes are not counted as sites.
+    assert snapshot["summary"]["sites"] == 4
     pop = next(n for n in snapshot["nodes"] if n["id"] == "pop:Ashburn")
+    # The PoP is in its box, over its users; the backbone is in a box alone.
+    assert pop["site"] == f"{POP_SITE_ID}:Ashburn"
+    assert all(pop["y"] < users[name]["y"] for name in ("Priya Nair", "Sam Okafor"))
+    assert [n["id"] for n in snapshot["nodes"] if n["site"] == CLOUD_SITE_ID] == [CLOUD_NODE_ID]
     assert ["Remote users connected", "2"] in _section(pop, "Cato PoP")["rows"]
+    rows = _section(pop, "Connected remote users")["rows"]
+    assert [r[0] for r in rows] == ["Priya Nair", "Sam Okafor"]
+    assert rows[1][3:5] == ["10.41.0.12", "198.51.100.202"]
+
+
+def test_a_remote_user_says_where_it_connects_from_and_to(snapshot):
+    users = {n["label"]: n for n in snapshot["nodes"] if n["kind"] == "user"}
+    dana = users["Dana Reyes"]
+    assert ["Email", "dana.reyes@example.com"] in _section(dana, "Remote user")["rows"]
+    origin = dict(_section(dana, "Connecting from")["rows"])
+    assert origin["Connected from"] == "Remote (not in an office)" and origin["Public IP"] == "198.51.100.201"
+    assert origin["ISP"] == "Example ISP" and origin["City"] == "Columbus" and origin["State"] == "Ohio"
+    target = dict(_section(dana, "Connected to (Cato)")["rows"])
+    assert target["PoP"] == "New York" and target["VPN IP"] == "10.41.0.11"
+    assert dict(_section(dana, "Device")["rows"])["Device"] == "LT-DANA"
+    recent = _section(dana, "Recent connections")
+    assert recent["rows"][0][4] == "New York" and recent["rows"][0][3] == "Wi-Fi"
+    # A user in an office is told which one, from the office's public address.
+    priya = dict(_section(users["Priya Nair"], "Connecting from")["rows"])
+    assert priya["Connected from"] == "Office: HQ-DataCenter"
+
+
+def test_remote_users_link_to_the_pops_they_use(snapshot):
+    links = {(e["a"], e["b"]): e for e in snapshot["edges"]}
+    assert links[(f"{USER_NODE_PREFIX}9002", "pop:Ashburn")]["label"] == "Cato Client"
+    assert links[(f"{USER_NODE_PREFIX}9001", "pop:New York")]["kind"] == "vpn"
+    # Every user has a PoP, so none is tied to the backbone.
+    assert not any(a.startswith(USER_NODE_PREFIX) and b == CLOUD_NODE_ID for a, b in links)
+
+
+def test_a_pop_only_remote_users_use_is_drawn_behind_them():
+    raw = build_sample_raw()
+    raw["users"][0]["popName"] = "Hong Kong"
+    raw["users"].append({"id": "9", "name": "No PoP", "connectivityStatus": "connected"})
+    raw["users"].append({"id": "10", "name": "Gone", "connectivityStatus": "disconnected"})
+    snap = build_snapshot(raw)
+    links = {(e["a"], e["b"]) for e in snap["edges"]}
+    assert (f"{USER_NODE_PREFIX}9001", "pop:Hong Kong") in links and ("pop:Hong Kong", CLOUD_NODE_ID) in links
+    # A user without a PoP is tied to the backbone, in a box of its own.
+    assert (f"{USER_NODE_PREFIX}9", CLOUD_NODE_ID) in links
+    assert next(n for n in snap["nodes"] if n["id"] == f"{USER_NODE_PREFIX}9")["site"] == USERS_SITE_ID
+    # A disconnected user is not drawn.
+    assert not any(n["id"] == f"{USER_NODE_PREFIX}10" for n in snap["nodes"])
+
+
+def test_remote_users_can_be_left_out():
+    raw = build_sample_raw()
+    raw["options"] = {"include_users": False}
+    snap = build_snapshot(raw)
+    assert not any(n["kind"] == "user" for n in snap["nodes"])
+    assert not any(s["id"].startswith(USERS_SITE_ID) for s in snap["sites"])
+    # The PoPs keep their boxes.
+    assert {s["name"] for s in snap["sites"] if s["id"].startswith(POP_SITE_ID)} == {"PoP Ashburn", "PoP New York"}
 
 
 def test_snapshot_ranges_are_deduplicated_per_site(snapshot):
@@ -268,6 +425,17 @@ def test_merge_marks_cato_nodes_with_their_provider(snapshot):
     tunnel = next(e for e in edges if e["from"] == "meraki:7:d:5003" and e["to"] == "meraki:7:pop:New York")
     assert tunnel["protocol"] == "vpn" and tunnel["provider"] == "cato"
     assert len(edges) == len(snapshot["edges"])
+
+
+def test_export_marks_only_the_cloud_to_pop_links_as_backbone(snapshot):
+    nodes: dict = {}
+    edges: list[dict] = []
+    merge_meraki_into_graph(nodes, edges, [(7, snapshot)], host_node=lambda _id: None, resolve_external=lambda *_: None)
+    export = graph_to_snapshot({"nodes": list(nodes.values()), "edges": edges}, {7: snapshot}, {})
+    backbone = {(e["a"], e["b"]) for e in export["edges"] if e.get("backbone")}
+    pops = [n["id"] for n in snapshot["nodes"] if n["id"].startswith("pop:")]
+    # The HTML viewer always draws these; site tunnels and users stay optional.
+    assert backbone == {(f"meraki:7:{pop}", "meraki:7:cato:cloud") for pop in pops}
 
 
 def test_node_details_report_the_provider_and_site(snapshot):
@@ -367,8 +535,9 @@ def test_api_cato_sample_is_merged_into_the_topology(api):
 
     graph = api.get("/api/topology").json()
     cato = [n for n in graph["nodes"] if (n.get("meraki") or {}).get("provider") == "cato"]
-    assert {n["meraki"]["kind"] for n in cato} == {"appliance", "wan", "cloud", "users"}
-    assert any(n["label"] == "Remote users (3)" for n in cato)
+    assert {n["meraki"]["kind"] for n in cato} == {"appliance", "wan", "cloud", "user"}
+    dana = next(n for n in cato if n["label"] == "Dana Reyes")
+    assert dana["ip"] == "10.41.0.11" and dana["meraki"]["site_name"] == "PoP New York"
     assert any(e.get("provider") == "cato" and e["protocol"] == "vpn" for e in graph["edges"])
 
     details = api.get(f"/api/meraki/nodes?org_ref={org_ref}&node_id=d:5003").json()
@@ -379,16 +548,19 @@ def test_api_cato_sample_is_merged_into_the_topology(api):
     vpc = next(s for s in subnets if s["cidr"] == "172.31.0.0/16")
     assert vpc["site_name"] == "AWS-us-east-1" and vpc["org_ref"] == org_ref
 
-    # A remote user is found by name, on the user group's node.
+    # A remote user is found by name, on their own node and their PoP.
     hits = api.get("/api/topology/search/deep?q=dana").json()["results"]
-    assert [(h["org_ref"], h["node_id"]) for h in hits] == [(org_ref, "cato:users")]
+    assert sorted((h["org_ref"], h["node_id"]) for h in hits) == [
+        (org_ref, f"{USER_NODE_PREFIX}9001"),
+        (org_ref, "pop:New York"),
+    ]
 
     # Both samples share the map and the HTML export.
     assert api.post("/api/meraki/sample").status_code == 201
     merged = api.get("/api/topology").json()["nodes"]
     assert {(n.get("meraki") or {}).get("provider") for n in merged if n.get("meraki")} == {"meraki", "cato"}
     export = api.get("/api/topology/export.html")
-    assert export.status_code == 200 and "Remote users (3)" in export.text
+    assert export.status_code == 200 and "PoP New York" in export.text
 
 
 def test_api_cato_build_job_runs_the_cato_collector(api, monkeypatch):
@@ -417,6 +589,38 @@ def test_api_cato_build_job_runs_the_cato_collector(api, monkeypatch):
     assert snapshot["org"]["name"] == "Acme Cato"
 
 
+def test_api_collection_warnings_are_listed_for_the_sources_dialog(api, monkeypatch):
+    import netcontrol.routes.meraki_topology as routes_module
+
+    async def _fake_collect(_client, _account_id, _options, _progress):
+        raw = build_sample_raw()
+        raw["errors"] = [
+            {"scope": "account", "path": "accountSnapshot.users", "status": 403, "message": "Permission denied"}
+        ]
+        return raw
+
+    monkeypatch.setattr(routes_module, "collect_account", _fake_collect)
+    body = {"name": "Warned Cato", "provider": "cato", "org_id": "4243", "api_key": "k"}
+    org = api.post("/api/meraki/orgs", json=body).json()["org"]
+    started = api.post(f"/api/meraki/orgs/{org['id']}/build")
+    job = {}
+    for _ in range(200):
+        job = api.get(f"/api/meraki/builds/{started.json()['job_id']}").json()
+        if job["status"] != "running":
+            break
+    assert job["status"] == "partial", job
+
+    sources = api.get("/api/topology/sources").json()["sources"]
+    source = next(s for s in sources if s["key"] == f"org:{org['id']}")
+    assert source["warning_count"] == 1 and source["snapshot_id"] == job["result"]["snapshot_id"]
+
+    listed = api.get(f"/api/meraki/snapshots/{source['snapshot_id']}/warnings").json()
+    assert listed["warnings"] == [
+        {"scope": "account", "path": "accountSnapshot.users", "status": 403, "message": "Permission denied"}
+    ]
+    assert api.get("/api/meraki/snapshots/999999/warnings").status_code == 404
+
+
 def test_api_cato_build_needs_an_account_id(api):
     org = api.post("/api/meraki/orgs", json={"name": "NoAccount", "provider": "cato", "api_key": "k"}).json()["org"]
     started = api.post(f"/api/meraki/orgs/{org['id']}/build")
@@ -427,3 +631,15 @@ def test_api_cato_build_needs_an_account_id(api):
         if job["status"] != "running":
             break
     assert job["status"] == "failed" and "account ID" in job["error"]
+
+
+def test_export_draws_each_pop_over_its_users(snapshot):
+    nodes: dict = {}
+    edges: list[dict] = []
+    merge_meraki_into_graph(nodes, edges, [(7, snapshot)], host_node=lambda _id: None, resolve_external=lambda *_: None)
+    export = graph_to_snapshot({"nodes": list(nodes.values()), "edges": edges}, {7: snapshot}, {})
+    by_label = {n["label"]: n for n in export["nodes"]}
+    pop = by_label["PoP Ashburn"]
+    users = [by_label["Priya Nair"], by_label["Sam Okafor"]]
+    assert all(u["site"] == pop["site"] and u["y"] > pop["y"] for u in users)
+    assert min(u["x"] for u in users) <= pop["x"] <= max(u["x"] for u in users)

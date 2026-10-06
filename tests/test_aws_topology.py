@@ -381,10 +381,75 @@ def test_snapshot_keeps_an_attachment_to_a_vpc_it_did_not_collect():
     ]  # fmt: skip
     snap = build_snapshot([ACCOUNT], resources, connections)
     stub = _node(snap, "x:vpc:vpc-other")
-    assert stub["kind"] == "cloud" and stub["site"] == TRANSIT_SITE_ID
+    # A VPC Plexus does not collect is still drawn as a VPC, in a box of its own.
+    assert stub["kind"] == "vpc" and stub["site"] == "vpc-other" and stub["model"] == "AWS VPC (not collected)"
+    site = next(s for s in snap["sites"] if s["id"] == "vpc-other")
+    assert site["name"] == "vpc-other (not collected)"
+    assert snap["summary"]["sites"] == 1 and snap["summary"]["devices_by_kind"] == {"vpc": 1}
     statuses = {e["a"]: e["status"] for e in snap["edges"]}
     # A failed attachment stays on the map but is not routed through.
     assert statuses == {"vpc:vpc-1": "active", "x:vpc:vpc-other": "failed"}
+
+
+def _peered_vpc(**account: str) -> tuple[dict, dict]:
+    """A collected VPC peered with one of another account, and the snapshot."""
+    resources = [
+        {"resource_uid": "aws:vpc:vpc-1", "resource_type": "vpc", "name": "core", "cidr": "172.30.0.0/16"},
+        {"resource_uid": "aws:route_table:rtb-1", "resource_type": "route_table", "name": "main",
+         "metadata": {"vpc_id": "vpc-1", "routes": [
+             {"destination": "10.7.1.0/24", "target": "pcx-1", "state": "active"},
+             {"destination": "0.0.0.0/0", "target": "igw-1", "state": "active"},
+         ]}},
+    ]  # fmt: skip
+    peering = {
+        "source_resource_uid": "aws:vpc:vpc-far",
+        "target_resource_uid": "aws:vpc:vpc-1",
+        "connection_type": "vpc_peering",
+        "state": "active",
+        "metadata": {
+            "peering_id": "pcx-1",
+            "requester_cidr": "10.7.1.0/24",
+            "requester_cidrs": ["10.7.1.0/24", "10.7.2.0/24"],
+            "requester_owner_id": "222222222222",
+            "requester_region": "us-east-2",
+            "accepter_cidr": "172.30.0.0/16",
+            "accepter_owner_id": "111111111111",
+            "accepter_region": "us-east-1",
+        },
+    }
+    accounts = [{**ACCOUNT, "account_identifier": "111111111111", "region_scope": "all", **account}]
+    snap = build_snapshot(accounts, resources, [peering])
+    return _node(snap, "x:vpc:vpc-far"), snap
+
+
+def test_a_peered_vpc_not_collected_shows_what_its_peering_records():
+    stub, snap = _peered_vpc()
+    assert stub["model"] == "AWS VPC 10.7.1.0/24, 10.7.2.0/24 (not collected)"
+    overview = dict(_section(stub, "Overview")["rows"])
+    assert overview["Region"] == "us-east-2" and overview["Account"] == "222222222222"
+    assert overview["Not collected"].startswith("Account 222222222222 is not added to Cloud Visibility")
+    site = next(s for s in snap["sites"] if s["id"] == "vpc-far")
+    assert site["name"] == "vpc-far (us-east-2, not collected)" and site["tags"] == ["us-east-2", "222222222222"]
+    details = node_details(snap, "x:vpc:vpc-far")
+    by_title = {s["title"]: s["rows"] for s in details["site_sections"]}
+    assert by_title["VPC peerings"] == [
+        ["pcx-1", "core", "172.30.0.0/16", "us-east-1", "Prod (111111111111)", "active"]
+    ]
+    # Only the routes over the peering, not the VPC's other routes.
+    assert by_title["Routes to this VPC"] == [["core", "main", "10.7.1.0/24", "pcx-1", "active"]]
+    # The collected VPC lists the peering from its side.
+    core = next(s for s in snap["sites"] if s["id"] == "vpc-1")
+    peerings = next(s for s in core["sections"] if s["title"] == "VPC peerings")["rows"]
+    assert peerings == [["pcx-1", "vpc-far", "10.7.1.0/24, 10.7.2.0/24", "us-east-2", "222222222222", "active"]]
+    assert snap["summary"]["devices_by_kind"] == {"vpc": 1}
+
+
+def test_a_peered_vpc_not_collected_says_why():
+    stub, _snap = _peered_vpc(account_identifier="222222222222", region_scope="us-east-1, us-west-2")
+    reason = dict(_section(stub, "Overview")["rows"])["Not collected"]
+    assert reason.startswith("Region us-east-2 is not among the regions Prod discovers")
+    stub, _snap = _peered_vpc(account_identifier="222222222222", region_scope="all")
+    assert dict(_section(stub, "Overview")["rows"])["Not collected"].startswith("Prod has not discovered it yet")
 
 
 def test_snapshot_of_nothing_is_empty():
@@ -436,6 +501,8 @@ def test_merge_makes_a_customer_gateway_the_device_on_that_address():
     assert "meraki:2:cgw" not in nodes
     tunnel = next(e for e in edges if e["provider"] == "aws")
     assert {tunnel["from"], tunnel["to"]} == {"meraki:2:tgw", "meraki:1:mx"} and tunnel["protocol"] == "vpn"
+    # The AWS view of the map shows it too.
+    assert nodes["meraki:1:mx"]["also_providers"] == ["aws"]
 
 
 def test_merge_leaves_a_peer_on_a_private_address_alone():
@@ -443,6 +510,7 @@ def test_merge_leaves_a_peer_on_a_private_address_alone():
     lan = {**BRANCH, "nodes": [_n("mx", "appliance", ip="10.0.0.1")], "edges": []}
     nodes, _edges = _merge(lan, aws)
     assert "meraki:2:cgw" in nodes
+    assert "also_providers" not in nodes["meraki:1:mx"]
 
 
 def test_merge_recognises_a_virtual_appliance_by_its_public_address():
@@ -455,6 +523,7 @@ def test_merge_recognises_a_virtual_appliance_by_its_public_address():
     nodes, edges = _merge(BRANCH, aws)
     # The instance is the appliance the other integration already shows.
     assert "meraki:2:i" not in nodes and nodes["meraki:1:mx"]["meraki"]["provider"] == "meraki"
+    assert nodes["meraki:1:mx"]["also_providers"] == ["aws"]
     assert frozenset(("meraki:1:mx", "meraki:2:vpc")) in _pairs(edges)
     attach = next(e for e in edges if e["provider"] == "aws")
     assert attach["protocol"] == "cloud"

@@ -825,8 +825,21 @@ class _Builder:
         if len(parts) != 3 or parts[1] != "vnet":
             return None
         rid = parts[2]
-        node = self._node(
-            uid, f"x:vnet:{rid}", "cloud", f"VNet {_short(rid)}", TRANSIT_SITE_ID, "unknown", model="Not collected"
+        # A VNet like any other, in a box of its own, so a peering looks the
+        # same whether or not its far end is collected.
+        site_id = f"x:{rid}"
+        node = self._node(uid, f"x:vnet:{rid}", "vpc", f"VNet {_short(rid)}", site_id, "unknown", model="Not collected")
+        self.sites.append(
+            {
+                "id": site_id,
+                "name": f"{_short(rid)} (not collected)",
+                "tags": [],
+                "vpn_mode": "spoke",
+                "status": "unknown",
+                "device_count": 0,
+                "sections": [],
+                "not_collected": True,
+            }
         )
         _add(
             node["sections"],
@@ -1024,7 +1037,7 @@ def build_snapshot(
     by_kind: dict[str, int] = {}
     by_status: dict[str, int] = {}
     for node in nodes:
-        if node["kind"] in ("wan", "cloud", "vpn_peer"):
+        if node["kind"] in ("wan", "cloud", "vpn_peer") or node.get("model") == "Not collected":
             continue
         by_kind[node["kind"]] = by_kind.get(node["kind"], 0) + 1
         by_status[node["status"]] = by_status.get(node["status"], 0) + 1
@@ -1040,7 +1053,7 @@ def build_snapshot(
         "generated_at": synced[-1] if synced else "",
         "org": {"id": "", "name": "Azure" + (f" ({', '.join(names)})" if names else ""), "url": ""},
         "summary": {
-            "sites": len(builder.sites),
+            "sites": sum(1 for s in builder.sites if not s.get("not_collected")),
             "devices": sum(by_kind.values()),
             "devices_by_kind": by_kind,
             "devices_by_status": by_status,

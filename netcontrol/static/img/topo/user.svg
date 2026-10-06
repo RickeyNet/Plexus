@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Remote user icon: person -->
+  <circle cx="32" cy="32" r="22" stroke="#42a5f5" stroke-width="3" fill="#0d47a1"/>
+  <!-- Head -->
+  <circle cx="32" cy="25" r="8" fill="#42a5f5"/>
+  <!-- Shoulders -->
+  <path d="M17 46 C17 38 24 35 32 35 C40 35 47 38 47 46 Z" fill="#42a5f5"/>
+</svg>

@@ -37,7 +37,7 @@ DEFAULT_MAX_RETRIES = 4
 CATO_API_DOMAIN = "catonetworks.com"
 
 _MAX_RETRY_AFTER_SECONDS = 60.0
-_MAX_DETAIL_CHARS = 300
+_MAX_DETAIL_CHARS = 1000
 
 
 class CatoApiError(RuntimeError):
@@ -174,9 +174,13 @@ class CatoClient:
                     if not errors:
                         data = body.get("data") if isinstance(body, dict) else None
                         return data if isinstance(data, dict) else {}
-                    first = errors[0] if isinstance(errors, list) and errors else {}
-                    detail = str((first.get("message") if isinstance(first, dict) else first) or "")
-                    detail = detail[:_MAX_DETAIL_CHARS]
+                    # Every message, not just the first: a refused query names
+                    # each field the schema lacks in an error of its own.
+                    messages = [
+                        str((e.get("message") if isinstance(e, dict) else e) or "")
+                        for e in (errors if isinstance(errors, list) else [errors])
+                    ]
+                    detail = "; ".join(dict.fromkeys(m for m in messages if m))[:_MAX_DETAIL_CHARS]
                     if not _is_rate_limit(detail) or attempt >= self._max_retries:
                         raise CatoApiError(f"Cato query {name} was refused", graphql=True, detail=detail)
                     rate_limited = True

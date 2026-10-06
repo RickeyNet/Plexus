@@ -300,7 +300,7 @@ def snapshot_devices(snapshot: dict, provider: str) -> list[dict[str, Any]]:
         if not isinstance(node, dict):
             continue
         kind = str(node.get("kind") or "")
-        if kind in ("wan", "external", "vpn_peer", "users", "vpc"):
+        if kind in ("wan", "external", "vpn_peer", "users", "user", "vpc"):
             continue
         raw_version = _version_row(node)
         platform = _snapshot_platform(provider, node)

@@ -25,8 +25,8 @@ def _iface(ident: str, name: str, *, pop: str, ip: str, provider: str, role: str
         "info": {
             "id": ident,
             "name": name,
-            "upBandwidth": up,
-            "downBandwidth": down,
+            "upstreamBandwidth": up,
+            "downstreamBandwidth": down,
             "destType": "CATO",
             "wanRole": role,
         },
@@ -80,7 +80,7 @@ def _site(
     conn_type: str = "SOCKET_X1500",
     is_ha: bool = False,
     devices: list[dict] | None = None,
-    ipsec: dict | None = None,
+    ipsec: list[dict] | None = None,
     hosts: int = 0,
 ) -> dict:
     return {
@@ -91,7 +91,9 @@ def _site(
         "connectedSince": "2026-09-20T03:15:00Z" if status != "disconnected" else None,
         "popName": pop,
         "hostCount": hosts,
-        "haStatus": {"readiness": "ready", "wanConnectivity": "ok", "keys": "ok", "routes": "ok"} if is_ha else None,
+        "haStatus": {"readiness": "ready", "wanConnectivity": "ok", "keepalive": "ok", "socketVersion": "ok"}
+        if is_ha
+        else None,
         "info": {
             "name": name,
             "type": "BRANCH" if ident != "1001" else "DATACENTER",
@@ -107,24 +109,24 @@ def _site(
                 {
                     "id": "1",
                     "name": "WAN 01",
-                    "upBandwidth": 500,
-                    "downBandwidth": 500,
+                    "upstreamBandwidth": 500,
+                    "downstreamBandwidth": 500,
                     "destType": "CATO",
                     "wanRole": "wan_1",
                 },
                 {
                     "id": "2",
                     "name": "WAN 02",
-                    "upBandwidth": 100,
-                    "downBandwidth": 100,
+                    "upstreamBandwidth": 100,
+                    "downstreamBandwidth": 100,
                     "destType": "CATO",
                     "wanRole": "wan_2",
                 },
                 {
                     "id": "5",
                     "name": "LAN 01",
-                    "upBandwidth": None,
-                    "downBandwidth": None,
+                    "upstreamBandwidth": None,
+                    "downstreamBandwidth": None,
                     "destType": "LAN",
                     "wanRole": None,
                 },
@@ -132,7 +134,7 @@ def _site(
             if devices
             else [],
             "sockets": [d["socketInfo"] for d in devices or []],
-            "ipsec": ipsec,
+            "ipsec": ipsec or [],
         },
         "devices": devices or [],
     }
@@ -162,14 +164,38 @@ def _user(ident: str, name: str, pop: str, vpn_ip: str, public_ip: str, os_type:
         "osType": os_type,
         "osVersion": "",
         "connectedInOffice": office,
-        "remoteIPInfo": {"countryName": "United States", "city": "", "provider": "Example ISP"},
+        "remoteIPInfo": {
+            "ip": public_ip,
+            "countryCode": "US",
+            "countryName": "United States",
+            "city": "Columbus",
+            "state": "Ohio",
+            "provider": "Example ISP",
+        },
         "info": {
             "name": name,
             "status": "active",
             "email": f"{name.lower().replace(' ', '.')}@example.com",
+            "phoneNumber": "",
             "origin": "LDAP",
             "authMethod": "SSO",
         },
+        "recentConnections": [
+            {
+                "duration": 7200,
+                "interfaceName": "Wi-Fi",
+                "deviceName": f"LT-{name.split()[0].upper()}",
+                "lastConnected": "2026-09-30T17:05:00Z",
+                "popName": pop,
+                "remoteIP": public_ip,
+                "remoteIPInfo": {
+                    "countryName": "United States",
+                    "city": "Columbus",
+                    "state": "Ohio",
+                    "provider": "Example ISP",
+                },
+            }
+        ],
     }
 
 
@@ -283,7 +309,10 @@ def build_sample_raw() -> dict[str, Any]:
             pop="Ashburn",
             city="Ashburn",
             conn_type="IPSEC_V2",
-            ipsec={"isPrimary": True, "catoIP": "192.0.2.80", "remoteIP": "192.0.2.90", "ikeVersion": "2"},
+            ipsec=[
+                {"isPrimary": False, "catoIP": "192.0.2.81", "remoteIP": "192.0.2.91", "ikeVersion": "2"},
+                {"isPrimary": True, "catoIP": "192.0.2.80", "remoteIP": "192.0.2.90", "ikeVersion": "2"},
+            ],
         ),
     ]
     ranges = [

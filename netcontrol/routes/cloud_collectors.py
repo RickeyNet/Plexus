@@ -32,7 +32,53 @@ class CloudCollectorUnavailable(CloudCollectorError):
 
 
 class CloudCollectorAuthError(CloudCollectorError):
-    """Raised for provider authentication/authorization failures."""
+    """Raised for provider authentication/authorization failures.
+
+    ``user_message`` is set when Plexus can say exactly what is wrong (an
+    expired session token, no credentials on the server); it is fixed text
+    written here, never the provider's error message, so it is safe to show.
+    """
+
+    def __init__(self, message: str, *, user_message: str = "") -> None:
+        super().__init__(message)
+        self.user_message = user_message
+
+
+# AWS error codes for temporary credentials past their expiry.
+_AWS_EXPIRED_CODES = {"ExpiredToken", "ExpiredTokenException", "RequestExpired", "TokenRefreshRequired"}
+AWS_EXPIRED_TOKEN_MESSAGE = (
+    "The AWS session token has expired. Edit the account and enter a fresh access key, secret and session token."
+)
+AWS_SSO_EXPIRED_MESSAGE = (
+    "The AWS SSO sign-in of the Plexus server has expired. Run 'aws sso login' on the server, then try again."
+)
+AWS_NO_CREDENTIALS_MESSAGE = (
+    "No AWS credentials were found on the Plexus server. Enter credentials for the account, "
+    "or configure them on the server (environment variables, ~/.aws/credentials or an SSO profile)."
+)
+
+
+def aws_credential_message(exc: BaseException) -> str:
+    """What to tell the user about an AWS sign-in failure, or ``""`` when
+    nothing more specific than "authentication failed" is known."""
+    try:
+        from botocore.exceptions import NoCredentialsError, SSOError, TokenRetrievalError
+    except Exception:  # pragma: no cover - boto3 missing is reported elsewhere
+        return ""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, (SSOError, TokenRetrievalError)):
+            return AWS_SSO_EXPIRED_MESSAGE
+        if isinstance(current, NoCredentialsError):
+            return AWS_NO_CREDENTIALS_MESSAGE
+        response = getattr(current, "response", None)
+        code = ((response or {}).get("Error") or {}).get("Code") if isinstance(response, dict) else None
+        if code in _AWS_EXPIRED_CODES:
+            return AWS_EXPIRED_TOKEN_MESSAGE
+        current = current.__cause__ or current.__context__
+    return ""
 
 
 class CloudCollectorExecutionError(CloudCollectorError):
@@ -60,6 +106,15 @@ def _parse_region_scope(region_scope: str | None) -> list[str]:
     if not raw:
         return []
     return [r.strip() for r in raw.split(",") if r.strip()]
+
+
+def _peering_cidrs(vpc_info: dict) -> list[str]:
+    """Every IPv4 and IPv6 range one end of a VPC peering reports, the
+    primary first."""
+    cidrs = [str(vpc_info.get("CidrBlock") or "").strip()]
+    cidrs += [str(c.get("CidrBlock") or "").strip() for c in vpc_info.get("CidrBlockSet") or []]
+    cidrs += [str(c.get("Ipv6CidrBlock") or "").strip() for c in vpc_info.get("Ipv6CidrBlockSet") or []]
+    return list(dict.fromkeys(c for c in cidrs if c))
 
 
 def _is_all_regions(region_scope: str | None) -> bool:
@@ -532,13 +587,17 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                 aws_session_token=creds["SessionToken"],
             )
         except Exception as exc:
-            raise CloudCollectorAuthError("Failed to assume AWS IAM role") from exc
+            raise CloudCollectorAuthError(
+                "Failed to assume AWS IAM role", user_message=aws_credential_message(exc)
+            ) from exc
 
     # Validate credentials early.
     try:
         session.client("sts", config=_cfg).get_caller_identity()
     except (BotoCoreError, ClientError) as exc:
-        raise CloudCollectorAuthError("AWS credentials are invalid or unauthorized") from exc
+        raise CloudCollectorAuthError(
+            "AWS credentials are invalid or unauthorized", user_message=aws_credential_message(exc)
+        ) from exc
     except Exception as exc:
         raise CloudCollectorExecutionError("Failed to validate AWS credentials") from exc
 
@@ -759,9 +818,11 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         metadata={
                             "peering_id": str(peering.get("VpcPeeringConnectionId") or ""),
                             "requester_cidr": str(req.get("CidrBlock") or ""),
+                            "requester_cidrs": _peering_cidrs(req),
                             "requester_owner_id": str(req.get("OwnerId") or ""),
                             "requester_region": str(req.get("Region") or ""),
                             "accepter_cidr": str(acc.get("CidrBlock") or ""),
+                            "accepter_cidrs": _peering_cidrs(acc),
                             "accepter_owner_id": str(acc.get("OwnerId") or ""),
                             "accepter_region": str(acc.get("Region") or ""),
                         },

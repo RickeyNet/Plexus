@@ -18,6 +18,7 @@ import {
   type AuditSeverity,
   type ErrorSeverity,
   type StpState,
+  type TopologyData,
   type TopologyEdge,
   type TopologyHostStatus,
   type TopologyNode,
@@ -35,13 +36,17 @@ import {
   edgeProtocolColor,
   filterBySource,
   getTopoThemeColors,
+  mapProviders,
+  providerLabel,
   isEdgeDown,
   isManagedNode,
   isMerakiEndpointNode,
+  isRemoteUserNode,
   merakiNodeKey,
   merakiNodeShape,
   nodeColor,
   nodeIconUrl,
+  nodeProvider,
   nodeSearchText,
   nodeShape,
   nodeTitle,
@@ -49,10 +54,12 @@ import {
   stpStyle,
   utilColor,
   utilShadow,
+  type EdgeColor,
   type SourceFilter,
   type TopoThemeColors,
 } from './helpers';
-import { crowdedGroups, tidyLabel, tidyTreeLayout, type XY } from './layout';
+import { crowdedGroups, tidyLabel, tidyTree, type XY } from './layout';
+import { distanceToRoute, routeSourceLinks, traceRoute } from './routes';
 import { EdgeDetails } from './EdgeDetails';
 import { CloudPathCheck } from './CloudPathCheck';
 import { MAX_PATH_ENDPOINTS, connectPicks, findSubnets, isAddressText, parseTraffic, pathSites, reachabilityQueries, subnetOptionLabel, type PathPick } from './paths';
@@ -89,6 +96,9 @@ const MAX_SEARCH_RESULTS = 40;
 // whose rows leave just enough space between sites for a frame and its title.
 const SITE_FRAME = { padX: 75, padY: 75, font: 26 };
 const TIDY_SITE_FRAME = { padX: 60, padY: 34, font: 16 };
+// The tidy layout's region of each source (inventory, Meraki, Cato, ...),
+// drawn when there is more than one. It fits in the layout's SOURCE_GAP.
+const SOURCE_FRAME = { padX: 110, padY: 80, font: 30 };
 // Past this size the per-frame canvas work matters more than polish: glows
 // are dropped, hover tracking is off and links hide while the view moves.
 const LARGE_MAP_NODES = 600;
@@ -97,6 +107,19 @@ const LARGE_MAP_EDGES = 1200;
 // unless the operator asks for all of them.
 const AUTO_HIDE_TUNNELS = 300;
 const TUNNEL_PROTOCOLS = new Set(['vpn', 'vpn-ipsec']);
+
+// The links from the Cato Cloud to its PoPs: the Cato backbone, a handful of
+// links that are always drawn however many tunnels the map hides.
+function catoBackbone(d: TopologyData | undefined): Set<number | string> {
+  const ids = new Set<number | string>();
+  if (!d) return ids;
+  const ref = new Map(d.nodes.map((n) => [n.id, n.meraki?.provider === 'cato' ? n.meraki.node_id : '']));
+  for (const e of d.edges) {
+    const ends = [ref.get(e.from) ?? '', ref.get(e.to) ?? ''];
+    if (ends.includes('cato:cloud') && ends.some((id) => id.startsWith('pop:'))) ids.add(e.id);
+  }
+  return ids;
+}
 
 type SiteBoxes = Map<string, { name: string; x0: number; y0: number; x1: number; y1: number }>;
 
@@ -159,10 +182,22 @@ export function Topology() {
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Tidy-tree positions of the rendered graph; null in every other layout.
   const tidyPosRef = useRef<Map<number | string, XY> | null>(null);
-  // Meraki sites whose frame would enclose other sites' devices (tidy layout).
+  // The piece of its site each node of the tidy layout is framed in.
+  const tidyPiecesRef = useRef<Map<number | string, string>>(new Map());
+  // Site frames that would enclose other sites' devices (tidy layout: pieces of sites).
   const crowdedSitesRef = useRef<Set<string>>(new Set());
   // Site frames of the tidy layout, kept until a node moves.
   const siteBoxesRef = useRef<SiteBoxes | null>(null);
+  // Source regions of the tidy layout, worked out with the site frames.
+  const sourceBoxesRef = useRef<SiteBoxes>(new Map());
+  // Links between two sources of the tidy layout: drawn here, over the
+  // sources instead of across them, so vis keeps them hidden.
+  const routedEdgesRef = useRef<Set<number | string>>(new Set());
+  const routesRef = useRef<Map<number | string, XY[]>>(new Map());
+  // Routed links a highlighted path runs over, drawn even if a hidden tunnel.
+  const pathRoutesRef = useRef<Set<number | string>>(new Set());
+  // The routed link whose details are open, drawn selected.
+  const selectedRouteRef = useRef<number | string | null>(null);
   const largeMapRef = useRef(false);
   const tunnelsByNodeRef = useRef<Map<number | string, TopologyEdge[]>>(new Map());
   // The node whose details are open; its VPN tunnels are always drawn.
@@ -189,11 +224,20 @@ export function Topology() {
   const overlayStatusQuery = useTopologyOverlayStatus(statusOverlay);
 
   const rawData = topologyQuery.data;
-  const data = useMemo(() => filterBySource(rawData, sourceFilter), [rawData, sourceFilter]);
   const hasMeraki = !!rawData?.nodes.some((n) => n.meraki);
+  const providersOnMap = useMemo(() => mapProviders(rawData), [rawData]);
+  // A provider that is no longer on the map (its source was deleted) shows everything again.
+  const activeFilter: SourceFilter =
+    sourceFilter.startsWith('provider:') && !providersOnMap.includes(sourceFilter.slice('provider:'.length))
+      ? 'all'
+      : sourceFilter;
+  const data = useMemo(() => filterBySource(rawData, activeFilter), [rawData, activeFilter]);
+  const backbone = useMemo(() => catoBackbone(data), [data]);
+  const backboneRef = useRef(backbone);
+  backboneRef.current = backbone;
   const tunnelCount = useMemo(
-    () => data?.edges.filter((e) => TUNNEL_PROTOCOLS.has(e.protocol ?? '')).length ?? 0,
-    [data],
+    () => data?.edges.filter((e) => TUNNEL_PROTOCOLS.has(e.protocol ?? '') && !backbone.has(e.id)).length ?? 0,
+    [data, backbone],
   );
   const showAllTunnels = tunnelPref ?? tunnelCount <= AUTO_HIDE_TUNNELS;
   const showAllTunnelsRef = useRef(showAllTunnels);
@@ -319,6 +363,14 @@ export function Topology() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detailsNode]);
 
+  // The routed link whose details are open is drawn selected.
+  useEffect(() => {
+    const id = detailsEdge && routedEdgesRef.current.has(detailsEdge.id) ? detailsEdge.id : null;
+    if (selectedRouteRef.current === id) return;
+    selectedRouteRef.current = id;
+    networkRef.current?.redraw();
+  }, [detailsEdge]);
+
   // Refresh edge labels in-place when toggled.
   useEffect(() => {
     refreshEdgeStyles();
@@ -424,8 +476,18 @@ export function Topology() {
     return largeMapRef.current ? { enabled: false } : { enabled: true, color, size, x: 0, y: 0 };
   }
 
+  // The tunnels the VPN Tunnels button hides and shows: all but the Cato backbone.
+  function optionalTunnel(e: TopologyEdge): boolean {
+    return TUNNEL_PROTOCOLS.has(e.protocol ?? '') && !backboneRef.current.has(e.id);
+  }
+
+  // Whether vis draws the link: not a routed one, nor a tunnel that is hidden.
+  function visHidden(e: TopologyEdge): boolean {
+    return routedEdgesRef.current.has(e.id) || tunnelHidden(e);
+  }
+
   function tunnelHidden(e: TopologyEdge): boolean {
-    if (showAllTunnelsRef.current || !TUNNEL_PROTOCOLS.has(e.protocol ?? '')) return false;
+    if (showAllTunnelsRef.current || !optionalTunnel(e)) return false;
     const revealed = revealedNodeRef.current;
     return revealed == null || (e.from !== revealed && e.to !== revealed);
   }
@@ -440,9 +502,11 @@ export function Topology() {
       : [...tunnelsByNodeRef.current.values()];
     const updates = new Map<number | string, { id: number | string; hidden: boolean }>();
     for (const list of lists) {
-      for (const e of list) updates.set(e.id, { id: e.id, hidden: tunnelHidden(e) });
+      for (const e of list) updates.set(e.id, { id: e.id, hidden: visHidden(e) });
     }
     if (updates.size) edgesDS.update([...updates.values()] as never);
+    // The routed links are drawn by drawMerakiSites, whatever vis redraws.
+    networkRef.current?.redraw();
   }
 
   function buildVisNode(n: TopologyNode, savedPos: Record<string, { x: number; y: number }>, circularXY?: { x: number; y: number }): VisNode {
@@ -457,7 +521,7 @@ export function Topology() {
       shape: iconUrl ? 'circularImage' : n.source === 'meraki' ? merakiNodeShape(n) : nodeShape(n.device_type),
       image: iconUrl,
       color: overlay.color,
-      size: isMerakiEndpointNode(n) ? 11 : isManagedNode(n) ? 25 : 18,
+      size: isMerakiEndpointNode(n) ? 11 : isRemoteUserNode(n) ? 14 : isManagedNode(n) ? 25 : 18,
       borderWidth: overlay.borderWidth,
       borderWidthSelected: 4,
       shapeProperties: { borderDashes: isManagedNode(n) ? false : [5, 5] },
@@ -663,7 +727,7 @@ export function Topology() {
       width: overlay.width,
       hoverWidth: 0.5,
       selectionWidth: 1,
-      hidden: tunnelHidden(e),
+      hidden: visHidden(e),
       shadow: glow(overlay.shadowColor, 6),
       font: { size: 9, color: tc.edgeFont, strokeWidth: 2, strokeColor: tc.edgeFontStroke, align: 'middle' },
       smooth: edgeSmooth(e, roundness),
@@ -671,20 +735,26 @@ export function Topology() {
     } as VisEdge;
   }
 
-  // Tidy tree: links leave and enter nodes sideways, like branches. A link
-  // between two nodes of the same column bows out instead, so it does not
-  // run straight through the nodes stacked between them.
+  // Tidy tree: links leave nodes downward and enter from above, like
+  // branches. A link between two nodes of the same row bows out instead, so
+  // it does not run straight through the nodes side by side between them.
   function edgeSmooth(e: TopologyEdge, roundness: number) {
     const tidy = tidyPosRef.current;
     if (!tidy) return { enabled: true, type: 'continuous', roundness };
     const a = tidy.get(e.from);
     const b = tidy.get(e.to);
-    if (a && b && a.x === b.x) return { enabled: true, type: 'curvedCW', roundness: 0.1 + roundness / 2 };
-    return { enabled: true, type: 'cubicBezier', forceDirection: 'horizontal', roundness: 0.3 + roundness / 2 };
+    if (a && b && a.y === b.y) return { enabled: true, type: 'curvedCW', roundness: 0.1 + roundness / 2 };
+    return { enabled: true, type: 'cubicBezier', forceDirection: 'vertical', roundness: 0.3 + roundness / 2 };
   }
 
   function siteFrame() {
     return tidyPosRef.current ? TIDY_SITE_FRAME : SITE_FRAME;
+  }
+
+  // The frame a site member is drawn in: its site, or in the tidy layout the
+  // piece of its site the tree placed it in.
+  function frameKey(id: number | string, orgRef: number, siteId: string): string {
+    return (tidyPosRef.current && tidyPiecesRef.current.get(id)) || merakiNodeKey(orgRef, siteId);
   }
 
   // Which Meraki site frames to leave out because they would swallow other
@@ -702,7 +772,7 @@ export function Topology() {
       const pos = live[meta.raw.id as never];
       if (!pos) continue;
       const ref = meta.raw.meraki;
-      placed.push({ group: ref?.site_id ? merakiNodeKey(ref.org_ref, ref.site_id) : '', x: pos.x, y: pos.y });
+      placed.push({ group: ref?.site_id ? frameKey(meta.raw.id, ref.org_ref, ref.site_id) : '', x: pos.x, y: pos.y });
     }
     const frame = siteFrame();
     crowdedSitesRef.current = crowdedGroups(placed, frame.padX, frame.padY);
@@ -714,11 +784,22 @@ export function Topology() {
     const isTidy = mode === 'tidy';
     const large = d.nodes.length > LARGE_MAP_NODES || d.edges.length > LARGE_MAP_EDGES;
     largeMapRef.current = large;
-    tidyPosRef.current = isTidy ? tidyTreeLayout(d.nodes, d.edges) : null;
+    const tidy = isTidy ? tidyTree(d.nodes, d.edges) : null;
+    tidyPosRef.current = tidy?.positions ?? null;
+    tidyPiecesRef.current = tidy?.pieces ?? new Map();
+    const routed = new Set<number | string>();
+    if (tidy) {
+      const sourceOf = new Map(d.nodes.map((n) => [n.id, nodeProvider(n)]));
+      if (new Set(sourceOf.values()).size > 1) {
+        for (const e of d.edges) if (sourceOf.get(e.from) !== sourceOf.get(e.to)) routed.add(e.id);
+      }
+    }
+    routedEdgesRef.current = routed;
+    routesRef.current = new Map();
 
     const tunnels = new Map<number | string, TopologyEdge[]>();
     for (const e of d.edges) {
-      if (!TUNNEL_PROTOCOLS.has(e.protocol ?? '')) continue;
+      if (!optionalTunnel(e)) continue;
       for (const end of [e.from, e.to]) {
         const list = tunnels.get(end);
         if (list) list.push(e);
@@ -779,9 +860,10 @@ export function Topology() {
         stabilization: { iterations: 300, updateInterval: 20 },
       },
       interaction: {
+        // Links stay drawn while panning and zooming, even on a large map:
+        // without the glow they are cheap, and a map that blinks its links
+        // out on every scroll is harder to follow than one a little slower.
         hover: !large,
-        hideEdgesOnDrag: large,
-        hideEdgesOnZoom: large,
         tooltipDelay: 150,
         navigationButtons: false,
         keyboard: { enabled: true },
@@ -812,8 +894,11 @@ export function Topology() {
         if (meta) setDetailsEdge(meta.raw);
         setDetailsNode(null);
       } else {
+        // vis does not know the routed links between sources.
+        const routed = routeAt(params.pointer.canvas);
+        const meta = routed != null ? edgeMetaRef.current.get(routed) : undefined;
         setDetailsNode(null);
-        setDetailsEdge(null);
+        setDetailsEdge(meta ? meta.raw : null);
       }
     });
 
@@ -898,12 +983,29 @@ export function Topology() {
     let boxes = tidyPosRef.current ? siteBoxesRef.current : null;
     if (!boxes) {
       boxes = new Map();
+      const sources: SiteBoxes = new Map();
       const positions = network.getPositions();
       for (const meta of nodeMetaRef.current.values()) {
         const ref = meta.raw.meraki;
         const pos = positions[meta.raw.id as never];
+        // A source's frame is where the layout put it: a node dragged (and
+        // pinned) elsewhere, maybe under an earlier layout, does not stretch
+        // it over other sources.
+        if (pos && tidyPosRef.current && !savedPositionsRef.current[String(meta.raw.id)]) {
+          const key = nodeProvider(meta.raw);
+          const region = sources.get(key);
+          if (!region) {
+            const name = key ? providerLabel(key) : 'Inventory';
+            sources.set(key, { name, x0: pos.x, y0: pos.y, x1: pos.x, y1: pos.y });
+          } else {
+            region.x0 = Math.min(region.x0, pos.x);
+            region.y0 = Math.min(region.y0, pos.y);
+            region.x1 = Math.max(region.x1, pos.x);
+            region.y1 = Math.max(region.y1, pos.y);
+          }
+        }
         if (!ref || !ref.site_id || !pos) continue;
-        const key = merakiNodeKey(ref.org_ref, ref.site_id);
+        const key = frameKey(meta.raw.id, ref.org_ref, ref.site_id);
         if (crowdedSitesRef.current.has(key)) continue;
         const box = boxes.get(key);
         if (!box) {
@@ -916,10 +1018,52 @@ export function Topology() {
         }
       }
       siteBoxesRef.current = boxes;
+      sourceBoxesRef.current = sources.size > 1 ? sources : new Map();
+      routesRef.current = new Map();
+      if (sources.size > 1 && routedEdgesRef.current.size) {
+        const at = new Map<number | string, XY>();
+        for (const id of nodeMetaRef.current.keys()) {
+          const pos = positions[id as never];
+          if (pos) at.set(id, pos);
+        }
+        const links = [...routedEdgesRef.current].flatMap((id) => {
+          const raw = edgeMetaRef.current.get(id)?.raw;
+          return raw ? [{ id, from: raw.from, to: raw.to }] : [];
+        });
+        const top = Math.min(...[...sources.values()].map((r) => r.y0)) - SOURCE_FRAME.padY;
+        routesRef.current = routeSourceLinks(links, at, top);
+      }
     }
+    const scale = network.getScale();
+    ctx.save();
+    // Source regions, behind the sites.
+    ctx.lineWidth = 3;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+    ctx.font = `700 ${SOURCE_FRAME.font}px Inter, sans-serif`;
+    for (const region of sourceBoxesRef.current.values()) {
+      const x = region.x0 - SOURCE_FRAME.padX;
+      const y = region.y0 - SOURCE_FRAME.padY;
+      const w = region.x1 - region.x0 + SOURCE_FRAME.padX * 2;
+      const h = region.y1 - region.y0 + SOURCE_FRAME.padY * 2;
+      ctx.fillStyle = 'rgba(66,165,245,0.04)';
+      ctx.strokeStyle = 'rgba(66,165,245,0.4)';
+      ctx.setLineDash([14, 10]);
+      ctx.beginPath();
+      ctx.rect(x, y, w, h);
+      ctx.fill();
+      ctx.stroke();
+      ctx.setLineDash([]);
+      if (SOURCE_FRAME.font * scale < 5) continue;
+      ctx.fillStyle = tc.nodeFont;
+      ctx.globalAlpha = 0.85;
+      ctx.fillText(region.name, x + 6, y - 10);
+      ctx.globalAlpha = 1;
+    }
+    ctx.restore();
     const frame = siteFrame();
     // Zoomed far out the titles are a few unreadable pixels each; skip them.
-    const titles = frame.font * network.getScale() >= 5;
+    const titles = frame.font * scale >= 5;
     ctx.save();
     ctx.lineWidth = 2;
     ctx.textAlign = 'left';
@@ -943,6 +1087,82 @@ export function Topology() {
       ctx.globalAlpha = 1;
     }
     ctx.restore();
+    drawSourceLinks(ctx);
+  }
+
+  // A routed link is drawn when vis would draw it: not a hidden tunnel,
+  // unless a highlighted path runs over it.
+  function routeShown(id: number | string): boolean {
+    const raw = edgeMetaRef.current.get(id)?.raw;
+    return !!raw && (!tunnelHidden(raw) || pathRoutesRef.current.has(id));
+  }
+
+  // The links between sources, styled like vis styles the link (overlays,
+  // dimming and highlighting included), under the nodes.
+  function drawSourceLinks(ctx: CanvasRenderingContext2D) {
+    const network = networkRef.current;
+    const edgesDS = edgesDSRef.current;
+    if (!network || !edgesDS || !routesRef.current.size) return;
+    const selectedNodes = new Set(network.getSelectedNodes());
+    const scale = network.getScale();
+    const tc = themeRef.current ?? getTopoThemeColors();
+    ctx.save();
+    ctx.lineCap = 'round';
+    for (const [id, points] of routesRef.current) {
+      if (!routeShown(id)) continue;
+      const raw = edgeMetaRef.current.get(id)!.raw;
+      const item = edgesDS.get(id as never) as unknown as {
+        color?: string | Partial<EdgeColor>;
+        width?: number;
+        dashes?: boolean | number[];
+        opacity?: number;
+        label?: string;
+      } | null;
+      if (!item) continue;
+      const selected = selectedRouteRef.current === id || selectedNodes.has(raw.from) || selectedNodes.has(raw.to);
+      const color = item.color;
+      ctx.strokeStyle =
+        typeof color === 'string' ? color : (selected ? color?.highlight : undefined) ?? color?.color ?? '#808080';
+      ctx.globalAlpha = item.opacity ?? (typeof color === 'object' ? color.opacity : undefined) ?? 1;
+      ctx.lineWidth = Math.max((item.width ?? 1) + (selected ? 1 : 0), 0.3 / scale);
+      ctx.setLineDash(Array.isArray(item.dashes) ? item.dashes : item.dashes ? [5, 5] : []);
+      ctx.beginPath();
+      traceRoute(ctx, points, 24);
+      ctx.stroke();
+      if (item.label && 9 * scale >= 5) {
+        // On the stretch across, the longest part of the route.
+        const [a, b] = [points[Math.floor((points.length - 1) / 2)], points[Math.floor((points.length - 1) / 2) + 1]];
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+        ctx.font = '9px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = tc.edgeFontStroke;
+        ctx.strokeText(item.label, (a.x + b.x) / 2, a.y - 3);
+        ctx.fillStyle = tc.edgeFont;
+        ctx.fillText(item.label, (a.x + b.x) / 2, a.y - 3);
+      }
+    }
+    ctx.restore();
+  }
+
+  // The routed link drawn at a point of the canvas, if any.
+  function routeAt(p: XY): number | string | null {
+    const network = networkRef.current;
+    if (!network) return null;
+    const reach = 8 / network.getScale();
+    let best: number | string | null = null;
+    let bestDistance = reach;
+    for (const [id, points] of routesRef.current) {
+      if (!routeShown(id)) continue;
+      const distance = distanceToRoute(points, p);
+      if (distance <= bestDistance) {
+        best = id;
+        bestDistance = distance;
+      }
+    }
+    return best;
   }
 
   // Keep pathMode/picks in refs so the click handler always sees the latest.
@@ -1348,6 +1568,7 @@ export function Topology() {
     nodesDS.update(orig.nodes.map(([id, color]) => ({ id, color, opacity: 1, borderWidth: 2.5 })) as never);
     edgesDS.update(orig.edges.map(([id, color]) => ({ id, color, opacity: 1 })) as never);
     originalColorsRef.current = null;
+    pathRoutesRef.current.clear();
     syncTunnelVisibility();
     // Re-apply styled overlays (util / STP) so refresh restores any overlay
     // state that the dim pass blew away.
@@ -1382,10 +1603,12 @@ export function Topology() {
         edgeUpdates.push({ id: edge.id, color: tc.dimEdge, opacity: 0.15 });
       } else {
         // A path may run over a VPN tunnel that is not being drawn.
+        const routed = routedEdgesRef.current.has(edge.id as number | string);
+        if (routed) pathRoutesRef.current.add(edge.id as number | string);
         edgeUpdates.push({
           id: edge.id,
           width: 4,
-          hidden: false,
+          hidden: routed,
           shadow: { enabled: true, color: tc.pathGlow, size: 12, x: 0, y: 0 },
         });
       }
@@ -1566,7 +1789,7 @@ export function Topology() {
           ))}
         </select>
         <select className="form-select" style={{ minWidth: 170 }} value={layout} onChange={(e) => setLayout(e.target.value as LayoutMode)}>
-          <option value="tidy">Tidy tree (left→right)</option>
+          <option value="tidy">Tidy tree (top→bottom)</option>
           <option value="physics">Physics (force-directed)</option>
           <option value="circular">Circular</option>
           <option value="hierarchical-UD">Hierarchical (top→bottom)</option>
@@ -1578,13 +1801,16 @@ export function Topology() {
           <select
             className="form-select"
             style={{ minWidth: 150 }}
-            value={sourceFilter}
+            value={activeFilter}
             title="Which devices to show"
             onChange={(e) => setSourceFilter(e.target.value as SourceFilter)}
           >
             <option value="all">All sources</option>
             <option value="inventory">Inventory only</option>
-            <option value="meraki">Meraki / Cato / AnyConnect / AWS / Azure only</option>
+            <option value="meraki">All integrations</option>
+            {providersOnMap.map((p) => (
+              <option key={p} value={`provider:${p}`}>{providerLabel(p)} only</option>
+            ))}
           </select>
         )}
 
@@ -1913,7 +2139,7 @@ export function Topology() {
           <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-lldp" /> LLDP</span>
           <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-ospf" /> OSPF</span>
           <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-bgp" /> BGP</span>
-          {hasMeraki && sourceFilter !== 'inventory' && (
+          {hasMeraki && activeFilter !== 'inventory' && (
             <>
               <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#8bc34a' }} /> Meraki / Cato / AnyConnect / AWS / Azure</span>
               <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#ba68c8' }} /> VPN Tunnel</span>

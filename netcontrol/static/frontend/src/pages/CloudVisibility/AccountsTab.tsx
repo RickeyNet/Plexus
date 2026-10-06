@@ -495,7 +495,7 @@ function AccountFormModal({ account, providerOptions, onClose, onSaved }: FormPr
                 <small className="text-muted" style={{ display: 'block' }}>
                   A JSON object of settings without a field above; it is saved on top of them.
                 </small>
-                <textarea className="form-input" rows={3} value={extraText} onChange={(e) => setExtraText(e.target.value)} placeholder='{"session_token": "..."}' />
+                <textarea className="form-input" rows={3} value={extraText} onChange={(e) => setExtraText(e.target.value)} placeholder='{"role_session_name": "plexus"}' />
               </label>
             </details>
           </>

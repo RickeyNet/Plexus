@@ -140,7 +140,15 @@ _SNAPSHOT_CACHE: dict[int, dict[str, Any]] = {}
 # stored snapshot can have.
 AWS_ORG_REF = -1
 AZURE_ORG_REF = -2
-_AWS_ACCOUNT_FIELDS = ("id", "name", "account_identifier", "last_sync_at", "last_sync_status", "last_sync_message")
+_AWS_ACCOUNT_FIELDS = (
+    "id",
+    "name",
+    "account_identifier",
+    "region_scope",
+    "last_sync_at",
+    "last_sync_status",
+    "last_sync_message",
+)
 
 
 class _Cloud:
@@ -890,6 +898,27 @@ async def get_meraki_snapshot_data_api(snapshot_id: int):
     return (await _get_snapshot_or_404(snapshot_id, include_body=True))["snapshot"]
 
 
+@router.get("/api/meraki/snapshots/{snapshot_id}/warnings")
+async def get_meraki_snapshot_warnings_api(snapshot_id: int):
+    """The collection warnings of a snapshot (API calls that failed or were
+    refused), for the Map Sources dialog."""
+    row = await _get_snapshot_or_404(snapshot_id, include_body=True)
+    errors = ((row["snapshot"] or {}).get("collection") or {}).get("errors") or []
+    return {
+        "snapshot_id": snapshot_id,
+        "warnings": [
+            {
+                "scope": str(e.get("scope") or ""),
+                "path": str(e.get("path") or ""),
+                "status": e.get("status"),
+                "message": str(e.get("message") or ""),
+            }
+            for e in errors
+            if isinstance(e, dict)
+        ],
+    }
+
+
 @router.delete("/api/meraki/snapshots/{snapshot_id}")
 async def delete_meraki_snapshot_api(snapshot_id: int, request: Request):
     await _get_snapshot_or_404(snapshot_id, include_body=False)
@@ -936,6 +965,7 @@ def _source(key: str, kind: str, name: str, **fields: Any) -> dict[str, Any]:
         "message": "",
         "detail": "",
         "warning_count": 0,
+        "snapshot_id": None,
         "collecting": False,
         "can_collect": True,
         "enabled": True,
@@ -978,6 +1008,8 @@ def _org_source(org: dict, newest: dict | None) -> dict[str, Any]:
             else ""
         ),
         warning_count=int((newest or {}).get("warning_count") or 0),
+        # The snapshot on the map, whose warnings the dialog can list.
+        snapshot_id=(newest or {}).get("id"),
         collecting=org["id"] in _running_builds,
         can_collect=bool(org.get("has_api_key")),
         demo=org["name"] in SAMPLE_ORG_NAMES and not org.get("has_api_key"),

@@ -1,15 +1,27 @@
 import type { TopologyEdge, TopologyNode } from '@/api/topology';
 
-// Tidy left-to-right tree layout: the default arrangement of the map.
+import { nodeProvider, PROVIDER_ORDER } from './helpers';
+
+// Tidy top-down tree layout: the default arrangement of the map.
 //
-// Every connected part of the network becomes a tree that grows to the right
-// from its most central gateway. Each node owns a horizontal band exactly as
-// tall as its subtree, so no two nodes (or their labels) can overlap, and the
-// result is deterministic - the same data always opens the same way.
+// The map is split by source first - the inventory, then each integration
+// (Meraki, Cato, AnyConnect, AWS, Azure) - and each source is drawn as a
+// region of its own, side by side, so no source's devices end up
+// scattered among another's. Links between sources are still drawn; they
+// just do not shape the layout.
 //
-// A small map stacks its trees. A large one (hundreds of sites hanging off a
-// VPN hub) would become one unusably tall strip, so there every site is laid
-// out as its own small tree and the sites are arranged in columns.
+// Within a source every connected part of the network becomes a tree that
+// grows down from its most central gateway. Each node owns a horizontal span
+// exactly as wide as its subtree, so no two nodes (or their labels) can
+// overlap, and the result is deterministic - the same data always opens the
+// same way. Many devices of one site hanging off a node with nothing below
+// them (access points, remote users) wrap into a grid instead of one endless
+// row.
+//
+// A node's children sit in a row under it, in site name order. A row too wide
+// for the room it is given (hundreds of sites hanging off a VPN hub) wraps
+// onto the next, so the hub stays on top of one compact block. A source's
+// trees are flowed into rows the same way.
 
 type NodeId = number | string;
 
@@ -22,18 +34,35 @@ export interface XY {
 export const TIDY_LABEL_MAX = 44;
 
 const LABEL_CHAR_PX = 6.6;
-const MIN_LEVEL_SEP = 240;
-const DEVICE_ROW_H = 84;
-const NEIGHBOR_ROW_H = 64;
-const ENDPOINT_ROW_H = 48;
+// Width a node takes in its row: its label, padded.
+const MIN_SLOT_W = 120;
+const SLOT_PAD = 28;
+// Vertical step from a node to its children.
+const LEVEL_H = 170;
+// The drop from the Cato backbone to its row of PoPs, per root of half the row's width.
+const FAN_DROP = 5;
+// WAN uplinks are drawn in a row this far above their appliance.
+const HEAD_H = 110;
 const GROUP_GAP = 56;
-const COMPONENT_GAP = 120;
+// This many leaves of one site under one node wrap into a grid.
+const GRID_MIN = 8;
+const GRID_ROW_H = 100;
+const USER_ROW_H = 76;
+// Width : height a grid of leaves aims for.
+const GRID_ASPECT = 3;
+const LOOSE_ROW_H = 100;
 const MAX_LOOSE_COLS = 8;
-// Trees stacked taller than this are split into blocks and flowed into columns.
-const PACK_MIN_HEIGHT = 6000;
-const PACK_GAP_Y = 110;
-// Width : height the packed map aims for.
+// A row of children is never wrapped narrower than this.
+const WRAP_MIN_W = 2400;
+const PACK_GAP_X = 160;
+const PACK_GAP_Y = 190;
+// Width : height wrapped rows aim for.
 const PACK_ASPECT = 1.7;
+/**
+ * Space between the outermost nodes of two sources side by side: room for
+ * both their frames and the half of a long label that sticks out of each.
+ */
+export const SOURCE_GAP = 600;
 
 // Logical adjacencies ride on top of the physical network; the tree follows
 // cables first and only uses these to reach parts nothing else connects.
@@ -52,10 +81,28 @@ export function layoutGroupKey(node: TopologyNode): string {
   return node.group_name ? `g:${node.group_name}` : '';
 }
 
+/** The sources on a map in the order they are drawn: the inventory, then each integration. */
+export function orderSources(sources: Iterable<string>): string[] {
+  const found = new Set(sources);
+  const known = ['', ...PROVIDER_ORDER].filter((s) => found.has(s));
+  const others = [...found].filter((s) => s && !PROVIDER_ORDER.includes(s)).sort();
+  return [...known, ...others];
+}
+
+// The node a Cato account's tunnels all lead to.
+const CATO_BACKBONE = 'cato:cloud';
+
+function isBackbone(node: TopologyNode): boolean {
+  return node.meraki?.provider === 'cato' && node.meraki.node_id === CATO_BACKBONE;
+}
+
 // Lower ranks sit closer to the root: gateways, then switching, then the rest.
 function tierRank(node: TopologyNode): number {
   const kind = node.meraki?.kind ?? '';
   const category = (node.device_category ?? '').toLowerCase();
+  // A Cato account hangs off its backbone: the backbone, then the PoPs, then
+  // the sites and users connected to them.
+  if (node.meraki?.provider === 'cato' && kind === 'cloud') return isBackbone(node) ? -2 : -1;
   if (kind === 'wan' || kind === 'vpn_peer') return 5;
   if (kind === 'appliance' || kind === 'vpc' || category === 'firewall' || category === 'router') return 0;
   if (node.device_type && GATEWAY_TYPES.has(node.device_type)) return 0;
@@ -65,10 +112,8 @@ function tierRank(node: TopologyNode): number {
   return 2;
 }
 
-function rowHeight(node: TopologyNode): number {
-  const kind = node.meraki?.kind ?? '';
-  if (node.source === 'meraki' && (kind === 'wan' || kind === 'vpn_peer')) return ENDPOINT_ROW_H;
-  return node.in_inventory || node.source === 'meraki' ? DEVICE_ROW_H : NEIGHBOR_ROW_H;
+function slotWidth(node: TopologyNode): number {
+  return Math.max(MIN_SLOT_W, Math.round(Math.min(TIDY_LABEL_MAX, node.label.length) * LABEL_CHAR_PX + SLOT_PAD));
 }
 
 function compareLabels(a: TopologyNode, b: TopologyNode): number {
@@ -80,16 +125,112 @@ function compareLabels(a: TopologyNode, b: TopologyNode): number {
 
 interface Block {
   root: NodeId;
-  /** Positions relative to the block's top-left node column. */
+  /** Positions relative to the block's top-left corner. */
   local: Map<NodeId, XY>;
   width: number;
   height: number;
 }
 
-export function tidyTreeLayout(nodes: TopologyNode[], edges: TopologyEdge[]): Map<NodeId, XY> {
-  const positions = new Map<NodeId, XY>();
-  if (!nodes.length) return positions;
+/** Leaves of one site under one node, drawn as a grid. */
+interface Grid {
+  members: NodeId[];
+  cols: number;
+  cellW: number;
+  rowH: number;
+  width: number;
+  height: number;
+}
 
+/** What a node's rows of children are made of: child subtrees and grids. */
+interface Unit {
+  group: string;
+  node?: NodeId;
+  grid?: Grid;
+}
+
+/** One row of a node's children; `top` is its offset below the node. */
+interface Row {
+  units: Unit[];
+  width: number;
+  top: number;
+}
+
+export interface TidyTree {
+  positions: Map<NodeId, XY>;
+  /**
+   * Which piece of its site each node is drawn in. A site whose devices the
+   * tree spreads over several places (a VPC peered with a hub, gateways with
+   * no links at all) is one piece per place, each framed on its own. Nodes
+   * that belong to no site are left out.
+   */
+  pieces: Map<NodeId, string>;
+}
+
+export function tidyTreeLayout(nodes: TopologyNode[], edges: TopologyEdge[]): Map<NodeId, XY> {
+  return tidyTree(nodes, edges).positions;
+}
+
+export function tidyTree(nodes: TopologyNode[], edges: TopologyEdge[]): TidyTree {
+  const positions = new Map<NodeId, XY>();
+  const pieces = new Map<NodeId, string>();
+  if (!nodes.length) return { positions, pieces };
+
+  const group = new Map<NodeId, string>();
+  const source = new Map<NodeId, string>();
+  const bySource = new Map<string, TopologyNode[]>();
+  for (const n of nodes) {
+    group.set(n.id, layoutGroupKey(n));
+    const key = nodeProvider(n);
+    source.set(n.id, key);
+    const members = bySource.get(key);
+    if (members) members.push(n);
+    else bySource.set(key, [n]);
+  }
+
+  // Pieces of a site: members joined by a link of the tree, or placed side
+  // by side as siblings or in a grid.
+  const leader = new Map<NodeId, NodeId>();
+  const find = (id: NodeId): NodeId => {
+    let at = id;
+    while (leader.get(at) !== undefined && leader.get(at) !== at) at = leader.get(at)!;
+    leader.set(id, at);
+    return at;
+  };
+  const join = (a: NodeId, b: NodeId) => {
+    if (group.get(a) !== group.get(b) || !group.get(a)) return;
+    leader.set(find(a), find(b));
+  };
+
+  // The sources side by side, their tops level.
+  let left = 0;
+  for (const key of orderSources(bySource.keys())) {
+    const inside = edges.filter((e) => source.get(e.from) === key && source.get(e.to) === key);
+    const region = placeSource(bySource.get(key)!, inside, group, join);
+    let x0 = Infinity;
+    let x1 = -Infinity;
+    for (const p of region.local.values()) {
+      x0 = Math.min(x0, p.x);
+      x1 = Math.max(x1, p.x);
+    }
+    for (const [id, p] of region.local) positions.set(id, { x: p.x - x0 + left, y: p.y });
+    left += x1 - x0 + SOURCE_GAP;
+  }
+
+  for (const n of nodes) {
+    const site = group.get(n.id)!;
+    if (site) pieces.set(n.id, `${site}#${String(find(n.id))}`);
+  }
+  return { positions, pieces };
+}
+
+/** Lay one source's nodes out as trees, with its top-left corner at 0,0. */
+function placeSource(
+  nodes: TopologyNode[],
+  edges: TopologyEdge[],
+  group: Map<NodeId, string>,
+  join: (a: NodeId, b: NodeId) => void,
+): { local: Map<NodeId, XY> } {
+  const local = new Map<NodeId, XY>();
   const byId = new Map<NodeId, TopologyNode>();
   for (const n of nodes) byId.set(n.id, n);
 
@@ -105,25 +246,24 @@ export function tidyTreeLayout(nodes: TopologyNode[], edges: TopologyEdge[]): Ma
     backward.set(e.from, (backward.get(e.from) ?? true) && overlay);
   }
 
-  const group = new Map<NodeId, string>();
   const rank = new Map<NodeId, number>();
+  const slot = new Map<NodeId, number>();
+  const siteName = new Map<string, string>();
   for (const n of nodes) {
-    group.set(n.id, layoutGroupKey(n));
     rank.set(n.id, tierRank(n));
+    slot.set(n.id, slotWidth(n));
+    siteName.set(group.get(n.id)!, n.meraki?.site_name || n.group_name || '');
   }
+  // Sites in name order.
+  const compareSites = (a: string, b: string) =>
+    siteName.get(a)!.localeCompare(siteName.get(b)!, undefined, { numeric: true, sensitivity: 'base' }) ||
+    a.localeCompare(b);
 
   const rootOrder = [...nodes].sort(
     (a, b) =>
       rank.get(a.id)! - rank.get(b.id)! ||
       adjacency.get(b.id)!.size - adjacency.get(a.id)!.size ||
       compareLabels(a, b),
-  );
-
-  let longestLabel = 0;
-  for (const n of nodes) longestLabel = Math.max(longestLabel, n.label.length);
-  const levelSep = Math.max(
-    MIN_LEVEL_SEP,
-    Math.round(Math.min(TIDY_LABEL_MAX, longestLabel) * LABEL_CHAR_PX + 40),
   );
 
   const visited = new Set<NodeId>();
@@ -184,148 +324,264 @@ export function tidyTreeLayout(nodes: TopologyNode[], edges: TopologyEdge[]): Ma
         if (ga !== gb) {
           if (ga === own) return -1;
           if (gb === own) return 1;
-          return ga.localeCompare(gb);
+          return compareSites(ga, gb);
         }
         return rank.get(a)! - rank.get(b)! || compareLabels(byId.get(a)!, byId.get(b)!);
       });
     }
   }
 
-  const gapBefore = (siblings: NodeId[], idx: number) =>
-    idx > 0 && group.get(siblings[idx])! !== group.get(siblings[idx - 1])! ? GROUP_GAP : 0;
+  // A WAN uplink is drawn in a row just above its appliance, as in a site
+  // box. As one of its children it would be placed among everything else the
+  // appliance has - beside a switch with a hundred access points, a screen
+  // away from it.
+  const overlayAdopted = new Set(viaOverlay);
+  const heads = new Map<NodeId, NodeId[]>();
+  for (const [id, kids] of children) {
+    const up = kids.filter(
+      (kid) =>
+        byId.get(kid)!.meraki?.kind === 'wan' &&
+        !children.get(kid)!.length &&
+        !overlayAdopted.has(kid) &&
+        group.get(kid) === group.get(id),
+    );
+    if (!up.length) continue;
+    heads.set(id, up);
+    children.set(id, kids.filter((kid) => !up.includes(kid)));
+  }
+  const headRoom = (id: NodeId) => (heads.has(id) ? HEAD_H : 0);
+  const headsWidth = (id: NodeId) => (heads.get(id) ?? []).reduce<number>((sum, wan) => sum + slot.get(wan)!, 0);
 
-  // Lay one tree out on its own, growing right from `root`.
-  const placeBlock = (root: NodeId, kidsOf: (id: NodeId) => NodeId[]): Block => {
-    const order: NodeId[] = [root];
-    const depth = new Map<NodeId, number>([[root, 0]]);
-    for (let i = 0; i < order.length; i++) {
-      for (const kid of kidsOf(order[i])) {
-        depth.set(kid, depth.get(order[i])! + 1);
-        order.push(kid);
+  // Many leaves of one site under one node (access points on a switch,
+  // hundreds of remote users on a PoP) would be one endless row: they wrap
+  // into a grid under it, and stay with it on a large map instead of each
+  // being a block of its own.
+  const grids = new Map<NodeId, Grid[]>();
+  const gridded = new Set<NodeId>();
+  for (const [id, kids] of children) {
+    const leaves = new Map<string, NodeId[]>();
+    for (const kid of kids) {
+      if (children.get(kid)!.length || heads.has(kid)) continue;
+      const site = group.get(kid)!;
+      const members = leaves.get(site);
+      if (members) members.push(kid);
+      else leaves.set(site, [kid]);
+    }
+    const own: Grid[] = [];
+    for (const members of leaves.values()) {
+      if (members.length < GRID_MIN) continue;
+      const cellW = Math.max(...members.map((m) => slot.get(m)!));
+      const rowH = members.every((m) => byId.get(m)!.meraki?.kind === 'user') ? USER_ROW_H : GRID_ROW_H;
+      const cols = Math.max(
+        1,
+        Math.min(members.length, Math.round(Math.sqrt((members.length * rowH * GRID_ASPECT) / cellW))),
+      );
+      own.push({ members, cols, cellW, rowH, width: cols * cellW, height: Math.ceil(members.length / cols) * rowH });
+    }
+    if (!own.length) continue;
+    grids.set(id, own);
+    for (const grid of own) for (const member of grid.members) gridded.add(member);
+    children.set(id, kids.filter((kid) => !gridded.has(kid)));
+  }
+
+  // A node's row of children: its own site first, then site by site, each
+  // site's grid after its other devices.
+  const unitsOf = (id: NodeId, kids: NodeId[]): Unit[] => {
+    const own = group.get(id)!;
+    const units: (Unit & { order: number })[] = kids.map((kid, idx) => ({ group: group.get(kid)!, node: kid, order: idx }));
+    for (const grid of grids.get(id) ?? []) units.push({ group: group.get(grid.members[0])!, grid, order: kids.length });
+    return units.sort((a, b) => {
+      if (a.group !== b.group) {
+        if (a.group === own) return -1;
+        if (b.group === own) return 1;
+        return compareSites(a.group, b.group);
       }
+      return a.order - b.order;
+    });
+  };
+  const gapBefore = (units: Unit[], idx: number) => (idx > 0 && units[idx].group !== units[idx - 1].group ? GROUP_GAP : 0);
+
+  // Lay one tree out on its own, growing down from `root`. A node's children
+  // sit in a row under it; a row wider than the room it is given wraps onto
+  // the next, so a hub with hundreds of sites stays a compact block with the
+  // hub on top instead of becoming one endless strip.
+  const placeBlock = (root: NodeId): Block => {
+    const order: NodeId[] = [root];
+    const units = new Map<NodeId, Unit[]>();
+    for (let i = 0; i < order.length; i++) {
+      const list = unitsOf(order[i], children.get(order[i])!);
+      units.set(order[i], list);
+      for (const unit of list) if (unit.node !== undefined) order.push(unit.node);
     }
 
-    // Band height of every subtree, leaves first.
-    const band = new Map<NodeId, number>();
+    // Size of every subtree, leaves first: its width, and how far it reaches
+    // below the top of the row it sits in.
+    const span = new Map<NodeId, number>();
+    const depth = new Map<NodeId, number>();
+    const rows = new Map<NodeId, Row[]>();
+    const unitWidth = (unit: Unit) => (unit.grid ? unit.grid.width : span.get(unit.node!)!);
+    const unitDepth = (unit: Unit) => (unit.grid ? unit.grid.height - unit.grid.rowH : depth.get(unit.node!)!);
     for (let i = order.length - 1; i >= 0; i--) {
       const id = order[i];
-      const kids = kidsOf(id);
-      let stacked = 0;
-      kids.forEach((kid, idx) => {
-        stacked += gapBefore(kids, idx) + band.get(kid)!;
-      });
-      band.set(id, Math.max(rowHeight(byId.get(id)!), stacked));
+      const list = units.get(id)!;
+      let area = 0;
+      let widest = 0;
+      for (const unit of list) {
+        area += (unitWidth(unit) + GROUP_GAP) * (unitDepth(unit) + LEVEL_H);
+        widest = Math.max(widest, unitWidth(unit));
+      }
+      // Wrapping is for many children; one wide subtree (a PoP with hundreds
+      // of users) does not push its few siblings onto rows of their own. The
+      // Cato backbone's PoPs stay in one row: its links to them are always
+      // drawn, and to a second row they would cross the first one's users.
+      const limit = isBackbone(byId.get(id)!)
+        ? Infinity
+        : Math.max(WRAP_MIN_W, widest * 2, Math.sqrt(area * PACK_ASPECT));
+      const own: Row[] = [];
+      let row: Unit[] = [];
+      let width = 0;
+      for (const unit of list) {
+        let gap = row.length && row[row.length - 1].group !== unit.group ? GROUP_GAP : 0;
+        if (row.length && width + gap + unitWidth(unit) > limit) {
+          own.push({ units: row, width, top: 0 });
+          row = [];
+          width = 0;
+          gap = 0;
+        }
+        row.push(unit);
+        width += gap + unitWidth(unit);
+      }
+      if (row.length) own.push({ units: row, width, top: 0 });
+      // Each row a level below the deepest subtree of the one above it. The
+      // backbone's one row of PoPs drops further the wider it is, so its links
+      // to the far PoPs come down steeply instead of grazing the PoPs between.
+      let top = isBackbone(byId.get(id)!) && own.length
+        ? Math.max(LEVEL_H, Math.round(FAN_DROP * Math.sqrt(own[0].width / 2)))
+        : LEVEL_H;
+      let reach = 0;
+      for (const r of own) {
+        r.top = top;
+        reach = top + Math.max(...r.units.map(unitDepth));
+        top = reach + LEVEL_H;
+      }
+      rows.set(id, own);
+      span.set(id, Math.max(slot.get(id)!, headsWidth(id), ...own.map((r) => r.width)));
+      depth.set(id, headRoom(id) + reach);
     }
 
-    // Hand each child its slice of the parent's band, root first.
+    // Hand each child its slice of the parent's span, root first.
     const local = new Map<NodeId, XY>();
-    const bandTop = new Map<NodeId, number>([[root, 0]]);
-    let maxDepth = 0;
+    const left = new Map<NodeId, number>([[root, 0]]);
+    const level = new Map<NodeId, number>([[root, headRoom(root)]]);
     for (const id of order) {
-      const kids = kidsOf(id);
-      const start = bandTop.get(id)!;
-      const height = band.get(id)!;
-      let y = start + height / 2;
-      if (kids.length) {
-        let stacked = 0;
-        kids.forEach((kid, idx) => {
-          stacked += gapBefore(kids, idx) + band.get(kid)!;
+      const start = left.get(id)!;
+      const width = span.get(id)!;
+      const y = level.get(id)!;
+      const site = group.get(id)!;
+      const centers: number[] = [];
+      const ownCenters: number[] = [];
+      for (const row of rows.get(id)!) {
+        let cursor = start + (width - row.width) / 2;
+        row.units.forEach((unit, idx) => {
+          cursor += gapBefore(row.units, idx);
+          const center = cursor + unitWidth(unit) / 2;
+          centers.push(center);
+          if (unit.group === site) ownCenters.push(center);
+          if (unit.node !== undefined) {
+            left.set(unit.node, cursor);
+            level.set(unit.node, y + row.top + headRoom(unit.node));
+          } else {
+            const grid = unit.grid!;
+            const gridLeft = cursor;
+            grid.members.forEach((member, i) => {
+              local.set(member, {
+                x: Math.round(gridLeft + (i % grid.cols) * grid.cellW + grid.cellW / 2),
+                y: y + row.top + Math.floor(i / grid.cols) * grid.rowH,
+              });
+            });
+          }
+          cursor += unitWidth(unit);
         });
-        let cursor = start + (height - stacked) / 2;
-        kids.forEach((kid, idx) => {
-          cursor += gapBefore(kids, idx);
-          bandTop.set(kid, cursor);
-          cursor += band.get(kid)!;
-        });
-        const first = kids[0];
-        const last = kids[kids.length - 1];
-        const middle =
-          (bandTop.get(first)! + band.get(first)! / 2 + bandTop.get(last)! + band.get(last)! / 2) / 2;
-        const half = rowHeight(byId.get(id)!) / 2;
-        y = Math.min(Math.max(middle, start + half), start + height - half);
       }
-      maxDepth = Math.max(maxDepth, depth.get(id)!);
-      local.set(id, { x: depth.get(id)! * levelSep, y: Math.round(y) });
+      // A site's gateway sits over its own devices, not in the middle of the
+      // other sites hanging off it, so its frame stays clear of them.
+      const over = site.startsWith('m:') && ownCenters.length ? ownCenters : centers;
+      let x = over.length ? (Math.min(...over) + Math.max(...over)) / 2 : start + width / 2;
+      const half = Math.max(slot.get(id)!, headsWidth(id)) / 2;
+      x = Math.round(Math.min(Math.max(x, start + half), start + width - half));
+      local.set(id, { x, y });
+      // The WAN uplinks: a row above the appliance, centered on it.
+      let wanLeft = x - headsWidth(id) / 2;
+      for (const wan of heads.get(id) ?? []) {
+        local.set(wan, { x: Math.round(wanLeft + slot.get(wan)! / 2), y: y - HEAD_H });
+        wanLeft += slot.get(wan)!;
+      }
     }
-    return { root, local, width: maxDepth * levelSep, height: band.get(root)! };
+    return { root, local, width: span.get(root)!, height: depth.get(root)! };
   };
 
-  const drop = (block: Block, x: number, y: number) => {
-    for (const [id, p] of block.local) positions.set(id, { x: x + p.x, y: y + p.y });
-  };
-
-  let top = 0;
-  let looseCols = MAX_LOOSE_COLS;
-  const trees = roots.map((root) => placeBlock(root, (id) => children.get(id)!));
-  const stackedHeight = trees.reduce((sum, tree) => sum + tree.height + COMPONENT_GAP, 0);
-
-  if (stackedHeight <= PACK_MIN_HEIGHT) {
-    // Small map: whole trees, one under the other.
-    for (const tree of trees) {
-      drop(tree, 0, top);
-      top += tree.height + COMPONENT_GAP;
+  // The trees side by side, flowed into rows of about the same width.
+  const blocks = roots.map(placeBlock);
+  let area = 0;
+  let widest = 0;
+  for (const block of blocks) {
+    area += (block.width + PACK_GAP_X) * (block.height + PACK_GAP_Y);
+    widest = Math.max(widest, block.width);
+  }
+  const rowLimit = Math.max(widest, Math.sqrt(area * PACK_ASPECT));
+  let x = 0;
+  let y = 0;
+  let rowHeight = 0;
+  let right = 0;
+  for (const block of blocks) {
+    if (x > 0 && x + block.width > rowLimit) {
+      x = 0;
+      y += rowHeight + PACK_GAP_Y;
+      rowHeight = 0;
     }
-  } else {
-    // Large map: one tall strip would be unusable. Cut the trees at their
-    // overlay links, so every cabled island (typically a site) is a block of
-    // its own, and flow the blocks into columns, in name order.
-    const overlayKids = new Set(viaOverlay);
-    const cabled = new Map<NodeId, NodeId[]>();
-    for (const [id, kids] of children) {
-      cabled.set(id, overlayKids.size ? kids.filter((kid) => !overlayKids.has(kid)) : kids);
-    }
-    const blockName = (root: NodeId) => {
-      const node = byId.get(root)!;
-      return node.meraki?.site_name || node.group_name || node.label;
-    };
-    const blocks = [...roots, ...viaOverlay]
-      .map((root) => placeBlock(root, (id) => cabled.get(id)!))
-      .sort(
-        (a, b) =>
-          blockName(a.root).localeCompare(blockName(b.root), undefined, { numeric: true, sensitivity: 'base' }) ||
-          String(a.root).localeCompare(String(b.root)),
-      );
+    for (const [id, p] of block.local) local.set(id, { x: x + p.x, y: y + p.y });
+    rowHeight = Math.max(rowHeight, block.height);
+    right = Math.max(right, x + block.width);
+    x += block.width + PACK_GAP_X;
+  }
+  const bottom = blocks.length ? y + rowHeight : 0;
 
-    let area = 0;
-    let tallest = 0;
-    for (const block of blocks) {
-      area += (block.width + levelSep) * (block.height + PACK_GAP_Y);
-      tallest = Math.max(tallest, block.height);
-    }
-    const columnHeight = Math.max(tallest, Math.sqrt(area / PACK_ASPECT));
-
-    let x = 0;
-    let y = 0;
-    let columnWidth = 0;
-    let bottom = 0;
-    for (const block of blocks) {
-      if (y > 0 && y + block.height > columnHeight) {
-        x += columnWidth + levelSep;
-        y = 0;
-        columnWidth = 0;
+  for (const [id, up] of heads) {
+    for (const wan of up) join(id, wan);
+  }
+  for (const [id, own] of grids) {
+    for (const { members } of own) {
+      for (const member of members) {
+        join(member, members[0]);
+        join(member, id);
       }
-      drop(block, x, y);
-      columnWidth = Math.max(columnWidth, block.width);
-      y += block.height + PACK_GAP_Y;
-      bottom = Math.max(bottom, y);
     }
-    top = bottom - PACK_GAP_Y + COMPONENT_GAP;
-    looseCols = Math.max(MAX_LOOSE_COLS, Math.floor((x + columnWidth) / levelSep) + 1);
+  }
+  for (const [id, kids] of children) {
+    kids.forEach((kid, idx) => {
+      join(id, kid);
+      if (idx) join(kids[idx - 1], kid);
+    });
   }
 
   // Devices with no links at all: a compact grid under the trees.
   if (loose.length) {
-    loose.sort((a, b) => group.get(a.id)!.localeCompare(group.get(b.id)!) || compareLabels(a, b));
-    const cols = Math.max(1, Math.min(looseCols, Math.ceil(Math.sqrt(loose.length))));
+    loose.sort((a, b) => compareSites(group.get(a.id)!, group.get(b.id)!) || compareLabels(a, b));
     loose.forEach((n, idx) => {
-      positions.set(n.id, {
-        x: (idx % cols) * levelSep,
-        y: Math.round(top + DEVICE_ROW_H / 2 + Math.floor(idx / cols) * DEVICE_ROW_H),
+      if (idx) join(loose[idx - 1].id, n.id);
+    });
+    const cellW = Math.max(...loose.map((n) => slot.get(n.id)!));
+    const cols = Math.max(1, Math.min(loose.length, Math.max(MAX_LOOSE_COLS, Math.floor(right / cellW))));
+    const looseTop = blocks.length ? bottom + PACK_GAP_Y : 0;
+    loose.forEach((n, idx) => {
+      local.set(n.id, {
+        x: Math.round((idx % cols) * cellW + cellW / 2),
+        y: looseTop + Math.floor(idx / cols) * LOOSE_ROW_H,
       });
     });
   }
 
-  return positions;
+  return { local };
 }
 
 /**
