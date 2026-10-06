@@ -121,14 +121,33 @@ describe('aws detail tabs', () => {
   });
 });
 
+describe('azure detail tabs', () => {
+  it('files VNet sections under the shared tabs', () => {
+    const vnet = details({
+      sections: [table('Overview'), table('VNet peerings')],
+      site_sections: [
+        table('VNet overview'),
+        table('Subnets'),
+        table('Route tables'),
+        table('Virtual machines'),
+        table('Network security group rules'),
+      ],
+    });
+    expect(merakiViewsWithData(vnet)).toEqual(['meraki', 'vlans', 'routing', 'firewall']);
+    expect(merakiViewSections(vnet, 'firewall').siteSections.map((s) => s.title)).toEqual(['Network security group rules']);
+    expect(merakiViewSections(vnet, 'routing').sections.map((s) => s.title)).toEqual(['VNet peerings']);
+  });
+});
+
 describe('sourceTypeLabel', () => {
   it('names every kind of map source', () => {
-    expect(['neighbors', 'meraki', 'cato', 'anyconnect', 'aws'].map(sourceTypeLabel)).toEqual([
+    expect(['neighbors', 'meraki', 'cato', 'anyconnect', 'aws', 'azure'].map(sourceTypeLabel)).toEqual([
       'Neighbor discovery',
       'Meraki',
       'Cato',
       'AnyConnect (FMC)',
       'AWS',
+      'Azure',
     ]);
   });
 });

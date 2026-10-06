@@ -12,9 +12,9 @@ the same search box, and are included in the HTML export.
 A Cato Networks account is added from the same dialog and shares the map,
 search, Path Mode and export; see [cato-topology.md](cato-topology.md), as is
 a Cisco FMC whose FTDs terminate AnyConnect remote access VPN; see
-[anyconnect-topology.md](anyconnect-topology.md). AWS accounts discovered by
-Cloud Visibility join the map as well; see
-[aws-topology.md](aws-topology.md).
+[anyconnect-topology.md](anyconnect-topology.md). AWS accounts and Azure
+subscriptions discovered by Cloud Visibility join the map as well; see
+[aws-topology.md](aws-topology.md) and [azure-topology.md](azure-topology.md).
 
 A registered organization can also be audited by the Compliance page against
 the Meraki equivalents of DHCP snooping, port security, BPDU guard and the
@@ -105,7 +105,10 @@ belong to no inventory group).
   collection (`GET /api/meraki/subnets`); IPv4 only when typing.
   When one of two subnets or addresses is in an AWS VPC, the AWS route
   tables, network ACLs and security groups are checked for that pair as
-  well; see [aws-topology.md](aws-topology.md#the-aws-check-of-a-path).
+  well; see [aws-topology.md](aws-topology.md#the-aws-check-of-a-path). An
+  end in an Azure VNet is checked against Azure's effective routes and
+  network security groups; see
+  [azure-topology.md](azure-topology.md#the-azure-check-of-a-path).
 - VPN tunnels are purple dashed lines (dotted for non-Meraki IPsec peers),
   WAN uplinks are blue. A tunnel or uplink Meraki reports as down is red.
 - **Device tabs.** Clicking a Meraki device opens its details, one tab per

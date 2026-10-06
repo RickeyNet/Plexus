@@ -54,8 +54,8 @@ import {
 } from './helpers';
 import { crowdedGroups, tidyLabel, tidyTreeLayout, type XY } from './layout';
 import { EdgeDetails } from './EdgeDetails';
-import { AwsPathCheck } from './AwsPathCheck';
-import { MAX_PATH_ENDPOINTS, connectPicks, findSubnets, isAddressText, parseTraffic, pathSites, reachabilityQuery, subnetOptionLabel, type PathPick } from './paths';
+import { CloudPathCheck } from './CloudPathCheck';
+import { MAX_PATH_ENDPOINTS, connectPicks, findSubnets, isAddressText, parseTraffic, pathSites, reachabilityQueries, subnetOptionLabel, type PathPick } from './paths';
 import { NodeDetails } from './NodeDetails';
 import { SourcesModal } from './SourcesModal';
 import { StpEventsModal } from './StpEventsModal';
@@ -111,7 +111,7 @@ export function Topology() {
   const [stpAllVlans, setStpAllVlans] = useState(false);
   const [pathMode, setPathMode] = useState(false);
   const [pathPicks, setPathPicks] = useState<PathPick[]>([]);
-  // Traffic the AWS check of a path is asked about: 'tcp/443', empty for any.
+  // Traffic the cloud check of a path is asked about: 'tcp/443', empty for any.
   const [pathTraffic, setPathTraffic] = useState('');
   const [pathSubnetInput, setPathSubnetInput] = useState('');
   const [pathSiteInput, setPathSiteInput] = useState('');
@@ -979,8 +979,8 @@ export function Topology() {
   }, [subnetsQuery.data, merakiNodeIds]);
   const pathResult = useMemo(() => connectPicks(pathPicks, data?.edges ?? []), [pathPicks, data]);
   const trafficFilter = useMemo(() => parseTraffic(pathTraffic), [pathTraffic]);
-  // Legs with an end in AWS, where route tables, ACLs and security groups can be checked.
-  const pathHasAwsLeg = pathResult.legs.some((leg) => reachabilityQuery(leg.from, leg.to, { protocol: '' }) !== null);
+  // Legs with an end in AWS or Azure, whose routes and filtering rules can be checked.
+  const pathHasCloudLeg = pathResult.legs.some((leg) => reachabilityQueries(leg.from, leg.to, { protocol: '' }).length > 0);
   // Redraw the path whenever the picks change or the map is rebuilt.
   useEffect(() => {
     if (!pathMode) return;
@@ -1245,7 +1245,7 @@ export function Topology() {
     const owner = pathSubnets.owners.get(subnetOptionLabel(subnet));
     if (owner === undefined) return false;
     setPathSubnetInput('');
-    // A typed address inside the subnet is kept: the AWS check of the path
+    // A typed address inside the subnet is kept: the cloud check of the path
     // matches the security groups of the instance that has it.
     const typedAddress = isAddressText(value) && value.trim() !== subnet.cidr ? value.trim() : undefined;
     addPathPick({
@@ -1549,7 +1549,7 @@ export function Topology() {
       <PageHelp
         pageKey="topology"
         title="Interactive Network Map"
-        text="Visualize your network as an interactive graph. Drag nodes to rearrange, zoom in/out, and click devices to view details. Connections are discovered from device data (CDP/LLDP/OSPF/BGP) and, for Meraki organizations, Cato accounts, AnyConnect FMCs and AWS accounts, from their APIs. Search finds devices by name or address and Meraki devices by anything collected for them - VLANs, subnets, routes, VPN peers, firewall rules. Sources lists everything that feeds the map and collects it again. Export HTML saves the whole map as one shareable interactive file."
+        text="Visualize your network as an interactive graph. Drag nodes to rearrange, zoom in/out, and click devices to view details. Connections are discovered from device data (CDP/LLDP/OSPF/BGP) and, for Meraki organizations, Cato accounts, AnyConnect FMCs and AWS and Azure accounts, from their APIs. Search finds devices by name or address and Meraki devices by anything collected for them - VLANs, subnets, routes, VPN peers, firewall rules. Sources lists everything that feeds the map and collects it again. Export HTML saves the whole map as one shareable interactive file."
       />
 
       {actionMsg && (
@@ -1584,7 +1584,7 @@ export function Topology() {
           >
             <option value="all">All sources</option>
             <option value="inventory">Inventory only</option>
-            <option value="meraki">Meraki / Cato / AnyConnect / AWS only</option>
+            <option value="meraki">Meraki / Cato / AnyConnect / AWS / Azure only</option>
           </select>
         )}
 
@@ -1652,7 +1652,7 @@ export function Topology() {
           )}
         </div>
 
-        <button className="btn btn-primary btn-sm" onClick={() => setSourcesOpen(true)} title="Everything that feeds the map - neighbor discovery, Meraki, Cato, AnyConnect, AWS: add, collect, history">Sources</button>
+        <button className="btn btn-primary btn-sm" onClick={() => setSourcesOpen(true)} title="Everything that feeds the map - neighbor discovery, Meraki, Cato, AnyConnect, AWS, Azure: add, collect, history">Sources</button>
         <button className="btn btn-secondary btn-sm" onClick={handleRefresh}>Refresh</button>
         <button className="btn btn-secondary btn-sm" onClick={handleFit}>Fit</button>
         <button className={`btn btn-sm ${pathMode ? 'btn-primary' : 'btn-secondary'}`} onClick={togglePathMode} title="Pick devices or sites and see how they reach one another">{pathMode ? 'Exit Path' : 'Path Mode'}</button>
@@ -1780,12 +1780,12 @@ export function Topology() {
                 </datalist>
               </>
             )}
-            {pathHasAwsLeg && (
+            {pathHasCloudLeg && (
               <input
                 className="form-input"
                 placeholder="Traffic: any, or tcp/443"
-                aria-label="Traffic checked against AWS route tables, network ACLs and security groups"
-                title="Traffic the AWS check is asked about, from the first of two picks to the second: tcp/443, udp/53, icmp, or empty for any traffic"
+                aria-label="Traffic checked against the routes and filtering rules of AWS and Azure"
+                title="Traffic the AWS / Azure check is asked about, from the first of two picks to the second: tcp/443, udp/53, icmp, or empty for any traffic"
                 value={pathTraffic}
                 onChange={(e) => setPathTraffic(e.target.value)}
                 aria-invalid={trafficFilter === null}
@@ -1831,8 +1831,8 @@ export function Topology() {
                 <div key={note} style={{ color: 'var(--warning, #f59f00)' }}>⚠ {note}</div>
               ))}
               {(() => {
-                const query = trafficFilter && reachabilityQuery(leg.from, leg.to, trafficFilter);
-                return query ? <AwsPathCheck query={query} /> : null;
+                const queries = trafficFilter ? reachabilityQueries(leg.from, leg.to, trafficFilter) : [];
+                return queries.map((query) => <CloudPathCheck key={query.cloud} query={query} />);
               })()}
             </div>
           ))}
@@ -1840,7 +1840,7 @@ export function Topology() {
             <div className="text-muted" style={{ marginTop: '0.35rem', fontSize: '0.78rem' }}>
               Shortest way over the cables, uplinks and VPN tunnels on the map that are up. Route tables are not consulted;
               a subnet is placed on the device that owns it (appliance, L3 switch, VPC or VPN peer).
-              {pathHasAwsLeg && ' Between two subnets or addresses with an end in AWS, the route tables, network ACLs and security groups of AWS are checked as well; type the IP address of an instance to include its security groups.'}
+              {pathHasCloudLeg && ' Between two subnets or addresses with an end in AWS or Azure, that cloud checks the pair as well: AWS route tables, network ACLs and security groups, Azure effective routes and network security groups. Type the IP address of an instance or virtual machine to include the rules of its interface.'}
             </div>
           )}
         </div>
@@ -1851,7 +1851,7 @@ export function Topology() {
 
       {data && !data.nodes.length && (
         <div className="card" style={{ padding: '1.5rem', textAlign: 'center' }}>
-          <p className="text-muted" style={{ marginTop: 0 }}>No topology data. Open Sources to discover the neighbors of your inventory devices, or to add a Meraki organization, a Cato account, an AnyConnect FMC or an AWS account.</p>
+          <p className="text-muted" style={{ marginTop: 0 }}>No topology data. Open Sources to discover the neighbors of your inventory devices, or to add a Meraki organization, a Cato account, an AnyConnect FMC, an AWS account or an Azure subscription.</p>
           <button className="btn btn-primary btn-sm" onClick={() => setSourcesOpen(true)}>Sources</button>
         </div>
       )}
@@ -1915,7 +1915,7 @@ export function Topology() {
           <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-bgp" /> BGP</span>
           {hasMeraki && sourceFilter !== 'inventory' && (
             <>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#8bc34a' }} /> Meraki / Cato / AnyConnect / AWS</span>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#8bc34a' }} /> Meraki / Cato / AnyConnect / AWS / Azure</span>
               <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#ba68c8' }} /> VPN Tunnel</span>
               <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#ff9800' }} /> Cloud Attachment</span>
               <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#4fc3f7' }} /> WAN Uplink</span>

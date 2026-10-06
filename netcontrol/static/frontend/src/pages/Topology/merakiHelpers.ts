@@ -95,6 +95,7 @@ export function formatWhen(iso?: string | null): string {
 export function sourceTypeLabel(type: string): string {
   if (type === 'neighbors') return 'Neighbor discovery';
   if (type === 'aws') return 'AWS';
+  if (type === 'azure') return 'Azure';
   if (type === 'anyconnect') return 'AnyConnect (FMC)';
   return type === 'cato' ? 'Cato' : 'Meraki';
 }
@@ -193,6 +194,8 @@ const VIEW_TITLES: Record<Exclude<MerakiView, 'meraki'>, string[]> = {
     'OSPF areas',
     'Route tables',
     'Transit gateway routes',
+    'VNet peerings',
+    'ExpressRoute peerings',
   ],
   vpn: [
     'Site-to-site VPN',
@@ -205,7 +208,14 @@ const VIEW_TITLES: Record<Exclude<MerakiView, 'meraki'>, string[]> = {
     'Access interfaces',
     'Connected users',
   ],
-  firewall: ['Layer 3 firewall rules', 'Port forwarding', '1:1 NAT', 'Security group rules', 'Network ACL rules'],
+  firewall: [
+    'Layer 3 firewall rules',
+    'Port forwarding',
+    '1:1 NAT',
+    'Security group rules',
+    'Network ACL rules',
+    'Network security group rules',
+  ],
   switching: ['Switch stacks', 'Spanning tree', 'STP bridge priority'],
   wireless: ['Wireless SSIDs'],
 };
