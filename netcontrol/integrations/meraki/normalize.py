@@ -1257,6 +1257,12 @@ class _Builder:
 # ── Layout ───────────────────────────────────────────────────────────────────
 
 
+def _leaf_cols(count: int) -> int:
+    """Columns of the leaves under one node: up to 5, more for a crowd (the
+    hundreds of remote users of a PoP) so it is not one tall strip."""
+    return max(MAX_LEAF_COLS, math.ceil(math.sqrt(count)))
+
+
 def _layout_site(members: list[dict], edges: list[dict]) -> tuple[float, float]:
     """Assign site-relative x/y to ``members``; return the content (w, h)."""
     wan_children: dict[str, list[dict]] = {}
@@ -1322,8 +1328,9 @@ def _layout_site(members: list[dict], edges: list[dict]) -> tuple[float, float]:
             cw, ch = measure(child)
             inner_w += cw
             inner_h = max(inner_h, ch)
-        leaf_cols = min(len(leaves), MAX_LEAF_COLS)
-        leaf_rows = math.ceil(len(leaves) / MAX_LEAF_COLS) if leaves else 0
+        cols = _leaf_cols(len(leaves))
+        leaf_cols = min(len(leaves), cols)
+        leaf_rows = math.ceil(len(leaves) / cols) if leaves else 0
         own_w = max(CELL_W, len(wan_children.get(nid, [])) * CELL_W)
         width = max(own_w, inner_w + leaf_cols * CELL_W)
         height = CELL_H + max(inner_h, leaf_rows * LEAF_ROW_H)
@@ -1344,10 +1351,11 @@ def _layout_site(members: list[dict], edges: list[dict]) -> tuple[float, float]:
         for child in inner:
             place(child, cursor, y0 + CELL_H)
             cursor += sizes[child][0]
+        cols = _leaf_cols(len(leaves))
         for idx, leaf in enumerate(leaves):
             leaf_node = tree_nodes[leaf]
-            leaf_node["x"] = cursor + (idx % MAX_LEAF_COLS) * CELL_W + CELL_W / 2
-            leaf_node["y"] = y0 + CELL_H + (idx // MAX_LEAF_COLS) * LEAF_ROW_H
+            leaf_node["x"] = cursor + (idx % cols) * CELL_W + CELL_W / 2
+            leaf_node["y"] = y0 + CELL_H + (idx // cols) * LEAF_ROW_H
 
     top = CELL_H if wan_children else 0.0
     cursor_x = 0.0
@@ -1359,7 +1367,9 @@ def _layout_site(members: list[dict], edges: list[dict]) -> tuple[float, float]:
         content_h = max(content_h, top + height)
 
     if loose:
-        cols = max(1, min(8, math.ceil(math.sqrt(len(loose)) * 1.5)))
+        # Up to 8 columns, more for a crowd (hundreds of remote users) so
+        # it does not become one long strip.
+        cols = max(1, min(max(8, math.ceil(math.sqrt(len(loose)))), math.ceil(math.sqrt(len(loose)) * 1.5)))
         base_y = content_h
         for idx, nid in enumerate(loose):
             node = tree_nodes[nid]

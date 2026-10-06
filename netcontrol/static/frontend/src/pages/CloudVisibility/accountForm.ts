@@ -47,6 +47,16 @@ export interface ProviderForm {
   sections: AuthSection[];
 }
 
+// Temporary credentials (access key starting with ASIA) come with a session
+// token and expire, typically after 1 to 12 hours.
+const SESSION_TOKEN: AuthField = {
+  key: 'session_token',
+  label: 'Session token',
+  optional: true,
+  secret: true,
+  help: 'Only for temporary credentials (key starting with ASIA). They expire: enter a fresh set when discovery reports the token has expired.',
+};
+
 const AWS: ProviderForm = {
   identifierLabel: 'AWS account ID',
   identifierPlaceholder: '123456789012',
@@ -60,8 +70,9 @@ const AWS: ProviderForm = {
       help: 'The access key of an IAM user with read-only access.',
       authType: 'api_keys',
       fields: [
-        { key: 'access_key_id', label: 'Access key ID', placeholder: 'AKIA...' },
+        { key: 'access_key_id', label: 'Access key ID', placeholder: 'AKIA... or ASIA...' },
         { key: 'secret_access_key', label: 'Secret access key', secret: true },
+        SESSION_TOKEN,
       ],
     },
     {
@@ -80,14 +91,25 @@ const AWS: ProviderForm = {
           help: 'The key that assumes the role. Leave both key fields empty to use the credentials of the Plexus server.',
         },
         { key: 'secret_access_key', label: 'Secret access key', optional: true, secret: true },
+        SESSION_TOKEN,
       ],
     },
     {
       key: 'server',
       label: 'Credentials of the Plexus server',
-      help: 'Nothing to enter: the instance profile or environment credentials of the server are used.',
+      help:
+        'The credentials the server already has: an instance profile, environment variables, ' +
+        '~/.aws/credentials or an SSO profile. Refreshing them on the server is picked up at the next discovery.',
       authType: 'workload_identity',
-      fields: [],
+      fields: [
+        {
+          key: 'profile_name',
+          label: 'Profile name',
+          optional: true,
+          placeholder: 'default',
+          help: 'A profile from ~/.aws/config on the Plexus server, such as an SSO profile. Empty: the default credentials.',
+        },
+      ],
     },
   ],
   sections: [

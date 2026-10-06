@@ -17,6 +17,7 @@ import {
   useMerakiBuildJob,
   useMerakiOrgs,
   useMerakiSnapshots,
+  useSnapshotWarnings,
   useStartMerakiBuild,
   useTopologySources,
   useValidateMerakiOrg,
@@ -57,6 +58,30 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** The collection whose warnings are listed in the warnings dialog. */
+interface WarningsTarget {
+  snapshotId: number;
+  name: string;
+}
+
+/** Opens the warnings dialog of one collection. */
+type ShowWarnings = (target: WarningsTarget) => void;
+
+function WarningsBadge({ text, onClick }: { text: string | number; onClick: (() => void) | undefined }) {
+  if (!onClick) return <span className="badge badge-warning">{text}</span>;
+  return (
+    <button
+      type="button"
+      className="badge badge-warning"
+      style={{ border: 'none', cursor: 'pointer' }}
+      title="Show the collection warnings"
+      onClick={onClick}
+    >
+      {text}
+    </button>
+  );
+}
+
 interface Props {
   isOpen: boolean;
   onClose: () => void;
@@ -89,6 +114,7 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
   const [cloudBusy, setCloudBusy] = useState<number[]>([]);
   const [allBusy, setAllBusy] = useState(false);
   const [allNote, setAllNote] = useState<{ text: string; failed: boolean } | null>(null);
+  const [warningsFor, setWarningsFor] = useState<WarningsTarget | null>(null);
 
   const job = useMerakiBuildJob(jobId);
   const isJobRunning = jobId !== null && !job.isError && (!job.data || job.data.status === 'running');
@@ -357,6 +383,7 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
                 onReloadSample={() => handleSample(source.type as CloudProvider | CloudAccountProvider)}
                 onEdit={setEditing}
                 onNavigate={onClose}
+                onShowWarnings={setWarningsFor}
               />
             ))}
           </tbody>
@@ -372,7 +399,9 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
         </div>
       )}
       {isJobRunning && <BuildProgress job={job.data} provider={jobProvider} />}
-      {isJobSettled && <BuildOutcome job={job.data} onDismiss={() => setJobId(null)} />}
+      {isJobSettled && (
+        <BuildOutcome job={job.data} onDismiss={() => setJobId(null)} onShowWarnings={setWarningsFor} />
+      )}
 
       <h4 style={{ margin: '1.25rem 0 0.5rem' }}>Collection history (Meraki, Cato and AnyConnect)</h4>
       {snapshots.isPending && <div className="loading">Loading history…</div>}
@@ -381,7 +410,11 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
           <strong>Failed to load history:</strong> {snapshots.error.message}
         </div>
       )}
-      {snapshots.data && <SnapshotTable snapshots={snapshots.data.snapshots} canWrite={canWrite} />}
+      {snapshots.data && (
+        <SnapshotTable snapshots={snapshots.data.snapshots} canWrite={canWrite} onShowWarnings={setWarningsFor} />
+      )}
+
+      {warningsFor && <WarningsModal target={warningsFor} onClose={() => setWarningsFor(null)} />}
 
       {(adding ?? editing?.provider) === 'meraki' && (
         <MerakiOrgFormModal
@@ -431,6 +464,7 @@ interface SourceRowProps {
   onEdit: (org: MerakiOrg) => void;
   /** Called when a link leaves the Topology page. */
   onNavigate: () => void;
+  onShowWarnings: ShowWarnings;
 }
 
 function collectTitle(source: TopologySource, isAdmin: boolean): string {
@@ -460,6 +494,7 @@ function SourceRow({
   onReloadSample,
   onEdit,
   onNavigate,
+  onShowWarnings,
 }: SourceRowProps) {
   const { confirm, alert } = useDialogs();
   const validate = useValidateMerakiOrg();
@@ -531,9 +566,14 @@ function SourceRow({
             {source.warning_count > 0 && (
               <>
                 {' '}
-                <span className="badge badge-warning" title="Collection warnings - see Report in the HTML map">
-                  {source.warning_count} warning(s)
-                </span>
+                <WarningsBadge
+                  text={`${source.warning_count} warning(s)`}
+                  onClick={
+                    source.snapshot_id != null
+                      ? () => onShowWarnings({ snapshotId: source.snapshot_id as number, name: source.name })
+                      : undefined
+                  }
+                />
               </>
             )}
             {(source.detail || source.message) && (
@@ -658,7 +698,15 @@ function BuildProgress({ job, provider }: { job: MerakiBuildJob | undefined; pro
   );
 }
 
-function BuildOutcome({ job, onDismiss }: { job: MerakiBuildJob | undefined; onDismiss: () => void }) {
+function BuildOutcome({
+  job,
+  onDismiss,
+  onShowWarnings,
+}: {
+  job: MerakiBuildJob | undefined;
+  onDismiss: () => void;
+  onShowWarnings: ShowWarnings;
+}) {
   // No job record means the poll failed: the server restarted or the record
   // expired. The build may still have produced a snapshot.
   const failed = !job || job.status === 'failed';
@@ -678,10 +726,13 @@ function BuildOutcome({ job, onDismiss }: { job: MerakiBuildJob | undefined; onD
               <strong>Map updated</strong> in {result.duration_seconds}s: {result.summary.sites ?? 0} sites,{' '}
               {result.summary.devices ?? 0} devices, {result.summary.vpn_tunnels ?? 0} VPN tunnels.
               {result.warning_count > 0 && (
-                <span style={{ color: 'var(--warning)' }}>
+                <>
                   {' '}
-                  {result.warning_count} collection warning(s) - see Report in the HTML map for details.
-                </span>
+                  <WarningsBadge
+                    text={`${result.warning_count} collection warning(s)`}
+                    onClick={() => onShowWarnings({ snapshotId: result.snapshot_id, name: 'Latest collection' })}
+                  />
+                </>
               )}
             </>
           )}
@@ -694,7 +745,15 @@ function BuildOutcome({ job, onDismiss }: { job: MerakiBuildJob | undefined; onD
   );
 }
 
-function SnapshotTable({ snapshots, canWrite }: { snapshots: MerakiSnapshot[]; canWrite: boolean }) {
+function SnapshotTable({
+  snapshots,
+  canWrite,
+  onShowWarnings,
+}: {
+  snapshots: MerakiSnapshot[];
+  canWrite: boolean;
+  onShowWarnings: ShowWarnings;
+}) {
   const { confirm, alert } = useDialogs();
   const remove = useDeleteMerakiSnapshot();
 
@@ -746,7 +805,15 @@ function SnapshotTable({ snapshots, canWrite }: { snapshots: MerakiSnapshot[]; c
             <td>{s.summary.vpn_tunnels ?? 0}</td>
             <td>
               {s.warning_count > 0 ? (
-                <span className="badge badge-warning">{s.warning_count}</span>
+                <WarningsBadge
+                  text={s.warning_count}
+                  onClick={() =>
+                    onShowWarnings({
+                      snapshotId: s.id,
+                      name: `${s.org_name ?? 'Collection'} - ${formatWhen(s.created_at)}`,
+                    })
+                  }
+                />
               ) : (
                 <span className="text-muted">0</span>
               )}
@@ -767,5 +834,50 @@ function SnapshotTable({ snapshots, canWrite }: { snapshots: MerakiSnapshot[]; c
         ))}
       </tbody>
     </table>
+  );
+}
+
+/** The API calls one collection could not make, so a partial map can be explained. */
+function WarningsModal({ target, onClose }: { target: WarningsTarget; onClose: () => void }) {
+  const warnings = useSnapshotWarnings(target.snapshotId);
+  const rows = warnings.data?.warnings ?? [];
+  return (
+    <Modal isOpen onClose={onClose} title={`Collection warnings - ${target.name}`} size="large">
+      <p className="text-muted" style={{ marginTop: 0, fontSize: '0.9rem' }}>
+        These API calls failed or were refused during the collection. The rest of the map was built; what these calls
+        would have added (users, subnets, WAN links...) is missing from it.
+      </p>
+      {warnings.isPending && <div className="loading">Loading warnings…</div>}
+      {warnings.error && (
+        <div className="error">
+          <strong>Failed to load warnings:</strong> {warnings.error.message}
+        </div>
+      )}
+      {warnings.data && rows.length === 0 && <p className="text-muted">No warnings recorded.</p>}
+      {rows.length > 0 && (
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Scope</th>
+              <th>Request</th>
+              <th>HTTP</th>
+              <th>Message</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((w, i) => (
+              <tr key={i}>
+                <td>{w.scope}</td>
+                <td style={{ wordBreak: 'break-all' }}>
+                  <code>{w.path}</code>
+                </td>
+                <td>{w.status ?? ''}</td>
+                <td style={{ whiteSpace: 'pre-wrap' }}>{w.message}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Modal>
   );
 }

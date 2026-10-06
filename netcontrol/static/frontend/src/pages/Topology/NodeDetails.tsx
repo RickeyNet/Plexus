@@ -460,7 +460,7 @@ function OverviewTab(props: {
         </>
       )}
 
-      {!node.in_inventory && node.ip && !['wan', 'vpn_peer', 'cloud', 'users', 'vpc'].includes(node.meraki?.kind ?? '') && (
+      {!node.in_inventory && node.ip && !['wan', 'vpn_peer', 'cloud', 'users', 'user', 'vpc'].includes(node.meraki?.kind ?? '') && (
         <button
           type="button"
           className="btn btn-primary btn-sm"

@@ -135,6 +135,8 @@ const ICON_MAP: Record<string, string> = {
   wireless: '/static/img/topo/wireless.svg',
   wlc: '/static/img/topo/wlc.svg',
   phone: '/static/img/topo/phone.svg',
+  // A remote user of a SASE cloud (a Cato Client).
+  user: '/static/img/topo/user.svg',
   server: '/static/img/topo/server.svg',
   unknown: '/static/img/topo/unknown.svg',
 };
@@ -188,6 +190,11 @@ export function providerScopeName(provider?: string | null): string {
 /** WAN uplink stubs and non-Meraki VPN peers: endpoints, not devices. */
 export function isMerakiEndpointNode(node: TopologyNode): boolean {
   return node.source === 'meraki' && ['wan', 'vpn_peer'].includes(node.meraki?.kind ?? '');
+}
+
+/** One remote user of a SASE cloud (a Cato Client): drawn small, hundreds at a time. */
+export function isRemoteUserNode(node: TopologyNode): boolean {
+  return node.source === 'meraki' && node.meraki?.kind === 'user';
 }
 
 export function nodeIconUrl(node: TopologyNode): string | undefined {
@@ -423,17 +430,64 @@ export function nodeTitle(node: TopologyNode): string {
   return `${node.label}\n${node.ip || ''}\nType: ${node.device_type ?? ''}${categoryInfo}${modelInfo}${node.group_name ? '\nGroup: ' + node.group_name : ''}${node.in_inventory ? '' : '\n(External)'}${ipamInfo}\nDrag to move · Right-click to unpin`;
 }
 
-// ── Source filter (inventory vs Meraki) ───────────────────────────────────
+// ── Source filter ────────────────────────────────────────────────────────
 
-export type SourceFilter = 'all' | 'inventory' | 'meraki';
+/**
+ * Which part of the map to show: everything, the inventory, every
+ * integration, or one integration (`provider:aws`, `provider:cato`, ...).
+ */
+export type SourceFilter = 'all' | 'inventory' | 'meraki' | `provider:${string}`;
+
+export const PROVIDER_ORDER = ['meraki', 'cato', 'anyconnect', 'aws', 'azure'];
+
+/** The integration a node belongs to, or '' for an inventory-only node. */
+export function nodeProvider(node: TopologyNode): string {
+  return node.meraki ? node.meraki.provider || 'meraki' : '';
+}
+
+/** The integrations present on the map, in a stable order, for the filter menu. */
+export function mapProviders(data: TopologyData | undefined): string[] {
+  const found = new Set((data?.nodes ?? []).map(nodeProvider).filter(Boolean));
+  const known = PROVIDER_ORDER.filter((p) => found.has(p));
+  const others = [...found].filter((p) => !PROVIDER_ORDER.includes(p)).sort();
+  return [...known, ...others];
+}
+
+const TUNNEL_PROTOCOLS = new Set(['vpn', 'vpn-ipsec']);
 
 export function filterBySource(data: TopologyData | undefined, filter: SourceFilter): TopologyData | undefined {
   if (!data || filter === 'all') return data;
-  const nodes = data.nodes.filter((n) => (filter === 'meraki' ? !!n.meraki : n.source !== 'meraki'));
-  const kept = new Set(nodes.map((n) => n.id));
-  const edges = data.edges.filter(
-    (e) => kept.has(e.from) && kept.has(e.to) && (filter === 'meraki' || e.source !== 'meraki'),
-  );
+  const only = filter.startsWith('provider:') ? filter.slice('provider:'.length) : '';
+  const keepNode = (n: TopologyNode): boolean => {
+    if (only) return nodeProvider(n) === only || !!n.also_providers?.includes(only);
+    return filter === 'meraki' ? !!n.meraki : n.source !== 'meraki';
+  };
+  const kept = new Set(data.nodes.filter(keepNode).map((n) => n.id));
+  // A device another integration runs here (a Cato vSocket on an AWS
+  // instance) keeps its tunnels into that integration's cloud (its PoP), so
+  // one source still shows where its VPN goes.
+  const guestEdges = new Set<TopologyEdge['id']>();
+  if (only) {
+    const byId = new Map(data.nodes.map((n) => [n.id, n]));
+    const guest = (id: TopologyNode['id']) => kept.has(id) && nodeProvider(byId.get(id)!) !== only;
+    const isCloud = (id: TopologyNode['id']) => byId.get(id)?.meraki?.kind === 'cloud';
+    for (const e of data.edges) {
+      if (!TUNNEL_PROTOCOLS.has(e.protocol ?? '')) continue;
+      for (const [near, far] of [[e.from, e.to], [e.to, e.from]]) {
+        if (guest(near) && isCloud(far)) guestEdges.add(e.id);
+      }
+    }
+    for (const e of data.edges) {
+      if (guestEdges.has(e.id)) kept.add(e.from).add(e.to);
+    }
+  }
+  const nodes = data.nodes.filter((n) => kept.has(n.id));
+  const edges = data.edges.filter((e) => {
+    if (guestEdges.has(e.id)) return true;
+    if (!kept.has(e.from) || !kept.has(e.to)) return false;
+    if (only) return e.source !== 'meraki' || (e.provider || 'meraki') === only;
+    return filter === 'meraki' || e.source !== 'meraki';
+  });
   return { ...data, nodes, edges };
 }
 

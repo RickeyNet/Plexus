@@ -16,7 +16,7 @@ from typing import Any
 
 # A VPC's own router owns its subnets even when the VPC holds an appliance.
 _GATEWAY_ORDER = ("vpc", "appliance", "switch", "wireless")
-_NOT_A_GATEWAY = ("wan", "external", "vpn_peer", "cloud", "users")
+_NOT_A_GATEWAY = ("wan", "external", "vpn_peer", "cloud", "users", "user")
 
 
 def _cidr(raw: Any) -> str:

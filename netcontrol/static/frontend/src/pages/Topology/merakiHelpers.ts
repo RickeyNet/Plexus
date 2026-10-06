@@ -39,7 +39,7 @@ type CatoToggleKey = {
 }[keyof CatoBuildOptions];
 
 export const CATO_OPTION_TOGGLES: { key: CatoToggleKey; label: string; hint: string }[] = [
-  { key: 'include_users', label: 'Remote users', hint: 'Users connected with the Cato Client when the collection runs: name, device, VPN IP, public IP and PoP. Shown as one node.' },
+  { key: 'include_users', label: 'Remote users', hint: 'Users connected with the Cato Client when the collection runs, one node each next to their PoP: name, email, device, VPN IP, public IP, ISP, location and recent connections.' },
   { key: 'include_ranges', label: 'Network ranges (subnets)', hint: 'The ranges behind every site, for search and for picking path endpoints by subnet.' },
   { key: 'inventory_enrich', label: 'Correlate with Plexus inventory', hint: 'Attach SNMP/SSH data Plexus already holds for a Socket that is also an inventory host.' },
 ];
@@ -194,6 +194,8 @@ const VIEW_TITLES: Record<Exclude<MerakiView, 'meraki'>, string[]> = {
     'OSPF areas',
     'Route tables',
     'Transit gateway routes',
+    'VPC peerings',
+    'Routes to this VPC',
     'VNet peerings',
     'ExpressRoute peerings',
   ],
