@@ -21,6 +21,13 @@ export interface MerakiBuildOptions {
 /** Integrations that feed the map through the same organization pipeline. */
 export type CloudProvider = 'meraki' | 'cato' | 'anyconnect';
 
+/** Clouds whose accounts are Cloud Visibility accounts that also feed the map. */
+export type CloudAccountProvider = 'aws' | 'azure';
+
+export function isCloudAccountProvider(type: string | null | undefined): type is CloudAccountProvider {
+  return type === 'aws' || type === 'azure';
+}
+
 export interface CatoBuildOptions {
   site_name_contains: string;
   include_users: boolean;
@@ -134,8 +141,8 @@ export interface DetailSection {
 }
 
 export interface MerakiNodeDetails {
-  /** Integration the node's snapshot came from ('aws' for Cloud Visibility's AWS discovery). */
-  provider?: CloudProvider | 'aws';
+  /** Integration the node's snapshot came from ('aws' / 'azure' for Cloud Visibility's discovery). */
+  provider?: CloudProvider | CloudAccountProvider;
   node_id: string;
   label: string;
   kind: string;
@@ -154,7 +161,7 @@ export interface MerakiNodeDetails {
 export interface MerakiSubnet {
   org_ref: number;
   /** Integration whose snapshot holds the subnet. */
-  provider?: CloudProvider | 'aws';
+  provider?: CloudProvider | CloudAccountProvider;
   cidr: string;
   name: string;
   /** vlan / lan / static (behind the appliance), svi (L3 switch), peer (non-Meraki VPN peer), range (Cato site). */
@@ -212,9 +219,9 @@ export interface ReachabilityStep {
   text: string;
 }
 
-/** What AWS routing, network ACLs and security groups do with one flow. */
-export interface AwsReachability {
-  /** False when neither address is in a collected VPC. */
+/** What the routing and filtering of a cloud (AWS or Azure) do with one flow. */
+export interface CloudReachability {
+  /** False when neither address is in a collected VPC / VNet. */
   applies: boolean;
   verdict: 'allowed' | 'blocked' | 'partial' | 'unknown';
   summary: string;
@@ -222,26 +229,42 @@ export interface AwsReachability {
   steps: ReachabilityStep[];
 }
 
-export interface AwsReachabilityQuery {
+export interface CloudReachabilityQuery {
+  /** The cloud whose routes and rules are checked. */
+  cloud: CloudAccountProvider;
   source: string;
   destination: string;
-  /** VPC of an address whose range exists in several VPCs. */
-  source_vpc?: string;
-  destination_vpc?: string;
+  /** VPC (AWS) or VNet (Azure) of an address whose range exists in several. */
+  source_network?: string;
+  destination_network?: string;
   /** tcp / udp / icmp; empty asks about any traffic. */
   protocol?: string;
   port?: number;
 }
 
-export function useAwsReachability(query: AwsReachabilityQuery | null) {
+/** The query string the server's check of ``cloud`` takes. */
+export function reachabilitySearch(query: CloudReachabilityQuery): string {
+  const network = query.cloud === 'azure' ? 'vnet' : 'vpc';
+  const values: Record<string, string | number | undefined> = {
+    source: query.source,
+    destination: query.destination,
+    [`source_${network}`]: query.source_network,
+    [`destination_${network}`]: query.destination_network,
+    protocol: query.protocol,
+    port: query.port,
+  };
   const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(query ?? {})) {
+  for (const [key, value] of Object.entries(values)) {
     if (value !== undefined && value !== '') params.set(key, String(value));
   }
-  const search = params.toString();
+  return params.toString();
+}
+
+export function useCloudReachability(query: CloudReachabilityQuery | null) {
+  const search = query ? reachabilitySearch(query) : '';
   return useQuery({
-    queryKey: ['meraki', 'aws-reachability', search],
-    queryFn: () => apiRequest<AwsReachability>(`/meraki/aws/reachability?${search}`),
+    queryKey: ['meraki', 'cloud-reachability', query?.cloud, search],
+    queryFn: () => apiRequest<CloudReachability>(`/meraki/${query?.cloud}/reachability?${search}`),
     enabled: query != null,
   });
 }
@@ -275,13 +298,13 @@ export function useMerakiOrgs() {
 }
 
 /** 'neighbors' is CDP / LLDP discovery of the inventory; the rest are integrations. */
-export type TopologySourceType = 'neighbors' | CloudProvider | 'aws';
+export type TopologySourceType = 'neighbors' | CloudProvider | CloudAccountProvider;
 
 /** One thing that feeds the topology map, with its last collection. */
 export interface TopologySource {
   key: string;
   type: TopologySourceType;
-  /** Organization id (Meraki, Cato) or Cloud Visibility account id (AWS). */
+  /** Organization id (Meraki, Cato) or Cloud Visibility account id (AWS, Azure). */
   id: number | null;
   name: string;
   status: 'never' | 'success' | 'partial' | 'failed' | string;
@@ -292,7 +315,7 @@ export interface TopologySource {
   warning_count: number;
   collecting: boolean;
   can_collect: boolean;
-  /** False for an AWS account switched off in Cloud Visibility. */
+  /** False for an AWS or Azure account switched off in Cloud Visibility. */
   enabled: boolean;
   demo: boolean;
 }
@@ -386,8 +409,8 @@ export function useStartMerakiBuild() {
 export function useBuildMerakiSample() {
   const qc = useQueryClient();
   return useMutation({
-    // 'aws' loads the demo AWS account, which lives under Cloud Visibility.
-    mutationFn: (provider: CloudProvider | 'aws') =>
+    // 'aws' / 'azure' load a demo account, which lives under Cloud Visibility.
+    mutationFn: (provider: CloudProvider | CloudAccountProvider) =>
       apiRequest<MerakiBuildResult & { org_ref: number }>(
         `/meraki/sample${provider === 'meraki' ? '' : `?provider=${provider}`}`,
         { method: 'POST' },

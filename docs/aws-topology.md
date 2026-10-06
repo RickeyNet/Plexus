@@ -13,7 +13,8 @@ validated and discovered under **Cloud Visibility**; every enabled AWS
 account that has been discovered joins the map, and the map follows each new
 discovery. Everything in [meraki-topology.md](meraki-topology.md) about the
 map, search, Path Mode and the HTML export applies; this guide covers what is
-different.
+different. Azure subscriptions join the map the same way; see
+[azure-topology.md](azure-topology.md).
 
 - Permission: the `topology` feature to view the map; admin to manage cloud
   accounts and run discovery

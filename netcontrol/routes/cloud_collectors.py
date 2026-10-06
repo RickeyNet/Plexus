@@ -15,6 +15,7 @@ import json
 from typing import Any
 
 from netcontrol.integrations.aws import collect as aws_detail
+from netcontrol.integrations.azure import collect as azure_detail
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.cloud_collectors")
@@ -194,58 +195,6 @@ def _aws_security_group_rules(group: dict, *, resource_uid: str) -> list[dict]:
                     "priority": None,
                 }
             )
-    return rules
-
-
-def _azure_selector(rule_obj, singular: str, plural: str) -> str:
-    values: list[str] = []
-    single = getattr(rule_obj, singular, None)
-    if single not in (None, ""):
-        values.append(str(single))
-    for item in getattr(rule_obj, plural, None) or []:
-        text = str(item or "").strip()
-        if text:
-            values.append(text)
-    return _join_policy_selectors(values) or "any"
-
-
-def _azure_nsg_rules(nsg) -> list[dict]:
-    rules: list[dict] = []
-    explicit = list(getattr(nsg, "security_rules", None) or [])
-    default = list(getattr(nsg, "default_security_rules", None) or [])
-    for rule_obj in explicit + default:
-        direction = str(getattr(rule_obj, "direction", "") or "").strip().lower()
-        if direction == "ingress":
-            direction = "inbound"
-        elif direction == "egress":
-            direction = "outbound"
-        action = str(getattr(rule_obj, "access", "") or "").strip().lower()
-        protocol = str(getattr(rule_obj, "protocol", "all") or "all").strip().lower()
-        if protocol == "*":
-            protocol = "all"
-        rules.append(
-            {
-                "rule_uid": str(getattr(rule_obj, "id", "") or getattr(rule_obj, "name", "") or "").strip(),
-                "rule_name": str(getattr(rule_obj, "name", "") or "").strip(),
-                "direction": direction,
-                "action": action,
-                "protocol": protocol,
-                "source_selector": _azure_selector(rule_obj, "source_address_prefix", "source_address_prefixes"),
-                "destination_selector": _azure_selector(
-                    rule_obj, "destination_address_prefix", "destination_address_prefixes"
-                ),
-                "port_expression": _join_policy_selectors(
-                    [str(getattr(rule_obj, "destination_port_range", "") or "").strip()]
-                    + [str(item or "").strip() for item in (getattr(rule_obj, "destination_port_ranges", None) or [])]
-                )
-                or "all",
-                "priority": getattr(rule_obj, "priority", None),
-                "metadata": {
-                    "is_default": rule_obj in default,
-                    "description": str(getattr(rule_obj, "description", "") or "").strip(),
-                },
-            }
-        )
     return rules
 
 
@@ -1017,55 +966,17 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
     return _dedupe_resources(resources), _dedupe_connections(connections)
 
 
-def _azure_resource_parts(resource_id: str) -> dict[str, str]:
-    parts = [p for p in str(resource_id or "").strip("/").split("/") if p]
-    out: dict[str, str] = {}
-    for idx in range(0, len(parts) - 1, 2):
-        out[parts[idx].lower()] = parts[idx + 1]
-    return out
-
-
-def _azure_rg_from_id(resource_id: str) -> str:
-    return _azure_resource_parts(resource_id).get("resourcegroups", "")
-
-
-def _azure_name_from_id(resource_id: str) -> str:
-    parts = [p for p in str(resource_id or "").strip("/").split("/") if p]
-    return parts[-1] if parts else ""
-
-
-def _azure_vnet_uid_from_resource_id(resource_id: str, subscription_id: str) -> str:
-    parts = _azure_resource_parts(resource_id)
-    rg = parts.get("resourcegroups", "")
-    vnet_name = parts.get("virtualnetworks", "")
-    if not rg or not vnet_name:
-        return ""
-    return f"azure:vnet:{subscription_id}:{rg}:{vnet_name}"
-
-
-def _azure_subnet_name_from_id(resource_id: str) -> str:
-    return _azure_resource_parts(resource_id).get("subnets", "")
-
-
-def _azure_id_to_resource_uid(resource_id: str, subscription_id: str) -> str:
-    parts = _azure_resource_parts(resource_id)
-    rg = parts.get("resourcegroups", "")
-    if parts.get("virtualnetworkgateways"):
-        return f"azure:virtual_network_gateway:{subscription_id}:{rg}:{parts['virtualnetworkgateways']}"
-    if parts.get("localnetworkgateways"):
-        return f"azure:local_network_gateway:{subscription_id}:{rg}:{parts['localnetworkgateways']}"
-    if parts.get("routetables"):
-        return f"azure:route_table:{subscription_id}:{rg}:{parts['routetables']}"
-    if parts.get("networksecuritygroups"):
-        return f"azure:nsg:{subscription_id}:{rg}:{parts['networksecuritygroups']}"
-    if parts.get("virtualnetworks"):
-        return f"azure:vnet:{subscription_id}:{rg}:{parts['virtualnetworks']}"
-    if parts.get("expressroutecircuits"):
-        return f"azure:expressroute:{subscription_id}:{rg}:{parts['expressroutecircuits']}"
-    return ""
-
-
 def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
+    """Discover one Azure subscription with the Network API.
+
+    The base sections (virtual networks and their subnets and peerings,
+    ExpressRoute circuits, virtual and local network gateways, route tables,
+    network security groups, gateway connections) fail the discovery when
+    they cannot be read. The map detail (public IP addresses, NAT gateways,
+    network interfaces, Azure Firewalls) is best-effort: a section that
+    cannot be read is skipped and recorded as a ``collection_warning``
+    resource.
+    """
     try:
         from azure.identity import ClientSecretCredential, DefaultAzureCredential
         from azure.mgmt.network import NetworkManagementClient
@@ -1090,59 +1001,45 @@ def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
     except Exception as exc:
         raise CloudCollectorAuthError("Failed to initialize Azure credentials") from exc
 
+    return _collect_azure_network(network_client, subscription_id)
+
+
+def _collect_azure_network(network_client, subscription_id: str) -> tuple[list[dict], list[dict]]:
+    """The discovery itself, on an initialised ``NetworkManagementClient``."""
     resources: list[dict] = []
     connections: list[dict] = []
-    subnet_to_vnet: dict[str, str] = {}
     section_errors: list[str] = []
+    public_ips: dict[str, str] = {}
+
+    def optional(section: str, read) -> None:
+        try:
+            read()
+        except Exception as exc:  # noqa: BLE001 - best-effort detail; discovery goes on
+            LOGGER.warning("azure collector: skipped %s: %s", section, azure_detail.error_code(exc), exc_info=True)
+            resources.append(azure_detail.warning_resource(section, exc))
+
+    def public_ip_addresses() -> None:
+        public_ips.update(azure_detail.public_ip_table(network_client.public_ip_addresses.list_all()))
+
+    # Gateways, NAT gateways, firewalls and NICs name their public IPs by ID.
+    optional("public_ip_addresses", public_ip_addresses)
 
     try:
         for vnet in network_client.virtual_networks.list_all():
-            vnet_id = str(vnet.id or "")
-            rg = _azure_rg_from_id(vnet_id)
-            name = str(vnet.name or "")
-            uid = f"azure:vnet:{subscription_id}:{rg}:{name}"
-            cidr = ""
-            if getattr(vnet, "address_space", None) and getattr(vnet.address_space, "address_prefixes", None):
-                prefixes = [str(p) for p in (vnet.address_space.address_prefixes or []) if p]
-                cidr = ",".join(prefixes)
-            region = str(vnet.location or "")
-            status = str(getattr(vnet, "provisioning_state", "") or "")
-            resources.append(
-                _normalize_resource(
-                    "azure",
-                    uid,
-                    "vnet",
-                    name=name,
-                    region=region,
-                    cidr=cidr,
-                    status=status,
-                    metadata={"resource_group": rg},
-                )
-            )
-            for subnet in getattr(vnet, "subnets", None) or []:
-                subnet_id = str(getattr(subnet, "id", "") or "").strip()
-                if subnet_id:
-                    subnet_to_vnet[subnet_id.lower()] = uid
-
+            resource = azure_detail.vnet_resource(vnet, subscription_id)
+            if not resource:
+                continue
+            resources.append(resource)
+            resources.extend(azure_detail.subnet_resources(vnet, subscription_id))
+            group = resource["metadata"].get("resource_group") or ""
+            name = resource["name"]
             # VNet peerings for hybrid graph edges.
             try:
-                if rg and name:
-                    for peering in network_client.virtual_network_peerings.list(rg, name):
-                        remote_id = str(getattr(getattr(peering, "remote_virtual_network", None), "id", "") or "")
-                        remote_rg = _azure_rg_from_id(remote_id)
-                        remote_name = _azure_name_from_id(remote_id)
-                        if not remote_name:
-                            continue
-                        target_uid = f"azure:vnet:{subscription_id}:{remote_rg}:{remote_name}"
-                        connections.append(
-                            _normalize_connection(
-                                "azure",
-                                uid,
-                                target_uid,
-                                "vnet_peering",
-                                state=str(getattr(peering, "peering_state", "") or ""),
-                            )
-                        )
+                if group and name:
+                    for peering in network_client.virtual_network_peerings.list(group, name):
+                        conn = azure_detail.peering_connection(resource["resource_uid"], peering, subscription_id)
+                        if conn:
+                            connections.append(conn)
             except Exception:
                 LOGGER.warning("azure collector: failed to list peerings for vnet=%s", name, exc_info=True)
                 section_errors.append("vnet_peerings")
@@ -1151,170 +1048,51 @@ def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
 
     try:
         for circuit in network_client.express_route_circuits.list_all():
-            circuit_id = str(circuit.id or "")
-            rg = _azure_rg_from_id(circuit_id)
-            name = str(circuit.name or "")
-            uid = f"azure:expressroute:{subscription_id}:{rg}:{name}"
-            resources.append(
-                _normalize_resource(
-                    "azure",
-                    uid,
-                    "expressroute",
-                    name=name,
-                    region=str(circuit.location or ""),
-                    status=str(getattr(circuit, "provisioning_state", "") or ""),
-                )
-            )
+            resource = azure_detail.express_route_resource(circuit, subscription_id)
+            if resource:
+                resources.append(resource)
     except Exception:
         LOGGER.warning("azure collector: failed to list expressroute circuits", exc_info=True)
         section_errors.append("expressroute_circuits")
 
     try:
         for gateway in network_client.virtual_network_gateways.list_all():
-            gateway_id = str(gateway.id or "")
-            rg = _azure_rg_from_id(gateway_id)
-            name = str(gateway.name or "")
-            uid = f"azure:virtual_network_gateway:{subscription_id}:{rg}:{name}"
-            resources.append(
-                _normalize_resource(
-                    "azure",
-                    uid,
-                    "virtual_network_gateway",
-                    name=name,
-                    region=str(gateway.location or ""),
-                    status=str(getattr(gateway, "provisioning_state", "") or ""),
-                    metadata={
-                        "resource_group": rg,
-                        "gateway_type": str(getattr(gateway, "gateway_type", "") or "").strip(),
-                        "vpn_type": str(getattr(gateway, "vpn_type", "") or "").strip(),
-                    },
-                )
-            )
-            for ip_config in getattr(gateway, "ip_configurations", None) or []:
-                subnet_id = str(getattr(getattr(ip_config, "subnet", None), "id", "") or "").strip()
-                if not subnet_id:
-                    continue
-                vnet_uid = subnet_to_vnet.get(subnet_id.lower()) or _azure_vnet_uid_from_resource_id(
-                    subnet_id, subscription_id
-                )
-                if not vnet_uid:
-                    continue
-                connections.append(
-                    _normalize_connection(
-                        "azure",
-                        vnet_uid,
-                        uid,
-                        "virtual_network_gateway_attachment",
-                        state=str(getattr(gateway, "provisioning_state", "") or "attached"),
-                        metadata={"subnet_name": _azure_subnet_name_from_id(subnet_id)},
-                    )
-                )
-                break
+            resource = azure_detail.virtual_network_gateway_resource(gateway, subscription_id, public_ips)
+            if not resource:
+                continue
+            resources.append(resource)
+            attachment = azure_detail.gateway_attachment(resource)
+            if attachment:
+                connections.append(attachment)
     except Exception:
         LOGGER.warning("azure collector: failed to list virtual network gateways", exc_info=True)
         section_errors.append("virtual_network_gateways")
 
     try:
         for gateway in network_client.local_network_gateways.list_all():
-            gateway_id = str(gateway.id or "")
-            rg = _azure_rg_from_id(gateway_id)
-            name = str(gateway.name or "")
-            uid = f"azure:local_network_gateway:{subscription_id}:{rg}:{name}"
-            prefixes = []
-            address_space = getattr(gateway, "local_network_address_space", None)
-            if address_space and getattr(address_space, "address_prefixes", None):
-                prefixes = [str(item) for item in (address_space.address_prefixes or []) if item]
-            resources.append(
-                _normalize_resource(
-                    "azure",
-                    uid,
-                    "local_network_gateway",
-                    name=name,
-                    region=str(gateway.location or ""),
-                    cidr=",".join(prefixes),
-                    status=str(getattr(gateway, "provisioning_state", "") or ""),
-                    metadata={
-                        "resource_group": rg,
-                        "gateway_ip_address": str(getattr(gateway, "gateway_ip_address", "") or "").strip(),
-                    },
-                )
-            )
+            resource = azure_detail.local_network_gateway_resource(gateway, subscription_id)
+            if resource:
+                resources.append(resource)
     except Exception:
         LOGGER.warning("azure collector: failed to list local network gateways", exc_info=True)
         section_errors.append("local_network_gateways")
 
     try:
         for route_table in network_client.route_tables.list_all():
-            route_table_id = str(route_table.id or "")
-            rg = _azure_rg_from_id(route_table_id)
-            name = str(route_table.name or "")
-            uid = f"azure:route_table:{subscription_id}:{rg}:{name}"
-            routes = list(getattr(route_table, "routes", None) or [])
-            resources.append(
-                _normalize_resource(
-                    "azure",
-                    uid,
-                    "route_table",
-                    name=name,
-                    region=str(route_table.location or ""),
-                    status=str(getattr(route_table, "provisioning_state", "") or "active"),
-                    metadata={
-                        "resource_group": rg,
-                        "route_count": len(routes),
-                        "route_summaries": [
-                            {
-                                "name": str(getattr(route, "name", "") or "").strip(),
-                                "prefix": str(getattr(route, "address_prefix", "") or "").strip(),
-                                "next_hop_type": str(getattr(route, "next_hop_type", "") or "").strip(),
-                            }
-                            for route in routes[:20]
-                        ],
-                    },
-                )
-            )
-            for subnet in getattr(route_table, "subnets", None) or []:
-                subnet_id = str(getattr(subnet, "id", "") or "").strip()
-                if not subnet_id:
-                    continue
-                vnet_uid = subnet_to_vnet.get(subnet_id.lower()) or _azure_vnet_uid_from_resource_id(
-                    subnet_id, subscription_id
-                )
-                if not vnet_uid:
-                    continue
-                connections.append(
-                    _normalize_connection(
-                        "azure",
-                        vnet_uid,
-                        uid,
-                        "route_table_association",
-                        state="attached",
-                        metadata={"subnet_name": _azure_subnet_name_from_id(subnet_id)},
-                    )
-                )
+            resource = azure_detail.route_table_resource(route_table, subscription_id)
+            if not resource:
+                continue
+            resources.append(resource)
+            connections.extend(azure_detail.route_table_associations(resource))
     except Exception:
         LOGGER.warning("azure collector: failed to list route tables", exc_info=True)
         section_errors.append("route_tables")
 
     try:
         for nsg in network_client.network_security_groups.list_all():
-            nsg_id = str(nsg.id or "")
-            rg = _azure_rg_from_id(nsg_id)
-            name = str(nsg.name or "")
-            uid = f"azure:nsg:{subscription_id}:{rg}:{name}"
-            resources.append(
-                _normalize_resource(
-                    "azure",
-                    uid,
-                    "network_security_group",
-                    name=name,
-                    region=str(nsg.location or ""),
-                    status=str(getattr(nsg, "provisioning_state", "") or "active"),
-                    metadata={
-                        "resource_group": rg,
-                        "policy_rules": _azure_nsg_rules(nsg),
-                    },
-                )
-            )
+            resource = azure_detail.nsg_resource(nsg, subscription_id)
+            if resource:
+                resources.append(resource)
     except Exception:
         LOGGER.warning("azure collector: failed to list nsgs", exc_info=True)
         section_errors.append("network_security_groups")
@@ -1323,32 +1101,33 @@ def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
         gateway_connections = getattr(network_client, "virtual_network_gateway_connections", None)
         if gateway_connections is not None:
             for conn in gateway_connections.list_all():
-                source_uid = _azure_id_to_resource_uid(
-                    str(getattr(getattr(conn, "virtual_network_gateway1", None), "id", "") or ""),
-                    subscription_id,
-                )
-                target_uid = _azure_id_to_resource_uid(
-                    str(getattr(getattr(conn, "virtual_network_gateway2", None), "id", "") or "")
-                    or str(getattr(getattr(conn, "local_network_gateway2", None), "id", "") or ""),
-                    subscription_id,
-                )
-                if not source_uid or not target_uid:
-                    continue
-                connections.append(
-                    _normalize_connection(
-                        "azure",
-                        source_uid,
-                        target_uid,
-                        str(getattr(conn, "connection_type", "gateway_connection") or "gateway_connection")
-                        .strip()
-                        .lower(),
-                        state=str(getattr(conn, "provisioning_state", "") or ""),
-                        metadata={"connection_status": str(getattr(conn, "connection_status", "") or "").strip()},
-                    )
-                )
+                record = azure_detail.gateway_connection(conn, subscription_id)
+                if record:
+                    connections.append(record)
     except Exception:
         LOGGER.warning("azure collector: failed to list gateway connections", exc_info=True)
         section_errors.append("gateway_connections")
+
+    def nat_gateways() -> None:
+        for gateway in network_client.nat_gateways.list_all():
+            resource = azure_detail.nat_gateway_resource(gateway, subscription_id, public_ips)
+            if resource:
+                resources.append(resource)
+                connections.extend(azure_detail.nat_gateway_attachments(resource))
+
+    def virtual_machines() -> None:
+        nics = list(network_client.network_interfaces.list_all())
+        resources.extend(azure_detail.vm_resources(nics, subscription_id, public_ips))
+
+    def firewalls() -> None:
+        for firewall in network_client.azure_firewalls.list_all():
+            resource = azure_detail.firewall_resource(firewall, subscription_id, public_ips)
+            if resource:
+                resources.append(resource)
+
+    optional("nat_gateways", nat_gateways)
+    optional("network_interfaces", virtual_machines)
+    optional("azure_firewalls", firewalls)
 
     # A partial snapshot must not silently replace the last known-good one; the
     # discover endpoint keeps the previous snapshot and surfaces this message on failure.

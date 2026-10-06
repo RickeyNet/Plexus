@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from netcontrol.integrations.aws.sample import build_sample as build_aws_sample
+from netcontrol.integrations.azure.sample import build_sample as build_azure_sample
 from netcontrol.routes.cloud_collectors import (
     CloudCollectorAuthError,
     CloudCollectorError,
@@ -1012,127 +1013,8 @@ def _sample_snapshot_for_provider(provider: str) -> tuple[list[dict], list[dict]
         return build_aws_sample()
 
     if provider == "azure":
-        resources = [
-            {
-                "resource_uid": "azure:vnet:core",
-                "resource_type": "vnet",
-                "name": "corp-core-vnet",
-                "region": "centralus",
-                "cidr": "10.210.0.0/16",
-                "status": "connected",
-            },
-            {
-                "resource_uid": "azure:vnet:shared",
-                "resource_type": "vnet",
-                "name": "shared-services-vnet",
-                "region": "centralus",
-                "cidr": "10.211.0.0/16",
-                "status": "connected",
-            },
-            {
-                "resource_uid": "azure:er:primary",
-                "resource_type": "expressroute",
-                "name": "er-primary",
-                "region": "centralus",
-                "status": "provisioned",
-            },
-            {
-                "resource_uid": "azure:virtual_network_gateway:core",
-                "resource_type": "virtual_network_gateway",
-                "name": "vgw-core",
-                "region": "centralus",
-                "status": "active",
-                "metadata": {"gateway_type": "Vpn"},
-            },
-            {
-                "resource_uid": "azure:local_network_gateway:hq",
-                "resource_type": "local_network_gateway",
-                "name": "lng-hq",
-                "region": "centralus",
-                "status": "active",
-            },
-            {
-                "resource_uid": "azure:route_table:core",
-                "resource_type": "route_table",
-                "name": "rt-core",
-                "region": "centralus",
-                "status": "active",
-                "metadata": {"route_count": 2},
-            },
-            {
-                "resource_uid": "azure:nsg:edge",
-                "resource_type": "network_security_group",
-                "name": "nsg-edge",
-                "region": "centralus",
-                "status": "active",
-                "metadata": {
-                    "policy_rules": [
-                        {
-                            "rule_uid": "azure:nsg:edge:allow-web",
-                            "rule_name": "AllowWeb",
-                            "direction": "inbound",
-                            "action": "allow",
-                            "protocol": "tcp",
-                            "source_selector": "10.0.0.0/8",
-                            "destination_selector": "10.210.10.0/24",
-                            "port_expression": "80,443",
-                            "priority": 100,
-                        },
-                        {
-                            "rule_uid": "azure:nsg:edge:deny-internet",
-                            "rule_name": "DenyInternet",
-                            "direction": "outbound",
-                            "action": "deny",
-                            "protocol": "all",
-                            "source_selector": "10.210.10.0/24",
-                            "destination_selector": "Internet",
-                            "port_expression": "all",
-                            "priority": 4096,
-                        },
-                    ],
-                },
-            },
-        ]
-        connections = [
-            {
-                "source_resource_uid": "azure:vnet:core",
-                "target_resource_uid": "azure:vnet:shared",
-                "connection_type": "vnet_peering",
-                "state": "connected",
-            },
-            {
-                "source_resource_uid": "azure:vnet:core",
-                "target_resource_uid": "azure:er:primary",
-                "connection_type": "expressroute_gateway",
-                "state": "up",
-            },
-            {
-                "source_resource_uid": "azure:vnet:core",
-                "target_resource_uid": "azure:virtual_network_gateway:core",
-                "connection_type": "virtual_network_gateway_attachment",
-                "state": "attached",
-            },
-            {
-                "source_resource_uid": "azure:virtual_network_gateway:core",
-                "target_resource_uid": "azure:local_network_gateway:hq",
-                "connection_type": "ipsec",
-                "state": "connected",
-            },
-            {
-                "source_resource_uid": "azure:vnet:core",
-                "target_resource_uid": "azure:route_table:core",
-                "connection_type": "route_table_association",
-                "state": "attached",
-                "metadata": {"subnet_name": "GatewaySubnet"},
-            },
-            {
-                "source_resource_uid": "azure:vnet:core",
-                "target_resource_uid": "azure:nsg:edge",
-                "connection_type": "security_boundary",
-                "state": "enforced",
-            },
-        ]
-        return resources, connections
+        # Shared with the Topology map as well.
+        return build_azure_sample()
 
     resources = [
         {

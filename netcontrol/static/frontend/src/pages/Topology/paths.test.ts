@@ -10,7 +10,7 @@ import {
   isAddressText,
   parseTraffic,
   pathSites,
-  reachabilityQuery,
+  reachabilityQueries,
   subnetOptionLabel,
   type PathPick,
 } from './paths';
@@ -215,13 +215,13 @@ describe('path mode with AWS', () => {
   });
 });
 
-describe('the AWS check of a path', () => {
-  const subnet = (cidr: string, provider: 'aws' | 'meraki', site: string): MerakiSubnet => ({
-    org_ref: provider === 'aws' ? -1 : 1,
+describe('the cloud check of a path', () => {
+  const subnet = (cidr: string, provider: 'aws' | 'azure' | 'meraki', site: string): MerakiSubnet => ({
+    org_ref: provider === 'aws' ? -1 : provider === 'azure' ? -2 : 1,
     provider,
     cidr,
     name: cidr,
-    kind: provider === 'aws' ? 'subnet' : 'vlan',
+    kind: provider === 'meraki' ? 'vlan' : 'subnet',
     site_id: site,
     site_name: site,
     node_id: site,
@@ -241,21 +241,34 @@ describe('the AWS check of a path', () => {
     expect(parseTraffic('https')).toBeNull();
   });
 
-  it('asks only for legs between addresses with an end in AWS', () => {
+  it('asks only for legs between addresses with an end in a cloud', () => {
     const app = subnet('10.200.10.0/24', 'aws', 'vpc-core');
     const branch = subnet('10.10.5.0/24', 'meraki', 'N_1');
     const tcp = { protocol: 'tcp', port: 443 };
     // The typed address is sent, and the VPC of an AWS end with it.
-    expect(reachabilityQuery(pick(app, '10.200.10.21'), pick(branch), tcp)).toEqual({
-      source: '10.200.10.21',
-      destination: '10.10.5.0/24',
-      source_vpc: 'vpc-core',
-      destination_vpc: undefined,
-      protocol: 'tcp',
-      port: 443,
-    });
-    expect(reachabilityQuery(pick(branch), pick(branch), tcp)).toBeNull();
+    expect(reachabilityQueries(pick(app, '10.200.10.21'), pick(branch), tcp)).toEqual([
+      {
+        cloud: 'aws',
+        source: '10.200.10.21',
+        destination: '10.10.5.0/24',
+        source_network: 'vpc-core',
+        destination_network: undefined,
+        protocol: 'tcp',
+        port: 443,
+      },
+    ]);
+    expect(reachabilityQueries(pick(branch), pick(branch), tcp)).toEqual([]);
     // A device or site pick has no address to check.
-    expect(reachabilityQuery(pick(app), { key: 'n:1', node: 'mx', label: 'mx' }, tcp)).toBeNull();
+    expect(reachabilityQueries(pick(app), { key: 'n:1', node: 'mx', label: 'mx' }, tcp)).toEqual([]);
+  });
+
+  it('asks each cloud that holds an end', () => {
+    const app = subnet('10.200.10.0/24', 'aws', 'vpc-core');
+    const prod = subnet('10.231.10.0/24', 'azure', 'sub:rg-prod:prod-vnet');
+    const checks = reachabilityQueries(pick(prod), pick(app), { protocol: '' });
+    expect(checks.map((q) => [q.cloud, q.source_network, q.destination_network])).toEqual([
+      ['azure', 'sub:rg-prod:prod-vnet', undefined],
+      ['aws', undefined, 'vpc-core'],
+    ]);
   });
 });

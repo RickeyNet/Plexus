@@ -154,6 +154,7 @@ export function isManagedNode(node: TopologyNode): boolean {
 /** Display name of the integration a snapshot node came from. */
 export function providerLabel(provider?: string | null): string {
   if (provider === 'aws') return 'AWS';
+  if (provider === 'azure') return 'Azure';
   if (provider === 'anyconnect') return 'AnyConnect';
   return provider === 'cato' ? 'Cato' : 'Meraki';
 }
@@ -171,6 +172,7 @@ export const DETAIL_CELL_STYLE = {
 /** Where the integration's data is read from. */
 export function providerSourceName(provider?: string | null): string {
   if (provider === 'aws') return 'AWS API';
+  if (provider === 'azure') return 'Azure API';
   if (provider === 'anyconnect') return 'FMC API';
   return provider === 'cato' ? 'Cato API' : 'Meraki Dashboard';
 }
@@ -178,6 +180,7 @@ export function providerSourceName(provider?: string | null): string {
 /** What one entry of the integration is called. */
 export function providerScopeName(provider?: string | null): string {
   if (provider === 'aws') return 'AWS account';
+  if (provider === 'azure') return 'Azure subscription';
   if (provider === 'anyconnect') return 'Cisco FMC';
   return provider === 'cato' ? 'Cato account' : 'Meraki organization';
 }

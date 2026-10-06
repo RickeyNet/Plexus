@@ -4,7 +4,7 @@ The Topology page has one graph. This module is the seam between the two
 data models:
 
   ``merge_meraki_into_graph``  - adds Meraki devices, WAN uplinks, VPN peers and
-      their links (and the Cato and AWS snapshots, which share the format) to
+      their links (and the Cato, AWS and Azure snapshots, which share the format) to
       the node/edge graph served by ``/api/topology``. A Meraki
       device or LLDP/CDP neighbor that is also a Plexus inventory host
       collapses into that host's node, which is what stitches a Meraki site
@@ -83,7 +83,13 @@ _VIEWER_KIND = {
 }
 
 EXTERNAL_SITE_ID = "__external__"
-_SOURCE_NAME = {"meraki": "Meraki Dashboard", "cato": "Cato API", "aws": "AWS API", "anyconnect": "FMC API"}
+_SOURCE_NAME = {
+    "meraki": "Meraki Dashboard",
+    "cato": "Cato API",
+    "aws": "AWS API",
+    "azure": "Azure API",
+    "anyconnect": "FMC API",
+}
 
 
 def meraki_graph_id(org_ref: int, node_id: str) -> str:
@@ -133,7 +139,7 @@ def _uplink_address(wan: dict) -> str:
 
 
 def _is_virtual_model(model: Any) -> bool:
-    """A virtual appliance (Meraki vMX, FTDv, "Threat Defense for AWS")."""
+    """A virtual appliance (Meraki vMX, FTDv, "Threat Defense for AWS" or for Azure)."""
     lowered = str(model or "").lower()
     return lowered.startswith("vmx") or any(t in lowered for t in ("ftdv", "threat defense for", "virtual"))
 

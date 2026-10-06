@@ -11,8 +11,9 @@ what feeds and surrounds that merge:
     organization (``provider`` "cato") and produce the same snapshot format
   - Cisco FMCs for AnyConnect remote access VPN, stored and collected the
     same way (``provider`` "anyconnect")
-  - AWS: the accounts Cloud Visibility discovers are turned into one more
-    snapshot (``provider`` "aws") whenever their discovery changes
+  - AWS and Azure: the accounts Cloud Visibility discovers are turned into
+    one more snapshot per cloud (``provider`` "aws" / "azure") whenever their
+    discovery changes
   - On-demand collection builds as background jobs with pollable progress
   - Stored snapshots: list / fetch JSON / delete, and an in-memory cache of
     the latest one per organization
@@ -53,6 +54,9 @@ from netcontrol.integrations.anyconnect.sample import build_sample_raw as build_
 from netcontrol.integrations.aws.normalize import build_snapshot as build_aws_snapshot
 from netcontrol.integrations.aws.reachability import Reachability
 from netcontrol.integrations.aws.sample import build_sample as build_aws_sample
+from netcontrol.integrations.azure.normalize import build_snapshot as build_azure_snapshot
+from netcontrol.integrations.azure.reachability import Reachability as AzureReachability
+from netcontrol.integrations.azure.sample import build_sample as build_azure_sample
 from netcontrol.integrations.cato.client import (
     DEFAULT_BASE_URL as CATO_BASE_URL,
     CatoApiError,
@@ -102,7 +106,8 @@ SAMPLE_ORG_NAME = "Sample Organization (demo data)"
 SAMPLE_CATO_NAME = "Sample Cato Account (demo data)"
 SAMPLE_ANYCONNECT_NAME = "Sample AnyConnect FMC (demo data)"
 SAMPLE_AWS_NAME = "Sample AWS Account (demo data)"
-# Marks the demo AWS account, which scheduled discovery leaves alone.
+SAMPLE_AZURE_NAME = "Sample Azure Subscription (demo data)"
+# Marks the demo AWS and Azure accounts, which scheduled discovery leaves alone.
 SAMPLE_AWS_AUTH_TYPE = "sample"
 # The demo FMC address: a documentation range, never contacted.
 SAMPLE_FMC_URL = "https://10.210.2.20"
@@ -113,8 +118,9 @@ PROVIDER_CATO = "cato"
 PROVIDER_ANYCONNECT = "anyconnect"
 PROVIDERS = (PROVIDER_MERAKI, PROVIDER_CATO, PROVIDER_ANYCONNECT)
 SAMPLE_ORG_NAMES = (SAMPLE_ORG_NAME, SAMPLE_CATO_NAME, SAMPLE_ANYCONNECT_NAME)
-# Not an organization provider: AWS accounts are Cloud Visibility accounts.
+# Not organization providers: AWS and Azure accounts are Cloud Visibility accounts.
 PROVIDER_AWS = "aws"
+PROVIDER_AZURE = "azure"
 
 _require_admin = None
 
@@ -128,45 +134,93 @@ _running_builds: dict[int, str] = {}
 # are dropped when a newer build replaces them.
 _SNAPSHOT_CACHE: dict[int, dict[str, Any]] = {}
 
-# AWS accounts belong to Cloud Visibility, not to ``meraki_orgs``. What they
-# discovered is built into one snapshot for all of them and referenced by an
-# ``org_ref`` (and cache key) no organization or stored snapshot can have.
+# AWS and Azure accounts belong to Cloud Visibility, not to ``meraki_orgs``.
+# What the accounts of one cloud discovered is built into one snapshot for all
+# of them and referenced by an ``org_ref`` (and cache key) no organization or
+# stored snapshot can have.
 AWS_ORG_REF = -1
+AZURE_ORG_REF = -2
 _AWS_ACCOUNT_FIELDS = ("id", "name", "account_identifier", "last_sync_at", "last_sync_status", "last_sync_message")
 
 
-async def _aws_entry() -> dict[str, Any] | None:
-    """The snapshot of every enabled AWS account that has been discovered,
-    rebuilt when a discovery, or the set of accounts, changes."""
+class _Cloud:
+    """How the accounts of one cloud of Cloud Visibility reach the map."""
+
+    def __init__(
+        self, provider: str, org_ref: int, label: str, build, reachability, sample, sample_name: str, sample_scope: str
+    ):
+        self.provider = provider
+        self.org_ref = org_ref
+        self.label = label
+        self.build = build
+        self.reachability = reachability
+        self.sample = sample
+        self.sample_name = sample_name
+        self.sample_scope = sample_scope
+
+
+# Merged in this order, after every organization: their gateways and
+# appliances are matched against what the other snapshots already put on the map.
+CLOUDS = (
+    _Cloud(
+        PROVIDER_AWS,
+        AWS_ORG_REF,
+        "AWS",
+        build_aws_snapshot,
+        Reachability,
+        build_aws_sample,
+        SAMPLE_AWS_NAME,
+        "us-east-1,us-west-2",
+    ),
+    _Cloud(
+        PROVIDER_AZURE,
+        AZURE_ORG_REF,
+        "Azure",
+        build_azure_snapshot,
+        AzureReachability,
+        build_azure_sample,
+        SAMPLE_AZURE_NAME,
+        "",
+    ),
+)
+_CLOUD_BY_PROVIDER = {cloud.provider: cloud for cloud in CLOUDS}
+_CLOUD_ORG_REFS = {cloud.org_ref for cloud in CLOUDS}
+
+
+async def _cloud_entry(cloud: _Cloud) -> dict[str, Any] | None:
+    """The snapshot of every enabled account of ``cloud`` that has been
+    discovered, rebuilt when a discovery, or the set of accounts, changes."""
     accounts = [
         {key: account.get(key) for key in (*_AWS_ACCOUNT_FIELDS, "resource_count", "connection_count")}
-        for account in await db.list_cloud_accounts(provider="aws", enabled_only=True)
+        for account in await db.list_cloud_accounts(provider=cloud.provider, enabled_only=True)
         if account.get("resource_count")
     ]
     if not accounts:
         return None
     signature = tuple(tuple(account.values()) for account in accounts)
-    entry = _SNAPSHOT_CACHE.get(AWS_ORG_REF)
+    entry = _SNAPSHOT_CACHE.get(cloud.org_ref)
     if entry is None or entry.get("signature") != signature:
         wanted = {account["id"] for account in accounts}
-        resources = [r for r in await db.get_cloud_resources(provider="aws") if r.get("account_id") in wanted]
-        connections = [c for c in await db.get_cloud_connections(provider="aws") if c.get("account_id") in wanted]
+        resources = [r for r in await db.get_cloud_resources(provider=cloud.provider) if r.get("account_id") in wanted]
+        connections = [
+            c for c in await db.get_cloud_connections(provider=cloud.provider) if c.get("account_id") in wanted
+        ]
         inventory = await load_inventory_index()
         # Layout of a large account is CPU-bound; keep it off the event loop.
-        snapshot = await asyncio.to_thread(build_aws_snapshot, accounts, resources, connections, inventory)
-        entry = _SNAPSHOT_CACHE[AWS_ORG_REF] = {
+        snapshot = await asyncio.to_thread(cloud.build, accounts, resources, connections, inventory)
+        entry = _SNAPSHOT_CACHE[cloud.org_ref] = {
             "snapshot": snapshot,
             "index": None,
             "signature": signature,
-            # Route tables, ACLs and security groups, for the Path Mode check.
-            "reachability": Reachability(resources, connections),
+            # Routes and filtering rules, for the Path Mode check.
+            "reachability": cloud.reachability(resources, connections),
         }
     return entry
 
 
 async def _latest_entries() -> list[tuple[int, dict[str, Any]]]:
     latest = await db.get_latest_meraki_snapshot_ids()
-    wanted = {snapshot_id for _org_ref, snapshot_id in latest} | {AWS_ORG_REF}
+    wanted = {snapshot_id for _org_ref, snapshot_id in latest} | _CLOUD_ORG_REFS
     for stale in set(_SNAPSHOT_CACHE) - wanted:
         _SNAPSHOT_CACHE.pop(stale, None)
     entries: list[tuple[int, dict[str, Any]]] = []
@@ -178,18 +232,19 @@ async def _latest_entries() -> list[tuple[int, dict[str, Any]]]:
                 continue
             entry = _SNAPSHOT_CACHE[snapshot_id] = {"snapshot": row["snapshot"], "index": None}
         entries.append((org_ref, entry))
-    # AWS goes last: its customer gateways and appliances are matched against
+    # The clouds go last: their VPN peers and appliances are matched against
     # what the other snapshots already put on the map. Best-effort, like the
     # merge itself: a problem with cloud data must not hide the rest.
-    try:
-        aws = await _aws_entry()
-    except Exception as exc:  # noqa: BLE001
-        aws = None
-        LOGGER.warning("aws: topology snapshot skipped: %s", type(exc).__name__, exc_info=True)
-    if aws is None:
-        _SNAPSHOT_CACHE.pop(AWS_ORG_REF, None)
-    else:
-        entries.append((AWS_ORG_REF, aws))
+    for cloud in CLOUDS:
+        try:
+            found = await _cloud_entry(cloud)
+        except Exception as exc:  # noqa: BLE001
+            found = None
+            LOGGER.warning("%s: topology snapshot skipped: %s", cloud.provider, type(exc).__name__, exc_info=True)
+        if found is None:
+            _SNAPSHOT_CACHE.pop(cloud.org_ref, None)
+        else:
+            entries.append((cloud.org_ref, found))
     return entries
 
 
@@ -209,11 +264,12 @@ async def ipam_subnets() -> list[dict[str, Any]]:
     """The subnets of the latest snapshot of every organization and account,
     for the IPAM overview: the ``subnet_index`` rows (Meraki VLANs, single
     LANs, SVIs and static routes, Cato network ranges, AnyConnect address
-    pools) with their organization and provider. AWS is left out: its VPCs
-    and subnets reach IPAM as Cloud Visibility resources already."""
+    pools) with their organization and provider. AWS and Azure are left
+    out: their networks and subnets reach IPAM as Cloud Visibility resources
+    already."""
     rows: list[dict[str, Any]] = []
     for org_ref, entry in await _latest_entries():
-        if org_ref == AWS_ORG_REF:
+        if org_ref in _CLOUD_ORG_REFS:
             continue
         snapshot = entry["snapshot"]
         org = snapshot.get("org") or {}
@@ -734,30 +790,31 @@ async def _build_anyconnect_sample(user: str) -> dict:
     return {"ok": True, "org_ref": org["id"], **result}
 
 
-async def _build_aws_sample(user: str) -> dict:
-    """Discover the demo AWS account. It is a Cloud Visibility account like
-    any other AWS account (and is deleted there); only its data is bundled."""
+async def _build_cloud_sample(cloud: _Cloud, user: str) -> dict:
+    """Discover the demo account of an AWS or Azure cloud. It is a Cloud
+    Visibility account like any other (and is deleted there); only its data
+    is bundled."""
     started = time.monotonic()
-    accounts = await db.list_cloud_accounts(provider=PROVIDER_AWS)
+    accounts = await db.list_cloud_accounts(provider=cloud.provider)
     # Only ever the demo account: a real account that happens to share the
     # name keeps its discovery.
     account = next(
-        (a for a in accounts if a.get("name") == SAMPLE_AWS_NAME and a.get("auth_type") == SAMPLE_AWS_AUTH_TYPE),
+        (a for a in accounts if a.get("name") == cloud.sample_name and a.get("auth_type") == SAMPLE_AWS_AUTH_TYPE),
         None,
     )
     if not account:
         account = await db.create_cloud_account(
-            provider=PROVIDER_AWS,
-            name=SAMPLE_AWS_NAME,
+            provider=cloud.provider,
+            name=cloud.sample_name,
             account_identifier="sample",
-            region_scope="us-east-1,us-west-2",
+            region_scope=cloud.sample_scope,
             auth_type=SAMPLE_AWS_AUTH_TYPE,
             notes="Demo data for the Topology map. Delete this account when you are done.",
             created_by=user,
         )
     if not account:
         raise HTTPException(status_code=500, detail="Could not create the sample account")
-    resources, connections = build_aws_sample()
+    resources, connections = cloud.sample()
     await db.replace_cloud_discovery_snapshot(
         account["id"],
         resources=resources,
@@ -766,10 +823,10 @@ async def _build_aws_sample(user: str) -> dict:
         sync_message="Sample discovery snapshot refreshed",
     )
     _topology_changed()
-    entry = await _aws_entry()
+    entry = await _cloud_entry(cloud)
     return {
         "ok": True,
-        "org_ref": AWS_ORG_REF,
+        "org_ref": cloud.org_ref,
         "snapshot_id": None,
         "summary": (entry["snapshot"].get("summary") if entry else None) or {},
         "warning_count": 0,
@@ -782,14 +839,15 @@ async def build_sample_topology_api(request: Request, provider: str = Query(defa
     """Build a snapshot from bundled demo data (no API key needed).
     ``provider=cato`` builds the demo Cato account instead of the Meraki one,
     ``provider=anyconnect`` the demo FMC with its AnyConnect headends,
-    ``provider=aws`` the demo AWS account in Cloud Visibility."""
+    ``provider=aws`` / ``provider=azure`` the demo AWS account / Azure
+    subscription in Cloud Visibility."""
     user = _session_user(request)
     if provider == PROVIDER_CATO:
         return await _build_cato_sample(user)
     if provider == PROVIDER_ANYCONNECT:
         return await _build_anyconnect_sample(user)
-    if provider == PROVIDER_AWS:
-        return await _build_aws_sample(user)
+    if provider in _CLOUD_BY_PROVIDER:
+        return await _build_cloud_sample(_CLOUD_BY_PROVIDER[provider], user)
     started = time.monotonic()
     org = await db.get_meraki_org_by_name(SAMPLE_ORG_NAME)
     if not org:
@@ -926,13 +984,15 @@ def _org_source(org: dict, newest: dict | None) -> dict[str, Any]:
     )
 
 
-def _aws_source(account: dict) -> dict[str, Any]:
+def _cloud_source(account: dict) -> dict[str, Any]:
+    """A Cloud Visibility account (AWS or Azure) as a source of the map."""
+    provider = str(account.get("provider") or PROVIDER_AWS)
     status = str(account.get("last_sync_status") or "never")
     demo = account.get("auth_type") == SAMPLE_AWS_AUTH_TYPE
     resources = int(account.get("resource_count") or 0)
     return _source(
-        f"aws:{account['id']}",
-        PROVIDER_AWS,
+        f"{provider}:{account['id']}",
+        provider,
         str(account.get("name") or ""),
         id=account["id"],
         status="failed" if status == "error" else status,
@@ -950,14 +1010,18 @@ def _aws_source(account: dict) -> dict[str, Any]:
 async def list_topology_sources_api():
     """Everything that feeds the topology map, with its last collection:
     neighbor discovery of the inventory, Meraki organizations, Cato accounts,
-    AnyConnect FMCs and the AWS accounts of Cloud Visibility. Credentials are
+    AnyConnect FMCs and the AWS and Azure accounts of Cloud Visibility. Credentials are
     never included."""
     newest: dict[int, dict] = {}
     for snapshot in await db.list_meraki_snapshots(limit=500):
         newest.setdefault(snapshot["org_ref"], snapshot)  # newest first
     sources = [_neighbor_source(await db.get_topology_link_stats())]
     sources.extend(_org_source(org, newest.get(org["id"])) for org in await db.list_meraki_orgs())
-    sources.extend(_aws_source(account) for account in await db.list_cloud_accounts(provider=PROVIDER_AWS))
+    for cloud in CLOUDS:
+        sources.extend(
+            _cloud_source({"provider": cloud.provider, **account})
+            for account in await db.list_cloud_accounts(provider=cloud.provider)
+        )
     return {"sources": sources}
 
 
@@ -987,6 +1051,50 @@ async def list_meraki_subnets_api():
     return {"subnets": subnets}
 
 
+async def _cloud_reachability(
+    cloud: _Cloud,
+    source: str,
+    destination: str,
+    source_network: str,
+    destination_network: str,
+    protocol: str,
+    port: int | None,
+) -> dict:
+    entries = dict(await _latest_entries())
+    entry = entries.get(cloud.org_ref)
+    if entry is None:
+        return {
+            "applies": False,
+            "verdict": "unknown",
+            "summary": f"No {cloud.label} account has been discovered.",
+            "steps": [],
+        }
+    # Instances that are an appliance of a Meraki organization on the map.
+    carriers: dict[str, VpnCarrier] = {}
+    pairs = virtual_appliance_pairs([(ref, item["snapshot"]) for ref, item in entries.items()])
+    for (cloud_ref, instance), (org_ref, node_id) in pairs.items():
+        device = entries[org_ref]
+        if cloud_ref != cloud.org_ref or str(device["snapshot"].get("provider") or PROVIDER_MERAKI) != PROVIDER_MERAKI:
+            continue
+        if device.get("subnets") is None:
+            device["subnets"] = await asyncio.to_thread(subnet_index, device["snapshot"])
+        # An AWS instance node is ``i:<instance id>``, an Azure VM ``vm:<id>``.
+        key = instance.split(":", 1)[1] if ":" in instance else instance
+        carriers[key] = VpnCarrier(device["snapshot"], node_id, device["subnets"])
+    try:
+        return entry["reachability"].check(
+            source,
+            destination,
+            source_vpc=source_network,
+            destination_vpc=destination_network,
+            protocol=protocol,
+            port=port,
+            carriers=carriers,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/api/meraki/aws/reachability")
 async def aws_reachability_api(
     source: str = Query(min_length=1, max_length=64),
@@ -1002,33 +1110,30 @@ async def aws_reachability_api(
     groups of the latest discovery. ``*_vpc`` names the VPC of an address
     whose range exists in several. A route to an instance that is a Meraki
     vMX is followed on through that appliance's VPN."""
-    entries = dict(await _latest_entries())
-    entry = entries.get(AWS_ORG_REF)
-    if entry is None:
-        return {"applies": False, "verdict": "unknown", "summary": "No AWS account has been discovered.", "steps": []}
-    # Instances that are an appliance of a Meraki organization on the map.
-    carriers: dict[str, VpnCarrier] = {}
-    pairs = virtual_appliance_pairs([(ref, item["snapshot"]) for ref, item in entries.items()])
-    for (cloud_ref, instance), (org_ref, node_id) in pairs.items():
-        device = entries[org_ref]
-        if cloud_ref != AWS_ORG_REF or str(device["snapshot"].get("provider") or PROVIDER_MERAKI) != PROVIDER_MERAKI:
-            continue
-        if device.get("subnets") is None:
-            device["subnets"] = await asyncio.to_thread(subnet_index, device["snapshot"])
-        # An AWS instance node is ``i:<instance id>``.
-        carriers[instance.removeprefix("i:")] = VpnCarrier(device["snapshot"], node_id, device["subnets"])
-    try:
-        return entry["reachability"].check(
-            source,
-            destination,
-            source_vpc=source_vpc,
-            destination_vpc=destination_vpc,
-            protocol=protocol,
-            port=port,
-            carriers=carriers,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return await _cloud_reachability(
+        _CLOUD_BY_PROVIDER[PROVIDER_AWS], source, destination, source_vpc, destination_vpc, protocol, port
+    )
+
+
+@router.get("/api/meraki/azure/reachability")
+async def azure_reachability_api(
+    source: str = Query(min_length=1, max_length=64),
+    destination: str = Query(min_length=1, max_length=64),
+    source_vnet: str = Query(default="", max_length=300),
+    destination_vnet: str = Query(default="", max_length=300),
+    protocol: str = Query(default="", max_length=8),
+    port: int | None = Query(default=None, ge=0, le=65535),
+):
+    """Whether Azure carries and permits traffic from ``source`` to
+    ``destination`` (IP addresses or networks) and its replies: the effective
+    routes of the subnets (VNet, peerings, gateways, route tables) and the
+    network security groups of subnets and network interfaces of the latest
+    discovery. ``*_vnet`` names the VNet (``subscription:group:name``) of an
+    address whose range exists in several. A route to a virtual machine that
+    is a Meraki vMX is followed on through that appliance's VPN."""
+    return await _cloud_reachability(
+        _CLOUD_BY_PROVIDER[PROVIDER_AZURE], source, destination, source_vnet, destination_vnet, protocol, port
+    )
 
 
 @router.get("/api/topology/search/deep")
