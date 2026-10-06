@@ -6,11 +6,19 @@ import {
   useComplianceProfiles,
   useCredentials,
   useInventoryGroups,
+  useMerakiComplianceOrgs,
+  useRunMerakiScan,
   useRunScan,
   useRunScanBulk,
 } from '@/api/compliance';
 
-type Scope = 'all' | 'group' | 'single';
+import { MerakiScanProgress } from './MerakiScanProgress';
+import { profileHasMerakiRules } from './merakiHelpers';
+
+type Scope = 'all' | 'group' | 'single' | 'meraki';
+
+const MERAKI_HINT =
+  "Reads the organization's configuration with its stored API key (read-only) and evaluates the profile's Meraki rules per organization, network and switch. Runs in the background.";
 
 export function RunScanModal({ onClose }: { onClose: () => void }) {
   const { alert } = useDialogs();
@@ -19,10 +27,14 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
   const credentials = useCredentials();
   const runScan = useRunScan();
   const runBulk = useRunScanBulk();
+  const merakiOrgs = useMerakiComplianceOrgs();
+  const runMeraki = useRunMerakiScan();
 
   const [scope, setScope] = useState<Scope>('all');
   const [groupId, setGroupId] = useState<number | null>(null);
   const [hostId, setHostId] = useState<number | null>(null);
+  const [orgRef, setOrgRef] = useState<number | null>(null);
+  const [merakiJobId, setMerakiJobId] = useState<string | null>(null);
   const [profileId, setProfileId] = useState<number | null>(null);
   const [credentialId, setCredentialId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +46,19 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
     return list.sort((a, b) => (a.hostname || '').localeCompare(b.hostname || ''));
   }, [groups.data]);
 
-  const profileList = useMemo(() => profiles.data || [], [profiles.data]);
+  // A Meraki scan needs a profile with Meraki rules; host scans take any profile
+  // (their Meraki rules are skipped).
+  const profileList = useMemo(
+    () =>
+      scope === 'meraki'
+        ? (profiles.data || []).filter(profileHasMerakiRules)
+        : profiles.data || [],
+    [profiles.data, scope],
+  );
+  const orgList = useMemo(
+    () => (merakiOrgs.data || []).filter((o) => o.has_api_key || o.is_sample),
+    [merakiOrgs.data],
+  );
   const credList = credentials.data || [];
   const groupList = useMemo(() => groups.data || [], [groups.data]);
 
@@ -56,6 +80,14 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
     if (groupId == null && groupList.length > 0) setGroupId(groupList[0].id);
   }
 
+  const [prevOrgList, setPrevOrgList] = useState(orgList);
+  const [prevOrgRef, setPrevOrgRef] = useState(orgRef);
+  if (orgList !== prevOrgList || orgRef !== prevOrgRef) {
+    setPrevOrgList(orgList);
+    setPrevOrgRef(orgRef);
+    if (orgRef == null && orgList.length > 0) setOrgRef(orgList[0].id);
+  }
+
   const selectedGroup = groupList.find((g) => g.id === groupId);
   const selectedGroupHostCount = (selectedGroup?.hosts || []).length;
 
@@ -64,16 +96,37 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
       ? `Scans all ${allHosts.length} host(s) in the inventory.`
       : scope === 'group'
         ? `Scans all ${selectedGroupHostCount} host(s) in the selected group.`
-        : '';
+        : scope === 'meraki'
+          ? MERAKI_HINT
+          : '';
   const submitLabel =
-    scope === 'all' ? 'Scan All Hosts' : scope === 'group' ? 'Scan Group' : 'Run Scan';
+    scope === 'all'
+      ? 'Scan All Hosts'
+      : scope === 'group'
+        ? 'Scan Group'
+        : scope === 'meraki'
+          ? 'Scan Organization'
+          : 'Run Scan';
 
-  const isPending = runScan.isPending || runBulk.isPending;
+  const isPending = runScan.isPending || runBulk.isPending || runMeraki.isPending;
 
   const onSubmit = async () => {
     setError(null);
     if (profileId == null) {
       setError('Select a compliance profile');
+      return;
+    }
+    if (scope === 'meraki') {
+      if (orgRef == null) {
+        setError('Select a Meraki organization');
+        return;
+      }
+      try {
+        const res = await runMeraki.mutateAsync({ profile_id: profileId, org_ref: orgRef });
+        setMerakiJobId(res.job_id);
+      } catch (e) {
+        setError(`Scan failed to start: ${(e as Error).message}`);
+      }
       return;
     }
     if (credentialId == null) {
@@ -162,19 +215,50 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
     <Modal isOpen onClose={onClose} title="Run Compliance Scan">
       <div className="form-group">
         <label className="form-label">Scope</label>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          {(['all', 'group', 'single'] as Scope[]).map((s) => (
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          {(['all', 'group', 'single', 'meraki'] as Scope[]).map((s) => (
             <button
               key={s}
               type="button"
               className={`btn btn-sm ${scope === s ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => setScope(s)}
+              onClick={() => {
+                setScope(s);
+                setProfileId(null);
+                setError(null);
+              }}
             >
-              {s === 'all' ? 'All Hosts' : s === 'group' ? 'By Group' : 'Single Host'}
+              {s === 'all'
+                ? 'All Hosts'
+                : s === 'group'
+                  ? 'By Group'
+                  : s === 'single'
+                    ? 'Single Host'
+                    : 'Meraki Organization'}
             </button>
           ))}
         </div>
       </div>
+
+      {scope === 'meraki' && (
+        <div className="form-group">
+          <label className="form-label">Meraki Organization</label>
+          <select
+            className="form-select"
+            value={orgRef ?? ''}
+            onChange={(e) => setOrgRef(e.target.value ? parseInt(e.target.value, 10) : null)}
+          >
+            {orgList.length === 0 && (
+              <option value="">No Meraki organization with an API key (Topology → Sources)</option>
+            )}
+            {orgList.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.name}
+                {o.is_sample ? ' (demo data)' : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {scope === 'group' && (
         <div className="form-group">
@@ -224,7 +308,11 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
             setProfileId(e.target.value ? parseInt(e.target.value, 10) : null)
           }
         >
-          {profileList.length === 0 && <option value="">No profiles available</option>}
+          {profileList.length === 0 && (
+            <option value="">
+              {scope === 'meraki' ? 'No profiles with Meraki rules - load the built-in profiles' : 'No profiles available'}
+            </option>
+          )}
           {profileList.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
@@ -233,23 +321,27 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
         </select>
       </div>
 
-      <div className="form-group">
-        <label className="form-label">Credential</label>
-        <select
-          className="form-select"
-          value={credentialId ?? ''}
-          onChange={(e) =>
-            setCredentialId(e.target.value ? parseInt(e.target.value, 10) : null)
-          }
-        >
-          <option value="">Select a credential…</option>
-          {credList.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-        </select>
-      </div>
+      {scope !== 'meraki' && (
+        <div className="form-group">
+          <label className="form-label">Credential</label>
+          <select
+            className="form-select"
+            value={credentialId ?? ''}
+            onChange={(e) =>
+              setCredentialId(e.target.value ? parseInt(e.target.value, 10) : null)
+            }
+          >
+            <option value="">Select a credential…</option>
+            {credList.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {merakiJobId && <MerakiScanProgress jobId={merakiJobId} onDismiss={() => setMerakiJobId(null)} />}
 
       {hint && (
         <div style={{ fontSize: '0.85em', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
@@ -267,13 +359,13 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
         }}
       >
         <button type="button" className="btn btn-secondary" onClick={onClose}>
-          Cancel
+          {merakiJobId ? 'Close' : 'Cancel'}
         </button>
         <button
           type="button"
           className="btn btn-primary"
           onClick={onSubmit}
-          disabled={isPending}
+          disabled={isPending || (scope === 'meraki' && merakiJobId != null)}
         >
           {isPending ? 'Scanning…' : submitLabel}
         </button>

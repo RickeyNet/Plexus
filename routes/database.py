@@ -3187,6 +3187,7 @@ from routes.db.lab import *  # noqa: E402,F403
 from routes.db.mac_tracking import *  # noqa: E402,F403
 from routes.db.maintenance import *  # noqa: E402,F403
 from routes.db.meraki import *  # noqa: E402,F403
+from routes.db.meraki_compliance import *  # noqa: E402,F403
 from routes.db.metrics import *  # noqa: E402,F403
 from routes.db.monitoring import *  # noqa: E402,F403
 from routes.db.playbooks import *  # noqa: E402,F403

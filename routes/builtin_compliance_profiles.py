@@ -575,4 +575,216 @@ BUILTIN_PROFILES = [
             },
         ],
     ),
+    # ── Meraki (Dashboard API configuration, no running config) ──────
+    # Rules of type "meraki" name a check from
+    # netcontrol.integrations.meraki.compliance; they are evaluated by a Meraki
+    # compliance scan of an organization and ignored by host (SSH) scans. There
+    # is no remediation: Plexus reads the Dashboard API only.
+    (
+        "Meraki Switch Security Baseline",
+        "Meraki MS equivalents of the Switch Port Security Baseline - DHCP server "
+        "policy (DHCP snooping) and ARP inspection, rogue DHCP alerting, RSTP and a "
+        "pinned root bridge, storm control, and per-port access policies (port "
+        "security), BPDU/root/loop guard, native VLAN and trunk pruning.",
+        "high",
+        [
+            {
+                "name": "DHCP server policy blocks unknown servers (DHCP snooping)",
+                "type": "meraki",
+                "check": "switch_dhcp_server_policy",
+            },
+            {"name": "Rogue DHCP server alerting enabled", "type": "meraki", "check": "switch_dhcp_rogue_alert"},
+            {"name": "Dynamic ARP inspection enabled", "type": "meraki", "check": "switch_arp_inspection"},
+            {"name": "Rapid spanning tree enabled", "type": "meraki", "check": "switch_rstp_enabled"},
+            {
+                "name": "Spanning tree root bridge pinned",
+                "type": "meraki",
+                "check": "switch_stp_root_pinned",
+                "params": {"max_priority": 32767},
+            },
+            {
+                "name": "Storm control thresholds configured",
+                "type": "meraki",
+                "check": "switch_storm_control",
+                "params": {"max_broadcast_percent": 99, "require_multicast": False, "require_unknown_unicast": False},
+            },
+            {
+                "name": "Access ports use an access policy (port security)",
+                "type": "meraki",
+                "check": "switch_port_access_policy",
+                "params": {
+                    "allowed_types": ["Sticky MAC allow list", "MAC allow list", "Custom access policy"],
+                    "exempt_tags": [],
+                    "exempt_name_pattern": "",
+                },
+            },
+            {
+                "name": "Sticky MAC limit bounded",
+                "type": "meraki",
+                "check": "switch_port_mac_limit",
+                "params": {"max_addresses": 5, "exempt_tags": [], "exempt_name_pattern": ""},
+            },
+            {
+                "name": "BPDU guard on access ports",
+                "type": "meraki",
+                "check": "switch_port_bpdu_guard",
+                "params": {"accepted": ["bpdu guard"], "exempt_tags": [], "exempt_name_pattern": ""},
+            },
+            {
+                "name": "Root or loop guard on trunk ports",
+                "type": "meraki",
+                "check": "switch_port_uplink_guard",
+                "params": {"accepted": ["root guard", "loop guard"], "exempt_tags": [], "exempt_name_pattern": ""},
+            },
+            {
+                "name": "Native VLAN is not VLAN 1",
+                "type": "meraki",
+                "check": "switch_port_native_vlan",
+                "params": {"forbidden_vlans": [1], "exempt_tags": [], "exempt_name_pattern": ""},
+            },
+            {
+                "name": "Trunk ports restrict allowed VLANs",
+                "type": "meraki",
+                "check": "switch_port_trunk_pruned",
+                "params": {"exempt_tags": [], "exempt_name_pattern": ""},
+            },
+            {
+                "name": "Only trunk ports are ARP-inspection trusted",
+                "type": "meraki",
+                "check": "switch_port_dai_trusted",
+                "params": {"exempt_tags": [], "exempt_name_pattern": ""},
+            },
+        ],
+    ),
+    (
+        "Meraki Security Appliance Baseline",
+        "Meraki MX hardening - IP source guard (anti-spoofing), intrusion prevention, "
+        "advanced malware protection, appliance services blocked from the WAN, "
+        "port forwarding and 1:1 NAT restricted to known sources, logged default "
+        "firewall rule, plus syslog, SNMPv3-or-off and alert destinations for the network.",
+        "high",
+        [
+            {"name": "IP source guard blocks spoofed traffic", "type": "meraki", "check": "mx_ip_source_guard"},
+            {
+                "name": "Intrusion prevention enabled",
+                "type": "meraki",
+                "check": "mx_ids_prevention",
+                "params": {"min_ruleset": "balanced"},
+            },
+            {"name": "Advanced malware protection enabled", "type": "meraki", "check": "mx_amp_enabled"},
+            {
+                "name": "Appliance services blocked from the WAN",
+                "type": "meraki",
+                "check": "mx_firewalled_services",
+                "params": {"services": ["web", "SNMP"], "allow_restricted": True},
+            },
+            {
+                "name": "Port forwarding rules restrict source addresses",
+                "type": "meraki",
+                "check": "mx_port_forwarding_restricted",
+                "params": {"allow_any_for_ports": []},
+            },
+            {
+                "name": "1:1 NAT rules restrict inbound sources",
+                "type": "meraki",
+                "check": "mx_one_to_one_nat_restricted",
+                "params": {"allow_any_for_ports": ["80", "443"]},
+            },
+            {
+                "name": "Outbound firewall default rule is logged",
+                "type": "meraki",
+                "check": "mx_l3_firewall_logging",
+                "params": {"every_rule": False},
+            },
+            {
+                "name": "Syslog server configured",
+                "type": "meraki",
+                "check": "net_syslog_configured",
+                "params": {"min_servers": 1},
+            },
+            {
+                "name": "Device SNMP access is not community-based",
+                "type": "meraki",
+                "check": "net_snmp_no_v2c",
+                "params": {"allowed_access": ["none", "users"]},
+            },
+            {"name": "Alert destinations configured", "type": "meraki", "check": "net_alerts_destination"},
+        ],
+    ),
+    (
+        "Meraki Wireless Security Baseline",
+        "Meraki MR SSID hardening - no open SSIDs, WPA2 or stronger, 802.1X on "
+        "corporate SSIDs and LAN isolation (or NAT mode) on guest SSIDs.",
+        "high",
+        [
+            {
+                "name": "No open SSIDs",
+                "type": "meraki",
+                "check": "wifi_no_open_ssids",
+                "params": {"exempt_name_pattern": ""},
+            },
+            {
+                "name": "WPA2 or stronger encryption",
+                "type": "meraki",
+                "check": "wifi_wpa2_or_better",
+                "params": {"minimum": "WPA2 only"},
+            },
+            {
+                "name": "Corporate SSIDs use 802.1X",
+                "type": "meraki",
+                "check": "wifi_enterprise_auth",
+                "params": {"guest_name_pattern": "guest|visitor|public"},
+            },
+            {
+                "name": "Guest SSIDs isolated from the LAN",
+                "type": "meraki",
+                "check": "wifi_guest_isolation",
+                "params": {"guest_name_pattern": "guest|visitor|public"},
+            },
+        ],
+    ),
+    (
+        "Meraki Dashboard Access Hardening",
+        "Meraki organization login security - two-factor authentication on every "
+        "administrator and enforced for the organization, strong passwords, idle "
+        "timeout, account lockout, password expiration and reuse, no dormant "
+        "administrators, and SNMPv3-only polling of the Meraki cloud.",
+        "critical",
+        [
+            {
+                "name": "All dashboard administrators use two-factor authentication",
+                "type": "meraki",
+                "check": "org_admins_2fa",
+                "params": {"exempt_emails": []},
+            },
+            {"name": "Two-factor authentication enforced", "type": "meraki", "check": "org_login_2fa_enforced"},
+            {"name": "Strong passwords enforced", "type": "meraki", "check": "org_login_strong_passwords"},
+            {
+                "name": "Idle session timeout enforced",
+                "type": "meraki",
+                "check": "org_login_idle_timeout",
+                "params": {"max_minutes": 30},
+            },
+            {
+                "name": "Account lockout enforced",
+                "type": "meraki",
+                "check": "org_login_lockout",
+                "params": {"max_attempts": 10},
+            },
+            {
+                "name": "Password expiration enforced",
+                "type": "meraki",
+                "check": "org_login_password_expiration",
+                "params": {"max_days": 90},
+            },
+            {"name": "Password reuse prevented", "type": "meraki", "check": "org_login_password_reuse"},
+            {
+                "name": "No dormant administrator accounts",
+                "type": "meraki",
+                "check": "org_admins_active",
+                "params": {"max_inactive_days": 90, "exempt_emails": []},
+            },
+            {"name": "Organization SNMP is v3 only", "type": "meraki", "check": "org_snmp_v3_only"},
+        ],
+    ),
 ]

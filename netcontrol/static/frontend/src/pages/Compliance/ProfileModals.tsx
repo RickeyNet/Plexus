@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
+  MerakiCheck,
   ProfilePayload,
   useComplianceAssignments,
   useComplianceProfile,
@@ -10,6 +11,7 @@ import {
   useCreateProfile,
   useCredentials,
   useInventoryGroups,
+  useMerakiChecks,
   useUpdateProfile,
 } from '@/api/compliance';
 
@@ -20,9 +22,12 @@ const RULES_PLACEHOLDER =
 const RULES_HELP = (
   <>
     Rule types: <code>must_contain</code>, <code>must_not_contain</code>,{' '}
-    <code>regex_match</code>
+    <code>regex_match</code> (running config), <code>meraki</code> (Dashboard API check)
     <br />
-    Each rule: <code>{'{"name": "...", "type": "...", "pattern": "..."}'}</code>
+    Config rule: <code>{'{"name": "...", "type": "...", "pattern": "..."}'}</code>
+    <br />
+    Meraki rule: <code>{'{"name": "...", "type": "meraki", "check": "<id>", "params": {...}}'}</code>{' '}
+    - pick one below to insert it. Host scans skip Meraki rules; Meraki scans skip config rules.
   </>
 );
 
@@ -409,8 +414,122 @@ function FormBody({
         <div style={{ marginTop: '0.5rem', fontSize: '0.8em', color: 'var(--text-muted)' }}>
           {RULES_HELP}
         </div>
+        <MerakiCheckPicker rulesText={rulesText} setRulesText={setRulesText} />
       </div>
     </>
+  );
+}
+
+/**
+ * Appends the rule JSON of a Meraki check (with its default parameters) to the
+ * rules editor, so a Meraki rule never has to be typed by hand.
+ */
+function MerakiCheckPicker({
+  rulesText,
+  setRulesText,
+}: {
+  rulesText: string;
+  setRulesText: (v: string) => void;
+}) {
+  const checks = useMerakiChecks();
+  const [category, setCategory] = useState('');
+  const [checkId, setCheckId] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const all = useMemo(() => checks.data?.checks || [], [checks.data]);
+  const categories = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const c of all) if (!seen.has(c.category)) seen.set(c.category, c.category_label);
+    return [...seen.entries()];
+  }, [all]);
+  const visible = useMemo(
+    () => (category ? all.filter((c) => c.category === category) : all),
+    [all, category],
+  );
+  const selected: MerakiCheck | undefined = visible.find((c) => c.id === checkId) ?? visible[0];
+
+  if (checks.isError || (checks.data && all.length === 0)) return null;
+
+  const insert = () => {
+    setError(null);
+    if (!selected) return;
+    let rules: unknown[] = [];
+    const trimmed = rulesText.trim();
+    if (trimmed) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (!Array.isArray(parsed)) {
+          setError('Rules must be a JSON array before a check can be added');
+          return;
+        }
+        rules = parsed;
+      } catch {
+        setError('Fix the rules JSON before adding a check');
+        return;
+      }
+    }
+    rules.push(selected.rule);
+    setRulesText(JSON.stringify(rules, null, 2));
+  };
+
+  return (
+    <div
+      style={{
+        marginTop: '0.75rem',
+        padding: '0.6rem 0.75rem',
+        border: '1px dashed var(--border)',
+        borderRadius: '0.5rem',
+        fontSize: '0.85em',
+      }}
+    >
+      <div style={{ fontWeight: 600, marginBottom: '0.4rem' }}>Add a Meraki check</div>
+      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+        <select
+          className="form-select"
+          style={{ maxWidth: 220 }}
+          value={category}
+          onChange={(e) => {
+            setCategory(e.target.value);
+            setCheckId('');
+          }}
+        >
+          <option value="">All categories</option>
+          {categories.map(([id, label]) => (
+            <option key={id} value={id}>
+              {label}
+            </option>
+          ))}
+        </select>
+        <select
+          className="form-select"
+          style={{ flex: 1, minWidth: 220 }}
+          value={selected?.id ?? ''}
+          onChange={(e) => setCheckId(e.target.value)}
+        >
+          {visible.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+        <button type="button" className="btn btn-sm btn-secondary" onClick={insert} disabled={!selected}>
+          Add check
+        </button>
+      </div>
+      {selected && (
+        <div style={{ marginTop: '0.4rem', color: 'var(--text-muted)' }}>
+          {selected.description}
+          {selected.ios_equivalent && (
+            <>
+              {' '}
+              IOS equivalent: <code>{selected.ios_equivalent}</code>.
+            </>
+          )}{' '}
+          Scope: {selected.scope === 'org' ? 'organization' : selected.scope === 'device' ? 'each switch' : 'each network'}.
+        </div>
+      )}
+      {error && <div className="error" style={{ marginTop: '0.4rem' }}>{error}</div>}
+    </div>
   );
 }
 
