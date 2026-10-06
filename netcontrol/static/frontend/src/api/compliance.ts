@@ -312,7 +312,7 @@ export function useRemediateFinding() {
 // DHCP snooping, port access policies for port security, BPDU guard, ...).
 // They are scanned per organization as background jobs, never over SSH.
 
-export type MerakiTargetKind = 'org' | 'network' | 'device';
+export type MerakiTargetKind = 'org' | 'network' | 'device' | 'ssid';
 
 export interface MerakiCheck {
   id: string;

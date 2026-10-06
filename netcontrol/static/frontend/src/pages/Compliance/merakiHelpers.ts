@@ -5,6 +5,7 @@ export const MERAKI_KIND_LABEL: Record<string, string> = {
   org: 'Organization',
   network: 'Network',
   device: 'Switch',
+  ssid: 'SSID',
 };
 
 /** CSS colour token for a scan status. */

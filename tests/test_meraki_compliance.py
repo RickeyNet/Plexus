@@ -46,7 +46,7 @@ def test_every_check_is_well_formed():
         assert check.scope in SCOPES
         assert check.name and check.description and check.ios_equivalent
         for key in check.requires:
-            assert key in ENDPOINTS or key in ("ports", "device", "network"), (check.id, key)
+            assert key in ENDPOINTS or key in ("ports", "device", "network", "ssid"), (check.id, key)
         if check.scope == "device":
             assert "ports" in check.requires or any(
                 ENDPOINTS[k][0] == "device" for k in check.requires if k in ENDPOINTS
@@ -79,6 +79,8 @@ def test_required_endpoints_follow_the_rules():
     assert required_endpoints([rule_template("switch_port_bpdu_guard")]) == {"switch_ports"}
     assert required_endpoints([rule_template("switch_port_unused_disabled")]) == {"switch_ports", "port_statuses"}
     assert required_endpoints([rule_template("switch_dhcp_rogue_alert")]) == {"dhcp_server_policy", "alerts"}
+    assert required_endpoints([rule_template("ssid_pmf_enabled")]) == {"ssids"}
+    assert required_endpoints([rule_template("ssid_guest_isolated")]) == {"ssids", "ssid_l3_firewall"}
     assert required_endpoints([{"type": "must_contain", "pattern": "x"}]) == set()
     assert required_endpoints([{"type": "meraki", "check": "nope"}]) == set()
 
@@ -102,7 +104,7 @@ def _failed(result: dict) -> set[str]:
 
 def test_sample_targets_cover_org_networks_and_switches(sample_results):
     kinds = {r["target_kind"] for r in sample_results}
-    assert kinds == {"org", "network", "device"}
+    assert kinds == {"org", "network", "device", "ssid"}
     assert sample_results[0]["target_kind"] == "org"
     # Only switches are device targets; access points and appliances have no port checks.
     assert all(r["model"].startswith("MS") for r in sample_results if r["target_kind"] == "device")
@@ -123,7 +125,6 @@ def test_sample_weak_branch_fails_the_switch_and_appliance_checks(sample_results
         "mx_firewalled_services",
         "mx_port_forwarding_restricted",
         "mx_l3_firewall_logging",
-        "wifi_wpa2_or_better",
         "net_syslog_configured",
         "net_snmp_no_v2c",
     } <= _failed(boston)
@@ -154,6 +155,51 @@ def test_sample_weak_switch_fails_port_checks_with_port_evidence(sample_results)
 
     healthy = _target(sample_results, "device", "HQ-DataCenter-SW1")
     assert healthy["status"] == "compliant", _failed(healthy)
+
+
+def test_sample_ssids_are_targets_with_per_ssid_findings(sample_results):
+    ssids = [r for r in sample_results if r["target_kind"] == "ssid"]
+    # Two enabled SSIDs per wireless network, each its own target, in its network.
+    networks = {r["network_name"] for r in sample_results if r["target_kind"] == "network"}
+    assert len(ssids) == 2 * len(networks)
+    assert all(r["network_name"] and r["model"].startswith("SSID ") for r in ssids)
+
+    weak_corp = next(r for r in ssids if r["network_name"] == "Branch-Boston" and r["target_name"] == "Corp")
+    assert _failed(weak_corp) == {"ssid_wpa2_or_better", "ssid_radius_redundancy", "ssid_pmf_enabled"}
+    # Guest-only checks leave no finding on a corporate SSID.
+    corp_checks = {f["check"] for f in weak_corp["findings"]}
+    assert not corp_checks & {"ssid_guest_isolated", "ssid_guest_lan_firewall", "ssid_guest_bandwidth_limit"}
+    assert "ssid_splash_on_open" not in corp_checks
+
+    weak_guest = next(r for r in ssids if r["network_name"] == "Branch-Boston" and r["target_name"] == "Guest")
+    assert _failed(weak_guest) == {"ssid_guest_isolated", "ssid_guest_lan_firewall", "ssid_guest_bandwidth_limit"}
+    lan = next(f for f in weak_guest["findings"] if f["check"] == "ssid_guest_lan_firewall")
+    assert "allow" in lan["detail"]
+    assert "ssid_enterprise_auth" not in {f["check"] for f in weak_guest["findings"]}
+
+    good_guest = next(r for r in ssids if r["network_name"] == "Branch-Atlanta" and r["target_name"] == "Guest")
+    assert good_guest["status"] == "compliant", _failed(good_guest)
+    good_corp = next(r for r in ssids if r["network_name"] == "Branch-Atlanta" and r["target_name"] == "Corp")
+    assert good_corp["status"] == "compliant", _failed(good_corp)
+
+
+def test_ssid_checks_without_the_per_ssid_payload():
+    raw = build_sample_compliance_raw()
+    raw["ssids_detail"] = {}
+    rules = [rule_template("ssid_guest_isolated"), rule_template("ssid_guest_lan_firewall")]
+    results = evaluate_profile(rules, raw)
+    guests = [r for r in results if r["target_name"] == "Guest"]
+    assert guests
+    for g in guests:
+        checks = {f["check"] for f in g["findings"]}
+        # The optional firewall payload is missing: isolation is judged on the
+        # SSID alone; the firewall-only check is not applicable.
+        assert checks == {"ssid_guest_isolated"}
+    # An unreadable SSID list becomes one unreadable target for the network.
+    raw["networks_detail"]["N_1000"]["ssids"] = Unreadable("HTTP 403")
+    results = evaluate_profile(rules, raw)
+    hq = next(r for r in results if r["network_id"] == "N_1000")
+    assert hq["status"] == "error" and hq["target_id"] == "N_1000:*" and hq["unreadable_rules"] == 2
 
 
 def test_sample_org_findings_name_the_admins(sample_results):
@@ -238,6 +284,7 @@ async def test_collector_fetches_only_what_the_rules_need():
                 json=[
                     {"id": "N1", "name": "Site A", "productTypes": ["switch", "appliance"]},
                     {"id": "N2", "name": "Site B", "productTypes": ["wireless"]},
+                    {"id": "N3", "name": "Site C", "productTypes": ["wireless"]},
                 ],
             )
         if path == "organizations/1/devices":
@@ -265,6 +312,29 @@ async def test_collector_fetches_only_what_the_rules_need():
             return httpx.Response(403, json={"errors": ["forbidden"]})
         if path == "networks/N1/switch/stp":
             return httpx.Response(404, json={"errors": ["not found"]})
+        if path == "networks/N2/wireless/ssids":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "number": 0,
+                        "name": "Guest WiFi",
+                        "enabled": True,
+                        "authMode": "psk",
+                        "ipAssignmentMode": "Bridge mode",
+                    },
+                    {"number": 1, "name": "Unused", "enabled": False, "authMode": "open"},
+                ],
+            )
+        if path == "networks/N3/wireless/ssids":
+            return httpx.Response(403, json={"errors": ["forbidden"]})
+        if path == "networks/N2/wireless/ssids/0/firewall/l3FirewallRules":
+            return httpx.Response(
+                200,
+                json={
+                    "rules": [{"comment": "Wireless clients accessing LAN", "policy": "deny", "destCidr": "Local LAN"}]
+                },
+            )
         if path.endswith("syslogServers"):
             return httpx.Response(200, json={"servers": [{"host": "10.0.0.1", "port": 514, "roles": ["Flows"]}]})
         raise AssertionError(f"unexpected call {path}")
@@ -274,6 +344,7 @@ async def test_collector_fetches_only_what_the_rules_need():
         rule_template("switch_rstp_enabled"),
         rule_template("switch_port_bpdu_guard"),
         rule_template("net_syslog_configured"),
+        rule_template("ssid_guest_isolated"),
     ]
     async with _client(handler) as client:
         raw = await collect_compliance_data(client, "1", rules)
@@ -282,7 +353,11 @@ async def test_collector_fetches_only_what_the_rules_need():
     # wireless, appliance or organization endpoints were requested.
     assert "networks/N2/switch/dhcpServerPolicy" not in seen
     assert "networks/N2/syslogServers" in seen and "networks/N1/syslogServers" in seen
-    assert not any("loginSecurity" in p or "ssids" in p for p in seen)
+    assert not any("loginSecurity" in p for p in seen)
+    # The per-SSID firewall is read for the enabled SSID only, and never for the switch network.
+    assert "networks/N2/wireless/ssids/0/firewall/l3FirewallRules" in seen
+    assert not any("ssids/1/" in p for p in seen) and not any(p.startswith("networks/N1/wireless") for p in seen)
+    assert raw["ssids_detail"]["N2"]["0"]["ssid_l3_firewall"]["rules"]
     assert isinstance(raw["networks_detail"]["N1"]["dhcp_server_policy"], Unreadable)
     assert raw["networks_detail"]["N1"]["stp"] is None
     assert raw["switch_ports"]["S1"][0]["portId"] == "1"
@@ -297,6 +372,10 @@ async def test_collector_fetches_only_what_the_rules_need():
     sw1 = _target(results, "device", "sw1")
     assert _failed(sw1) == {"switch_port_bpdu_guard"}
     assert not any(r["target_name"] == "ap1" for r in results)
+    guest = _target(results, "ssid", "Guest WiFi")
+    assert guest["status"] == "compliant" and "denies Local LAN" in guest["findings"][0]["detail"]
+    site_c = next(r for r in results if r["target_kind"] == "ssid" and r["network_name"] == "Site C")
+    assert site_c["status"] == "error"
 
 
 @pytest.mark.asyncio
@@ -551,7 +630,7 @@ def test_api_scan_requires_an_api_key_unless_sample(api, monkeypatch):
     assert job["status"] == "completed", job
     assert job["result"]["org_name"] == "Acme"
     rows = api.get("/api/compliance/meraki/results").json()
-    assert rows and all(r["target_kind"] == "network" for r in rows)
+    assert rows and all(r["target_kind"] == "ssid" for r in rows)
 
 
 def test_scheduled_loop_runs_due_meraki_assignments(api):

@@ -6,7 +6,7 @@ no running config: its configuration is a set of Dashboard API objects. The
 **Meraki** tab brings the same controls to Meraki by evaluating *checks*
 against those objects - the Meraki equivalents of DHCP snooping, port
 security, BPDU guard, storm control and the rest - per organization, per
-network and per switch.
+network, per switch and per SSID.
 
 - Permission: the `compliance` feature (same as host compliance)
 - API: `/api/compliance/meraki/*`
@@ -55,8 +55,9 @@ rule JSON with its default parameters; `GET /api/compliance/meraki/checks`
 returns the same catalog.
 
 A scan reads only what the profile's checks need (one call per endpoint per
-network, one organization-wide call for all switch ports, plus one call per
-switch only for the live port-status check), honouring the Dashboard API rate
+network, one organization-wide call for all switch ports, one call per
+enabled SSID for the SSID firewall, plus one call per switch only for the
+live port-status check), honouring the Dashboard API rate
 limit like a topology collection, and limited to the same networks (the
 organization's network tag / name filter). It then produces one result per
 **target**:
@@ -66,6 +67,7 @@ organization's network tag / name filter). It then produces one result per
 | Organization | dashboard administrators, login security, organization SNMP | 1 administrator without two-factor authentication |
 | Network | DHCP server policy, STP, storm control, MX security, SSIDs, syslog, SNMP, alerts (only the checks whose product the network has) | Branch-Boston: DHCP server policy is *allow* |
 | Switch | every per-port check | Branch-Boston-SW1: 3 of 21 access ports without an access policy (port 5, 6, 7) |
+| SSID | every wireless check that concerns the SSID (guest vs corporate, open vs secured) | Guest in Branch-Boston: SSID firewall allows the LAN |
 
 A target is **compliant**, **non-compliant** (at least one check failed) or
 **error** (a payload could not be read - typically an API key without access
@@ -118,14 +120,27 @@ are never counted.
 | `mx_l3_firewall_logging` | the default outbound rule (or `every_rule`) logs to syslog | `access-list ... log` |
 | `mx_content_filtering` | at least `min_categories` URL categories blocked | - |
 
-### Wireless (per network)
+### Wireless (per SSID)
 
-| Check | Condition on enabled SSIDs |
-|---|---|
-| `wifi_no_open_ssids` | no SSID with open authentication (`exempt_name_pattern`) |
-| `wifi_wpa2_or_better` | no WEP; WPA mode at least `minimum` (*WPA2 only*; WPA3 modes count as stronger) |
-| `wifi_enterprise_auth` | SSIDs whose name does not match `guest_name_pattern` use 802.1X |
-| `wifi_guest_isolation` | SSIDs matching `guest_name_pattern` use NAT mode or LAN isolation |
+Every enabled SSID of a wireless network is its own target ("Guest in
+Branch-Boston"). A check that does not concern the SSID - a guest check on
+a corporate SSID, a WPA check on an open SSID - leaves no finding. Guest
+SSIDs are those whose name matches `guest_name_pattern`
+(`guest|visitor|public`). The SSID's own L3 firewall is read per SSID, only
+for enabled SSIDs and only when a check needs it.
+
+| Check | Condition | IOS equivalent |
+|---|---|---|
+| `ssid_requires_auth` | not open (`exempt_name_pattern` skips SSIDs) | no open WLAN |
+| `ssid_wpa2_or_better` | secured SSIDs: no WEP, WPA mode at least `minimum` (*WPA2 only*; WPA3 modes count as stronger) | `security wpa wpa2` / `wpa3` |
+| `ssid_enterprise_auth` | non-guest SSIDs use 802.1X | `dot1x` on the WLAN |
+| `ssid_radius_redundancy` | RADIUS SSIDs list at least `min_servers` (2); `require_accounting` | redundant RADIUS group, `aaa accounting` |
+| `ssid_pmf_enabled` | secured SSIDs enable 802.11w (`require_mandatory`) | `security pmf` |
+| `ssid_splash_on_open` | open SSIDs present a splash page | web authentication |
+| `ssid_guest_isolated` | guest SSIDs use NAT mode, LAN isolation, or an SSID firewall rule denying *Local LAN* | guest ACL |
+| `ssid_guest_lan_firewall` | guest SSID firewall sets *Wireless clients accessing LAN* to deny (per-SSID endpoint) | `ip access-group` on the WLAN |
+| `ssid_mandatory_dhcp` | mandatory DHCP on guest SSIDs (`guest_only: false` for all) | IP source guard on the WLAN |
+| `ssid_guest_bandwidth_limit` | guest SSIDs cap per-client download (`require_upload_limit`) | QoS policing |
 
 ### Network services (per network, any product)
 

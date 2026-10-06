@@ -61,7 +61,7 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   },
   meraki: {
     title: 'Meraki Organizations',
-    text: 'Meraki has no running config, so profiles carry rules of type "meraki" that check the Dashboard API configuration: DHCP server policy (DHCP snooping), port access policies (port security), BPDU/root guard, storm control, IPS/AMP, SSID security, dashboard login security. Assign such a profile to an organization registered on the Topology page; scans use its stored API key, read-only, and report per organization, network and switch. Load Built-in adds four Meraki baselines.',
+    text: 'Meraki has no running config, so profiles carry rules of type "meraki" that check the Dashboard API configuration: DHCP server policy (DHCP snooping), port access policies (port security), BPDU/root guard, storm control, IPS/AMP, SSID security, dashboard login security. Assign such a profile to an organization registered on the Topology page; scans use its stored API key, read-only, and report per organization, network, switch and SSID. Load Built-in adds four Meraki baselines.',
   },
 };
 

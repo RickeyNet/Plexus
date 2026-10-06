@@ -525,7 +525,15 @@ function MerakiCheckPicker({
               IOS equivalent: <code>{selected.ios_equivalent}</code>.
             </>
           )}{' '}
-          Scope: {selected.scope === 'org' ? 'organization' : selected.scope === 'device' ? 'each switch' : 'each network'}.
+          Scope:{' '}
+          {selected.scope === 'org'
+            ? 'organization'
+            : selected.scope === 'device'
+              ? 'each switch'
+              : selected.scope === 'ssid'
+                ? 'each enabled SSID'
+                : 'each network'}
+          .
         </div>
       )}
       {error && <div className="error" style={{ marginTop: '0.4rem' }}>{error}</div>}
