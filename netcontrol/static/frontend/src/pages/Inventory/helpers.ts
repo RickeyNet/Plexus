@@ -15,8 +15,20 @@ export function hostMatchesQuery(host: InventoryHost, query: string): boolean {
   return (
     lower(host.hostname).includes(q) ||
     lower(host.ip_address).includes(q) ||
-    lower(host.device_type).includes(q)
+    lower(host.device_type).includes(q) ||
+    lower(host.aws_instance_id).includes(q)
   );
+}
+
+// AWS issues 8 or 17 hex digits; the demo account's IDs are shorter.
+const AWS_INSTANCE_ID_RE = /^i-[0-9a-f]{1,17}$/i;
+
+/**
+ * Whether `value` looks like an EC2 instance ID (`i-` plus up to 17 hex
+ * digits, case-insensitive). Mirrors the backend validation; callers trim first.
+ */
+export function isAwsInstanceId(value: string): boolean {
+  return AWS_INSTANCE_ID_RE.test(value);
 }
 
 export function filterGroups(

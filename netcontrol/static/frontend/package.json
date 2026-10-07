@@ -6,7 +6,7 @@
   "description": "Plexus React frontend. Builds to dist/ which FastAPI serves at /frontend/.",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && vite build -c vite.viewer.config.ts",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",

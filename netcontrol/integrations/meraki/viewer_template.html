@@ -73,14 +73,26 @@ details { border-bottom: 1px solid var(--border); }
 summary { cursor: pointer; padding: 8px 0; font-weight: 600; }
 summary .count { color: var(--muted); font-weight: 400; margin-left: 6px; }
 table { border-collapse: collapse; width: 100%; margin-bottom: 10px; font-size: 12px; }
-th, td { text-align: left; padding: 3px 8px 3px 0; vertical-align: top; border-bottom: 1px solid var(--border); word-break: break-word; }
+/* A cell that is one word (an address, an ID, a name) stays on one line: an
+   address broken over two reads as another one ("10.210.2" over ".20"), and
+   "i-0f3c001" would break at its hyphen. A cell of several words wraps
+   between them. A table too wide for the panel scrolls sideways (.scroll-x);
+   only a key/value's value, which has the row to itself, may break a long
+   ID or ARN rather than scroll. */
+th, td { text-align: left; padding: 3px 8px 3px 0; vertical-align: top; border-bottom: 1px solid var(--border); }
 th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--surface); }
+td.w { white-space: nowrap; }
 td.k { color: var(--muted); white-space: nowrap; width: 1%; padding-right: 14px; }
+td.v { word-break: break-word; }
 tr.hit td { background: var(--hit); }
 tr.hide { display: none; }
 pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px; overflow: auto; max-height: 420px; font: 12px/1.4 Consolas, "Courier New", monospace; white-space: pre; margin: 0 0 10px; }
 .link { color: var(--accent); cursor: pointer; text-decoration: underline; background: none; border: 0; padding: 0; }
-.scroll-x { overflow-x: auto; }
+/* A classic scrollbar, so a table wider than the panel shows it can scroll
+   (the browser's overlay scrollbar is invisible until the table is touched). */
+.scroll-x { overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--muted) transparent; }
+.scroll-x::-webkit-scrollbar { height: 8px; }
+.scroll-x::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 4px; }
 @media (max-width: 900px) { #left { display: none; } #panel { position: absolute; right: 0; top: 0; bottom: 0; max-width: 92vw; z-index: 4; } }
 @media print { header .btn, #left, #layers { display: none; } }
 </style>
@@ -134,6 +146,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   </aside>
 </main>
 <script type="application/json" id="topology-data">__TOPOLOGY_JSON__</script>
+<script>/*__LAYOUT_JS__*/</script>
 <script>
 (function () {
   'use strict';
@@ -151,6 +164,16 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   });
   // What the map shows now: the part of the export the Source picker keeps.
   var nodes = allNodes, edges = allEdges, sites = allSites, edgesByNode = {};
+  // The Topology page's tidy layout, inlined by the export when the frontend
+  // is built: the map is laid out as on the page - a region per source, each
+  // network a tree, links between sources routed over the regions. Without
+  // it (or for an older export) the sites keep the export's row packing.
+  var LAYOUT = window.PlexusLayout && allNodes.length && allNodes.every(function (n) { return n.topo; }) ? window.PlexusLayout : null;
+  // The page's frames: a site's box around its devices, its title above it,
+  // and a source's region around its sites.
+  var FRAME = { padX: 60, padY: 34, padBottom: 60, title: 16 };
+  var REGION = { padX: 110, padY: 80, font: 30 };
+  var regions = [];
 
   var KIND = {
     appliance: { tag: 'FW', name: 'Security appliance', color: '#e8590c', shape: 'square' },
@@ -280,6 +303,9 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     return b;
   }
   function siteBox(s) { return { x0: s.x, y0: s.y, x1: s.x + s.w, y1: s.y + s.h }; }
+  function routeBox(e) {
+    return bounds(e.route.map(function (p) { return { x0: p.x, y0: p.y, x1: p.x, y1: p.y }; }));
+  }
   function nodeBox(n) { return { x0: n.x - 90, y0: n.y - 60, x1: n.x + 90, y1: n.y + 80 }; }
   function fitBox(b, maxK) {
     if (!isFinite(b.x0)) return;
@@ -349,6 +375,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   function drawSite(s, detail) {
     var isMatch = matchSites && matchSites[s.id], isSel = (selected && selected.type === 'site' && selected.ref === s) || (pathActive() && pathSiteIds[s.id]);
     ctx.globalAlpha = matchSites && !isMatch && !siteHasMatch(s) ? 0.35 : 1;
+    if (LAYOUT) { drawSiteBoxes(s, isSel, isMatch); ctx.globalAlpha = 1; return; }
     roundRect(s.x, s.y, s.w, s.h, 18);
     ctx.fillStyle = theme.surface; ctx.fill();
     ctx.lineWidth = (isSel || isMatch ? 3 : 1.5) / Math.min(view.k, 1);
@@ -365,6 +392,36 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
       ctx.fillText('VPN ' + s.vpn_mode + ' · ' + s.device_count + ' devices', s.x + 38, s.y + 18 + size, s.w - 50);
     }
     ctx.globalAlpha = 1;
+  }
+  // A site as on the page: a box per piece of it the layout placed, its name
+  // above. Zoomed far out the names are a few unreadable pixels; skip them.
+  function drawSiteBoxes(s, isSel, isMatch) {
+    var titled = FRAME.title * view.k >= 5;
+    s.boxes.forEach(function (b) {
+      roundRect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0, 10);
+      ctx.fillStyle = theme.surface; ctx.fill();
+      ctx.lineWidth = (isSel || isMatch ? 3 : 1.5) / Math.min(view.k, 1);
+      ctx.strokeStyle = isSel ? theme.accent : (isMatch ? '#ffc400' : theme.border); ctx.stroke();
+      if (!titled) return;
+      ctx.fillStyle = STATUS[s.status] || STATUS.unknown;
+      ctx.beginPath(); ctx.arc(b.x0 + 6, b.y0 - 4 - FRAME.title / 2, 5, 0, 6.2832); ctx.fill();
+      ctx.fillStyle = theme.text; ctx.font = '600 ' + FRAME.title + 'px Segoe UI, system-ui, sans-serif';
+      ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+      ctx.fillText(b.title || s.name, b.x0 + 16, b.y0 - 4, Math.max(b.x1 - b.x0 - 16, 80));
+    });
+  }
+  function drawRegions() {
+    ctx.lineWidth = 3 / Math.min(view.k, 1);
+    ctx.setLineDash([14 / Math.min(view.k, 1), 10 / Math.min(view.k, 1)]);
+    ctx.font = '700 ' + REGION.font + 'px Segoe UI, system-ui, sans-serif';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+    regions.forEach(function (r) {
+      ctx.fillStyle = 'rgba(66,165,245,0.04)'; ctx.strokeStyle = 'rgba(66,165,245,0.4)';
+      ctx.beginPath(); ctx.rect(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0); ctx.fill(); ctx.stroke();
+      if (REGION.font * view.k < 5) return;
+      ctx.fillStyle = theme.muted; ctx.fillText(r.name, r.x0 + 6, r.y0 - 10);
+    });
+    ctx.setLineDash([]);
   }
   var siteMatchCache = null;
   function siteHasMatch(s) {
@@ -389,11 +446,16 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     ctx.strokeStyle = marked ? theme.accent : (bad ? STATUS.offline : style.color);
     ctx.lineWidth = (sel ? 3 : (e.kind === 'stack' ? 4 : 1.6)) / Math.min(view.k, 1);
     ctx.setLineDash(style.dash.map(function (d) { return d / Math.min(view.k, 1); }));
-    ctx.beginPath(); ctx.moveTo(e.na.x, e.na.y);
-    if (isCurved(e)) { var c = curveCtl(e); ctx.quadraticCurveTo(c.x, c.y, e.nb.x, e.nb.y); }
-    else ctx.lineTo(e.nb.x, e.nb.y);
+    ctx.beginPath();
+    if (e.route) LAYOUT.traceRoute(ctx, e.route, 24);
+    else {
+      ctx.moveTo(e.na.x, e.na.y);
+      if (isCurved(e)) { var c = curveCtl(e); ctx.quadraticCurveTo(c.x, c.y, e.nb.x, e.nb.y); }
+      else ctx.lineTo(e.nb.x, e.nb.y);
+    }
     ctx.stroke(); ctx.setLineDash([]);
-    if (detail && layers.labels && view.k > 1.05 && e.kind === 'lan' && !faded) {
+    // Port labels sit along the straight line between the ends: not on a route.
+    if (detail && layers.labels && view.k > 1.05 && e.kind === 'lan' && !faded && !e.route) {
       ctx.fillStyle = theme.muted; ctx.font = '10px Segoe UI, system-ui, sans-serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       var dx = e.nb.x - e.na.x, dy = e.nb.y - e.na.y;
@@ -438,10 +500,12 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     }
     if (layers.labels && view.k > 0.42) {
       ctx.fillStyle = theme.text; ctx.font = '12px Segoe UI, system-ui, sans-serif'; ctx.textBaseline = 'top';
-      ctx.fillText(clip(n.label, 24), n.x, n.y + 27);
+      // The tidy layout gives each node a slot as wide as its label (up to 44 characters).
+      ctx.fillText(clip(n.label, LAYOUT ? 44 : 24), n.x, n.y + 27);
       if (view.k > 0.8) {
         ctx.fillStyle = theme.muted; ctx.font = '10.5px Segoe UI, system-ui, sans-serif';
-        ctx.fillText(clip([n.model, n.ip].filter(Boolean).join(' · '), 30), n.x, n.y + 42);
+        var room = LAYOUT ? Math.max(18, Math.min(30, n.label.length)) : 30;
+        ctx.fillText(clip([n.model, n.ip].filter(Boolean).join(' · '), room), n.x, n.y + 42);
       }
     }
     ctx.globalAlpha = 1;
@@ -455,21 +519,26 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     ctx.setTransform(dpr * view.k, 0, 0, dpr * view.k, dpr * view.x, dpr * view.y);
     var a = toWorld(0, 0), b = toWorld(W, H), detail = view.k > 0.22, m = 120;
     function inView(x0, y0, x1, y1) { return x1 >= a.x - m && x0 <= b.x + m && y1 >= a.y - m && y0 <= b.y + m; }
-    // Tunnels run behind the site boxes so they never cover devices; only
-    // the selection's tunnels are drawn over them, where they can be traced.
-    var behind = [], links = [], front = [];
+    // Tunnels run over the site boxes and LAN links, where they can be
+    // traced, but under the devices so they never cover one; the
+    // selection's tunnels are drawn last, over the other tunnels.
+    var tunnels = [], links = [], front = [];
     edges.forEach(function (e) {
       if (!edgeVisible(e)) return;
       var onPath = pathActive() && e.onPath;
       if (!detail && !isCurved(e) && !onPath) return;
       var x0 = Math.min(e.na.x, e.nb.x), x1 = Math.max(e.na.x, e.nb.x), y0 = Math.min(e.na.y, e.nb.y), y1 = Math.max(e.na.y, e.nb.y);
-      if (isCurved(e)) { x0 -= 260; x1 += 260; y0 -= 260; y1 += 260; }
+      if (e.route) { var rb = routeBox(e); x0 = rb.x0; y0 = rb.y0; x1 = rb.x1; y1 = rb.y1; }
+      else if (isCurved(e)) { x0 -= 260; x1 += 260; y0 -= 260; y1 += 260; }
       if (!inView(x0, y0, x1, y1)) return;
-      (onPath ? front : (isCurved(e) ? (touchesSelection(e) ? front : behind) : links)).push(e);
+      (onPath ? front : (isCurved(e) ? (touchesSelection(e) ? front : tunnels) : links)).push(e);
     });
-    behind.forEach(function (e) { drawEdge(e, detail); });
-    sites.forEach(function (s) { if (inView(s.x, s.y, s.x + s.w, s.y + s.h)) drawSite(s, detail); });
+    if (LAYOUT) drawRegions();
+    sites.forEach(function (s) {
+      if ((!LAYOUT || s.boxes.length) && inView(s.x, s.y, s.x + s.w, s.y + s.h)) drawSite(s, detail);
+    });
     links.forEach(function (e) { drawEdge(e, detail); });
+    tunnels.forEach(function (e) { drawEdge(e, detail); });
     front.forEach(function (e) { drawEdge(e, detail); });
     nodes.forEach(function (n) {
       if (nodeVisible(n) && inView(n.x - 60, n.y - 40, n.x + 60, n.y + 60)) drawNode(n, detail);
@@ -496,7 +565,8 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     for (i = 0; i < edges.length; i++) {
       var e = edges[i], de;
       if (!edgeVisible(e) || (view.k <= 0.22 && !isCurved(e))) continue;
-      if (isCurved(e)) {
+      if (e.route) de = LAYOUT.distanceToRoute(e.route, p);
+      else if (isCurved(e)) {
         var c = curveCtl(e), px = e.na.x, py = e.na.y; de = Infinity;
         for (var s = 1; s <= 16; s++) {
           var t = s / 16, u = 1 - t;
@@ -508,8 +578,11 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     }
     if (bestE) return { type: 'edge', ref: bestE };
     for (i = 0; i < sites.length; i++) {
-      var st = sites[i];
-      if (p.x >= st.x && p.x <= st.x + st.w && p.y >= st.y && p.y <= st.y + st.h) return { type: 'site', ref: st };
+      var st = sites[i], boxes = LAYOUT ? st.boxes : [siteBox(st)];
+      for (var k = 0; k < boxes.length; k++) {
+        var bx = boxes[k];
+        if (p.x >= bx.x0 && p.x <= bx.x1 && p.y >= bx.y0 && p.y <= bx.y1) return { type: 'site', ref: st };
+      }
     }
     return null;
   }
@@ -553,7 +626,10 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
       }
       section.rows.forEach(function (row) {
         var tr = el('tr'), isHit = terms.length > 0 && rowMatches(row.join(' '), terms);
-        row.forEach(function (cell, i) { tr.appendChild(el('td', section.kind === 'kv' && i === 0 ? 'k' : null, cell)); });
+        row.forEach(function (cell, i) {
+          var cls = section.kind === 'kv' ? (i === 0 ? 'k' : 'v') : (/\s/.test(String(cell)) ? null : 'w');
+          tr.appendChild(el('td', cls, cell));
+        });
         if (isHit) { tr.className = 'hit'; hits++; }
         if (filtering && !isHit) tr.className = 'hide'; else shown++;
         tbody.appendChild(tr);
@@ -646,7 +722,8 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   // ── Path mode ────────────────────────────────────────────────────────────
   // Pick a few sites, devices or subnets and see how they reach one another
   // over the links on the map that are up (topology only; route tables are
-  // not read). A subnet stands for the device that owns it.
+  // not read here, the Topology page has the AWS / Azure check). A subnet
+  // stands for the device that owns it.
   var MAX_PATH_PICKS = 6, pathMode = false, pathPicks = [], pathLegs = [], pathSiteIds = {}, pathPicked = {}, pathMessage = '';
   function pathActive() { return pathMode && pathPicks.length > 0; }
   function siteGateway(s) {
@@ -735,7 +812,9 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
       if (leg.notes.length) sections.push({ title: 'Warning: ' + name, kind: 'text', text: leg.notes.join('\n') });
     });
     if (pathLegs.length) {
-      sections.push({ title: 'About this path', kind: 'text', text: 'Shortest way over the cables, uplinks and VPN tunnels on the map that are up. Route tables are not consulted; a subnet is placed on the device that owns it (appliance, L3 switch or VPN peer).' });
+      var inCloud = pathPicks.some(function (p) { return p.n.provider === 'aws' || p.n.provider === 'azure'; });
+      sections.push({ title: 'About this path', kind: 'text', text: 'The path drawn is the shortest way over the cables, uplinks and VPN tunnels on the map that are up: it shows how the ends are joined, not the route each device picks. A subnet is placed on the device that owns it (appliance, L3 switch, VPC or VPN peer).' +
+        (inCloud ? ' This file does not check AWS or Azure route tables and filtering rules; Path Mode on the Plexus Topology page does, between two subnets or IP addresses.' : '') });
     }
     selected = { type: 'path', ref: { title: 'Path', sub: pathPicks.length + ' picked', sections: sections } };
     renderPanel(); renderList(); dirty();
@@ -928,8 +1007,23 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   var SITE_GAP = 90, source = 'all';
   function keepNode(n) {
     if (source === 'all') return true;
-    if (source.indexOf('provider:') === 0) return n.provider === source.slice(9);
+    if (source.indexOf('provider:') === 0) return n.provider === source.slice(9) || (n.also_providers || []).indexOf(source.slice(9)) >= 0;
     return source === 'integrations' ? !!n.provider : !n.integration_only;
+  }
+  // As on the page, a device another integration runs here (a Cato vSocket
+  // on an AWS instance) keeps its tunnels into that integration's cloud (its
+  // PoP) under one source, so the view still shows where its VPN goes.
+  function guestTunnels(shown) {
+    var guest = {};
+    if (source.indexOf('provider:') !== 0) return guest;
+    var only = source.slice(9);
+    allEdges.forEach(function (e) {
+      if (!isCurved(e)) return;
+      [[e.na, e.nb], [e.nb, e.na]].forEach(function (ends) {
+        if (shown[ends[0].id] && ends[0].provider !== only && ends[1].kind === 'cloud') guest[e.id] = true;
+      });
+    });
+    return guest;
   }
   function keepEdge(e) {
     if (source === 'all') return true;
@@ -952,21 +1046,101 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     if (pathMode) setPathMode(false);
     selected = null; source = value;
     var shown = {}, used = {};
-    nodes = allNodes.filter(keepNode);
-    nodes.forEach(function (n) { shown[n.id] = true; used[n.site] = true; });
-    edges = allEdges.filter(function (e) { return shown[e.a] && shown[e.b] && keepEdge(e); });
+    allNodes.forEach(function (n) { if (keepNode(n)) shown[n.id] = true; });
+    var guest = guestTunnels(shown);
+    allEdges.forEach(function (e) { if (guest[e.id]) { shown[e.a] = true; shown[e.b] = true; } });
+    nodes = allNodes.filter(function (n) { return shown[n.id]; });
+    nodes.forEach(function (n) { used[n.site] = true; });
+    edges = allEdges.filter(function (e) { return guest[e.id] || (shown[e.a] && shown[e.b] && keepEdge(e)); });
     sites = source === 'all' ? allSites : allSites.filter(function (s) { return used[s.id]; });
-    allSites.forEach(function (s) { s.x = s.homeX; s.y = s.homeY; });
-    var shift = source === 'all' ? {} : packSites();
-    allNodes.forEach(function (n) {
-      var d = shift[n.site] || { x: 0, y: 0 };
-      n.x = n.homeX + d.x; n.y = n.homeY + d.y;
-    });
+    if (LAYOUT) layoutTidy();
+    else {
+      allSites.forEach(function (s) { s.x = s.homeX; s.y = s.homeY; });
+      var shift = source === 'all' ? {} : packSites();
+      allNodes.forEach(function (n) {
+        var d = shift[n.site] || { x: 0, y: 0 };
+        n.x = n.homeX + d.x; n.y = n.homeY + d.y;
+      });
+    }
     edgesByNode = {};
     nodes.forEach(function (n) { edgesByNode[n.id] = []; });
     edges.forEach(function (e) { edgesByNode[e.a].push(e); edgesByNode[e.b].push(e); });
     setSubnets(shown); buildIndex(); renderChips(); renderLegend();
     runSearch($('q').value); renderPanel(); fitAll();
+  }
+  // Lay out what is shown with the page's tidy layout, then frame it as the
+  // page does: a box per piece of a site (none where it would swallow
+  // another site's devices), a region per source when there are several, and
+  // the links between sources routed around the boxes, over the regions.
+  function layoutTidy() {
+    var tree = LAYOUT.tidyTree(
+      nodes.map(function (n) { return Object.assign({ id: n.id, label: n.label }, n.topo); }),
+      edges.map(function (e) { return { id: e.id, from: e.a, to: e.b, protocol: e.protocol || '' }; }));
+    var at = new Map(), labels = new Map(), byRegion = {};
+    nodes.forEach(function (n) {
+      var p = tree.positions.get(n.id) || { x: 0, y: 0 };
+      n.x = p.x; n.y = p.y; at.set(n.id, p); labels.set(n.id, LAYOUT.labelWidth(n.label));
+      n.piece = tree.pieces.get(n.id) || '';
+      n.region = LAYOUT.nodeProvider(n.topo);
+      var r = byRegion[n.region];
+      if (!r) byRegion[n.region] = { x0: n.x, y0: n.y, x1: n.x, y1: n.y };
+      else { r.x0 = Math.min(r.x0, n.x); r.y0 = Math.min(r.y0, n.y); r.x1 = Math.max(r.x1, n.x); r.y1 = Math.max(r.y1, n.y); }
+    });
+    var crowded = LAYOUT.crowdedGroups(nodes.map(function (n) { return { group: n.piece, x: n.x, y: n.y }; }), FRAME.padX, FRAME.padY);
+    var pieces = {};
+    nodes.forEach(function (n) {
+      if (!n.piece || crowded.has(n.piece)) return;
+      var b = pieces[n.piece];
+      if (!b) pieces[n.piece] = { x0: n.x, y0: n.y, x1: n.x, y1: n.y, site: n.site, ids: [n.id] };
+      else { b.x0 = Math.min(b.x0, n.x); b.y0 = Math.min(b.y0, n.y); b.x1 = Math.max(b.x1, n.x); b.y1 = Math.max(b.y1, n.y); b.ids.push(n.id); }
+    });
+    allSites.forEach(function (s) { s.boxes = []; });
+    var routeBoxes = [], framed = [];
+    Object.keys(pieces).forEach(function (key) {
+      var b = pieces[key], s = siteById[b.site];
+      var box = { x0: b.x0 - FRAME.padX, y0: b.y0 - FRAME.padY, x1: b.x1 + FRAME.padX, y1: b.y1 + FRAME.padBottom,
+        title: s ? s.name : '' };
+      if (s) s.boxes.push(box);
+      framed.push({ box: box, ids: b.ids });
+    });
+    // A long name over a narrow box (a VPC of one node) is shortened where it
+    // would run into the next box, as on the page; the panel keeps it whole.
+    if (LAYOUT.fitTitles) {
+      var titles = LAYOUT.fitTitles(framed.map(function (f) {
+        return { x0: f.box.x0, y0: f.box.y0, x1: f.box.x1, y1: f.box.y1, name: f.box.title };
+      }), FRAME.title, 16);
+      framed.forEach(function (f, i) { f.box.title = titles[i]; });
+    }
+    framed.forEach(function (f) {
+      var box = f.box, titleTop = box.y0 - FRAME.title - 4;
+      routeBoxes.push({ x0: box.x0, y0: titleTop, x1: box.x1, y1: box.y1, ids: f.ids,
+        title: { x0: box.x0, y0: titleTop, x1: box.x0 + 16 + box.title.length * FRAME.title * 0.6, y1: box.y0 } });
+    });
+    // A site's extent, to zoom to it: its boxes and titles, and its devices.
+    var membersOf = {};
+    nodes.forEach(function (n) { (membersOf[n.site] = membersOf[n.site] || []).push(nodeBox(n)); });
+    sites.forEach(function (s) {
+      var b = bounds(s.boxes.map(function (x) { return { x0: x.x0, y0: x.y0 - FRAME.title - 4, x1: x.x1, y1: x.y1 }; })
+        .concat(membersOf[s.id] || []));
+      if (!isFinite(b.x0)) b = { x0: 0, y0: 0, x1: 0, y1: 0 };
+      s.x = b.x0; s.y = b.y0; s.w = b.x1 - b.x0; s.h = b.y1 - b.y0;
+    });
+    var keys = Object.keys(byRegion);
+    regions = keys.length > 1 ? keys.map(function (k) {
+      var r = byRegion[k];
+      return { name: k ? PROVIDER_NAME[k] || k : 'Inventory', x0: r.x0 - REGION.padX, y0: r.y0 - REGION.padY,
+        x1: r.x1 + REGION.padX, y1: r.y1 + REGION.padY };
+    }) : [];
+    edges.forEach(function (e) { e.route = null; });
+    // A hub's links to its spokes follow the layout's comb; the links between
+    // sources are routed over the regions below, whatever the comb says.
+    if (tree.routes) edges.forEach(function (e) { e.route = tree.routes.get(e.id) || null; });
+    if (regions.length) {
+      var top = Math.min.apply(null, regions.map(function (r) { return r.y0; }));
+      var routed = edges.filter(function (e) { return e.na.region !== e.nb.region; });
+      var routes = LAYOUT.routeSourceLinks(routed.map(function (e) { return { id: e.id, from: e.a, to: e.b }; }), at, top, routeBoxes, labels);
+      routed.forEach(function (e) { e.route = routes.get(e.id) || null; });
+    }
   }
   function buildSourcePicker() {
     var found = {};

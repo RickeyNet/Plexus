@@ -9,6 +9,8 @@ import {
   useUpdateHost,
 } from '@/api/inventory';
 
+import { isAwsInstanceId } from './helpers';
+
 const DEVICE_TYPES = [
   { value: 'cisco_ios', label: 'Cisco IOS' },
   { value: 'cisco_nxos', label: 'Cisco NX-OS' },
@@ -39,6 +41,9 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
   const [selectedGroupId, setSelectedGroupId] = useState<number>(
     host?.group_id ?? groupId ?? groups[0]?.id ?? 0,
   );
+  const [awsInstanceId, setAwsInstanceId] = useState(
+    host?.aws_instance_id ?? '',
+  );
 
   const isPending = add.isPending || update.isPending;
 
@@ -46,8 +51,13 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
     e.preventDefault();
     const h = hostname.trim();
     const ip = ipAddress.trim();
+    const instanceId = awsInstanceId.trim();
     if (!h || !ip) {
       void alert('Hostname and IP address are required.');
+      return;
+    }
+    if (instanceId && !isAwsInstanceId(instanceId)) {
+      void alert('AWS instance ID must look like i-0123456789abcdef0.');
       return;
     }
     try {
@@ -58,6 +68,7 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
           ip_address: ip,
           device_type: deviceType,
           group_id: selectedGroupId,
+          aws_instance_id: instanceId,
         });
       } else if (groupId != null) {
         await add.mutateAsync({
@@ -65,6 +76,7 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
           hostname: h,
           ip_address: ip,
           device_type: deviceType,
+          aws_instance_id: instanceId,
         });
       }
       onClose();
@@ -112,6 +124,24 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
               </option>
             ))}
           </select>
+        </div>
+        <div className="form-group">
+          <label className="form-label">AWS instance ID</label>
+          <input
+            className="form-input"
+            value={awsInstanceId}
+            onChange={(e) => setAwsInstanceId(e.target.value)}
+            placeholder="i-0123456789abcdef0"
+            spellCheck={false}
+            autoComplete="off"
+          />
+          <div
+            className="text-muted"
+            style={{ fontSize: '0.78rem', marginTop: '0.25rem' }}
+          >
+            Optional. Pins this host to an EC2 instance on the Topology map
+            when its IP is not one of the instance&apos;s addresses.
+          </div>
         </div>
         {isEdit && (
           <div className="form-group">

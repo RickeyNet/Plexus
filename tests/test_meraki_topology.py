@@ -472,7 +472,7 @@ def test_export_escapes_markup_in_device_names():
     html = render_topology_html(build_snapshot(raw))
     assert '<script>alert("x")' not in html
     assert "<title>&lt;b&gt;Org &amp; Co&lt;/b&gt; - Network Topology</title>" in html
-    assert html.count("</script>") == 2  # data block + viewer only
+    assert html.count("</script>") == 3  # data block, layout and viewer only
 
 
 # ── Merge into the Topology graph ────────────────────────────────────────────
@@ -672,6 +672,29 @@ def test_graph_to_snapshot_tags_sources_for_the_viewer_picker():
     assert nodes["m:1:v1"]["provider"] == "aws" and nodes["m:1:v1"]["integration_only"] is True
     assert [e.get("provider") for e in unified["edges"]] == ["aws", None]
     assert 'id="source"' in render_topology_html(unified)
+    # What the page's tidy layout reads, for the viewer to lay the map out the same way.
+    assert nodes["7"]["topo"] == {"group_name": "HQ", "in_inventory": True}
+    assert nodes["m:1:v1"]["topo"] == {
+        "source": "meraki",
+        "meraki": {"provider": "aws", "node_id": "v1", "kind": "vpc", "org_ref": 1, "site_id": "S", "site_name": "S"},
+    }
+    assert [e["protocol"] for e in unified["edges"]] == ["attach", "cdp"]
+
+
+def test_export_inlines_the_page_layout_when_the_frontend_is_built(snapshot, tmp_path, monkeypatch):
+    from netcontrol.integrations.meraki import html_export
+
+    script = tmp_path / "viewer-layout.js"
+    script.write_text('var PlexusLayout=(function(e){return e})({});var s="</script>";', encoding="utf-8")
+    monkeypatch.setattr(html_export, "_LAYOUT_SCRIPT_PATH", script)
+    html = render_topology_html(snapshot)
+    # Inlined, and unable to close its own script block early.
+    assert '<script>var PlexusLayout=(function(e){return e})({});var s="<\\/script>";</script>' in html
+
+    monkeypatch.setattr(html_export, "_LAYOUT_SCRIPT_PATH", tmp_path / "missing.js")
+    # Not built: the viewer keeps the export's own layout.
+    assert "<script></script>" in render_topology_html(snapshot)
+    assert "__LAYOUT_JS__" not in render_topology_html(snapshot)
 
 
 # ── HTTP API ─────────────────────────────────────────────────────────────────

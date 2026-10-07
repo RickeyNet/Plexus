@@ -9,6 +9,7 @@ import csv
 import io
 import ipaddress
 import json
+import re
 import socket
 import uuid
 
@@ -90,6 +91,29 @@ def _validate_host_ip(ip_str: str) -> str:
     return ip_str
 
 
+# An EC2 instance ID: ``i-`` and hex (8 or 17 digits on AWS; the demo
+# account's are shorter).
+_AWS_INSTANCE_ID_RE = re.compile(r"^i-[0-9a-f]{1,17}$", re.IGNORECASE)
+
+
+def _validate_aws_instance_id(value: str | None) -> str | None:
+    """Trim an AWS instance ID; ``''`` clears it, ``None`` leaves it as is."""
+    if value is None:
+        return None
+    value = value.strip()
+    if value and not _AWS_INSTANCE_ID_RE.match(value):
+        raise HTTPException(422, f"Invalid AWS instance ID {value!r}: expected an EC2 instance ID such as i-0abc1234")
+    return value
+
+
+def _invalidate_topology_cache() -> None:
+    """Drop the assembled /api/topology cache after a host changes, so a host
+    that is an AWS instance (by address or ID) is on the map at once."""
+    from netcontrol.routes.topology import invalidate_topology_cache
+
+    invalidate_topology_cache()
+
+
 # ── Pydantic Models ──────────────────────────────────────────────────────────
 
 
@@ -109,6 +133,8 @@ class HostCreate(BaseModel):
     device_type: str = "cisco_ios"
     vrf_name: str = ""
     vlan_id: str = ""
+    # The EC2 instance this host is, matched before its addresses on the AWS map.
+    aws_instance_id: str = ""
 
 
 class HostUpdate(BaseModel):
@@ -117,6 +143,8 @@ class HostUpdate(BaseModel):
     device_type: str = "cisco_ios"
     vrf_name: str | None = None
     vlan_id: str | None = None
+    # None leaves it unchanged; "" clears it.
+    aws_instance_id: str | None = None
     # Optional - when present, the host is moved to the new group as part
     # of the update so renaming and re-grouping happen in one round-trip.
     group_id: int | None = None
@@ -1006,6 +1034,7 @@ async def list_hosts(group_id: int):
 @router.post("/api/inventory/{group_id}/hosts", status_code=201)
 async def add_host(group_id: int, body: HostCreate):
     _validate_host_ip(body.ip_address)
+    aws_instance_id = _validate_aws_instance_id(body.aws_instance_id) or ""
     try:
         hid = await db.add_host(
             group_id,
@@ -1014,9 +1043,13 @@ async def add_host(group_id: int, body: HostCreate):
             body.device_type,
             vrf_name=body.vrf_name or "",
             vlan_id=str(body.vlan_id or ""),
+            aws_instance_id=aws_instance_id,
         )
     except ValueError:
         raise HTTPException(409, "A host with that IP address already exists in this group")
+    # The map may have a place for the host already (an AWS instance with
+    # its address or ID): show it on the next load, not after the cache TTL.
+    _invalidate_topology_cache()
     # Auto-apply graph templates to manually added host
     try:
         await db.apply_graph_templates_to_host(hid)
@@ -1035,6 +1068,7 @@ async def add_host(group_id: int, body: HostCreate):
 async def update_host(host_id: int, body: HostUpdate):
     if body.ip_address:
         _validate_host_ip(body.ip_address)
+    aws_instance_id = _validate_aws_instance_id(body.aws_instance_id)
     prior = await db.get_host(host_id)
     prior_ip = (prior.get("ip_address") if prior else "") or ""
     await db.update_host(
@@ -1044,7 +1078,9 @@ async def update_host(host_id: int, body: HostUpdate):
         body.device_type,
         vrf_name=body.vrf_name,
         vlan_id=body.vlan_id,
+        aws_instance_id=aws_instance_id,
     )
+    _invalidate_topology_cache()
     # Optional re-group as part of the same edit. The (group_id, ip_address)
     # unique key means moving to a group that already has this IP will fail
     # with an asyncpg/sqlite UniqueViolationError - surface as a clean 409.

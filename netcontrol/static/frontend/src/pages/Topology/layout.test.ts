@@ -2,7 +2,17 @@ import { describe, expect, it } from 'vitest';
 
 import type { TopologyEdge, TopologyNode } from '@/api/topology';
 
-import { crowdedGroups, orderSources, SOURCE_GAP, tidyLabel, tidyTree, tidyTreeLayout, TIDY_LABEL_MAX } from './layout';
+import {
+  crowdedGroups,
+  fitTitles,
+  orderSources,
+  SOURCE_GAP,
+  tidyLabel,
+  tidyTree,
+  tidyTreeLayout,
+  TIDY_LABEL_MAX,
+  type XY,
+} from './layout';
 
 const meraki = (id: string, kind: string, site: string, provider?: string): TopologyNode => ({
   id,
@@ -81,8 +91,9 @@ describe('tidyTreeLayout', () => {
     expect(pos.get('spoke1')!.y).toBe(level);
     expect(pos.get('spoke2')!.y).toBe(level);
     expect(pos.get('spoke1-sw')!.y).toBe(level * 2);
-    // The hub's own site comes first, and other sites are set apart from it.
-    expect(pos.get('hub-sw')!.x).toBeLessThan(pos.get('spoke1')!.x);
+    // The hub's own site is in the middle of the others, set apart from them.
+    expect(pos.get('spoke1')!.x).toBeLessThan(pos.get('hub-sw')!.x);
+    expect(pos.get('hub-sw')!.x).toBeLessThan(pos.get('spoke2')!.x);
     expect(pos.get('spoke2')!.x - pos.get('spoke1')!.x).toBeGreaterThan(120);
   });
 
@@ -279,10 +290,10 @@ describe('tidyTree site frames', () => {
     expect(pieces.get('hub-fw')).toBe(pieces.get('hub'));
     expect(pieces.get('dev-igw')).toBe(pieces.get('dev'));
     expect(pieces.get('dev')).not.toBe(pieces.get('prod'));
-    // The transit gateway under the hub and the unlinked customer gateways
-    // are two pieces of the transit site, not one frame across the map.
-    expect(pieces.get('cgw1')).toBe(pieces.get('cgw2'));
-    expect(pieces.get('tgw')).not.toBe(pieces.get('cgw1'));
+    // The unlinked customer gateways are drawn under the transit gateway, in
+    // its frame, not in a second frame under the trees.
+    expect(pieces.get('cgw1')).toBe(pieces.get('tgw'));
+    expect(pieces.get('cgw2')).toBe(pieces.get('tgw'));
     expect(pieces.get('tgw')!.startsWith('m:1:transit#')).toBe(true);
   });
 
@@ -340,16 +351,24 @@ describe('tidyTree Cato backbone', () => {
     }
   }
 
-  it('puts every PoP in one row, far enough down for steep links', () => {
-    const { positions } = tidyTree(nodes, edges);
-    const cloud = positions.get('cato:cloud')!;
+  it('puts every PoP in one row, linked to the backbone by a comb', () => {
+    const { positions, routes } = tidyTree(nodes, edges);
     const pops = Array.from({ length: 20 }, (_, p) => positions.get(popId(p))!);
     // One row: no link from the backbone runs past a row of PoPs and users.
     expect(new Set(pops.map((p) => p.y)).size).toBe(1);
-    const halfWidth = Math.max(...pops.map((p) => Math.abs(p.x - cloud.x)));
-    // A wide row drops further than one level, so the far links come down steeply.
-    expect(pops[0].y - cloud.y).toBeGreaterThan(170);
-    expect(pops[0].y - cloud.y).toBeGreaterThanOrEqual(4 * Math.sqrt(halfWidth));
+    // Each link runs square, and comes straight down onto its PoP.
+    for (const e of edges.filter((l) => l.to === 'cato:cloud')) {
+      const route = routes.get(e.id)!;
+      expect(route[0]).toEqual(positions.get('cato:cloud'));
+      expect(route[route.length - 1]).toEqual(positions.get(e.from));
+      expect(route.length).toBeGreaterThanOrEqual(2);
+      for (let i = 1; i < route.length; i++) {
+        expect(route[i].x === route[i - 1].x || route[i].y === route[i - 1].y).toBe(true);
+      }
+      const [a, b] = route.slice(-2);
+      expect(a.x).toBe(b.x);
+      expect(a.y).toBeLessThan(b.y);
+    }
   });
 
   it('frames each PoP with its users', () => {
@@ -411,5 +430,276 @@ describe('tidyTree remote users', () => {
     const placed = users.map((u) => positions.get(u.id)!);
     expect(placed.every((p) => p.y > pop.y && p.y < pop.y + 3000 && Math.abs(p.x - pop.x) < 4000)).toBe(true);
     expect(new Set(users.map((u) => pieces.get(u.id))).size).toBe(1);
+  });
+});
+
+describe('tidyTree link-less devices', () => {
+  const xs = (pos: Map<number | string, { x: number; y: number }>, ids: (number | string)[]) =>
+    ids.map((id) => pos.get(id)!.x);
+  const ys = (pos: Map<number | string, { x: number; y: number }>, ids: (number | string)[]) =>
+    ids.map((id) => pos.get(id)!.y);
+
+  it('draws a device with no links with its site, under the gateway', () => {
+    const nodes = [
+      meraki('mx', 'appliance', 'a'),
+      meraki('sw', 'switch', 'a'),
+      meraki('ap1', 'wireless', 'a'),
+      meraki('dormant-ap1', 'wireless', 'a'),
+      meraki('dormant-ap2', 'wireless', 'a'),
+      meraki('sensor', 'sensor', 'a'),
+      meraki('mx2', 'appliance', 'b'),
+      meraki('sw2', 'switch', 'b'),
+    ];
+    const edges = [link('mx', 'sw'), link('sw', 'ap1'), link('mx2', 'sw2')];
+    expectNoOverlap(nodes, edges);
+    const { positions: pos, pieces } = tidyTree(nodes, edges);
+    const tree = ['mx', 'sw', 'ap1'];
+    const stray = ['dormant-ap1', 'dormant-ap2', 'sensor'];
+    const mx = pos.get('mx')!;
+    // Under the gateway, next to the site's other devices and in its frame.
+    for (const y of ys(pos, stray)) expect(y).toBeGreaterThan(mx.y);
+    for (const y of ys(pos, stray)) expect(y).toBeLessThanOrEqual(Math.max(...ys(pos, tree)));
+    for (const x of xs(pos, stray)) {
+      expect(x).toBeGreaterThanOrEqual(Math.min(...xs(pos, tree)) - 200);
+      expect(x).toBeLessThanOrEqual(Math.max(...xs(pos, tree)) + 300);
+    }
+    for (const id of stray) expect(pieces.get(id)).toBe(pieces.get('mx'));
+    // Site b is left alone, to the right of all of site a.
+    const b = xs(pos, ['mx2', 'sw2']);
+    expect(Math.min(...b)).toBeGreaterThan(Math.max(...xs(pos, [...tree, ...stray])));
+    expect(pieces.get('sw2')).toBe(pieces.get('mx2'));
+    expect(pieces.get('mx2')).not.toBe(pieces.get('mx'));
+  });
+
+  it('keeps a site with no links at all in the grid under the trees', () => {
+    const nodes = [
+      meraki('mx', 'appliance', 'a'),
+      meraki('sw', 'switch', 'a'),
+      meraki('off-mx', 'appliance', 'c'),
+      meraki('off-sw', 'switch', 'c'),
+    ];
+    const { positions: pos, pieces } = tidyTree(nodes, [link('mx', 'sw')]);
+    const treeBottom = Math.max(...ys(pos, ['mx', 'sw']));
+    for (const y of ys(pos, ['off-mx', 'off-sw'])) expect(y).toBeGreaterThan(treeBottom);
+    expect(pieces.get('off-mx')).toBe(pieces.get('off-sw'));
+    expect(pieces.get('off-mx')).not.toBe(pieces.get('mx'));
+  });
+
+  it('keeps devices of no group in the grid under the trees, and grouped ones with their group', () => {
+    const inGroup = (id: number, label: string): TopologyNode => ({ ...host(id, label), group_name: 'lab' });
+    const nodes = [inGroup(1, 'core'), inGroup(2, 'edge'), inGroup(3, 'spare'), host(4, 'loner')];
+    const { positions: pos, pieces } = tidyTree(nodes, [link(1, 2)]);
+    const treeBottom = Math.max(...ys(pos, [1, 2]));
+    expect(pos.get(3)!.y).toBeGreaterThan(pos.get(1)!.y);
+    expect(pos.get(3)!.y).toBeLessThanOrEqual(treeBottom);
+    expect(pieces.get(3)).toBe(pieces.get(1));
+    expect(pos.get(4)!.y).toBeGreaterThan(treeBottom);
+    expect(pieces.has(4)).toBe(false);
+  });
+
+  it('wraps many devices with no links into a grid after the gateway’s other devices', () => {
+    const nodes = [meraki('mx', 'appliance', 'a'), meraki('sw1', 'switch', 'a'), meraki('sw2', 'switch', 'a')];
+    const stray: string[] = [];
+    for (let i = 1; i <= 12; i++) {
+      stray.push(`ap${i}`);
+      nodes.push(meraki(`ap${i}`, 'wireless', 'a'));
+    }
+    const edges = [link('mx', 'sw1'), link('mx', 'sw2')];
+    const pos = expectNoOverlap(nodes, edges);
+    const mx = pos.get('mx')!;
+    const level = pos.get('sw1')!.y - mx.y;
+    expect(level).toBeGreaterThan(0);
+    expect(pos.get('sw2')!.y).toBe(pos.get('sw1')!.y);
+    const strayYs = ys(pos, stray);
+    expect(Math.max(...strayYs) - Math.min(...strayYs)).toBeGreaterThan(0);
+    expect(new Set(xs(pos, stray)).size).toBeGreaterThan(1);
+    // The switches come first, directly under the gateway; the grid starts
+    // no higher than them and after them.
+    expect(Math.min(...strayYs)).toBeGreaterThanOrEqual(pos.get('sw1')!.y);
+    expect(Math.min(...xs(pos, stray))).toBeGreaterThan(Math.max(...xs(pos, ['sw1', 'sw2'])));
+  });
+
+  it('still frames a site drawn as two separate networks twice', () => {
+    const nodes = [
+      meraki('mx', 'appliance', 'a'),
+      meraki('sw', 'switch', 'a'),
+      meraki('lab-sw1', 'switch', 'a'),
+      meraki('lab-sw2', 'switch', 'a'),
+      meraki('dormant', 'wireless', 'a'),
+    ];
+    const { pieces } = tidyTree(nodes, [link('mx', 'sw'), link('lab-sw1', 'lab-sw2')]);
+    expect(pieces.get('dormant')).toBe(pieces.get('mx'));
+    expect(pieces.get('lab-sw1')).not.toBe(pieces.get('mx'));
+  });
+
+  it('is deterministic', () => {
+    const nodes = [
+      meraki('mx', 'appliance', 'a'),
+      meraki('sw', 'switch', 'a'),
+      meraki('ap', 'wireless', 'a'),
+      meraki('dormant-ap', 'wireless', 'a'),
+      meraki('sensor', 'sensor', 'a'),
+      meraki('mx2', 'appliance', 'b'),
+      meraki('dormant-mx', 'appliance', 'c'),
+      host(1, 'loner'),
+    ];
+    const edges = [link('mx', 'sw'), link('sw', 'ap'), link('mx2', 'mx2')];
+    const first = tidyTree(nodes, edges);
+    const second = tidyTree([...nodes].reverse(), edges);
+    for (const n of nodes) expect(second.positions.get(n.id)).toEqual(first.positions.get(n.id));
+    expect([...second.pieces.entries()].sort()).toEqual([...first.pieces.entries()].sort());
+  });
+});
+
+describe('tidyTree spokes', () => {
+  // An AWS account: a hub VPC (its router, an internet gateway and two
+  // instances) peered with 12 VPCs, each a router with an internet gateway
+  // and an instance, and a transit gateway. The VPC names are long enough
+  // that the peers wrap onto more than one row.
+  const vpc = (id: string, site: string): TopologyNode => ({
+    ...meraki(id, 'vpc', site, 'aws'),
+    label: id.padEnd(40, '-'),
+  });
+  const nodes: TopologyNode[] = [
+    vpc('hub', 'hub'),
+    meraki('hub-igw', 'wan', 'hub', 'aws'),
+    meraki('hub-i1', 'instance', 'hub', 'aws'),
+    meraki('hub-i2', 'instance', 'hub', 'aws'),
+    meraki('tgw', 'cloud', 'transit', 'aws'),
+  ];
+  const edges: TopologyEdge[] = [
+    link('hub', 'hub-igw', 'wan'),
+    link('hub', 'hub-i1', 'cloud'),
+    link('hub', 'hub-i2', 'cloud'),
+    link('hub', 'tgw', 'cloud'),
+  ];
+  const peers: string[] = [];
+  for (let i = 0; i < 12; i++) {
+    const peer = `peer${String(i).padStart(2, '0')}`;
+    peers.push(peer);
+    nodes.push(vpc(peer, peer), meraki(`${peer}-igw`, 'wan', peer, 'aws'), meraki(`${peer}-i`, 'instance', peer, 'aws'));
+    edges.push(link('hub', peer, 'peering'), link(peer, `${peer}-igw`, 'wan'), link(peer, `${peer}-i`, 'cloud'));
+  }
+  const spokes = [...peers, 'tgw'];
+  const hubEdge = (to: string) => edges.find((e) => e.from === 'hub' && e.to === to)!;
+  const HEAD_SIDE = 70;
+  const segments = (route: XY[]) => route.slice(1).map((b, i) => [route[i], b] as const);
+  // The top of the row a spoke is in: its internet gateway, if it has one.
+  const rowTop = (positions: Map<number | string, XY>, spoke: string) =>
+    positions.get(spoke === 'tgw' ? spoke : `${spoke}-igw`)!.y;
+
+  it('puts the hub in the middle of its first row of spokes, over its own devices', () => {
+    expectNoOverlap(nodes, edges);
+    const { positions } = tidyTree(nodes, edges);
+    const hub = positions.get('hub')!;
+    const firstTop = Math.min(...spokes.map((s) => rowTop(positions, s)));
+    const first = peers.filter((p) => rowTop(positions, p) === firstTop).map((p) => positions.get(p)!);
+    expect(first.some((p) => p.x < hub.x)).toBe(true);
+    expect(first.some((p) => p.x > hub.x)).toBe(true);
+    const own = ['hub-i1', 'hub-i2'].map((id) => positions.get(id)!.x);
+    expect(hub.x).toBeGreaterThanOrEqual(Math.min(...own));
+    expect(hub.x).toBeLessThanOrEqual(Math.max(...own));
+    // The spokes wrap onto more than one row.
+    expect(new Set(spokes.map((s) => rowTop(positions, s))).size).toBeGreaterThan(1);
+  });
+
+  it('routes every link to a spoke, square, from the hub to the spoke', () => {
+    const { positions, routes } = tidyTree(nodes, edges);
+    for (const id of ['hub-i1', 'hub-i2', 'hub-igw']) expect(routes.has(hubEdge(id).id)).toBe(false);
+    for (const spoke of spokes) {
+      const route = routes.get(hubEdge(spoke).id)!;
+      expect(route).toBeDefined();
+      expect(route[0]).toEqual(positions.get('hub'));
+      expect(route[route.length - 1]).toEqual(positions.get(spoke));
+      for (const [a, b] of segments(route)) expect(a.x === b.x || a.y === b.y).toBe(true);
+    }
+    // A peer's links to its own devices are not on a comb.
+    expect(routes.has(edges.find((e) => e.from === 'peer00' && e.to === 'peer00-i')!.id)).toBe(false);
+  });
+
+  it('comes down beside a spoke’s internet gateway, and straight onto one without', () => {
+    const { positions, routes } = tidyTree(nodes, edges);
+    for (const peer of peers) {
+      const at = positions.get(peer)!;
+      const [drop, turn, end] = routes.get(hubEdge(peer).id)!.slice(-3);
+      expect(drop.x).toBe(at.x - HEAD_SIDE);
+      expect(drop.y).toBeLessThan(positions.get(`${peer}-igw`)!.y);
+      expect(turn).toEqual({ x: at.x - HEAD_SIDE, y: at.y });
+      expect(end).toEqual(at);
+    }
+    const [a, b] = routes.get(hubEdge('tgw').id)!.slice(-2);
+    expect(a.x).toBe(b.x);
+    expect(a.y).toBeLessThan(b.y);
+  });
+
+  it('runs no link through a node', () => {
+    const { positions, routes } = tidyTree(nodes, edges);
+    const clear = 30;
+    for (const spoke of spokes) {
+      const route = routes.get(hubEdge(spoke).id)!;
+      for (const [id, n] of positions) {
+        if (id === 'hub' || id === spoke) continue;
+        for (const [a, b] of segments(route)) {
+          const through =
+            a.y === b.y
+              ? Math.abs(a.y - n.y) < clear && n.x > Math.min(a.x, b.x) && n.x < Math.max(a.x, b.x)
+              : Math.abs(a.x - n.x) < clear && n.y > Math.min(a.y, b.y) && n.y < Math.max(a.y, b.y);
+          expect(through, `the link to ${spoke} runs through ${String(id)}`).toBe(false);
+        }
+      }
+    }
+  });
+
+  it('takes the lower rows down one trunk, left of every site', () => {
+    const { positions, routes } = tidyTree(nodes, edges);
+    const firstTop = Math.min(...spokes.map((s) => rowTop(positions, s)));
+    const lower = spokes.filter((s) => rowTop(positions, s) > firstTop);
+    expect(lower.length).toBeGreaterThan(0);
+    const trunks = new Set<number>();
+    for (const spoke of lower) {
+      const route = routes.get(hubEdge(spoke).id)!;
+      // Down from the hub, across to the trunk, down it.
+      expect(route[1].x).toBe(route[0].x);
+      expect(route[2].y).toBe(route[1].y);
+      expect(route[3].x).toBe(route[2].x);
+      expect(route[3].y).toBeGreaterThan(route[2].y);
+      trunks.add(route[2].x);
+    }
+    expect(trunks.size).toBe(1);
+    const trunk = [...trunks][0];
+    const minX = Math.min(...[...positions.values()].map((p) => p.x));
+    // Clear of every site's frame (60 beside its nodes), with room to spare.
+    expect(trunk).toBeLessThanOrEqual(minX - 60 - 20);
+  });
+
+  it('keeps every site frame drawable, and is deterministic', () => {
+    const { positions, pieces, routes } = tidyTree(nodes, edges);
+    const placed = nodes.map((n) => ({ group: pieces.get(n.id)!, ...positions.get(n.id)! }));
+    expect(crowdedGroups(placed, 60, 34).size).toBe(0);
+    expect([...tidyTree(nodes, edges).routes.entries()]).toEqual([...routes.entries()]);
+  });
+});
+
+describe('fitTitles', () => {
+  it('shortens a title that would run into the next box, and only that one', () => {
+    const boxes = [
+      // A narrow box with a long name, a box beside it, and one far below.
+      { x0: 0, y0: 100, x1: 120, y1: 200, name: 'vpc-0ae7538824810f377 (us-east-2, not collected)' },
+      { x0: 200, y0: 100, x1: 400, y1: 200, name: 'prod' },
+      { x0: 0, y0: 600, x1: 120, y1: 700, name: 'a much longer name than this box is wide' },
+    ];
+    const [narrow, beside, below] = fitTitles(boxes, 16, 4);
+    expect(narrow.endsWith('…')).toBe(true);
+    expect(4 + narrow.length * 16 * 0.6).toBeLessThanOrEqual(200);
+    expect(beside).toBe('prod');
+    expect(below).toBe(boxes[2].name);
+  });
+
+  it('never shortens to fewer than 8 characters', () => {
+    const boxes = [
+      { x0: 0, y0: 100, x1: 10, y1: 200, name: 'a-very-long-site-name' },
+      { x0: 20, y0: 100, x1: 400, y1: 200, name: 'next' },
+    ];
+    expect(fitTitles(boxes, 16, 4)[0]).toHaveLength(8);
   });
 });
