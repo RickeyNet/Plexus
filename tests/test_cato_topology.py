@@ -533,11 +533,22 @@ def test_api_cato_sample_is_merged_into_the_topology(api):
     assert built.json()["summary"]["remote_users"] == 3
     org_ref = built.json()["org_ref"]
 
+    # An inventory host on a user's VPN address is not that user: the address
+    # is Cato's, handed out to whoever connects.
+    group = api.post("/api/inventory", json={"name": "core", "description": ""})
+    assert group.status_code in (200, 201), group.text
+    host = api.post(
+        f"/api/inventory/{group.json()['id']}/hosts",
+        json={"hostname": "not-dana", "ip_address": "10.41.0.11", "device_type": "cisco_xe"},
+    )
+    assert host.status_code in (200, 201), host.text
+
     graph = api.get("/api/topology").json()
     cato = [n for n in graph["nodes"] if (n.get("meraki") or {}).get("provider") == "cato"]
     assert {n["meraki"]["kind"] for n in cato} == {"appliance", "wan", "cloud", "user"}
     dana = next(n for n in cato if n["label"] == "Dana Reyes")
     assert dana["ip"] == "10.41.0.11" and dana["meraki"]["site_name"] == "PoP New York"
+    assert dana["source"] == "meraki" and not dana["in_inventory"]
     assert any(e.get("provider") == "cato" and e["protocol"] == "vpn" for e in graph["edges"])
 
     details = api.get(f"/api/meraki/nodes?org_ref={org_ref}&node_id=d:5003").json()
@@ -643,3 +654,18 @@ def test_export_draws_each_pop_over_its_users(snapshot):
     users = [by_label["Priya Nair"], by_label["Sam Okafor"]]
     assert all(u["site"] == pop["site"] and u["y"] > pop["y"] for u in users)
     assert min(u["x"] for u in users) <= pop["x"] <= max(u["x"] for u in users)
+
+
+def test_export_draws_a_pop_over_its_only_user_too():
+    # One user, whose name sorts before "PoP ...": the tree is still rooted at the PoP.
+    raw = build_sample_raw()
+    raw["users"][0]["popName"] = "Hong Kong"
+    raw["users"][0]["name"] = "Aaron Chen"
+    snap = build_snapshot(raw)
+    nodes: dict = {}
+    edges: list[dict] = []
+    merge_meraki_into_graph(nodes, edges, [(7, snap)], host_node=lambda _id: None, resolve_external=lambda *_: None)
+    export = graph_to_snapshot({"nodes": list(nodes.values()), "edges": edges}, {7: snap}, {})
+    by_label = {n["label"]: n for n in export["nodes"]}
+    pop, user = by_label["PoP Hong Kong"], by_label["Aaron Chen"]
+    assert user["site"] == pop["site"] and user["y"] > pop["y"]

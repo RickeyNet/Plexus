@@ -816,7 +816,18 @@ function GroupCard({
                               <td>{host.ip_address}</td>
                               <td>{host.device_type || 'cisco_ios'}</td>
                               <td>{host.model || '-'}</td>
-                              <td>{host.serial_number || '-'}</td>
+                              <td>
+                                {host.serial_number || '-'}
+                                {host.aws_instance_id && (
+                                  <div
+                                    className="text-muted"
+                                    style={{ fontSize: '0.78rem' }}
+                                    title="AWS instance ID"
+                                  >
+                                    {host.aws_instance_id}
+                                  </div>
+                                )}
+                              </td>
                               <td>{host.software_version || '-'}</td>
                               <td>
                                 <div style={{ display: 'flex', gap: '0.25rem' }}>

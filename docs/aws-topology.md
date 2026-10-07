@@ -134,6 +134,9 @@ Not every instance is a node: a VPC with hundreds of servers would bury the
 map. An instance is drawn when it forwards traffic or when it is a Plexus
 inventory host. Every other instance is listed in its VPC's details (name,
 ID, private and public IP, type, state, subnet) and found by the search box.
+An instance that becomes an inventory host later - a host added to the
+inventory, or given its instance ID, after the last discovery - is drawn as
+soon as the map is next loaded; no new discovery is needed.
 
 To see AWS alone, pick **AWS only** in the source selector of the Topology
 toolbar. The map then keeps the VPCs, the transit and VPN box and the links
@@ -165,7 +168,14 @@ lists its peerings on the **Routing** tab.
 - **Inventory hosts.** An instance whose private or public IP is the address
   (or an IP alias) of a Plexus inventory host becomes that host's node, so a
   firewall Plexus already manages is shown once, inside its VPC, with both
-  its SNMP/SSH data and its AWS data.
+  its SNMP/SSH data and its AWS data. When the host's inventory address is
+  not one AWS records (a NAT or load-balancer address, say), set its
+  **AWS instance ID** (`i-…`, in the host's edit dialog or as
+  `aws_instance_id` on `POST /api/inventory/{group}/hosts` and
+  `PUT /api/hosts/{id}`): the instance ID is checked before any address, in
+  any letter case, and a host that names one instance is never matched to
+  another by address. The host's node shows which instance it is (ID,
+  subnet, VPC) even when it is drawn as a Meraki or Cato device.
 - **Customer gateways.** A customer gateway is the public IP of the far end
   of a VPN. When a device on the map answers on that address - a Meraki
   appliance or Cato Socket through its WAN link, or an inventory host - the
@@ -211,7 +221,10 @@ Click a VPC for its tabs:
 A transit or virtual private gateway lists its attachments and VPN
 connections (tunnel addresses, tunnel status, routing, static routes); a
 transit gateway also lists the routes of its route tables under **Routing**.
-A forwarding instance lists its network interfaces.
+An instance's **Overview** tab shows its instance ID, state, type, VPC,
+availability zone, subnet, addresses and security groups, and its network
+interfaces are listed below. An inventory host that is an instance shows
+the instance ID and subnet on its Overview tab and tooltip too.
 
 ### Search and Path Mode
 
@@ -231,7 +244,12 @@ is checked separately, below the path.
 ### The AWS check of a path
 
 When both ends of a path are subnets or IP addresses and at least one is in
-a VPC, Plexus checks the flow against what discovery collected and reports
+a VPC, Plexus checks the flow against what discovery collected. An end
+picked as a device or site (a Meraki appliance clicked on the map, a VPC
+picked as a site) has no address to check; the path then says which end to
+add with the subnet box instead. An address in a range of a Cato vSocket or
+Meraki vMX that runs in AWS is checked too, though the picker files it under
+the Cato or Meraki site. The check reports
 **AWS allows it**, **AWS blocks it**, **AWS allows part of it** or **AWS
 check incomplete**, with the reason. Open the line for every step, in both
 directions.

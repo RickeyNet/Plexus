@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 
 import {
   type StpState,
   type TopologyEdge,
+  type TopologyMerakiRef,
   type TopologyNode,
   useUpdateHostCategory,
 } from '@/api/topology';
@@ -25,10 +26,13 @@ import { Modal } from '@/components/Modal';
 import {
   abbreviateInterface,
   DETAIL_CELL_STYLE,
+  DETAILS_PANEL_MIN_WIDTH,
+  draggedPanelWidth,
   formatBps,
   providerLabel,
   providerScopeName,
   providerSourceName,
+  SCROLL_X_STYLE,
   stpPortKey,
 } from './helpers';
 import { useMerakiNodeDetails } from '@/api/meraki';
@@ -53,7 +57,9 @@ interface Props {
   searchText?: string;
 }
 
-type TabKey = 'overview' | MerakiView | 'config' | 'errors' | 'audit';
+// 'aws' is the secondary AWS tab of a node whose primary reference is another
+// integration (a Meraki/Cato device that is also an EC2 instance).
+type TabKey = 'overview' | MerakiView | 'aws' | 'config' | 'errors' | 'audit';
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'overview', label: 'Overview' },
@@ -66,6 +72,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'firewall', label: 'Firewall' },
   { key: 'switching', label: 'Switching' },
   { key: 'wireless', label: 'Wireless' },
+  { key: 'aws', label: 'AWS' },
   { key: 'config', label: 'Config' },
   { key: 'errors', label: 'Errors' },
   { key: 'audit', label: 'Audit' },
@@ -73,6 +80,47 @@ const TABS: { key: TabKey; label: string }[] = [
 
 // Tabs backed by inventory (SNMP/SSH) data, keyed by host id.
 const INVENTORY_TABS: TabKey[] = ['interfaces', 'vlans', 'mac', 'config', 'errors', 'audit'];
+
+/**
+ * The AWS instance behind a node as a snapshot ref, when it is only a
+ * secondary reference (the node's own `meraki` ref is another integration).
+ */
+function secondaryAwsRef(node: TopologyNode): TopologyMerakiRef | null {
+  const instance = node.instance;
+  if (!instance || node.meraki?.provider === instance.provider) return null;
+  return {
+    org_ref: instance.org_ref,
+    node_id: instance.node_id,
+    site_id: '',
+    site_name: instance.vpc,
+    kind: 'server',
+    status: node.status ?? 'unknown',
+    provider: 'aws',
+    instance_id: instance.id,
+    subnet: instance.subnet,
+  };
+}
+
+// Width the operator dragged the details panel to, shared by every tab.
+const PANEL_WIDTH_KEY = 'plexus.topology.detailsWidth';
+
+function readStoredPanelWidth(): number | null {
+  try {
+    const width = Number(localStorage.getItem(PANEL_WIDTH_KEY) ?? NaN);
+    return Number.isFinite(width) && width >= DETAILS_PANEL_MIN_WIDTH ? width : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredPanelWidth(width: number | null): void {
+  try {
+    if (width == null) localStorage.removeItem(PANEL_WIDTH_KEY);
+    else localStorage.setItem(PANEL_WIDTH_KEY, String(width));
+  } catch {
+    // Storage unavailable (private mode, quota): the width just isn't remembered.
+  }
+}
 
 const SEVERITY_BADGE: Record<HostAuditFinding['severity'], string> = {
   critical: 'badge-danger',
@@ -114,9 +162,11 @@ export function NodeDetails({
   // Until the details load, only the device summary tab is offered.
   const merakiViews: MerakiView[] = !node.meraki ? [] : merakiData ? merakiViewsWithData(merakiData) : ['meraki'];
   const highlightTerms = searchTerms(searchText ?? '');
+  const awsRef = secondaryAwsRef(node);
 
   const tabs = TABS.filter((t) => {
     if (t.key === 'overview') return true;
+    if (t.key === 'aws') return awsRef != null;
     if (INVENTORY_TABS.includes(t.key) && (hostId != null || !node.meraki)) return true;
     return merakiViews.includes(t.key as MerakiView);
   }).map((t) => {
@@ -128,7 +178,7 @@ export function NodeDetails({
     return {
       ...t,
       // Without a host there is nothing behind an inventory tab.
-      disabled: !fromMeraki && hostId == null && t.key !== 'overview',
+      disabled: !fromMeraki && hostId == null && t.key !== 'overview' && t.key !== 'aws',
       // Points at the tabs holding rows that match the active map search.
       matched: sectionsMatch(sections, highlightTerms) || sectionsMatch(siteSections, highlightTerms),
     };
@@ -138,82 +188,165 @@ export function NodeDetails({
   const merakiView = merakiViews.includes(shownTab as MerakiView) ? (shownTab as MerakiView) : null;
   const tabLabel = tabs.find((t) => t.key === shownTab)?.label ?? '';
 
+  // The operator can drag the panel's left edge to widen it (wide tables on a
+  // big monitor); the width is remembered and then used for every tab.
+  const [customWidth, setCustomWidth] = useState<number | null>(readStoredPanelWidth);
+  const [handleHot, setHandleHot] = useState(false);
+  const asideRef = useRef<HTMLElement>(null);
+  const dragRef = useRef<{
+    startX: number;
+    startWidth: number;
+    mapWidth: number;
+    /** Latest dragged width; null until the pointer actually moves. */
+    width: number | null;
+  } | null>(null);
+  const panelWidth = customWidth ?? (merakiView || shownTab === 'aws' ? 460 : 380);
+
+  function startResize(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const aside = asideRef.current;
+    const map = aside?.offsetParent;
+    dragRef.current = {
+      startX: e.clientX,
+      // The width on screen: a remembered width is capped by the map's width.
+      startWidth: aside ? aside.getBoundingClientRect().width : panelWidth,
+      mapWidth: map ? map.clientWidth : window.innerWidth,
+      width: null,
+    };
+  }
+
+  function moveResize(e: React.PointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current;
+    if (!drag) return;
+    drag.width = draggedPanelWidth(drag.startWidth, drag.startX, e.clientX, drag.mapWidth);
+    setCustomWidth(drag.width);
+  }
+
+  function endResize() {
+    const drag = dragRef.current;
+    if (!drag) return;
+    dragRef.current = null;
+    // A plain click (or the first half of a double-click) leaves the width alone.
+    if (drag.width != null) writeStoredPanelWidth(drag.width);
+  }
+
+  function resetWidth() {
+    dragRef.current = null;
+    setCustomWidth(null);
+    writeStoredPanelWidth(null);
+  }
+
   return (
     <aside
+      ref={asideRef}
       style={{
         position: 'absolute',
         top: '0.75rem',
         right: '0.75rem',
-        width: merakiView ? 460 : 380,
+        width: panelWidth,
+        // A remembered width never pushes the panel past the map's left edge.
+        maxWidth: 'calc(100% - 1.5rem)',
         maxHeight: 'calc(100% - 1.5rem)',
+        display: 'flex',
+        flexDirection: 'column',
         background: 'var(--card-bg)',
         border: '1px solid var(--border)',
         borderRadius: '0.5rem',
-        padding: '0.85rem',
-        overflowY: 'auto',
+        overflow: 'hidden',
         zIndex: 5,
         boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
       }}
     >
+      {/* Resize handle. The content scrolls in the inner div, not the aside, so
+          the handle spans the panel's full height however far it is scrolled. */}
       <div
+        aria-hidden
+        title="Drag to resize, double-click to reset"
+        onPointerDown={startResize}
+        onPointerMove={moveResize}
+        onPointerUp={endResize}
+        onPointerCancel={endResize}
+        onDoubleClick={resetWidth}
+        onMouseEnter={() => setHandleHot(true)}
+        onMouseLeave={() => setHandleHot(false)}
         style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: '0.5rem',
+          position: 'absolute',
+          top: 0,
+          bottom: 0,
+          left: 0,
+          width: 6,
+          cursor: 'ew-resize',
+          zIndex: 1,
+          touchAction: 'none',
+          background: handleHot ? 'var(--border)' : 'transparent',
         }}
-      >
-        <h4 style={{ margin: 0 }}>{node.label || 'Unknown'}</h4>
-        <button
-          type="button"
-          className="modal-close"
-          onClick={onClose}
-          style={{ fontSize: '1.2rem' }}
+      />
+      <div style={{ padding: '0.85rem', overflowY: 'auto', minHeight: 0 }}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '0.5rem',
+          }}
         >
-          ×
-        </button>
-      </div>
+          <h4 style={{ margin: 0 }}>{node.label || 'Unknown'}</h4>
+          <button
+            type="button"
+            className="modal-close"
+            onClick={onClose}
+            style={{ fontSize: '1.2rem' }}
+          >
+            ×
+          </button>
+        </div>
 
-      <TabBar tabs={tabs} active={shownTab} onChange={setActiveTab} />
+        <TabBar tabs={tabs} active={shownTab} onChange={setActiveTab} />
 
-      <div style={{ marginTop: '0.6rem' }}>
-        {shownTab === 'overview' && (
-          <OverviewTab
-            node={node}
-            edges={edges}
-            allNodes={allNodes}
-            stpStateByPort={stpStateByPort}
-            onAddToInventory={onAddToInventory}
-            onCategoryUpdated={onCategoryUpdated}
-          />
-        )}
-        {shownTab === 'interfaces' && hostId != null && (
-          <InterfacesTab hostId={hostId} />
-        )}
-        {shownTab === 'vlans' && hostId != null && <VlansTab hostId={hostId} />}
-        {shownTab === 'mac' && hostId != null && <MacArpTab hostId={hostId} />}
-        {shownTab === 'config' && hostId != null && (
-          <ConfigTab hostId={hostId} />
-        )}
-        {shownTab === 'errors' && hostId != null && (
-          <ErrorsTab hostId={hostId} />
-        )}
-        {shownTab === 'audit' && hostId != null && <AuditTab hostId={hostId} />}
-        {merakiView && node.meraki && (
-          <>
-            {/* An inventory host that is also a Meraki device shows both sources. */}
-            {hostId != null && INVENTORY_TABS.includes(merakiView) && (
-              <SubHeading label={providerSourceName(node.meraki.provider)} />
-            )}
-            <MerakiDetails
-              key={merakiView}
-              meraki={node.meraki}
-              highlight={searchText}
-              view={merakiView}
-              title={tabLabel}
+        <div style={{ marginTop: '0.6rem' }}>
+          {shownTab === 'overview' && (
+            <OverviewTab
+              node={node}
+              edges={edges}
+              allNodes={allNodes}
+              stpStateByPort={stpStateByPort}
+              onAddToInventory={onAddToInventory}
+              onCategoryUpdated={onCategoryUpdated}
             />
-          </>
-        )}
+          )}
+          {shownTab === 'interfaces' && hostId != null && (
+            <InterfacesTab hostId={hostId} />
+          )}
+          {shownTab === 'vlans' && hostId != null && <VlansTab hostId={hostId} />}
+          {shownTab === 'mac' && hostId != null && <MacArpTab hostId={hostId} />}
+          {shownTab === 'config' && hostId != null && (
+            <ConfigTab hostId={hostId} />
+          )}
+          {shownTab === 'errors' && hostId != null && (
+            <ErrorsTab hostId={hostId} />
+          )}
+          {shownTab === 'audit' && hostId != null && <AuditTab hostId={hostId} />}
+          {merakiView && node.meraki && (
+            <>
+              {/* An inventory host that is also a Meraki device shows both sources. */}
+              {hostId != null && INVENTORY_TABS.includes(merakiView) && (
+                <SubHeading label={providerSourceName(node.meraki.provider)} />
+              )}
+              <MerakiDetails
+                key={merakiView}
+                meraki={node.meraki}
+                highlight={searchText}
+                view={merakiView}
+                title={tabLabel}
+              />
+            </>
+          )}
+          {shownTab === 'aws' && awsRef && (
+            <MerakiDetails key="aws" meraki={awsRef} highlight={searchText} view="all" title="AWS" />
+          )}
+        </div>
       </div>
     </aside>
   );
@@ -366,6 +499,25 @@ function OverviewTab(props: {
               {node.meraki.site_name || providerScopeName(node.meraki.provider)}
               {node.meraki.serial ? ` · ${node.meraki.serial}` : ''}
             </span>
+          </>
+        )}
+        {node.instance && (
+          <>
+            <span className="text-muted">AWS instance</span>
+            <span>{node.instance.id}</span>
+            {node.instance.subnet && (
+              <>
+                <span className="text-muted">Subnet</span>
+                <span>{node.instance.subnet}</span>
+              </>
+            )}
+            {/* For an AWS node the provider row above already names the VPC. */}
+            {node.meraki?.provider !== 'aws' && node.instance.vpc && (
+              <>
+                <span className="text-muted">VPC</span>
+                <span>{node.instance.vpc}</span>
+              </>
+            )}
           </>
         )}
         {node.platform && (
@@ -801,7 +953,7 @@ function CompactTable(props: {
   return (
     <>
       {/* Wider than the panel when a table has many columns; scroll, don't squeeze. */}
-      <div style={{ overflowX: 'auto' }}>
+      <div style={SCROLL_X_STYLE}>
         <table
           className="data-table"
           style={{ fontSize: '0.75rem', width: '100%' }}

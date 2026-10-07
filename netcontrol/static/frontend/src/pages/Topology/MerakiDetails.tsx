@@ -4,15 +4,18 @@ import { type DetailSection, useMerakiNodeDetails } from '@/api/meraki';
 import type { TopologyMerakiRef } from '@/api/topology';
 import { Modal } from '@/components/Modal';
 
-import { DETAIL_CELL_STYLE, providerSourceName } from './helpers';
+import { DETAIL_CELL_STYLE, providerSourceName, SCROLL_X_STYLE } from './helpers';
 import { formatWhen, type MerakiView, merakiViewSections, rowMatches, searchTerms } from './merakiHelpers';
 
 interface Props {
   meraki: TopologyMerakiRef;
   /** Terms from the active map search; matching rows are highlighted. */
   highlight?: string;
-  /** The tab being shown: only its sections are rendered. */
-  view: MerakiView;
+  /**
+   * The tab being shown: only its sections are rendered. 'all' renders every
+   * section of the device (a secondary reference shown on one tab).
+   */
+  view: MerakiView | 'all';
   /** Tab label, for the expanded view's title. */
   title: string;
 }
@@ -29,7 +32,8 @@ export function MerakiDetails({ meraki, highlight = '', view, title }: Props) {
   const data = details.data;
   const filterTerms = searchTerms(filter);
   const highlightTerms = searchTerms(highlight);
-  const { sections, siteSections } = merakiViewSections(data, view);
+  const { sections, siteSections } =
+    view === 'all' ? { sections: data.sections, siteSections: [] } : merakiViewSections(data, view);
 
   if (!sections.length && !siteSections.length) {
     return <p className="text-muted" style={{ fontSize: '0.78rem' }}>Nothing was collected for this device here.</p>;
@@ -116,6 +120,18 @@ interface SectionProps {
   highlightTerms: string[];
 }
 
+const WHOLE_CELL_STYLE = { ...DETAIL_CELL_STYLE, whiteSpace: 'nowrap' } as const;
+
+/**
+ * A key, and a table cell that is one word (an address, an ID, a name), stay
+ * on one line: "i-0f3c001" would otherwise break at its hyphen. A cell of
+ * several words wraps between them. A table too wide for the panel scrolls.
+ */
+function cellStyle(isKv: boolean, column: number, cell: string) {
+  if (isKv) return column === 0 ? WHOLE_CELL_STYLE : DETAIL_CELL_STYLE;
+  return /\s/.test(cell) ? DETAIL_CELL_STYLE : WHOLE_CELL_STYLE;
+}
+
 // A tab holds only a few sections, so they all start open.
 function Section({ section, filterTerms, highlightTerms }: SectionProps) {
   const filtering = filterTerms.length > 0;
@@ -159,7 +175,7 @@ function Section({ section, filterTerms, highlightTerms }: SectionProps) {
           </span>
         )}
       </summary>
-      <div style={{ overflowX: 'auto', marginBottom: '0.5rem' }}>
+      <div style={{ ...SCROLL_X_STYLE, marginBottom: '0.5rem' }}>
         <table className="data-table" style={{ fontSize: '0.74rem', width: '100%' }}>
           {!isKv && (
             <thead>
@@ -180,7 +196,7 @@ function Section({ section, filterTerms, highlightTerms }: SectionProps) {
                   <td
                     key={j}
                     className={isKv && j === 0 ? 'text-muted' : undefined}
-                    style={isKv && j === 0 ? { ...DETAIL_CELL_STYLE, whiteSpace: 'nowrap' } : DETAIL_CELL_STYLE}
+                    style={cellStyle(isKv, j, cell)}
                   >
                     {cell}
                   </td>

@@ -64,26 +64,34 @@ belong to no inventory group).
   inventory, then Meraki, Cato, AnyConnect, AWS and Azure. Links between
   sources are still drawn, but they do not pull a device into another
   source's region, and they go around the sources rather than through them:
-  up from each end, in a column clear of the devices above it, to a lane
+  up from each end, around the other sites' boxes and devices, to a lane
   over the tops of the regions, then across and down (a vSocket to its VPC,
   for example). Links whose stretches overlap get lanes of their own, the
   shorter one lower; click one for its details as usual. Within a source each connected network is a tree growing
   down from its busiest gateway (for a hub-and-spoke VPN, the hub; for Cato,
   the backbone, then the PoPs), following cables first and VPN tunnels only
   to reach other sites. Every device gets its own spot, so nothing overlaps
-  and nothing needs arranging; devices with no links are listed in a grid
-  underneath. An appliance's WAN uplinks (and a VPC's internet gateway) are
+  and nothing needs arranging. A device with no links (dormant, offline, or
+  a sensor the API reports no neighbour for) is drawn in a small grid under
+  its site's gateway, inside the site's box, after the gateway's other
+  devices; only devices whose whole site has no links (and inventory
+  devices in no group) are listed in a grid under the trees. An appliance's WAN uplinks (and a VPC's internet gateway) are
   drawn in a row just above it. Eight or more devices of one site with
   nothing below them (access points on a switch, remote users on a PoP) are
-  drawn as a grid under their parent. The other layouts (physics, circular,
+  drawn as a grid under their parent. A device's links to the sites hanging
+  off it (a VPN hub's spokes, a VPC's peers, the Cato backbone's PoPs) are
+  drawn as a comb: down from the device to a bar above the row of sites and
+  a straight drop into each (beside a site's WAN uplinks, not through them).
+  When the sites wrap onto several rows, a trunk down the left of the block
+  carries the bar to each lower row, so no link runs through another site's
+  box. The device sits in the middle of its spokes, over its own devices.
+  The other layouts (physics, circular,
   hierarchical) remain in the layout menu. A node you dragged stays where
   you put it; **Reset Positions** puts every node back in the tree.
 - **Large maps.** When a device's children would make one very wide row
   (hundreds of sites behind a VPN hub), they wrap onto several rows under
   it, in site name order, so the hub stays on top. The Cato PoPs are the
-  exception: they stay in one row under the Cato Cloud, dropped further the
-  wider the row is, so the backbone links reach every PoP without crossing
-  another node. With more than
+  exception: they stay in one row under the Cato Cloud, on one comb. With more than
   300 VPN tunnels, tunnels are not all drawn at once: click a device to see
   its tunnels, or turn on **VPN Tunnels** in the toolbar to draw them all.
   The links from the Cato Cloud to its PoPs are always drawn and are not
@@ -91,18 +99,23 @@ belong to no inventory group).
   Above roughly 600 devices the map also drops the glow behind nodes and
   links and the hover highlight, which keeps it responsive; links stay
   drawn while you pan or zoom.
-  The HTML export follows the same rule: tunnels run behind the site boxes,
-  and past 300 of them only the selected site's tunnels are drawn,
+  The HTML export follows the same rule: tunnels run over the site boxes
+  and LAN links but under the devices, and past 300 of them only the selected site's tunnels are drawn,
   highlighted (selecting any device selects its site's tunnels;
   **Layers > All tunnels at once** draws every one).
 - Each Meraki network is framed as a labelled site box. A device with
-  links into other sites (a VPN hub, a VPC peered with others) sits level
-  with the devices of its own site, not in the middle of the sites hanging
-  off it, so its box stays clear of them. A site whose devices the tree
-  places in more than one spot (the gateways of the **AWS transit and VPN**
-  box, some under a VPC and some with no links) gets a box in each spot,
-  with the same title. A box that would still enclose another site's
-  devices is left out.
+  links into other sites (a VPN hub, a VPC peered with others) sits over
+  the devices of its own site, which are drawn in the middle of the sites
+  hanging off it, so its box stays clear of them. A site whose devices the tree
+  places in more than one spot (two networks of the site not linked to each
+  other) gets a box in each spot, with the same title. Devices with no links
+  do not split a site: they are drawn under its gateway, in its box (the
+  unlinked customer gateways of the **AWS transit and VPN** box sit under
+  its transit gateway). A box that would still enclose another site's
+  devices is left out. A site title that would run into the next site's box
+  (a long name over a narrow box, such as a VPC that was not collected) is
+  shortened with an ellipsis; the full name is in the tooltip and the
+  details panel. The HTML export follows, combs and titles included.
 - You can still drag a node to pin it; right-click returns it to its place
   in the tree, and **Reset Positions** returns the whole map to the tidy
   arrangement.
@@ -112,9 +125,13 @@ belong to no inventory group).
   site** (the site's appliance stands for it). Every pair is traced, up to
   six picks; the path is highlighted and listed hop by hop. It is the
   shortest way over the cables, uplinks and VPN tunnels that are up, with
-  AutoVPN preferred over non-Meraki IPsec - route tables are not consulted.
+  AutoVPN preferred over non-Meraki IPsec. The path drawn shows how the
+  ends are joined, not the route each device picks; with an end in AWS or
+  Azure, that cloud's route tables and rules are checked separately (see
+  [AWS topology](aws-topology.md#the-aws-check-of-a-path)).
   The HTML export has the same tool under **Path**: click sites in the
-  list or on the map.
+  list or on the map. It draws the path only and does not run the AWS or
+  Azure check.
 - Path picks can also be **subnets**: choose one in **Add a subnet or IP
   address**, or type an address or network and press Enter (the most
   specific collected subnet containing it is used; if several sites have
@@ -174,8 +191,10 @@ Click a Meraki device and pick a tab. A security appliance also shows its
 site's configuration on the matching tabs: VLANs and DHCP, static and derived
 routes, VPN mode and peers, firewall and NAT rules, SSIDs. Switches show
 ports, SVIs, routing and stack membership; all devices show LLDP/CDP
-neighbors. Use the filter box to narrow long tables, or **Expand** for a
-full-width view of the tab.
+neighbors. Use the filter box to narrow long tables. Tables wider than the
+panel scroll sideways (the scrollbar stays visible), the panel's left edge can
+be dragged to widen it (double-click the edge to reset; the width is
+remembered), and **Expand** opens the tab in a large modal.
 
 ### Search
 
@@ -333,13 +352,18 @@ contains the API key, pre-shared keys, or VPN/RADIUS shared secrets.
 | Light / dark | **Theme** |
 | Statistics and collection warnings | **Report** |
 
-The export uses its own layout (sites as boxes in a grid); positions you have
-pinned on the Topology page are not carried over.
+The export is laid out like the Topology page's **Tidy tree**, by the same
+code: a region per source side by side, each network a tree in boxes of its
+own that do not overlap, and the links between sources routed around the
+other sites and over the regions. Positions you have pinned on the Topology
+page are not carried over. The layout code comes from the frontend build
+(`viewer-layout.js` in `frontend/dist`); a Plexus whose frontend was never
+built exports the older layout, with the sites packed in a grid.
 
 The file always holds every source; its source selector works like the one on
-the Topology page. One source packs its sites together, recounts the sites,
-devices and tunnels in the header, and limits search and Path to what it
-shows. The selector appears only when the export includes an integration.
+the Topology page. One source is laid out again on its own, recounts the
+sites, devices and tunnels in the header, and limits search and Path to what
+it shows. The selector appears only when the export includes an integration.
 
 ## API reference
 

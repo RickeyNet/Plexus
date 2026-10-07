@@ -171,6 +171,24 @@ export const DETAIL_CELL_STYLE = {
   verticalAlign: 'top',
 } as const;
 
+/** A table wider than the panel scrolls sideways; the scrollbar stays visible so the cut-off is obviously scrollable (overlay scrollbars hide it). */
+export const SCROLL_X_STYLE = {
+  overflowX: 'auto',
+  scrollbarWidth: 'thin',
+  scrollbarColor: 'var(--text-muted) transparent',
+} as const;
+
+export const DETAILS_PANEL_MIN_WIDTH = 380;
+
+/** Width of the details panel while its left edge is dragged from startX to clientX; never narrower than the minimum nor wider than the map minus its margins. */
+export function draggedPanelWidth(startWidth: number, startX: number, clientX: number, mapWidth: number): number {
+  // The panel is pinned on the right, so dragging its left edge left widens it.
+  const wanted = startWidth + (startX - clientX);
+  // 0.75rem margin on each side of the panel inside the map.
+  const max = Math.max(DETAILS_PANEL_MIN_WIDTH, mapWidth - 24);
+  return Math.round(Math.min(max, Math.max(DETAILS_PANEL_MIN_WIDTH, wanted)));
+}
+
 /** Where the integration's data is read from. */
 export function providerSourceName(provider?: string | null): string {
   if (provider === 'aws') return 'AWS API';
@@ -423,11 +441,16 @@ export function nodeTitle(node: TopologyNode): string {
   const hasPct = node.ipam_utilization_pct != null && !Number.isNaN(Number(node.ipam_utilization_pct));
   const ipamPct = hasPct ? `${Math.round(Number(node.ipam_utilization_pct))}%` : 'n/a';
   const ipamInfo = ipamSubnet ? `\nIPAM: ${ipamSubnet} (${ipamPct})` : '';
+  const instance = node.instance;
+  const instanceInfo = instance ? `\nInstance: ${instance.id}${instance.subnet ? ` · ${instance.subnet}` : ''}` : '';
   if (node.source === 'meraki') {
     const site = node.meraki?.site_name ? `\nSite: ${node.meraki.site_name}` : '';
-    return `${node.label}\n${node.ip || ''}\n${providerLabel(node.meraki?.provider)} ${node.meraki?.kind ?? 'device'} · ${node.meraki?.status ?? 'unknown'}${modelInfo}${site}\nDrag to move · Right-click to unpin`;
+    // An AWS node's site already is its VPC; another integration's names it here.
+    const vpcInfo = instance?.vpc && node.meraki?.provider !== 'aws' ? `\nVPC: ${instance.vpc}` : '';
+    return `${node.label}\n${node.ip || ''}\n${providerLabel(node.meraki?.provider)} ${node.meraki?.kind ?? 'device'} · ${node.meraki?.status ?? 'unknown'}${modelInfo}${site}${instanceInfo}${vpcInfo}\nDrag to move · Right-click to unpin`;
   }
-  return `${node.label}\n${node.ip || ''}\nType: ${node.device_type ?? ''}${categoryInfo}${modelInfo}${node.group_name ? '\nGroup: ' + node.group_name : ''}${node.in_inventory ? '' : '\n(External)'}${ipamInfo}\nDrag to move · Right-click to unpin`;
+  const vpcInfo = instance?.vpc ? `\nVPC: ${instance.vpc}` : '';
+  return `${node.label}\n${node.ip || ''}\nType: ${node.device_type ?? ''}${categoryInfo}${modelInfo}${node.group_name ? '\nGroup: ' + node.group_name : ''}${node.in_inventory ? '' : '\n(External)'}${ipamInfo}${instanceInfo}${vpcInfo}\nDrag to move · Right-click to unpin`;
 }
 
 // ── Source filter ────────────────────────────────────────────────────────
@@ -501,6 +524,8 @@ export function nodeSearchText(node: TopologyNode): string {
     node.device_type,
     node.meraki?.serial,
     node.meraki?.site_name,
+    node.meraki?.instance_id,
+    node.instance?.id,
   ]
     .filter(Boolean)
     .join(' ')

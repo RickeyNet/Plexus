@@ -12,6 +12,7 @@ import {
   pathSites,
   reachabilityQueries,
   subnetOptionLabel,
+  uncheckedCloudNote,
   type PathPick,
 } from './paths';
 
@@ -270,5 +271,43 @@ describe('the cloud check of a path', () => {
       ['azure', 'sub:rg-prod:prod-vnet', undefined],
       ['aws', undefined, 'vpc-core'],
     ]);
+  });
+
+  it('asks AWS about the ranges of a vSocket that is an AWS instance', () => {
+    // 172.29.80.0/24 is a Cato range of the vSocket site and a subnet of its VPC.
+    const routed: MerakiSubnet = { ...subnet('172.29.80.0/24', 'meraki', 'AwsUSEAST2'), provider: 'cato', kind: 'range', node_id: 'socket' };
+    const branch = subnet('10.10.5.0/24', 'meraki', 'N_1');
+    const providersOf = (node: string | number) => (node === 'socket' ? ['cato', 'aws'] : ['meraki']);
+    expect(reachabilityQueries(pick(branch, '10.10.5.20'), pick(routed, '172.29.80.15'), { protocol: '' }, providersOf)).toEqual([
+      {
+        cloud: 'aws',
+        source: '10.10.5.20',
+        destination: '172.29.80.15',
+        source_network: undefined,
+        destination_network: undefined,
+        protocol: '',
+        port: undefined,
+      },
+    ]);
+    // Without knowing the device is in AWS, nothing tells the page to ask.
+    expect(reachabilityQueries(pick(branch), pick(routed), { protocol: '' })).toEqual([]);
+  });
+
+  it('says how to get the check when an end in a cloud is joined to a device', () => {
+    const app = subnet('10.200.10.0/24', 'aws', 'vpc-core');
+    const branch = subnet('10.10.5.0/24', 'meraki', 'N_1');
+    const mx: PathPick = { key: 'n:mx', node: 'mx', label: 'Branch MX' };
+    const vpc: PathPick = { key: 'n:vpc', node: 'vpc-core', label: 'vpc-core' };
+    const providerOf = (node: string | number) => [node === 'vpc-core' ? 'aws' : 'meraki'];
+    // An instance's address to a Meraki device: the device needs a subnet.
+    expect(uncheckedCloudNote(pick(app, '10.200.10.21'), mx, providerOf)).toBe(
+      'The AWS route tables, network ACLs and security groups are checked only between two subnets or IP addresses: ' +
+        'add Branch MX with the subnet box instead (one of its subnets, or an IP address).',
+    );
+    // A VPC picked as a site is an end in AWS too.
+    expect(uncheckedCloudNote(vpc, pick(branch), providerOf)).toContain('add vpc-core with the subnet box');
+    // Checked legs, and legs with no end in a cloud, need no note.
+    expect(uncheckedCloudNote(pick(app), pick(branch), providerOf)).toBeNull();
+    expect(uncheckedCloudNote(mx, pick(branch), providerOf)).toBeNull();
   });
 });

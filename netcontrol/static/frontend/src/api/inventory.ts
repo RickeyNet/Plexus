@@ -21,6 +21,8 @@ export interface InventoryHost {
   serial_number?: string | null;
   software_version?: string | null;
   status?: string | null;
+  /** Explicit EC2 instance ID pinning this host on the Topology map ('' when unset). */
+  aws_instance_id?: string | null;
 }
 
 export interface InventoryGroupFull {
@@ -234,15 +236,23 @@ export function useAddHost() {
       hostname,
       ip_address,
       device_type,
+      aws_instance_id,
     }: {
       groupId: number;
       hostname: string;
       ip_address: string;
       device_type: string;
+      /** Optional EC2 instance ID ('' or omitted leaves it unset). */
+      aws_instance_id?: string;
     }) =>
       apiRequest(`/inventory/${groupId}/hosts`, {
         method: 'POST',
-        body: { hostname, ip_address, device_type },
+        body: {
+          hostname,
+          ip_address,
+          device_type,
+          ...(aws_instance_id !== undefined ? { aws_instance_id } : {}),
+        },
       }),
     onSuccess: () => invalidateInventory(qc),
   });
@@ -257,16 +267,25 @@ export function useUpdateHost() {
       ip_address,
       device_type,
       group_id,
+      aws_instance_id,
     }: {
       hostId: number;
       hostname: string;
       ip_address: string;
       device_type: string;
       group_id?: number;
+      /** EC2 instance ID; '' clears it, omitted leaves it unchanged. */
+      aws_instance_id?: string;
     }) =>
       apiRequest(`/hosts/${hostId}`, {
         method: 'PUT',
-        body: { hostname, ip_address, device_type, group_id },
+        body: {
+          hostname,
+          ip_address,
+          device_type,
+          group_id,
+          ...(aws_instance_id !== undefined ? { aws_instance_id } : {}),
+        },
       }),
     onSuccess: () => invalidateInventory(qc),
   });

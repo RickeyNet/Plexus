@@ -27,6 +27,7 @@ from netcontrol.integrations.meraki.normalize import InventoryIndex
 from netcontrol.integrations.meraki.subnets import subnet_index
 from netcontrol.integrations.meraki.unified import (
     build_search_index,
+    graph_to_snapshot,
     merge_meraki_into_graph,
     node_details,
     virtual_appliance_pairs,
@@ -303,6 +304,58 @@ def test_snapshot_instance_in_inventory_becomes_a_node():
     snap = build_snapshot([ACCOUNT], resources, connections, inventory)
     fmc = _node(snap, "i:i-0f3c001")
     assert fmc["kind"] == "server" and fmc["inventory"]["host_id"] == 9
+    assert fmc["instance_id"] == "i-0f3c001" and fmc["subnet"] == "edge-mgmt-a"
+    assert "i:i-0f3c001" not in {n["id"] for n in snap["latent"]["nodes"]}
+
+
+def test_inventory_index_matches_a_named_instance_before_any_address():
+    named = {"id": 1, "hostname": "app1", "ip_address": "192.0.2.50", "aws_instance_id": " I-0A99001 "}
+    by_address = {"id": 2, "hostname": "app-server-1", "ip_address": "10.200.10.21", "aws_instance_id": ""}
+    index = InventoryIndex([named, by_address])
+    # The host that names the instance wins over the one with its address, in any case.
+    assert index.match(instance_id="i-0a99001", ips=["10.200.10.21"])["id"] == 1
+    assert index.match(instance_id="I-0a99001")["id"] == 1
+    # No instance ID (or one no host names): addresses as before.
+    assert index.match(instance_id="", ips=["10.200.10.21"])["id"] == 2
+    assert index.match(instance_id="i-0ffff01", ips=["10.200.10.21"])["id"] == 2
+    # A host that names one instance is not some other instance sharing its address.
+    assert index.match(instance_id="i-0ffff01", ips=["192.0.2.50"]) is None
+    assert index.match(ips=["192.0.2.50"])["id"] == 1
+
+
+def test_snapshot_instance_named_by_a_host_becomes_its_node():
+    resources, connections = _records()
+    host = {"id": 4, "hostname": "app1", "ip_address": "192.0.2.50", "aws_instance_id": "i-0a99001"}
+    snap = build_snapshot([ACCOUNT], resources, connections, InventoryIndex([host]))
+    app = _node(snap, "i:i-0a99001")
+    assert app["kind"] == "server" and app["inventory"]["host_id"] == 4
+    assert app["instance_id"] == "i-0a99001" and app["subnet"] == "core-app-a"
+    overview = dict(_section(app, "Overview")["rows"])
+    assert overview["Instance ID"] == "i-0a99001" and overview["Subnet"] == "core-app-a"
+    assert snap["summary"]["inventory_matches"] == 1
+
+
+def test_snapshot_keeps_the_instances_that_are_not_nodes_aside(snapshot):
+    latent = {n["id"]: n for n in snapshot["latent"]["nodes"]}
+    assert set(latent) == {"i:i-0f3c001", "i:i-0a99001", "i:i-0a99002"}
+    fmc = latent["i:i-0f3c001"]
+    assert fmc["kind"] == "server" and "inventory" not in fmc and fmc["ip"] == "10.210.2.20"
+    assert fmc["instance_id"] == "i-0f3c001" and fmc["subnet"] == "edge-mgmt-a"
+    assert dict(_section(fmc, "Overview")["rows"])["Subnet"] == "edge-mgmt-a"
+    # Placed at its VPC, so it has somewhere to start when it is put on the map.
+    vpc = _node(snapshot, "vpc:vpc-0ed9e00002")
+    assert fmc["x"] == vpc["x"] and fmc["y"] > vpc["y"]
+    links = {e["a"]: e for e in snapshot["latent"]["edges"]}
+    assert links["i:i-0f3c001"]["b"] == "vpc:vpc-0ed9e00002" and links["i:i-0f3c001"]["kind"] == "attach"
+    assert links["i:i-0a99001"]["b"] == "vpc:vpc-0c0re00001" and links["i:i-0a99001"]["sections"]
+    # Not on the map: not in the nodes, the counts or the search.
+    assert not set(latent) & {n["id"] for n in snapshot["nodes"]}
+    assert snapshot["summary"]["devices_by_kind"].get("server", 0) == 0
+    assert node_details(snapshot, "i:i-0f3c001")["provider"] == "aws"
+    # Forwarding instances say which instance they are too.
+    ftd = _node(snapshot, "i:i-0f7d001")
+    assert ftd["instance_id"] == "i-0f7d001" and ftd["subnet"] == "edge-mgmt-a"
+    assert dict(_section(ftd, "Overview")["rows"])["Subnet"] == "edge-mgmt-a"
 
 
 def test_snapshot_links_vpcs_gateways_and_vpn(snapshot):
@@ -501,8 +554,12 @@ def test_merge_makes_a_customer_gateway_the_device_on_that_address():
     assert "meraki:2:cgw" not in nodes
     tunnel = next(e for e in edges if e["provider"] == "aws")
     assert {tunnel["from"], tunnel["to"]} == {"meraki:2:tgw", "meraki:1:mx"} and tunnel["protocol"] == "vpn"
-    # The AWS view of the map shows it too.
+    # The AWS view of the map shows it too, on the page and in the HTML export.
     assert nodes["meraki:1:mx"]["also_providers"] == ["aws"]
+    export = graph_to_snapshot({"nodes": list(nodes.values()), "edges": edges}, {}, {})
+    exported = {n["id"]: n for n in export["nodes"]}
+    assert exported["meraki:1:mx"]["provider"] == "meraki" and exported["meraki:1:mx"]["also_providers"] == ["aws"]
+    assert "also_providers" not in exported["meraki:2:tgw"]
 
 
 def test_merge_leaves_a_peer_on_a_private_address_alone():
@@ -539,6 +596,47 @@ def test_merge_recognises_a_virtual_appliance_whichever_snapshot_comes_first():
     nodes, edges = _merge(aws, BRANCH)
     assert "meraki:1:i" not in nodes
     assert frozenset(("meraki:2:mx", "meraki:1:vpc")) in _pairs(edges)
+
+
+def test_merge_keeps_the_instance_of_a_host_another_integration_drew_first():
+    host = {"id": 5, "label": "fw-1", "in_inventory": True}
+    meraki = {**BRANCH, "nodes": [_n("mx", "appliance", inventory={"host_id": 5})], "edges": []}
+    aws = {
+        "provider": "aws",
+        "sites": [{"id": "vpc-1", "name": "core (us-east-1)"}],
+        "nodes": [
+            _n("vpc:vpc-1", "vpc", site="vpc-1"),
+            _n("i:i-1", "server", site="vpc-1", ip="10.0.0.5", alias_ips=[], instance_id="i-1", subnet="app-a",
+               inventory={"host_id": 5}),
+        ],
+        "edges": [{"id": "e1", "kind": "attach", "a": "i:i-1", "b": "vpc:vpc-1", "status": "active"}],
+    }  # fmt: skip
+    nodes: dict = {5: host}
+    edges: list[dict] = []
+    merge_meraki_into_graph(
+        nodes,
+        edges,
+        [(1, meraki), (2, aws)],
+        host_node=lambda host_id: nodes.get(host_id),
+        resolve_external=lambda *_: None,
+    )
+    # The host is the Meraki appliance; AWS says which instance it is all the same.
+    assert host["meraki"]["provider"] == "meraki" and host["also_providers"] == ["aws"]
+    assert host["instance"] == {
+        "provider": "aws",
+        "id": "i-1",
+        "subnet": "app-a",
+        "vpc": "core (us-east-1)",
+        "org_ref": 2,
+        "node_id": "i:i-1",
+    }
+    assert frozenset((5, "meraki:2:vpc:vpc-1")) in _pairs(edges)
+    # A node AWS draws itself carries it on its reference and beside it.
+    alone, _edges = _merge(aws)
+    instance = alone["meraki:1:i:i-1"]
+    assert instance["meraki"]["instance_id"] == "i-1" and instance["meraki"]["subnet"] == "app-a"
+    assert instance["instance"]["id"] == "i-1" and instance["instance"]["vpc"] == "core (us-east-1)"
+    assert "instance" not in alone["meraki:1:vpc:vpc-1"] and "instance_id" not in alone["meraki:1:vpc:vpc-1"]["meraki"]
 
 
 def _uplink(node_id: str, public: str, inside: str) -> dict:
@@ -937,6 +1035,77 @@ def test_api_discovered_aws_account_is_on_the_topology(api):
     # Disabling the account takes it off the map; the discovery is kept.
     assert api.put(f"/api/cloud/accounts/{account['id']}", json={"enabled": False}).status_code == 200
     assert _aws_nodes(api) == []
+
+
+def test_api_a_host_added_after_discovery_is_its_instance_on_the_map(api):
+    import netcontrol.routes.meraki_topology as routes_module
+    from netcontrol.routes.topology import invalidate_topology_cache
+
+    account = api.post("/api/cloud/accounts", json={"provider": "aws", "name": "Prod AWS"}).json()["account"]
+    api.post(f"/api/cloud/accounts/{account['id']}/discover", json={"mode": "sample", "include_hybrid_links": False})
+    # The AWS snapshot is built (and cached) before the hosts exist.
+    aws = _aws_nodes(api)
+    org_ref = aws[0]["meraki"]["org_ref"]
+    assert not {"i:i-0f3c001", "i:i-0a99001"} & {n["meraki"]["node_id"] for n in aws}
+
+    group = api.post("/api/inventory", json={"name": "Cloud"}).json()["id"]
+    by_address = {"hostname": "fmc-01", "ip_address": "10.210.2.20", "device_type": "linux"}
+    fmc = api.post(f"/api/inventory/{group}/hosts", json=by_address)
+    assert fmc.status_code == 201, fmc.text
+    # An address AWS does not know, but the instance named outright (in upper case).
+    named = {"hostname": "app1", "ip_address": "192.0.2.50", "device_type": "linux", "aws_instance_id": "I-0A99001"}
+    app = api.post(f"/api/inventory/{group}/hosts", json=named)
+    assert app.status_code == 201, app.text
+    bad = api.post(f"/api/inventory/{group}/hosts", json={**named, "ip_address": "192.0.2.51", "aws_instance_id": "x"})
+    assert bad.status_code == 422 and "AWS instance ID" in bad.json()["error"]["message"]
+
+    invalidate_topology_cache()
+    graph = api.get("/api/topology").json()
+    nodes = {n["id"]: n for n in graph["nodes"]}
+    vpcs = {"fmc-01": "vpc:vpc-0ed9e00002", "app1": "vpc:vpc-0c0re00001"}
+    expected = {
+        "fmc-01": ("i-0f3c001", "edge-mgmt-a", "edge-security-vpc (us-east-1)"),
+        "app1": ("i-0a99001", "core-app-a", "prod-core-vpc (us-east-1)"),
+    }
+    for host_id, hostname in ((fmc.json()["id"], "fmc-01"), (app.json()["id"], "app1")):
+        node = nodes[host_id]
+        instance_id, subnet, vpc = expected[hostname]
+        assert node["in_inventory"] and node["meraki"]["provider"] == "aws"
+        assert node["meraki"]["instance_id"] == instance_id and node["meraki"]["subnet"] == subnet
+        assert node["instance"] == {
+            "provider": "aws",
+            "id": instance_id,
+            "subnet": subnet,
+            "vpc": vpc,
+            "org_ref": org_ref,
+            "node_id": f"i:{instance_id}",
+        }
+        vpc_id = f"meraki:{org_ref}:{vpcs[hostname]}"
+        assert any({e["from"], e["to"]} == {host_id, vpc_id} and e["protocol"] == "cloud" for e in graph["edges"])
+
+    # Its details, though the cached snapshot has no node for it.
+    details = api.get(f"/api/meraki/nodes?org_ref={org_ref}&node_id=i:i-0f3c001")
+    assert details.status_code == 200, details.text
+    assert details.json()["provider"] == "aws"
+    overview = dict(next(s for s in details.json()["sections"] if s["title"] == "Overview")["rows"])
+    assert overview["Subnet"] == "edge-mgmt-a" and overview["Instance ID"] == "i-0f3c001"
+    cached = routes_module._SNAPSHOT_CACHE[org_ref]["snapshot"]
+    assert "i:i-0f3c001" not in {n["id"] for n in cached["nodes"]}
+
+    # The ID is stored as entered (trimmed), and an edit is checked like an add.
+    host_id = fmc.json()["id"]
+    edit = {**by_address, "aws_instance_id": "foo"}
+    rejected = api.put(f"/api/hosts/{host_id}", json=edit)
+    assert rejected.status_code == 422 and "AWS instance ID" in rejected.json()["error"]["message"]
+    assert api.put(f"/api/hosts/{host_id}", json={**edit, "aws_instance_id": " i-0f3c001 "}).status_code == 200
+    assert api.put(f"/api/hosts/{app.json()['id']}", json={**named}).status_code == 200
+    stored = {h["hostname"]: h["aws_instance_id"] for h in api.get(f"/api/inventory/{group}/hosts").json()}
+    assert stored == {"fmc-01": "i-0f3c001", "app1": "I-0A99001"}
+    # Leaving it out of an edit leaves it alone; an empty one clears it.
+    assert api.put(f"/api/hosts/{host_id}", json=by_address).status_code == 200
+    assert api.put(f"/api/hosts/{app.json()['id']}", json={**named, "aws_instance_id": ""}).status_code == 200
+    stored = {h["hostname"]: h["aws_instance_id"] for h in api.get(f"/api/inventory/{group}/hosts").json()}
+    assert stored == {"fmc-01": "i-0f3c001", "app1": ""}
 
 
 def test_api_aws_shares_the_map_with_meraki_and_cato(api):

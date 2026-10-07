@@ -36,6 +36,11 @@ export interface TopologyNode {
   meraki?: TopologyMerakiRef | null;
   /** Other integrations that know this node (an AWS instance that is a Cato vSocket). */
   also_providers?: string[];
+  /**
+   * The AWS EC2 instance this node is (or collapsed with). Present even when
+   * `meraki.provider` is another integration (then `also_providers` has 'aws').
+   */
+  instance?: TopologyInstanceRef | null;
   /** Layout hint: Meraki sites arrive pre-arranged instead of using physics. */
   x?: number;
   y?: number;
@@ -51,6 +56,23 @@ export interface TopologyMerakiRef {
   serial?: string;
   /** Integration the snapshot came from: 'meraki' (default), 'cato', 'anyconnect', 'aws' or 'azure'. */
   provider?: string;
+  /** EC2 instance ID, present when the ref is an AWS instance. */
+  instance_id?: string;
+  /** Subnet the AWS instance sits in, present when the ref is an AWS instance. */
+  subnet?: string;
+}
+
+/** An AWS instance a topology node maps to (see `TopologyNode.instance`). */
+export interface TopologyInstanceRef {
+  /** Integration the instance came from (currently always 'aws'). */
+  provider: string;
+  /** EC2 instance ID, e.g. 'i-0123456789abcdef0'. */
+  id: string;
+  subnet: string;
+  vpc: string;
+  /** Snapshot reference for the instance's details (as in `TopologyMerakiRef`). */
+  org_ref: number;
+  node_id: string;
 }
 
 export interface TopologyEdge {

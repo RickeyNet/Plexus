@@ -1,6 +1,7 @@
 import { useCloudReachability, type CloudReachability, type CloudReachabilityQuery, type ReachabilityStatus } from '@/api/meraki';
 
 import { providerLabel } from './helpers';
+import { CLOUD_CHECKS } from './paths';
 
 const VERDICT: Record<CloudReachability['verdict'], { label: (cloud: string) => string; color: string }> = {
   allowed: { label: (cloud) => `${cloud} allows it`, color: 'var(--success, #2f9e44)' },
@@ -17,12 +18,6 @@ const STEP: Record<ReachabilityStatus, { mark: string; color: string }> = {
   info: { mark: 'i', color: 'var(--text-muted, #868e96)' },
 };
 
-/** What a cloud checks: AWS route tables, ACLs and security groups; Azure routes and NSGs. */
-const CHECKED: Record<CloudReachabilityQuery['cloud'], string> = {
-  aws: 'AWS route tables, network ACLs and security groups',
-  azure: 'Azure effective routes and network security groups',
-};
-
 /**
  * What the routing and filtering of a cloud do with the traffic of one Path
  * Mode leg: a verdict, and the steps behind it on demand.
@@ -30,10 +25,12 @@ const CHECKED: Record<CloudReachabilityQuery['cloud'], string> = {
 export function CloudPathCheck({ query }: { query: CloudReachabilityQuery }) {
   const check = useCloudReachability(query);
   const cloud = providerLabel(query.cloud);
-  if (check.isPending) return <div className="text-muted">Checking {CHECKED[query.cloud]}…</div>;
+  if (check.isPending) return <div className="text-muted">Checking {CLOUD_CHECKS[query.cloud]}…</div>;
   if (check.error) return <div style={{ color: 'var(--danger)' }}>{cloud} check failed: {(check.error as Error).message}</div>;
   const result = check.data;
-  if (!result?.applies) return null;
+  if (!result) return null;
+  // Asked because an end looked like it was in the cloud: say why it was not checked.
+  if (!result.applies) return <div className="text-muted">ⓘ No {cloud} check: {result.summary}</div>;
   const verdict = VERDICT[result.verdict];
   return (
     <details>

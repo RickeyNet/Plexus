@@ -67,6 +67,19 @@ export function formatErrorDetail(detail: unknown): string | null {
   return String(detail);
 }
 
+// The message of an error body. app.py wraps every /api/ error as
+// `{ok: false, error: {code, message}}`; FastAPI's own shape is `{detail}`.
+export function errorMessage(body: unknown): string | null {
+  if (!body || typeof body !== 'object') return null;
+  const rec = body as { error?: unknown; detail?: unknown };
+  if (rec.error && typeof rec.error === 'object' && 'message' in rec.error) {
+    const message = (rec.error as { message?: unknown }).message;
+    if (typeof message === 'string' && message) return message;
+  }
+  if (typeof rec.error === 'string' && rec.error) return rec.error;
+  return 'detail' in rec ? formatErrorDetail(rec.detail) : null;
+}
+
 // Tripped on the first 401 so concurrent page queries don't each trigger a
 // separate reload when the server-side session has idle-expired.
 let sessionExpiryHandled = false;
@@ -160,10 +173,7 @@ export async function apiRequest<T = unknown>(
   }
 
   if (!res.ok) {
-    const detail =
-      (parsed && typeof parsed === 'object' && 'detail' in parsed
-        ? formatErrorDetail((parsed as { detail: unknown }).detail)
-        : null) ?? res.statusText;
+    const detail = errorMessage(parsed) ?? res.statusText;
     if (
       res.status === 401 &&
       endpoint !== '/auth/login' &&

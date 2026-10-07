@@ -1,6 +1,22 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatErrorDetail } from './client';
+import { errorMessage, formatErrorDetail } from './client';
+
+describe('errorMessage', () => {
+  it("reads the message of the app's {ok, error} envelope", () => {
+    const body = { ok: false, error: { code: 'http_error', message: "Invalid AWS instance ID 'foo'" } };
+    expect(errorMessage(body)).toBe("Invalid AWS instance ID 'foo'");
+    expect(errorMessage({ ok: false, error: 'git fetch failed' })).toBe('git fetch failed');
+  });
+
+  it("falls back to FastAPI's detail, and to nothing", () => {
+    expect(errorMessage({ detail: 'Deployment not found' })).toBe('Deployment not found');
+    expect(errorMessage({ detail: [{ msg: 'Field required', loc: ['body', 'name'] }] })).toBe('name: Field required');
+    expect(errorMessage({ ok: false, error: { code: 'x', message: '' } })).toBeNull();
+    expect(errorMessage('plain text')).toBeNull();
+    expect(errorMessage(null)).toBeNull();
+  });
+});
 
 describe('formatErrorDetail', () => {
   it('returns a plain string detail unchanged', () => {

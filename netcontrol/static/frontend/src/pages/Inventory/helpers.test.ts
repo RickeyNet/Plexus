@@ -5,6 +5,7 @@ import type { InventoryGroupFull, InventoryHost } from '@/api/inventory';
 import {
   filterGroups,
   hostMatchesQuery,
+  isAwsInstanceId,
   sortGroups,
   sortHostsForQuery,
 } from './helpers';
@@ -43,6 +44,30 @@ describe('hostMatchesQuery', () => {
 
   it('returns false on empty query', () => {
     expect(hostMatchesQuery(host(1), '')).toBe(false);
+  });
+
+  it('matches against the AWS instance ID', () => {
+    const h = host(1, { aws_instance_id: 'i-0123456789abcdef0' });
+    expect(hostMatchesQuery(h, 'i-0123456789')).toBe(true);
+    expect(hostMatchesQuery(host(2, { aws_instance_id: '' }), 'i-0')).toBe(false);
+  });
+});
+
+describe('isAwsInstanceId', () => {
+  it('accepts short and long instance IDs case-insensitively', () => {
+    expect(isAwsInstanceId('i-0123abcd')).toBe(true);
+    expect(isAwsInstanceId('i-0123456789abcdef0')).toBe(true);
+    expect(isAwsInstanceId('I-0123456789ABCDEF0')).toBe(true);
+    expect(isAwsInstanceId('i-0a99001')).toBe(true); // the demo account's
+  });
+
+  it('rejects anything else', () => {
+    expect(isAwsInstanceId('')).toBe(false);
+    expect(isAwsInstanceId('i-')).toBe(false);
+    expect(isAwsInstanceId('i-0123456789abcdef01')).toBe(false); // 18 hex digits
+    expect(isAwsInstanceId('i-0123456789abcdeg0')).toBe(false); // non-hex
+    expect(isAwsInstanceId('vol-0123456789abcdef0')).toBe(false);
+    expect(isAwsInstanceId(' i-0123456789abcdef0')).toBe(false); // untrimmed
   });
 });
 

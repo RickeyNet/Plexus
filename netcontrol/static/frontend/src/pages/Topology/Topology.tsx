@@ -58,11 +58,11 @@ import {
   type SourceFilter,
   type TopoThemeColors,
 } from './helpers';
-import { crowdedGroups, tidyLabel, tidyTree, type XY } from './layout';
+import { crowdedGroups, fitTitles, labelWidth, straighten, tidyLabel, tidyTree, type XY } from './layout';
 import { distanceToRoute, routeSourceLinks, traceRoute } from './routes';
 import { EdgeDetails } from './EdgeDetails';
 import { CloudPathCheck } from './CloudPathCheck';
-import { MAX_PATH_ENDPOINTS, connectPicks, findSubnets, isAddressText, parseTraffic, pathSites, reachabilityQueries, subnetOptionLabel, type PathPick } from './paths';
+import { MAX_PATH_ENDPOINTS, connectPicks, findSubnets, isAddressText, parseTraffic, pathSites, reachabilityQueries, subnetOptionLabel, uncheckedCloudNote, type PathPick } from './paths';
 import { NodeDetails } from './NodeDetails';
 import { SourcesModal } from './SourcesModal';
 import { StpEventsModal } from './StpEventsModal';
@@ -121,7 +121,9 @@ function catoBackbone(d: TopologyData | undefined): Set<number | string> {
   return ids;
 }
 
-type SiteBoxes = Map<string, { name: string; x0: number; y0: number; x1: number; y1: number }>;
+// `title` is the text written over the box (the tidy layout shortens a name
+// that would run into the next box); the full name otherwise.
+type SiteBoxes = Map<string, { name: string; title?: string; x0: number; y0: number; x1: number; y1: number }>;
 
 export function Topology() {
   const qc = useQueryClient();
@@ -190,9 +192,15 @@ export function Topology() {
   const siteBoxesRef = useRef<SiteBoxes | null>(null);
   // Source regions of the tidy layout, worked out with the site frames.
   const sourceBoxesRef = useRef<SiteBoxes>(new Map());
-  // Links between two sources of the tidy layout: drawn here, over the
-  // sources instead of across them, so vis keeps them hidden.
+  // Links of the tidy layout drawn here instead of by vis, which keeps them
+  // hidden: those between two sources (routed over the sources instead of
+  // across them) and those on a comb (a hub's links to its spokes).
   const routedEdgesRef = useRef<Set<number | string>>(new Set());
+  // Of those, the links between two sources.
+  const sourceLinksRef = useRef<Set<number | string>>(new Set());
+  // The combs as the layout drew them, before any node was dragged.
+  const tidyRoutesRef = useRef<Map<number | string, XY[]>>(new Map());
+  // The polyline of every routed link, from live positions.
   const routesRef = useRef<Map<number | string, XY[]>>(new Map());
   // Routed links a highlighted path runs over, drawn even if a hidden tunnel.
   const pathRoutesRef = useRef<Set<number | string>>(new Set());
@@ -787,14 +795,16 @@ export function Topology() {
     const tidy = isTidy ? tidyTree(d.nodes, d.edges) : null;
     tidyPosRef.current = tidy?.positions ?? null;
     tidyPiecesRef.current = tidy?.pieces ?? new Map();
-    const routed = new Set<number | string>();
+    const sourceLinks = new Set<number | string>();
     if (tidy) {
       const sourceOf = new Map(d.nodes.map((n) => [n.id, nodeProvider(n)]));
       if (new Set(sourceOf.values()).size > 1) {
-        for (const e of d.edges) if (sourceOf.get(e.from) !== sourceOf.get(e.to)) routed.add(e.id);
+        for (const e of d.edges) if (sourceOf.get(e.from) !== sourceOf.get(e.to)) sourceLinks.add(e.id);
       }
     }
-    routedEdgesRef.current = routed;
+    sourceLinksRef.current = sourceLinks;
+    tidyRoutesRef.current = tidy?.routes ?? new Map();
+    routedEdgesRef.current = new Set([...sourceLinks, ...tidyRoutesRef.current.keys()]);
     routesRef.current = new Map();
 
     const tunnels = new Map<number | string, TopologyEdge[]>();
@@ -894,7 +904,7 @@ export function Topology() {
         if (meta) setDetailsEdge(meta.raw);
         setDetailsNode(null);
       } else {
-        // vis does not know the routed links between sources.
+        // vis does not know the routed links (between sources, on a comb).
         const routed = routeAt(params.pointer.canvas);
         const meta = routed != null ? edgeMetaRef.current.get(routed) : undefined;
         setDetailsNode(null);
@@ -983,25 +993,28 @@ export function Topology() {
     let boxes = tidyPosRef.current ? siteBoxesRef.current : null;
     if (!boxes) {
       boxes = new Map();
+      const members = new Map<string, (number | string)[]>();
       const sources: SiteBoxes = new Map();
       const positions = network.getPositions();
       for (const meta of nodeMetaRef.current.values()) {
         const ref = meta.raw.meraki;
         const pos = positions[meta.raw.id as never];
-        // A source's frame is where the layout put it: a node dragged (and
-        // pinned) elsewhere, maybe under an earlier layout, does not stretch
-        // it over other sources.
-        if (pos && tidyPosRef.current && !savedPositionsRef.current[String(meta.raw.id)]) {
+        // A source's frame is where the layout put its nodes: one dragged
+        // (and pinned) elsewhere, maybe under an earlier layout, neither
+        // stretches it over other sources nor, when it is the last node of
+        // a small source, empties it (which would lose the routed links).
+        const laid = tidyPosRef.current?.get(meta.raw.id);
+        if (laid) {
           const key = nodeProvider(meta.raw);
           const region = sources.get(key);
           if (!region) {
             const name = key ? providerLabel(key) : 'Inventory';
-            sources.set(key, { name, x0: pos.x, y0: pos.y, x1: pos.x, y1: pos.y });
+            sources.set(key, { name, x0: laid.x, y0: laid.y, x1: laid.x, y1: laid.y });
           } else {
-            region.x0 = Math.min(region.x0, pos.x);
-            region.y0 = Math.min(region.y0, pos.y);
-            region.x1 = Math.max(region.x1, pos.x);
-            region.y1 = Math.max(region.y1, pos.y);
+            region.x0 = Math.min(region.x0, laid.x);
+            region.y0 = Math.min(region.y0, laid.y);
+            region.x1 = Math.max(region.x1, laid.x);
+            region.y1 = Math.max(region.y1, laid.y);
           }
         }
         if (!ref || !ref.site_id || !pos) continue;
@@ -1010,7 +1023,9 @@ export function Topology() {
         const box = boxes.get(key);
         if (!box) {
           boxes.set(key, { name: ref.site_name, x0: pos.x, y0: pos.y, x1: pos.x, y1: pos.y });
+          members.set(key, [meta.raw.id]);
         } else {
+          members.get(key)!.push(meta.raw.id);
           box.x0 = Math.min(box.x0, pos.x);
           box.y0 = Math.min(box.y0, pos.y);
           box.x1 = Math.max(box.x1, pos.x);
@@ -1019,20 +1034,72 @@ export function Topology() {
       }
       siteBoxesRef.current = boxes;
       sourceBoxesRef.current = sources.size > 1 ? sources : new Map();
-      routesRef.current = new Map();
-      if (sources.size > 1 && routedEdgesRef.current.size) {
+      const site = siteFrame();
+      if (tidyPosRef.current) {
+        // A long name over a narrow box (a VPC of one node) would be
+        // written over the titles of the boxes beside it: it is shortened
+        // where it would reach the next box. The tooltip and panel keep it whole.
+        const list = [...boxes.values()];
+        const titles = fitTitles(
+          list.map((b) => ({
+            x0: b.x0 - site.padX,
+            y0: b.y0 - site.padY,
+            x1: b.x1 + site.padX,
+            y1: b.y1 + site.padY,
+            name: b.name,
+          })),
+          site.font,
+          4,
+        );
+        list.forEach((b, idx) => {
+          b.title = titles[idx];
+        });
+      }
+      // The combs, from where their ends are now: a dragged node keeps its
+      // link, joined by a straight stretch to wherever it was dropped.
+      const routes = new Map<number | string, XY[]>();
+      for (const [id, points] of tidyRoutesRef.current) {
+        const raw = edgeMetaRef.current.get(id)?.raw;
+        const from = raw ? positions[raw.from as never] : undefined;
+        const to = raw ? positions[raw.to as never] : undefined;
+        if (!raw || !from || !to) continue;
+        // A comb runs down from the hub, which may be either end of the link.
+        const laid = tidyPosRef.current?.get(raw.from);
+        const fromFirst = !!laid && laid.x === points[0].x && laid.y === points[0].y;
+        const [head, tail] = fromFirst ? [from, to] : [to, from];
+        routes.set(id, straighten([{ x: head.x, y: head.y }, ...points.slice(1, -1), { x: tail.x, y: tail.y }]));
+      }
+      if (sources.size > 1 && sourceLinksRef.current.size) {
         const at = new Map<number | string, XY>();
-        for (const id of nodeMetaRef.current.keys()) {
+        const labels = new Map<number | string, number>();
+        for (const [id, meta] of nodeMetaRef.current) {
           const pos = positions[id as never];
           if (pos) at.set(id, pos);
+          labels.set(id, labelWidth(meta.raw.label));
         }
-        const links = [...routedEdgesRef.current].flatMap((id) => {
+        const links = [...sourceLinksRef.current].flatMap((id) => {
           const raw = edgeMetaRef.current.get(id)?.raw;
           return raw ? [{ id, from: raw.from, to: raw.to }] : [];
         });
         const top = Math.min(...[...sources.values()].map((r) => r.y0)) - SOURCE_FRAME.padY;
-        routesRef.current = routeSourceLinks(links, at, top);
+        // The site boxes as drawn, titles included, for the routes to keep out of.
+        const title = site.font + (site.font > 20 ? 8 : 4);
+        const siteRects = [...boxes].map(([key, b]) => {
+          const x0 = b.x0 - site.padX;
+          const y0 = b.y0 - site.padY;
+          return {
+            x0,
+            x1: b.x1 + site.padX,
+            y0: y0 - title,
+            y1: b.y1 + site.padY,
+            ids: members.get(key) ?? [],
+            // About 0.6 em a character, from where the title is written.
+            title: { x0, y0: y0 - title, x1: x0 + 4 + (b.title ?? b.name).length * site.font * 0.6, y1: y0 },
+          };
+        });
+        for (const [id, points] of routeSourceLinks(links, at, top, siteRects, labels)) routes.set(id, points);
       }
+      routesRef.current = routes;
     }
     const scale = network.getScale();
     ctx.save();
@@ -1083,11 +1150,11 @@ export function Topology() {
       if (!titles) continue;
       ctx.fillStyle = tc.nodeFont;
       ctx.globalAlpha = 0.75;
-      ctx.fillText(box.name, x + 4, y - (frame.font > 20 ? 8 : 4));
+      ctx.fillText(box.title ?? box.name, x + 4, y - (frame.font > 20 ? 8 : 4));
       ctx.globalAlpha = 1;
     }
     ctx.restore();
-    drawSourceLinks(ctx);
+    drawRoutedLinks(ctx);
   }
 
   // A routed link is drawn when vis would draw it: not a hidden tunnel,
@@ -1097,9 +1164,9 @@ export function Topology() {
     return !!raw && (!tunnelHidden(raw) || pathRoutesRef.current.has(id));
   }
 
-  // The links between sources, styled like vis styles the link (overlays,
-  // dimming and highlighting included), under the nodes.
-  function drawSourceLinks(ctx: CanvasRenderingContext2D) {
+  // The routed links (between sources, and on a comb), styled like vis
+  // styles the link (overlays, dimming and highlighting included), under the nodes.
+  function drawRoutedLinks(ctx: CanvasRenderingContext2D) {
     const network = networkRef.current;
     const edgesDS = edgesDSRef.current;
     if (!network || !edgesDS || !routesRef.current.size) return;
@@ -1200,7 +1267,11 @@ export function Topology() {
   const pathResult = useMemo(() => connectPicks(pathPicks, data?.edges ?? []), [pathPicks, data]);
   const trafficFilter = useMemo(() => parseTraffic(pathTraffic), [pathTraffic]);
   // Legs with an end in AWS or Azure, whose routes and filtering rules can be checked.
-  const pathHasCloudLeg = pathResult.legs.some((leg) => reachabilityQueries(leg.from, leg.to, { protocol: '' }).length > 0);
+  const nodeProvidersOf = (node: number | string) => {
+    const raw = nodeMetaRef.current.get(node)?.raw;
+    return [raw?.meraki?.provider, ...(raw?.also_providers ?? [])];
+  };
+  const pathHasCloudLeg = pathResult.legs.some((leg) => reachabilityQueries(leg.from, leg.to, { protocol: '' }, nodeProvidersOf).length > 0);
   // Redraw the path whenever the picks change or the map is rebuilt.
   useEffect(() => {
     if (!pathMode) return;
@@ -2057,15 +2128,20 @@ export function Topology() {
                 <div key={note} style={{ color: 'var(--warning, #f59f00)' }}>⚠ {note}</div>
               ))}
               {(() => {
-                const queries = trafficFilter ? reachabilityQueries(leg.from, leg.to, trafficFilter) : [];
+                const note = leg.sameDevice ? null : uncheckedCloudNote(leg.from, leg.to, nodeProvidersOf);
+                return note && <div className="text-muted">ⓘ {note}</div>;
+              })()}
+              {(() => {
+                const queries = trafficFilter ? reachabilityQueries(leg.from, leg.to, trafficFilter, nodeProvidersOf) : [];
                 return queries.map((query) => <CloudPathCheck key={query.cloud} query={query} />);
               })()}
             </div>
           ))}
           {pathResult.legs.length > 0 && (
             <div className="text-muted" style={{ marginTop: '0.35rem', fontSize: '0.78rem' }}>
-              Shortest way over the cables, uplinks and VPN tunnels on the map that are up. Route tables are not consulted;
-              a subnet is placed on the device that owns it (appliance, L3 switch, VPC or VPN peer).
+              The path drawn is the shortest way over the cables, uplinks and VPN tunnels on the map that are up: it shows how
+              the ends are joined, not the route each device picks. A subnet is placed on the device that owns it (appliance,
+              L3 switch, VPC or VPN peer).
               {pathHasCloudLeg && ' Between two subnets or addresses with an end in AWS or Azure, that cloud checks the pair as well: AWS route tables, network ACLs and security groups, Azure effective routes and network security groups. Type the IP address of an instance or virtual machine to include the rules of its interface.'}
             </div>
           )}

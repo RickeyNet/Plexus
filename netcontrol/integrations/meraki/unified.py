@@ -145,6 +145,21 @@ def _is_virtual_model(model: Any) -> bool:
     return lowered.startswith("vmx") or any(t in lowered for t in ("ftdv", "threat defense for", "virtual"))
 
 
+def _instance(ref: dict) -> dict | None:
+    """What the map shows of the cloud instance a node is (``ref`` of an
+    instance node carries its ID and subnet), ``None`` for any other node."""
+    if not ref.get("instance_id"):
+        return None
+    return {
+        "provider": ref["provider"],
+        "id": ref["instance_id"],
+        "subnet": ref.get("subnet") or "",
+        "vpc": ref["site_name"],
+        "org_ref": ref["org_ref"],
+        "node_id": ref["node_id"],
+    }
+
+
 def virtual_appliance_pairs(snapshots: list[tuple[int, dict]]) -> dict[tuple[int, str], tuple[int, str]]:
     """Cloud instances that are a device another snapshot manages (a Meraki
     vMX, a Cato vSocket), as ``(org_ref, instance node id) -> (org_ref,
@@ -297,12 +312,20 @@ def merge_meraki_into_graph(
         }
         if not is_external:
             nodes_by_id[graph_id]["source"] = "meraki"
+        instance = _instance(ref)
+        if instance:
+            nodes_by_id[graph_id]["instance"] = instance
         return graph_id
 
     def collapse(target: dict, ref: dict, x: float, y: float) -> Any:
         target.setdefault("meraki", ref)
         target.setdefault("x", x)
         target.setdefault("y", y)
+        # The instance a host or another integration's device is, even when
+        # ``meraki`` belongs to that other integration.
+        instance = _instance(ref)
+        if instance:
+            target.setdefault("instance", instance)
         # A node of another integration that is this one (a vSocket or vMX
         # instance, a VPN peer): the map's source filter shows it under both.
         if ref["provider"] != target["meraki"].get("provider"):
@@ -345,6 +368,9 @@ def merge_meraki_into_graph(
                 "serial": node.get("serial") or "",
                 "provider": provider,
             }
+            if node.get("instance_id"):
+                ref["instance_id"] = node["instance_id"]
+                ref["subnet"] = node.get("subnet") or ""
             x = round(node.get("x", 0.0) - min_x + MERAKI_X_OFFSET, 1)
             y = round(node.get("y", 0.0) - min_y + y_cursor, 1)
             if node["kind"] == "vpn_peer":
@@ -476,6 +502,11 @@ def node_details(snapshot: dict, node_id: str) -> dict | None:
     when the node is the site's security appliance)."""
     node = next((n for n in snapshot.get("nodes") or [] if n["id"] == node_id), None)
     if node is None:
+        # An instance the topology put on the map since the snapshot was
+        # built (it matches a host added to the inventory later).
+        latent = (snapshot.get("latent") or {}).get("nodes") or []
+        node = next((n for n in latent if n["id"] == node_id), None)
+    if node is None:
         return None
     site = next((s for s in snapshot.get("sites") or [] if s["id"] == node.get("site")), None)
     site_sections = (site or {}).get("sections") or []
@@ -575,6 +606,22 @@ def _viewer_status(status: str) -> str:
     return {"up": "online", "down": "offline", "alerting": "alerting"}.get(status or "", "unknown")
 
 
+_LAYOUT_NODE_FIELDS = ("device_category", "device_type", "group_name", "source")
+_LAYOUT_REF_FIELDS = ("provider", "node_id", "kind", "org_ref", "site_id", "site_name")
+
+
+def _layout_fields(g: dict) -> dict:
+    """What the Topology page's tidy layout reads of a node, beside its id and
+    label: the export's viewer lays the map out with the same code."""
+    out: dict[str, Any] = {k: g[k] for k in _LAYOUT_NODE_FIELDS if g.get(k)}
+    if g.get("in_inventory"):
+        out["in_inventory"] = True
+    ref = g.get("meraki")
+    if ref:
+        out["meraki"] = {k: ref[k] for k in _LAYOUT_REF_FIELDS if ref.get(k) is not None}
+    return out
+
+
 def graph_to_snapshot(
     graph: dict,
     snapshots: dict[int, dict],
@@ -588,7 +635,12 @@ def graph_to_snapshot(
     detail sections); ``host_sections`` maps inventory host id -> sections
     built from data Plexus collected over SNMP/SSH.
     """
-    snap_nodes = {(org_ref, n["id"]): n for org_ref, snap in snapshots.items() for n in snap.get("nodes") or []}
+    # Latent nodes too: an instance put on the map because it is a host.
+    snap_nodes = {
+        (org_ref, n["id"]): n
+        for org_ref, snap in snapshots.items()
+        for n in [*(snap.get("nodes") or []), *((snap.get("latent") or {}).get("nodes") or [])]
+    }
     snap_sites = {(org_ref, s["id"]): s for org_ref, snap in snapshots.items() for s in snap.get("sites") or []}
 
     sites: dict[str, dict] = {}
@@ -685,17 +737,25 @@ def graph_to_snapshot(
             "mac": (src or {}).get("mac") or "",
             "ip": g.get("ip") or "",
             "sections": sections,
+            "topo": _layout_fields(g),
         }
         if src and src.get("site_sections"):
             nodes[node_id]["site_sections"] = True
         if g.get("in_inventory"):
             nodes[node_id]["inventory"] = {"host_id": g["id"]}
+        if g.get("instance"):
+            nodes[node_id]["instance_id"] = g["instance"]["id"]
+            nodes[node_id]["subnet"] = g["instance"].get("subnet") or ""
         # The viewer's Source picker: which integration drew the node, and
         # whether only that integration knows it (the Topology page's filter).
         if ref:
             nodes[node_id]["provider"] = ref.get("provider") or "meraki"
             if ref.get("provider") == "cato":
                 cato_ids[node_id] = str(ref.get("node_id") or "")
+            # A device another integration runs (a vSocket on an AWS
+            # instance) is shown under that integration too.
+            if g.get("also_providers"):
+                nodes[node_id]["also_providers"] = list(g["also_providers"])
         if g.get("source") == "meraki":
             nodes[node_id]["integration_only"] = True
 
@@ -712,6 +772,7 @@ def graph_to_snapshot(
             "a": a,
             "b": b,
             "kind": kind,
+            "protocol": protocol,
             "a_port": g.get("source_interface") or "",
             "b_port": g.get("target_interface") or "",
             "status": g.get("status") or "",

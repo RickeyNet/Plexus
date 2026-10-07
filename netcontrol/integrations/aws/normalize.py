@@ -16,7 +16,10 @@ How AWS maps onto the map:
     NAT and virtual private gateways sit beside it
   - an instance is a node only when it forwards traffic (source/destination
     check off: firewalls, routers, SD-WAN and VPN appliances) or is a Plexus
-    inventory host. Every instance is listed in its VPC's details
+    inventory host (by its ``aws_instance_id``, then by address). Every
+    instance is listed in its VPC's details; the others are kept aside as
+    ``latent`` nodes, which the topology route puts on the map when they
+    match a host added to the inventory since
   - transit gateways, Direct Connect and customer gateways share an
     "AWS transit and VPN" box; a site-to-site VPN is a tunnel from its
     gateway to the customer gateway
@@ -169,6 +172,11 @@ class _Builder:
         self.sites: list[dict] = []
         self.errors: list[dict] = []
         self.subnet_count = 0
+        # Instances that are not nodes, built as nodes all the same: the
+        # topology route puts one on the map when it matches a host added to
+        # the inventory since this snapshot was built.
+        self.latent_nodes: list[dict] = []
+        self.latent_edges: list[dict] = []
         self._edge_keys: set[tuple] = set()
         # Resource uid -> node id, for the resources that are nodes.
         self._node_of: dict[str, str] = {}
@@ -311,7 +319,9 @@ class _Builder:
 
     # ── Graph primitives ───────────────────────────────────────────────────
 
-    def _node(self, uid: str, node_id: str, kind: str, label: str, site: str, status: str, **fields: Any) -> dict:
+    @staticmethod
+    def _new_node(node_id: str, kind: str, label: str, site: str, status: str, **fields: Any) -> dict:
+        """A node that is not on the map (yet): ``_node`` puts one there."""
         node = {
             "id": node_id,
             "kind": kind,
@@ -325,10 +335,30 @@ class _Builder:
             "sections": [],
         }
         node.update(fields)
-        self.nodes[node_id] = node
-        if uid:
-            self._node_of[uid] = node_id
         return node
+
+    def _node(self, uid: str, node_id: str, kind: str, label: str, site: str, status: str, **fields: Any) -> dict:
+        return self._place(uid, self._new_node(node_id, kind, label, site, status, **fields))
+
+    def _place(self, uid: str, node: dict) -> dict:
+        self.nodes[node["id"]] = node
+        if uid:
+            self._node_of[uid] = node["id"]
+        return node
+
+    @staticmethod
+    def _new_edge(edge_id: str, a: str, b: str, kind: str, *, status: str, label: str, detail: str = "") -> dict:
+        return {
+            "id": edge_id,
+            "a": a,
+            "b": b,
+            "kind": kind,
+            "a_port": "",
+            "b_port": "",
+            "status": status,
+            "label": label,
+            "detail": detail,
+        }
 
     def _edge(self, a: str, b: str, kind: str, *, status: str = "", label: str = "", detail: str = "") -> None:
         if a == b or a not in self.nodes or b not in self.nodes:
@@ -338,17 +368,7 @@ class _Builder:
             return
         self._edge_keys.add(key)
         self.edges.append(
-            {
-                "id": f"e{len(self.edges) + 1}",
-                "a": a,
-                "b": b,
-                "kind": kind,
-                "a_port": "",
-                "b_port": "",
-                "status": status,
-                "label": label,
-                "detail": detail,
-            }
+            self._new_edge(f"e{len(self.edges) + 1}", a, b, kind, status=status, label=label, detail=detail)
         )
 
     def _linked(self, a: str, b: str) -> bool:
@@ -560,98 +580,139 @@ class _Builder:
     def _instance_nodes(
         self, instances: list[dict], vpc_node: dict, site_id: str, subnet_names: dict[str, str]
     ) -> list[dict]:
+        """The instances of a VPC that are nodes: those that forward traffic
+        or are inventory hosts. The others become latent nodes."""
         members: list[dict] = []
+        latent = 0
         for instance in instances:
             meta = instance["meta"]
-            interfaces = [i for i in meta.get("interfaces") or [] if isinstance(i, dict)]
-            primary = _text(meta.get("private_ip"))
-            addresses = [primary, _text(meta.get("public_ip"))]
-            for interface in interfaces:
-                addresses += [_text(ip) for ip in (interface.get("private_ips") or [])]
-                addresses += [_text(ip) for ip in (interface.get("public_ips") or [])]
+            addresses = [_text(meta.get("private_ip")), _text(meta.get("public_ip"))]
+            for interface in meta.get("interfaces") or []:
+                if isinstance(interface, dict):
+                    addresses += [_text(ip) for ip in (interface.get("private_ips") or [])]
+                    addresses += [_text(ip) for ip in (interface.get("public_ips") or [])]
             addresses = list(dict.fromkeys(a for a in addresses if a))
             forwards = not meta.get("source_dest_check", True)
-            host = self.inventory.match(ips=addresses)
+            host = self.inventory.match(instance_id=instance["rid"], ips=addresses)
             if not forwards and not host:
+                if latent < MAX_SITE_ROWS:
+                    latent += 1
+                    node = self._instance_node(instance, addresses, vpc_node, site_id, subnet_names, None)
+                    self.latent_nodes.append(node)
+                    self.latent_edges.append(
+                        self._new_edge(
+                            f"latent:{node['id']}",
+                            node["id"],
+                            vpc_node["id"],
+                            "attach",
+                            status="failed" if node["status"] == "offline" else "active",
+                            label="Instance in VPC",
+                        )
+                    )
                 continue
-            state = _text(instance.get("status")).lower()
-            status = "offline" if state in _DOWN_INSTANCE_STATES else _status(state)
-            node = self._node(
+            node = self._place(
                 _text(instance["resource_uid"]),
-                f"i:{instance['rid']}",
-                "appliance" if forwards else "server",
-                _text(instance.get("name")) or instance["rid"],
-                site_id,
-                status,
-                model=_text(meta.get("instance_type")),
-                ip=primary,
-                # Other addresses of the instance; a public one identifies it
-                # to the rest of the map (an SD-WAN appliance's WAN address).
-                alias_ips=[a for a in addresses if a != primary],
+                self._instance_node(instance, addresses, vpc_node, site_id, subnet_names, host),
             )
-            if host:
-                node["inventory"] = _inventory_ref(host)
-            _add(
-                node["sections"],
-                kv_section(
-                    "Overview",
-                    [
-                        ("Name", instance.get("name")),
-                        ("Instance ID", instance["rid"]),
-                        ("State", instance.get("status")),
-                        ("Type", meta.get("instance_type")),
-                        ("Platform", meta.get("platform")),
-                        ("VPC", vpc_node["label"]),
-                        ("Availability zone", meta.get("availability_zone")),
-                        ("Private IP", primary),
-                        ("Public IP", meta.get("public_ip")),
-                        ("Forwards traffic (source/destination check off)", forwards),
-                        ("Security groups", meta.get("security_groups")),
-                        ("Launched", meta.get("launched")),
-                        ("Account", self._account(instance)),
-                    ],
-                ),
-            )
-            _add(
-                node["sections"],
-                table_section(
-                    "Network interfaces",
-                    ["Interface", "Index", "Subnet", "Private IPs", "Public IPs", "Source/dest check", "Description"],
-                    [
-                        [
-                            i.get("id"),
-                            i.get("device_index"),
-                            subnet_names.get(_text(i.get("subnet_id"))) or i.get("subnet_id"),
-                            i.get("private_ips"),
-                            i.get("public_ips"),
-                            bool(i.get("source_dest_check", True)),
-                            i.get("description"),
-                        ]
-                        for i in interfaces
-                    ],
-                ),
-            )
-            if host:
-                _add(
-                    node["sections"],
-                    kv_section(
-                        "Plexus inventory",
-                        [
-                            ("Hostname", host.get("hostname")),
-                            ("IP address", host.get("ip_address")),
-                            ("Device type", host.get("device_type")),
-                        ],
-                    ),
-                )
             self._edge(
                 node["id"],
                 vpc_node["id"],
                 "attach",
-                status="failed" if status == "offline" else "active",
+                status="failed" if node["status"] == "offline" else "active",
                 label="Instance in VPC",
             )
             members.append(node)
         return members
+
+    def _instance_node(
+        self,
+        instance: dict,
+        addresses: list[str],
+        vpc_node: dict,
+        site_id: str,
+        subnet_names: dict[str, str],
+        host: dict | None,
+    ) -> dict:
+        """The node of one instance, not yet placed on the map."""
+        meta = instance["meta"]
+        interfaces = [i for i in meta.get("interfaces") or [] if isinstance(i, dict)]
+        primary = _text(meta.get("private_ip"))
+        forwards = not meta.get("source_dest_check", True)
+        subnet_id = _text(meta.get("subnet_id"))
+        subnet = subnet_names.get(subnet_id) or subnet_id
+        state = _text(instance.get("status")).lower()
+        status = "offline" if state in _DOWN_INSTANCE_STATES else _status(state)
+        node = self._new_node(
+            f"i:{instance['rid']}",
+            "appliance" if forwards else "server",
+            _text(instance.get("name")) or instance["rid"],
+            site_id,
+            status,
+            model=_text(meta.get("instance_type")),
+            ip=primary,
+            # Other addresses of the instance; a public one identifies it
+            # to the rest of the map (an SD-WAN appliance's WAN address).
+            alias_ips=[a for a in addresses if a != primary],
+            # Which instance this is, for the map to show beside any host it became.
+            instance_id=instance["rid"],
+            subnet=subnet,
+        )
+        if host:
+            node["inventory"] = _inventory_ref(host)
+        _add(
+            node["sections"],
+            kv_section(
+                "Overview",
+                [
+                    ("Name", instance.get("name")),
+                    ("Instance ID", instance["rid"]),
+                    ("State", instance.get("status")),
+                    ("Type", meta.get("instance_type")),
+                    ("Platform", meta.get("platform")),
+                    ("VPC", vpc_node["label"]),
+                    ("Availability zone", meta.get("availability_zone")),
+                    ("Subnet", subnet),
+                    ("Private IP", primary),
+                    ("Public IP", meta.get("public_ip")),
+                    ("Forwards traffic (source/destination check off)", forwards),
+                    ("Security groups", meta.get("security_groups")),
+                    ("Launched", meta.get("launched")),
+                    ("Account", self._account(instance)),
+                ],
+            ),
+        )
+        _add(
+            node["sections"],
+            table_section(
+                "Network interfaces",
+                ["Interface", "Index", "Subnet", "Private IPs", "Public IPs", "Source/dest check", "Description"],
+                [
+                    [
+                        i.get("id"),
+                        i.get("device_index"),
+                        subnet_names.get(_text(i.get("subnet_id"))) or i.get("subnet_id"),
+                        i.get("private_ips"),
+                        i.get("public_ips"),
+                        bool(i.get("source_dest_check", True)),
+                        i.get("description"),
+                    ]
+                    for i in interfaces
+                ],
+            ),
+        )
+        if host:
+            _add(
+                node["sections"],
+                kv_section(
+                    "Plexus inventory",
+                    [
+                        ("Hostname", host.get("hostname")),
+                        ("IP address", host.get("ip_address")),
+                        ("Device type", host.get("device_type")),
+                    ],
+                ),
+            )
+        return node
 
     def _vpc_gateways(self, vpc_uid: str, vpc_node: dict, site_id: str) -> list[dict]:
         """Internet, NAT and virtual private gateways of one VPC."""
@@ -1086,8 +1147,10 @@ class _Builder:
             )
 
     def build_edge_sections(self) -> None:
-        for edge in self.edges:
-            a, b = self.nodes[edge["a"]], self.nodes[edge["b"]]
+        latent = {n["id"]: n for n in self.latent_nodes}
+        for edge in [*self.edges, *self.latent_edges]:
+            a = self.nodes.get(edge["a"]) or latent[edge["a"]]
+            b = self.nodes.get(edge["b"]) or latent[edge["b"]]
             section = kv_section(
                 edge.pop("label") or "Link",
                 [
@@ -1142,6 +1205,13 @@ def build_snapshot(
     nodes = list(builder.nodes.values())
     for node in nodes:
         node.pop("parent", None)
+    # A latent instance that is put on the map starts out at its VPC.
+    per_vpc: dict[str, int] = {}
+    for node, edge in zip(builder.latent_nodes, builder.latent_edges, strict=True):
+        vpc = builder.nodes[edge["b"]]
+        per_vpc[vpc["id"]] = per_vpc.get(vpc["id"], 0) + 1
+        node["x"] = vpc.get("x", 0.0)
+        node["y"] = vpc.get("y", 0.0) + 40.0 * per_vpc[vpc["id"]]
 
     by_kind: dict[str, int] = {}
     by_status: dict[str, int] = {}
@@ -1183,4 +1253,7 @@ def build_snapshot(
         "sites": sites,
         "nodes": nodes,
         "edges": builder.edges,
+        # Instances that are not nodes (see ``_Builder.latent_nodes``); not
+        # counted in the summary nor searched: the VPC lists them.
+        "latent": {"nodes": builder.latent_nodes, "edges": builder.latent_edges},
     }
