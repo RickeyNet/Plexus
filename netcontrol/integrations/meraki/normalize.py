@@ -177,14 +177,19 @@ def _worst(statuses: list[str]) -> str:
 
 
 class InventoryIndex:
-    """Lookup of Plexus inventory hosts by serial, IP (incl. aliases) and name."""
+    """Lookup of Plexus inventory hosts by cloud instance ID, serial, IP
+    (incl. aliases) and name."""
 
     def __init__(self, hosts: list[dict] | None = None, aliases: list[dict] | None = None) -> None:
+        self._by_instance: dict[str, dict] = {}
         self._by_serial: dict[str, dict] = {}
         self._by_ip: dict[str, dict] = {}
         self._by_name: dict[str, dict] = {}
         by_id = {h.get("id"): h for h in hosts or []}
         for host in hosts or []:
+            instance = str(host.get("aws_instance_id") or "").strip().lower()
+            if instance:
+                self._by_instance.setdefault(instance, host)
             serial = str(host.get("serial_number") or "").strip().upper()
             if serial:
                 self._by_serial.setdefault(serial, host)
@@ -200,12 +205,21 @@ class InventoryIndex:
             if owner and ip:
                 self._by_ip.setdefault(ip, owner)
 
-    def match(self, *, serial: str = "", ips: list[str] | None = None, name: str = "") -> dict | None:
+    def match(
+        self, *, serial: str = "", ips: list[str] | None = None, name: str = "", instance_id: str = ""
+    ) -> dict | None:
+        # A host that names the instance outright wins over any address match.
+        instance = instance_id.strip().lower()
+        if instance and instance in self._by_instance:
+            return self._by_instance[instance]
         if serial and serial.upper() in self._by_serial:
             return self._by_serial[serial.upper()]
         for ip in ips or []:
-            if ip and ip in self._by_ip:
-                return self._by_ip[ip]
+            host = self._by_ip.get(ip) if ip else None
+            # ...and is not some other instance that happens to share an address.
+            claimed = str((host or {}).get("aws_instance_id") or "").strip().lower()
+            if host and not (instance and claimed and claimed != instance):
+                return host
         short = _short_name(name)
         if short and short in self._by_name:
             return self._by_name[short]
@@ -1289,6 +1303,9 @@ def _layout_site(members: list[dict], edges: list[dict]) -> tuple[float, float]:
         "switch": 2,
         "external": 3,
         "wireless": 4,
+        # A PoP (cloud) sits over its remote users, however few: with one
+        # user the degrees tie and the label would decide.
+        "user": 6,
     }
 
     def root_order(nid: str) -> tuple:

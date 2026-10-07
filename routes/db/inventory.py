@@ -95,7 +95,8 @@ async def get_all_groups_with_hosts() -> list[dict]:
                 h.model AS host_model,
                 h.software_version AS host_software_version,
                 h.device_category AS host_device_category,
-                h.serial_number AS host_serial_number
+                h.serial_number AS host_serial_number,
+                h.aws_instance_id AS host_aws_instance_id
             FROM inventory_groups g
             LEFT JOIN hosts h ON h.group_id = g.id
             ORDER BY g.name, h.ip_address
@@ -136,6 +137,7 @@ async def get_all_groups_with_hosts() -> list[dict]:
                 "software_version": row["host_software_version"] or "",
                 "device_category": row["host_device_category"] or "",
                 "serial_number": row["host_serial_number"] or "",
+                "aws_instance_id": row["host_aws_instance_id"] or "",
             }
         )
         group["host_count"] += 1
@@ -192,7 +194,8 @@ async def get_all_groups_with_hosts_for_user(user_id: int) -> list[dict]:
                 h.model AS host_model,
                 h.software_version AS host_software_version,
                 h.device_category AS host_device_category,
-                h.serial_number AS host_serial_number
+                h.serial_number AS host_serial_number,
+                h.aws_instance_id AS host_aws_instance_id
             FROM inventory_groups g
             LEFT JOIN hosts h ON h.group_id = g.id
             LEFT JOIN user_inventory_group_order o
@@ -237,6 +240,7 @@ async def get_all_groups_with_hosts_for_user(user_id: int) -> list[dict]:
                 "software_version": row["host_software_version"] or "",
                 "device_category": row["host_device_category"] or "",
                 "serial_number": row["host_serial_number"] or "",
+                "aws_instance_id": row["host_aws_instance_id"] or "",
             }
         )
         group["host_count"] += 1
@@ -482,13 +486,28 @@ async def get_fdm_hosts() -> list[dict]:
 
 
 async def add_host(
-    group_id: int, hostname: str, ip_address: str, device_type: str = "cisco_ios", vrf_name: str = "", vlan_id: str = ""
+    group_id: int,
+    hostname: str,
+    ip_address: str,
+    device_type: str = "cisco_ios",
+    vrf_name: str = "",
+    vlan_id: str = "",
+    aws_instance_id: str = "",
 ) -> int:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "INSERT INTO hosts (group_id, hostname, ip_address, device_type, vrf_name, vlan_id) VALUES (?,?,?,?,?,?)",
-            (group_id, hostname, ip_address, device_type, vrf_name or "", str(vlan_id or "")),
+            "INSERT INTO hosts (group_id, hostname, ip_address, device_type, vrf_name, vlan_id, aws_instance_id)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (
+                group_id,
+                hostname,
+                ip_address,
+                device_type,
+                vrf_name or "",
+                str(vlan_id or ""),
+                (aws_instance_id or "").strip(),
+            ),
         )
         await db.commit()
         new_id = cursor.lastrowid
@@ -550,7 +569,9 @@ async def update_host(
     device_type: str = "cisco_ios",
     vrf_name: str | None = None,
     vlan_id: str | None = None,
+    aws_instance_id: str | None = None,
 ):
+    """``None`` leaves ``vrf_name``/``vlan_id`` (together) and ``aws_instance_id`` unchanged."""
     db = await _dbcore.get_db()
     try:
         cur = await db.execute("SELECT ip_address, vrf_name FROM hosts WHERE id = ?", (host_id,))
@@ -568,6 +589,11 @@ async def update_host(
             await db.execute(
                 "UPDATE hosts SET hostname=?, ip_address=?, device_type=?, vrf_name=?, vlan_id=? WHERE id=?",
                 (hostname, ip_address, device_type, vrf_name or "", str(vlan_id or ""), host_id),
+            )
+        if aws_instance_id is not None:
+            await db.execute(
+                "UPDATE hosts SET aws_instance_id=? WHERE id=?",
+                (aws_instance_id.strip(), host_id),
             )
         await db.commit()
     finally:

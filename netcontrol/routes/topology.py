@@ -1614,22 +1614,51 @@ async def _merge_meraki(
     inventory = await load_inventory_index()
     live_match: dict[tuple[int, str], int] = {}
     wanted: set[int] = set()
+
+    def match(n: dict) -> dict | None:
+        label = n.get("label") or ""
+        return inventory.match(
+            instance_id=n.get("instance_id") or "",
+            serial=n.get("serial") or "",
+            ips=[n.get("ip") or "", *(n.get("alias_ips") or [])],
+            name=label if n["kind"] == "external" else "",
+        )
+
+    merged: list[tuple[int, dict]] = []
     for org_ref, snap in snapshots:
         for n in snap.get("nodes") or []:
             built = (n.get("inventory") or {}).get("host_id")
             if built is not None:
                 wanted.add(int(built))
-            if n["kind"] in ("wan", "vpn_peer", "cloud", "users"):
+            # Not devices: a WAN stub, a VPN peer, a cloud, a remote user
+            # (its VPN address is Cato's, not an inventory host's).
+            if n["kind"] in ("wan", "vpn_peer", "cloud", "users", "user"):
                 continue
-            label = n.get("label") or ""
-            host = inventory.match(
-                serial=n.get("serial") or "",
-                ips=[n.get("ip") or "", *(n.get("alias_ips") or [])],
-                name=label if n["kind"] == "external" else "",
-            )
+            host = match(n)
             if host:
                 live_match[(org_ref, n["id"])] = host["id"]
                 wanted.add(host["id"])
+        # A cloud instance that is not a node becomes one when it is a host
+        # added to the inventory since the snapshot was built. The cached
+        # snapshot is left as it is.
+        latent = snap.get("latent") or {}
+        promoted: list[dict] = []
+        for n in latent.get("nodes") or []:
+            host = match(n)
+            if host:
+                promoted.append(n)
+                live_match[(org_ref, n["id"])] = host["id"]
+                wanted.add(host["id"])
+        if promoted:
+            ids = {n["id"] for n in promoted}
+            links = [e for e in latent.get("edges") or [] if e["a"] in ids or e["b"] in ids]
+            snap = {
+                **snap,
+                "nodes": [*(snap.get("nodes") or []), *promoted],
+                "edges": [*(snap.get("edges") or []), *links],
+            }
+        merged.append((org_ref, snap))
+    snapshots = merged
 
     # A Meraki node can match an inventory host that has no discovered links
     # and so is not on the map yet; those are pulled in on demand.
