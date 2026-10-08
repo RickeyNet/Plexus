@@ -194,6 +194,7 @@ export function CloudVisibility() {
           accounts={accountList}
           providerOptions={providerOptions.length ? providerOptions : ['aws', 'azure', 'gcp']}
           isLoading={accounts.isPending}
+          providers={providers.data?.providers ?? []}
         />
       )}
       {tab === 'topology' && <TopologyTab filter={filter} />}

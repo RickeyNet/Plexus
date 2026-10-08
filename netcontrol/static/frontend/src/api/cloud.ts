@@ -202,6 +202,7 @@ export interface CloudDiscoverResult {
   requested_mode?: string;
   effective_mode?: string;
   fallback_used?: boolean;
+  summary?: { resources?: number; connections?: number; hybrid_links?: number; policy_rules?: number } | null;
 }
 
 export interface CloudPullResult {
