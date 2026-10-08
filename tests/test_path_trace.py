@@ -628,12 +628,12 @@ def _aws_rows() -> list[dict]:
     ]
 
 
-def _vmx_tracer() -> Tracer:
+def _vmx_tracer(vmx: dict | None = None, rows: list[dict] | None = None) -> Tracer:
     branch = _mx(
         {"VLAN 10": ("10.1.10.1", "10.1.10.0/24")},
         routes=[route("10.50.0.0/16", "autovpn", peer={"site": "CLOUD"}, source="AutoVPN from Cloud vMX")],
     )
-    vmx = _mx(
+    vmx = vmx or _mx(
         {"LAN": ("10.50.1.10", "10.50.1.0/24")},
         routes=[
             route("10.50.0.0/16", "static", next_hop="10.50.1.1", interface="LAN", source="Static route VPC"),
@@ -692,7 +692,7 @@ def _vmx_tracer() -> Tracer:
         },
     ]
     graph = {"nodes": nodes, "edges": edges}
-    return Tracer(graph, {1: meraki, -1: aws}, {-1: Reachability(_aws_rows(), [])}, {}, [])
+    return Tracer(graph, {1: meraki, -1: aws}, {-1: Reachability(rows or _aws_rows(), [])}, {}, [])
 
 
 def test_branch_to_a_vpc_subnet_through_a_vmx_uses_the_aws_engine_and_comes_back_through_the_vmx():
@@ -733,6 +733,56 @@ def test_branch_to_a_vpc_subnet_through_a_vmx_uses_the_aws_engine_and_comes_back
     back = tracer.trace("10.50.2.20", "10.1.10.5", source_node="meraki:-1:vpc:vpc-1", destination_node="meraki:1:d:BR")
     assert back["request"]["verdict"] == "allowed" and _labels(back["request"]) == ["cloud-vpc", "vMX", "Branch 01 MX"]
     assert back["request"]["hops"][0]["items"][0]["where"] == "Security groups of instance app-1, outbound"
+
+
+def test_a_passthrough_vmx_hands_the_flow_to_its_own_vpc_when_another_vpc_has_the_same_subnets():
+    # A vMX in VPN concentrator mode has one interface, its uplink, and
+    # reaches its VPC by the default route to the VPC router. Another VPC
+    # uses the same ranges (as every default VPC does): the vMX is an
+    # instance of the first, so the next hop is the router of that one.
+    vmx = _mx(
+        {},
+        routes=[route("10.1.10.0/24", "autovpn", peer={"site": "BR"}, source="AutoVPN from Branch 01")],
+        wan_ip="10.50.1.10",
+        gateway="10.50.1.1",
+    )
+    vmx["nat"] = []  # a concentrator does not translate
+    twin = [
+        {
+            "resource_uid": "aws:vpc:vpc-2",
+            "resource_type": "vpc",
+            "name": "twin-vpc",
+            "cidr": "10.50.0.0/16",
+            "metadata": {},
+        },
+        {
+            "resource_uid": "aws:subnet:subnet-twin",
+            "resource_type": "subnet",
+            "name": "twin-subnet",
+            "cidr": "10.50.1.0/24",
+            "metadata": {"vpc_id": "vpc-2"},
+        },
+    ]
+    result = _vmx_tracer(vmx, [*_aws_rows(), *twin]).trace(
+        "10.1.10.5",
+        "10.50.2.20",
+        source_node="meraki:1:d:BR",
+        destination_node="meraki:-1:vpc:vpc-1",
+        protocol="tcp",
+        port=443,
+    )
+
+    assert result["verdict"] == "allowed", result["summary"]
+    request = result["request"]
+    assert _labels(request) == ["Branch 01 MX", "vMX", "cloud-vpc"]
+    vmx_hop, vpc = request["hops"][1:]
+    assert vmx_hop["out"] == "wan1" and vmx_hop["items"][-1]["where"] == "Link to cloud-vpc"
+    assert "the router of cloud-vpc" in next(i["text"] for i in vmx_hop["items"] if i["stage"] == "route")
+    # The map draws the link from the vMX to its VPC, and the VPC walks the
+    # flow from the vMX's own subnet.
+    assert vpc["edge"] == "meraki:-1:e1"
+    assert vpc["items"][0]["where"] == "Route table main of subnet vmx-subnet (10.50.1.0/24)"
+    assert _labels(result["reply"]) == ["cloud-vpc", "vMX", "Branch 01 MX"]
 
 
 # ── Cato ─────────────────────────────────────────────────────────────────────
