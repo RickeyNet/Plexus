@@ -138,8 +138,8 @@ async def ipam_overview_api(
     """The address space of every source: inventory hosts, cloud resources,
     external and local IPAM prefixes and, with ``include_topology``, the
     subnets of the latest Topology collections (Meraki VLANs and routes, Cato
-    network ranges, AnyConnect pools), with the ranges two sites or VPCs both
-    claim listed under ``overlaps``."""
+    network ranges, FMC connected subnets, routes and VPN pools), with the
+    ranges two sites or VPCs both claim listed under ``overlaps``."""
     if group_id is not None and group_id <= 0:
         raise HTTPException(status_code=400, detail="Invalid inventory group id")
     return await db.get_ipam_overview(

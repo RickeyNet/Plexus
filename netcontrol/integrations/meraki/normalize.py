@@ -33,6 +33,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from netcontrol.integrations.meraki.collector import _device_kind
+from netcontrol.integrations.meraki.forwarding import appliance_block, canonical, peer_block, share, switch_block
 
 SCHEMA_VERSION = 1
 
@@ -171,6 +172,63 @@ def _add(sections: list[dict], section: dict | None) -> None:
 def _worst(statuses: list[str]) -> str:
     known = [s for s in statuses if s in _STATUS_RANK]
     return min(known, key=lambda s: _STATUS_RANK[s]) if known else "unknown"
+
+
+def _rules_table(title: str, payload: Any, *, switch: bool = False) -> dict | None:
+    """A Dashboard rule list (``{"rules": [...]}``) in the style of the
+    Layer 3 firewall rules table. A switch ACL names the destination
+    ``dstCidr`` and adds the IP version and VLAN."""
+    rules = (payload.get("rules") if isinstance(payload, dict) else payload) or []
+    rules = [r for r in rules if isinstance(r, dict)] if isinstance(rules, list) else []
+    if switch:
+        return table_section(
+            title,
+            [
+                "#",
+                "Policy",
+                "IP version",
+                "Protocol",
+                "Source",
+                "Src port",
+                "Destination",
+                "Dst port",
+                "VLAN",
+                "Comment",
+            ],
+            [
+                [
+                    idx,
+                    r.get("policy"),
+                    r.get("ipVersion"),
+                    r.get("protocol"),
+                    r.get("srcCidr"),
+                    r.get("srcPort"),
+                    r.get("dstCidr"),
+                    r.get("dstPort"),
+                    r.get("vlan"),
+                    r.get("comment"),
+                ]
+                for idx, r in enumerate(rules, start=1)
+            ],
+        )
+    return table_section(
+        title,
+        ["#", "Policy", "Protocol", "Source", "Src port", "Destination", "Dst port", "Syslog", "Comment"],
+        [
+            [
+                idx,
+                r.get("policy"),
+                r.get("protocol"),
+                r.get("srcCidr"),
+                r.get("srcPort"),
+                r.get("destCidr"),
+                r.get("destPort"),
+                r.get("syslogEnabled"),
+                r.get("comment"),
+            ]
+            for idx, r in enumerate(rules, start=1)
+        ],
+    )
 
 
 # ── Inventory correlation ────────────────────────────────────────────────────
@@ -762,6 +820,8 @@ class _Builder:
                 ],
             ),
         )
+        acl = (self.net_detail.get(node["site"]) or {}).get("switch_acl")
+        _add(sections, _rules_table("Switch ACL", acl, switch=True))
         _add(
             sections,
             table_section(
@@ -861,6 +921,11 @@ class _Builder:
             )
             self._site_addressing(sections, detail)
             self._site_vpn(sections, net_id, detail, vpn)
+            if str(vpn.get("vpnMode") or s2s.get("mode") or "none").lower() != "none":
+                _add(
+                    sections,
+                    _rules_table("Site-to-site VPN firewall rules", self.org_data.get("vpn_firewall")),
+                )
             self._site_routes(sections, net_id, detail, vpn)
             self._site_security(sections, detail)
             self._site_switching(sections, detail)
@@ -1148,6 +1213,30 @@ class _Builder:
                 ],
             ),
         )
+        _add(
+            sections,
+            table_section(
+                "1:Many NAT",
+                ["Public IP", "Uplink", "Name", "Protocol", "Public port", "LAN IP", "Local port", "Allowed IPs"],
+                [
+                    [
+                        r.get("publicIp"),
+                        r.get("uplink"),
+                        p.get("name"),
+                        p.get("protocol"),
+                        p.get("publicPort"),
+                        p.get("localIp"),
+                        p.get("localPort"),
+                        p.get("allowedIps"),
+                    ]
+                    for r in (detail.get("one_to_many_nat") or {}).get("rules") or []
+                    if isinstance(r, dict)
+                    for p in r.get("portRules") or []
+                    if isinstance(p, dict)
+                ],
+            ),
+        )
+        _add(sections, _rules_table("Inbound firewall rules", detail.get("inbound_firewall")))
         spare = detail.get("warm_spare") or {}
         if spare.get("enabled"):
             _add(
@@ -1235,6 +1324,69 @@ class _Builder:
                 ],
             ),
         )
+
+    # ── Forwarding data ────────────────────────────────────────────────────
+
+    def build_forwarding(self) -> None:
+        """The ``forwarding`` block of every appliance, L3 switch and
+        non-Meraki VPN peer (see ``forwarding``)."""
+        peers_cfg: dict[str, dict] = {}
+        cfg = self.org_data.get("third_party_vpn_peers")
+        for peer in (cfg.get("peers") if isinstance(cfg, dict) else cfg) or []:
+            if isinstance(peer, dict):
+                peers_cfg[str(peer.get("name") or "")] = peer
+        net_names = {n["id"]: str(n.get("name") or n["id"]) for n in self.networks}
+        for net_id, primary in self.appliance_by_net.items():
+            node = self.nodes.get(primary)
+            if not node:
+                continue
+            block = appliance_block(
+                detail=self.net_detail.get(net_id) or {},
+                vpn=self.vpn_by_net.get(net_id) or {},
+                vpn_by_net=self.vpn_by_net,
+                net_details=self.net_detail,
+                net_names=net_names,
+                uplinks=[
+                    u
+                    for u in (self.uplinks_by_serial.get(node.get("serial")) or {}).get("uplinks") or []
+                    if isinstance(u, dict)
+                ],
+                peers_cfg=peers_cfg,
+                vpn_firewall=self.org_data.get("vpn_firewall"),
+            )
+            node["forwarding"] = block
+            # A warm spare forwards like the primary when it takes over.
+            for other in self.nodes.values():
+                if other["kind"] == "appliance" and other["site"] == net_id and other["id"] != primary:
+                    other["forwarding"] = share(block)
+
+        for node in self.nodes.values():
+            if node["kind"] == "switch" and node.get("serial"):
+                detail = self.dev_detail.get(node["serial"]) or {}
+                stack = self._stack_for(node["serial"]) or {}
+                svis = detail.get("routing_interfaces") or stack.get("routing_interfaces") or []
+                if not any(isinstance(i, dict) and canonical(i.get("subnet")) for i in svis):
+                    continue
+                site = self.net_detail.get(node["site"]) or {}
+                vlans = {
+                    str(v.get("id")): canonical(v.get("subnet"))
+                    for v in site.get("vlans") or []
+                    if isinstance(v, dict) and canonical(v.get("subnet"))
+                }
+                node["forwarding"] = switch_block(
+                    svis=[i for i in svis if isinstance(i, dict)],
+                    static_routes=[
+                        r
+                        for r in detail.get("routing_static_routes") or stack.get("routing_static_routes") or []
+                        if isinstance(r, dict)
+                    ],
+                    acl=site.get("switch_acl"),
+                    ospf_enabled=bool((site.get("ospf") or {}).get("enabled")),
+                    vlans=vlans,
+                )
+            elif node["kind"] == "vpn_peer":
+                name = str(node.get("label") or "")
+                node["forwarding"] = peer_block(name, list((peers_cfg.get(name) or {}).get("privateSubnets") or []))
 
     # ── Edge sections ──────────────────────────────────────────────────────
 
@@ -1461,6 +1613,7 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
     builder.build_vpn()
     builder.build_device_sections()
     sites = builder.build_sites()
+    builder.build_forwarding()
     builder.build_edge_sections()
     _layout(sites, builder.nodes, builder.edges)
 

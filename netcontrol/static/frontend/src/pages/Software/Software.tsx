@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useLocation, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { PageHelp } from '@/components/PageHelp';
@@ -17,12 +18,21 @@ import {
   useSoftwareOverview,
   useStartPsirtSync,
 } from '@/api/software';
+import { UpgradesContent } from '@/pages/Upgrades/Upgrades';
 
 import { AdvisoryModal } from './AdvisoryModal';
 import { DeviceHistoryModal } from './DeviceHistoryModal';
 import { ImportAdvisoriesModal } from './ImportAdvisoriesModal';
 import { SettingsModal } from './SettingsModal';
-import { barWidth, formatTime, severityBadgeClass, severityLabel, sourceLabel } from './helpers';
+import {
+  type SoftwareTab,
+  barWidth,
+  formatTime,
+  severityBadgeClass,
+  severityLabel,
+  softwareTabFromPath,
+  sourceLabel,
+} from './helpers';
 
 type ModalState =
   | { kind: 'none' }
@@ -33,7 +43,81 @@ type ModalState =
 
 const PLATFORM_FALLBACK = 'Other';
 
+// Each tab is gated on its own feature: Versions on `software`, Upgrades (the
+// firmware upgrade tool) on `upgrades`. The tool's old path /upgrades is
+// redirected here by the router, so bookmarks still land on the Upgrades tab.
+const TABS: { key: SoftwareTab; label: string; path: string; feature: string }[] = [
+  { key: 'versions', label: 'Versions', path: '/software', feature: 'software' },
+  { key: 'upgrades', label: 'Upgrades', path: '/software/upgrades', feature: 'upgrades' },
+];
+
 export function Software() {
+  const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const { data: auth } = useAuthStatus();
+  const [tab, setTab] = useState<SoftwareTab>(() => softwareTabFromPath(pathname));
+
+  const [prevPathname, setPrevPathname] = useState(pathname);
+  if (pathname !== prevPathname) {
+    setPrevPathname(pathname);
+    setTab(softwareTabFromPath(pathname));
+  }
+
+  function selectTab(t: SoftwareTab) {
+    const target = TABS.find((x) => x.key === t)!;
+    setTab(t);
+    if (pathname !== target.path) navigate(target.path);
+  }
+
+  const isAdmin = auth?.role === 'admin';
+  const access = new Set(auth?.feature_access ?? []);
+  const hidden = new Set(auth?.feature_visibility_hidden ?? []);
+  const visibleTabs = TABS.filter((t) => (isAdmin || access.has(t.feature)) && !hidden.has(t.feature));
+  // The path's tab is not available to this user but the other one is: show
+  // that one instead. With neither available, keep the path's tab (the API
+  // refuses its data anyway).
+  const shownTab = visibleTabs.some((t) => t.key === tab) ? tab : (visibleTabs[0]?.key ?? tab);
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <h2>Software</h2>
+      </div>
+
+      {visibleTabs.length > 1 && (
+        <div role="tablist" style={{ marginBottom: '1rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+          {visibleTabs.map((t) => (
+            <button
+              key={t.key}
+              role="tab"
+              aria-selected={shownTab === t.key}
+              className={`btn btn-sm btn-secondary mon-tab-btn${shownTab === t.key ? ' active' : ''}`}
+              onClick={() => selectTab(t.key)}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {shownTab === 'versions' && <VersionsTab />}
+      {shownTab === 'upgrades' && (
+        <>
+          <PageHelp
+            pageKey="software.upgrades"
+            title="Firmware Upgrade Campaigns"
+            text="Plan and execute IOS-XE upgrades across the fleet. Stage images, schedule maintenance windows, and run multi-phase campaigns with backups and rollback support."
+          />
+          <UpgradesContent />
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Versions tab ───────────────────────────────────────────────────────────
+
+function VersionsTab() {
   const qc = useQueryClient();
   const { alert, confirm } = useDialogs();
   const { data: auth } = useAuthStatus();
@@ -144,7 +228,6 @@ export function Software() {
   return (
     <div>
       <div
-        className="page-header"
         style={{
           display: 'flex',
           justifyContent: 'space-between',
@@ -154,12 +237,9 @@ export function Software() {
           marginBottom: '1rem',
         }}
       >
-        <div>
-          <h2 style={{ margin: 0 }}>Software Versions</h2>
-          <div className="text-muted" style={{ fontSize: '0.88em', marginTop: '0.2rem' }}>
-            Last refresh: {formatTime(summary?.last_refresh_at)}
-            {settings?.psirt_last_sync_at ? ` · Cisco PSIRT sync: ${formatTime(settings.psirt_last_sync_at)}` : ''}
-          </div>
+        <div className="text-muted" style={{ fontSize: '0.88em' }}>
+          Last refresh: {formatTime(summary?.last_refresh_at)}
+          {settings?.psirt_last_sync_at ? ` · Cisco PSIRT sync: ${formatTime(settings.psirt_last_sync_at)}` : ''}
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'end' }}>
           <label>
@@ -222,7 +302,7 @@ export function Software() {
       <PageHelp
         pageKey="software"
         title="Software Versions & Vulnerability Alerts"
-        text="Every software version Plexus knows - inventory hosts polled by SNMP/SSH, and the Meraki, Cato and AnyConnect devices of the latest topology collections - in one list, with the version spread per platform, a history of upgrades and downgrades, and alerts when a device runs a version an advisory names. Add advisories by hand, import them, or let Plexus ask Cisco PSIRT about every Cisco version it tracks."
+        text="Every software version Plexus knows - inventory hosts polled by SNMP/SSH, and the Meraki, Cato and Cisco FMC devices of the latest topology collections - in one list, with the version spread per platform, a history of upgrades and downgrades, and alerts when a device runs a version an advisory names. Add advisories by hand, import them, or let Plexus ask Cisco PSIRT about every Cisco version it tracks."
       />
 
       {syncJobId && syncJob.data && (
@@ -350,7 +430,7 @@ function DevicesCard({ devices, loading, filtered, onHistory }: DevicesCardProps
           <p>
             {filtered
               ? 'No device matches the filter.'
-              : 'No software versions yet. Poll your inventory (SNMP enrichment stores the version) or collect a Meraki, Cato or AnyConnect topology, then Refresh.'}
+              : 'No software versions yet. Poll your inventory (SNMP enrichment stores the version) or collect a Meraki, Cato or Cisco FMC topology, then Refresh.'}
           </p>
         </div>
       ) : (

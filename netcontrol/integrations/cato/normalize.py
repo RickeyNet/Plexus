@@ -18,6 +18,13 @@ How a Cato account maps onto the map:
     a "Remote users" box, linked to the backbone); its details say where it
     connects from (public IP, ISP, location, office) and what it is
     connected to in Cato (PoP, VPN IP)
+
+Forwarding data (``node["forwarding"]``, see
+``netcontrol.integrations.meraki.forwarding``) is hops only: a site's
+device holds its ranges and a default route into its PoP; a PoP routes the
+ranges and users connected to it to them and everything else to the Cato
+Cloud; the Cloud routes every range and user to its PoP. The WAN and
+internet firewall rules are not collected, so a trace says so.
 """
 
 from __future__ import annotations
@@ -25,6 +32,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from netcontrol.integrations.meraki.forwarding import canonical, interface, new_block, note, route
 from netcontrol.integrations.meraki.normalize import (
     SCHEMA_VERSION,
     InventoryIndex,
@@ -140,6 +148,14 @@ class _Builder:
         # PoP name -> [site name, device label, state] rows.
         self._pop_sites: dict[str, list[list[str]]] = {}
         self._cloud_sites: list[list[str]] = []
+        # For the forwarding blocks: the ranges of each site, the device
+        # traffic for a site enters by, the PoPs each device is connected to
+        # (none: the Cato Cloud), its WAN links, and the remote users.
+        self._ranges: dict[str, list[list[str]]] = {}
+        self._gateway: dict[str, str] = {}
+        self._pops: dict[str, list[str]] = {}
+        self._wans: dict[str, list[tuple[str, str, bool]]] = {}
+        self._users: list[tuple[str, str, str]] = []
 
     # ── Graph primitives ───────────────────────────────────────────────────
 
@@ -207,6 +223,7 @@ class _Builder:
 
     def build_sites(self) -> None:
         ranges = self._ranges_by_site()
+        self._ranges = ranges
         self._node(CLOUD_NODE_ID, "cloud", "Cato Cloud", CLOUD_SITE_ID, "online", model="Cato backbone")
         for site in sorted(self.sites_raw, key=lambda s: _text((s.get("info") or {}).get("name")).lower()):
             site_id = _text(site["id"])
@@ -323,6 +340,8 @@ class _Builder:
                 ),
             )
             self._tunnel(node, site_name, [site_pop] if site_pop else [], site_status != "offline")
+            self._gateway[site_id] = node["id"]
+            self._pops[node["id"]] = [site_pop] if site_pop and site_status != "offline" else []
             return [node]
 
         primary = next((d for d in devices if _is_primary(d)), devices[0])
@@ -348,6 +367,7 @@ class _Builder:
             )
             if device is primary:
                 node["site_sections"] = True
+                self._gateway[site_id] = node["id"]
             host = self.inventory.match(serial=serial, ips=[node["ip"]])
             if host:
                 node["inventory"] = _inventory_ref(host)
@@ -412,6 +432,16 @@ class _Builder:
                 fallback = _text(device.get("lastPopName")) or site_pop
                 pops = [fallback] if fallback else []
             self._tunnel(node, site_name, pops if connected else [], connected)
+            self._pops[node["id"]] = pops if connected else []
+            self._wans[node["id"]] = [
+                (
+                    _text(i.get("name")) or _text(i.get("id")) or f"wan{n + 1}",
+                    _text(i.get("tunnelRemoteIP")),
+                    bool(i.get("connected")),
+                )
+                for n, i in enumerate(interfaces)
+                if i.get("connected") or _text(i.get("tunnelRemoteIP"))
+            ]
             members.append(node)
         return members
 
@@ -578,6 +608,7 @@ class _Builder:
                 node_id = f"{node_id}:{index}"
             node = self._user_node(node_id, site_id, user, offices)
             self._edge(node_id, target, "vpn", status="reachable", label="Cato Client", a_port=node["ip"])
+            self._users.append((node_id, node["ip"], pop))
 
     def _no_pop_box(self, users: list[dict]) -> None:
         sections: list[dict] = []
@@ -703,6 +734,113 @@ class _Builder:
         )
         return node
 
+    # ── Forwarding data ────────────────────────────────────────────────────
+
+    def build_forwarding(self) -> None:
+        """Hops only: ranges, users and the tunnels between the sites, the
+        PoPs and the Cato Cloud. No firewall rules are collected."""
+        site_names = {s["id"]: s["name"] for s in self.sites}
+
+        def via(node_id: str) -> str:
+            pops = self._pops.get(node_id) or []
+            return f"pop:{pops[0]}" if pops else CLOUD_NODE_ID
+
+        for node_id, pops in self._pops.items():
+            node = self.nodes[node_id]
+            block = new_block()
+            for name, address, connected in self._wans.get(node_id, []):
+                block["interfaces"].append(interface(name, "wan", ip=address, enabled=connected))
+            for row in self._ranges.get(node["site"], []):
+                name = f"{row[1] or 'Range'} ({row[0]})"
+                block["interfaces"].append(interface(name, "lan", cidr=row[0]))
+                block["routes"].append(route(row[0], "connected", interface=name, source=f"Network range {row[1]}"))
+            target = via(node_id)
+            block["routes"].append(
+                route(
+                    "0.0.0.0/0",
+                    "default",
+                    peer={"org_node": target},
+                    source=f"Cato tunnel to PoP {pops[0]}" if pops else "Cato tunnel to the Cato Cloud",
+                )
+            )
+            note(block, "WAN firewall rules")
+            note(block, "Internet firewall rules")
+            node["forwarding"] = block
+
+        for node in self.nodes.values():
+            if node["id"].startswith("pop:"):
+                pop = node["id"].removeprefix("pop:")
+                block = new_block()
+                for site_id, gateway in self._gateway.items():
+                    attached = pop in (self._pops.get(gateway) or [])
+                    for row in self._ranges.get(site_id, []):
+                        block["routes"].append(
+                            route(
+                                row[0],
+                                "static",
+                                peer={"org_node": gateway if attached else CLOUD_NODE_ID},
+                                source=f"Range of {site_names.get(site_id, site_id)}"
+                                + ("" if attached else ", over the Cato backbone"),
+                            )
+                        )
+                for user_id, address, user_pop in self._users:
+                    if canonical(address):
+                        block["routes"].append(
+                            route(
+                                canonical(address),
+                                "static",
+                                peer={"org_node": user_id if user_pop == pop else CLOUD_NODE_ID},
+                                source=f"Remote user {self.nodes[user_id]['label']}",
+                            )
+                        )
+                block["routes"].append(
+                    route("0.0.0.0/0", "default", peer={"org_node": CLOUD_NODE_ID}, source="Cato backbone")
+                )
+                node["forwarding"] = block
+            elif node["kind"] == "user":
+                block = new_block()
+                if node["ip"]:
+                    block["interfaces"].append(interface("Cato Client", "tunnel", ip=node["ip"], cidr=node["ip"]))
+                    block["routes"].append(
+                        route(
+                            canonical(node["ip"]), "connected", interface="Cato Client", source="Address given by Cato"
+                        )
+                    )
+                pop = next((p for u, _a, p in self._users if u == node["id"]), "")
+                block["routes"].append(
+                    route(
+                        "0.0.0.0/0",
+                        "default",
+                        peer={"org_node": f"pop:{pop}" if pop else CLOUD_NODE_ID},
+                        source=f"Cato Client tunnel to PoP {pop}" if pop else "Cato Client tunnel",
+                    )
+                )
+                node["forwarding"] = block
+
+        cloud = new_block()
+        for site_id, gateway in self._gateway.items():
+            for row in self._ranges.get(site_id, []):
+                cloud["routes"].append(
+                    route(
+                        row[0],
+                        "static",
+                        peer={"org_node": via(gateway)} if self._pops.get(gateway) else {"org_node": gateway},
+                        source=f"Range of {site_names.get(site_id, site_id)}",
+                    )
+                )
+        for user_id, address, user_pop in self._users:
+            if canonical(address):
+                cloud["routes"].append(
+                    route(
+                        canonical(address),
+                        "static",
+                        peer={"org_node": f"pop:{user_pop}" if user_pop else user_id},
+                        source=f"Remote user {self.nodes[user_id]['label']}",
+                    )
+                )
+        note(cloud, "WAN firewall rules")
+        self.nodes[CLOUD_NODE_ID]["forwarding"] = cloud
+
     def build_edge_sections(self) -> None:
         titles = {"vpn": "Cato tunnel", "uplink": "WAN link"}
         for edge in self.edges:
@@ -738,6 +876,7 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
     builder = _Builder(raw, inventory or InventoryIndex())
     builder.build_sites()
     builder.build_cloud()
+    builder.build_forwarding()
     builder.build_edge_sections()
 
     cloud_members = [n for n in builder.nodes.values() if n["site"] == CLOUD_SITE_ID]

@@ -11,8 +11,9 @@ the same search box, and are included in the HTML export.
 
 A Cato Networks account is added from the same dialog and shares the map,
 search, Path Mode and export; see [cato-topology.md](cato-topology.md), as is
-a Cisco FMC whose FTDs terminate AnyConnect remote access VPN; see
-[anyconnect-topology.md](anyconnect-topology.md). AWS accounts and Azure
+a Cisco FMC and the FTDs it manages (interfaces, routing, NAT, access
+control, site-to-site and remote access VPN); see
+[fmc-topology.md](fmc-topology.md). AWS accounts and Azure
 subscriptions discovered by Cloud Visibility join the map as well; see
 [aws-topology.md](aws-topology.md) and [azure-topology.md](azure-topology.md).
 
@@ -24,7 +25,7 @@ other hardening controls; see [meraki-compliance.md](meraki-compliance.md).
 
 1. Open **Network → Topology** and click **Sources** in the toolbar. The
    dialog lists everything that feeds the map (neighbor discovery of the
-   inventory, Meraki organizations, Cato accounts, AnyConnect FMCs, AWS
+   inventory, Meraki organizations, Cato accounts, Cisco FMCs, AWS
    accounts) with its last collection; **Collect All** refreshes every source
    in one click.
 2. **Preview without a key.** Click **Load Sample**, then **Meraki**. A demo
@@ -61,7 +62,7 @@ belong to no inventory group).
 
 - The map opens in the **Tidy tree** layout, top to bottom. Each source is
   a region of its own, framed and titled, side by side from left to right: the
-  inventory, then Meraki, Cato, AnyConnect, AWS and Azure. Links between
+  inventory, then Meraki, Cato, Cisco FMC, AWS and Azure. Links between
   sources are still drawn, but they do not pull a device into another
   source's region, and they go around the sources rather than through them:
   up from each end, around the other sites' boxes and devices, to a lane
@@ -126,12 +127,11 @@ belong to no inventory group).
   six picks; the path is highlighted and listed hop by hop. It is the
   shortest way over the cables, uplinks and VPN tunnels that are up, with
   AutoVPN preferred over non-Meraki IPsec. The path drawn shows how the
-  ends are joined, not the route each device picks; with an end in AWS or
-  Azure, that cloud's route tables and rules are checked separately (see
-  [AWS topology](aws-topology.md#the-aws-check-of-a-path)).
+  ends are joined, not the route each device picks. Between two subnets or
+  addresses the route each device picks is traced as well; see the next
+  point.
   The HTML export has the same tool under **Path**: click sites in the
-  list or on the map. It draws the path only and does not run the AWS or
-  Azure check.
+  list or on the map. It draws the path only and has no trace.
 - Path picks can also be **subnets**: choose one in **Add a subnet or IP
   address**, or type an address or network and press Enter (the most
   specific collected subnet containing it is used; if several sites have
@@ -143,12 +143,21 @@ belong to no inventory group).
   VPN at its site, or it is behind a non-Meraki peer the other site has
   no tunnel of its own to. The subnet list comes from the latest
   collection (`GET /api/meraki/subnets`); IPv4 only when typing.
-  When one of two subnets or addresses is in an AWS VPC, the AWS route
-  tables, network ACLs and security groups are checked for that pair as
-  well; see [aws-topology.md](aws-topology.md#the-aws-check-of-a-path). An
-  end in an Azure VNet is checked against Azure's effective routes and
-  network security groups; see
-  [azure-topology.md](azure-topology.md#the-azure-check-of-a-path).
+- **Path trace.** Between two subnets or addresses the server traces the
+  flow hop by hop across every device on the map, for the request and for
+  the replies. Under the leg it lists each hop in order with the policies,
+  ACLs, security groups, NAT rules and routes the device applies: on a
+  Meraki appliance the Layer 3, inbound and site-to-site VPN firewall
+  rules, 1:1, port forwarding and 1:Many NAT, and the static and AutoVPN
+  routes; on a switch its ACL and SVI routes. Layer 7 rules and group
+  policies are not collected: each hop notes them, and the summary lists
+  them as not checked. The **Traffic** box takes
+  `tcp/443`, `udp/53`, `icmp` or nothing for any traffic. **Reverse**
+  traces the same traffic opened from the other end, and an **Asymmetric
+  routing** line says whether the replies take the same hops back. The map
+  highlights the hops of the trace instead of the drawn path. A leg
+  between a subnet and a device says which end to add as a subnet. See
+  [path-trace.md](path-trace.md).
 - VPN tunnels are purple dashed lines (dotted for non-Meraki IPsec peers),
   WAN uplinks are blue. A tunnel or uplink Meraki reports as down is red.
 - **Device tabs.** Clicking a Meraki device opens its details, one tab per
@@ -176,11 +185,11 @@ belong to no inventory group).
 - Where Plexus and Meraki both report the same link, the Plexus-discovered
   link is shown, since it carries utilization and spanning-tree state.
 - The source selector narrows the map: **All sources**, **Inventory only**,
-  **All integrations** (every Meraki, Cato, AnyConnect and AWS device), or
-  one integration alone (**Meraki only**, **Cato only**, **AnyConnect only**,
+  **All integrations** (every Meraki, Cato, Cisco FMC and AWS device), or
+  one integration alone (**Meraki only**, **Cato only**, **Cisco FMC only**,
   **AWS only**; only the integrations on the map are offered). A single
   integration keeps its own devices and the links between them; a link to
-  another integration (a Cato or Meraki VPN to an AWS gateway, a headend's
+  another integration (a Cato or Meraki VPN to an AWS gateway, an FTD's
   **Managed by FMC** link to an FMC in another box) is hidden with the other
   side. An inventory host matched to an integration's device counts as that
   integration.
@@ -244,7 +253,8 @@ the **IPAM** page, next to the subnets inferred from inventory hosts, the
 cloud CIDRs of Cloud Visibility and external IPAM prefixes: each VLAN,
 single LAN, switch SVI and static route is a row with source **topology**,
 its VLAN ID, and the sites that hold it in the **Preview** column (the same
-goes for Cato network ranges and AnyConnect address pools). Untick **Include
+goes for Cato network ranges and the connected subnets, static routes and
+VPN address pools of a Cisco FMC's FTDs). Untick **Include
 Topology Subnets** to leave them out (`GET /api/ipam/overview?include_topology=false`).
 
 **Overlapping Ranges** lists every range two sites both hold, or a site holds
@@ -372,6 +382,7 @@ it shows. The selector appears only when the export includes an integration.
 | `GET` | `/api/topology` | Topology graph; Meraki nodes carry `source: "meraki"` and a `meraki` reference |
 | `GET` | `/api/topology/search/deep?q=` | Search collected Meraki detail; returns node references and snippets |
 | `GET` | `/api/topology/export.html` | Interactive HTML map (`?group_id=`, `?download=1` to save) |
+| `GET` | `/api/topology/path?source=&destination=` | Trace a flow hop by hop across every device on the map, request and replies. Optional `source_node`, `destination_node` (map node ids of the ends), `protocol` (`tcp`, `udp`, `icmp`, empty for any traffic) and `port`; see [path-trace.md](path-trace.md#api-reference) |
 | `GET` | `/api/meraki/nodes?org_ref=&node_id=` | Detail sections for one Meraki node |
 | `GET` | `/api/meraki/orgs` | List organizations and default collection options |
 | `POST` | `/api/meraki/orgs` | Add an organization (admin) |

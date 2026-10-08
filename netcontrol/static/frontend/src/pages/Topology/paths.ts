@@ -1,4 +1,4 @@
-import { isCloudAccountProvider, type CloudAccountProvider, type CloudReachabilityQuery, type MerakiSubnet } from '@/api/meraki';
+import type { MerakiSubnet } from '@/api/meraki';
 import type { TopologyEdge, TopologyNode } from '@/api/topology';
 
 import { isEdgeDown } from './helpers';
@@ -6,9 +6,9 @@ import { layoutGroupKey } from './layout';
 
 // Path mode: how a set of picked devices / sites reach one another over the
 // links on the map. The path drawn follows topology (cables, uplinks, VPN
-// tunnels that are up), not route tables. Where a leg between two subnets or
-// addresses has an end in AWS or Azure, the server also checks that cloud's
-// routes and filtering rules (reachabilityQueries).
+// tunnels that are up), not route tables. A leg between two subnets or
+// addresses is also traced by the server hop by hop through each device's
+// routes, policies and NAT (pathTrace.ts).
 
 type NodeId = number | string;
 
@@ -33,6 +33,8 @@ export interface PathLeg {
   path: NodeId[] | null;
   /** Protocol of the link taken into each device after the first. */
   via: string[];
+  /** Every live link between consecutive devices of `path`. */
+  edgeIds: NodeId[];
 }
 
 /** Something picked for the path: a device, a site's gateway or a subnet's owner. */
@@ -53,6 +55,8 @@ export interface PickLeg {
   sameDevice: boolean;
   /** Reasons the drawn path may not carry the picked subnets. */
   notes: string[];
+  /** Links the drawn path runs over. */
+  edgeIds: NodeId[];
 }
 
 export interface PickResult {
@@ -151,18 +155,17 @@ export function connectEndpoints(endpoints: NodeId[], edges: TopologyEdge[]): Pa
     for (let j = i + 1; j < endpoints.length; j++) {
       const target = endpoints[j];
       if (!parent.has(target)) {
-        result.legs.push({ from: endpoints[i], to: target, path: null, via: [] });
+        result.legs.push({ from: endpoints[i], to: target, path: null, via: [], edgeIds: [] });
         continue;
       }
       const path: NodeId[] = [];
       for (let at: NodeId | null = target; at !== null; at = parent.get(at) ?? null) path.push(at);
       path.reverse();
       const via = path.slice(1).map((id, idx) => cheapest.get(pairKey(path[idx], id))?.protocol ?? '');
-      result.legs.push({ from: endpoints[i], to: target, path, via });
-      path.forEach((id, idx) => {
-        result.nodeIds.add(id);
-        if (idx > 0) for (const edgeId of between.get(pairKey(path[idx - 1], id)) ?? []) result.edgeIds.add(edgeId);
-      });
+      const edgeIds = path.slice(1).flatMap((id, idx) => between.get(pairKey(path[idx], id)) ?? []);
+      result.legs.push({ from: endpoints[i], to: target, path, via, edgeIds });
+      for (const id of path) result.nodeIds.add(id);
+      for (const edgeId of edgeIds) result.edgeIds.add(edgeId);
     }
   }
   return result;
@@ -192,7 +195,7 @@ export function connectPicks(picks: PathPick[], edges: TopologyEdge[]): PickResu
       const from = picks[i];
       const to = picks[j];
       if (from.node === to.node) {
-        legs.push({ from, to, path: [from.node], sameDevice: true, notes: [] });
+        legs.push({ from, to, path: [from.node], sameDevice: true, notes: [], edgeIds: [] });
         continue;
       }
       const forward = traced.legs.find((l) => l.from === from.node && l.to === to.node);
@@ -200,7 +203,14 @@ export function connectPicks(picks: PathPick[], edges: TopologyEdge[]): PickResu
       const leg = forward ?? back;
       const path = leg?.path ? (forward ? leg.path : [...leg.path].reverse()) : null;
       const tunnels = (leg?.via ?? []).filter((p) => TUNNEL_PROTOCOLS.has(p)).length;
-      legs.push({ from, to, path, sameDevice: false, notes: [...subnetNotes(from, tunnels), ...subnetNotes(to, tunnels)] });
+      legs.push({
+        from,
+        to,
+        path,
+        sameDevice: false,
+        notes: [...subnetNotes(from, tunnels), ...subnetNotes(to, tunnels)],
+        edgeIds: leg?.edgeIds ?? [],
+      });
     }
   }
   return { legs, nodeIds: traced.nodeIds, edgeIds: traced.edgeIds };
@@ -226,69 +236,6 @@ export function parseTraffic(text: string): TrafficFilter | null {
   if (digits === undefined) return { protocol };
   const port = Number(digits);
   return protocol === 'icmp' || port > 65535 ? null : { protocol, port };
-}
-
-/** The integrations that know a node: its own, and any it is also part of. */
-export type NodeProviders = (node: NodeId) => readonly (string | null | undefined)[];
-
-/**
- * The clouds an end may be in: the cloud of its subnet, or of its device. A
- * Cato vSocket or Meraki vMX that is an AWS instance owns ranges that are
- * subnets of its VPC too.
- */
-function cloudsOf(pick: PathPick, providersOf: NodeProviders): CloudAccountProvider[] {
-  return [pick.subnet?.provider, ...providersOf(pick.node)].filter(isCloudAccountProvider);
-}
-
-/**
- * The checks the clouds can make for a leg: both ends are subnets or
- * addresses, and one check per cloud (AWS, Azure) that holds an end. Empty
- * when there is nothing for a cloud to check.
- */
-export function reachabilityQueries(
-  from: PathPick,
-  to: PathPick,
-  traffic: TrafficFilter,
-  providersOf: NodeProviders = () => [],
-): CloudReachabilityQuery[] {
-  if (!from.subnet || !to.subnet) return [];
-  const clouds = [...cloudsOf(from, providersOf), ...cloudsOf(to, providersOf)];
-  return [...new Set(clouds)].map((cloud) => {
-    const inCloud = (pick: PathPick) => pick.subnet?.provider === cloud;
-    return {
-      cloud,
-      source: from.address ?? from.subnet!.cidr,
-      destination: to.address ?? to.subnet!.cidr,
-      // A cloud subnet's site is its VPC / VNet.
-      source_network: inCloud(from) ? from.subnet!.site_id : undefined,
-      destination_network: inCloud(to) ? to.subnet!.site_id : undefined,
-      protocol: traffic.protocol,
-      port: traffic.port,
-    };
-  });
-}
-
-/** What a cloud checks: AWS route tables, ACLs and security groups; Azure routes and NSGs. */
-export const CLOUD_CHECKS: Record<CloudAccountProvider, string> = {
-  aws: 'AWS route tables, network ACLs and security groups',
-  azure: 'Azure effective routes and network security groups',
-};
-
-/**
- * Why a leg with an end in AWS or Azure gets no check of that cloud's routes
- * and rules: the clouds check between two subnets or addresses, and an end
- * was picked as a device or site. Null when the leg is checked or has no end
- * in a cloud.
- */
-export function uncheckedCloudNote(from: PathPick, to: PathPick, providersOf: NodeProviders): string | null {
-  const ends = [from, to];
-  const clouds = [...new Set(ends.flatMap((p) => cloudsOf(p, providersOf)))];
-  const devices = ends.filter((p) => !p.subnet);
-  if (!clouds.length || !devices.length) return null;
-  return (
-    `The ${clouds.map((c) => CLOUD_CHECKS[c]).join(' and ')} are checked only between two subnets or IP addresses: ` +
-    `add ${devices.map((p) => p.label).join(' and ')} with the subnet box instead (one of its subnets, or an IP address).`
-  );
 }
 
 /** Text of a subnet in the picker; unique per (subnet, owner). */

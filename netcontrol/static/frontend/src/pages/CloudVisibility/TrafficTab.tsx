@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import {
+  type CloudPullResult,
   useCloudTrafficMetricSummary,
   useCloudTrafficMetricTimeline,
   useCloudTrafficMetricTopResources,
@@ -10,7 +11,7 @@ import {
   useUpdateCloudTrafficSyncConfig,
 } from '@/api/cloud';
 import type { CloudFilterState } from './CloudVisibility';
-import { formatCount, formatMetricValue, formatTimestamp } from './helpers';
+import { formatCount, formatMetricValue, formatTimestamp, pullOutcome } from './helpers';
 import { SyncControls } from './SyncControls';
 
 interface Props {
@@ -57,14 +58,9 @@ export function TrafficTab({ filter }: Props) {
     }, 8000);
   }
 
-  function pullOutcome(label: string, r: { ok?: boolean; ingested?: number; total_ingested?: number; errors?: unknown[] } | undefined) {
-    const ingested = Number(r?.ingested ?? r?.total_ingested ?? 0).toLocaleString();
-    const errors = Array.isArray(r?.errors) ? r?.errors : [];
-    if (r?.ok === false || errors.length) {
-      flash('error', `${label} finished with ${errors.length || 'unknown'} error(s); ingested ${ingested}. ${errors.slice(0, 3).map(String).join(' | ')}`);
-    } else {
-      flash('success', `${label} complete: ${ingested} ingested`);
-    }
+  function showPull(label: string, r: CloudPullResult | undefined) {
+    const outcome = pullOutcome(label, r);
+    flash(outcome.kind, outcome.text);
   }
 
   return (
@@ -114,7 +110,7 @@ export function TrafficTab({ filter }: Props) {
         }}
         onPullAll={async () => {
           try {
-            pullOutcome('Traffic pull', await triggerPull.mutateAsync(null));
+            showPull('Traffic pull', await triggerPull.mutateAsync(null));
           } catch (e) {
             flash('error', `Traffic pull failed: ${(e as Error).message}`);
           }
@@ -122,7 +118,7 @@ export function TrafficTab({ filter }: Props) {
         onPullSelected={async () => {
           if (!filter.accountId) return;
           try {
-            pullOutcome('Traffic pull (selected account)', await triggerPull.mutateAsync(filter.accountId));
+            showPull('Traffic pull (selected account)', await triggerPull.mutateAsync(filter.accountId));
           } catch (e) {
             flash('error', `Traffic pull failed: ${(e as Error).message}`);
           }

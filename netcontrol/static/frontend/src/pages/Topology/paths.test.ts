@@ -10,9 +10,7 @@ import {
   isAddressText,
   parseTraffic,
   pathSites,
-  reachabilityQueries,
   subnetOptionLabel,
-  uncheckedCloudNote,
   type PathPick,
 } from './paths';
 
@@ -110,6 +108,8 @@ describe('path mode', () => {
       [false, ['mx-a', 'hub', 'mx-b'], []],
       [false, ['mx-a', 'hub', 'mx-b'], []],
     ]);
+    // Each leg knows the links it runs over, so a trace can replace it on the map.
+    expect(result.legs.map((l) => [...l.edgeIds].sort())).toEqual([[], ['vpn-a', 'vpn-b'], ['vpn-a', 'vpn-b']]);
   });
 
   it('warns when the tunnels on the path will not carry a picked subnet', () => {
@@ -162,8 +162,8 @@ describe('path mode with a Cato account', () => {
   });
 });
 
-describe('path mode with an AnyConnect FMC', () => {
-  it('offers each headend as a site, but neither the FMC nor the users node', () => {
+describe('path mode with a Cisco FMC', () => {
+  it('offers each FTD as a site, but neither the FMC nor the users node', () => {
     const nodes = [
       meraki('ftd-1', 'dev:1', 'appliance'),
       meraki('wan-1', 'dev:1', 'wan'),
@@ -177,14 +177,14 @@ describe('path mode with an AnyConnect FMC', () => {
     ]);
   });
 
-  it('does not join two headends through the FMC that manages them', () => {
+  it('does not join two FTDs through the FMC that manages them', () => {
     const edges = [
       edge('m-1', 'fmc', 'ftd-1', 'management'),
       edge('m-2', 'fmc', 'ftd-2', 'management'),
       edge('u-1', 'users-1', 'ftd-1', 'vpn'),
     ];
     expect(connectEndpoints(['ftd-1', 'ftd-2'], edges).legs[0].path).toBeNull();
-    // A VPN link to the headend still counts.
+    // A VPN link to the FTD still counts.
     expect(connectEndpoints(['users-1', 'ftd-1'], edges).legs[0].path).toEqual(['users-1', 'ftd-1']);
   });
 });
@@ -216,20 +216,7 @@ describe('path mode with AWS', () => {
   });
 });
 
-describe('the cloud check of a path', () => {
-  const subnet = (cidr: string, provider: 'aws' | 'azure' | 'meraki', site: string): MerakiSubnet => ({
-    org_ref: provider === 'aws' ? -1 : provider === 'azure' ? -2 : 1,
-    provider,
-    cidr,
-    name: cidr,
-    kind: provider === 'meraki' ? 'vlan' : 'subnet',
-    site_id: site,
-    site_name: site,
-    node_id: site,
-    in_vpn: null,
-  });
-  const pick = (s: MerakiSubnet, address?: string): PathPick => ({ key: address ?? s.cidr, node: s.node_id, label: s.cidr, subnet: s, address });
-
+describe('the traffic of a path', () => {
   it('reads the traffic to ask about', () => {
     expect(parseTraffic('')).toEqual({ protocol: '' });
     expect(parseTraffic(' Any ')).toEqual({ protocol: '' });
@@ -240,74 +227,5 @@ describe('the cloud check of a path', () => {
     expect(parseTraffic('tcp/70000')).toBeNull();
     expect(parseTraffic('icmp/8')).toBeNull();
     expect(parseTraffic('https')).toBeNull();
-  });
-
-  it('asks only for legs between addresses with an end in a cloud', () => {
-    const app = subnet('10.200.10.0/24', 'aws', 'vpc-core');
-    const branch = subnet('10.10.5.0/24', 'meraki', 'N_1');
-    const tcp = { protocol: 'tcp', port: 443 };
-    // The typed address is sent, and the VPC of an AWS end with it.
-    expect(reachabilityQueries(pick(app, '10.200.10.21'), pick(branch), tcp)).toEqual([
-      {
-        cloud: 'aws',
-        source: '10.200.10.21',
-        destination: '10.10.5.0/24',
-        source_network: 'vpc-core',
-        destination_network: undefined,
-        protocol: 'tcp',
-        port: 443,
-      },
-    ]);
-    expect(reachabilityQueries(pick(branch), pick(branch), tcp)).toEqual([]);
-    // A device or site pick has no address to check.
-    expect(reachabilityQueries(pick(app), { key: 'n:1', node: 'mx', label: 'mx' }, tcp)).toEqual([]);
-  });
-
-  it('asks each cloud that holds an end', () => {
-    const app = subnet('10.200.10.0/24', 'aws', 'vpc-core');
-    const prod = subnet('10.231.10.0/24', 'azure', 'sub:rg-prod:prod-vnet');
-    const checks = reachabilityQueries(pick(prod), pick(app), { protocol: '' });
-    expect(checks.map((q) => [q.cloud, q.source_network, q.destination_network])).toEqual([
-      ['azure', 'sub:rg-prod:prod-vnet', undefined],
-      ['aws', undefined, 'vpc-core'],
-    ]);
-  });
-
-  it('asks AWS about the ranges of a vSocket that is an AWS instance', () => {
-    // 172.29.80.0/24 is a Cato range of the vSocket site and a subnet of its VPC.
-    const routed: MerakiSubnet = { ...subnet('172.29.80.0/24', 'meraki', 'AwsUSEAST2'), provider: 'cato', kind: 'range', node_id: 'socket' };
-    const branch = subnet('10.10.5.0/24', 'meraki', 'N_1');
-    const providersOf = (node: string | number) => (node === 'socket' ? ['cato', 'aws'] : ['meraki']);
-    expect(reachabilityQueries(pick(branch, '10.10.5.20'), pick(routed, '172.29.80.15'), { protocol: '' }, providersOf)).toEqual([
-      {
-        cloud: 'aws',
-        source: '10.10.5.20',
-        destination: '172.29.80.15',
-        source_network: undefined,
-        destination_network: undefined,
-        protocol: '',
-        port: undefined,
-      },
-    ]);
-    // Without knowing the device is in AWS, nothing tells the page to ask.
-    expect(reachabilityQueries(pick(branch), pick(routed), { protocol: '' })).toEqual([]);
-  });
-
-  it('says how to get the check when an end in a cloud is joined to a device', () => {
-    const app = subnet('10.200.10.0/24', 'aws', 'vpc-core');
-    const branch = subnet('10.10.5.0/24', 'meraki', 'N_1');
-    const mx: PathPick = { key: 'n:mx', node: 'mx', label: 'Branch MX' };
-    const vpc: PathPick = { key: 'n:vpc', node: 'vpc-core', label: 'vpc-core' };
-    const providerOf = (node: string | number) => [node === 'vpc-core' ? 'aws' : 'meraki'];
-    // An instance's address to a Meraki device: the device needs a subnet.
-    expect(uncheckedCloudNote(pick(app, '10.200.10.21'), mx, providerOf)).toBe(
-      'The AWS route tables, network ACLs and security groups are checked only between two subnets or IP addresses: ' +
-        'add Branch MX with the subnet box instead (one of its subnets, or an IP address).',
-    );
-    // A VPC picked as a site is an end in AWS too.
-    expect(uncheckedCloudNote(vpc, pick(branch), providerOf)).toContain('add vpc-core with the subnet box');
-    // Checked legs, and legs with no end in a cloud, need no note.
-    expect(uncheckedCloudNote(pick(app), pick(branch), providerOf)).toBeNull();
-    expect(uncheckedCloudNote(mx, pick(branch), providerOf)).toBeNull();
   });
 });

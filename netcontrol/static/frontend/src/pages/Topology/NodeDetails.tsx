@@ -28,6 +28,7 @@ import {
   DETAIL_CELL_STYLE,
   DETAILS_PANEL_MIN_WIDTH,
   draggedPanelWidth,
+  edgeProtocolLabel,
   formatBps,
   providerLabel,
   providerScopeName,
@@ -544,7 +545,7 @@ function OverviewTab(props: {
               const peerId = isSource ? edge.to : edge.from;
               const peer = nodeById.get(peerId);
               const peerLabel = peer?.label ?? String(peerId);
-              const proto = (edge.protocol ?? 'L2').toUpperCase();
+              const proto = edgeProtocolLabel(edge, node, peer);
               const util = edge.utilization;
               const stpKey = stpPortKey(edge.from_host_id ?? edge.from, edge.source_interface);
               const stp = stpStateByPort.get(stpKey);

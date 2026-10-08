@@ -39,15 +39,15 @@ export function formatSubnetPreview(item: IpamSubnet): string {
   return parts.join(' | ') || 'No preview';
 }
 
-/** "Meraki", "Cato", "AnyConnect", "AWS"... for a topology / cloud provider id. */
+/** "Meraki", "Cato", "Cisco FMC", "AWS"... for a topology / cloud provider id. */
 export function providerLabel(provider: string | undefined): string {
   switch ((provider ?? '').toLowerCase()) {
     case 'meraki':
       return 'Meraki';
     case 'cato':
       return 'Cato';
-    case 'anyconnect':
-      return 'AnyConnect';
+    case 'fmc':
+      return 'Cisco FMC';
     case 'aws':
       return 'AWS';
     case 'azure':

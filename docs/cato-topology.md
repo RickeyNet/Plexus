@@ -108,6 +108,11 @@ In **Path Mode** a Cato site or one of its subnets can be picked like a
 Meraki one. A path between two Cato sites runs Socket → PoP → Cato Cloud →
 PoP → Socket, and a site whose tunnel is down is not routed through.
 
+Between two subnets or addresses the path is also traced hop by hop through
+the Socket, the PoPs and the Cato Cloud. WAN and internet firewall rules are
+not collected, so such a trace reports them as unknown; see
+[path-trace.md](path-trace.md).
+
 A path is only drawn over links on the map. Plexus does not know that a Cato
 Socket and a Meraki switch at the same location are cabled together unless
 one of them reports the other as a neighbor, so a path between a Meraki

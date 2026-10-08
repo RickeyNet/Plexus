@@ -61,8 +61,9 @@ import {
 import { crowdedGroups, fitTitles, labelWidth, straighten, tidyLabel, tidyTree, type XY } from './layout';
 import { distanceToRoute, routeSourceLinks, traceRoute } from './routes';
 import { EdgeDetails } from './EdgeDetails';
-import { CloudPathCheck } from './CloudPathCheck';
-import { MAX_PATH_ENDPOINTS, connectPicks, findSubnets, isAddressText, parseTraffic, pathSites, reachabilityQueries, subnetOptionLabel, uncheckedCloudNote, type PathPick } from './paths';
+import { MAX_PATH_ENDPOINTS, connectPicks, findSubnets, isAddressText, parseTraffic, pathSites, subnetOptionLabel, type PathPick } from './paths';
+import { PathTrace } from './PathTracePanel';
+import { legKey, mergeHighlights, pathTraceQuery, reverseTraceQuery, uncheckedTraceNote, type TraceHighlight } from './pathTrace';
 import { NodeDetails } from './NodeDetails';
 import { SourcesModal } from './SourcesModal';
 import { StpEventsModal } from './StpEventsModal';
@@ -136,8 +137,10 @@ export function Topology() {
   const [stpAllVlans, setStpAllVlans] = useState(false);
   const [pathMode, setPathMode] = useState(false);
   const [pathPicks, setPathPicks] = useState<PathPick[]>([]);
-  // Traffic the cloud check of a path is asked about: 'tcp/443', empty for any.
+  // Traffic the trace of a path is asked about: 'tcp/443', empty for any.
   const [pathTraffic, setPathTraffic] = useState('');
+  // Map highlight of each traced leg (by legKey): the request hops shown.
+  const [traceHighlights, setTraceHighlights] = useState<Record<string, TraceHighlight | null>>({});
   const [pathSubnetInput, setPathSubnetInput] = useState('');
   const [pathSiteInput, setPathSiteInput] = useState('');
   const [pathNote, setPathNote] = useState('');
@@ -1241,11 +1244,19 @@ export function Topology() {
   const pathSiteList = useMemo(() => pathSites(data?.nodes ?? []), [data]);
   const subnetsQuery = useMerakiSubnets(pathMode && pathSiteList.length > 0);
   // Map node of every Meraki snapshot node (a device that is also an
-  // inventory host resolves to the host's node).
+  // inventory host resolves to the host's node). The snapshot nodes collapsed
+  // into another node (`also_refs`) resolve to it too, so their subnets can
+  // be picked; a node's own reference wins.
   const merakiNodeIds = useMemo(() => {
     const byMerakiKey = new Map<string, number | string>();
     for (const n of data?.nodes ?? []) {
       if (n.meraki) byMerakiKey.set(merakiNodeKey(n.meraki.org_ref, n.meraki.node_id), n.id);
+    }
+    for (const n of data?.nodes ?? []) {
+      for (const ref of n.also_refs ?? []) {
+        const key = merakiNodeKey(ref.org_ref, ref.node_id);
+        if (!byMerakiKey.has(key)) byMerakiKey.set(key, n.id);
+      }
     }
     return byMerakiKey;
   }, [data]);
@@ -1266,19 +1277,23 @@ export function Topology() {
   }, [subnetsQuery.data, merakiNodeIds]);
   const pathResult = useMemo(() => connectPicks(pathPicks, data?.edges ?? []), [pathPicks, data]);
   const trafficFilter = useMemo(() => parseTraffic(pathTraffic), [pathTraffic]);
-  // Legs with an end in AWS or Azure, whose routes and filtering rules can be checked.
-  const nodeProvidersOf = (node: number | string) => {
-    const raw = nodeMetaRef.current.get(node)?.raw;
-    return [raw?.meraki?.provider, ...(raw?.also_providers ?? [])];
-  };
-  const pathHasCloudLeg = pathResult.legs.some((leg) => reachabilityQueries(leg.from, leg.to, { protocol: '' }, nodeProvidersOf).length > 0);
-  // Redraw the path whenever the picks change or the map is rebuilt.
+  // Legs between two subnets or addresses, which the server traces hop by hop.
+  const pathHasTraceLeg = pathResult.legs.some((leg) => pathTraceQuery(leg.from, leg.to, { protocol: '' }) !== null);
+  const setLegHighlight = useCallback((key: string, highlight: TraceHighlight | null) => {
+    setTraceHighlights((prev) => ((prev[key] ?? null) === highlight ? prev : { ...prev, [key]: highlight }));
+  }, []);
+  // A traced leg is drawn over the hops of its trace, the others over the links.
+  const pathHighlight = useMemo(
+    () => mergeHighlights(pathPicks, pathResult.legs, traceHighlights),
+    [pathPicks, pathResult, traceHighlights],
+  );
+  // Redraw the path whenever the picks or traces change or the map is rebuilt.
   useEffect(() => {
     if (!pathMode) return;
     restoreOriginalColors();
-    if (pathPicks.length) highlightPath(pathResult.nodeIds, pathResult.edgeIds);
+    if (pathPicks.length) highlightPath(pathHighlight.nodeIds, pathHighlight.edgeIds);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pathMode, pathResult, positions, layout]);
+  }, [pathMode, pathHighlight, positions, layout]);
 
   // The search panel keeps `onHighlight` in a useEffect dep array, so the
   // callback identity must be stable across parent re-renders. Stash the
@@ -1536,8 +1551,8 @@ export function Topology() {
     const owner = pathSubnets.owners.get(subnetOptionLabel(subnet));
     if (owner === undefined) return false;
     setPathSubnetInput('');
-    // A typed address inside the subnet is kept: the cloud check of the path
-    // matches the security groups of the instance that has it.
+    // A typed address inside the subnet is kept: the trace matches rules against
+    // it, and the security groups of the instance that has it.
     const typedAddress = isAddressText(value) && value.trim() !== subnet.cidr ? value.trim() : undefined;
     addPathPick({
       key: `s:${subnet.org_ref}:${typedAddress ?? subnet.cidr}:${subnet.node_id}`,
@@ -1843,7 +1858,7 @@ export function Topology() {
       <PageHelp
         pageKey="topology"
         title="Interactive Network Map"
-        text="Visualize your network as an interactive graph. Drag nodes to rearrange, zoom in/out, and click devices to view details. Connections are discovered from device data (CDP/LLDP/OSPF/BGP) and, for Meraki organizations, Cato accounts, AnyConnect FMCs and AWS and Azure accounts, from their APIs. Search finds devices by name or address and Meraki devices by anything collected for them - VLANs, subnets, routes, VPN peers, firewall rules. Sources lists everything that feeds the map and collects it again. Export HTML saves the whole map as one shareable interactive file."
+        text="Visualize your network as an interactive graph. Drag nodes to rearrange, zoom in/out, and click devices to view details. Connections are discovered from device data (CDP/LLDP/OSPF/BGP) and, for Meraki organizations, Cato accounts, Cisco FMCs and AWS and Azure accounts, from their APIs. Search finds devices by name or address and Meraki devices by anything collected for them - VLANs, subnets, routes, VPN peers, firewall rules. Sources lists everything that feeds the map and collects it again. Export HTML saves the whole map as one shareable interactive file."
       />
 
       {actionMsg && (
@@ -1949,7 +1964,7 @@ export function Topology() {
           )}
         </div>
 
-        <button className="btn btn-primary btn-sm" onClick={() => setSourcesOpen(true)} title="Everything that feeds the map - neighbor discovery, Meraki, Cato, AnyConnect, AWS, Azure: add, collect, history">Sources</button>
+        <button className="btn btn-primary btn-sm" onClick={() => setSourcesOpen(true)} title="Everything that feeds the map - neighbor discovery, Meraki, Cato, Cisco FMC, AWS, Azure: add, collect, history">Sources</button>
         <button className="btn btn-secondary btn-sm" onClick={handleRefresh}>Refresh</button>
         <button className="btn btn-secondary btn-sm" onClick={handleFit}>Fit</button>
         <button className={`btn btn-sm ${pathMode ? 'btn-primary' : 'btn-secondary'}`} onClick={togglePathMode} title="Pick devices or sites and see how they reach one another">{pathMode ? 'Exit Path' : 'Path Mode'}</button>
@@ -2077,12 +2092,12 @@ export function Topology() {
                 </datalist>
               </>
             )}
-            {pathHasCloudLeg && (
+            {pathHasTraceLeg && (
               <input
                 className="form-input"
                 placeholder="Traffic: any, or tcp/443"
-                aria-label="Traffic checked against the routes and filtering rules of AWS and Azure"
-                title="Traffic the AWS / Azure check is asked about, from the first of two picks to the second: tcp/443, udp/53, icmp, or empty for any traffic"
+                aria-label="Traffic traced through the routes, policies and NAT on the path"
+                title="Traffic the trace is asked about, from the first of two picks to the second: tcp/443, udp/53, icmp, or empty for any traffic"
                 value={pathTraffic}
                 onChange={(e) => setPathTraffic(e.target.value)}
                 aria-invalid={trafficFilter === null}
@@ -2108,7 +2123,7 @@ export function Topology() {
             </div>
           )}
           {pathResult.legs.map((leg) => (
-            <div key={`${leg.from.key}|${leg.to.key}`} style={{ marginTop: '0.35rem' }}>
+            <div key={legKey(leg)} style={{ marginTop: '0.35rem' }}>
               {(leg.from.subnet || leg.to.subnet) && (
                 <strong>{leg.from.address ?? leg.from.subnet?.cidr ?? leg.from.label} ↔ {leg.to.address ?? leg.to.subnet?.cidr ?? leg.to.label}: </strong>
               )}
@@ -2128,12 +2143,19 @@ export function Topology() {
                 <div key={note} style={{ color: 'var(--warning, #f59f00)' }}>⚠ {note}</div>
               ))}
               {(() => {
-                const note = leg.sameDevice ? null : uncheckedCloudNote(leg.from, leg.to, nodeProvidersOf);
+                const key = legKey(leg);
+                const query = trafficFilter ? pathTraceQuery(leg.from, leg.to, trafficFilter) : null;
+                if (query) {
+                  return (
+                    <PathTrace
+                      forward={query}
+                      backward={reverseTraceQuery(query)}
+                      onHighlight={(highlight) => setLegHighlight(key, highlight)}
+                    />
+                  );
+                }
+                const note = leg.sameDevice ? null : uncheckedTraceNote(leg.from, leg.to);
                 return note && <div className="text-muted">ⓘ {note}</div>;
-              })()}
-              {(() => {
-                const queries = trafficFilter ? reachabilityQueries(leg.from, leg.to, trafficFilter, nodeProvidersOf) : [];
-                return queries.map((query) => <CloudPathCheck key={query.cloud} query={query} />);
               })()}
             </div>
           ))}
@@ -2142,7 +2164,8 @@ export function Topology() {
               The path drawn is the shortest way over the cables, uplinks and VPN tunnels on the map that are up: it shows how
               the ends are joined, not the route each device picks. A subnet is placed on the device that owns it (appliance,
               L3 switch, VPC or VPN peer).
-              {pathHasCloudLeg && ' Between two subnets or addresses with an end in AWS or Azure, that cloud checks the pair as well: AWS route tables, network ACLs and security groups, Azure effective routes and network security groups. Type the IP address of an instance or virtual machine to include the rules of its interface.'}
+              {pathHasTraceLeg &&
+                ' Between two subnets or addresses the server traces the flow hop by hop and lists, at every device, the policies, ACLs, security groups, NAT rules and routes it hits, for the request and for the replies, and says whether routing is asymmetric. Reverse swaps the ends. Anything a source does not collect is reported as unknown, never as allowed.'}
             </div>
           )}
         </div>
@@ -2153,7 +2176,7 @@ export function Topology() {
 
       {data && !data.nodes.length && (
         <div className="card" style={{ padding: '1.5rem', textAlign: 'center' }}>
-          <p className="text-muted" style={{ marginTop: 0 }}>No topology data. Open Sources to discover the neighbors of your inventory devices, or to add a Meraki organization, a Cato account, an AnyConnect FMC, an AWS account or an Azure subscription.</p>
+          <p className="text-muted" style={{ marginTop: 0 }}>No topology data. Open Sources to discover the neighbors of your inventory devices, or to add a Meraki organization, a Cato account, a Cisco FMC, an AWS account or an Azure subscription.</p>
           <button className="btn btn-primary btn-sm" onClick={() => setSourcesOpen(true)}>Sources</button>
         </div>
       )}
@@ -2217,7 +2240,7 @@ export function Topology() {
           <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-bgp" /> BGP</span>
           {hasMeraki && activeFilter !== 'inventory' && (
             <>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#8bc34a' }} /> Meraki / Cato / AnyConnect / AWS / Azure</span>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#8bc34a' }} /> Meraki / Cato / Cisco FMC / AWS / Azure</span>
               <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#ba68c8' }} /> VPN Tunnel</span>
               <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#ff9800' }} /> Cloud Attachment</span>
               <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#4fc3f7' }} /> WAN Uplink</span>

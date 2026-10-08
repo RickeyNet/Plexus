@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 
 import { type CloudConnection, type CloudResource, useCloudTopology } from '@/api/cloud';
+import { capitalize, cloudTerms } from '@/lib/cloudProviderTerms';
 import {
   attachmentBucketLabel,
   attachmentBucketTone,
@@ -11,7 +12,8 @@ import {
   isRouteResourceType,
   providerLabel,
   resourceMetadataSummary,
-  topologyLabel,
+  topologyConnectionLabel,
+  topologyResourceTypeLabel,
 } from './helpers';
 import type { CloudFilterState } from './CloudVisibility';
 
@@ -57,56 +59,6 @@ interface ProviderGroup {
   connections: CloudConnection[];
   hybridLinks: { cloud_resource_uid?: string }[];
   routeRows?: RouteRow[];
-}
-
-function topologyConnectionLabel(connectionType: string | undefined, _provider: string, metadata: Record<string, unknown> | null | undefined): string {
-  const n = String(connectionType ?? '').toLowerCase();
-  if (n === 'route_table_association') {
-    if (metadata && typeof metadata === 'object' && (metadata as Record<string, unknown>).subnet_name) return 'Attached Subnet';
-    return 'Attached Network';
-  }
-  const labels: Record<string, string> = {
-    route_next_hop: 'Next Hop',
-    transit_gateway_attachment: 'Transit Gateway',
-    direct_connect_gateway: 'Direct Connect',
-    internet_gateway_attachment: 'Internet Gateway',
-    expressroute_gateway: 'ExpressRoute',
-    virtual_network_gateway_attachment: 'VNet Gateway',
-    ipsec: 'IPsec Tunnel',
-    router_attachment: 'Cloud Router',
-    vpn_tunnel: 'HA VPN Tunnel',
-    interconnect_attachment: 'Interconnect',
-    vnet_peering: 'VNet Peering',
-    vpc_peering: 'VPC Peering',
-    security_boundary: 'Security Boundary',
-  };
-  return labels[n] ?? topologyLabel(n || connectionType || 'link');
-}
-
-function topologyResourceTypeLabel(t: string | undefined, provider: string | undefined): string {
-  const n = String(t ?? '').toLowerCase();
-  const pk = String(provider ?? '').toLowerCase();
-  const labels: Record<string, string> = {
-    route_table: 'Route Table',
-    route_entry: 'Route Entry',
-    transit_gateway: 'Transit Gateway',
-    direct_connect: 'Direct Connect',
-    internet_gateway: 'Internet Gateway',
-    nat_gateway: 'NAT Gateway',
-    expressroute: 'ExpressRoute',
-    virtual_network_gateway: 'Virtual Network Gateway',
-    local_network_gateway: 'Local Network Gateway',
-    cloud_router: 'Cloud Router',
-    ha_vpn_gateway: 'HA VPN Gateway',
-    interconnect_attachment: pk === 'gcp' ? 'Interconnect Attachment' : 'Interconnect',
-    vpn_tunnel: 'VPN Tunnel',
-    vpc: 'VPC',
-    vnet: 'VNet',
-    security_group: 'Security Group',
-    network_security_group: 'Network Security Group',
-    firewall_policy: 'Firewall Policy',
-  };
-  return labels[n] ?? topologyLabel(n || t || 'resource');
 }
 
 function compactDetail(detail: string, duplicates: (string | undefined)[] = []): string {
@@ -319,7 +271,7 @@ export function TopologyTab({ filter }: Props) {
   return (
     <div>
       <div className="drift-summary-grid" style={{ marginBottom: '0.75rem' }}>
-        <SummaryCard label="Accounts" value={summary.account_count ?? 0} />
+        <SummaryCard label={capitalize(cloudTerms(filter.provider).scopeTitlePlural)} value={summary.account_count ?? 0} />
         <SummaryCard label="Cloud Resources" value={summary.resource_count ?? 0} />
         <SummaryCard label="Cloud Links" value={summary.connection_count ?? 0} />
         <SummaryCard label="Route Objects" value={routeResourceCount} />
@@ -443,7 +395,7 @@ export function TopologyTab({ filter }: Props) {
       <h4 style={{ margin: '0.5rem 0 0.45rem' }}>Resources</h4>
       {!resources.length ? (
         <div className="card" style={{ padding: '1rem', marginBottom: '0.75rem' }}>
-          <p className="text-muted" style={{ margin: 0 }}>No cloud resources yet. Run discovery on an account.</p>
+          <p className="text-muted" style={{ margin: 0 }}>No cloud resources yet. Run discovery on an account, subscription or project.</p>
         </div>
       ) : (
         <div style={{ overflowX: 'auto', marginBottom: '0.75rem' }}>
@@ -457,7 +409,7 @@ export function TopologyTab({ filter }: Props) {
               {resources.map((r) => (
                 <tr key={`${r.provider}-${r.resource_uid}`}>
                   <td>{providerLabel(r.provider)}</td>
-                  <td>{r.resource_type ?? ''}</td>
+                  <td>{topologyResourceTypeLabel(r.resource_type, r.provider)}</td>
                   <td>{r.name || r.resource_uid}</td>
                   <td>{r.region ?? '-'}</td>
                   <td>{r.cidr ?? '-'}</td>
@@ -489,7 +441,7 @@ export function TopologyTab({ filter }: Props) {
                   <td>{providerLabel(c.provider)}</td>
                   <td>{c.source_name || c.source_resource_uid || ''}</td>
                   <td>{c.target_name || c.target_resource_uid || ''}</td>
-                  <td>{c.connection_type ?? ''}</td>
+                  <td>{topologyConnectionLabel(c.connection_type, c.provider, c.metadata)}</td>
                   <td>{c.state ?? '-'}</td>
                   <td>{connectionMetadataSummary(c)}</td>
                 </tr>
@@ -517,7 +469,7 @@ export function TopologyTab({ filter }: Props) {
                 <tr key={i}>
                   <td>{l.host_hostname || l.host_label || '-'}</td>
                   <td>{l.cloud_resource_name || l.cloud_resource_uid || '-'}</td>
-                  <td>{l.connection_type ?? ''}</td>
+                  <td>{topologyConnectionLabel(l.connection_type, l.provider)}</td>
                   <td>{l.state ?? '-'}</td>
                 </tr>
               ))}

@@ -5,7 +5,7 @@ Cloud Visibility discovers. VPCs, their subnets, internet / NAT / virtual
 private gateways, transit gateways, VPC peerings, site-to-site VPN
 connections, Direct Connect and the instances that forward traffic appear on
 the same map as the devices Plexus discovers itself and any Meraki
-organizations, Cato accounts and AnyConnect FMCs. They are covered by the
+organizations, Cato accounts and Cisco FMCs. They are covered by the
 same search box and Path Mode, and are included in the HTML export.
 
 AWS accounts are not managed on the Topology page. An account is added,
@@ -31,8 +31,8 @@ different. Azure subscriptions join the map the same way; see
    `pip install -r requirements-cloud.txt` (it is optional and not part of
    the base install). Without it discovery reports that its dependencies are
    not installed.
-3. **Add the account.** Open **Cloud Visibility → Accounts → Add Cloud
-   Account**, choose AWS, and fill in:
+3. **Add the account.** Open **Cloud Visibility → Accounts → Add AWS
+   account** and fill in:
    - *Regions*: the regions to read, comma-separated
      (`us-east-1,us-west-2`). **Left empty, only `us-east-1` is read.**
      Tick **All regions** to read every region enabled for the account
@@ -140,7 +140,7 @@ soon as the map is next loaded; no new discovery is needed.
 
 To see AWS alone, pick **AWS only** in the source selector of the Topology
 toolbar. The map then keeps the VPCs, the transit and VPN box and the links
-between them, and hides inventory, Meraki, Cato and AnyConnect devices with
+between them, and hides inventory, Meraki, Cato and Cisco FMC devices with
 the tunnels that join them to AWS (a customer gateway that is a Meraki or
 Cato appliance goes with its own integration).
 
@@ -196,14 +196,17 @@ lists its peerings on the **Routing** tab.
   Meraki model is a vMX or the public IP Meraki reports is a NAT gateway of
   the instance's VPC. An appliance that meets none of this stays two nodes:
   the Meraki device in its site and the instance in its VPC.
-- **AnyConnect headends.** An FTDv that an FMC manages is matched the same
-  way, by the private address of its VPN access interface, when its FMC
-  model is a virtual one; see
-  [anyconnect-topology.md](anyconnect-topology.md). A headend that is a
-  Plexus inventory host collapses into that host together with its instance.
-- **The same VPN seen from the other side.** A Meraki non-Meraki VPN peer or
-  a Cato IPsec site configured with an AWS tunnel address is joined to the
-  AWS gateway that owns the address.
+- **Cisco FMC devices.** An FTDv that an FMC manages is matched the same
+  way, by the private address of an outside interface (a remote access VPN
+  access interface, or the egress of its default route), when its FMC model
+  is a virtual one; the secondary of an HA pair is matched by its standby
+  address. See [fmc-topology.md](fmc-topology.md). An FTD that is a Plexus
+  inventory host collapses into that host together with its instance.
+- **The same VPN seen from the other side.** A Meraki non-Meraki VPN peer,
+  a Cato IPsec site or an FMC extranet VPN peer configured with an AWS
+  tunnel address is joined to the AWS gateway that owns the address, and a
+  customer gateway whose public address is an FTD's outside or VPN endpoint
+  address is that FTD.
 
 Apart from that one case only public addresses are used; private addresses
 repeat from site to site and identify nothing on their own.
@@ -237,22 +240,23 @@ site; typing an IP address picks the subnet that contains it. A path between
 two VPCs runs over their transit gateway or peering, and a path to a site
 runs over the VPN or virtual appliance that joins it to AWS.
 
-The path drawn on the map follows links, not route tables: it shows how two
-places *can* be joined. Whether AWS actually carries and permits the traffic
-is checked separately, below the path.
+Between two subnets or addresses the path is traced hop by hop across every
+device on the map, and the hops in AWS list the checks below as their items;
+see [path-trace.md](path-trace.md).
 
 ### The AWS check of a path
 
 When both ends of a path are subnets or IP addresses and at least one is in
-a VPC, Plexus checks the flow against what discovery collected. An end
+a VPC, Plexus checks the flow against what discovery collected. In a path
+trace these are the items of the VPC and transit gateway hops, with their
+wording as below; `GET /api/meraki/aws/reachability` still answers the AWS
+part on its own. An end
 picked as a device or site (a Meraki appliance clicked on the map, a VPC
 picked as a site) has no address to check; the path then says which end to
 add with the subnet box instead. An address in a range of a Cato vSocket or
 Meraki vMX that runs in AWS is checked too, though the picker files it under
-the Cato or Meraki site. The check reports
-**AWS allows it**, **AWS blocks it**, **AWS allows part of it** or **AWS
-check incomplete**, with the reason. Open the line for every step, in both
-directions.
+the Cato or Meraki site. Each step is allowed, blocked, allowed in part or
+incomplete, with the reason, in both directions.
 
 - **Direction and traffic.** The first of the two picks is the source. The
   **Traffic** box next to the subnet box takes `tcp/443`, `udp/53`, `443`
@@ -290,7 +294,8 @@ directions.
   and the vMX must advertise the AWS address (its **VPN local subnets**) so
   the site has a route back. The reply is then followed from the vMX's
   subnet to the AWS end. Firewall rules on the Meraki appliances are not
-  matched.
+  matched by this check. A path trace instead makes the vMX a hop of its
+  own, with its firewall rules and routes.
 
 The check never reports as allowed what it could not look at. *Check
 incomplete* means one of:
@@ -332,7 +337,7 @@ Not collected: prefix lists, load balancers,
 VPC endpoints, Client VPN endpoints, and the on-premises router behind a
 Direct Connect (a Direct Connect is the edge of the map). The subnets also
 appear in IPAM's cloud CIDR view, where each VPC's range is checked against
-the ranges of every Meraki, Cato and AnyConnect site under **Overlapping
+the ranges of every Meraki, Cato and Cisco FMC site under **Overlapping
 Ranges** (see the [Meraki guide](meraki-topology.md#ipam)).
 
 ## API reference

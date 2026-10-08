@@ -108,6 +108,12 @@ def _traffic_cover(
     return _NONE if ports[1] < low or ports[0] > high else _PART
 
 
+# Public names for path tracing (``netcontrol.integrations.pathtrace``).
+FULL, PART, NONE = _FULL, _PART, _NONE
+cidr_cover = _cidr_cover
+traffic_cover = _traffic_cover
+
+
 def _port_range(expression: Any) -> tuple[int | None, int | None]:
     match = re.fullmatch(r"(\d+)(?:-(\d+))?", _text(expression))
     if not match:
@@ -743,6 +749,34 @@ class Reachability:
                 "text": f"No rule of {names} allows it; {', '.join(missing)} was not collected.",
             }
         return {**result, "status": BLOCKED, "where": where, "text": f"No rule of {names} allows it."}
+
+    # ── One direction at a time (path tracing) ─────────────────────────────
+    # Thin public wrappers over the walk ``check`` uses, so a trace across
+    # other devices can hand a flow into AWS and get it back at the gateway
+    # it leaves by. None of them changes the index.
+
+    def walk(
+        self, origin: dict, target: dict, direction: str, steps: list[dict], carriers: dict[str, Any] | None = None
+    ) -> dict:
+        """Follow ``target``'s address from ``origin``'s subnet, appending the
+        steps to ``steps``: ``delivered``, ``exit`` (with the gateway) or ``stop``."""
+        return self._walk(origin, target, direction, steps, carriers)
+
+    def enter(self, left: dict, target: dict, direction: str, initiating: bool, steps: list[dict]) -> None:
+        """Traffic from outside AWS towards ``target`` through the gateway ``left`` names."""
+        self._enter(left, target, direction, initiating, steps)
+
+    def acl(
+        self, place: dict, peer: dict, egress: bool, protocol: str, ports: tuple[int, int] | None, direction: str
+    ) -> dict:
+        """The network ACL step of ``place``'s subnet for traffic to or from ``peer``."""
+        return self._acl(place, peer, egress, protocol, ports, direction)
+
+    def security_groups(
+        self, place: dict, peer: dict, outbound: bool, protocol: str, ports: tuple[int, int] | None
+    ) -> dict | None:
+        """The security group step of the instance at ``place`` (``None`` outside AWS)."""
+        return self._security_groups(place, peer, outbound, protocol, ports)
 
     # ── The check ──────────────────────────────────────────────────────────
 

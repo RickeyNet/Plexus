@@ -32,6 +32,116 @@ def _link(a_serial: str, a_port: str, b_serial: str, b_port: str) -> dict:
     }
 
 
+def _rule(policy: str, protocol: str, src: str, dst: str, dst_port: str = "Any", comment: str = "") -> dict:
+    return {
+        "policy": policy,
+        "protocol": protocol,
+        "srcCidr": src,
+        "srcPort": "Any",
+        "destCidr": dst,
+        "destPort": dst_port,
+        "comment": comment,
+        "syslogEnabled": False,
+    }
+
+
+_DEFAULT_RULE = _rule("allow", "Any", "Any", "Any", comment="Default rule")
+
+
+def _nat_rules(idx: int) -> dict[str, Any]:
+    """1:1 NAT, port forwarding, 1:Many NAT and the inbound firewall rules
+    of a site: the first hub publishes a web server, an SSH bastion and a
+    mail relay; every other site publishes nothing."""
+    if idx != 0:
+        return {
+            "one_to_one_nat": {"rules": []},
+            "port_forwarding": {"rules": []},
+            "one_to_many_nat": {"rules": []},
+            "inbound_firewall": {"rules": [dict(_DEFAULT_RULE)], "syslogDefaultRule": False},
+        }
+    return {
+        "one_to_one_nat": {
+            "rules": [
+                {
+                    "name": "Web server",
+                    "publicIp": "198.51.100.150",
+                    "lanIp": "10.0.10.80",
+                    "uplink": "internet1",
+                    "allowedInbound": [{"protocol": "tcp", "destinationPorts": ["443"], "allowedIps": ["any"]}],
+                }
+            ]
+        },
+        "port_forwarding": {
+            "rules": [
+                {
+                    "name": "SSH bastion",
+                    "lanIp": "10.0.10.22",
+                    "uplink": "both",
+                    "publicPort": "2222",
+                    "localPort": "22",
+                    "allowedIps": ["203.0.113.0/24"],
+                    "protocol": "tcp",
+                }
+            ]
+        },
+        "one_to_many_nat": {
+            "rules": [
+                {
+                    "publicIp": "198.51.100.151",
+                    "uplink": "internet1",
+                    "portRules": [
+                        {
+                            "name": "Mail relay",
+                            "protocol": "tcp",
+                            "publicPort": "25",
+                            "localIp": "10.0.10.25",
+                            "localPort": "25",
+                            "allowedIps": ["any"],
+                        }
+                    ],
+                }
+            ]
+        },
+        "inbound_firewall": {
+            "rules": [
+                _rule("allow", "tcp", "Any", "10.0.10.80/32", "443", "Web server (1:1 NAT)"),
+                _rule("deny", "Any", "Any", "Any", comment="Deny all other inbound"),
+                dict(_DEFAULT_RULE),
+            ],
+            "syslogDefaultRule": False,
+        },
+    }
+
+
+def _switch_acl(idx: int) -> dict[str, Any]:
+    return {
+        "rules": [
+            {
+                "comment": "Guest to servers",
+                "policy": "deny",
+                "ipVersion": "ipv4",
+                "protocol": "any",
+                "srcCidr": f"10.{idx}.30.0/24",
+                "srcPort": "any",
+                "dstCidr": f"10.{idx}.100.0/24",
+                "dstPort": "any",
+                "vlan": "any",
+            },
+            {
+                "comment": "Default rule",
+                "policy": "allow",
+                "ipVersion": "any",
+                "protocol": "any",
+                "srcCidr": "any",
+                "srcPort": "any",
+                "dstCidr": "any",
+                "dstPort": "any",
+                "vlan": "any",
+            },
+        ]
+    }
+
+
 def build_sample_raw(branches: int = 10) -> dict[str, Any]:
     """Two VPN hubs plus ``branches`` spoke sites."""
     branches = max(1, min(int(branches), len(_BRANCH_CITIES)))
@@ -201,6 +311,8 @@ def build_sample_raw(branches: int = 10) -> dict[str, Any]:
                     },
                 ]
             },
+            **_nat_rules(idx),
+            "switch_acl": _switch_acl(idx),
             "stp": {"rstpEnabled": True, "stpBridgePriority": [{"stpPriority": 4096, "switches": [switches[0]]}]},
             "ssids": [
                 {
@@ -407,6 +519,19 @@ def build_sample_raw(branches: int = 10) -> dict[str, Any]:
                 ]
             },
             "switch_ports": switch_ports,
+            # Organisation-wide, applied to traffic leaving over AutoVPN.
+            "vpn_firewall": {
+                "rules": [
+                    _rule(
+                        "deny",
+                        "Any",
+                        "10.1.30.0/24,10.2.30.0/24",
+                        "10.0.0.0/8",
+                        comment="Block guest VLANs over the VPN",
+                    ),
+                    dict(_DEFAULT_RULE),
+                ]
+            },
         },
         "networks_detail": networks_detail,
         "devices_detail": devices_detail,

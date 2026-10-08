@@ -3,7 +3,7 @@ import {
   type InterfaceInventoryRow,
   useHostInterfaceInventory,
 } from '@/api/host-details';
-import { abbreviateInterface, formatBps, isEdgeDown } from './helpers';
+import { abbreviateInterface, edgeProtocolLabel, formatBps, isEdgeDown } from './helpers';
 
 interface Props {
   edge: TopologyEdge;
@@ -27,7 +27,7 @@ export function EdgeDetails({ edge, fromNode, toNode, onClose }: Props) {
   const fromPort = pickPort(fromQ.data?.interfaces, edge.source_interface);
   const toPort = pickPort(toQ.data?.interfaces, edge.target_interface);
 
-  const protoLabel = (edge.protocol ?? 'L2').toUpperCase();
+  const protoLabel = edgeProtocolLabel(edge, fromNode, toNode);
   const util = edge.utilization;
 
   return (

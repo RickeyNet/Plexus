@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from 'react-router';
 import { useCloudAccounts, useCloudProviders } from '@/api/cloud';
 import { PageHelp } from '@/components/PageHelp';
 import { UntestedBanner } from '@/components/UntestedBanner';
+import { capitalize, cloudProviderTerms, cloudTerms } from '@/lib/cloudProviderTerms';
 import { providerLabel } from './helpers';
 import { AccountsTab } from './AccountsTab';
 import { TopologyTab } from './TopologyTab';
@@ -21,28 +22,40 @@ const TABS: { key: Tab; label: string; path: string }[] = [
   { key: 'policy', label: 'Policy', path: '/cloud-visibility/policy' },
 ];
 
-const TAB_HELP: Record<Tab, { title: string; text: string }> = {
-  accounts: {
-    title: 'Connected Cloud Accounts',
-    text: 'Register AWS, Azure, and GCP accounts so Plexus can pull their network topology, flow logs, and policies. Capabilities depend on which cloud SDKs are installed on the server.',
-  },
-  topology: {
-    title: 'Hybrid Topology',
-    text: 'Cloud constructs (VPCs, subnets, gateways) rendered alongside on-prem devices. Use this to reason about hybrid connectivity paths and trace traffic between sites and cloud workloads.',
-  },
-  flow: {
-    title: 'VPC Flow Logs',
-    text: 'Query and aggregate cloud-native flow log records - top talkers, top conversations, denied flows. Filter by account and provider above.',
-  },
-  traffic: {
-    title: 'Cloud Traffic Metrics',
-    text: 'Bandwidth and connection metrics pulled from the cloud provider, normalized into the same view as on-prem interface stats.',
-  },
-  policy: {
-    title: 'Cloud Network Policy',
-    text: 'Audit security groups, NACLs, and firewall rules across registered cloud accounts. Spot overly-permissive rules and unused policies.',
-  },
-};
+/** Help for a tab, in the words of the provider selected above (all three for All Providers). */
+function tabHelp(tab: Tab, provider: string): { title: string; text: string } {
+  const terms = cloudTerms(provider);
+  const all = !terms.id;
+  switch (tab) {
+    case 'accounts':
+      return {
+        title: `Connected ${terms.scopeTitlePlural}`,
+        text: `Register ${terms.scopeTitlePlural} so Plexus can read their network topology, ${terms.flowLogs} and ${terms.policy}. Live reads need the provider's SDK on the server (see the cards above).`,
+      };
+    case 'topology':
+      return {
+        title: 'Hybrid topology',
+        text: `${all ? 'VPCs, VNets' : terms.networks}, subnets and gateways next to the on-prem devices, to reason about hybrid paths between sites and cloud workloads.`,
+      };
+    case 'flow':
+      return {
+        title: capitalize(terms.flowLogs),
+        text: all
+          ? 'VPC Flow Logs from CloudWatch Logs (AWS) and Cloud Logging (GCP), NSG flow logs from a storage account (Azure): top talkers, top conversations, denied flows. Filter by provider and account above.'
+          : `${terms.flowLogs} read from ${terms.flowSource}: top talkers, top conversations, denied flows. Filter by provider and ${terms.scope} above.`,
+      };
+    case 'traffic':
+      return {
+        title: 'Traffic metrics',
+        text: `Bandwidth and packet metrics from ${all ? 'CloudWatch (AWS), Azure Monitor (Azure) and Cloud Monitoring (GCP)' : terms.metricsSource}, in the same view as on-prem interface counters.`,
+      };
+    case 'policy':
+      return {
+        title: 'Network policy',
+        text: `Audit ${terms.policy} across the registered ${terms.scopeTitlePlural}: overly permissive rules and unused policies.`,
+      };
+  }
+}
 
 function tabFromPath(pathname: string): Tab {
   const match = TABS.find((t) => t.path === pathname);
@@ -86,7 +99,8 @@ export function CloudVisibility() {
     ? accountList.filter((a) => String(a.provider ?? '').toLowerCase() === filter.provider)
     : accountList;
 
-  const tabHelp = TAB_HELP[tab];
+  const help = tabHelp(tab, filter.provider);
+  const filterTerms = cloudTerms(filter.provider);
 
   return (
     <div className="page">
@@ -99,7 +113,7 @@ export function CloudVisibility() {
       <PageHelp
         pageKey="cloud-visibility"
         title="Hybrid Cloud Network Visibility"
-        text="Track AWS/Azure/GCP network constructs alongside on-prem devices. Manage cloud accounts, refresh topology snapshots, and view cloud and hybrid connectivity paths."
+        text="Track AWS, Azure and GCP network constructs alongside on-prem devices. Manage accounts, subscriptions and projects, refresh their topology, and view cloud and hybrid connectivity paths."
       />
 
       {/* Provider capability hints */}
@@ -108,6 +122,9 @@ export function CloudVisibility() {
           {(providers.data?.providers ?? []).map((p) => (
             <div key={p.id} className="card" style={{ padding: '0.65rem 0.85rem' }}>
               <strong>{providerLabel(p.id)}</strong>
+              <span className="text-muted" style={{ marginLeft: '0.45rem' }}>
+                {p.name || cloudProviderTerms(p.id).fullName}
+              </span>
               <span
                 className={`badge badge-${p.live_supported ? 'success' : 'warning'}`}
                 style={{ marginLeft: '0.45rem' }}
@@ -138,7 +155,7 @@ export function CloudVisibility() {
               <option key={p} value={p}>{providerLabel(p)}</option>
             ))}
           </select>
-          <label className="text-muted">Account:</label>
+          <label className="text-muted">{filterTerms.id ? `${capitalize(filterTerms.scopeTitle)}:` : 'Account:'}</label>
           <select
             className="form-select"
             value={filter.accountId ?? ''}
@@ -146,7 +163,7 @@ export function CloudVisibility() {
               setFilter({ ...filter, accountId: e.target.value ? parseInt(e.target.value, 10) : null })
             }
           >
-            <option value="">All Accounts</option>
+            <option value="">All {filterTerms.scopeTitlePlural}</option>
             {filteredAccounts.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name} ({providerLabel(a.provider)})
@@ -170,7 +187,7 @@ export function CloudVisibility() {
         ))}
       </div>
 
-      <PageHelp pageKey={`cloud-visibility.${tab}`} title={tabHelp.title} text={tabHelp.text} />
+      <PageHelp pageKey={`cloud-visibility.${tab}`} title={help.title} text={help.text} />
 
       {tab === 'accounts' && (
         <AccountsTab

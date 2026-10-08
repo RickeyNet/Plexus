@@ -19,7 +19,7 @@ export interface MerakiBuildOptions {
 }
 
 /** Integrations that feed the map through the same organization pipeline. */
-export type CloudProvider = 'meraki' | 'cato' | 'anyconnect';
+export type CloudProvider = 'meraki' | 'cato' | 'fmc';
 
 /** Clouds whose accounts are Cloud Visibility accounts that also feed the map. */
 export type CloudAccountProvider = 'aws' | 'azure';
@@ -35,21 +35,34 @@ export interface CatoBuildOptions {
   inventory_enrich: boolean;
 }
 
-/** A Cisco FMC whose FTDs terminate AnyConnect remote access VPN. */
-export interface AnyConnectBuildOptions {
+/**
+ * A Cisco FMC (Secure Firewall Management Center) and the FTDs it manages.
+ * Every boolean is one kind of data the collector reads; see the toggles in
+ * `FMC_OPTION_TOGGLES`.
+ */
+export interface FmcBuildOptions {
   /** The FMC API user; the password is the entry's write-only secret. */
   username: string;
   device_name_contains: string;
+  /** Every managed device; off draws only the remote access VPN headends. */
   include_all_devices: boolean;
   include_interfaces: boolean;
+  /** Virtual routers, static routes, BGP, OSPF, EIGRP, policy-based routes, ECMP zones. */
+  include_routing: boolean;
+  include_s2s_vpn: boolean;
+  include_nat: boolean;
+  /** Access control policies, their rules (capped) and prefilter policies. */
+  include_access_policies: boolean;
+  /** Health alerts and devices with a pending deployment. */
+  include_health: boolean;
   include_sessions: boolean;
   verify_tls: boolean;
   inventory_enrich: boolean;
 }
 
-export type OrgBuildOptions = MerakiBuildOptions | CatoBuildOptions | AnyConnectBuildOptions;
+export type OrgBuildOptions = MerakiBuildOptions | CatoBuildOptions | FmcBuildOptions;
 
-/** A Meraki organization, a Cato account (`provider` 'cato') or an FMC (`provider` 'anyconnect'). */
+/** A Meraki organization, a Cato account (`provider` 'cato') or a Cisco FMC (`provider` 'fmc'). */
 export interface MerakiOrg {
   id: number;
   name: string;
@@ -209,47 +222,95 @@ export function useMerakiSubnets(enabled: boolean) {
 
 export type ReachabilityStatus = 'ok' | 'blocked' | 'partial' | 'unknown' | 'info';
 
-export interface ReachabilityStep {
-  direction: 'forward' | 'return';
-  /** 'vpn' is the VPN of a Meraki vMX the route hands the traffic to. */
-  stage: 'route' | 'transit' | 'acl' | 'security_group' | 'vpn';
-  status: ReachabilityStatus;
-  /** The route table, ACL or security group the step looked at. */
-  where: string;
-  text: string;
-}
-
-/** What the routing and filtering of a cloud (AWS or Azure) do with one flow. */
-export interface CloudReachability {
-  /** False when neither address is in a collected VPC / VNet. */
-  applies: boolean;
-  verdict: 'allowed' | 'blocked' | 'partial' | 'unknown';
-  summary: string;
-  traffic?: string;
-  steps: ReachabilityStep[];
-}
-
-export interface CloudReachabilityQuery {
-  /** The cloud whose routes and rules are checked. */
-  cloud: CloudAccountProvider;
+/** What Path Mode traces: two subnets or addresses and the traffic between them. */
+export interface PathTraceQuery {
   source: string;
   destination: string;
-  /** VPC (AWS) or VNet (Azure) of an address whose range exists in several. */
-  source_network?: string;
-  destination_network?: string;
+  /** Graph node ids of the devices that own the ends, when the page knows them. */
+  source_node?: number | string;
+  destination_node?: number | string;
   /** tcp / udp / icmp; empty asks about any traffic. */
-  protocol?: string;
+  protocol: string;
   port?: number;
 }
 
-/** The query string the server's check of ``cloud`` takes. */
-export function reachabilitySearch(query: CloudReachabilityQuery): string {
-  const network = query.cloud === 'azure' ? 'vnet' : 'vpc';
+export type PathVerdict = 'allowed' | 'blocked' | 'partial' | 'unknown';
+
+/** What a step of a hop looked at. */
+export type PathItemStage = 'policy' | 'acl' | 'security_group' | 'nat' | 'route' | 'link' | 'note';
+
+/** One policy, ACL, security group, NAT rule, route lookup or link a flow hits at a hop. */
+export interface PathItem {
+  stage: PathItemStage;
+  status: ReachabilityStatus;
+  /** The rule set, table, NAT rule or route source. */
+  where: string;
+  text: string;
+  /** Index of the matching rule, when one did. */
+  rule?: number | null;
+}
+
+/** One device (or the Internet) the flow passes, with what it applies, in order. */
+export interface PathHop {
+  /** Graph node id; null for the Internet pseudo hop. */
+  node: number | string | null;
+  /** Graph edge taken into this hop; null for the first. */
+  edge: number | string | null;
+  label: string;
+  site: string;
+  /** meraki | fmc | cato | aws | azure | inventory | internet | unknown */
+  provider: string;
+  /** Ingress interface or subnet, "" when none. */
+  in: string;
+  /** Egress, "" when delivered here. */
+  out: string;
+  /** Worst of the items: blocked > unknown > partial > ok; info is ignored. */
+  status: ReachabilityStatus;
+  items: PathItem[];
+}
+
+/** The request or the replies of a traced flow. */
+export interface PathDirection {
+  verdict: PathVerdict;
+  summary: string;
+  hops: PathHop[];
+}
+
+export interface PathAsymmetry {
+  status: 'no' | 'yes' | 'unknown';
+  text: string;
+}
+
+export interface PathEnd {
+  address: string;
+  node: number | string | null;
+  label: string;
+  site: string;
+}
+
+/** A flow traced hop by hop across every device on the map (`GET /api/topology/path`). */
+export interface PathTrace {
+  /** False when neither end could be placed; `summary` says why. */
+  applies: boolean;
+  /** "tcp/443", or "any traffic" when nothing was asked. */
+  traffic: string;
+  source?: PathEnd;
+  destination?: PathEnd;
+  verdict: PathVerdict;
+  summary: string;
+  asymmetric?: PathAsymmetry;
+  request?: PathDirection;
+  reply?: PathDirection;
+  notes?: string[];
+}
+
+/** The query string of `GET /api/topology/path`. */
+export function pathTraceSearch(query: PathTraceQuery): string {
   const values: Record<string, string | number | undefined> = {
     source: query.source,
     destination: query.destination,
-    [`source_${network}`]: query.source_network,
-    [`destination_${network}`]: query.destination_network,
+    source_node: query.source_node,
+    destination_node: query.destination_node,
     protocol: query.protocol,
     port: query.port,
   };
@@ -260,12 +321,13 @@ export function reachabilitySearch(query: CloudReachabilityQuery): string {
   return params.toString();
 }
 
-export function useCloudReachability(query: CloudReachabilityQuery | null) {
-  const search = query ? reachabilitySearch(query) : '';
+export function usePathTrace(query: PathTraceQuery | null) {
+  const search = query ? pathTraceSearch(query) : '';
   return useQuery({
-    queryKey: ['meraki', 'cloud-reachability', query?.cloud, search],
-    queryFn: () => apiRequest<CloudReachability>(`/meraki/${query?.cloud}/reachability?${search}`),
+    queryKey: ['topology', 'path', search],
+    queryFn: () => apiRequest<PathTrace>(`/topology/path?${search}`),
     enabled: query != null,
+    staleTime: 60_000,
   });
 }
 
@@ -289,7 +351,7 @@ export function useMerakiOrgs() {
         orgs: MerakiOrg[];
         default_options: MerakiBuildOptions;
         cato_default_options: CatoBuildOptions;
-        anyconnect_default_options: AnyConnectBuildOptions;
+        fmc_default_options: FmcBuildOptions;
       }>('/meraki/orgs'),
     // Keeps the "Building" badge honest for builds this tab isn't tracking
     // (started in another tab, or before a page reload).
@@ -313,7 +375,7 @@ export interface TopologySource {
   /** What the last collection found, e.g. "12 sites, 80 devices". */
   detail: string;
   warning_count: number;
-  /** The snapshot on the map (Meraki, Cato, AnyConnect), whose warnings can be listed. */
+  /** The snapshot on the map (Meraki, Cato, Cisco FMC), whose warnings can be listed. */
   snapshot_id?: number | null;
   collecting: boolean;
   can_collect: boolean;

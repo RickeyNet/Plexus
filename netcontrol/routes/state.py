@@ -439,7 +439,7 @@ _FEATURE_CATALOG = [
         "writable": False,
         "visible_in_nav": True,
     },
-    {"key": "upgrades", "label": "Upgrades", "gateable": True, "writable": True, "visible_in_nav": True},
+    {"key": "upgrades", "label": "Software Upgrades", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "deployments", "label": "Deployments", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "federation", "label": "Federation", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "floor-plan", "label": "Floor Plans", "gateable": True, "writable": True, "visible_in_nav": True},

@@ -200,7 +200,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   var STATUS = { online: '#2fb344', alerting: '#f59f00', offline: '#e5484d', dormant: '#8892a6', unknown: '#8892a6' };
   var EDGE = {
     lan: { name: 'LAN link (LLDP/CDP)', color: '#7b8aa8', dash: [] },
-    stack: { name: 'Switch stack', color: '#1c7ed6', dash: [] },
+    stack: { name: 'Switch stack / HA / cluster', color: '#1c7ed6', dash: [] },
     uplink: { name: 'WAN uplink', color: '#4dabf7', dash: [4, 4] },
     vpn: { name: 'VPN tunnel', color: '#ae3ec9', dash: [10, 6] },
     attach: { name: 'Cloud attachment', color: '#f08c00', dash: [] },
@@ -1002,8 +1002,8 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   // ── Source picker ────────────────────────────────────────────────────────
   // As on the Topology page: everything, the inventory, every integration,
   // or one integration (provider:aws, provider:cato...).
-  var PROVIDERS = ['meraki', 'cato', 'anyconnect', 'aws', 'azure'];
-  var PROVIDER_NAME = { meraki: 'Meraki', cato: 'Cato', anyconnect: 'AnyConnect', aws: 'AWS', azure: 'Azure' };
+  var PROVIDERS = ['meraki', 'cato', 'fmc', 'aws', 'azure'];
+  var PROVIDER_NAME = { meraki: 'Meraki', cato: 'Cato', fmc: 'Cisco FMC', aws: 'AWS', azure: 'Azure' };
   var SITE_GAP = 90, source = 'all';
   function keepNode(n) {
     if (source === 'all') return true;

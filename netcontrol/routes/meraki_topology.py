@@ -9,8 +9,9 @@ what feeds and surrounds that merge:
   - Meraki organization CRUD (Dashboard API key is write-only, stored encrypted)
   - Cato Networks accounts, which are stored and collected like an
     organization (``provider`` "cato") and produce the same snapshot format
-  - Cisco FMCs for AnyConnect remote access VPN, stored and collected the
-    same way (``provider`` "anyconnect")
+  - Cisco FMCs and the FTDs they manage, stored and collected the same way
+    (``provider`` "fmc"; entries stored as "anyconnect" by earlier releases
+    are read as "fmc")
   - AWS and Azure: the accounts Cloud Visibility discovers are turned into
     one more snapshot per cloud (``provider`` "aws" / "azure") whenever their
     discovery changes
@@ -18,6 +19,8 @@ what feeds and surrounds that merge:
   - Stored snapshots: list / fetch JSON / delete, and an in-memory cache of
     the latest one per organization
   - Per-node Meraki detail sections and whole-map deep search
+  - Path Mode's trace of a flow hop by hop across every device on the map
+    (``/api/topology/path``, ``netcontrol.integrations.pathtrace``)
   - The list of everything that feeds the map (``/api/topology/sources``):
     neighbor discovery, organizations and accounts, with their last collection
   - Self-contained interactive HTML export of the whole topology
@@ -39,18 +42,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-from netcontrol.integrations.anyconnect.client import (
-    FmcApiError,
-    FmcClient,
-    validate_base_url as validate_fmc_base_url,
-)
-from netcontrol.integrations.anyconnect.collector import (
-    DEFAULT_OPTIONS as ANYCONNECT_DEFAULT_OPTIONS,
-    collect_fmc,
-    sanitize_options as sanitize_anyconnect_options,
-)
-from netcontrol.integrations.anyconnect.normalize import build_snapshot as build_anyconnect_snapshot
-from netcontrol.integrations.anyconnect.sample import build_sample_raw as build_anyconnect_sample_raw
 from netcontrol.integrations.aws.normalize import build_snapshot as build_aws_snapshot
 from netcontrol.integrations.aws.reachability import Reachability
 from netcontrol.integrations.aws.sample import build_sample as build_aws_sample
@@ -71,6 +62,18 @@ from netcontrol.integrations.cato.collector import (
 )
 from netcontrol.integrations.cato.normalize import build_snapshot as build_cato_snapshot
 from netcontrol.integrations.cato.sample import build_sample_raw as build_cato_sample_raw
+from netcontrol.integrations.fmc.client import (
+    FmcApiError,
+    FmcClient,
+    validate_base_url as validate_fmc_base_url,
+)
+from netcontrol.integrations.fmc.collector import (
+    DEFAULT_OPTIONS as FMC_DEFAULT_OPTIONS,
+    collect_fmc,
+    sanitize_options as sanitize_fmc_options,
+)
+from netcontrol.integrations.fmc.normalize import build_snapshot as build_fmc_snapshot
+from netcontrol.integrations.fmc.sample import build_sample_raw as build_fmc_sample_raw
 from netcontrol.integrations.meraki.client import (
     DEFAULT_BASE_URL,
     MerakiApiError,
@@ -92,6 +95,8 @@ from netcontrol.integrations.meraki.unified import (
     virtual_appliance_pairs,
 )
 from netcontrol.integrations.meraki.vpn_reach import VpnCarrier
+from netcontrol.integrations.pathtrace.engine import PROTOCOLS as PATH_PROTOCOLS, Tracer
+from netcontrol.integrations.pathtrace.inventory import forwarding_for_host
 from netcontrol.routes import background_jobs
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, supervise_task
 from netcontrol.telemetry import configure_logging, redact_value
@@ -104,7 +109,10 @@ _JOB_KIND = "meraki-topology-build"
 _SNAPSHOTS_KEPT_PER_ORG = 10
 SAMPLE_ORG_NAME = "Sample Organization (demo data)"
 SAMPLE_CATO_NAME = "Sample Cato Account (demo data)"
-SAMPLE_ANYCONNECT_NAME = "Sample AnyConnect FMC (demo data)"
+SAMPLE_FMC_NAME = "Sample Cisco FMC (demo data)"
+# The demo FMC's name before the provider became "fmc": an existing demo
+# entry under it is still flagged as demo data (and renamed when rebuilt).
+SAMPLE_FMC_LEGACY_NAME = "Sample AnyConnect FMC (demo data)"
 SAMPLE_AWS_NAME = "Sample AWS Account (demo data)"
 SAMPLE_AZURE_NAME = "Sample Azure Subscription (demo data)"
 # Marks the demo AWS and Azure accounts, which scheduled discovery leaves alone.
@@ -114,10 +122,13 @@ SAMPLE_FMC_URL = "https://10.210.2.20"
 
 PROVIDER_MERAKI = "meraki"
 PROVIDER_CATO = "cato"
-# A Cisco FMC whose FTDs terminate AnyConnect remote access VPN.
-PROVIDER_ANYCONNECT = "anyconnect"
-PROVIDERS = (PROVIDER_MERAKI, PROVIDER_CATO, PROVIDER_ANYCONNECT)
-SAMPLE_ORG_NAMES = (SAMPLE_ORG_NAME, SAMPLE_CATO_NAME, SAMPLE_ANYCONNECT_NAME)
+# A Cisco FMC and the FTDs it manages.
+PROVIDER_FMC = "fmc"
+PROVIDERS = (PROVIDER_MERAKI, PROVIDER_CATO, PROVIDER_FMC)
+# Provider keys of earlier releases, read as their current key: an FMC was
+# "anyconnect" while it only drew remote access VPN headends.
+LEGACY_PROVIDERS = {"anyconnect": PROVIDER_FMC}
+SAMPLE_ORG_NAMES = (SAMPLE_ORG_NAME, SAMPLE_CATO_NAME, SAMPLE_FMC_NAME, SAMPLE_FMC_LEGACY_NAME)
 # Not organization providers: AWS and Azure accounts are Cloud Visibility accounts.
 PROVIDER_AWS = "aws"
 PROVIDER_AZURE = "azure"
@@ -238,7 +249,13 @@ async def _latest_entries() -> list[tuple[int, dict[str, Any]]]:
             row = await db.get_meraki_snapshot(snapshot_id)
             if not row:
                 continue
-            entry = _SNAPSHOT_CACHE[snapshot_id] = {"snapshot": row["snapshot"], "index": None}
+            snapshot = row["snapshot"]
+            # A snapshot stored under a provider key of an earlier release
+            # is served under the current key (it is the same format).
+            legacy = LEGACY_PROVIDERS.get(str(snapshot.get("provider") or ""))
+            if legacy:
+                snapshot["provider"] = legacy
+            entry = _SNAPSHOT_CACHE[snapshot_id] = {"snapshot": snapshot, "index": None}
         entries.append((org_ref, entry))
     # The clouds go last: their VPN peers and appliances are matched against
     # what the other snapshots already put on the map. Best-effort, like the
@@ -271,8 +288,8 @@ async def _subnets_of(entry: dict[str, Any]) -> list[dict[str, Any]]:
 async def ipam_subnets() -> list[dict[str, Any]]:
     """The subnets of the latest snapshot of every organization and account,
     for the IPAM overview: the ``subnet_index`` rows (Meraki VLANs, single
-    LANs, SVIs and static routes, Cato network ranges, AnyConnect address
-    pools) with their organization and provider. AWS and Azure are left
+    LANs, SVIs and static routes, Cato network ranges, FMC connected subnets,
+    static routes and remote access VPN address pools) with their organization and provider. AWS and Azure are left
     out: their networks and subnets reach IPAM as Cloud Visibility resources
     already."""
     rows: list[dict[str, Any]] = []
@@ -322,7 +339,8 @@ def _session_user(request: Request) -> str:
 
 class MerakiOrgCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
-    # "meraki" (organization), "cato" (account) or "anyconnect" (FMC). Fixed once created.
+    # "meraki" (organization), "cato" (account) or "fmc" (FMC; the legacy
+    # "anyconnect" is accepted and stored as "fmc"). Fixed once created.
     provider: str = Field(default=PROVIDER_MERAKI, max_length=20)
     org_id: str = Field(default="", max_length=64)
     base_url: str = Field(default="", max_length=200)
@@ -339,13 +357,19 @@ class MerakiOrgUpdate(BaseModel):
     options: dict | None = None
 
 
+def _provider_key(raw: str | None) -> str:
+    """A provider key as stored now: legacy keys map to their current one."""
+    provider = str(raw or "").strip().lower()
+    return LEGACY_PROVIDERS.get(provider, provider)
+
+
 def _provider_of(org: dict) -> str:
-    provider = str(org.get("provider") or PROVIDER_MERAKI)
+    provider = _provider_key(org.get("provider")) or PROVIDER_MERAKI
     return provider if provider in PROVIDERS else PROVIDER_MERAKI
 
 
 def _clean_base_url(raw: str | None, provider: str = PROVIDER_MERAKI) -> str:
-    if provider == PROVIDER_ANYCONNECT:
+    if provider == PROVIDER_FMC:
         try:
             return validate_fmc_base_url(raw or "")
         except ValueError:
@@ -373,8 +397,8 @@ def _clean_base_url(raw: str | None, provider: str = PROVIDER_MERAKI) -> str:
 def _options_for(provider: str, raw: object) -> dict[str, Any]:
     if provider == PROVIDER_CATO:
         return sanitize_cato_options(raw)
-    if provider == PROVIDER_ANYCONNECT:
-        return sanitize_anyconnect_options(raw)
+    if provider == PROVIDER_FMC:
+        return sanitize_fmc_options(raw)
     return sanitize_options(raw)
 
 
@@ -435,16 +459,16 @@ async def list_meraki_orgs_api():
         "orgs": [_serialize_org(o) for o in orgs],
         "default_options": dict(DEFAULT_OPTIONS),
         "cato_default_options": dict(CATO_DEFAULT_OPTIONS),
-        "anyconnect_default_options": dict(ANYCONNECT_DEFAULT_OPTIONS),
+        "fmc_default_options": dict(FMC_DEFAULT_OPTIONS),
     }
 
 
 @router.post("/api/meraki/orgs", status_code=201, dependencies=[Depends(_require_admin_dep)])
 async def create_meraki_org_api(body: MerakiOrgCreate, request: Request):
     user = _session_user(request)
-    provider = body.provider.strip().lower() or PROVIDER_MERAKI
+    provider = _provider_key(body.provider) or PROVIDER_MERAKI
     if provider not in PROVIDERS:
-        raise HTTPException(status_code=400, detail="Provider must be meraki, cato or anyconnect")
+        raise HTTPException(status_code=400, detail="Provider must be meraki, cato or fmc")
     org = await db.create_meraki_org(
         body.name.strip(),
         provider=provider,
@@ -519,8 +543,8 @@ async def validate_meraki_org_api(org_ref: int):
         return {"ok": False, "message": "No API key is stored for this organization", "organizations": []}
     if _provider_of(org) == PROVIDER_CATO:
         return await _validate_cato(org, api_key)
-    if _provider_of(org) == PROVIDER_ANYCONNECT:
-        return await _validate_anyconnect(org, api_key)
+    if _provider_of(org) == PROVIDER_FMC:
+        return await _validate_fmc(org, api_key)
     try:
         async with MerakiClient(api_key, base_url=org["base_url"] or DEFAULT_BASE_URL, max_retries=1) as client:
             visible = await client.get_all("organizations")
@@ -576,8 +600,8 @@ def _fmc_client(org: dict, password: str, options: dict, **kwargs: Any) -> FmcCl
     )
 
 
-async def _validate_anyconnect(org: dict, password: str) -> dict:
-    options = sanitize_anyconnect_options(org.get("options"))
+async def _validate_fmc(org: dict, password: str) -> dict:
+    options = sanitize_fmc_options(org.get("options"))
     try:
         async with _fmc_client(org, password, options, max_retries=1) as client:
             await client.login()
@@ -597,7 +621,7 @@ async def _validate_anyconnect(org: dict, password: str) -> dict:
 # ── Builds ───────────────────────────────────────────────────────────────────
 
 
-async def _collect_anyconnect(org: dict, password: str, options: dict, progress) -> dict:
+async def _collect_fmc(org: dict, password: str, options: dict, progress) -> dict:
     async with _fmc_client(org, password, options) as client:
         raw = await collect_fmc(client, str(org.get("org_id") or ""), options, progress)
     raw["fmc"]["name"] = org["name"]
@@ -661,7 +685,9 @@ async def _track_clients(org: dict, raw: dict) -> int:
 _SNAPSHOT_BUILDERS = {
     PROVIDER_MERAKI: build_snapshot,
     PROVIDER_CATO: build_cato_snapshot,
-    PROVIDER_ANYCONNECT: build_anyconnect_snapshot,
+    PROVIDER_FMC: build_fmc_snapshot,
+    # A capture stored under the legacy key builds the same way.
+    "anyconnect": build_fmc_snapshot,
 }
 
 
@@ -682,8 +708,8 @@ async def _run_build(job_id: str, org: dict, user: str) -> None:
             raise ValueError("No API key is stored for this organization")
         if provider == PROVIDER_CATO:
             raw = await _collect_cato(org, api_key, options, progress)
-        elif provider == PROVIDER_ANYCONNECT:
-            raw = await _collect_anyconnect(org, api_key, options, progress)
+        elif provider == PROVIDER_FMC:
+            raw = await _collect_fmc(org, api_key, options, progress)
         else:
             async with MerakiClient(
                 api_key,
@@ -722,7 +748,7 @@ async def _run_build(job_id: str, org: dict, user: str) -> None:
         LOGGER.warning("cato: build failed for account %s: %s", org["name"], redact_value(f"{exc} {exc.detail}"))
     except FmcApiError as exc:
         error = _fmc_error_message(exc)
-        LOGGER.warning("anyconnect: build failed for FMC %s: %s", org["name"], redact_value(f"{exc} {exc.detail}"))
+        LOGGER.warning("fmc: build failed for FMC %s: %s", org["name"], redact_value(f"{exc} {exc.detail}"))
     except ValueError as exc:
         error = str(exc)
     except Exception as exc:  # noqa: BLE001 - job must always reach a terminal state
@@ -778,23 +804,29 @@ async def _build_cato_sample(user: str) -> dict:
     return {"ok": True, "org_ref": org["id"], **result}
 
 
-async def _build_anyconnect_sample(user: str) -> dict:
+async def _build_fmc_sample(user: str) -> dict:
     started = time.monotonic()
-    org = await db.get_meraki_org_by_name(SAMPLE_ANYCONNECT_NAME)
+    org = await db.get_meraki_org_by_name(SAMPLE_FMC_NAME)
+    if not org:
+        # The demo entry of an earlier release takes the current name
+        # rather than leaving two demo FMCs on the map.
+        legacy = await db.get_meraki_org_by_name(SAMPLE_FMC_LEGACY_NAME)
+        if legacy and not legacy.get("has_api_key"):
+            org = await db.update_meraki_org(legacy["id"], name=SAMPLE_FMC_NAME) or legacy
     if not org:
         org = await db.create_meraki_org(
-            SAMPLE_ANYCONNECT_NAME,
-            provider=PROVIDER_ANYCONNECT,
+            SAMPLE_FMC_NAME,
+            provider=PROVIDER_FMC,
             org_id="Global",
             base_url=SAMPLE_FMC_URL,
-            options=sanitize_anyconnect_options({"username": "plexus-readonly"}),
+            options=sanitize_fmc_options({"username": "plexus-readonly"}),
             created_by=user,
         )
     if not org:
         raise HTTPException(status_code=500, detail="Could not create the sample FMC")
-    raw = build_anyconnect_sample_raw()
+    raw = build_fmc_sample_raw()
     raw["fmc"]["name"] = org["name"]
-    result = await _store_snapshot(org, build_anyconnect_snapshot(raw), user=user, started=started)
+    result = await _store_snapshot(org, build_fmc_snapshot(raw), user=user, started=started)
     return {"ok": True, "org_ref": org["id"], **result}
 
 
@@ -846,14 +878,16 @@ async def _build_cloud_sample(cloud: _Cloud, user: str) -> dict:
 async def build_sample_topology_api(request: Request, provider: str = Query(default=PROVIDER_MERAKI)):
     """Build a snapshot from bundled demo data (no API key needed).
     ``provider=cato`` builds the demo Cato account instead of the Meraki one,
-    ``provider=anyconnect`` the demo FMC with its AnyConnect headends,
+    ``provider=fmc`` (or the legacy ``anyconnect``) the demo Cisco FMC and
+    its FTDs,
     ``provider=aws`` / ``provider=azure`` the demo AWS account / Azure
     subscription in Cloud Visibility."""
     user = _session_user(request)
+    provider = _provider_key(provider) or PROVIDER_MERAKI
     if provider == PROVIDER_CATO:
         return await _build_cato_sample(user)
-    if provider == PROVIDER_ANYCONNECT:
-        return await _build_anyconnect_sample(user)
+    if provider == PROVIDER_FMC:
+        return await _build_fmc_sample(user)
     if provider in _CLOUD_BY_PROVIDER:
         return await _build_cloud_sample(_CLOUD_BY_PROVIDER[provider], user)
     started = time.monotonic()
@@ -1042,7 +1076,7 @@ def _cloud_source(account: dict) -> dict[str, Any]:
 async def list_topology_sources_api():
     """Everything that feeds the topology map, with its last collection:
     neighbor discovery of the inventory, Meraki organizations, Cato accounts,
-    AnyConnect FMCs and the AWS and Azure accounts of Cloud Visibility. Credentials are
+    Cisco FMCs and the AWS and Azure accounts of Cloud Visibility. Credentials are
     never included."""
     newest: dict[int, dict] = {}
     for snapshot in await db.list_meraki_snapshots(limit=500):
@@ -1166,6 +1200,96 @@ async def azure_reachability_api(
     return await _cloud_reachability(
         _CLOUD_BY_PROVIDER[PROVIDER_AZURE], source, destination, source_vnet, destination_vnet, protocol, port
     )
+
+
+# ── Path trace ───────────────────────────────────────────────────────────────
+
+# (host id, route snapshot id) -> forwarding block of an inventory host. A new
+# route capture gets a new id, so an entry never goes stale; the dict is
+# cleared when it grows past the limit.
+_HOST_FORWARDING: dict[tuple[int, int | None], dict[str, Any]] = {}
+_HOST_FORWARDING_LIMIT = 5000
+
+
+async def _inventory_forwarding(nodes: list[dict]) -> dict[int, dict[str, Any]]:
+    """The forwarding block of every inventory host on the graph, from its
+    interfaces, addresses and latest SSH route capture (bulk queries)."""
+    hosts = {n["id"]: n for n in nodes if isinstance(n.get("id"), int) and n.get("in_inventory", True)}
+    if not hosts:
+        return {}
+    captures = await db.get_latest_route_snapshots_for_hosts(list(hosts))
+    keys = {host_id: (host_id, (captures.get(host_id) or {}).get("id")) for host_id in hosts}
+    missing = [host_id for host_id, key in keys.items() if key not in _HOST_FORWARDING]
+    if missing:
+        aliases: dict[int, list[str]] = {}
+        for row in await db.get_ip_aliases_for_hosts(missing):
+            aliases.setdefault(int(row["host_id"]), []).append(str(row.get("ip_address") or ""))
+        interfaces = await db.get_interface_inventory_for_hosts(missing)
+        if len(_HOST_FORWARDING) + len(missing) > _HOST_FORWARDING_LIMIT:
+            _HOST_FORWARDING.clear()
+        for host_id in missing:
+            node = hosts[host_id]
+            host = {"ip_address": node.get("ip") or "", "device_type": node.get("device_type") or ""}
+            _HOST_FORWARDING[keys[host_id]] = forwarding_for_host(
+                host, aliases.get(host_id, []), captures.get(host_id), interfaces.get(host_id, [])
+            )
+    return {host_id: _HOST_FORWARDING[key] for host_id, key in keys.items() if key in _HOST_FORWARDING}
+
+
+def _graph_node_id(raw: str | None) -> Any:
+    """A graph node id from the query string: an inventory host's id is an int."""
+    if raw is None or not raw.strip():
+        return None
+    text = raw.strip()
+    return int(text) if text.lstrip("-").isdigit() else text
+
+
+@router.get("/api/topology/path")
+async def topology_path_api(
+    source: str = Query(min_length=1, max_length=64),
+    destination: str = Query(min_length=1, max_length=64),
+    source_node: str | None = Query(default=None, max_length=300),
+    destination_node: str | None = Query(default=None, max_length=300),
+    protocol: str = Query(default="", max_length=8),
+    port: int | None = Query(default=None, ge=0, le=65535),
+):
+    """Trace a flow from ``source`` to ``destination`` (IP addresses or
+    networks) hop by hop across every device on the map, and its replies:
+    at each device the NAT rules, rule sets, route lookup and link it meets,
+    in the order the device applies them, and whether routing is asymmetric.
+    ``source_node`` / ``destination_node`` name the graph nodes that own the
+    ends when the page knows them. ``protocol`` is ``tcp``, ``udp``, ``icmp``
+    or empty (any traffic)."""
+    from netcontrol.routes.topology import get_topology
+
+    if protocol.strip().lower() not in ("", "any", "all", *PATH_PROTOCOLS):
+        raise HTTPException(status_code=400, detail=f"protocol must be one of {', '.join(PATH_PROTOCOLS)}")
+    graph = await get_topology(None)
+    entries = await _latest_entries()
+    snapshots = {org_ref: entry["snapshot"] for org_ref, entry in entries}
+    clouds = {org_ref: entry["reachability"] for org_ref, entry in entries if entry.get("reachability") is not None}
+    subnets: list[dict] = []
+    for org_ref, entry in entries:
+        provider = str(entry["snapshot"].get("provider") or PROVIDER_MERAKI)
+        subnets.extend({"org_ref": org_ref, "provider": provider, **subnet} for subnet in await _subnets_of(entry))
+    host_forwarding = await _inventory_forwarding(graph.get("nodes") or [])
+
+    def run() -> dict:
+        tracer = Tracer(graph, snapshots, clouds, host_forwarding, subnets)
+        return tracer.trace(
+            source,
+            destination,
+            source_node=_graph_node_id(source_node),
+            destination_node=_graph_node_id(destination_node),
+            protocol=protocol,
+            port=port,
+        )
+
+    try:
+        # Building the indexes and walking a large map is CPU-bound.
+        return await asyncio.to_thread(run)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/api/topology/search/deep")

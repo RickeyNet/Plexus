@@ -37,6 +37,11 @@ export interface TopologyNode {
   /** Other integrations that know this node (an AWS instance that is a Cato vSocket). */
   also_providers?: string[];
   /**
+   * Further snapshot nodes collapsed into this one (an FTD that is also an
+   * AWS instance): their subnets belong to this node too.
+   */
+  also_refs?: { org_ref: number; node_id: string; provider?: string }[];
+  /**
    * The AWS EC2 instance this node is (or collapsed with). Present even when
    * `meraki.provider` is another integration (then `also_providers` has 'aws').
    */
@@ -54,7 +59,7 @@ export interface TopologyMerakiRef {
   kind: string;
   status: string;
   serial?: string;
-  /** Integration the snapshot came from: 'meraki' (default), 'cato', 'anyconnect', 'aws' or 'azure'. */
+  /** Integration the snapshot came from: 'meraki' (default), 'cato', 'fmc' (Cisco FMC), 'aws' or 'azure'. */
   provider?: string;
   /** EC2 instance ID, present when the ref is an AWS instance. */
   instance_id?: string;
@@ -86,7 +91,7 @@ export interface TopologyEdge {
   protocol?: string | null;
   utilization?: TopologyEdgeUtilization | null;
   source?: 'meraki' | string;
-  /** Integration a 'meraki'-source link came from: 'meraki', 'cato', 'anyconnect', 'aws', 'azure'. */
+  /** Integration a 'meraki'-source link came from: 'meraki', 'cato', 'fmc', 'aws', 'azure'. */
   provider?: string;
   /** Meraki link state: VPN reachability or WAN uplink status. */
   status?: string | null;

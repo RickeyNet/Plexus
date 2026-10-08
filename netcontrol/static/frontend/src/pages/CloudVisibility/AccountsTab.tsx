@@ -12,8 +12,17 @@ import {
   useValidateCloudAccount,
 } from '@/api/cloud';
 import { Modal } from '@/components/Modal';
-import { ALL_REGIONS, type AuthField, authMethod, buildAuthConfig, isAllRegions, providerForm } from './accountForm';
-import { formatTimestamp, providerLabel } from './helpers';
+import { capitalize, cloudProviderTerms } from '@/lib/cloudProviderTerms';
+import {
+  ALL_REGIONS,
+  type AuthField,
+  authMethod,
+  buildAuthConfig,
+  fieldLabel,
+  isAllRegions,
+  providerForm,
+} from './accountForm';
+import { formatTimestamp, providerLabel, pullOutcome } from './helpers';
 
 interface Props {
   accounts: CloudAccount[];
@@ -21,8 +30,26 @@ interface Props {
   isLoading: boolean;
 }
 
+const PROVIDER_ORDER = ['aws', 'azure', 'gcp'];
+
+function orderedProviders(options: string[]): string[] {
+  const rank = (p: string) => {
+    const i = PROVIDER_ORDER.indexOf(p);
+    return i === -1 ? PROVIDER_ORDER.length : i;
+  };
+  return [...options].sort((a, b) => rank(a) - rank(b));
+}
+
+function withArticle(text: string): string {
+  return `${/^[aeiou]/i.test(text) ? 'an' : 'a'} ${text}`;
+}
+
+function joinOr(items: string[]): string {
+  return items.length > 1 ? `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}` : (items[0] ?? '');
+}
+
 export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
-  const [modalAccount, setModalAccount] = useState<CloudAccount | null | undefined>(undefined);
+  const [modal, setModal] = useState<{ account: CloudAccount | null; provider: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<CloudAccount | null>(null);
   const [confirmDiscover, setConfirmDiscover] = useState<CloudAccount | null>(null);
   const [actionMsg, setActionMsg] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
@@ -92,31 +119,39 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
   }
 
   async function runFlowPull(a: CloudAccount) {
+    const terms = cloudProviderTerms(a.provider);
     try {
       const r = await flowPull.mutateAsync(a.id);
-      const ingested = Number(r?.ingested ?? r?.total_ingested ?? 0);
-      showMsg('success', `${a.name}: flow pull ingested ${ingested.toLocaleString()}`);
+      const outcome = pullOutcome(`${a.name}: ${terms.flowLogs} pull`, r, (n) => `${a.name}: ${n} ${terms.flowLogs} records ingested`);
+      showMsg(outcome.kind, outcome.text);
     } catch (e) {
-      showMsg('error', `Flow pull failed: ${(e as Error).message}`);
+      showMsg('error', `${a.name}: ${terms.flowLogs} pull failed: ${(e as Error).message}`);
     }
   }
 
   async function runTrafficPull(a: CloudAccount) {
+    const terms = cloudProviderTerms(a.provider);
     try {
       const r = await trafficPull.mutateAsync(a.id);
-      const ingested = Number(r?.ingested ?? r?.total_ingested ?? 0);
-      showMsg('success', `${a.name}: traffic pull ingested ${ingested.toLocaleString()}`);
+      const outcome = pullOutcome(`${a.name}: traffic metrics pull`, r, (n) => `${a.name}: ${n} ${terms.metricsSource} samples ingested`);
+      showMsg(outcome.kind, outcome.text);
     } catch (e) {
-      showMsg('error', `Traffic pull failed: ${(e as Error).message}`);
+      showMsg('error', `${a.name}: traffic metrics pull failed: ${(e as Error).message}`);
     }
   }
 
+  const providers = orderedProviders(providerOptions);
+  const deleteTerms = cloudProviderTerms(confirmDelete?.provider);
+  const discoverTerms = cloudProviderTerms(confirmDiscover?.provider);
+
   return (
     <div>
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
-        <button className="btn btn-primary" onClick={() => setModalAccount(null)}>
-          Add Cloud Account
-        </button>
+      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+        {providers.map((p) => (
+          <button key={p} className="btn btn-primary" onClick={() => setModal({ account: null, provider: p })}>
+            Add {cloudProviderTerms(p).scopeTitle}
+          </button>
+        ))}
       </div>
 
       {actionMsg && (
@@ -137,7 +172,7 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
       {!isLoading && accounts.length === 0 && (
         <div className="card" style={{ padding: '1.25rem' }}>
           <p className="text-muted" style={{ margin: 0 }}>
-            No cloud accounts configured. Add an AWS / Azure / GCP account to start building hybrid visibility.
+            No cloud accounts yet. Add {joinOr(providers.map((p) => withArticle(cloudProviderTerms(p).scopeTitle)))} to start.
           </p>
         </div>
       )}
@@ -149,8 +184,8 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
               <tr>
                 <th>Name</th>
                 <th>Provider</th>
-                <th>Account</th>
-                <th>Scope</th>
+                <th>Identifier</th>
+                <th>Regions</th>
                 <th>Enabled</th>
                 <th>Last Sync</th>
                 <th>Sync Readiness</th>
@@ -160,27 +195,49 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
             </thead>
             <tbody>
               {accounts.map((a) => {
+                const terms = cloudProviderTerms(a.provider);
+                const form = providerForm(a.provider);
                 const readiness = {
                   flowReady: a.sync_readiness?.flow_ready ?? false,
                   trafficReady: a.sync_readiness?.traffic_ready ?? false,
-                  flowMissing: a.sync_readiness?.flow_missing ?? [],
-                  trafficMissing: a.sync_readiness?.traffic_missing ?? [],
+                  flowMissing: (a.sync_readiness?.flow_missing ?? []).map((key) => fieldLabel(form, key)),
+                  trafficMissing: (a.sync_readiness?.traffic_missing ?? []).map((key) => fieldLabel(form, key)),
                 };
+                const hasResources = (a.resource_count ?? 0) > 0;
                 return (
                   <tr key={a.id}>
                     <td>
                       {a.name}
-                      {a.provider === 'aws' && Boolean(a.enabled) && (a.resource_count ?? 0) > 0 && (
+                      {terms.onTopologyMap && Boolean(a.enabled) && hasResources && (
                         <small style={{ display: 'block' }}>
-                          <Link to="/topology" title="This account's VPCs, gateways and VPNs are on the Topology map">
+                          <Link
+                            to="/topology"
+                            title={`This ${terms.scope}'s ${terms.networks}, gateways and VPNs are on the Topology map`}
+                          >
                             Shown on Topology map
                           </Link>
                         </small>
                       )}
+                      {!terms.onTopologyMap && hasResources && (
+                        <small
+                          className="text-muted"
+                          style={{ display: 'block' }}
+                          title={`${capitalize(terms.scopeTitlePlural)} are not drawn on the Topology map yet`}
+                        >
+                          Not on the Topology map
+                        </small>
+                      )}
                     </td>
                     <td>{providerLabel(a.provider)}</td>
-                    <td>{a.account_identifier ?? '-'}</td>
-                    <td>{isAllRegions(a.region_scope) ? 'All regions' : (a.region_scope ?? '-')}</td>
+                    <td>
+                      {a.account_identifier || '-'}
+                      <small className="text-muted" style={{ display: 'block' }}>{terms.identifierLabel}</small>
+                    </td>
+                    <td>
+                      {!form.regionHelp
+                        ? terms.wholeScope
+                        : isAllRegions(a.region_scope) ? 'All regions' : (a.region_scope ?? '-')}
+                    </td>
                     <td>
                       <span className={`badge badge-${a.enabled ? 'success' : 'secondary'}`}>
                         {a.enabled ? 'enabled' : 'disabled'}
@@ -203,17 +260,17 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
                     <td>
                       <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
                         <span className={`badge badge-${readiness.flowReady ? 'success' : 'warning'}`}>
-                          Flow {readiness.flowReady ? 'ready' : 'needs config'}
+                          {readiness.flowReady ? 'Flow logs ready' : 'Flow logs need setup'}
                         </span>
                         <span className={`badge badge-${readiness.trafficReady ? 'success' : 'warning'}`}>
-                          Traffic {readiness.trafficReady ? 'ready' : 'needs config'}
+                          {readiness.trafficReady ? 'Metrics ready' : 'Metrics need setup'}
                         </span>
                       </div>
                       {(!readiness.flowReady || !readiness.trafficReady) && (
                         <small className="text-muted" style={{ display: 'block', marginTop: '0.25rem' }}>
-                          {!readiness.flowReady && `Flow: missing ${readiness.flowMissing.join(', ')}`}
+                          {!readiness.flowReady && `Flow logs need ${readiness.flowMissing.join(', ')}`}
                           {!readiness.flowReady && !readiness.trafficReady && ' | '}
-                          {!readiness.trafficReady && `Traffic: missing ${readiness.trafficMissing.join(', ')}`}
+                          {!readiness.trafficReady && `Traffic metrics need ${readiness.trafficMissing.join(', ')}`}
                         </small>
                       )}
                     </td>
@@ -234,7 +291,7 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
                       <button className="btn btn-sm btn-secondary" onClick={() => runTrafficPull(a)} disabled={trafficPull.isPending}>
                         Pull Traffic
                       </button>{' '}
-                      <button className="btn btn-sm btn-secondary" onClick={() => setModalAccount(a)}>
+                      <button className="btn btn-sm btn-secondary" onClick={() => setModal({ account: a, provider: a.provider })}>
                         Edit
                       </button>{' '}
                       <button className="btn btn-sm btn-danger" onClick={() => setConfirmDelete(a)}>
@@ -249,14 +306,14 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
         </div>
       )}
 
-      {modalAccount !== undefined && (
+      {modal && (
         <AccountFormModal
-          account={modalAccount}
-          providerOptions={providerOptions}
-          onClose={() => setModalAccount(undefined)}
+          account={modal.account}
+          provider={modal.provider}
+          onClose={() => setModal(null)}
           onSaved={(msg) => {
             showMsg('success', msg);
-            setModalAccount(undefined);
+            setModal(null);
           }}
         />
       )}
@@ -264,12 +321,13 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
       <Modal
         isOpen={Boolean(confirmDelete)}
         onClose={() => setConfirmDelete(null)}
-        title="Delete Cloud Account"
+        title={`Delete ${deleteTerms.scopeTitle}`}
       >
         {confirmDelete && (
           <div>
             <p>
-              Delete <strong>{confirmDelete.name}</strong> and all discovered cloud topology data?
+              Delete <strong>{confirmDelete.name}</strong> and everything discovered from this {deleteTerms.scope}{' '}
+              (resources, connections, policy rules and traffic metrics)?
             </p>
             <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
               <button className="btn btn-secondary" onClick={() => setConfirmDelete(null)}>Cancel</button>
@@ -284,12 +342,14 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
       <Modal
         isOpen={Boolean(confirmDiscover)}
         onClose={() => setConfirmDiscover(null)}
-        title="Run Cloud Discovery"
+        title={`Discover ${discoverTerms.scopeTitle}`}
       >
         {confirmDiscover && (
           <div>
             <p>
-              Refresh cloud topology snapshot for <strong>{confirmDiscover.name}</strong>? Live provider APIs are used; if discovery fails, the last known snapshot is kept and the error is reported.
+              Read <strong>{confirmDiscover.name}</strong> through {discoverTerms.api} and refresh its{' '}
+              {discoverTerms.networks}, gateways and connections? If discovery fails, the last snapshot is kept and the
+              error is reported.
             </p>
             <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
               <button className="btn btn-secondary" onClick={() => setConfirmDiscover(null)}>Cancel</button>
@@ -306,15 +366,23 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
 
 interface FormProps {
   account: CloudAccount | null;
-  providerOptions: string[];
+  /** Fixed: a stored sign-in only fits the provider it was written for. */
+  provider: string;
   onClose: () => void;
   onSaved: (msg: string) => void;
 }
 
-function AccountFormModal({ account, providerOptions, onClose, onSaved }: FormProps) {
+/** "Flow logs and traffic metrics" from the section titles. */
+function sectionsSummary(titles: string[]): string {
+  const parts = titles.map((t, i) => (i === 0 ? t : t.charAt(0).toLowerCase() + t.slice(1)));
+  return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : (parts[0] ?? '');
+}
+
+function AccountFormModal({ account, provider: providerProp, onClose, onSaved }: FormProps) {
   const create = useCreateCloudAccount();
   const update = useUpdateCloudAccount();
-  const [provider, setProvider] = useState(String(account?.provider ?? providerOptions[0] ?? '').toLowerCase());
+  const provider = String(account?.provider ?? providerProp).toLowerCase();
+  const terms = cloudProviderTerms(provider);
   const [name, setName] = useState(account?.name ?? '');
   const [accountIdentifier, setAccountIdentifier] = useState(account?.account_identifier ?? '');
   const [allRegions, setAllRegions] = useState(isAllRegions(account?.region_scope));
@@ -338,7 +406,7 @@ function AccountFormModal({ account, providerOptions, onClose, onSaved }: FormPr
     e.preventDefault();
     setError(null);
     if (!name.trim()) {
-      setError('Account name is required');
+      setError(`${capitalize(terms.scope)} name is required`);
       return;
     }
     const payload = {
@@ -366,10 +434,10 @@ function AccountFormModal({ account, providerOptions, onClose, onSaved }: FormPr
           ? { ...payload, ...auth, clear_auth_config: Object.keys(auth.auth_config).length === 0 }
           : payload;
         await update.mutateAsync({ id: account.id, data });
-        onSaved(`Cloud account "${payload.name}" updated`);
+        onSaved(`${terms.scopeTitle} "${payload.name}" updated`);
       } else {
         await create.mutateAsync({ ...payload, auth_type: auth?.auth_type, auth_config: auth?.auth_config ?? {} });
-        onSaved(`Cloud account "${payload.name}" created`);
+        onSaved(`${terms.scopeTitle} "${payload.name}" created`);
       }
     } catch (err) {
       setError((err as Error).message);
@@ -377,19 +445,14 @@ function AccountFormModal({ account, providerOptions, onClose, onSaved }: FormPr
   }
 
   return (
-    <Modal isOpen onClose={onClose} title={account?.id ? 'Edit Cloud Account' : 'Add Cloud Account'} size="large">
+    <Modal isOpen onClose={onClose} title={`${account?.id ? 'Edit' : 'Add'} ${terms.scopeTitle}`} size="large">
       <form onSubmit={submit} style={{ display: 'grid', gap: '0.75rem' }}>
-        <label>
-          Provider
-          <select className="form-select" value={provider} onChange={(e) => setProvider(e.target.value)}>
-            {providerOptions.map((p) => (
-              <option key={p} value={p}>{providerLabel(p)}</option>
-            ))}
-          </select>
-        </label>
+        <div>
+          Provider: {terms.fullName === terms.label ? terms.label : `${terms.fullName} (${terms.label})`}
+        </div>
         <label>
           Name
-          <input className="form-input" type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder={`Prod ${providerLabel(provider)}`} required />
+          <input className="form-input" type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder={`Prod ${terms.label}`} required />
         </label>
         <label>
           {form.identifierLabel}
@@ -439,7 +502,7 @@ function AccountFormModal({ account, providerOptions, onClose, onSaved }: FormPr
               <legend style={{ padding: '0 0.35rem', fontWeight: 600 }}>How Plexus signs in</legend>
               {account?.id && (
                 <div className="text-muted" style={{ fontSize: '0.9em' }}>
-                  Saving replaces everything stored for this account, flow log and traffic settings included: fill in
+                  Saving replaces everything stored for this {terms.scope}, flow log and traffic settings included: fill in
                   all that apply.{' '}
                   <button type="button" className="btn btn-sm btn-secondary" onClick={() => setReplaceAuth(false)}>
                     Keep what is stored
@@ -471,7 +534,9 @@ function AccountFormModal({ account, providerOptions, onClose, onSaved }: FormPr
 
             {form.sections.length > 0 && (
               <details>
-                <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Flow logs and traffic metrics (optional)</summary>
+                <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
+                  {sectionsSummary(form.sections.map((s) => s.title))} (optional)
+                </summary>
                 <div style={{ display: 'grid', gap: '0.6rem', marginTop: '0.6rem' }}>
                   <small className="text-muted">Discovery and the Topology map need none of these.</small>
                   {form.sections.map((section) => (
@@ -495,7 +560,7 @@ function AccountFormModal({ account, providerOptions, onClose, onSaved }: FormPr
                 <small className="text-muted" style={{ display: 'block' }}>
                   A JSON object of settings without a field above; it is saved on top of them.
                 </small>
-                <textarea className="form-input" rows={3} value={extraText} onChange={(e) => setExtraText(e.target.value)} placeholder='{"role_session_name": "plexus"}' />
+                <textarea className="form-input" rows={3} value={extraText} onChange={(e) => setExtraText(e.target.value)} placeholder={form.extraPlaceholder} />
               </label>
             </details>
           </>

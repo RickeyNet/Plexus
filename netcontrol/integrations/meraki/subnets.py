@@ -3,10 +3,14 @@
 Path mode lets a user pick subnets instead of devices. The index is derived
 from the detail sections a snapshot already carries (VLANs, single LAN,
 static routes, switch SVIs, VPN participation, non-Meraki VPN peers, the
-network ranges of a Cato site, the subnets of an AWS VPC, the address pools
-of an AnyConnect headend), so it
+network ranges of a Cato site, the subnets of an AWS VPC, the remote access
+VPN address pools of an FTD, and the "Connected subnets" and node-level
+"Static routes" tables of an appliance such as a Cisco FMC's FTDs), so it
 works on snapshots collected before the index existed and on the merged
 snapshot of the HTML export alike.
+
+The appliance tables are read by column name rather than position, so any
+integration can adopt the titles without matching another's layout.
 """
 
 from __future__ import annotations
@@ -36,6 +40,19 @@ def _rows(sections: list[dict], title: str) -> list[list[str]]:
 
 def _cell(row: list[str], index: int) -> str:
     return str(row[index]) if len(row) > index else ""
+
+
+def _table(sections: list[dict], title: str) -> tuple[dict[str, int], list[list[str]]]:
+    """A table section's column positions by header name, and its rows."""
+    for section in sections:
+        if section.get("title") == title and section.get("kind") == "table":
+            columns = {str(c): i for i, c in enumerate(section.get("columns") or [])}
+            return columns, [row for row in section.get("rows") or [] if isinstance(row, list)]
+    return {}, []
+
+
+def _named(row: list[str], columns: dict[str, int], name: str) -> str:
+    return _cell(row, columns[name]) if name in columns else ""
 
 
 def subnet_index(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
@@ -96,7 +113,7 @@ def subnet_index(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
         for row in _rows(sections, "Network ranges"):
             vlan = f" (VLAN {_cell(row, 3)})" if _cell(row, 3) else ""
             add(_cidr(_cell(row, 0)), gateway, site["id"], "range", f"{_cell(row, 1)}{vlan}", True)
-        # An AnyConnect headend: the address pools its VPN clients get.
+        # A remote access VPN headend (an FTD of a Cisco FMC): the pools its clients get.
         for row in _rows(sections, "VPN address pools"):
             add(_cidr(_cell(row, 0)), gateway, site["id"], "pool", f"VPN pool {_cell(row, 1)}", None)
         # An AWS VPC: Subnet, Name, Availability zone...
@@ -129,6 +146,40 @@ def subnet_index(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
                     peer.get("site") or "",
                     "peer",
                     f"Behind {peer.get('label')}",
+                    None,
+                )
+
+    # An appliance's own interfaces and routes (an FTD of a Cisco FMC).
+    for node in nodes:
+        if node.get("kind") != "appliance" or not node.get("site"):
+            continue
+        sections = node.get("sections") or []
+        columns, rows = _table(sections, "Connected subnets")
+        if "Subnet" in columns:
+            for row in rows:
+                cidr = _cidr(_named(row, columns, "Subnet"))
+                ifname = _named(row, columns, "Name") or _named(row, columns, "Interface")
+                zone = _named(row, columns, "Zone")
+                add(
+                    cidr,
+                    node["id"],
+                    node["site"],
+                    "connected",
+                    f"{ifname} ({zone})" if zone else ifname,
+                    None,
+                )
+        columns, rows = _table(sections, "Static routes")
+        if "Subnet" in columns:
+            for row in rows:
+                if _named(row, columns, "Enabled") == "No":
+                    continue
+                cidr = _cidr(_named(row, columns, "Subnet"))
+                add(
+                    cidr,
+                    node["id"],
+                    node["site"],
+                    "static",
+                    f"Static route {_named(row, columns, 'Destination')}",
                     None,
                 )
 

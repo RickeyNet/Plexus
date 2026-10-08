@@ -40,6 +40,7 @@ __all__ = [
     "get_interface_stats_by_hosts",
     "upsert_interface_inventory",
     "get_interface_inventory_for_host",
+    "get_interface_inventory_for_hosts",
     "get_interface_inventory_by_name",
     "upsert_vlan_definition",
     "get_vlan_definitions_for_host",
@@ -494,6 +495,25 @@ async def get_interface_inventory_for_host(host_id: int) -> list[dict]:
             (host_id,),
         )
         return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_interface_inventory_for_hosts(host_ids: list[int]) -> dict[int, list[dict]]:
+    """``host_id -> interface rows`` (by ``if_index``) for many hosts in one query."""
+    found: dict[int, list[dict]] = {int(h): [] for h in host_ids}
+    if not found:
+        return found
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        placeholders = ",".join("?" * len(found))
+        cursor = await db.execute(
+            f"SELECT * FROM interface_inventory WHERE host_id IN ({placeholders}) ORDER BY host_id, if_index",
+            tuple(found),
+        )
+        for row in rows_to_list(await cursor.fetchall()):
+            found.setdefault(int(row["host_id"]), []).append(row)
+        return found
     finally:
         await db.close()
 

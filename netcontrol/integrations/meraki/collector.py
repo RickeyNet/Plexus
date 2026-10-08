@@ -265,6 +265,9 @@ async def collect_organization(
         ),
         (org_data, "third_party_vpn_peers", col.optional("org", f"{org_path}/appliance/vpn/thirdPartyVPNPeers")),
     ]
+    if opts["include_firewall"]:
+        # Organisation-wide: applied to traffic leaving over AutoVPN.
+        org_jobs.append((org_data, "vpn_firewall", col.optional("org", f"{org_path}/appliance/vpn/vpnFirewallRules")))
     if opts["include_switch_ports"]:
         org_jobs.append(
             (
@@ -303,11 +306,14 @@ async def collect_organization(
                 add("l3_firewall", "appliance/firewall/l3FirewallRules")
                 add("port_forwarding", "appliance/firewall/portForwardingRules")
                 add("one_to_one_nat", "appliance/firewall/oneToOneNatRules")
+                add("one_to_many_nat", "appliance/firewall/oneToManyNatRules")
+                add("inbound_firewall", "appliance/firewall/inboundFirewallRules")
         if "switch" in products:
             add("stacks", "switch/stacks")
             add("stp", "switch/stp")
             if opts["include_switch_routing"]:
                 add("ospf", "switch/routing/ospf")
+                add("switch_acl", "switch/accessControlLists")
         if "wireless" in products and opts["include_wireless"]:
             add("ssids", "wireless/ssids")
         if opts["include_clients"]:

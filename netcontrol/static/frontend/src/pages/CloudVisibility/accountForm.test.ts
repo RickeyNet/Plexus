@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { authMethod, buildAuthConfig, isAllRegions, providerForm } from './accountForm';
+import { authMethod, buildAuthConfig, fieldLabel, isAllRegions, providerForm } from './accountForm';
 
 describe('buildAuthConfig', () => {
   it('saves an AWS access key with the sync settings that were filled in', () => {
@@ -96,6 +96,25 @@ describe('authMethod', () => {
   it('falls back to the first sign-in of the provider', () => {
     expect(authMethod(providerForm('azure'), 'access_key').key).toBe('service_principal');
     expect(authMethod(providerForm('other'), 'anything').key).toBe('server');
+  });
+});
+
+describe('fieldLabel', () => {
+  it('names a missing setting by its form label', () => {
+    expect(fieldLabel(providerForm('azure'), 'client_secret')).toBe('Client secret');
+    expect(fieldLabel(providerForm('aws'), 'log_group_name')).toBe('Flow log group');
+    expect(fieldLabel(providerForm('azure'), 'storage_account_name')).toBe('Storage account');
+    expect(fieldLabel(providerForm('gcp'), 'project_id')).toBe('Project ID');
+    expect(fieldLabel(providerForm('aws'), 'unknown_key')).toBe('unknown_key');
+  });
+});
+
+describe('extraPlaceholder', () => {
+  it('is a JSON object for every provider', () => {
+    for (const id of ['aws', 'azure', 'gcp', 'other']) {
+      const parsed: unknown = JSON.parse(providerForm(id).extraPlaceholder);
+      expect(typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)).toBe(true);
+    }
   });
 });
 

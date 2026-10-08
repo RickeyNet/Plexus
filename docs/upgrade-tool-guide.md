@@ -73,9 +73,9 @@ Phases 1 and 2 can be run during business hours with no impact. Only Phase 3 nee
 
 | Resource | Location / Value |
 |---|---|
-| Upgrade tool | Plexus web UI: **Delegator → Upgrades** |
-| Software images | **Delegator → Upgrades → Images** tab |
-| Campaigns | **Delegator → Upgrades → Campaigns** tab |
+| Upgrade tool | Plexus web UI: **Network → Software → Upgrades** |
+| Software images | **Network → Software → Upgrades → Images** tab |
+| Campaigns | **Network → Software → Upgrades → Campaigns** tab |
 | Config backups | **Backups** tab inside the campaign (`backup_<hostname>_<timestamp>.txt`) |
 | Per-device logs | Click a device in the campaign's device table |
 | Operation history | **Operation history** table inside the campaign |
@@ -200,7 +200,7 @@ Check each item off as it is completed. All items must be done before the mainte
 
 - ☐ Completed and submitted RFC for change in the change-control system: ______________________________
 - ☐ Communicated upcoming upgrade and expected interruption to the appropriate team chat channels and site contacts.
-- ☐ Confirmed you have a Plexus account with access to the **Delegator → Upgrades** page (the `upgrades` feature).
+- ☐ Confirmed you have a Plexus account with access to the **Network → Software → Upgrades** page (the `upgrades` feature).
 - ☐ Confirmed a device credential with privileged EXEC access to every target switch, either one you own or the site-wide service credential in Settings.
 - ☐ Downloaded the target IOS-XE image(s) from https://software.cisco.com/download/home (typically 400 - 900 MB; uploads are capped at 2 GB by default).
 - ☐ Uploaded each image on the **Images** tab, keeping Cisco's original filename (see Appendix A).
@@ -269,11 +269,11 @@ Cisco also publishes release notes and known-caveat lists for every IOS-XE relea
 
 ## Work
 
-All steps below are performed in the Plexus web UI under **Delegator → Upgrades**. Open the campaign to see the **Upgrade steps** panel and the device table. Each step runs against **all campaign devices**, or only the devices you select in the table ("Steps apply to" shows the current target). Progress streams live into the per-device logs; click a device to see its full log.
+All steps below are performed in the Plexus web UI under **Network → Software → Upgrades**. Open the campaign to see the **Upgrade steps** panel and the device table. Each step runs against **all campaign devices**, or only the devices you select in the table ("Steps apply to" shows the current target). Progress streams live into the per-device logs; click a device to see its full log.
 
 ### Step 0. Open the session and confirm the plan
 
-1. Log in to Plexus and open **Delegator → Upgrades → Campaigns**.
+1. Log in to Plexus and open **Network → Software → Upgrades → Campaigns**.
 2. Open the campaign for this RFC and confirm the device list contains only the switches in this change.
 3. Confirm the image map points at the image(s) named in the RFC and that each has the expected version and MD5.
 4. Confirm the options are as intended. **Verify upgrade after reboot** should be on unless there is a specific reason otherwise.
@@ -455,7 +455,7 @@ None
 
 ### Appendix A. Uploading and verifying the software image
 
-1. Go to **Delegator → Upgrades → Images**.
+1. Go to **Network → Software → Upgrades → Images**.
 2. Upload the IOS-XE `.bin` file. Keep Cisco's original filename (letters, numbers, dot, hyphen, underscore only). The version number is auto-detected from it.
 3. After upload, check the row in the Images table:
    - **Version** - auto-detected from the filename (for example `17.15.3`). Verify it.
@@ -478,7 +478,7 @@ Confirm install mode with `show version` (look for "Installation mode is INSTALL
 
 ### Appendix C. Creating a campaign
 
-1. Go to **Delegator → Upgrades → Campaigns** and create a new campaign.
+1. Go to **Network → Software → Upgrades → Campaigns** and create a new campaign.
 2. Fill in:
    - **Campaign Name / Description** - for example `Q2 2026 IOS-XE 17.15 Upgrade`.
    - **Image map** - one row per hardware family: a model pattern (for example `9200`) and the image to install on devices matching it. Longer or more specific patterns win when several match. A device whose model matches no pattern is skipped with a warning.

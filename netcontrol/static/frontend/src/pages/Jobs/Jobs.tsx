@@ -2,20 +2,18 @@ import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 
 import { PageHelp } from '@/components/PageHelp';
-import { UpgradesContent } from '@/pages/Upgrades/Upgrades';
 
 import { JobsTab } from './JobsTab';
 import { PlaybooksTab } from './PlaybooksTab';
 import { TemplatesTab } from './TemplatesTab';
 import { CredentialsTab } from './CredentialsTab';
 
-type Tab = 'assignments' | 'tasks' | 'instructions' | 'upgrades' | 'credentials';
+type Tab = 'assignments' | 'tasks' | 'instructions' | 'credentials';
 
 const TABS: { key: Tab; label: string; path: string }[] = [
   { key: 'assignments', label: 'Assignments', path: '/assignments' },
   { key: 'tasks', label: 'Tasks', path: '/tasks' },
   { key: 'instructions', label: 'Instructions', path: '/instructions' },
-  { key: 'upgrades', label: 'Upgrades', path: '/upgrades' },
   { key: 'credentials', label: 'Credentials', path: '/credentials' },
 ];
 
@@ -33,10 +31,6 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   instructions: {
     title: 'Configuration Command Sets',
     text: 'Blocks of CLI commands pushed into config mode by a task. Reusable across devices - keep one canonical "access port hardening" or "SNMPv3 user" snippet here and tasks pull it in at run time.',
-  },
-  upgrades: {
-    title: 'Firmware Upgrade Campaigns',
-    text: 'Plan and execute IOS-XE upgrades across the fleet. Stage images, schedule maintenance windows, and run multi-phase campaigns with backups and rollback support.',
   },
   credentials: {
     title: 'Credential Management',
@@ -88,7 +82,7 @@ export function Jobs() {
       <PageHelp
         pageKey="delegator"
         title="Delegate Work to the Fleet"
-        text="Assign automated tasks against your devices - audits, config pushes, remediations, firmware upgrades - and track them through to completion. Build the inventory of reusable tasks, instructions, and credentials that operators draw from at run time."
+        text="Assign automated tasks against your devices - audits, config pushes, remediations - and track them through to completion. Build the inventory of reusable tasks, instructions, and credentials that operators draw from at run time."
       />
 
       <div role="tablist" style={{ marginBottom: '1rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
@@ -110,7 +104,6 @@ export function Jobs() {
       {tab === 'assignments' && <JobsTab />}
       {tab === 'tasks' && <PlaybooksTab />}
       {tab === 'instructions' && <TemplatesTab />}
-      {tab === 'upgrades' && <UpgradesContent />}
       {tab === 'credentials' && <CredentialsTab />}
     </div>
   );
