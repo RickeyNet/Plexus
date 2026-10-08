@@ -29,8 +29,8 @@ describes the shared behavior. This guide covers what is different.
    subscription**, enter the **Subscription ID** and pick how Plexus
    signs in: a service principal (tenant ID, client ID, client secret) or
    the managed identity / environment credentials of the Plexus server.
-4. **Validate**, then **Discover**. When discovery finishes the subscription
-   is on the map.
+4. **Discover** (it checks the sign-in first). When discovery finishes the
+   subscription is on the map.
 
 One account entry reads one subscription. Add one entry per subscription;
 they are joined on the map automatically, because every resource is named
