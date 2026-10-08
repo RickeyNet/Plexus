@@ -50,7 +50,9 @@ fixed.
 
 ## Reading a trace
 
-Under each traced leg:
+Under each traced leg, the hops of the request on one line, for example
+`Branch 01 MX → Hub 01 MX → Corp East Backup ✕ (3 hops)`, with the mark of
+any hop that is not ok, in place of the path drawn over the links; then:
 
 1. **The verdict** of the direction shown: **Allowed**, **Blocked**,
    **Allowed in part** or **Check incomplete**, the traffic, and a sentence
@@ -148,7 +150,10 @@ router. The route then names the next device:
   tables take over. A device that is also an instance there (a Meraki vMX,
   whose one interface is its uplink, an FTDv) looks in its own VPC or VNet
   first, so a range that several VPCs use, as every default VPC does, still
-  leads to the right one
+  leads to the right one. The networks a Meraki site exports into AutoVPN
+  that are not its VLANs or static routes (a vMX's VPC ranges) are routed by
+  its uplink, ahead of the same range advertised by another site, so two vMXs
+  in one VPC do not hand the flow back and forth
 - a default route out of a WAN uplink goes to the Internet
 
 A connected route that holds the destination delivers the flow there. A

@@ -2,7 +2,17 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { usePathTrace, type PathDirection, type PathTrace as PathTraceResult, type PathTraceQuery } from '@/api/meraki';
 
-import { hopTitle, itemWhere, stageLabel, statusMark, traceEnds, traceHighlight, verdictLabel, type TraceHighlight } from './pathTrace';
+import {
+  hopTitle,
+  itemWhere,
+  stageLabel,
+  statusMark,
+  traceEnds,
+  traceHighlight,
+  traceRoute,
+  verdictLabel,
+  type TraceHighlight,
+} from './pathTrace';
 
 const MUTED = 'var(--text-muted, #868e96)';
 const WARNING = 'var(--warning, #f59f00)';
@@ -17,14 +27,15 @@ function verdictWord(trace: TraceQuery): string {
   return `${verdictLabel(trace.data.verdict).label}.`;
 }
 
-function Direction({ title, direction }: { title: string; direction: PathDirection | undefined }) {
+/** One direction of a trace; its summary is left out when it repeats `overall`, the trace's own. */
+function Direction({ title, direction, overall }: { title: string; direction: PathDirection | undefined; overall: string }) {
   if (!direction) return null;
   const verdict = verdictLabel(direction.verdict);
   return (
     <div style={{ margin: '0.3rem 0 0 0' }}>
       <div>
         <strong>{title}</strong>: <span style={{ color: verdict.color }}>{verdict.label}</span>
-        {direction.summary ? <span className="text-muted"> · {direction.summary}</span> : null}
+        {direction.summary && direction.summary !== overall ? <span className="text-muted"> · {direction.summary}</span> : null}
       </div>
       {direction.hops.length > 0 && (
         <ol style={{ listStyle: 'none', margin: '0.15rem 0 0 0', padding: 0 }}>
@@ -73,8 +84,8 @@ function Result({ result, query }: { result: PathTraceResult; query: PathTraceQu
           {asymmetric.text ? `. ${asymmetric.text}` : '.'}
         </div>
       )}
-      <Direction title={`Request, ${source} → ${destination}`} direction={result.request} />
-      <Direction title={`Replies, ${destination} → ${source}`} direction={result.reply} />
+      <Direction title={`Request, ${source} → ${destination}`} direction={result.request} overall={result.summary} />
+      <Direction title={`Replies, ${destination} → ${source}`} direction={result.reply} overall={result.summary} />
       {(result.notes ?? []).map((note) => (
         <div key={note} className="text-muted">ⓘ {note}</div>
       ))}
@@ -108,6 +119,8 @@ export function PathTrace({
 
   const data = shown.data;
   const highlight = useMemo(() => (data?.applies ? traceHighlight(data.request) : null), [data]);
+  // The hops the request takes, in place of the path drawn over the links.
+  const route = data?.applies ? traceRoute(data.request) : null;
   const onHighlightRef = useRef(onHighlight);
   useEffect(() => {
     onHighlightRef.current = onHighlight;
@@ -148,6 +161,7 @@ export function PathTrace({
 
   return (
     <div style={{ margin: '0.2rem 0 0.35rem 0' }}>
+      {route && <div>{route}</div>}
       <div>
         {head}
         {reverseButton}

@@ -136,13 +136,31 @@ export function verdictLabel(verdict: PathVerdict | string): { label: string; co
   return VERDICTS[verdict as PathVerdict] ?? VERDICTS.unknown;
 }
 
+/** The name of a hop: its label, else Internet for the Internet pseudo hop, else its node id. */
+function hopName(hop: PathHop): string {
+  return hop.label || (hop.node === null ? 'Internet' : String(hop.node));
+}
+
 /** A hop as a numbered line: `3. Hub 01 MX · Hub 01 · in AutoVPN from Branch 01 → out VLAN 20`. */
 export function hopTitle(hop: PathHop, index: number): string {
-  const parts = [hop.label || (hop.node === null ? 'Internet' : String(hop.node))];
+  const parts = [hopName(hop)];
   if (hop.site && hop.site !== hop.label) parts.push(hop.site);
   const ports = [hop.in ? `in ${hop.in}` : '', hop.out ? `out ${hop.out}` : ''].filter(Boolean).join(' → ');
   if (ports) parts.push(ports);
   return `${index + 1}. ${parts.join(' · ')}`;
+}
+
+/**
+ * The hops of a traced direction on one line, each not ok with its mark:
+ * `Branch 01 MX → Hub 01 MX → Corp East Backup ✕ (3 hops)`. The count is the
+ * number of devices listed (the numbered hops below it), not the links between
+ * them. Null when there are no hops.
+ */
+export function traceRoute(direction: PathDirection | null | undefined): string | null {
+  const hops = direction?.hops ?? [];
+  if (!hops.length) return null;
+  const names = hops.map((hop) => (hop.status === 'ok' ? hopName(hop) : `${hopName(hop)} ${statusMark(hop.status).mark}`));
+  return `${names.join(' → ')} (${hops.length} hop${hops.length !== 1 ? 's' : ''})`;
 }
 
 /** Where an item looked, with the rule that matched: `Layer 3 firewall rules, rule 2`. */

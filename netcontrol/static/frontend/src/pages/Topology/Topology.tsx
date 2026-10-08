@@ -2127,9 +2127,10 @@ export function Topology() {
               {(leg.from.subnet || leg.to.subnet) && (
                 <strong>{leg.from.address ?? leg.from.subnet?.cidr ?? leg.from.label} ↔ {leg.to.address ?? leg.to.subnet?.cidr ?? leg.to.label}: </strong>
               )}
+              {/* A traced leg lists the hops of its trace (PathTrace below) instead of the drawn path. */}
               {leg.sameDevice ? (
                 <>Same device - routed locally by {pathLabel(leg.from.node)}.</>
-              ) : leg.path ? (
+              ) : leg.path && traceHighlights[legKey(leg)]?.nodeIds.size ? null : leg.path ? (
                 <>
                   {leg.path.map((id) => pathLabel(id)).join(' → ')}{' '}
                   <span className="text-muted">({leg.path.length - 1} hop{leg.path.length - 1 !== 1 ? 's' : ''})</span>
@@ -2162,8 +2163,9 @@ export function Topology() {
           {pathResult.legs.length > 0 && (
             <div className="text-muted" style={{ marginTop: '0.35rem', fontSize: '0.78rem' }}>
               The path drawn is the shortest way over the cables, uplinks and VPN tunnels on the map that are up: it shows how
-              the ends are joined, not the route each device picks. A subnet is placed on the device that owns it (appliance,
-              L3 switch, VPC or VPN peer).
+              the ends are joined, not the route each device picks.
+              {pathHasTraceLeg && ' A traced leg lists the hops of its trace instead.'} A subnet is placed on the device that
+              owns it (appliance, L3 switch, VPC or VPN peer).
               {pathHasTraceLeg &&
                 ' Between two subnets or addresses the server traces the flow hop by hop and lists, at every device, the policies, ACLs, security groups, NAT rules and routes it hits, for the request and for the replies, and says whether routing is asymmetric. Reverse swaps the ends. Anything a source does not collect is reported as unknown, never as allowed.'}
             </div>
