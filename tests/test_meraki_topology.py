@@ -24,7 +24,7 @@ from netcontrol.integrations.meraki.client import MerakiApiError, MerakiClient, 
 from netcontrol.integrations.meraki.clients import client_records
 from netcontrol.integrations.meraki.collector import collect_organization, sanitize_options, scrub_secrets
 from netcontrol.integrations.meraki.enrich import enrich_snapshot, load_inventory_index, show_commands_for
-from netcontrol.integrations.meraki.forwarding import meraki_addresses
+from netcontrol.integrations.meraki.forwarding import appliance_block, meraki_addresses
 from netcontrol.integrations.meraki.html_export import export_filename, render_topology_html
 from netcontrol.integrations.meraki.normalize import VPN_PEER_SITE_ID, InventoryIndex, build_snapshot
 from netcontrol.integrations.meraki.sample import build_sample_raw
@@ -1032,6 +1032,48 @@ def test_snapshot_branch_appliance_carries_its_forwarding_block(snapshot):
     assert [n["kind"] for n in block["nat"]] == ["interface_pat"]
     assert block["nat"][0]["translated_src"] == ["interface"]
     assert block["not_collected"] == ["Layer 7 firewall rules", "Group policies"]
+
+
+def _appliance_routes(detail: dict, uplinks: list[dict]) -> list[dict]:
+    block = appliance_block(
+        detail=detail,
+        vpn={},
+        vpn_by_net={},
+        net_details={},
+        net_names={},
+        uplinks=uplinks,
+        peers_cfg={},
+        vpn_firewall=None,
+    )
+    return block["routes"]
+
+
+def test_appliance_routes_the_networks_it_exports_by_its_uplink():
+    # A vMX in concentrator mode: no VLANs, the VPC range exported into AutoVPN.
+    uplinks = [
+        {"interface": "wan1", "status": "failed", "ip": "10.50.9.10", "gateway": "10.50.9.1"},
+        {"interface": "wan2", "status": "active", "ip": "10.50.1.10", "gateway": "10.50.1.1"},
+    ]
+    detail = {"site_to_site_vpn": {"subnets": [{"localSubnet": "10.50.0.0/16", "useVpn": True}]}}
+    exported = [r for r in _appliance_routes(detail, uplinks) if r["prefix"] == "10.50.0.0/16"]
+    assert [(r["kind"], r["next_hop"], r["interface"], r["source"], r["advertised"]) for r in exported] == [
+        ("static", "10.50.1.1", "wan2", "Site-to-site VPN local network", True)
+    ]
+    # No live uplink: the route is kept, its next hop unknown.
+    exported = [r for r in _appliance_routes(detail, uplinks[:1]) if r["prefix"] == "10.50.0.0/16"]
+    assert [(r["next_hop"], r["interface"]) for r in exported] == [("", "")]
+    # A network that is already a VLAN (or inside one) is not routed again.
+    detail = {
+        "vlans": [{"id": 10, "subnet": "10.2.10.0/24", "applianceIp": "10.2.10.1"}],
+        "site_to_site_vpn": {
+            "subnets": [
+                {"localSubnet": "10.2.10.0/24", "useVpn": True},
+                {"localSubnet": "10.2.10.128/25", "useVpn": True},
+            ]
+        },
+    }
+    routes = _appliance_routes(detail, uplinks)
+    assert [(r["prefix"], r["kind"]) for r in routes if r["kind"] != "default"] == [("10.2.10.0/24", "connected")]
 
 
 def test_snapshot_hub_appliance_has_nat_and_inbound_rules(snapshot):

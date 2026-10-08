@@ -628,7 +628,7 @@ def _aws_rows() -> list[dict]:
     ]
 
 
-def _vmx_tracer(vmx: dict | None = None, rows: list[dict] | None = None) -> Tracer:
+def _vmx_tracer(vmx: dict | None = None, rows: list[dict] | None = None, backup: dict | None = None) -> Tracer:
     branch = _mx(
         {"VLAN 10": ("10.1.10.1", "10.1.10.0/24")},
         routes=[route("10.50.0.0/16", "autovpn", peer={"site": "CLOUD"}, source="AutoVPN from Cloud vMX")],
@@ -640,12 +640,15 @@ def _vmx_tracer(vmx: dict | None = None, rows: list[dict] | None = None) -> Trac
             route("10.1.10.0/24", "autovpn", peer={"site": "BR"}, source="AutoVPN from Branch 01"),
         ],
     )
-    meraki = _snapshot(
-        "Acme",
-        [_node("d:BR", "appliance", "BR", "Branch 01 MX", branch), _node("d:VMX", "appliance", "CLOUD", "vMX", vmx)],
-        [],
-        {"BR": "Branch 01", "CLOUD": "Cloud vMX"},
-    )
+    meraki_nodes = [
+        _node("d:BR", "appliance", "BR", "Branch 01 MX", branch),
+        _node("d:VMX", "appliance", "CLOUD", "vMX", vmx),
+    ]
+    sites = {"BR": "Branch 01", "CLOUD": "Cloud vMX"}
+    if backup is not None:
+        meraki_nodes.append(_node("d:VMX2", "appliance", "CLOUD2", "vMX backup", backup))
+        sites["CLOUD2"] = "Cloud vMX backup"
+    meraki = _snapshot("Acme", meraki_nodes, [], sites)
     aws = _snapshot(
         "AWS",
         [_node("vpc:vpc-1", "vpc", "vpc-1", "cloud-vpc"), _node("i:i-vmx", "appliance", "vpc-1", "vmx")],
@@ -691,6 +694,23 @@ def _vmx_tracer(vmx: dict | None = None, rows: list[dict] | None = None) -> Trac
             "status": "active",
         },
     ]
+    if backup is not None:
+        nodes.append(
+            {
+                "id": "meraki:1:d:VMX2",
+                "label": "vMX backup",
+                "meraki": ref(1, "d:VMX2", "Cloud vMX backup", "appliance", "meraki"),
+            }
+        )
+        edges.append(
+            {
+                "id": "meraki:1:e2",
+                "from": "meraki:1:d:VMX",
+                "to": "meraki:1:d:VMX2",
+                "protocol": "vpn",
+                "status": "reachable",
+            }
+        )
     graph = {"nodes": nodes, "edges": edges}
     return Tracer(graph, {1: meraki, -1: aws}, {-1: Reachability(rows or _aws_rows(), [])}, {}, [])
 
@@ -783,6 +803,53 @@ def test_a_passthrough_vmx_hands_the_flow_to_its_own_vpc_when_another_vpc_has_th
     assert vpc["edge"] == "meraki:-1:e1"
     assert vpc["items"][0]["where"] == "Route table main of subnet vmx-subnet (10.50.1.0/24)"
     assert _labels(result["reply"]) == ["cloud-vpc", "vMX", "Branch 01 MX"]
+
+
+def test_a_vmx_keeps_its_own_vpc_when_a_backup_vmx_exports_the_same_range():
+    # Two vMXs in one VPC both export its range into AutoVPN. Each learns the
+    # range from the other; its own export (routed by its uplink) must win,
+    # or the flow bounces between them.
+    def concentrator(peer: str, peer_name: str, wan_ip: str) -> dict:
+        block = _mx(
+            {},
+            routes=[
+                route("10.50.0.0/16", "autovpn", peer={"site": peer}, source=f"AutoVPN from {peer_name}"),
+                route(
+                    "10.50.0.0/16",
+                    "static",
+                    next_hop="10.50.1.1",
+                    interface="wan1",
+                    source="Site-to-site VPN local network",
+                ),
+                route("10.1.10.0/24", "autovpn", peer={"site": "BR"}, source="AutoVPN from Branch 01"),
+            ],
+            wan_ip=wan_ip,
+            gateway="10.50.1.1",
+        )
+        block["nat"] = []  # a concentrator does not translate
+        return block
+
+    tracer = _vmx_tracer(
+        concentrator("CLOUD2", "Cloud vMX backup", "10.50.1.10"),
+        backup=concentrator("CLOUD", "Cloud vMX", "10.50.1.11"),
+    )
+    result = tracer.trace(
+        "10.1.10.5",
+        "10.50.2.20",
+        source_node="meraki:1:d:BR",
+        destination_node="meraki:-1:vpc:vpc-1",
+        protocol="tcp",
+        port=443,
+    )
+
+    assert result["verdict"] == "allowed", result["summary"]
+    request = result["request"]
+    assert _labels(request) == ["Branch 01 MX", "vMX", "cloud-vpc"]
+    vmx_hop = request["hops"][1]
+    assert vmx_hop["out"] == "wan1"
+    assert ("route", "ok", "Site-to-site VPN local network") in _items(vmx_hop)
+    texts = [i["text"] for h in request["hops"] for i in h["items"]]
+    assert not any("Routing loop" in t for t in texts)
 
 
 # ── Cato ─────────────────────────────────────────────────────────────────────

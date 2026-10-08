@@ -458,7 +458,7 @@ def appliance_block(
             )
         )
 
-    # Routes: connected, static, AutoVPN, non-Meraki VPN, WAN default.
+    # Routes: connected, static, exported, AutoVPN, non-Meraki VPN, WAN default.
     for item in block["interfaces"]:
         if item["kind"] in ("vlan", "lan") and item["cidr"]:
             label = f"{item['name']} {names.get(item['name'], '')}".strip()
@@ -484,6 +484,41 @@ def appliance_block(
                 interface=_interface_for(gateway, block["interfaces"]),
                 source=f"Static route {static.get('name') or ''}".strip(),
                 advertised=bool(in_vpn) if in_vpn is not None else None,
+            )
+        )
+    # Networks the site exports that are neither VLANs nor static routes (a
+    # vMX's VPC ranges) sit behind its uplink, ahead of the same range from a peer.
+    covered = [ipaddress.ip_network(r["prefix"]) for r in block["routes"] if canonical(r["prefix"])]
+    # A VLAN exported under VPN NAT is the VLAN itself.
+    covered += [
+        ipaddress.ip_network(canonical(v.get("vpnNatSubnet")))
+        for v in detail.get("vlans") or []
+        if isinstance(v, dict) and canonical(v.get("vpnNatSubnet"))
+    ]
+    live = next(
+        (
+            u
+            for u in uplinks
+            if isinstance(u, dict)
+            and str(u.get("status") or "").lower() in _LIVE_UPLINK
+            and u.get("gateway")
+            and u.get("interface")
+        ),
+        None,
+    )
+    for subnet, name in _exported(detail, vpn):
+        network = ipaddress.ip_network(subnet)
+        if any(network.version == c.version and network.subnet_of(c) for c in covered):  # type: ignore[arg-type]
+            continue
+        covered.append(network)
+        block["routes"].append(
+            route(
+                subnet,
+                "static",
+                next_hop=str(live["gateway"]) if live else "",
+                interface=str(live["interface"]) if live else "",
+                source=f"Site-to-site VPN local network {name}".strip(),
+                advertised=True,
             )
         )
     for peer in vpn.get("merakiVpnPeers") or []:
