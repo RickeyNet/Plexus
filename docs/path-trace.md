@@ -145,7 +145,10 @@ router. The route then names the next device:
   host's address, alias or SVI
 - a next-hop address inside a collected VPC or VNet subnet, or a connected
   subnet that is one, goes to that VPC or VNet, where the cloud's own route
-  tables take over
+  tables take over. A device that is also an instance there (a Meraki vMX,
+  whose one interface is its uplink, an FTDv) looks in its own VPC or VNet
+  first, so a range that several VPCs use, as every default VPC does, still
+  leads to the right one
 - a default route out of a WAN uplink goes to the Internet
 
 A connected route that holds the destination delivers the flow there. A
