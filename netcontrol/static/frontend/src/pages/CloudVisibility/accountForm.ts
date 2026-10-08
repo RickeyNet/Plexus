@@ -117,12 +117,12 @@ const AWS: ProviderForm = {
   sections: [
     {
       title: 'Flow logs',
-      help: 'Needed for Pull Flow only. VPC Flow Logs are read from CloudWatch Logs.',
+      help: 'Needed only for the Flow Logs tab. VPC Flow Logs are read from CloudWatch Logs.',
       fields: [{ key: 'log_group_name', label: 'Flow log group', placeholder: '/aws/vpc/flow-logs' }],
     },
     {
       title: 'Traffic metrics',
-      help: 'Needed for Pull Traffic only. CloudWatch metrics are read for the resources listed.',
+      help: 'Needed only for the Traffic Metrics tab. CloudWatch metrics are read for the resources listed.',
       fields: [
         { key: 'resource_ids', label: 'Resource IDs', list: true, placeholder: 'i-1234567890abcdef0, i-0fedcba0987654321' },
         { key: 'metric_names', label: 'Metric names', list: true, placeholder: 'Default: NetworkIn, NetworkOut, NetworkPacketsIn, NetworkPacketsOut' },
@@ -162,7 +162,7 @@ const AZURE: ProviderForm = {
   sections: [
     {
       title: 'Flow logs',
-      help: 'Needed for Pull Flow only. NSG flow logs are read from a storage account.',
+      help: 'Needed only for the Flow Logs tab. NSG flow logs are read from a storage account.',
       fields: [
         { key: 'storage_account_name', label: 'Storage account', placeholder: 'mystorageacct' },
         { key: 'container_name', label: 'Container', placeholder: 'insights-logs-networksecuritygroupflowevent' },
@@ -176,7 +176,7 @@ const AZURE: ProviderForm = {
     },
     {
       title: 'Traffic metrics',
-      help: 'Needed for Pull Traffic only. Azure Monitor metrics are read for the resources listed.',
+      help: 'Needed only for the Traffic Metrics tab. Azure Monitor metrics are read for the resources listed.',
       fields: [
         { key: 'resource_ids', label: 'Resource IDs', list: true, placeholder: '/subscriptions/.../networkInterfaces/nic-1' },
         { key: 'metric_names', label: 'Metric names', list: true, placeholder: 'Default: BytesIn, BytesOut, PacketsIn, PacketsOut' },
@@ -213,7 +213,7 @@ const GCP: ProviderForm = {
   sections: [
     {
       title: 'Traffic metrics',
-      help: 'Needed for Pull Traffic only, and only to read other metrics than the defaults.',
+      help: 'Needed only for the Traffic Metrics tab, and only to read other metrics than the defaults.',
       fields: [
         { key: 'metric_types', label: 'Metric types', list: true, placeholder: 'Default: instance network received and sent bytes' },
       ],

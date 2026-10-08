@@ -42,9 +42,10 @@ different. Azure subscriptions join the map the same way; see
    - *How Plexus signs in*: an access key, an IAM role, or the credentials
      of the Plexus server (see below).
    Nothing else is needed for the map; the flow log and traffic metric
-   settings are optional and only feed **Pull Flow** and **Pull Traffic**.
-4. **Validate**, then **Discover**. When discovery finishes the account is on
-   the Topology map (group filter **All groups**).
+   settings are optional and only feed the **Flow Logs** and **Traffic
+   Metrics** tabs.
+4. **Discover** (it checks the sign-in first). When discovery finishes the
+   account is on the Topology map (group filter **All groups**).
 
 To refresh the map, run **Discover** again. Scheduled discovery
 (`PUT /api/cloud/discovery-sync/config` with `enabled` and
