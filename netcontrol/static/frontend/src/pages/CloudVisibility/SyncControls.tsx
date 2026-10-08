@@ -84,10 +84,10 @@ export function SyncControls({ kind, config, status, cursors, selectedAccountId,
             Save {kind === 'Flow' ? 'Sync' : 'Metric Sync'} Config
           </button>
           <button className="btn btn-primary" disabled={isPulling} onClick={() => onPullAll()}>
-            Pull All Accounts
+            Pull all
           </button>
           <button className="btn btn-secondary" disabled={isPulling || !selectedAccountId} onClick={() => onPullSelected()}>
-            Pull Selected Account
+            Pull selected
           </button>
         </div>
       </div>
@@ -111,7 +111,7 @@ export function SyncControls({ kind, config, status, cursors, selectedAccountId,
         <div style={{ marginTop: '0.75rem', overflowX: 'auto' }}>
           <table className="chart-table">
             <thead>
-              <tr><th>Account</th><th>Provider</th><th>Last Pull End</th><th>Updated</th></tr>
+              <tr><th>Account / subscription / project</th><th>Provider</th><th>Last Pull End</th><th>Updated</th></tr>
             </thead>
             <tbody>
               {cursors.map((c, i) => (

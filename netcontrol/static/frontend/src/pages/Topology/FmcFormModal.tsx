@@ -2,28 +2,28 @@ import { useState } from 'react';
 
 import { Modal } from '@/components/Modal';
 import {
-  AnyConnectBuildOptions,
+  FmcBuildOptions,
   MerakiOrg,
   MerakiOrgInput,
   useCreateMerakiOrg,
   useUpdateMerakiOrg,
 } from '@/api/meraki';
 
-import { ANYCONNECT_OPTION_TOGGLES, FMC_URL_PLACEHOLDER } from './merakiHelpers';
+import { FMC_OPTION_TOGGLES, FMC_URL_PLACEHOLDER } from './merakiHelpers';
 
-export interface AnyConnectFormModalProps {
+export interface FmcFormModalProps {
   existing: MerakiOrg | null;
-  defaultOptions: AnyConnectBuildOptions;
+  defaultOptions: FmcBuildOptions;
   onClose: () => void;
 }
 
 /**
- * Add or edit a Cisco FMC whose FTDs terminate AnyConnect remote access VPN.
- * The FMC is stored like a Cato account: its address is the entry's base
- * URL, the domain its org_id, the API user an option and the password the
- * write-only secret.
+ * Add or edit a Cisco FMC (Secure Firewall Management Center) and the FTDs
+ * it manages. The FMC is stored like a Cato account: its address is the
+ * entry's base URL, the domain its org_id, the API user an option and the
+ * password the write-only secret.
  */
-export function AnyConnectFormModal({ existing, defaultOptions, onClose }: AnyConnectFormModalProps) {
+export function FmcFormModal({ existing, defaultOptions, onClose }: FmcFormModalProps) {
   const isEdit = existing !== null;
   const [name, setName] = useState(existing?.name ?? '');
   const [baseUrl, setBaseUrl] = useState(existing?.base_url ?? '');
@@ -31,9 +31,12 @@ export function AnyConnectFormModal({ existing, defaultOptions, onClose }: AnyCo
   // The password is write-only, so the field always opens blank; leaving it
   // blank on edit keeps the stored one.
   const [password, setPassword] = useState('');
-  const [options, setOptions] = useState<AnyConnectBuildOptions>(
-    (existing?.options as AnyConnectBuildOptions | undefined) ?? defaultOptions,
-  );
+  // An entry saved before an option existed lacks its key; the defaults
+  // fill it in so every toggle starts checked or unchecked, never blank.
+  const [options, setOptions] = useState<FmcBuildOptions>({
+    ...defaultOptions,
+    ...(existing?.options as Partial<FmcBuildOptions> | undefined),
+  });
   const [errMsg, setErrMsg] = useState<string | null>(null);
 
   const create = useCreateMerakiOrg();
@@ -44,7 +47,7 @@ export function AnyConnectFormModal({ existing, defaultOptions, onClose }: AnyCo
     setErrMsg(null);
     const body: MerakiOrgInput = {
       name: name.trim(),
-      provider: 'anyconnect',
+      provider: 'fmc',
       org_id: domain.trim(),
       base_url: baseUrl.trim(),
       options: { ...options, username: options.username.trim() },
@@ -62,10 +65,10 @@ export function AnyConnectFormModal({ existing, defaultOptions, onClose }: AnyCo
   const ready = name.trim() && baseUrl.trim() && options.username.trim() && (isEdit || password.trim());
 
   return (
-    <Modal isOpen onClose={onClose} title={isEdit ? 'Edit AnyConnect FMC' : 'Add AnyConnect FMC'} size="large">
+    <Modal isOpen onClose={onClose} title={isEdit ? 'Edit Cisco FMC' : 'Add Cisco FMC'} size="large">
       <div className="text-muted" style={{ fontSize: '0.85em', marginBottom: '0.75rem' }}>
-        The Firewall Management Center that manages the FTDs terminating AnyConnect / Secure Client. Plexus
-        reads the devices, remote access VPN policies, address pools and connected users over the FMC REST API.
+        The Firewall Management Center that manages your FTDs. Plexus reads devices, interfaces, routing, NAT,
+        access control, site-to-site and remote access VPN over the FMC REST API (read-only).
       </div>
       <div className="form-group">
         <label className="form-label" htmlFor="fmc-name">
@@ -157,7 +160,7 @@ export function AnyConnectFormModal({ existing, defaultOptions, onClose }: AnyCo
       </div>
 
       <h4 style={{ margin: '0.75rem 0 0.5rem' }}>Data to collect</h4>
-      {ANYCONNECT_OPTION_TOGGLES.map((toggle) => (
+      {FMC_OPTION_TOGGLES.map((toggle) => (
         <div className="form-group" key={toggle.key} style={{ marginBottom: '0.4rem' }}>
           <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}>
             <input

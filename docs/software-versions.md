@@ -6,6 +6,11 @@ platform, keeps a history of upgrades and downgrades, and raises an alert
 when a device runs a version a security advisory names. Advisories can be
 entered by hand, imported, or synced from Cisco PSIRT.
 
+The page has two tabs. **Versions** is described here; **Upgrades** is the
+firmware upgrade tool (campaigns, images, backups; the `upgrades` feature),
+described in [upgrade-tool-guide.md](upgrade-tool-guide.md). Each tab is
+shown only to users with its feature.
+
 - Permission: the `software` feature to view, `software.write` to refresh,
   acknowledge alerts and manage advisories, admin for the settings and the
   Cisco PSIRT credentials
@@ -15,7 +20,7 @@ entered by hand, imported, or synced from Cisco PSIRT.
 
 1. Make sure Plexus knows some versions. An inventory host gets its version
    from SNMP enrichment or an SSH poll (the **Software** column on the
-   Inventory page); a Meraki organization, Cato account or AnyConnect FMC
+   Inventory page); a Meraki organization, Cato account or Cisco FMC
    gets it from its topology collection (**Network → Topology → Sources**).
    **Load Sample** on the Topology page is enough to try the page.
 2. Open **Network → Software**. The first visit builds the tracked set from
@@ -35,7 +40,7 @@ entered by hand, imported, or synced from Cisco PSIRT.
 | Inventory | every host with a stored software version | `software_version` of the host (SNMP sysDescr, SSH `show version`) | from the host's driver: `cisco_ios` is IOS XE when the version is 16.x or later, `cisco_nxos`, `cisco_xr`, `cisco_ftd` (ASA when the model says so), `juniper_junos`, `arista_eos`, `fortinet_fortios`, `paloalto_panos`; otherwise guessed from the text, else **Other** |
 | Meraki | every device of the latest collection | the device's firmware (`wired-18-107-2` is shown as `18.107.2`) | by product: Meraki MX, MS, MR, MG, MV, MT |
 | Cato | every Socket of the latest collection | the Socket version | Cato Socket |
-| AnyConnect | every headend and the FMC of the latest collection | the FTD software version; the FMC version | Cisco Secure Firewall Threat Defense, Management Center |
+| Cisco FMC | every managed device and the FMC of the latest collection | the FTD software version; the FMC version | Cisco Secure Firewall Threat Defense, Management Center |
 
 A topology device that is also an inventory host is listed once, under the
 collection: the controller knows the exact firmware. AWS resources carry no
@@ -153,7 +158,7 @@ the CVSS score as the value and a dedup key of
 
 | Method | Path | Notes |
 |---|---|---|
-| `GET` | `/api/software/overview` | `summary`, `platforms` (the spread), `platform_catalog`, `devices`, open `alerts`, `advisories`, recent `changes`, `settings` (no secrets). Query `platform`, `source` (`inventory`, `meraki`, `cato`, `anyconnect`) and `search` narrow `devices` only |
+| `GET` | `/api/software/overview` | `summary`, `platforms` (the spread), `platform_catalog`, `devices`, open `alerts`, `advisories`, recent `changes`, `settings` (no secrets). Query `platform`, `source` (`inventory`, `meraki`, `cato`, `fmc`) and `search` narrow `devices` only |
 | `POST` | `/api/software/refresh` | Rebuild the tracked set and re-match; returns counts and the version changes (`software.write`) |
 | `GET` | `/api/software/history?device_key=` | Every version one device was seen on, with `seen_from` / `seen_until` |
 | `GET` | `/api/software/advisories` | All advisories |

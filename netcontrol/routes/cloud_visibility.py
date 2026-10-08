@@ -91,7 +91,7 @@ async def _require_admin_dep(request: Request):
 
 
 def _topology_changed() -> None:
-    """AWS discovery feeds the Topology map; drop its cached graph."""
+    """AWS and Azure discovery feed the Topology map; drop its cached graph."""
     from netcontrol.routes.topology import invalidate_topology_cache
 
     invalidate_topology_cache()

@@ -4,6 +4,8 @@ import { NavLink, useLocation } from 'react-router';
 import { useAuthStatus } from '@/api/auth';
 import { prefetchRoute } from '@/lib/pageLoaders';
 
+import { isNavItemVisible, type NavGate } from './navVisibility';
+
 // Navigation mirrors the legacy SPA sidebar (netcontrol/static/index.html). Each
 // item is either an internal React route (`to`) or a link back to the legacy UI
 // (`href`) when the page hasn't been ported yet. The legacy app lives at /, so
@@ -11,30 +13,18 @@ import { prefetchRoute } from '@/lib/pageLoaders';
 
 type Icon = ReactNode;
 
-interface RouteItem {
+// Gating fields (feature / altFeature / visKey) and the visibility rules are
+// in navVisibility.ts.
+interface RouteItem extends NavGate {
   label: string;
   icon: Icon;
   to: string;
-  // Per-user gateable feature key (FEATURE_FLAGS). Omit for items always
-  // visible to authenticated users (e.g., Settings). May be an array, in
-  // which case the entry is visible if the user has *any* listed feature
-  // (e.g., Delegator gates on five sub-features at once).
-  feature?: string | string[];
-  // Optional second feature flag - entry is visible if user has either.
-  // Used for grouped pages like Changes (risk-analysis | deployments).
-  altFeature?: string;
-  // Global visibility key (FEATURE_VISIBILITY_CATALOG) - what admins can hide
-  // via Settings → Features. Defaults to `feature` if not set.
-  visKey?: string;
 }
 
-interface LegacyItem {
+interface LegacyItem extends NavGate {
   label: string;
   icon: Icon;
   href: string;
-  feature?: string | string[];
-  altFeature?: string;
-  visKey?: string;
 }
 
 interface NavGroup {
@@ -242,13 +232,13 @@ const NAV: TopItem[] = [
   { label: 'Dashboard', icon: ic.dashboard, to: '/', feature: 'dashboard' },
   { label: 'Inventory', icon: ic.inventory, to: '/inventory', feature: 'inventory' },
   // Delegator - single entry covering Assignments / Tasks / Instructions /
-  // Upgrades / Credentials. Visible if the user has any of the underlying
+  // Credentials. Visible if the user has any of the four underlying
   // sub-features. Lands on the Assignments tab by default.
   {
     label: 'Delegator',
     icon: ic.playbooks,
     to: '/assignments',
-    feature: ['playbooks', 'jobs', 'templates', 'credentials', 'upgrades'],
+    feature: ['playbooks', 'jobs', 'templates', 'credentials'],
   },
   {
     id: 'network',
@@ -257,7 +247,8 @@ const NAV: TopItem[] = [
     children: [
       { label: 'Topology', icon: ic.topology, to: '/topology', feature: 'topology' },
       { label: 'IPAM', icon: ic.ipam, to: '/ipam', feature: 'ipam' },
-      { label: 'Software', icon: ic.software, to: '/software', feature: 'software' },
+      // Software - Versions tab (`software`) and Upgrades tab (`upgrades`).
+      { label: 'Software', icon: ic.software, to: '/software', feature: ['software', 'upgrades'] },
       { label: 'Cloud Visibility', icon: ic.cloud, to: '/cloud-visibility', feature: 'cloud-visibility' },
       { label: 'Monitoring', icon: ic.monitoring, to: '/monitoring', feature: 'monitoring' },
       { label: 'Configuration', icon: ic.config, to: '/configuration', feature: 'config-drift', visKey: 'configuration' },
@@ -347,27 +338,14 @@ export function Sidebar({ username, mobileOpen, onMobileClose, onOpenUserMenu }:
   const { data: auth } = useAuthStatus();
 
   const visibleNav = useMemo(() => {
-    const isAdmin = auth?.role === 'admin';
-    const access = new Set(auth?.feature_access ?? []);
-    const hidden = new Set(auth?.feature_visibility_hidden ?? []);
-
-    const isItemVisible = (i: RouteItem | LegacyItem): boolean => {
-      // visKey can only be a single string, so use the first feature if the
-      // item gates on an array. Picking element 0 is fine because the
-      // Features admin UI hides whole *groups*, not individual sub-features
-      // within a multi-gated entry like Delegator.
-      const visKey = i.visKey ?? (Array.isArray(i.feature) ? i.feature[0] : i.feature);
-      if (visKey && hidden.has(visKey)) return false;
-      if (!i.feature) return true; // always-visible (Settings, etc.)
-      if (isAdmin) return true;
-      if (Array.isArray(i.feature)) {
-        if (i.feature.some((f) => access.has(f))) return true;
-      } else {
-        if (access.has(i.feature)) return true;
-      }
-      if (i.altFeature && access.has(i.altFeature)) return true;
-      return false;
+    const ctx = {
+      isAdmin: auth?.role === 'admin',
+      access: new Set(auth?.feature_access ?? []),
+      hidden: new Set(auth?.feature_visibility_hidden ?? []),
     };
+    // An entry gating on an array of features (Delegator, Software) is hidden
+    // globally only when every one of its features is - see navVisibility.ts.
+    const isItemVisible = (i: RouteItem | LegacyItem): boolean => isNavItemVisible(i, ctx);
 
     return NAV.flatMap((item): TopItem[] => {
       if (!isGroup(item)) {

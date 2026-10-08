@@ -24,6 +24,7 @@ from netcontrol.integrations.meraki.client import MerakiApiError, MerakiClient, 
 from netcontrol.integrations.meraki.clients import client_records
 from netcontrol.integrations.meraki.collector import collect_organization, sanitize_options, scrub_secrets
 from netcontrol.integrations.meraki.enrich import enrich_snapshot, load_inventory_index, show_commands_for
+from netcontrol.integrations.meraki.forwarding import meraki_addresses
 from netcontrol.integrations.meraki.html_export import export_filename, render_topology_html
 from netcontrol.integrations.meraki.normalize import VPN_PEER_SITE_ID, InventoryIndex, build_snapshot
 from netcontrol.integrations.meraki.sample import build_sample_raw
@@ -961,3 +962,197 @@ def test_api_build_job_runs_collector_and_stores_snapshot(api, monkeypatch):
     assert job["result"]["summary"]["sites"] == 4
     refreshed = api.get("/api/meraki/orgs").json()["orgs"][0]
     assert refreshed["last_build_status"] == "success" and refreshed["snapshot_count"] == 1
+
+
+# ── Forwarding data (path tracing) ───────────────────────────────────────────
+
+
+def _node_of(snapshot: dict, node_id: str) -> dict:
+    return next(n for n in snapshot["nodes"] if n["id"] == node_id)
+
+
+def _policy(block: dict, name: str) -> dict:
+    return next(p for p in block["policies"] if p["name"] == name)
+
+
+def test_meraki_address_syntax_is_resolved():
+    vlans = {"30": "10.2.30.0/24", "10": "10.2.10.0/24"}
+    assert meraki_addresses("Any", vlans) == (["any"], [])
+    assert meraki_addresses("VLAN(30).*", vlans) == (["10.2.30.0/24"], [])
+    assert meraki_addresses("VLAN(30).17, 10.9.0.5,192.168.1.0/24", vlans) == (
+        ["10.2.30.17/32", "10.9.0.5/32", "192.168.1.0/24"],
+        [],
+    )
+    assert meraki_addresses("10.1.2.3/16", vlans) == (["10.1.0.0/16"], [])
+    assert meraki_addresses("VLAN(77).*, www.example.com", vlans) == ([], ["VLAN(77).*", "www.example.com"])
+    assert meraki_addresses("10.0.0.1, any", vlans) == (["any"], [])
+
+
+def test_snapshot_branch_appliance_carries_its_forwarding_block(snapshot):
+    block = _node_of(snapshot, "d:Q2MX-0002-0001")["forwarding"]  # Branch-Atlanta
+    assert set(block) == {"version", "interfaces", "routes", "vpn", "policies", "nat", "not_collected"}
+    interfaces = {i["name"]: i for i in block["interfaces"]}
+    assert interfaces["VLAN 10"] == {
+        "name": "VLAN 10",
+        "kind": "vlan",
+        "ip": "10.2.10.1",
+        "cidr": "10.2.10.0/24",
+        "zone": "",
+        "vrf": "",
+        "enabled": True,
+    }
+    assert interfaces["wan1"]["kind"] == "wan" and interfaces["wan1"]["ip"] == "198.51.100.12"
+    routes = {(r["prefix"], r["kind"]): r for r in block["routes"]}
+    assert routes[("10.2.30.0/24", "connected")]["advertised"] is False
+    static = routes[("172.16.2.0/24", "static")]
+    assert (static["next_hop"], static["interface"], static["source"]) == ("10.2.0.11", "VLAN 99", "Static route Lab")
+    autovpn = routes[("10.0.10.0/24", "autovpn")]
+    assert autovpn["peer"] == {"site": "N_1000"} and autovpn["source"] == "AutoVPN from HQ-DataCenter"
+    defaults = [r for r in block["routes"] if r["kind"] == "default"]
+    assert [(r["interface"], r["next_hop"]) for r in defaults] == [("wan1", "198.51.100.1"), ("wan2", "203.0.113.1")]
+    assert block["vpn"] == []
+    # Policies in the order the MX applies them; Meraki syntax resolved.
+    assert [(p["name"], p["kind"], p["applies"], p["default"]) for p in block["policies"]] == [
+        ("Layer 3 firewall rules", "firewall", "lan_in", "allow"),
+        ("Site-to-site VPN firewall rules", "vpn_firewall", "vpn_out", "allow"),
+        ("Inbound firewall rules", "inbound", "wan_in", "deny"),
+    ]
+    guest = _policy(block, "Layer 3 firewall rules")["rules"][0]
+    assert (guest["index"], guest["action"], guest["src"], guest["dst"], guest["comment"]) == (
+        1,
+        "deny",
+        ["10.2.30.0/24"],
+        ["10.0.0.0/8"],
+        "Guest isolation",
+    )
+    # The trailing default rule of the Dashboard is kept as the last rule.
+    assert _policy(block, "Layer 3 firewall rules")["rules"][-1]["comment"] == "Default rule"
+    vpn_rule = _policy(block, "Site-to-site VPN firewall rules")["rules"][0]
+    assert vpn_rule["src"] == ["10.1.30.0/24", "10.2.30.0/24"] and vpn_rule["action"] == "deny"
+    assert [n["kind"] for n in block["nat"]] == ["interface_pat"]
+    assert block["nat"][0]["translated_src"] == ["interface"]
+    assert block["not_collected"] == ["Layer 7 firewall rules", "Group policies"]
+
+
+def test_snapshot_hub_appliance_has_nat_and_inbound_rules(snapshot):
+    block = _node_of(snapshot, "d:Q2MX-0000-0001")["forwarding"]  # HQ-DataCenter
+    nat = {n["kind"]: n for n in block["nat"]}
+    assert list(nat) == ["one_to_one", "port_forward", "one_to_many", "interface_pat"]
+    assert (nat["one_to_one"]["original_dst"], nat["one_to_one"]["translated_dst"]) == (
+        ["198.51.100.150/32"],
+        ["10.0.10.80/32"],
+    )
+    assert nat["one_to_one"]["dst_interface"] == "wan1" and nat["one_to_one"]["allowed_src"] == ["any"]
+    forward = nat["port_forward"]
+    assert (forward["original_dst"], forward["original_port"], forward["translated_port"]) == (
+        ["interface"],
+        "2222",
+        "22",
+    )
+    assert forward["allowed_src"] == ["203.0.113.0/24"] and forward["dst_interface"] == ""
+    assert nat["one_to_many"]["translated_dst"] == ["10.0.10.25/32"] and nat["one_to_many"]["protocol"] == "tcp"
+    inbound = _policy(block, "Inbound firewall rules")["rules"]
+    assert (inbound[0]["action"], inbound[0]["dst"], inbound[0]["dst_ports"]) == ("allow", ["10.0.10.80/32"], "443")
+    assert inbound[1]["action"] == "deny"
+    # AutoVPN routes back to every spoke, and the subnets of the non-Meraki peer.
+    routes = {(r["prefix"], r["kind"]): r for r in block["routes"]}
+    assert routes[("10.2.10.0/24", "autovpn")]["peer"] == {"site": "N_1002"}
+    assert routes[("172.31.0.0/16", "vpn3p")]["peer"] == {"org_node": "p:AWS-Transit"}
+    assert routes[("10.0.10.0/24", "connected")]["interface"] == "VLAN 10"
+    assert "Routes learned by BGP" in block["not_collected"]
+
+
+def test_snapshot_l3_switch_and_vpn_peer_carry_forwarding(snapshot):
+    switch = _node_of(snapshot, "d:Q2SW-0000-0001")["forwarding"]
+    assert switch["interfaces"][0]["name"] == "Servers" and switch["interfaces"][0]["kind"] == "svi"
+    assert switch["interfaces"][0]["ip"] == "10.0.100.1"
+    assert [(r["prefix"], r["kind"], r["next_hop"]) for r in switch["routes"]] == [
+        ("10.0.100.0/24", "connected", ""),
+        ("0.0.0.0/0", "static", "10.0.0.1"),
+    ]
+    acl = switch["policies"][0]
+    assert (acl["name"], acl["kind"], acl["applies"], acl["stateful"]) == ("Switch ACL", "acl", "any", False)
+    assert acl["rules"][0]["src"] == ["10.0.30.0/24"] and acl["rules"][0]["dst"] == ["10.0.100.0/24"]
+    assert switch["not_collected"] == []
+    # A switch with no SVI forwards nothing of its own.
+    assert "forwarding" not in _node_of(snapshot, "d:Q2SW-0002-0001")
+    peer = _node_of(snapshot, "p:AWS-Transit")["forwarding"]
+    assert [(r["prefix"], r["kind"]) for r in peer["routes"]] == [("172.31.0.0/16", "connected")]
+    assert peer["not_collected"] == ["Everything behind a non-Meraki VPN peer"]
+
+
+def test_snapshot_lists_the_new_rule_sets_in_the_details(snapshot):
+    hub = next(s for s in snapshot["sites"] if s["name"] == "HQ-DataCenter")
+    titles = {s["title"] for s in hub["sections"]}
+    assert {"Inbound firewall rules", "Site-to-site VPN firewall rules", "1:Many NAT"} <= titles
+    assert _section(hub, "1:Many NAT")["rows"][0][:3] == ["198.51.100.151", "internet1", "Mail relay"]
+    vpn_rules = _section(hub, "Site-to-site VPN firewall rules")
+    assert vpn_rules["rows"][0][-1] == "Block guest VLANs over the VPN"
+    switch = _node_of(snapshot, "d:Q2SW-0000-0001")
+    assert _section(switch, "Switch ACL")["rows"][0][-1] == "Guest to servers"
+
+
+def test_forwarding_of_a_capture_without_the_new_collections():
+    raw = build_sample_raw(branches=1)
+    raw["org"].pop("vpn_firewall")
+    for detail in raw["networks_detail"].values():
+        for key in ("inbound_firewall", "one_to_many_nat", "switch_acl", "l3_firewall"):
+            detail.pop(key, None)
+    detail = raw["networks_detail"]["N_1002"]
+    detail["vlans"][0]["vpnNatSubnet"] = "172.30.10.0/24"
+    # A warm spare forwards like the primary.
+    primary = next(d for d in raw["devices"] if d["serial"] == "Q2MX-0002-0001")
+    raw["devices"].append(dict(primary, serial="Q2MX-0002-0002", name="spare"))
+    snap = build_snapshot(raw)
+    block = _node_of(snap, "d:Q2MX-0002-0001")["forwarding"]
+    assert block["policies"] == []
+    assert block["not_collected"] == [
+        "Layer 3 firewall rules",
+        "Site-to-site VPN firewall rules",
+        "Inbound firewall rules",
+        "1:Many NAT",
+        "Layer 7 firewall rules",
+        "Group policies",
+    ]
+    vpn_nat = next(n for n in block["nat"] if n["kind"] == "vpn_nat")
+    assert (vpn_nat["original_src"], vpn_nat["translated_src"]) == (["10.2.10.0/24"], ["172.30.10.0/24"])
+    assert _node_of(snap, "d:Q2MX-0002-0002")["forwarding"] == block
+    assert _node_of(snap, "d:Q2SW-0000-0001")["forwarding"]["not_collected"] == ["Switch ACL"]
+
+
+@pytest.mark.asyncio
+async def test_collect_organization_reads_the_rule_sets_best_effort():
+    payloads = {
+        "organizations/1": {"id": "1", "name": "Acme"},
+        "organizations/1/networks": [{"id": "N1", "name": "HQ", "productTypes": ["appliance", "switch"]}],
+        "organizations/1/devices": [],
+        "organizations/1/appliance/vpn/vpnFirewallRules": {"rules": [{"policy": "allow", "srcCidr": "Any"}]},
+        "networks/N1/appliance/firewall/oneToManyNatRules": {"rules": [{"publicIp": "198.51.100.5", "portRules": []}]},
+        "networks/N1/switch/accessControlLists": {"rules": [{"policy": "deny", "srcCidr": "10.0.0.0/8"}]},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path.removeprefix("/api/v1/")
+        if path in payloads:
+            return httpx.Response(200, json=payloads[path])
+        if path == "networks/N1/appliance/firewall/inboundFirewallRules":
+            return httpx.Response(403, json={"errors": ["forbidden"]})
+        return httpx.Response(404, json={"errors": ["n/a"]})
+
+    async with _client(handler, max_retries=0) as client:
+        raw = await collect_organization(client, "1")
+    assert raw["org"]["vpn_firewall"]["rules"][0]["policy"] == "allow"
+    detail = raw["networks_detail"]["N1"]
+    assert detail["one_to_many_nat"]["rules"][0]["publicIp"] == "198.51.100.5"
+    assert detail["switch_acl"]["rules"][0]["policy"] == "deny"
+    # Denied: recorded, and the rest of the build goes on.
+    assert "inbound_firewall" not in detail
+    assert [(e["path"], e["status"]) for e in raw["errors"]] == [
+        ("networks/N1/appliance/firewall/inboundFirewallRules", 403)
+    ]
+
+    # Without the firewall and switch routing options none of them is asked for.
+    async with _client(handler, max_retries=0) as client:
+        bare = await collect_organization(client, "1", {"include_firewall": False, "include_switch_routing": False})
+    assert "vpn_firewall" not in bare["org"] and bare["errors"] == []
+    assert not {"one_to_many_nat", "inbound_firewall", "switch_acl"} & set(bare["networks_detail"]["N1"])

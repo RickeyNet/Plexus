@@ -5,7 +5,7 @@ What runs what:
 * :func:`refresh_software` gathers the software version of every device
   Plexus knows - inventory hosts (what SNMP or SSH stored on the host) and
   the devices of the latest topology collection of every Meraki
-  organization, Cato account and AnyConnect FMC (firmware, Socket version,
+  organization, Cato account and Cisco FMC (firmware, Socket version,
   FTD software, FMC version) - stores them as the tracked set, records
   version changes, then matches every device against the advisories and
   opens, reopens or resolves alerts. It runs on a schedule, after each

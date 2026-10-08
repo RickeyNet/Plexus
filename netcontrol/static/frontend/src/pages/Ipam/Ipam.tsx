@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 
 import { PageHelp } from '@/components/PageHelp';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { cloudProviderTerms } from '@/lib/cloudProviderTerms';
 
 import {
   type DhcpServer,
@@ -204,7 +205,7 @@ export function Ipam() {
       <PageHelp
         pageKey="ipam"
         title="Address Space, Utilization & Conflicts"
-        text="Review inferred on-prem subnets, discovered cloud CIDRs, the subnets of your Meraki, Cato and AnyConnect topology collections, duplicate IPs and ranges two sites both claim in one place so addressing issues are visible before they become outages."
+        text="Review inferred on-prem subnets, discovered cloud CIDRs, the subnets of your Meraki, Cato and Cisco FMC topology collections, duplicate IPs and ranges two sites both claim in one place so addressing issues are visible before they become outages."
       />
 
       <div style={{ marginBottom: '1rem' }}>
@@ -312,7 +313,7 @@ export function Ipam() {
                               <span
                                 className="badge badge-warning"
                                 style={{ fontSize: '0.7em', marginRight: '0.3rem' }}
-                                title="This range is also held by another site or VPC; see Overlapping Ranges"
+                                title="This range is also held by another site or cloud network; see Overlapping Ranges"
                               >
                                 {item.overlap_count} overlap{item.overlap_count === 1 ? '' : 's'}
                               </span>
@@ -568,8 +569,9 @@ export function Ipam() {
               <div>
                 Topology subnets come from the latest collection of each
                 Meraki organization (VLANs, single LANs, switch SVIs, static
-                routes), Cato account (network ranges) and AnyConnect FMC
-                (address pools) on the Topology page. Overlapping Ranges lists
+                routes), Cato account (network ranges) and Cisco FMC
+                (connected subnets, static routes and VPN address pools) on the
+                Topology page. Overlapping Ranges lists
                 the ranges two sites, or a site and a VPC, both hold; static
                 routes are listed but not checked, since a hub's summary route
                 legitimately covers its spokes.
@@ -622,7 +624,8 @@ interface OverlapsCardProps {
 }
 
 function OverlapSide({ side }: { side: IpamOverlapSide }) {
-  const where = side.source === 'cloud' ? 'VPC' : 'site';
+  const cloudNetwork = side.provider ? cloudProviderTerms(side.provider).network : 'cloud network';
+  const where = side.source === 'cloud' ? cloudNetwork : 'site';
   return (
     <div style={{ lineHeight: 1.45 }}>
       <strong style={{ color: 'var(--text-primary)' }}>{side.subnet}</strong>
@@ -644,7 +647,7 @@ function OverlapsCard({ overlaps, total, vpnTotal, includeTopology }: OverlapsCa
       {overlaps.length === 0 ? (
         <p className="text-muted" style={{ margin: 0 }}>
           {includeTopology
-            ? 'No range is held by two sites or VPCs.'
+            ? 'No range is held by two sites or cloud networks.'
             : 'Topology subnets are excluded; include them to check sites against each other.'}
         </p>
       ) : (

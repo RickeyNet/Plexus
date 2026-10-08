@@ -89,6 +89,8 @@ _SOURCE_NAME = {
     "cato": "Cato API",
     "aws": "AWS API",
     "azure": "Azure API",
+    "fmc": "FMC API",
+    # The FMC's provider key of earlier releases.
     "anyconnect": "FMC API",
 }
 
@@ -318,6 +320,13 @@ def merge_meraki_into_graph(
         return graph_id
 
     def collapse(target: dict, ref: dict, x: float, y: float) -> Any:
+        # Every further snapshot node this graph node also is: path tracing
+        # finds its routes and the Topology page its subnets through them.
+        own = target.get("meraki")
+        if own is not None and (own["org_ref"], own["node_id"]) != (ref["org_ref"], ref["node_id"]):
+            target.setdefault("also_refs", []).append(
+                {"org_ref": ref["org_ref"], "node_id": ref["node_id"], "provider": ref["provider"]}
+            )
         target.setdefault("meraki", ref)
         target.setdefault("x", x)
         target.setdefault("y", y)
@@ -756,6 +765,8 @@ def graph_to_snapshot(
             # instance) is shown under that integration too.
             if g.get("also_providers"):
                 nodes[node_id]["also_providers"] = list(g["also_providers"])
+            if g.get("also_refs"):
+                nodes[node_id]["also_refs"] = [dict(r) for r in g["also_refs"]]
         if g.get("source") == "meraki":
             nodes[node_id]["integration_only"] = True
 

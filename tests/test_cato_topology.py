@@ -669,3 +669,58 @@ def test_export_draws_a_pop_over_its_only_user_too():
     by_label = {n["label"]: n for n in export["nodes"]}
     pop, user = by_label["PoP Hong Kong"], by_label["Aaron Chen"]
     assert user["site"] == pop["site"] and user["y"] > pop["y"]
+
+
+# ── Forwarding data (path tracing) ───────────────────────────────────────────
+
+
+def _fwd(snapshot: dict, node_id: str) -> dict:
+    return next(n for n in snapshot["nodes"] if n["id"] == node_id)["forwarding"]
+
+
+def test_sockets_pops_and_the_cloud_carry_forwarding_hops(snapshot):
+    socket = _fwd(snapshot, "d:5003")  # Branch-Cleveland, on PoP New York
+    assert set(socket) == {"version", "interfaces", "routes", "vpn", "policies", "nat", "not_collected"}
+    assert [(i["name"], i["kind"], i["ip"], i["cidr"]) for i in socket["interfaces"]] == [
+        ("WAN 01", "wan", "198.51.100.30", ""),
+        ("Users (10.60.20.0/24)", "lan", "", "10.60.20.0/24"),
+    ]
+    assert [(r["prefix"], r["kind"], r["peer"]) for r in socket["routes"]] == [
+        ("10.60.20.0/24", "connected", None),
+        ("0.0.0.0/0", "default", {"org_node": "pop:New York"}),
+    ]
+    assert socket["policies"] == [] and socket["nat"] == [] and socket["vpn"] == []
+    assert socket["not_collected"] == ["WAN firewall rules", "Internet firewall rules"]
+
+    # A PoP routes its own sites to their Socket, the rest over the backbone.
+    pop = {r["prefix"]: r for r in _fwd(snapshot, "pop:New York")["routes"]}
+    assert pop["10.60.20.0/24"]["peer"] == {"org_node": "d:5003"} and pop["10.60.20.0/24"]["kind"] == "static"
+    assert pop["10.50.10.0/24"]["peer"] == {"org_node": CLOUD_NODE_ID}
+    assert pop["10.41.0.11/32"]["peer"] == {"org_node": "cato:user:9001"}
+    assert pop["0.0.0.0/0"]["kind"] == "default" and pop["0.0.0.0/0"]["peer"] == {"org_node": CLOUD_NODE_ID}
+
+    # The Cato Cloud hands each range to the PoP of its site.
+    cloud = _fwd(snapshot, CLOUD_NODE_ID)
+    by_prefix = {r["prefix"]: r for r in cloud["routes"]}
+    assert by_prefix["10.50.10.0/24"]["peer"] == {"org_node": "pop:Ashburn"}
+    assert by_prefix["10.60.20.0/24"]["peer"] == {"org_node": "pop:New York"}
+    assert by_prefix["172.31.0.0/16"]["peer"] == {"org_node": "pop:Ashburn"}
+    # A site that is down is reached over its down tunnel to the cloud.
+    assert by_prefix["10.61.20.0/24"]["peer"] == {"org_node": "d:5004"}
+    assert _fwd(snapshot, "d:5004")["routes"][-1]["peer"] == {"org_node": CLOUD_NODE_ID}
+    assert cloud["not_collected"] == ["WAN firewall rules"]
+
+
+def test_ha_sockets_ipsec_sites_and_users_carry_forwarding_too(snapshot):
+    assert _fwd(snapshot, "d:5002")["routes"] == _fwd(snapshot, "d:5001")["routes"]
+    ipsec = _fwd(snapshot, "s:1004")
+    assert [(r["prefix"], r["peer"]) for r in ipsec["routes"]] == [
+        ("172.31.0.0/16", None),
+        ("0.0.0.0/0", {"org_node": "pop:Ashburn"}),
+    ]
+    user = _fwd(snapshot, "cato:user:9002")
+    assert user["interfaces"][0]["ip"] == "10.41.0.12" and user["interfaces"][0]["kind"] == "tunnel"
+    assert [(r["prefix"], r["kind"]) for r in user["routes"]] == [
+        ("10.41.0.12/32", "connected"),
+        ("0.0.0.0/0", "default"),
+    ]

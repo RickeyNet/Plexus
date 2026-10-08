@@ -48,6 +48,9 @@ describe('source filter', () => {
   it('lists the providers on the map in a stable order', () => {
     expect(mapProviders(DATA)).toEqual(['meraki', 'cato', 'aws']);
     expect(mapProviders(undefined)).toEqual([]);
+    // A Cisco FMC sits between Cato and the clouds.
+    const withFmc = { ...DATA, nodes: [...DATA.nodes, node('ftd1', 'fmc')] } as TopologyData;
+    expect(mapProviders(withFmc)).toEqual(['meraki', 'cato', 'fmc', 'aws']);
   });
 
   it('keeps only one provider and the links inside it', () => {

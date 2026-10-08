@@ -26,13 +26,13 @@ import {
 import { useDialogs } from '@/components/DialogProvider-context';
 import { Modal } from '@/components/Modal';
 
-import { AnyConnectFormModal } from './AnyConnectFormModal';
 import { CatoAccountFormModal } from './CatoAccountFormModal';
+import { FmcFormModal } from './FmcFormModal';
 import { MerakiOrgFormModal } from './MerakiOrgFormModal';
-import { providerLabel } from './helpers';
+import { providerLabel, providerScopeName } from './helpers';
 import {
-  FALLBACK_ANYCONNECT_OPTIONS,
   FALLBACK_CATO_OPTIONS,
+  FALLBACK_FMC_OPTIONS,
   FALLBACK_OPTIONS,
   buildStatusBadge,
   describeProgress,
@@ -43,7 +43,7 @@ import {
 const CLOUD_ACCOUNTS_PATH = '/cloud-visibility';
 
 /** Sources that are entries of the organization dialog (collected as a tracked build). */
-const ORG_SOURCE_TYPES = new Set<string>(['meraki', 'cato', 'anyconnect']);
+const ORG_SOURCE_TYPES = new Set<string>(['meraki', 'cato', 'fmc']);
 
 function isOrgSource(source: TopologySource): boolean {
   return ORG_SOURCE_TYPES.has(source.type);
@@ -253,7 +253,7 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
     <Modal isOpen={isOpen} onClose={onClose} title="Map Sources" size="large">
       <p className="text-muted" style={{ marginTop: 0, fontSize: '0.9rem' }}>
         Everything on the map comes from one of these sources. Inventory devices are scanned for their CDP
-        and LLDP neighbors. Meraki organizations, Cato accounts, AnyConnect FMCs, AWS accounts and Azure
+        and LLDP neighbors. Meraki organizations, Cato accounts, Cisco FMCs, AWS accounts and Azure
         subscriptions are read from their APIs.
         Collect again whenever you want a fresh picture.
       </p>
@@ -306,10 +306,10 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
             <button
               type="button"
               className="btn btn-secondary btn-sm"
-              title="A Cisco FMC whose FTDs terminate AnyConnect / Secure Client remote access VPN"
-              onClick={() => handleAdd('anyconnect')}
+              title="A Cisco Secure Firewall Management Center and the FTDs it manages"
+              onClick={() => handleAdd('fmc')}
             >
-              AnyConnect (FMC)
+              Cisco FMC
             </button>
             <Link className="btn btn-secondary btn-sm" to={CLOUD_ACCOUNTS_PATH} onClick={onClose}>
               AWS Account
@@ -328,7 +328,7 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
         <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '0.75rem' }}>
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
             <strong>Load demo data for:</strong>
-            {(['meraki', 'cato', 'anyconnect', 'aws', 'azure'] as const).map((provider) => (
+            {(['meraki', 'cato', 'fmc', 'aws', 'azure'] as const).map((provider) => (
               <button
                 key={provider}
                 type="button"
@@ -403,7 +403,7 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
         <BuildOutcome job={job.data} onDismiss={() => setJobId(null)} onShowWarnings={setWarningsFor} />
       )}
 
-      <h4 style={{ margin: '1.25rem 0 0.5rem' }}>Collection history (Meraki, Cato and AnyConnect)</h4>
+      <h4 style={{ margin: '1.25rem 0 0.5rem' }}>Collection history (Meraki, Cato and Cisco FMC)</h4>
       {snapshots.isPending && <div className="loading">Loading history…</div>}
       {snapshots.error && (
         <div className="error">
@@ -436,10 +436,10 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
           }}
         />
       )}
-      {(adding ?? editing?.provider) === 'anyconnect' && (
-        <AnyConnectFormModal
+      {(adding ?? editing?.provider) === 'fmc' && (
+        <FmcFormModal
           existing={editing}
-          defaultOptions={orgs.data?.anyconnect_default_options ?? FALLBACK_ANYCONNECT_OPTIONS}
+          defaultOptions={orgs.data?.fmc_default_options ?? FALLBACK_FMC_OPTIONS}
           onClose={() => {
             setAdding(null);
             setEditing(null);
@@ -474,12 +474,12 @@ function collectTitle(source: TopologySource, isAdmin: boolean): string {
       : 'No devices in inventory';
   }
   if (isCloudSource(source)) {
-    const cloud = providerLabel(source.type);
-    if (!source.enabled) return 'This account is disabled in Cloud Visibility';
-    return isAdmin ? `Discover this ${cloud} account and update the map` : `${cloud} discovery needs an administrator`;
+    const scopeName = providerScopeName(source.type);
+    if (!source.enabled) return `This ${scopeName} is disabled in Cloud Visibility`;
+    return isAdmin ? `Discover this ${scopeName} and update the map` : `${providerLabel(source.type)} discovery needs an administrator`;
   }
   if (source.can_collect) return `Collect from ${providerLabel(source.type)} and update the map`;
-  return source.type === 'anyconnect' ? 'No password stored' : 'No API key stored';
+  return source.type === 'fmc' ? 'No password stored' : 'No API key stored';
 }
 
 function SourceRow({
@@ -509,7 +509,7 @@ function SourceRow({
         message:
           visible && source.type === 'meraki'
             ? `${result.message}\n\nVisible organizations:\n${visible}`
-            : visible && source.type === 'anyconnect'
+            : visible && source.type === 'fmc'
               ? `${result.message}\n\nDomains the account can see:\n${visible}`
               : result.message,
         variant: result.ok ? undefined : 'error',
@@ -617,7 +617,7 @@ function SourceRow({
                 disabled={!source.can_collect || validate.isPending}
                 onClick={handleValidate}
               >
-                {validate.isPending ? '…' : source.type === 'anyconnect' ? 'Test Login' : 'Test Key'}
+                {validate.isPending ? '…' : source.type === 'fmc' ? 'Test Login' : 'Test Key'}
               </button>
               <button
                 type="button"
@@ -689,8 +689,8 @@ function BuildProgress({ job, provider }: { job: MerakiBuildJob | undefined; pro
       <div className="text-muted" style={{ fontSize: '0.85em', marginTop: '0.35rem' }}>
         {provider === 'cato'
           ? 'A Cato account takes a few queries, sent slowly to stay inside the Cato API rate limits.'
-          : provider === 'anyconnect'
-            ? 'An FMC takes a few requests per headend, sent slowly to stay inside the FMC limit of 120 requests per minute.'
+          : provider === 'fmc'
+            ? 'An FMC takes several requests per device (interfaces, routing, NAT, policies), sent slowly to stay inside the FMC limit of 120 requests per minute.'
             : 'Large organizations take several minutes: Meraki limits the API to 10 requests per second.'}{' '}
         You can close this dialog; the map updates when collection finishes.
       </div>

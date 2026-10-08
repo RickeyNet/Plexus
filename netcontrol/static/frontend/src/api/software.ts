@@ -15,13 +15,13 @@ export interface SoftwareDevice {
   id: number;
   /** `host:<id>` for an inventory host, `<provider>:<org_ref>:<serial>` for a topology device. */
   device_key: string;
-  source: 'inventory' | 'meraki' | 'cato' | 'anyconnect' | string;
+  source: 'inventory' | 'meraki' | 'cato' | 'fmc' | string;
   org_ref: number;
   host_id: number | null;
   name: string;
   model: string;
   serial: string;
-  /** Inventory group, Meraki network, Cato site or AnyConnect headend. */
+  /** Inventory group, Meraki network, Cato site or Cisco FMC box (device, HA pair or cluster). */
   site: string;
   org_name: string;
   platform: string;

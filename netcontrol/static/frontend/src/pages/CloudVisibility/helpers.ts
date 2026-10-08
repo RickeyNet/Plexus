@@ -1,9 +1,33 @@
+import type { CloudPullResult } from '@/api/cloud';
+import { capitalize, cloudProviderTerms } from '@/lib/cloudProviderTerms';
+
 export function providerLabel(provider?: string | null): string {
-  const p = String(provider ?? '').toLowerCase();
-  if (p === 'aws') return 'AWS';
-  if (p === 'azure') return 'Azure';
-  if (p === 'gcp') return 'GCP';
-  return provider ?? '';
+  return cloudProviderTerms(provider).label;
+}
+
+export interface PullOutcome {
+  kind: 'success' | 'error';
+  text: string;
+}
+
+/**
+ * The message for a flow or traffic pull. A pull that answers ok: false or
+ * lists errors still returns 200, so the result has to be read, not just awaited.
+ */
+export function pullOutcome(
+  label: string,
+  result: CloudPullResult | undefined,
+  successText?: (ingested: string) => string,
+): PullOutcome {
+  const ingested = Number(result?.ingested ?? result?.total_ingested ?? 0).toLocaleString();
+  const errors = Array.isArray(result?.errors) ? result.errors : [];
+  if (result?.ok === false || errors.length) {
+    return {
+      kind: 'error',
+      text: `${label} finished with ${errors.length || 'unknown'} error(s); ingested ${ingested}. ${errors.slice(0, 3).map(String).join(' | ')}`,
+    };
+  }
+  return { kind: 'success', text: successText ? successText(ingested) : `${label} complete: ${ingested} ingested` };
 }
 
 export function formatCount(value: unknown): string {
@@ -48,6 +72,95 @@ export function topologyLabel(value: unknown): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ');
+}
+
+const CONNECTION_LABELS: Record<string, string> = {
+  route_next_hop: 'Next hop',
+  transit_gateway_attachment: 'Transit Gateway',
+  direct_connect: 'Direct Connect',
+  direct_connect_gateway: 'Direct Connect',
+  direct_connect_virtual_interface: 'Direct Connect virtual interface',
+  direct_connect_gateway_association: 'Direct Connect gateway association',
+  internet_gateway_attachment: 'Internet gateway',
+  nat_gateway_attachment: 'NAT gateway',
+  customer_gateway_attachment: 'Customer gateway',
+  vpn_attachment: 'VPN attachment',
+  vpn: 'VPN',
+  expressroute: 'ExpressRoute',
+  expressroute_gateway: 'ExpressRoute',
+  virtual_network_gateway_attachment: 'VNet gateway',
+  ipsec: 'IPsec tunnel',
+  vnet2vnet: 'VNet-to-VNet',
+  vpnclient: 'Point-to-site VPN',
+  gateway_connection: 'Gateway connection',
+  router_attachment: 'Cloud Router',
+  interconnect_attachment: 'Interconnect',
+  vnet_peering: 'VNet peering',
+  vpc_peering: 'VPC peering',
+  security_boundary: 'Security boundary',
+};
+
+/** A connection type as the provider names it. */
+export function topologyConnectionLabel(
+  connectionType: string | undefined,
+  provider?: string | null,
+  metadata?: Record<string, unknown> | null,
+): string {
+  const n = String(connectionType ?? '').toLowerCase();
+  const pk = String(provider ?? '').toLowerCase();
+  if (n === 'route_table_association') {
+    return metadata && typeof metadata === 'object' && metadata.subnet_name ? 'Attached subnet' : 'Attached network';
+  }
+  if (n === 'peering') return pk === 'azure' ? 'VNet peering' : pk === 'aws' || pk === 'gcp' ? 'VPC peering' : 'Peering';
+  if (n === 'vpn_tunnel') return pk === 'gcp' ? 'HA VPN tunnel' : 'VPN tunnel';
+  if (n === 'vpn_gateway_attachment') return pk === 'gcp' ? 'HA VPN gateway' : 'Virtual private gateway';
+  return CONNECTION_LABELS[n] ?? topologyLabel(n || connectionType || 'link');
+}
+
+const RESOURCE_TYPE_LABELS: Record<string, string> = {
+  vnet: 'VNet',
+  subnet: 'Subnet',
+  vm: 'Virtual machine',
+  route_table: 'Route table',
+  route_entry: 'Route entry',
+  transit_gateway: 'Transit Gateway',
+  transit_gateway_route_table: 'Transit Gateway route table',
+  direct_connect: 'Direct Connect',
+  direct_connect_gateway: 'Direct Connect gateway',
+  internet_gateway: 'Internet gateway',
+  nat_gateway: 'NAT gateway',
+  vpn_gateway: 'Virtual private gateway',
+  vpn_connection: 'Site-to-site VPN',
+  customer_gateway: 'Customer gateway',
+  expressroute: 'ExpressRoute',
+  virtual_network_gateway: 'Virtual network gateway',
+  local_network_gateway: 'Local network gateway',
+  azure_firewall: 'Azure Firewall',
+  cloud_router: 'Cloud Router',
+  ha_vpn_gateway: 'HA VPN gateway',
+  vpn_tunnel: 'VPN tunnel',
+  security_group: 'Security group',
+  network_acl: 'Network ACL',
+  network_security_group: 'Network security group',
+  firewall_rule: 'Firewall rule',
+  firewall_policy: 'Firewall policy',
+  public_ip: 'Public IP',
+  network_interface: 'Network interface',
+  collection_warning: 'Collection warning',
+};
+
+/** A resource type as the provider names it. */
+export function topologyResourceTypeLabel(t: string | undefined, provider?: string | null): string {
+  const n = String(t ?? '').toLowerCase();
+  const pk = String(provider ?? '').toLowerCase();
+  if (n === 'vpc') return pk === 'gcp' ? 'VPC network' : 'VPC';
+  if (n === 'instance') {
+    if (pk === 'aws' || pk === 'azure' || pk === 'gcp') return capitalize(cloudProviderTerms(pk).compute);
+    return 'Instance';
+  }
+  if (n === 'interconnect_attachment') return pk === 'gcp' ? 'Interconnect attachment' : 'Interconnect';
+  if (n === 'internet_gateway' && pk === 'gcp') return 'Default internet gateway';
+  return RESOURCE_TYPE_LABELS[n] ?? topologyLabel(n || t || 'resource');
 }
 
 export function isRouteResourceType(t?: string): boolean {

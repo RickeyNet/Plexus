@@ -268,6 +268,10 @@ def _version_row(node: dict) -> str:
     return ""
 
 
+# A Cisco FMC snapshot; "anyconnect" is its provider key of earlier releases.
+_FMC_PROVIDERS = ("fmc", "anyconnect")
+
+
 def _snapshot_platform(provider: str, node: dict) -> str:
     kind = str(node.get("kind") or "")
     model = str(node.get("model") or "").lower()
@@ -275,7 +279,7 @@ def _snapshot_platform(provider: str, node: dict) -> str:
         return _MERAKI_KIND_PLATFORMS.get(kind, "meraki")
     if provider == "cato":
         return "cato-socket"
-    if provider == "anyconnect":
+    if provider in _FMC_PROVIDERS:
         if "management center" in model:
             return "fmc"
         return "asa" if "adaptive security" in model else "ftd"
@@ -286,13 +290,13 @@ def snapshot_devices(snapshot: dict, provider: str) -> list[dict[str, Any]]:
     """The devices of a topology snapshot that report a software version.
 
     Meraki devices carry their firmware, Cato Sockets their Socket version,
-    AnyConnect headends their FTD software and the FMC its own version; all
+    the FTDs of a Cisco FMC their software and the FMC its own version; all
     are read from the detail sections the snapshot already holds, so
     snapshots collected before the tracker existed are covered. Nodes
     without a version (a Cato IPsec site, a PoP, a users node) are skipped.
     AWS snapshots carry no software versions.
     """
-    if provider not in ("meraki", "cato", "anyconnect"):
+    if provider not in ("meraki", "cato", *_FMC_PROVIDERS):
         return []
     site_names = {s.get("id"): s.get("name") or s.get("id") or "" for s in snapshot.get("sites") or []}
     devices: list[dict[str, Any]] = []
