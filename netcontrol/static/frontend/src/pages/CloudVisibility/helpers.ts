@@ -1,4 +1,4 @@
-import type { CloudPullResult } from '@/api/cloud';
+import type { CloudDiscoverResult, CloudProvider, CloudPullResult } from '@/api/cloud';
 import { capitalize, cloudProviderTerms } from '@/lib/cloudProviderTerms';
 
 export function providerLabel(provider?: string | null): string {
@@ -28,6 +28,63 @@ export function pullOutcome(
     };
   }
   return { kind: 'success', text: successText ? successText(ingested) : `${label} complete: ${ingested} ingested` };
+}
+
+/**
+ * The message for a discovery run that succeeded. A run that found nothing
+ * (wrong region scope, missing permissions, empty account) is reported as an
+ * error so it is not mistaken for a good run. `regionsLabel` is null for
+ * providers without regions.
+ */
+export function discoverOutcome(
+  accountName: string,
+  result: CloudDiscoverResult | undefined,
+  regionsLabel: string | null,
+): PullOutcome {
+  const summary = result?.summary;
+  if (!summary || typeof summary !== 'object') {
+    return { kind: 'success', text: `${accountName}: ${result?.message ?? 'Discovery completed'}` };
+  }
+  const resources = Number(summary.resources ?? 0);
+  if (!resources) {
+    const where = regionsLabel ? ` in ${regionsLabel}` : '';
+    const check = regionsLabel ? "the region scope and the credentials' permissions" : "the credentials' permissions";
+    return {
+      kind: 'error',
+      text: `${accountName}: discovery completed but found no resources${where}. Check ${check}.`,
+    };
+  }
+  const plural = (n: number, word: string) => `${formatCount(n)} ${word}${n === 1 ? '' : 's'}`;
+  const counts = `${plural(resources, 'resource')} and ${plural(Number(summary.connections ?? 0), 'connection')}`;
+  return {
+    kind: 'success',
+    text: `${accountName}: discovery completed, ${counts}${regionsLabel ? ` (${regionsLabel})` : ''}`,
+  };
+}
+
+/** The provider's capability entry, or undefined when it is not (yet) known. */
+function findProvider(provider: string, providers: CloudProvider[]): CloudProvider | undefined {
+  const key = String(provider ?? '').toLowerCase();
+  return providers.find((p) => String(p.id ?? '').toLowerCase() === key);
+}
+
+/** The packages the server lacks for live reads of this provider. */
+export function liveMissingDependencies(provider: string, providers: CloudProvider[]): string[] {
+  const entry = findProvider(provider, providers);
+  if (!entry || entry.live_supported !== false) return [];
+  return Array.isArray(entry.missing_dependencies) ? entry.missing_dependencies : [];
+}
+
+/**
+ * Why live reads cannot run for this provider, or null when they can. An
+ * unknown provider or a capability list that has not loaded does not block.
+ */
+export function liveUnavailableReason(provider: string, providers: CloudProvider[]): string | null {
+  const entry = findProvider(provider, providers);
+  if (!entry || entry.live_supported !== false) return null;
+  const missing = liveMissingDependencies(provider, providers);
+  const need = missing.length ? `need ${missing.join(', ')}` : 'are not available';
+  return `Live reads ${need} on the Plexus server. Install with: pip install -r requirements-cloud.txt`;
 }
 
 export function formatCount(value: unknown): string {
