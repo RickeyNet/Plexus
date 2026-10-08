@@ -7,10 +7,7 @@ import {
   useCreateCloudAccount,
   useDeleteCloudAccount,
   useDiscoverCloudAccount,
-  useTriggerCloudFlowPull,
-  useTriggerCloudTrafficPull,
   useUpdateCloudAccount,
-  useValidateCloudAccount,
 } from '@/api/cloud';
 import { Modal } from '@/components/Modal';
 import { capitalize, cloudProviderTerms } from '@/lib/cloudProviderTerms';
@@ -29,7 +26,6 @@ import {
   liveMissingDependencies,
   liveUnavailableReason,
   providerLabel,
-  pullOutcome,
 } from './helpers';
 
 interface Props {
@@ -73,11 +69,8 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
   const [confirmDiscover, setConfirmDiscover] = useState<CloudAccount | null>(null);
   const [actionMsg, setActionMsg] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
 
-  const validate = useValidateCloudAccount();
   const discover = useDiscoverCloudAccount();
   const deleteAcct = useDeleteCloudAccount();
-  const flowPull = useTriggerCloudFlowPull();
-  const trafficPull = useTriggerCloudTrafficPull();
 
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
@@ -101,22 +94,6 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
     if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
     flashTimerRef.current = null;
     setActionMsg(null);
-  }
-
-  async function runValidate(a: CloudAccount) {
-    try {
-      const result = await validate.mutateAsync(a.id);
-      if (result?.valid) {
-        showMsg('success', `${a.name}: ${result.message ?? 'Validation succeeded'}`);
-      } else {
-        let detail = result?.message ?? 'Validation failed';
-        const missing = Array.isArray(result?.missing_dependencies) ? result.missing_dependencies : [];
-        if (result?.status === 'unavailable' && missing.length) detail += ` (missing: ${missing.join(', ')})`;
-        showMsg('error', `${a.name}: ${detail}`);
-      }
-    } catch (e) {
-      showMsg('error', `${a.name}: ${(e as Error).message}`);
-    }
   }
 
   async function runDiscover(a: CloudAccount) {
@@ -145,28 +122,6 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
       showMsg('error', `Delete failed: ${(e as Error).message}`);
     } finally {
       setConfirmDelete(null);
-    }
-  }
-
-  async function runFlowPull(a: CloudAccount) {
-    const terms = cloudProviderTerms(a.provider);
-    try {
-      const r = await flowPull.mutateAsync(a.id);
-      const outcome = pullOutcome(`${a.name}: ${terms.flowLogs} pull`, r, (n) => `${a.name}: ${n} ${terms.flowLogs} records ingested`);
-      showMsg(outcome.kind, outcome.text);
-    } catch (e) {
-      showMsg('error', `${a.name}: ${terms.flowLogs} pull failed: ${(e as Error).message}`);
-    }
-  }
-
-  async function runTrafficPull(a: CloudAccount) {
-    const terms = cloudProviderTerms(a.provider);
-    try {
-      const r = await trafficPull.mutateAsync(a.id);
-      const outcome = pullOutcome(`${a.name}: traffic metrics pull`, r, (n) => `${a.name}: ${n} ${terms.metricsSource} samples ingested`);
-      showMsg(outcome.kind, outcome.text);
-    } catch (e) {
-      showMsg('error', `${a.name}: traffic metrics pull failed: ${(e as Error).message}`);
     }
   }
 
@@ -319,35 +274,11 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
                     <td style={{ whiteSpace: 'nowrap' }}>
                       <button
                         className="btn btn-sm btn-secondary"
-                        onClick={() => runValidate(a)}
-                        disabled={Boolean(liveBlocked) || validate.isPending}
-                        title={liveBlocked ?? undefined}
-                      >
-                        Validate
-                      </button>{' '}
-                      <button
-                        className="btn btn-sm btn-secondary"
                         onClick={() => setConfirmDiscover(a)}
                         disabled={Boolean(liveBlocked) || discover.isPending}
                         title={liveBlocked ?? undefined}
                       >
                         Discover
-                      </button>{' '}
-                      <button
-                        className="btn btn-sm btn-secondary"
-                        onClick={() => runFlowPull(a)}
-                        disabled={Boolean(liveBlocked) || flowPull.isPending}
-                        title={liveBlocked ?? undefined}
-                      >
-                        Pull Flow
-                      </button>{' '}
-                      <button
-                        className="btn btn-sm btn-secondary"
-                        onClick={() => runTrafficPull(a)}
-                        disabled={Boolean(liveBlocked) || trafficPull.isPending}
-                        title={liveBlocked ?? undefined}
-                      >
-                        Pull Traffic
                       </button>{' '}
                       <button className="btn btn-sm btn-secondary" onClick={() => setModal({ account: a, provider: a.provider })}>
                         Edit
