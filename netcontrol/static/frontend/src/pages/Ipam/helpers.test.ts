@@ -53,7 +53,7 @@ describe('formatSubnetPreview', () => {
 describe('providerLabel', () => {
   it('names the topology and cloud providers', () => {
     expect(providerLabel('meraki')).toBe('Meraki');
-    expect(providerLabel('anyconnect')).toBe('AnyConnect');
+    expect(providerLabel('fmc')).toBe('Cisco FMC');
     expect(providerLabel('aws')).toBe('AWS');
     expect(providerLabel('other')).toBe('other');
     expect(providerLabel(undefined)).toBe('');

@@ -37,8 +37,8 @@ export function sourceLabel(source: string | null | undefined): string {
       return 'Meraki';
     case 'cato':
       return 'Cato';
-    case 'anyconnect':
-      return 'AnyConnect';
+    case 'fmc':
+      return 'Cisco FMC';
     case 'manual':
       return 'Manual';
     case 'import':
@@ -132,4 +132,15 @@ export function parseAdvisoryImport(text: string): ParsedImport {
 export function barWidth(count: number, max: number): number {
   if (max <= 0 || count <= 0) return 0;
   return Math.max(4, Math.round((count / max) * 100));
+}
+
+export type SoftwareTab = 'versions' | 'upgrades';
+
+/**
+ * Tab of the Software page a path opens: `/software/upgrades` opens Upgrades,
+ * anything else Versions. (The upgrade tool's old path `/upgrades` is
+ * redirected to `/software/upgrades` by the router.)
+ */
+export function softwareTabFromPath(pathname: string): SoftwareTab {
+  return pathname === '/software/upgrades' ? 'upgrades' : 'versions';
 }

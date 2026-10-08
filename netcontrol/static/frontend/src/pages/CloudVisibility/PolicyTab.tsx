@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 
 import { useCloudPolicyEffective, useCloudPolicyRules } from '@/api/cloud';
 import type { CloudFilterState } from './CloudVisibility';
-import { formatCount, providerLabel } from './helpers';
+import { formatCount, providerLabel, topologyResourceTypeLabel } from './helpers';
 
 interface Props {
   filter: CloudFilterState;
@@ -141,7 +141,7 @@ export function PolicyTab({ filter }: Props) {
                         <tr key={row.resource_uid} style={bg ? { background: bg } : undefined}>
                           <td>
                             {row.resource_name || row.resource_uid || '-'}
-                            <div className="text-muted" style={{ fontSize: '0.75rem' }}>{row.resource_type ?? ''}</div>
+                            <div className="text-muted" style={{ fontSize: '0.75rem' }}>{topologyResourceTypeLabel(row.resource_type, row.provider)}</div>
                           </td>
                           <td>{providerLabel(row.provider)}</td>
                           <td>{formatCount(row.rule_count)}</td>
@@ -172,7 +172,7 @@ export function PolicyTab({ filter }: Props) {
           {rulesQuery.error && <div style={{ color: 'var(--danger)' }}>Error: {(rulesQuery.error as Error).message}</div>}
           {!rules.length ? (
             <div className="card" style={{ padding: '1rem' }}>
-              <p className="text-muted" style={{ margin: 0 }}>No cloud policy rules discovered yet. Run discovery for a cloud account to populate security-group, NSG, or firewall rules.</p>
+              <p className="text-muted" style={{ margin: 0 }}>No policy rules yet. Run discovery on an account, subscription or project to read its security groups, NSGs or firewall rules.</p>
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>

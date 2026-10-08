@@ -8,6 +8,7 @@ import {
   severityBadgeClass,
   severityLabel,
   severityRank,
+  softwareTabFromPath,
   sourceLabel,
 } from './helpers';
 
@@ -33,7 +34,7 @@ describe('sourceLabel', () => {
   it('names the sources and passes unknown ones through', () => {
     expect(sourceLabel('inventory')).toBe('Inventory');
     expect(sourceLabel('cisco-psirt')).toBe('Cisco PSIRT');
-    expect(sourceLabel('anyconnect')).toBe('AnyConnect');
+    expect(sourceLabel('fmc')).toBe('Cisco FMC');
     expect(sourceLabel('custom')).toBe('custom');
     expect(sourceLabel(null)).toBe('');
   });
@@ -89,6 +90,18 @@ describe('parseAdvisoryImport', () => {
     expect(adv.severity).toBe('critical');
     expect(adv.enabled).toBe(true);
     expect(adv.cves).toEqual(['CVE-2026-0001']);
+  });
+});
+
+describe('softwareTabFromPath', () => {
+  it('opens Upgrades on its path', () => {
+    expect(softwareTabFromPath('/software/upgrades')).toBe('upgrades');
+  });
+
+  it('opens Versions on any other path', () => {
+    expect(softwareTabFromPath('/software')).toBe('versions');
+    expect(softwareTabFromPath('/software/other')).toBe('versions');
+    expect(softwareTabFromPath('')).toBe('versions');
   });
 });
 

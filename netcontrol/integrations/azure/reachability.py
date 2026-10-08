@@ -813,6 +813,28 @@ class Reachability:
             )
         return steps
 
+    # ── One direction at a time (path tracing) ─────────────────────────────
+    # Thin public wrappers over the walk ``check`` uses, so a trace across
+    # other devices can hand a flow into Azure and get it back at the gateway
+    # it leaves by. None of them changes the index.
+
+    def walk(
+        self, origin: dict, target: dict, direction: str, steps: list[dict], carriers: dict[str, Any] | None = None
+    ) -> dict:
+        """Follow ``target``'s address from ``origin``'s subnet, appending the
+        steps to ``steps``: ``delivered``, ``exit`` (with the gateway) or ``stop``."""
+        return self._walk(origin, target, direction, steps, carriers)
+
+    def enter(self, left: dict, target: dict, direction: str, initiating: bool, steps: list[dict]) -> None:
+        """Traffic from outside Azure towards ``target`` through the gateway ``left`` names."""
+        self._enter(left, target, direction, initiating, steps)
+
+    def nsg(self, place: dict, peer: dict, outbound: bool, protocol: str, ports: tuple[int, int] | None) -> list[dict]:
+        """The network security group steps at ``place`` (subnet, then interface)."""
+        return self._security_groups(place, peer, outbound, protocol, ports)
+
+    security_groups = nsg
+
     # ── The check ──────────────────────────────────────────────────────────
 
     def check(

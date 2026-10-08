@@ -182,7 +182,7 @@ class FmcClient:
             resp = await self._ensure_client().post(
                 TOKEN_PATH,
                 auth=(self._username, self._password),
-                headers={"Accept": "application/json", "User-Agent": "Plexus-AnyConnectTopology/1.0"},
+                headers={"Accept": "application/json", "User-Agent": "Plexus-FmcTopology/1.0"},
             )
         except httpx.HTTPError:
             raise FmcApiError("Could not reach the FMC") from None
@@ -236,7 +236,7 @@ class FmcClient:
                 headers={
                     "X-auth-access-token": self._token or "",
                     "Accept": "application/json",
-                    "User-Agent": "Plexus-AnyConnectTopology/1.0",
+                    "User-Agent": "Plexus-FmcTopology/1.0",
                 },
             )
         except httpx.HTTPError:

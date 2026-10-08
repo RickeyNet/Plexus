@@ -10,6 +10,8 @@ import { apiRequest } from './client';
 
 export interface CloudProvider {
   id: string;
+  name?: string;
+  focus_constructs?: string[];
   live_supported?: boolean;
   missing_dependencies?: string[];
 }

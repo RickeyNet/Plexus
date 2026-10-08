@@ -45,6 +45,8 @@ export interface ProviderForm {
   methods: AuthMethod[];
   /** Optional sync settings; every field may be left empty. */
   sections: AuthSection[];
+  /** Additional settings example: a key the collectors read that has no field above. */
+  extraPlaceholder: string;
 }
 
 // Temporary credentials (access key starting with ASIA) come with a session
@@ -129,6 +131,7 @@ const AWS: ProviderForm = {
       ],
     },
   ],
+  extraPlaceholder: '{"role_session_name": "plexus"}',
 };
 
 const AZURE: ProviderForm = {
@@ -180,6 +183,8 @@ const AZURE: ProviderForm = {
       ],
     },
   ],
+  // Every key the Azure collector and pullers read has a field above.
+  extraPlaceholder: '{"key": "value"}',
 };
 
 const GCP: ProviderForm = {
@@ -214,6 +219,7 @@ const GCP: ProviderForm = {
       ],
     },
   ],
+  extraPlaceholder: '{"service_account_file": "/etc/plexus/gcp.json"}',
 };
 
 const OTHER: ProviderForm = {
@@ -230,6 +236,7 @@ const OTHER: ProviderForm = {
     },
   ],
   sections: [],
+  extraPlaceholder: '{"key": "value"}',
 };
 
 /** The region scope that reads every region enabled for the account. */
@@ -246,6 +253,13 @@ export function providerForm(provider: string): ProviderForm {
   if (n === 'azure') return AZURE;
   if (n === 'gcp') return GCP;
   return OTHER;
+}
+
+/** The form label of an auth_config key, for messages that name a missing setting. */
+export function fieldLabel(form: ProviderForm, key: string): string {
+  if (form.identifierKey && key === form.identifierKey) return form.identifierLabel;
+  const fields = [...form.methods.flatMap((m) => m.fields), ...form.sections.flatMap((s) => s.fields)];
+  return fields.find((f) => f.key === key)?.label ?? key;
 }
 
 export function authMethod(form: ProviderForm, key: string): AuthMethod {

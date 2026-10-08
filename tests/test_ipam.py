@@ -240,10 +240,10 @@ def _topology_rows() -> list[dict]:
         row(7, "meraki", "Hub", "192.168.0.0/16", "static", "Static route Branches", True),
         # A Cato site range that overlaps the inventory's cloud VPC, not in VPN terms.
         row(8, "cato", "Denver", "10.0.0.128/25", "range", "Users (VLAN 20)", True),
-        # An AnyConnect pool on its own.
-        row(9, "anyconnect", "ftdv-1", "10.250.0.0/22", "pool", "VPN pool Corp", None),
+        # A Cisco FMC remote access VPN pool on its own.
+        row(9, "fmc", "ftdv-1", "10.250.0.0/22", "pool", "VPN pool Corp", None),
         # Not a network.
-        row(9, "anyconnect", "ftdv-1", "garbage", "pool", "VPN pool Broken", None),
+        row(9, "fmc", "ftdv-1", "garbage", "pool", "VPN pool Broken", None),
     ]
 
 
@@ -325,6 +325,7 @@ def test_ipam_overview_lists_topology_subnets_and_overlaps(tmp_path, monkeypatch
         assert subnet_map["192.168.0.0/16"]["overlap_count"] == 0
         assert subnet_map["10.0.0.128/25"]["vlan_ids"] == ["20"] and subnet_map["10.0.0.128/25"]["overlap_count"] == 1
         assert subnet_map["10.250.0.0/22"]["source_types"] == ["topology"]
+        assert subnet_map["10.250.0.0/22"]["topology_providers"] == ["fmc"]
         assert "garbage" not in subnet_map
         # Cloud rows now carry their resource names and VPC ranges are checked.
         vpc = subnet_map["10.0.0.0/24"]

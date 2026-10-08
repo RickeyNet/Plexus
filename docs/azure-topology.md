@@ -6,7 +6,7 @@ peerings, VPN and ExpressRoute gateways, local network gateways,
 site-to-site VPN connections, ExpressRoute circuits, NAT gateways, Azure
 Firewalls and the virtual machines that forward traffic appear on the same
 map as the devices Plexus discovers itself and any Meraki organizations,
-Cato accounts, AnyConnect FMCs and AWS accounts. They are covered by the same
+Cato accounts, Cisco FMCs and AWS accounts. They are covered by the same
 search box and Path Mode, and are included in the HTML export.
 
 Azure works the way AWS does on the map; [aws-topology.md](aws-topology.md)
@@ -25,8 +25,8 @@ describes the shared behavior. This guide covers what is different.
    Visibility → Accounts** when you are done.
 2. **Install the Azure SDK** on the Plexus server, once:
    `pip install -r requirements-cloud.txt`.
-3. **Add the subscription.** Open **Cloud Visibility → Accounts → Add Cloud
-   Account**, choose Azure, enter the **Subscription ID** and pick how Plexus
+3. **Add the subscription.** Open **Cloud Visibility → Accounts → Add Azure
+   subscription**, enter the **Subscription ID** and pick how Plexus
    signs in: a service principal (tenant ID, client ID, client secret) or
    the managed identity / environment credentials of the Plexus server.
 4. **Validate**, then **Discover**. When discovery finishes the subscription
@@ -97,10 +97,12 @@ circuit lists its provider, bandwidth and peerings.
 ## The Azure check of a path
 
 When both ends of a path are subnets or IP addresses and at least one is in
-a VNet, Plexus reports **Azure allows it**, **Azure blocks it**, **Azure
-allows part of it** or **Azure check incomplete**, with every step. The
-**Traffic** box works as for AWS. A path between AWS and Azure gets both
-checks.
+a VNet, Plexus checks the flow against what discovery collected. Between two
+subnets or addresses the path is traced hop by hop across every device on
+the map, and the hops in Azure list these checks as their items; see
+[path-trace.md](path-trace.md). The **Traffic** box works as for AWS.
+`GET /api/meraki/azure/reachability` still answers the Azure part on its
+own.
 
 - **Effective routes.** Plexus rebuilds what Azure applies to the source
   subnet: the VNet's address space, the address space of every connected

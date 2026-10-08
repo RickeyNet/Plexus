@@ -21,8 +21,8 @@ import netcontrol.app as app_module
 import netcontrol.routes.software as software_routes
 import pytest
 import routes.database as db_module
-from netcontrol.integrations.anyconnect.normalize import build_snapshot as build_anyconnect_snapshot
-from netcontrol.integrations.anyconnect.sample import build_sample_raw as build_anyconnect_raw
+from netcontrol.integrations.fmc.normalize import build_snapshot as build_fmc_snapshot
+from netcontrol.integrations.fmc.sample import build_sample_raw as build_fmc_raw
 from netcontrol.integrations.meraki.normalize import build_snapshot as build_meraki_snapshot
 from netcontrol.integrations.meraki.sample import build_sample_raw as build_meraki_raw
 from netcontrol.integrations.software.psirt import OS_TYPES, PsirtApiError, PsirtClient, normalize_advisory
@@ -118,7 +118,7 @@ def test_classify_host_tells_ios_xe_from_ios_and_knows_the_drivers():
     assert classify_host("cisco_ios", "", "") == ("ios", "")
 
 
-def test_snapshot_devices_read_firmware_from_meraki_and_software_from_anyconnect():
+def test_snapshot_devices_read_firmware_from_meraki_and_software_from_fmc():
     meraki = build_meraki_snapshot(build_meraki_raw())
     devices = snapshot_devices(meraki, "meraki")
     assert devices and all(d["serial"] and d["version"] for d in devices)
@@ -127,13 +127,23 @@ def test_snapshot_devices_read_firmware_from_meraki_and_software_from_anyconnect
     mx = next(d for d in devices if d["platform"] == "meraki-mx")
     assert mx["raw_version"] == "wired-18-2-11" and mx["version"] == "18.2.11" and mx["site"]
 
-    anyconnect = build_anyconnect_snapshot(build_anyconnect_raw())
-    devices = snapshot_devices(anyconnect, "anyconnect")
+    fmc = build_fmc_snapshot(build_fmc_raw())
+    devices = snapshot_devices(fmc, "fmc")
     platforms = sorted(d["platform"] for d in devices)
-    assert platforms == ["fmc", "ftd", "ftd"]
+    # Every FTD (both HA members, both cluster units, the branch) and the FMC.
+    assert platforms == ["fmc", "ftd", "ftd", "ftd", "ftd", "ftd"]
     assert {d["version"] for d in devices} == {"7.4.1"}
-    # Users nodes, WAN stubs and the AWS snapshot carry no versions.
-    assert snapshot_devices(anyconnect, "aws") == []
+    assert sorted(d["name"] for d in devices if d["platform"] == "ftd") == [
+        "ftd-branch-dc",
+        "ftd-dc-unit-1",
+        "ftd-dc-unit-2",
+        "ftdv-ravpn-1",
+        "ftdv-ravpn-2",
+    ]
+    # The provider key of earlier releases reads the same snapshot.
+    assert snapshot_devices(fmc, "anyconnect") == devices
+    # Users nodes, WAN stubs, VPN peers and the AWS snapshot carry no versions.
+    assert snapshot_devices(fmc, "aws") == []
 
 
 def test_advisory_matching_respects_platform_product_and_enabled():
@@ -395,12 +405,12 @@ def _device(overview: dict, name: str) -> dict:
 def test_api_overview_tracks_inventory_hosts_and_topology_devices(api):
     _seed_hosts()
     assert api.post("/api/meraki/sample?provider=meraki").status_code == 201
-    assert api.post("/api/meraki/sample?provider=anyconnect").status_code == 201
+    assert api.post("/api/meraki/sample?provider=fmc").status_code == 201
 
     overview = api.get("/api/software/overview").json()
     summary = overview["summary"]
     assert summary["sources"]["inventory"] == 2  # the host without a version is not tracked
-    assert summary["sources"]["meraki"] > 0 and summary["sources"]["anyconnect"] == 3
+    assert summary["sources"]["meraki"] > 0 and summary["sources"]["fmc"] == 6
     assert summary["devices"] == sum(summary["sources"].values())
     assert summary["open_alerts"] == 0 and summary["advisories"] == 0 and summary["last_refresh_at"]
 
@@ -413,7 +423,7 @@ def test_api_overview_tracks_inventory_hosts_and_topology_devices(api):
 
     platforms = {p["platform"]: p for p in overview["platforms"]}
     assert platforms["meraki-mx"]["newest_version"] == "18.2.11"
-    assert platforms["ftd"]["device_count"] == 2 and platforms["fmc"]["device_count"] == 1
+    assert platforms["ftd"]["device_count"] == 5 and platforms["fmc"]["device_count"] == 1
     assert {p["key"] for p in overview["platform_catalog"]} == set(PLATFORMS)
     mx = next(d for d in overview["devices"] if d["platform"] == "meraki-mx")
     assert mx["device_key"].startswith("meraki:") and mx["raw_version"] == "wired-18-2-11"
@@ -424,8 +434,9 @@ def test_api_overview_tracks_inventory_hosts_and_topology_devices(api):
     assert [d["name"] for d in filtered["devices"]] == ["core-1"]
     assert filtered["summary"]["devices"] == summary["devices"]
     assert len(filtered["platforms"]) == len(overview["platforms"])
-    by_source = api.get("/api/software/overview?source=anyconnect").json()
-    assert {d["source"] for d in by_source["devices"]} == {"anyconnect"}
+    by_source = api.get("/api/software/overview?source=fmc").json()
+    assert {d["source"] for d in by_source["devices"]} == {"fmc"}
+    assert all(d["device_key"].startswith("fmc:") for d in by_source["devices"])
 
 
 def test_api_refresh_records_version_changes_and_history(api):
@@ -663,7 +674,7 @@ def _wait(api, job_id: str) -> dict:
 
 def test_api_psirt_sync_stores_advisories_for_the_tracked_versions(api, monkeypatch):
     _seed_hosts()
-    assert api.post("/api/meraki/sample?provider=anyconnect").status_code == 201
+    assert api.post("/api/meraki/sample?provider=fmc").status_code == 201
     api.get("/api/software/overview")
     fake = _FakePsirt()
     monkeypatch.setattr(software_routes, "_PSIRT_TRANSPORT", httpx.MockTransport(fake.handler))

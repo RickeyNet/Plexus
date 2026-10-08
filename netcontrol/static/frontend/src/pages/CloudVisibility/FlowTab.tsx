@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import {
+  type CloudPullResult,
   useCloudFlowSummary,
   useCloudFlowSyncConfig,
   useCloudFlowSyncCursors,
@@ -10,7 +11,7 @@ import {
   useUpdateCloudFlowSyncConfig,
 } from '@/api/cloud';
 import type { CloudFilterState } from './CloudVisibility';
-import { formatBytes, formatCount, formatTimestamp } from './helpers';
+import { formatBytes, formatCount, formatTimestamp, pullOutcome } from './helpers';
 import { SyncControls } from './SyncControls';
 
 interface Props {
@@ -59,14 +60,9 @@ export function FlowTab({ filter }: Props) {
     }, 8000);
   }
 
-  function pullOutcome(label: string, r: { ok?: boolean; ingested?: number; total_ingested?: number; errors?: unknown[] } | undefined) {
-    const ingested = Number(r?.ingested ?? r?.total_ingested ?? 0).toLocaleString();
-    const errors = Array.isArray(r?.errors) ? r?.errors : [];
-    if (r?.ok === false || errors.length) {
-      flash('error', `${label} finished with ${errors.length || 'unknown'} error(s); ingested ${ingested}. ${errors.slice(0, 3).map(String).join(' | ')}`);
-    } else {
-      flash('success', `${label} complete: ${ingested} ingested`);
-    }
+  function showPull(label: string, r: CloudPullResult | undefined) {
+    const outcome = pullOutcome(label, r);
+    flash(outcome.kind, outcome.text);
   }
 
   return (
@@ -122,7 +118,7 @@ export function FlowTab({ filter }: Props) {
         }}
         onPullAll={async () => {
           try {
-            pullOutcome('Cloud flow pull', await triggerPull.mutateAsync(null));
+            showPull('Cloud flow pull', await triggerPull.mutateAsync(null));
           } catch (e) {
             flash('error', `Cloud flow pull failed: ${(e as Error).message}`);
           }
@@ -130,7 +126,7 @@ export function FlowTab({ filter }: Props) {
         onPullSelected={async () => {
           if (!filter.accountId) return;
           try {
-            pullOutcome('Cloud flow pull (selected account)', await triggerPull.mutateAsync(filter.accountId));
+            showPull('Cloud flow pull (selected account)', await triggerPull.mutateAsync(filter.accountId));
           } catch (e) {
             flash('error', `Cloud flow pull failed: ${(e as Error).message}`);
           }

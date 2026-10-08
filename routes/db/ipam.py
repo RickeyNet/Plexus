@@ -210,10 +210,10 @@ async def get_ipam_overview(
     topology sources.
 
     ``topology_subnets`` are the rows of the topology subnet index (Meraki
-    VLANs, single LANs, SVIs and static routes, Cato network ranges,
-    AnyConnect address pools), each with ``org_ref``, ``org_name`` and
-    ``provider``; ``None`` leaves topology out. They have no VRF and are keyed
-    with vrf="", like cloud resources.
+    VLANs, single LANs, SVIs and static routes, Cato network ranges, FMC
+    connected subnets, static routes and VPN address pools), each with
+    ``org_ref``, ``org_name`` and ``provider``; ``None`` leaves topology out.
+    They have no VRF and are keyed with vrf="", like cloud resources.
     """
     db = await _dbcore.get_db(read_only=True)
     try:
@@ -302,7 +302,7 @@ async def get_ipam_overview(
                         }
                     )
 
-        # ── 2b. Topology subnets (Meraki, Cato, AnyConnect; vrf="") ────────
+        # ── 2b. Topology subnets (Meraki, Cato, Cisco FMC; vrf="") ─────────
         topology_keys: set[tuple[str, str]] = set()
         subnet_topology_count: dict[tuple[str, str], int] = {}
         topology_names: dict[tuple[str, str], list[str]] = {}
