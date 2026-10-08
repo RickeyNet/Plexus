@@ -14,6 +14,7 @@ import {
   statusMark,
   traceEnds,
   traceHighlight,
+  traceRoute,
   uncheckedTraceNote,
   verdictLabel,
 } from './pathTrace';
@@ -108,6 +109,26 @@ describe('path trace display', () => {
       'Check incomplete',
     ]);
     expect(verdictLabel('allowed').color).toBe('var(--success, #2f9e44)');
+  });
+
+  it('lists the hops of a direction on one line, marking those not ok', () => {
+    const blocked: PathDirection = {
+      verdict: 'blocked',
+      summary: 'Blocked at 1000 - Corp East Backup.',
+      hops: [
+        hop({ node: 1049, label: '1049 - Data Eng HQ' }),
+        hop({ node: 1000, edge: 7, label: '1000 - AWS Corp East VMX-Large' }),
+        hop({ node: 1001, edge: 8, label: '1000 - Corp East Backup', status: 'blocked' }),
+      ],
+    };
+    expect(traceRoute(blocked)).toBe('1049 - Data Eng HQ → 1000 - AWS Corp East VMX-Large → 1000 - Corp East Backup ✕ (3 hops)');
+    // The Internet pseudo hop has no node; one hop is "1 hop".
+    expect(traceRoute({ verdict: 'unknown', summary: '', hops: [hop({ status: 'unknown' })] })).toBe('Internet ? (1 hop)');
+    expect(
+      traceRoute({ verdict: 'allowed', summary: '', hops: [hop({ node: 'mx-a', label: 'Branch 01 MX' }), hop({ label: 'Internet' }), hop({ node: 'hub' })] }),
+    ).toBe('Branch 01 MX → Internet → hub (3 hops)');
+    expect(traceRoute({ verdict: 'unknown', summary: '', hops: [] })).toBeNull();
+    expect(traceRoute(undefined)).toBeNull();
   });
 
   it('shows the matching rule with the rule set', () => {
