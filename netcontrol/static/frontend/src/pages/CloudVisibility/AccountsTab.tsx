@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 
 import {
   type CloudAccount,
+  type CloudProvider,
   useCreateCloudAccount,
   useDeleteCloudAccount,
   useDiscoverCloudAccount,
@@ -22,12 +23,21 @@ import {
   isAllRegions,
   providerForm,
 } from './accountForm';
-import { formatTimestamp, providerLabel, pullOutcome } from './helpers';
+import {
+  discoverOutcome,
+  formatTimestamp,
+  liveMissingDependencies,
+  liveUnavailableReason,
+  providerLabel,
+  pullOutcome,
+} from './helpers';
 
 interface Props {
   accounts: CloudAccount[];
   providerOptions: string[];
   isLoading: boolean;
+  /** Provider capabilities; empty until loaded, which blocks nothing. */
+  providers: CloudProvider[];
 }
 
 const PROVIDER_ORDER = ['aws', 'azure', 'gcp'];
@@ -48,7 +58,16 @@ function joinOr(items: string[]): string {
   return items.length > 1 ? `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}` : (items[0] ?? '');
 }
 
-export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
+/** The regions a discovery run read, worded for a message; null for providers without regions. */
+function discoverRegionsLabel(a: CloudAccount): string | null {
+  if (!providerForm(a.provider).regionHelp) return null;
+  if (isAllRegions(a.region_scope)) return 'all enabled regions';
+  const scope = (a.region_scope ?? '').trim();
+  if (scope) return scope;
+  return String(a.provider ?? '').toLowerCase() === 'aws' ? 'us-east-1' : 'the default region';
+}
+
+export function AccountsTab({ accounts, providerOptions, isLoading, providers: capabilities }: Props) {
   const [modal, setModal] = useState<{ account: CloudAccount | null; provider: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<CloudAccount | null>(null);
   const [confirmDiscover, setConfirmDiscover] = useState<CloudAccount | null>(null);
@@ -68,10 +87,20 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
   function showMsg(kind: 'success' | 'error', text: string) {
     setActionMsg({ kind, text });
     if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
-    flashTimerRef.current = setTimeout(() => {
-      flashTimerRef.current = null;
-      setActionMsg(null);
-    }, 6000);
+    flashTimerRef.current = null;
+    // Errors stay until dismissed; only successes fade on their own.
+    if (kind === 'success') {
+      flashTimerRef.current = setTimeout(() => {
+        flashTimerRef.current = null;
+        setActionMsg(null);
+      }, 6000);
+    }
+  }
+
+  function dismissMsg() {
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = null;
+    setActionMsg(null);
   }
 
   async function runValidate(a: CloudAccount) {
@@ -94,11 +123,12 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
     try {
       const result = await discover.mutateAsync(a.id);
       if (result && result.ok === false) {
-        showMsg('error', `${a.name}: ${result.message ?? 'Discovery failed'}`);
+        showMsg('error', `${a.name}: discovery did not run, nothing was changed – ${result.message ?? 'Discovery failed'}`);
       } else if (result?.fallback_used || result?.effective_mode === 'sample') {
         showMsg('error', `${a.name}: showing SAMPLE data, not live topology (${result?.message ?? ''})`);
       } else {
-        showMsg('success', result?.message ?? 'Discovery completed');
+        const outcome = discoverOutcome(a.name, result, discoverRegionsLabel(a));
+        showMsg(outcome.kind, outcome.text);
       }
     } catch (e) {
       showMsg('error', `Discovery failed: ${(e as Error).message}`);
@@ -161,9 +191,15 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
             padding: '0.6rem 0.85rem',
             marginBottom: '0.6rem',
             borderLeft: `3px solid var(--${actionMsg.kind === 'success' ? 'success' : 'danger'})`,
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '0.5rem',
           }}
         >
-          {actionMsg.text}
+          <span style={{ flex: 1 }}>{actionMsg.text}</span>
+          <button type="button" className="btn btn-sm btn-secondary" aria-label="Dismiss" title="Dismiss" onClick={dismissMsg}>
+            ×
+          </button>
         </div>
       )}
 
@@ -204,6 +240,8 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
                   trafficMissing: (a.sync_readiness?.traffic_missing ?? []).map((key) => fieldLabel(form, key)),
                 };
                 const hasResources = (a.resource_count ?? 0) > 0;
+                const liveBlocked = liveUnavailableReason(a.provider, capabilities);
+                const liveMissing = liveMissingDependencies(a.provider, capabilities);
                 return (
                   <tr key={a.id}>
                     <td>
@@ -279,16 +317,36 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
                       <span className="badge badge-info">{a.connection_count ?? 0} edges</span>
                     </td>
                     <td style={{ whiteSpace: 'nowrap' }}>
-                      <button className="btn btn-sm btn-secondary" onClick={() => runValidate(a)} disabled={validate.isPending}>
+                      <button
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => runValidate(a)}
+                        disabled={Boolean(liveBlocked) || validate.isPending}
+                        title={liveBlocked ?? undefined}
+                      >
                         Validate
                       </button>{' '}
-                      <button className="btn btn-sm btn-secondary" onClick={() => setConfirmDiscover(a)}>
+                      <button
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => setConfirmDiscover(a)}
+                        disabled={Boolean(liveBlocked) || discover.isPending}
+                        title={liveBlocked ?? undefined}
+                      >
                         Discover
                       </button>{' '}
-                      <button className="btn btn-sm btn-secondary" onClick={() => runFlowPull(a)} disabled={flowPull.isPending}>
+                      <button
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => runFlowPull(a)}
+                        disabled={Boolean(liveBlocked) || flowPull.isPending}
+                        title={liveBlocked ?? undefined}
+                      >
                         Pull Flow
                       </button>{' '}
-                      <button className="btn btn-sm btn-secondary" onClick={() => runTrafficPull(a)} disabled={trafficPull.isPending}>
+                      <button
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => runTrafficPull(a)}
+                        disabled={Boolean(liveBlocked) || trafficPull.isPending}
+                        title={liveBlocked ?? undefined}
+                      >
                         Pull Traffic
                       </button>{' '}
                       <button className="btn btn-sm btn-secondary" onClick={() => setModal({ account: a, provider: a.provider })}>
@@ -297,6 +355,16 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
                       <button className="btn btn-sm btn-danger" onClick={() => setConfirmDelete(a)}>
                         Delete
                       </button>
+                      {liveBlocked && (
+                        <small
+                          className="text-muted"
+                          style={{ display: 'block', marginTop: '0.3rem', whiteSpace: 'normal', maxWidth: '24rem' }}
+                          title={liveBlocked}
+                        >
+                          Live {terms.label} reads unavailable
+                          {liveMissing.length ? ` (missing ${liveMissing.join(', ')} on the server)` : ' on the server'}
+                        </small>
+                      )}
                     </td>
                   </tr>
                 );
@@ -341,7 +409,9 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
 
       <Modal
         isOpen={Boolean(confirmDiscover)}
-        onClose={() => setConfirmDiscover(null)}
+        onClose={() => {
+          if (!discover.isPending) setConfirmDiscover(null);
+        }}
         title={`Discover ${discoverTerms.scopeTitle}`}
       >
         {confirmDiscover && (
@@ -352,9 +422,11 @@ export function AccountsTab({ accounts, providerOptions, isLoading }: Props) {
               error is reported.
             </p>
             <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-              <button className="btn btn-secondary" onClick={() => setConfirmDiscover(null)}>Cancel</button>
+              <button className="btn btn-secondary" onClick={() => setConfirmDiscover(null)} disabled={discover.isPending}>
+                Cancel
+              </button>
               <button className="btn btn-primary" onClick={() => runDiscover(confirmDiscover)} disabled={discover.isPending}>
-                Discover
+                {discover.isPending ? 'Discovering…' : 'Discover'}
               </button>
             </div>
           </div>
