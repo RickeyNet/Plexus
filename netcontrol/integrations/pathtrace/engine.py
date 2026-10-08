@@ -475,8 +475,35 @@ class Tracer:
                 return adapter, node_id
         return None
 
-    def _cloud_holding(self, address: Any) -> tuple[CloudAdapter, str] | None:
-        """The cloud whose collected subnets hold ``address``, and the graph node of its VPC or VNet."""
+    def _home_network(self, gid: Any) -> tuple[CloudAdapter, str] | None:
+        """The cloud and VPC or VNet snapshot node of a device that is also an
+        instance in it (a Meraki vMX, an FTDv, a Cato vSocket)."""
+        for org_ref, node_id, _provider in self.refs_of.get(gid, []):
+            adapter = self.clouds.get(org_ref)
+            if adapter is None or not node_id.startswith(("i:", "vm:")):
+                continue
+            site = str((self.snap_nodes.get((org_ref, node_id)) or {}).get("site") or "")
+            network = self.gateways.get((org_ref, site), "")
+            if adapter.network_id(network):
+                return adapter, network
+        return None
+
+    def _cloud_holding(self, address: Any, near: Any = None) -> tuple[CloudAdapter, str] | None:
+        """The cloud whose collected subnets hold ``address``, and the graph
+        node of its VPC or VNet. For ``near``, a device that is an instance
+        in a cloud, its own VPC or VNet is looked in first: a range that
+        several VPCs use (every default VPC has the same subnets) is
+        ambiguous anywhere else."""
+        home = self._home_network(near) if near is not None else None
+        if home is not None:
+            adapter, network = home
+            try:
+                place = adapter.locate(address, adapter.network_id(network))
+            except ValueError:
+                place = {"subnet": None}
+            gid = self.graph_of.get((adapter.org_ref, network))
+            if place["subnet"] is not None and gid is not None:
+                return adapter, gid
         for adapter in self.clouds.values():
             try:
                 place = adapter.locate(address)
@@ -864,7 +891,7 @@ class Tracer:
                 prefix = net(route.get("prefix"))
                 egress = next((i for i in interfaces if net(i.get("cidr")) == prefix), None)
             name = (egress or {}).get("name") or route.get("interface") or route["prefix"]
-            cloud = self._cloud_holding(flow.dst) if self._cloud_of(gid) is None else None
+            cloud = self._cloud_holding(flow.dst, gid) if self._cloud_of(gid) is None else None
             if cloud is not None and cloud[1] != gid:
                 text = f"{route['prefix']} is connected on {name}: {show(flow.dst)} is in {self.label(cloud[1])}, "
                 items.append(item(ROUTE, OK, source, text + "whose router takes it."))
@@ -967,7 +994,7 @@ class Tracer:
                     "via_ip": hop_ip,
                     "egress": egress,
                 }
-            cloud = self._cloud_holding(hop_ip)
+            cloud = self._cloud_holding(hop_ip, gid)
             if cloud is not None and cloud[1] != gid:
                 items.append(item(ROUTE, OK, source, f"{text[:-1]}, the router of {self.label(cloud[1])}."))
                 return {
@@ -1560,6 +1587,7 @@ class Tracer:
             reply=walk.reply,
             first=at.first,
             entry_address=at.address,
+            entry_network=adapter.network_id(node_id),
             src_network=adapter.network_id(node_id) if at.first else "",
             dst_network=dest_hint,
         )

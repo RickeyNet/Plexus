@@ -108,6 +108,7 @@ class CloudAdapter:
         reply: bool,
         first: bool,
         entry_address: str = "",
+        entry_network: str = "",
         src_network: str = "",
         dst_network: str = "",
     ) -> dict[str, Any]:
@@ -115,7 +116,9 @@ class CloudAdapter:
         through the cloud. Returns ``segments`` (``[snapshot node id, items]``
         in order), ``kind`` (``delivered``, ``exit`` or ``stop``) and, for
         an exit, ``next`` (``{"node": id}`` or ``{"internet": True}``) and
-        ``address`` (the address the next device receives the flow on)."""
+        ``address`` (the address the next device receives the flow on).
+        ``entry_network`` is the VPC or VNet ``entry_address`` is in: a
+        range several of them use is otherwise in none."""
         engine = self.engine
         direction = RETURN if reply else FORWARD
         src = self.locate(flow.src, src_network if first else "")
@@ -133,7 +136,7 @@ class CloudAdapter:
         if first and src["subnet"] is not None:
             origin = src
         elif entry_address:
-            place = self.locate(entry_address)
+            place = self.locate(entry_address, entry_network)
             if place["subnet"] is not None:
                 origin = place
 
