@@ -21,7 +21,8 @@ stream live job output - all through a REST API with WebSocket support.
 ## Quick Start
 
 Plexus runs as a Docker compose stack. You need Docker Engine with the compose
-plugin; for production hosts see `DEPLOYMENT.md` and `deploy/DEPLOYMENT.md`.
+plugin; for production hosts see `deploy/DEPLOYMENT.md` (Docker deployment
+guide) and `deploy/FIREWALL.md` (host firewall rules).
 
 `docker-compose.yml` runs three services: `plexus` (the app, built from the
 `Dockerfile` with the cloud SDKs included), `postgres` (PostgreSQL 16, data in
@@ -86,8 +87,8 @@ For day-to-day development that matches the deployed stack, see
 
 **Operators**
 
-- [DEPLOYMENT.md](DEPLOYMENT.md) - production deployment notes (firewalls, storage, systemd)
-- [deploy/DEPLOYMENT.md](deploy/DEPLOYMENT.md) - Ubuntu UFW firewall ruleset for the Docker stack
+- [deploy/DEPLOYMENT.md](deploy/DEPLOYMENT.md) - Docker deployment guide (install, .env reference, operations, backups, troubleshooting)
+- [deploy/FIREWALL.md](deploy/FIREWALL.md) - host firewall rules (UFW, DOCKER-USER) for the Docker stack
 - [deploy/airgap/README.md](deploy/airgap/README.md) - air-gapped deployment on an offline VM
 - [DATA_RETENTION.md](DATA_RETENTION.md) - how long each class of data is kept
 - [RADIUS_CONFIGURATION_GUIDE.md](RADIUS_CONFIGURATION_GUIDE.md) - RADIUS login setup
