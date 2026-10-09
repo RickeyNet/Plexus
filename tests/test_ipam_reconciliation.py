@@ -95,16 +95,13 @@ def test_compute_drifts_ignores_invalid_ip_entries():
 
 
 @pytest.fixture
-def ipam_db(tmp_path, monkeypatch):
-    db_path = str(tmp_path / "ipam_reconcile.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+def ipam_db(monkeypatch):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-reconcile")
 
     async def _prepare():
         await db_module.init_db()
 
     asyncio.run(_prepare())
-    return db_path
 
 
 def _seed_source_and_inventory():

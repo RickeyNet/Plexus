@@ -19,7 +19,6 @@ DESCRIPTION = "Add compliance_scan_results(host_id, profile_id, id) index"
 
 
 async def up(db) -> None:
-    # Identical SQL on SQLite and Postgres.
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_compliance_scan_results_host_profile_id "
         "ON compliance_scan_results(host_id, profile_id, id)"

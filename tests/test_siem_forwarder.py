@@ -395,11 +395,9 @@ async def test_severity_floor_drops_lower_priority_events():
 # ── add_audit_event hook ─────────────────────────────────────────────────────
 
 
-async def test_audit_event_hook_fires(tmp_path, monkeypatch):
+async def test_audit_event_hook_fires():
     """Registering a hook with set_audit_event_hook causes it to receive
     every newly inserted audit row."""
-    db_path = str(tmp_path / "siem-hook.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
     await db_module.init_db()
 
     captured: list[dict] = []
@@ -422,10 +420,8 @@ async def test_audit_event_hook_fires(tmp_path, monkeypatch):
         db_module.set_audit_event_hook(None)
 
 
-async def test_audit_event_hook_failure_does_not_break_insert(tmp_path, monkeypatch):
+async def test_audit_event_hook_failure_does_not_break_insert():
     """A raising hook must not propagate or prevent the audit insert."""
-    db_path = str(tmp_path / "siem-hook-fail.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
     await db_module.init_db()
 
     async def boom(_event):

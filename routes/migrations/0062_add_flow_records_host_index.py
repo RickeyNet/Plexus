@@ -15,7 +15,6 @@ DESCRIPTION = "Add flow_records(host_id, received_at) index"
 
 
 async def up(db) -> None:
-    # Identical SQL on SQLite and Postgres.
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_flow_host_received ON flow_records(host_id, received_at)"
     )

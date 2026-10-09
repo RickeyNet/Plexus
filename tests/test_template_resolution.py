@@ -23,9 +23,7 @@ import routes.database as db_module
 
 
 @pytest.fixture
-async def db(tmp_path, monkeypatch):
-    db_path = str(tmp_path / "template_resolution.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+async def db():
     await db_module.init_db()
     return db_module
 

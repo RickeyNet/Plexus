@@ -20,12 +20,9 @@ chain happens via :func:`routes.database.verify_audit_chain`.
 from __future__ import annotations
 
 import hashlib
-import os
 
 VERSION = 37
 DESCRIPTION = "Hash-chain audit_events and block UPDATE/DELETE via triggers"
-
-DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
 
 
 def _canonical_row_bytes(
@@ -69,67 +66,7 @@ def _compute_row_hash(
     ).hexdigest()
 
 
-# ── SQLite ──────────────────────────────────────────────────────────────────
-
-
-async def _column_exists_sqlite(db, table: str, column: str) -> bool:
-    cursor = await db.execute(f"PRAGMA table_info({table})")
-    rows = await cursor.fetchall()
-    return any(r[1] == column for r in rows)
-
-
-async def _up_sqlite(db) -> None:
-    if not await _column_exists_sqlite(db, "audit_events", "prev_hash"):
-        await db.execute("ALTER TABLE audit_events ADD COLUMN prev_hash TEXT NOT NULL DEFAULT ''")
-    if not await _column_exists_sqlite(db, "audit_events", "row_hash"):
-        await db.execute("ALTER TABLE audit_events ADD COLUMN row_hash TEXT NOT NULL DEFAULT ''")
-
-    # Backfill in id ASC so each prev_hash matches the previous row_hash.
-    cursor = await db.execute(
-        'SELECT id, timestamp, category, action, "user", detail, correlation_id FROM audit_events ORDER BY id ASC'
-    )
-    rows = await cursor.fetchall()
-
-    prev_hash = ""
-    for row in rows:
-        row_id, ts, cat, act, usr, det, corr = (row[0], row[1], row[2], row[3], row[4], row[5], row[6])
-        rh = _compute_row_hash(ts, cat, act, usr, det, corr, prev_hash)
-        await db.execute(
-            "UPDATE audit_events SET prev_hash = ?, row_hash = ? WHERE id = ?",
-            (prev_hash, rh, row_id),
-        )
-        prev_hash = rh
-
-    # Triggers - block UPDATE and DELETE outright. Inserts are allowed.
-    await db.execute("DROP TRIGGER IF EXISTS audit_events_no_update")
-    await db.execute(
-        """
-        CREATE TRIGGER audit_events_no_update
-        BEFORE UPDATE ON audit_events
-        FOR EACH ROW
-        BEGIN
-            SELECT RAISE(ABORT, 'audit immutable');
-        END
-        """
-    )
-    await db.execute("DROP TRIGGER IF EXISTS audit_events_no_delete")
-    await db.execute(
-        """
-        CREATE TRIGGER audit_events_no_delete
-        BEFORE DELETE ON audit_events
-        FOR EACH ROW
-        BEGIN
-            SELECT RAISE(ABORT, 'audit immutable');
-        END
-        """
-    )
-    await db.commit()
-
-
-# ── Postgres ────────────────────────────────────────────────────────────────
-
-
-async def _up_postgres(db) -> None:
+async def up(db) -> None:
     # IF NOT EXISTS for idempotency on re-runs of partially-applied migrations.
     await db.execute("ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS prev_hash TEXT NOT NULL DEFAULT ''")
     await db.execute("ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS row_hash TEXT NOT NULL DEFAULT ''")
@@ -180,10 +117,3 @@ async def _up_postgres(db) -> None:
         """
     )
     await db.commit()
-
-
-async def up(db) -> None:
-    if DB_ENGINE == "postgres":
-        await _up_postgres(db)
-    else:
-        await _up_sqlite(db)

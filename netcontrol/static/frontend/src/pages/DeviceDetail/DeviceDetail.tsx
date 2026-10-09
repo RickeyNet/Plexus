@@ -285,8 +285,8 @@ function DeviceInfoBar({ poll, hostId }: { poll: MonitoringPoll | null; hostId: 
 }
 
 function LivenessPill({ poll }: { poll: MonitoringPoll }) {
-  // icmp_alive arrives as 0/1 from SQLite or true/false from a JSON-clean
-  // Postgres path - normalise both. `null/undefined` means ICMP didn't run
+  // icmp_alive may arrive as 0/1 (older rows) or true/false - normalise
+  // both. `null/undefined` means ICMP didn't run
   // (icmplib missing, or icmp_enabled=false), so we say nothing rather
   // than imply the host is down.
   const icmpRan = poll.icmp_alive !== undefined && poll.icmp_alive !== null;

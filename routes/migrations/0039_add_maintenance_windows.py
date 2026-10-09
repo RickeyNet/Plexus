@@ -21,68 +21,11 @@ Adds:
 
 from __future__ import annotations
 
-import os
-
 VERSION = 39
 DESCRIPTION = "Maintenance windows + deployment approval gates"
 
-DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
 
-
-async def _column_exists_sqlite(db, table: str, column: str) -> bool:
-    cursor = await db.execute(f"PRAGMA table_info({table})")
-    rows = await cursor.fetchall()
-    return any(row[1] == column for row in rows)
-
-
-async def _up_sqlite(db) -> None:
-    await db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS maintenance_windows (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            name            TEXT    NOT NULL,
-            description     TEXT    NOT NULL DEFAULT '',
-            start_at        TEXT    NOT NULL,
-            end_at          TEXT    NOT NULL,
-            recurrence      TEXT    NOT NULL DEFAULT 'none',
-            weekday_mask    INTEGER NOT NULL DEFAULT 0,
-            policy          TEXT    NOT NULL DEFAULT 'block_outside_window',
-            enabled         INTEGER NOT NULL DEFAULT 1,
-            created_by      TEXT    NOT NULL DEFAULT '',
-            created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
-        )
-        """
-    )
-    await db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS maintenance_window_scopes (
-            window_id   INTEGER NOT NULL REFERENCES maintenance_windows(id) ON DELETE CASCADE,
-            group_id    INTEGER NOT NULL REFERENCES inventory_groups(id) ON DELETE CASCADE,
-            PRIMARY KEY (window_id, group_id)
-        )
-        """
-    )
-    await db.execute("CREATE INDEX IF NOT EXISTS idx_maintenance_scopes_group ON maintenance_window_scopes(group_id)")
-
-    if not await _column_exists_sqlite(db, "inventory_groups", "environment"):
-        await db.execute("ALTER TABLE inventory_groups ADD COLUMN environment TEXT DEFAULT NULL")
-
-    deployment_columns = [
-        ("requires_approval", "INTEGER NOT NULL DEFAULT 0"),
-        ("approval_status", "TEXT    NOT NULL DEFAULT 'not_required'"),
-        ("approval_requested_at", "TEXT"),
-        ("approved_by", "TEXT    DEFAULT ''"),
-        ("approved_at", "TEXT"),
-        ("approval_comment", "TEXT    DEFAULT ''"),
-    ]
-    for col, decl in deployment_columns:
-        if not await _column_exists_sqlite(db, "deployments", col):
-            await db.execute(f"ALTER TABLE deployments ADD COLUMN {col} {decl}")
-
-    await db.commit()
-
-
-async def _up_postgres(db) -> None:
+async def up(db) -> None:
     await db.execute(
         """
         CREATE TABLE IF NOT EXISTS maintenance_windows (
@@ -120,10 +63,3 @@ async def _up_postgres(db) -> None:
     await db.execute("ALTER TABLE deployments ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ")
     await db.execute("ALTER TABLE deployments ADD COLUMN IF NOT EXISTS approval_comment TEXT DEFAULT ''")
     await db.commit()
-
-
-async def up(db) -> None:
-    if DB_ENGINE == "postgres":
-        await _up_postgres(db)
-    else:
-        await _up_sqlite(db)

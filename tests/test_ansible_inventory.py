@@ -9,7 +9,6 @@ import sys
 import netcontrol.app as app_module
 import netcontrol.routes.state as state_module
 import pytest
-import routes.database as db_module
 from fastapi.testclient import TestClient
 from netcontrol.routes.ansible_inventory import (
     _ansible_connection,
@@ -61,10 +60,8 @@ class TestAnsibleConnection:
 
 
 @pytest.fixture
-def ansible_client(monkeypatch, tmp_path):
+def ansible_client(monkeypatch):
     """Create a test client with API token auth and seeded inventory data."""
-    db_path = tmp_path / "ansible-inv-test.db"
-    monkeypatch.setattr(db_module, "DB_PATH", str(db_path))
     monkeypatch.setattr(app_module, "APP_API_TOKEN", "test-ansible-token")
     # Disable rate limiting for test fixture setup
     monkeypatch.setitem(state_module.API_RATE_LIMIT, "enabled", False)

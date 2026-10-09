@@ -12,11 +12,11 @@ directly; this file goes through the FastAPI app with a real session.
 
 from __future__ import annotations
 
-import sqlite3
+import asyncio
 
 import netcontrol.app as app_module
-import pytest
-import routes.database as db_module
+
+import pg_raw
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -49,10 +49,8 @@ class _CsrfClient:
         return self._client.delete(url, **kw)
 
 
-def _auth_client(tmp_path, monkeypatch, request):
+def _auth_client(monkeypatch, request):
     """TestClient with lifespan run, logged in as the bootstrap admin."""
-    db_path = str(tmp_path / "monitoring_api.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-monitoring")
     monkeypatch.setenv("APP_API_TOKEN", "")
     monkeypatch.setenv("APP_REQUIRE_API_TOKEN", "false")
@@ -73,43 +71,43 @@ def _auth_client(tmp_path, monkeypatch, request):
         },
     )
     csrf_token = resp.json().get("csrf_token", "")
-    return _CsrfClient(client, csrf_token), db_path
+    return _CsrfClient(client, csrf_token)
 
 
-def _seed_alert(db_path: str, severity: str = "warning") -> int:
+def _seed_alert(severity: str = "warning") -> int:
     """Insert group → host → alert directly; there is no create-alert API.
 
-    Uses a plain sqlite3 connection against the same file so we don't fight
-    the app's loop-bound aiosqlite singleton from the test thread.
+    Uses a raw autocommit connection on a private loop so the rows are
+    committed before the app (running on the TestClient's loop) reads them.
     """
-    conn = sqlite3.connect(db_path)
-    try:
-        cur = conn.execute("INSERT INTO inventory_groups (name) VALUES ('api-test')")
-        group_id = cur.lastrowid
-        cur = conn.execute(
-            "INSERT INTO hosts (group_id, hostname, ip_address) VALUES (?, 'sw1', '10.9.9.1')",
-            (group_id,),
-        )
-        host_id = cur.lastrowid
-        cur = conn.execute(
-            """INSERT INTO monitoring_alerts
-               (host_id, alert_type, metric, message, severity, original_severity, dedup_key)
-               VALUES (?, 'threshold', 'cpu', 'cpu high', ?, ?, ?)""",
-            (host_id, severity, severity, f"{host_id}:cpu:threshold"),
-        )
-        alert_id = cur.lastrowid
-        conn.commit()
-        return alert_id
-    finally:
-        conn.close()
+
+    async def _seed() -> int:
+        conn = await pg_raw.connect()
+        try:
+            group_id = await conn.fetchval("INSERT INTO inventory_groups (name) VALUES ('api-test') RETURNING id")
+            host_id = await conn.fetchval(
+                "INSERT INTO hosts (group_id, hostname, ip_address) VALUES ($1, 'sw1', '10.9.9.1') RETURNING id",
+                group_id,
+            )
+            return await conn.fetchval(
+                """INSERT INTO monitoring_alerts
+                   (host_id, alert_type, metric, message, severity, original_severity, dedup_key)
+                   VALUES ($1, 'threshold', 'cpu', 'cpu high', $2, $3, $4) RETURNING id""",
+                host_id,
+                severity,
+                severity,
+                f"{host_id}:cpu:threshold",
+            )
+        finally:
+            await conn.close()
+
+    return asyncio.run(_seed())
 
 
 # ── Auth gate ────────────────────────────────────────────────────────────────
 
 
-def test_monitoring_routes_require_auth(tmp_path, monkeypatch, request):
-    db_path = str(tmp_path / "noauth.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+def test_monitoring_routes_require_auth(monkeypatch, request):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-noauth")
     monkeypatch.setenv("PLEXUS_DEV_BOOTSTRAP", "1")
     monkeypatch.setattr(app_module, "APP_API_TOKEN", "")
@@ -126,8 +124,8 @@ def test_monitoring_routes_require_auth(tmp_path, monkeypatch, request):
 # ── Alert rules CRUD ─────────────────────────────────────────────────────────
 
 
-def test_rule_create_list_get(tmp_path, monkeypatch, request):
-    client, _ = _auth_client(tmp_path, monkeypatch, request)
+def test_rule_create_list_get(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
     resp = client.post(
         "/api/monitoring/rules",
         json={
@@ -149,8 +147,8 @@ def test_rule_create_list_get(tmp_path, monkeypatch, request):
     assert fetched.json()["metric"] == "cpu"
 
 
-def test_rule_create_requires_name_and_metric(tmp_path, monkeypatch, request):
-    client, _ = _auth_client(tmp_path, monkeypatch, request)
+def test_rule_create_requires_name_and_metric(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
     assert (
         client.post(
             "/api/monitoring/rules",
@@ -173,8 +171,8 @@ def test_rule_create_requires_name_and_metric(tmp_path, monkeypatch, request):
     )
 
 
-def test_rule_create_rejects_unknown_operator(tmp_path, monkeypatch, request):
-    client, _ = _auth_client(tmp_path, monkeypatch, request)
+def test_rule_create_rejects_unknown_operator(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
     resp = client.post(
         "/api/monitoring/rules",
         json={
@@ -187,8 +185,8 @@ def test_rule_create_rejects_unknown_operator(tmp_path, monkeypatch, request):
     assert resp.status_code == 400
 
 
-def test_rule_create_rejects_non_numeric_value(tmp_path, monkeypatch, request):
-    client, _ = _auth_client(tmp_path, monkeypatch, request)
+def test_rule_create_rejects_non_numeric_value(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
     resp = client.post(
         "/api/monitoring/rules",
         json={
@@ -200,8 +198,8 @@ def test_rule_create_rejects_non_numeric_value(tmp_path, monkeypatch, request):
     assert resp.status_code == 400
 
 
-def test_rule_update_and_delete(tmp_path, monkeypatch, request):
-    client, _ = _auth_client(tmp_path, monkeypatch, request)
+def test_rule_update_and_delete(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
     rule_id = client.post(
         "/api/monitoring/rules",
         json={
@@ -219,8 +217,8 @@ def test_rule_update_and_delete(tmp_path, monkeypatch, request):
     assert client.get(f"/api/monitoring/rules/{rule_id}").status_code == 404
 
 
-def test_rule_update_missing_returns_404(tmp_path, monkeypatch, request):
-    client, _ = _auth_client(tmp_path, monkeypatch, request)
+def test_rule_update_missing_returns_404(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
     assert client.put("/api/monitoring/rules/99999", json={"value": 1}).status_code == 404
     assert client.delete("/api/monitoring/rules/99999").status_code == 404
 
@@ -228,8 +226,8 @@ def test_rule_update_missing_returns_404(tmp_path, monkeypatch, request):
 # ── Suppressions CRUD ────────────────────────────────────────────────────────
 
 
-def test_suppression_create_list_delete(tmp_path, monkeypatch, request):
-    client, _ = _auth_client(tmp_path, monkeypatch, request)
+def test_suppression_create_list_delete(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
     resp = client.post(
         "/api/monitoring/suppressions",
         json={
@@ -249,14 +247,14 @@ def test_suppression_create_list_delete(tmp_path, monkeypatch, request):
     assert not any(s["id"] == sup_id for s in listed)
 
 
-def test_suppression_requires_ends_at(tmp_path, monkeypatch, request):
-    client, _ = _auth_client(tmp_path, monkeypatch, request)
+def test_suppression_requires_ends_at(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
     resp = client.post("/api/monitoring/suppressions", json={"name": "no end"})
     assert resp.status_code == 400
 
 
-def test_suppression_active_only_filter(tmp_path, monkeypatch, request):
-    client, _ = _auth_client(tmp_path, monkeypatch, request)
+def test_suppression_active_only_filter(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
     active = client.post(
         "/api/monitoring/suppressions",
         json={
@@ -283,10 +281,9 @@ def test_suppression_active_only_filter(tmp_path, monkeypatch, request):
 # ── Alert acknowledge ────────────────────────────────────────────────────────
 
 
-@pytest.mark.sqlite_only  # seeds rows with sqlite3.connect(DB_PATH)
-def test_acknowledge_alert(tmp_path, monkeypatch, request):
-    client, db_path = _auth_client(tmp_path, monkeypatch, request)
-    alert_id = _seed_alert(db_path)
+def test_acknowledge_alert(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
+    alert_id = _seed_alert()
 
     open_alerts = client.get("/api/monitoring/alerts?acknowledged=false").json()
     assert any(a["id"] == alert_id for a in open_alerts)
@@ -300,10 +297,9 @@ def test_acknowledge_alert(tmp_path, monkeypatch, request):
     assert any(a["id"] == alert_id for a in acked)
 
 
-@pytest.mark.sqlite_only  # seeds rows with sqlite3.connect(DB_PATH)
-def test_bulk_acknowledge(tmp_path, monkeypatch, request):
-    client, db_path = _auth_client(tmp_path, monkeypatch, request)
-    a1 = _seed_alert(db_path)
+def test_bulk_acknowledge(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
+    a1 = _seed_alert()
 
     resp = client.post(
         "/api/monitoring/alerts/bulk-acknowledge",
@@ -315,14 +311,14 @@ def test_bulk_acknowledge(tmp_path, monkeypatch, request):
     assert resp.json()["acknowledged"] == 1
 
 
-def test_bulk_acknowledge_requires_ids(tmp_path, monkeypatch, request):
-    client, _ = _auth_client(tmp_path, monkeypatch, request)
+def test_bulk_acknowledge_requires_ids(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
     resp = client.post("/api/monitoring/alerts/bulk-acknowledge", json={"alert_ids": []})
     assert resp.status_code == 400
 
 
-def test_monitoring_summary_shape(tmp_path, monkeypatch, request):
-    client, _ = _auth_client(tmp_path, monkeypatch, request)
+def test_monitoring_summary_shape(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
     resp = client.get("/api/monitoring/summary")
     assert resp.status_code == 200
     assert isinstance(resp.json(), dict)

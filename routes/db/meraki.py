@@ -56,10 +56,8 @@ def _encrypt_key(api_key: str) -> str:
 
 
 def _stamp_param(value: str) -> str | datetime:
-    """Bind an ISO-8601 stamp: TIMESTAMPTZ on Postgres wants a datetime
-    (naive means UTC), the SQLite column is TEXT and keeps the string."""
-    if _dbcore.DB_ENGINE != "postgres":
-        return value
+    """Bind an ISO-8601 stamp: a TIMESTAMPTZ column wants a datetime
+    (naive means UTC)."""
     stamp = datetime.fromisoformat(value)
     return stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)
 
@@ -184,7 +182,7 @@ async def update_meraki_org(org_ref: int, **kwargs) -> dict | None:
         vals.append(value)
     if not sets:
         return await get_meraki_org(org_ref)
-    sets.append("updated_at = NOW()" if _dbcore.DB_ENGINE == "postgres" else "updated_at = datetime('now')")
+    sets.append("updated_at = NOW()")
     db = await _dbcore.get_db()
     try:
         sql, params = _safe_dynamic_update("meraki_orgs", sets, vals, "id = ?", org_ref)

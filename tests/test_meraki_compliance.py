@@ -20,7 +20,6 @@ import json
 import httpx
 import netcontrol.app as app_module
 import pytest
-import routes.database as db_module
 from netcontrol.integrations.meraki.client import MerakiClient
 from netcontrol.integrations.meraki.compliance import (
     CHECKS,
@@ -437,8 +436,7 @@ class _CsrfClient:
 
 
 @pytest.fixture
-def api(tmp_path, monkeypatch, request):
-    monkeypatch.setattr(db_module, "DB_PATH", str(tmp_path / "meraki-compliance.db"))
+def api(monkeypatch, request):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-meraki-compliance")
     monkeypatch.setenv("APP_API_TOKEN", "")
     monkeypatch.setenv("APP_REQUIRE_API_TOKEN", "false")

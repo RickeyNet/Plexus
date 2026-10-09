@@ -1,6 +1,10 @@
 """
-database.py - Async database layer for Plexus (PostgreSQL; the SQLite engine
-is kept for the test suite and the legacy migration tool).
+database.py - Async database layer for Plexus (PostgreSQL only).
+
+Queries, the schema below and the numbered migrations are written in a
+portable SQLite-style SQL dialect (``?`` placeholders, ``datetime('now')``,
+``INSERT OR IGNORE`` ...) and translated to PostgreSQL at execution time by
+``_PostgresConnectionCompat``.
 
 Tables:
     inventory_groups  - device groups (name, description)
@@ -48,97 +52,35 @@ import os
 import re
 from datetime import UTC, datetime, timedelta
 
-import aiosqlite
-
 try:
     import asyncpg
-except Exception:  # pragma: no cover - optional dependency for postgres mode
+except Exception:  # pragma: no cover - asyncpg is a hard runtime dependency
     asyncpg = None
 
 from netcontrol.telemetry import configure_logging
 
 _LOGGER = configure_logging("plexus.db")
 
-# PostgreSQL is the only supported runtime backend. The sqlite engine is kept
-# for the in-process test suite and for tools/migrate_sqlite_to_postgres.py,
-# which reads legacy SQLite databases; the app refuses to boot on it unless
-# PLEXUS_ALLOW_SQLITE_ENGINE=1 (see ensure_supported_db_engine).
-DB_ENGINE = os.getenv("APP_DB_ENGINE", "postgres").strip().lower() or "postgres"
+# PostgreSQL is the only backend. APP_DB_ENGINE is still honoured as a guard:
+# a stale ``APP_DB_ENGINE=sqlite`` from an old install fails loudly at startup
+# instead of silently pointing at an empty database.
 APP_DATABASE_URL = os.getenv("APP_DATABASE_URL", "").strip()
-_VALID_DB_ENGINES = {"sqlite", "postgres"}
-ALLOW_SQLITE_ENGINE_ENV = "PLEXUS_ALLOW_SQLITE_ENGINE"
 
 
 def ensure_supported_db_engine() -> None:
-    """Refuse to run the app on anything but PostgreSQL.
+    """Refuse to start when ``APP_DB_ENGINE`` names anything but PostgreSQL.
 
-    The sqlite engine is test/migration-only; setting
-    ``PLEXUS_ALLOW_SQLITE_ENGINE=1`` lets the in-process test suite boot the
-    app on it. Read at call time so tests can toggle the variable.
+    Read at call time so tests can toggle the variable.
     """
-    if DB_ENGINE == "postgres":
-        return
-    if DB_ENGINE == "sqlite" and os.getenv(ALLOW_SQLITE_ENGINE_ENV, "").strip() == "1":
+    engine = os.getenv("APP_DB_ENGINE", "").strip().lower()
+    if not engine or engine == "postgres":
         return
     raise RuntimeError(
-        f"APP_DB_ENGINE={DB_ENGINE!r} is not supported: Plexus runs on PostgreSQL only "
+        f"APP_DB_ENGINE={engine!r} is not supported: Plexus runs on PostgreSQL only "
         "(set APP_DB_ENGINE=postgres and APP_DATABASE_URL). See docs/database-backends.md; "
         "legacy SQLite installs can move their data with tools/migrate_sqlite_to_postgres.py."
     )
 
-
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-DB_PATH = os.getenv(
-    "APP_DB_PATH",
-    os.path.join(_REPO_ROOT, "netcontrol.db"),
-)
-
-
-def _migrate_legacy_sqlite_path() -> None:
-    """Move legacy routes/netcontrol.db (+ WAL/SHM sidecars) to the new default.
-
-    The default SQLite location moved from ``routes/netcontrol.db`` to the repo
-    root. Auto-migrate so existing dev installs do not appear to lose data.
-    Runs only when ``APP_DB_PATH`` is unset (i.e., we own the default) and the
-    legacy file exists.
-
-    A zero-byte file at the new path is treated as a stub (e.g., created by a
-    process that imported the module and called ``aiosqlite.connect`` before
-    ever writing schema) and is overwritten by the migration. Any non-empty
-    file at the new path is left untouched.
-    """
-    if os.getenv("APP_DB_PATH"):
-        return
-    legacy = os.path.join(os.path.dirname(__file__), "netcontrol.db")
-    if not os.path.isfile(legacy):
-        return
-    try:
-        new_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else -1
-    except OSError:
-        return
-    if new_size > 0:
-        return
-    try:
-        os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
-        for suffix in ("", "-wal", "-shm"):
-            src = legacy + suffix
-            if os.path.isfile(src):
-                os.replace(src, DB_PATH + suffix)
-        _LOGGER.info("Migrated legacy SQLite database from %s to %s", legacy, DB_PATH)
-    except OSError as exc:
-        _LOGGER.warning("Could not migrate legacy SQLite database (%s); using new default", exc)
-
-
-_migrate_legacy_sqlite_path()
-# SQLite tuning knobs (APP_DB_PATH above and APP_SQLITE_* below) apply to the
-# test-only sqlite engine; they are not runtime configuration.
-SQLITE_CONNECT_TIMEOUT = float(os.getenv("APP_SQLITE_CONNECT_TIMEOUT", "30"))
-SQLITE_BUSY_TIMEOUT_MS = int(os.getenv("APP_SQLITE_BUSY_TIMEOUT_MS", "5000"))
-# Size of the read-only SQLite connection pool used by get_db(read_only=True).
-# WAL supports many concurrent readers alongside the single writer; each pooled
-# connection costs one aiosqlite worker thread. 0 disables the pool (reads then
-# take the exclusive writer path, the pre-pool behavior).
-SQLITE_READ_POOL_SIZE = max(0, int(os.getenv("APP_SQLITE_READ_POOL", "4")))
 
 _INSERT_ID_TABLES = {
     "users",
@@ -271,23 +213,17 @@ def _minute_bucket_expr(column: str, bucket_minutes: int) -> str:
     """SQL expression truncating a timestamp column to N-minute buckets and
     emitting a ``YYYY-MM-DDTHH:MM:00`` string.
 
-    SQLite uses strftime/printf; Postgres has neither, so it needs a to_char /
-    extract branch (without it the flow/cloud timeline endpoints 500 on pg).
+    Postgres has no strftime/printf (which the dialect translator does not
+    rewrite), so this emits native to_char / extract SQL directly.
     ``bucket_minutes`` must be a validated int (callers clamp 1..60) — it is
     interpolated, not parameterized, so it must never be user-controlled text.
     """
     if not _SAFE_COLUMN_RE.match(column):
         raise ValueError(f"unsafe column identifier: {column!r}")
     b = int(bucket_minutes)
-    if DB_ENGINE == "postgres":
-        return (
-            f"to_char({column}::timestamp, 'YYYY-MM-DD\"T\"HH24:') || "
-            f"lpad((floor(extract(minute from {column}::timestamp)::int / {b})::int * {b})::text, 2, '0') || "
-            f"':00'"
-        )
     return (
-        f"strftime('%Y-%m-%dT%H:', {column}) || "
-        f"printf('%02d', (CAST(strftime('%M', {column}) AS INTEGER) / {b}) * {b}) || "
+        f"to_char({column}::timestamp, 'YYYY-MM-DD\"T\"HH24:') || "
+        f"lpad((floor(extract(minute from {column}::timestamp)::int / {b})::int * {b})::text, 2, '0') || "
         f"':00'"
     )
 
@@ -295,14 +231,12 @@ def _minute_bucket_expr(column: str, bucket_minutes: int) -> str:
 def _minutes_between_expr(later: str, earlier: str) -> str:
     """SQL expression for minutes elapsed (``later`` - ``earlier``).
 
-    SQLite uses ``julianday()*1440``; Postgres has no ``julianday()`` (the SLA
-    MTTR/MTTD queries 500 on pg without this branch), so it uses
-    ``EXTRACT(EPOCH ...)/60``. Both operands may be arbitrary timestamp
-    subexpressions (they are parenthesized), never user text.
+    Postgres has no ``julianday()`` (and the dialect translator does not
+    rewrite it), so this emits ``EXTRACT(EPOCH ...)/60`` directly. Both
+    operands may be arbitrary timestamp subexpressions (they are
+    parenthesized), never user text.
     """
-    if DB_ENGINE == "postgres":
-        return f"(EXTRACT(EPOCH FROM (({later})::timestamp - ({earlier})::timestamp)) / 60.0)"
-    return f"((julianday({later}) - julianday({earlier})) * 1440)"
+    return f"(EXTRACT(EPOCH FROM (({later})::timestamp - ({earlier})::timestamp)) / 60.0)"
 
 
 def _safe_dynamic_update(
@@ -2263,6 +2197,9 @@ _REAL_TYPE_RE = re.compile(r"(?<=\s)REAL(?=[\s,)]|$)")
 
 
 def _convert_sqlite_schema_to_postgres(sqlite_schema: str) -> str:
+    """Translate schema DDL written in the portable SQLite-style dialect
+    (``AUTOINCREMENT``, ``datetime('now')`` defaults, ``BLOB``/``REAL``) to
+    PostgreSQL types."""
     converted = sqlite_schema
     converted = converted.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
     converted = converted.replace("DEFAULT (datetime('now'))", "DEFAULT NOW()")
@@ -2274,39 +2211,13 @@ def _convert_sqlite_schema_to_postgres(sqlite_schema: str) -> str:
 POSTGRES_SCHEMA = _convert_sqlite_schema_to_postgres(SCHEMA)
 
 
-# ── Engine-specific extras for full-text search on config_backups ────────────
-# The runtime FTS query in `search_config_backups` already branches on engine
-# (postgres uses to_tsvector @@ plainto_tsquery; sqlite uses an FTS5 virtual
-# table). These DDL blocks are applied alongside SCHEMA on init.
+# ── Full-text search on config_backups ───────────────────────────────────────
+# `search_config_backups` queries with to_tsvector @@ plainto_tsquery; this GIN
+# index backs it. Applied alongside SCHEMA on init.
 
 POSTGRES_FTS_EXTRAS = """
 CREATE INDEX IF NOT EXISTS idx_config_backups_search_tsv
     ON config_backups USING GIN (to_tsvector('simple', COALESCE(config_text, '')));
-"""
-
-SQLITE_FTS_EXTRAS = """
-CREATE VIRTUAL TABLE IF NOT EXISTS config_backups_fts
-USING fts5(config_text, content='config_backups', content_rowid='id');
-
-CREATE TRIGGER IF NOT EXISTS config_backups_ai
-AFTER INSERT ON config_backups BEGIN
-    INSERT INTO config_backups_fts(rowid, config_text)
-    VALUES (new.id, COALESCE(new.config_text, ''));
-END;
-
-CREATE TRIGGER IF NOT EXISTS config_backups_ad
-AFTER DELETE ON config_backups BEGIN
-    INSERT INTO config_backups_fts(config_backups_fts, rowid, config_text)
-    VALUES ('delete', old.id, COALESCE(old.config_text, ''));
-END;
-
-CREATE TRIGGER IF NOT EXISTS config_backups_au
-AFTER UPDATE ON config_backups BEGIN
-    INSERT INTO config_backups_fts(config_backups_fts, rowid, config_text)
-    VALUES ('delete', old.id, COALESCE(old.config_text, ''));
-    INSERT INTO config_backups_fts(rowid, config_text)
-    VALUES (new.id, COALESCE(new.config_text, ''));
-END;
 """
 
 
@@ -2576,8 +2487,8 @@ def _convert_sqlite_insert_or_ignore_to_postgres(query: str) -> str:
 
 
 def _convert_sqlite_ddl_to_postgres(query: str) -> str:
-    """Apply SQLite→Postgres DDL transforms so migrations written in SQLite
-    syntax run unchanged on postgres. Mirrors the conversions in
+    """Translate DDL written in the portable SQLite-style dialect to Postgres
+    so migrations run unchanged. Mirrors the conversions in
     ``_convert_sqlite_schema_to_postgres`` but is applied per-query inside
     ``_PostgresConnectionCompat.execute`` for DDL statements.
     """
@@ -2639,7 +2550,7 @@ class _PostgresCursorCompat:
         return row
 
     async def fetchmany(self, size: int = 1) -> list:
-        # Mirrors aiosqlite's Cursor.fetchmany (DB-API): next ``size`` rows,
+        # DB-API Cursor.fetchmany semantics: next ``size`` rows,
         # advancing the cursor; ``size <= 0`` yields an empty list.
         if size <= 0:
             return []
@@ -2672,16 +2583,19 @@ def _strip_nuls_from_params(params: tuple) -> tuple:
     # Postgres rejects 0x00 in TEXT values ("invalid byte sequence for
     # encoding UTF8: 0x00") while SQLite accepts them. SNMP-returned device
     # strings, syslog bodies, and some config payloads occasionally carry a
-    # trailing NUL. Strip them here so callers can keep treating the
-    # backends identically.
+    # trailing NUL. Strip them here so callers never have to.
     return tuple(v.replace("\x00", "") if isinstance(v, str) else v for v in params)
 
 
 class _PostgresConnectionCompat:
-    """sqlite3-shaped facade over an asyncpg connection.
+    """sqlite3/DB-API-shaped facade over an asyncpg connection.
 
-    Transactions mirror sqlite3's implicit model so multi-statement writes
-    are atomic on Postgres exactly like they are on SQLite: the first
+    Callers write queries in the portable SQLite-style dialect (``?``
+    placeholders, ``datetime('now', ...)``, ``INSERT OR IGNORE``); each
+    statement is translated to Postgres here before it runs.
+
+    Transactions mirror sqlite3's implicit model, which the callers were
+    written against, so multi-statement writes stay atomic: the first
     data/schema-modifying statement opens a real transaction (BEGIN), and
     ``commit()``/``rollback()`` end it. Inside an open transaction every
     statement runs in a savepoint, so an expected failure (e.g. the
@@ -2723,7 +2637,7 @@ class _PostgresConnectionCompat:
         query_stripped = query.strip()
         query_upper = query_stripped.upper()
 
-        # Migrations are written in SQLite-flavored DDL. Transparently convert
+        # Migrations are written in the SQLite-style DDL dialect. Transparently convert
         # CREATE/ALTER statements so each migration runs on postgres without
         # needing a hand-written postgres branch.
         if query_upper.startswith("CREATE") or query_upper.startswith("ALTER"):
@@ -2789,123 +2703,31 @@ class _PostgresConnectionCompat:
         await self._conn.close()
 
 
-# ── Connection reuse (singleton SQLite conn / asyncpg pool) ──────────────────
+# ── Connection reuse (asyncpg pool) ──────────────────────────────────────────
 #
 # Every callsite follows the same shape:  ``db = await get_db()`` then a
 # ``try/finally: await db.close()``.  Historically get_db() opened a *brand
-# new* backend connection each call - for SQLite that means an os.makedirs
-# syscall, a fresh file handle, and four sequential PRAGMA round-trips; for
-# Postgres a full TCP+auth handshake - and close() tore it down.  A single
-# job launch makes ~8-12 of these serially before the job flips
-# queued->running, which is the "sitting in the queue too long" latency.
+# new* backend connection each call - a full TCP+auth handshake - and close()
+# tore it down.  A single job launch makes ~8-12 of these serially before the
+# job flips queued->running, which is the "sitting in the queue too long"
+# latency.
 #
 # We keep all ~500 callsites untouched by changing only what get_db()
-# returns and what .close() does:
-#
-#   * SQLite: one process-lifetime aiosqlite connection (PRAGMAs applied
-#     once).  aiosqlite already funnels every operation through a single
-#     worker thread, so concurrent coroutines sharing it can't run SQL in
-#     parallel anyway; an async lock makes each get_db()->...->close()
-#     critical section exclusive so transactions never interleave -
-#     identical isolation to the old connection-per-call model.
-#   * Postgres: a real asyncpg pool; get_db() acquires, close() releases.
+# returns and what .close() does: get_db() acquires a connection from a
+# process-wide asyncpg pool and close() releases it back.
 #
 # Re-entrancy: ~21 callsites hold a connection and, still holding it,
 # await another get_db()-using function (all read-only ``get_*`` helpers
-# - verified none commit or write).  With a shared connection + lock a
-# naive singleton would self-deadlock there.  A contextvar tracks the
-# connection + acquisition depth for the current asyncio task: a nested
-# get_db() in the same task reuses the held connection and just bumps the
-# depth (no lock, no new connection); the matching close() decrements,
-# and only the depth-0 close() releases the lock / pool slot.  The real
-# connection is never closed during normal operation.
+# - verified none commit or write).  Acquiring a second pooled connection
+# there would not see the outer section's uncommitted rows and could
+# exhaust the pool.  A contextvar tracks the connection + acquisition depth
+# for the current asyncio task: a nested get_db() in the same task reuses
+# the held connection and just bumps the depth; the matching close()
+# decrements, and only the depth-0 close() returns the connection to the
+# pool.
 
-_sqlite_conn = None
-_sqlite_conn_path = None  # DB_PATH the singleton is bound to
-_sqlite_conn_loop = None  # event loop the singleton was built on
-_sqlite_conn_lock = asyncio.Lock()  # guards lazy creation of _sqlite_conn
-_sqlite_access_lock = asyncio.Lock()  # serializes each critical section
 _pg_pool = None
 _pg_pool_lock = asyncio.Lock()
-
-# ── SQLite read-only pool ────────────────────────────────────────────────────
-# WAL allows any number of readers concurrent with the single writer, but the
-# exclusive _sqlite_access_lock above serializes *everything*. get_db(
-# read_only=True) sidesteps the lock: it borrows a PRAGMA query_only=ON
-# connection from this bounded pool, so read helpers overlap each other and
-# the writer. Same (DB_PATH, loop) binding rules as the singleton; the pool
-# is torn down and rebuilt when either changes (tests), and released
-# connections from a stale generation are stopped instead of re-pooled.
-_sqlite_read_pool: list = []  # idle read connections
-_sqlite_read_pool_key: tuple | None = None  # (DB_PATH, loop) the pool is bound to
-_sqlite_read_sem: asyncio.Semaphore | None = None
-_sqlite_read_rebuild_lock = asyncio.Lock()
-
-
-def _stop_sqlite_read_pool() -> list:
-    """Stop every idle pooled read connection (loop-independent).
-
-    Returns the futures ``stop()`` handed back (one per connection when a
-    loop is running) so a caller on that loop can wait for the closes.
-    """
-    global _sqlite_read_pool, _sqlite_read_pool_key, _sqlite_read_sem
-    futures = []
-    for conn in _sqlite_read_pool:
-        try:
-            futures.append(conn.stop())
-        except Exception as exc:
-            _LOGGER.debug("Failed to stop pooled SQLite read connection: %s", exc)
-    _sqlite_read_pool = []
-    _sqlite_read_pool_key = None
-    _sqlite_read_sem = None
-    return futures
-
-
-async def _acquire_sqlite_read_conn():
-    """Borrow a read-only connection; returns (conn, sem, pool_key)."""
-    global _sqlite_read_pool, _sqlite_read_pool_key, _sqlite_read_sem
-    running = asyncio.get_running_loop()
-    key = (DB_PATH, running)
-    if _sqlite_read_pool_key != key:
-        async with _sqlite_read_rebuild_lock:
-            if _sqlite_read_pool_key != key:
-                _stop_sqlite_read_pool()
-                _sqlite_read_pool_key = key
-                _sqlite_read_sem = asyncio.Semaphore(SQLITE_READ_POOL_SIZE)
-    sem = _sqlite_read_sem
-    await sem.acquire()
-    try:
-        if _sqlite_read_pool:
-            return _sqlite_read_pool.pop(), sem, key
-        conn = await aiosqlite.connect(DB_PATH, timeout=SQLITE_CONNECT_TIMEOUT)
-        try:
-            conn.row_factory = aiosqlite.Row
-            await conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
-            await conn.execute("PRAGMA query_only=ON")
-        except BaseException:
-            try:
-                conn.stop()
-            except Exception as exc:
-                _LOGGER.debug("Failed to stop half-built read connection: %s", exc)
-            raise
-        return conn, sem, key
-    except BaseException:
-        sem.release()
-        raise
-
-
-def _return_sqlite_read_conn(conn, sem, pool_key) -> None:
-    """Return a borrowed read connection to the pool (or drop it if stale)."""
-    if pool_key == _sqlite_read_pool_key:
-        _sqlite_read_pool.append(conn)
-    else:
-        # The pool was rebuilt (DB_PATH/loop change) while this connection was
-        # out on loan — it belongs to a dead generation, so close it.
-        try:
-            conn.stop()
-        except Exception as exc:
-            _LOGGER.debug("Failed to stop stale read connection: %s", exc)
-    sem.release()
 
 
 # Per-task held connection + depth, so nested get_db() is re-entrant.
@@ -2916,9 +2738,7 @@ class _ConnProxy:
     """Delegates everything to the real connection except ``close()``.
 
     ``close()`` decrements this task's acquisition depth; the real
-    connection is only released (lock unlocked / pooled conn returned)
-    when depth hits zero, and is never actually closed while the
-    process runs.
+    connection is only returned to the pool when depth hits zero.
     """
 
     __slots__ = ("_real", "_closed")
@@ -2943,89 +2763,6 @@ class _ConnProxy:
         await _release_db()
 
 
-async def _get_sqlite_singleton():
-    # Bind the singleton to DB_PATH *and* the running event loop.  In
-    # production both are constant for the process so the connection is
-    # created once and every subsequent call hits the fast early-return.
-    #
-    # Tests are the reason for the loop check: pytest-asyncio gives each
-    # test function its own event loop, and the many sync tests that call
-    # asyncio.run() several times per case spin up a fresh (then closed)
-    # loop on each call.  A connection is owned by the loop that created
-    # it — aiosqlite schedules result callbacks back onto that loop — so a
-    # singleton carried into a new loop would dispatch onto a dead loop and
-    # hang.  Detecting either a DB_PATH change or a loop change rebuilds the
-    # connection so each test/loop gets an isolated, live database.
-    global _sqlite_conn, _sqlite_conn_path, _sqlite_conn_loop
-    running = asyncio.get_running_loop()
-    if _sqlite_conn is not None and _sqlite_conn_path == DB_PATH and _sqlite_conn_loop is running:
-        return _sqlite_conn
-    async with _sqlite_conn_lock:
-        if _sqlite_conn is not None and _sqlite_conn_path == DB_PATH and _sqlite_conn_loop is running:
-            return _sqlite_conn
-        if _sqlite_conn is not None:
-            # Only the owning loop can await close() (it schedules onto that
-            # loop).  When the loop has changed the old one is typically dead,
-            # so signal the worker thread directly: stop() is loop-independent,
-            # closes the underlying sqlite connection (releasing the file lock)
-            # and terminates the non-daemon worker thread (no leaked thread).
-            if _sqlite_conn_loop is running:
-                try:
-                    await _sqlite_conn.close()
-                except Exception as exc:
-                    _LOGGER.debug("Failed to close stale SQLite connection: %s", exc)
-            else:
-                try:
-                    _sqlite_conn.stop()
-                except Exception as exc:
-                    _LOGGER.debug("Failed to stop stale SQLite connection: %s", exc)
-            _sqlite_conn = None
-        db_dir = os.path.dirname(DB_PATH)
-        if db_dir:
-            os.makedirs(db_dir, exist_ok=True)
-        conn = await aiosqlite.connect(DB_PATH, timeout=SQLITE_CONNECT_TIMEOUT)
-        conn.row_factory = aiosqlite.Row
-        await conn.execute("PRAGMA journal_mode=WAL")
-        await conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
-        await conn.execute("PRAGMA synchronous=NORMAL")
-        await conn.execute("PRAGMA foreign_keys=ON")
-        _sqlite_conn = conn
-        _sqlite_conn_path = DB_PATH
-        _sqlite_conn_loop = running
-        return _sqlite_conn
-
-
-def _dispose_sqlite_singleton_sync():
-    """Tear down the SQLite singleton from synchronous (test) teardown.
-
-    Loop-independent: ``stop()`` queues a close onto the worker thread,
-    which closes the underlying sqlite connection (releasing the WAL file
-    lock) and terminates the non-daemon worker thread — so nothing lingers
-    to block process exit or lock the next test's database.  The locks and
-    held-state are recreated so a critical section a failed test never
-    finished cannot leak into the next one.  No-op when no singleton exists.
-
-    Not used in production; an autouse pytest fixture calls this after each
-    test (see tests/conftest.py).
-    """
-    global _sqlite_conn, _sqlite_conn_path, _sqlite_conn_loop
-    global _sqlite_conn_lock, _sqlite_access_lock, _sqlite_read_rebuild_lock
-    conn = _sqlite_conn
-    _sqlite_conn = None
-    _sqlite_conn_path = None
-    _sqlite_conn_loop = None
-    _sqlite_conn_lock = asyncio.Lock()
-    _sqlite_access_lock = asyncio.Lock()
-    _sqlite_read_rebuild_lock = asyncio.Lock()
-    _stop_sqlite_read_pool()
-    _held.set(None)
-    if conn is not None:
-        try:
-            conn.stop()
-        except Exception as exc:
-            _LOGGER.debug("Failed to stop SQLite connection during teardown: %s", exc)
-
-
 async def _get_pg_pool():
     global _pg_pool
     if _pg_pool is not None:
@@ -3047,9 +2784,9 @@ async def _get_pg_pool():
 async def close_db_pool() -> None:
     """Cleanly release database connections at app shutdown.
 
-    Closes the asyncpg pool (Postgres) and stops the SQLite singleton so
-    connections are returned/closed deterministically rather than being
-    reclaimed only at process exit. Safe to call when nothing was opened.
+    Closes the asyncpg pool so connections are returned/closed
+    deterministically rather than being reclaimed only at process exit.
+    Safe to call when nothing was opened.
     """
     global _pg_pool
     pool = _pg_pool
@@ -3059,51 +2796,29 @@ async def close_db_pool() -> None:
             await pool.close()
         except Exception as exc:
             _LOGGER.warning("close_db_pool: failed to close pg pool: %s", exc)
-    futures = []
-    conn = _sqlite_conn
-    if conn is not None:
-        try:
-            futures.append(conn.stop())
-        except Exception as exc:
-            _LOGGER.debug("close_db_pool: failed to stop sqlite connection: %s", exc)
-    futures.extend(_stop_sqlite_read_pool())
-    # Each worker thread reports the close back to this loop via the future
-    # stop() returned. Wait for those: if shutdown returns first, the loop is
-    # closed before the workers report and each one dies with
-    # "RuntimeError: Event loop is closed" on the way out.
-    pending = [f for f in futures if f is not None]
-    if pending:
-        await asyncio.wait(pending, timeout=5)
 
 
 async def get_db(*, read_only: bool = False):
-    """Return a backend connection (reused, not opened per call).
+    """Return a pooled PostgreSQL connection (reused, not opened per call).
 
     The returned object behaves exactly like the old per-call
     connection: ``execute``/``executemany``/``executescript``/``commit``/
     ``rollback``/``row_factory`` all work, and the mandatory
     ``await db.close()`` in each caller's ``finally`` releases it.
 
-    ``read_only=True`` is for helpers that only SELECT: on SQLite they
-    borrow a PRAGMA query_only connection from a small pool instead of
-    taking the exclusive writer lock, so reads overlap each other and the
-    writer (WAL). On Postgres the flag is a no-op (the asyncpg pool is
-    already concurrent). A nested get_db() inside a held section reuses
-    the held connection regardless of the flag, so a read helper called
-    from inside a write transaction still sees that transaction's
-    uncommitted rows.
+    ``read_only=True`` declares that the section only SELECTs. It does not
+    change which connection is handed out (the asyncpg pool is already
+    concurrent), but it is enforced for nesting: requesting write access
+    from inside a task that holds a read-only section raises. A nested
+    get_db() inside a held section reuses the held connection, so a read
+    helper called from inside a write transaction still sees that
+    transaction's uncommitted rows.
     """
-    if DB_ENGINE not in _VALID_DB_ENGINES:
-        raise RuntimeError(
-            f"Unsupported APP_DB_ENGINE '{DB_ENGINE}'. Supported values: {', '.join(sorted(_VALID_DB_ENGINES))}"
-        )
-
     state = _held.get()
     if state is not None:
         # Nested acquisition in the same task: reuse, bump depth. Requesting a
-        # write while holding only a read-only connection can't work (the
-        # borrowed connection is query_only), so fail loudly instead of
-        # letting the write die mid-helper with an opaque OperationalError.
+        # write while the outermost section declared itself read-only is a
+        # caller bug; fail loudly instead of silently writing.
         if not read_only and state.get("readonly"):
             raise RuntimeError(
                 "get_db(): write access requested while this task holds a "
@@ -3113,27 +2828,14 @@ async def get_db(*, read_only: bool = False):
         state["depth"] += 1
         return _ConnProxy(state["conn"])
 
-    if DB_ENGINE == "postgres":
-        if asyncpg is None:
-            raise RuntimeError("APP_DB_ENGINE=postgres requires the 'asyncpg' package")
-        if not APP_DATABASE_URL:
-            raise RuntimeError("APP_DB_ENGINE=postgres requires APP_DATABASE_URL")
-        pool = await _get_pg_pool()
-        raw = await pool.acquire()
-        conn = _PostgresConnectionCompat(raw)
-        _held.set({"conn": conn, "depth": 1, "engine": "postgres", "pool": pool, "raw": raw})
-        return _ConnProxy(conn)
-
-    if read_only and SQLITE_READ_POOL_SIZE > 0:
-        conn, sem, pool_key = await _acquire_sqlite_read_conn()
-        _held.set({"conn": conn, "depth": 1, "engine": "sqlite", "readonly": True, "sem": sem, "pool_key": pool_key})
-        return _ConnProxy(conn)
-
-    # SQLite write (or read with the pool disabled): acquire the exclusive
-    # access lock for this critical section, then hand back the singleton.
-    conn = await _get_sqlite_singleton()
-    await _sqlite_access_lock.acquire()
-    _held.set({"conn": conn, "depth": 1, "engine": "sqlite"})
+    if asyncpg is None:
+        raise RuntimeError("Plexus requires the 'asyncpg' package")
+    if not APP_DATABASE_URL:
+        raise RuntimeError("Plexus requires APP_DATABASE_URL (a postgresql:// URL)")
+    pool = await _get_pg_pool()
+    raw = await pool.acquire()
+    conn = _PostgresConnectionCompat(raw)
+    _held.set({"conn": conn, "depth": 1, "readonly": read_only, "pool": pool, "raw": raw})
     return _ConnProxy(conn)
 
 
@@ -3143,10 +2845,10 @@ _DELETE_CHUNK_SIZE = 5000
 async def chunked_delete(table: str, where_sql: str, params: tuple = ()) -> int:
     """Delete every row matching ``where_sql`` in bounded chunks.
 
-    Retention passes can match millions of rows; a single DELETE holds the
-    writer lock (and on SQLite the whole app's write path) for the full
-    scan. Each chunk here runs in its own get_db() section, so the lock is
-    released between chunks and other writers interleave. ``table`` and
+    Retention passes can match millions of rows; a single DELETE holds its
+    row locks and one pooled connection for the full scan. Each chunk here
+    runs in its own get_db() section and commits, so locks are released
+    between chunks and other writers interleave. ``table`` and
     ``where_sql`` are trusted SQL fragments from db helpers, never user
     input. Returns the total number of rows deleted.
     """
@@ -3176,35 +2878,18 @@ async def _release_db():
     if state["depth"] > 0:
         return
     _held.set(None)
-    if state["engine"] == "postgres":
-        # Same hygiene as the SQLite branch below: a helper that raised
-        # between DML and commit() leaves the implicit transaction open —
-        # roll it back before the connection returns to the pool.
-        try:
-            if state["conn"]._tx is not None:
-                _LOGGER.warning("get_db(): pg section released with an uncommitted transaction; rolling back")
-                await state["conn"].rollback()
-        except Exception as exc:
-            _LOGGER.warning("get_db(): pg rollback of abandoned transaction failed: %s", exc)
-        finally:
-            await state["pool"].release(state["raw"])
-    elif state.get("readonly"):
-        _return_sqlite_read_conn(state["conn"], state["sem"], state["pool_key"])
-    else:
-        # The writer connection is shared by every caller in turn. If a helper
-        # raised between a DML statement and its commit(), an implicit
-        # transaction is still open here — and the next caller would inherit
-        # it: their commit() would persist this caller's partial writes, or
-        # their rollback() would wipe them along with their own. Roll back
-        # before handing the lock over.
-        try:
-            if getattr(state["conn"], "in_transaction", False):
-                _LOGGER.warning("get_db(): section released with an uncommitted transaction; rolling back")
-                await state["conn"].rollback()
-        except Exception as exc:
-            _LOGGER.warning("get_db(): rollback of abandoned transaction failed: %s", exc)
-        finally:
-            _sqlite_access_lock.release()
+    # A helper that raised between DML and commit() leaves the implicit
+    # transaction open — roll it back before the connection returns to the
+    # pool, otherwise the next borrower would inherit (and could commit) this
+    # caller's partial writes.
+    try:
+        if state["conn"]._tx is not None:
+            _LOGGER.warning("get_db(): pg section released with an uncommitted transaction; rolling back")
+            await state["conn"].rollback()
+    except Exception as exc:
+        _LOGGER.warning("get_db(): pg rollback of abandoned transaction failed: %s", exc)
+    finally:
+        await state["pool"].release(state["raw"])
 
 
 async def _init_postgres(db) -> None:
@@ -3230,14 +2915,8 @@ async def init_db():
 
     db = await get_db()
     try:
-        if DB_ENGINE == "postgres":
-            await _init_postgres(db)
-        else:
-            await db.executescript(SCHEMA)
-            await db.executescript(SQLITE_FTS_EXTRAS)
-            await db.commit()
-
-        await run_migrations(db, engine=DB_ENGINE)
+        await _init_postgres(db)
+        await run_migrations(db)
     finally:
         await db.close()
 

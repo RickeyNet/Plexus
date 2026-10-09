@@ -15,8 +15,7 @@ import routes.database as db_module
 
 
 @pytest.fixture
-def ts_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(db_module, "DB_PATH", str(tmp_path / "ts.db"))
+def ts_db(monkeypatch):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-ts-multi")
     asyncio.run(db_module.init_db())
 

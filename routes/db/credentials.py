@@ -14,8 +14,6 @@ import os
 import re
 from datetime import UTC, datetime, timedelta
 
-import aiosqlite
-
 import routes.database as _dbcore
 from routes.database import (
     _LOGGER,
@@ -112,10 +110,7 @@ async def update_secret_variable(
         args.append(description)
     if not updates:
         return True
-    if _dbcore.DB_ENGINE == "postgres":
-        updates.append("updated_at = NOW()::text")
-    else:
-        updates.append("updated_at = datetime('now')")
+    updates.append("updated_at = NOW()::text")
     args.append(var_id)
     conn = await _dbcore.get_db()
     try:

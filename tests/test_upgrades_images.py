@@ -6,7 +6,6 @@ import io
 
 import netcontrol.app as app_module
 import pytest
-import routes.database as db_module
 from netcontrol.routes import upgrades
 
 
@@ -37,9 +36,7 @@ class _AuthClient:
 
 @pytest.fixture
 def image_client(tmp_path, monkeypatch):
-    db_path = str(tmp_path / "upgrade_images.db")
     images_dir = tmp_path / "software_images"
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
     monkeypatch.setattr(upgrades, "SOFTWARE_IMAGES_DIR", str(images_dir))
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-upgrades-images")
     monkeypatch.setenv("APP_API_TOKEN", "")

@@ -351,10 +351,9 @@ def test_show_commands_are_chosen_by_device_type():
 
 
 @pytest.mark.asyncio
-async def test_enrich_attaches_collected_inventory_data(tmp_path, monkeypatch):
+async def test_enrich_attaches_collected_inventory_data(monkeypatch):
     import netcontrol.routes.state as state
 
-    monkeypatch.setattr(db_module, "DB_PATH", str(tmp_path / "enrich.db"))
     await db_module.init_db()
     monkeypatch.setitem(state.AUTH_CONFIG, "service_credential_id", None)
     conn = await db_module.get_db()
@@ -719,8 +718,7 @@ class _CsrfClient:
 
 
 @pytest.fixture
-def api(tmp_path, monkeypatch, request):
-    monkeypatch.setattr(db_module, "DB_PATH", str(tmp_path / "meraki.db"))
+def api(monkeypatch, request):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-meraki")
     monkeypatch.setenv("APP_API_TOKEN", "")
     monkeypatch.setenv("APP_REQUIRE_API_TOKEN", "false")

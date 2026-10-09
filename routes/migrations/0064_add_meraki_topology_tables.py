@@ -14,52 +14,11 @@ Adds:
 
 from __future__ import annotations
 
-import os
-
 VERSION = 64
 DESCRIPTION = "Add Meraki topology organization and snapshot tables"
 
-DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
 
-
-async def _up_sqlite(db) -> None:
-    await db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS meraki_orgs (
-            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-            name                TEXT    NOT NULL UNIQUE,
-            org_id              TEXT    NOT NULL DEFAULT '',
-            base_url            TEXT    NOT NULL DEFAULT 'https://api.meraki.com/api/v1',
-            api_key_enc         TEXT    NOT NULL DEFAULT '',
-            options_json        TEXT    NOT NULL DEFAULT '{}',
-            last_build_at       TEXT,
-            last_build_status   TEXT    NOT NULL DEFAULT 'never',
-            last_build_message  TEXT    NOT NULL DEFAULT '',
-            created_by          TEXT    NOT NULL DEFAULT '',
-            created_at          TEXT    NOT NULL DEFAULT (datetime('now')),
-            updated_at          TEXT
-        )
-        """
-    )
-    await db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS meraki_topology_snapshots (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            org_ref         INTEGER NOT NULL REFERENCES meraki_orgs(id) ON DELETE CASCADE,
-            summary_json    TEXT    NOT NULL DEFAULT '{}',
-            snapshot_json   TEXT    NOT NULL DEFAULT '{}',
-            warning_count   INTEGER NOT NULL DEFAULT 0,
-            duration_seconds REAL   NOT NULL DEFAULT 0,
-            built_by        TEXT    NOT NULL DEFAULT '',
-            created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
-        )
-        """
-    )
-    await db.execute("CREATE INDEX IF NOT EXISTS idx_meraki_snapshots_org ON meraki_topology_snapshots (org_ref, id)")
-    await db.commit()
-
-
-async def _up_postgres(db) -> None:
+async def up(db) -> None:
     await db.execute(
         """
         CREATE TABLE IF NOT EXISTS meraki_orgs (
@@ -94,10 +53,3 @@ async def _up_postgres(db) -> None:
     )
     await db.execute("CREATE INDEX IF NOT EXISTS idx_meraki_snapshots_org ON meraki_topology_snapshots (org_ref, id)")
     await db.commit()
-
-
-async def up(db) -> None:
-    if DB_ENGINE == "postgres":
-        await _up_postgres(db)
-    else:
-        await _up_sqlite(db)

@@ -19,33 +19,21 @@ import pytest
 import routes.database as db_module
 from netcontrol.routes import audit as audit_router
 
+import pg_raw
 
-async def _init_clean_db(tmp_path, monkeypatch) -> str:
-    """Stand up a fresh sqlite DB with every migration applied."""
-    db_path = str(tmp_path / "audit_schedules.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+
+async def _init_clean_db():
+    """Stand up the schema with every migration applied."""
     await db_module.init_db()
-    return db_path
-
-
-async def _table_columns(table: str) -> list[str]:
-    conn = await db_module.get_db()
-    try:
-        cursor = await conn.execute(f"PRAGMA table_info({table})")
-        rows = await cursor.fetchall()
-        return [r[1] for r in rows]
-    finally:
-        await conn.close()
 
 
 # ── Migration shape ────────────────────────────────────────────────────────
 
 
-@pytest.mark.sqlite_only  # inspects the schema with PRAGMA table_info
-async def test_migration_0043_creates_schedule_table(tmp_path, monkeypatch):
-    await _init_clean_db(tmp_path, monkeypatch)
+async def test_migration_0043_creates_schedule_table():
+    await _init_clean_db()
 
-    cols = await _table_columns("audit_schedules")
+    cols = await pg_raw.table_columns("audit_schedules")
     expected = {
         "id",
         "name",
@@ -59,19 +47,18 @@ async def test_migration_0043_creates_schedule_table(tmp_path, monkeypatch):
     assert expected.issubset(set(cols)), f"audit_schedules missing columns: {expected - set(cols)}"
 
 
-@pytest.mark.sqlite_only  # inspects the schema with PRAGMA table_info
-async def test_migration_0043_adds_schedule_id_to_runs(tmp_path, monkeypatch):
-    await _init_clean_db(tmp_path, monkeypatch)
+async def test_migration_0043_adds_schedule_id_to_runs():
+    await _init_clean_db()
 
-    cols = await _table_columns("audit_runs")
+    cols = await pg_raw.table_columns("audit_runs")
     assert "schedule_id" in cols, "audit_runs.schedule_id missing -- migration 0043 did not run"
 
 
 # ── CRUD round-trip ────────────────────────────────────────────────────────
 
 
-async def test_schedule_crud_roundtrip(tmp_path, monkeypatch):
-    await _init_clean_db(tmp_path, monkeypatch)
+async def test_schedule_crud_roundtrip():
+    await _init_clean_db()
 
     created = await audit_router._create_schedule(
         name="Nightly sweep",
@@ -204,14 +191,11 @@ async def _fetch_runs() -> list[dict]:
         await conn.close()
 
 
-async def test_sweep_enqueues_due_schedule_and_advances_last_run(
-    tmp_path,
-    monkeypatch,
-):
+async def test_sweep_enqueues_due_schedule_and_advances_last_run():
     """A due schedule should produce exactly one queued audit_runs row
     and the schedule's last_run_at must advance so a second sweep is a
     no-op."""
-    await _init_clean_db(tmp_path, monkeypatch)
+    await _init_clean_db()
 
     s = await audit_router._create_schedule(
         name="Hourly check",
@@ -242,8 +226,8 @@ async def test_sweep_enqueues_due_schedule_and_advances_last_run(
     assert len(await _fetch_runs()) == 1
 
 
-async def test_sweep_skips_disabled_schedule(tmp_path, monkeypatch):
-    await _init_clean_db(tmp_path, monkeypatch)
+async def test_sweep_skips_disabled_schedule():
+    await _init_clean_db()
 
     await audit_router._create_schedule(
         name="Paused",
@@ -257,10 +241,10 @@ async def test_sweep_skips_disabled_schedule(tmp_path, monkeypatch):
     assert (await _fetch_runs()) == []
 
 
-async def test_claim_queued_picks_up_scheduled_row(tmp_path, monkeypatch):
+async def test_claim_queued_picks_up_scheduled_row():
     """Scheduled rows go on the same queue the on-demand path uses, so
     `_claim_queued_run` must pick them up unchanged."""
-    await _init_clean_db(tmp_path, monkeypatch)
+    await _init_clean_db()
 
     s = await audit_router._create_schedule(
         name="x",
@@ -285,9 +269,9 @@ async def test_claim_queued_picks_up_scheduled_row(tmp_path, monkeypatch):
     assert (await audit_router._claim_queued_run()) is None
 
 
-async def test_enqueue_scheduled_run_records_schedule_id(tmp_path, monkeypatch):
+async def test_enqueue_scheduled_run_records_schedule_id():
     """The explicit run-now path must also stamp schedule_id on the row."""
-    await _init_clean_db(tmp_path, monkeypatch)
+    await _init_clean_db()
 
     s = await audit_router._create_schedule(
         name="x",

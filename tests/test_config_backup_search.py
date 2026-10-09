@@ -7,11 +7,8 @@ import routes.database as db_module
 
 
 @pytest.fixture
-async def backup_search_db(tmp_path, monkeypatch):
-    """Initialize a temporary SQLite DB with config backup sample data."""
-    db_path = str(tmp_path / "backup_search_test.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
-    monkeypatch.setattr(db_module, "DB_ENGINE", "sqlite")
+async def backup_search_db():
+    """Initialize the test DB with config backup sample data."""
     await db_module.init_db()
 
     db = await db_module.get_db()

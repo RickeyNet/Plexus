@@ -9,12 +9,8 @@ campaign and event volume. These indexes turn those into range lookups.
 
 from __future__ import annotations
 
-import os
-
 VERSION = 47
 DESCRIPTION = "Index upgrade_devices(campaign_id) and upgrade_events for campaign/device lookups"
-
-DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
 
 
 async def up(db) -> None:

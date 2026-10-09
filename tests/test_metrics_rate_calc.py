@@ -24,12 +24,9 @@ from netcontrol.routes.metrics_engine import (
 
 
 @pytest.fixture
-def rate_db(tmp_path, monkeypatch):
-    db_path = str(tmp_path / "metrics_rate.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+def rate_db(monkeypatch):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-metrics-rate")
     asyncio.run(db_module.init_db())
-    return db_path
 
 
 def test_parse_db_time_naive_string_is_aware():

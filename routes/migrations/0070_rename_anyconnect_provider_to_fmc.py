@@ -23,9 +23,7 @@ from __future__ import annotations
 VERSION = 70
 DESCRIPTION = "Rename the anyconnect topology provider to fmc"
 
-
-# 'anyconnect:' is 11 characters: the rest of the key starts at 12. The same
-# SQL runs on SQLite and PostgreSQL (substr and || are common to both).
+# 'anyconnect:' is 11 characters: the rest of the key starts at 12.
 _NEW_KEY = "'fmc:' || substr({column}, 12)"
 _IS_OLD = "{column} LIKE 'anyconnect:%'"
 

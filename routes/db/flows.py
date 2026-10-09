@@ -14,8 +14,6 @@ import os
 import re
 from datetime import UTC, datetime, timedelta
 
-import aiosqlite
-
 import routes.database as _dbcore
 from routes.database import (
     _LOGGER,
@@ -229,12 +227,8 @@ async def upsert_flow_exporter(
     """
     if not exporter_ip or not flow_type:
         return
-    if _dbcore.DB_ENGINE == "postgres":
-        now_expr = "NOW()"
-        last_record_expr = "COALESCE(EXCLUDED.last_record_at, flow_exporters.last_record_at)"
-    else:
-        now_expr = "datetime('now')"
-        last_record_expr = "COALESCE(EXCLUDED.last_record_at, flow_exporters.last_record_at)"
+    now_expr = "NOW()"
+    last_record_expr = "COALESCE(EXCLUDED.last_record_at, flow_exporters.last_record_at)"
     db = await _dbcore.get_db()
     try:
         await db.execute(

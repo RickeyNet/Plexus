@@ -185,16 +185,13 @@ def test_infoblox_adapter_falls_back_to_subnet_size_when_total_missing():
 
 
 @pytest.fixture
-def dhcp_db(tmp_path, monkeypatch):
-    db_path = str(tmp_path / "dhcp.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+def dhcp_db(monkeypatch):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-dhcp")
 
     async def _prepare():
         await db_module.init_db()
 
     asyncio.run(_prepare())
-    return db_path
 
 
 def test_create_and_get_dhcp_server(dhcp_db):

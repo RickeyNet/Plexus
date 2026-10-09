@@ -126,16 +126,14 @@ def test_coerce_ignores_keys_not_in_schema():
 # ── DB-backed queue behavior ─────────────────────────────────────────────────
 
 
-async def _init_clean_db(tmp_path, monkeypatch):
-    db_path = str(tmp_path / "jobs.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+async def _init_clean_db():
     await db_module.init_db()
     playbook_id = await db_module.create_playbook("test-pb", "test_pb.txt")
     return playbook_id
 
 
-async def test_queue_orders_by_priority_then_fifo(tmp_path, monkeypatch):
-    pb = await _init_clean_db(tmp_path, monkeypatch)
+async def test_queue_orders_by_priority_then_fifo():
+    pb = await _init_clean_db()
     normal_first = await db_module.create_job(pb, None, priority=2)
     normal_second = await db_module.create_job(pb, None, priority=2)
     critical = await db_module.create_job(pb, None, priority=4)
@@ -152,11 +150,11 @@ async def test_queue_orders_by_priority_then_fifo(tmp_path, monkeypatch):
     assert nxt["id"] == normal_second
 
 
-async def test_start_job_wins_transition_only_once(tmp_path, monkeypatch):
+async def test_start_job_wins_transition_only_once():
     """start_job must report whether it won queued→running: a second caller
     (concurrent queue kick, or a cancel racing the launch) gets False and
     must not launch a duplicate runner."""
-    pb = await _init_clean_db(tmp_path, monkeypatch)
+    pb = await _init_clean_db()
     job = await db_module.create_job(pb, None)
 
     assert await db_module.start_job(job) is True
@@ -167,8 +165,8 @@ async def test_start_job_wins_transition_only_once(tmp_path, monkeypatch):
     assert await db_module.start_job(cancelled) is False  # cancel won first
 
 
-async def test_dependencies_gate_until_success(tmp_path, monkeypatch):
-    pb = await _init_clean_db(tmp_path, monkeypatch)
+async def test_dependencies_gate_until_success():
+    pb = await _init_clean_db()
     dep = await db_module.create_job(pb, None)
     dependent = await db_module.create_job(pb, None, depends_on=[dep])
 
@@ -180,8 +178,8 @@ async def test_dependencies_gate_until_success(tmp_path, monkeypatch):
     assert await db_module.check_job_dependencies_met(dependent) is True
 
 
-async def test_failed_dependency_keeps_gate_closed(tmp_path, monkeypatch):
-    pb = await _init_clean_db(tmp_path, monkeypatch)
+async def test_failed_dependency_keeps_gate_closed():
+    pb = await _init_clean_db()
     dep = await db_module.create_job(pb, None)
     dependent = await db_module.create_job(pb, None, depends_on=[dep])
 
@@ -190,14 +188,14 @@ async def test_failed_dependency_keeps_gate_closed(tmp_path, monkeypatch):
     assert await db_module.check_job_dependencies_met(dependent) is False
 
 
-async def test_no_dependencies_is_always_met(tmp_path, monkeypatch):
-    pb = await _init_clean_db(tmp_path, monkeypatch)
+async def test_no_dependencies_is_always_met():
+    pb = await _init_clean_db()
     job = await db_module.create_job(pb, None)
     assert await db_module.check_job_dependencies_met(job) is True
 
 
-async def test_cancel_only_hits_queued_or_running(tmp_path, monkeypatch):
-    pb = await _init_clean_db(tmp_path, monkeypatch)
+async def test_cancel_only_hits_queued_or_running():
+    pb = await _init_clean_db()
     job = await db_module.create_job(pb, None)
 
     assert await db_module.cancel_job(job, "tester") is True
@@ -210,8 +208,8 @@ async def test_cancel_only_hits_queued_or_running(tmp_path, monkeypatch):
     assert await db_module.cancel_job(done, "tester") is False
 
 
-async def test_priority_update_only_while_queued_and_clamped(tmp_path, monkeypatch):
-    pb = await _init_clean_db(tmp_path, monkeypatch)
+async def test_priority_update_only_while_queued_and_clamped():
+    pb = await _init_clean_db()
     job = await db_module.create_job(pb, None, priority=2)
 
     assert await db_module.update_job_priority(job, 99) is True
@@ -225,8 +223,8 @@ async def test_priority_update_only_while_queued_and_clamped(tmp_path, monkeypat
 # ── _JobEventWriter ──────────────────────────────────────────────────────────
 
 
-async def test_event_writer_persists_in_order(tmp_path, monkeypatch):
-    pb = await _init_clean_db(tmp_path, monkeypatch)
+async def test_event_writer_persists_in_order():
+    pb = await _init_clean_db()
     job = await db_module.create_job(pb, None)
 
     writer = _JobEventWriter(job, batch_size=2, flush_seconds=0.05)
@@ -239,8 +237,8 @@ async def test_event_writer_persists_in_order(tmp_path, monkeypatch):
     assert all(e["level"] == "info" and e["host"] == "sw1" for e in events)
 
 
-async def test_event_writer_rejects_enqueue_after_close(tmp_path, monkeypatch):
-    pb = await _init_clean_db(tmp_path, monkeypatch)
+async def test_event_writer_rejects_enqueue_after_close():
+    pb = await _init_clean_db()
     job = await db_module.create_job(pb, None)
 
     writer = _JobEventWriter(job)

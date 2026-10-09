@@ -12,34 +12,10 @@ so older jobs replayed via retry continue to work.
 
 from __future__ import annotations
 
-import os
-
 VERSION = 38
 DESCRIPTION = "Add jobs.parameters JSON column for per-job playbook parameters"
 
-DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
-
-
-async def _column_exists_sqlite(db) -> bool:
-    cursor = await db.execute("PRAGMA table_info(jobs)")
-    rows = await cursor.fetchall()
-    return any(row[1] == "parameters" for row in rows)
-
-
-async def _up_sqlite(db) -> None:
-    if await _column_exists_sqlite(db):
-        return
-    await db.execute("ALTER TABLE jobs ADD COLUMN parameters TEXT DEFAULT NULL")
-    await db.commit()
-
-
-async def _up_postgres(db) -> None:
-    await db.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS parameters TEXT DEFAULT NULL")
-    await db.commit()
-
 
 async def up(db) -> None:
-    if DB_ENGINE == "postgres":
-        await _up_postgres(db)
-    else:
-        await _up_sqlite(db)
+    await db.execute("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS parameters TEXT DEFAULT NULL")
+    await db.commit()

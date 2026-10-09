@@ -8,11 +8,8 @@ import routes.database as db_module
 
 
 @pytest.fixture
-async def mac_db(tmp_path, monkeypatch):
+async def mac_db():
     """Temporary DB with two switches seeded."""
-    db_path = str(tmp_path / "mac_test.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
-    monkeypatch.setattr(db_module, "DB_ENGINE", "sqlite")
     await db_module.init_db()
 
     db = await db_module.get_db()

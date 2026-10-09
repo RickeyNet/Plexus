@@ -11,11 +11,8 @@ import routes.database as db_module
 
 
 @pytest.fixture
-async def stp_db(tmp_path, monkeypatch):
+async def stp_db():
     """Create a temporary DB with one group and one host."""
-    db_path = str(tmp_path / "stp_test.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
-    monkeypatch.setattr(db_module, "DB_ENGINE", "sqlite")
     await db_module.init_db()
 
     db = await db_module.get_db()

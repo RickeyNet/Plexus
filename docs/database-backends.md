@@ -19,25 +19,23 @@ The `asyncpg` driver is part of `requirements.txt` and the hashed
 `requirements-lock.txt`, and installs from prebuilt wheels on Linux and
 Windows.
 
-## SQLite
-
-The SQLite engine remains in `routes/database.py` for two reasons: the pytest
-suite runs in-process on SQLite files, and `tools/migrate_sqlite_to_postgres.py`
-reads legacy SQLite databases. It is not a supported way to run the app, and
-its `.env` options are no longer documented. `APP_DB_ENGINE` defaults to
-`postgres`, and the app refuses to start with any other engine unless
-`PLEXUS_ALLOW_SQLITE_ENGINE=1` is set, an escape hatch meant for the test
-suite only.
+`APP_DB_ENGINE` defaults to `postgres`, and the app refuses to start with any
+other value; the error points at the migration tool below. Queries and
+migrations are still written in a portable SQLite-style dialect (`?`
+placeholders, `datetime('now', ...)`, `INSERT OR IGNORE`), which the Postgres
+connection layer in `routes/database.py` translates at execution time.
 
 ## Migrating a legacy SQLite install
 
-Installs that still have a SQLite database (`netcontrol.db`) can move their
-data to PostgreSQL with the migration utility, which verifies row counts and
-optionally per-table checksums. Without `--sqlite-path` it reads `APP_DB_PATH`,
-falling back to `netcontrol.db`. Older compose installs kept the file in the
-`plexus-db` volume at `/app/state/netcontrol.db`; compose no longer sets
-`APP_DB_PATH`, so pass that path explicitly. Back up that file before
-upgrading: the new `deploy/upgrade.sh` stops when `.env` still sets
+The SQLite engine has been removed from the app, but installs that still have
+a SQLite database (`netcontrol.db`) can move their data to PostgreSQL with the
+migration utility, which reads the file with Python's built-in `sqlite3`
+module and verifies row counts and optionally per-table checksums. Without
+`--sqlite-path` it reads `APP_DB_PATH` (the app itself no longer reads this
+variable), falling back to `netcontrol.db`. Older compose installs kept the
+file in the `plexus-db` volume at `/app/state/netcontrol.db`; compose no
+longer sets `APP_DB_PATH`, so pass that path explicitly. Back up that file
+before upgrading: `deploy/upgrade.sh` stops when `.env` still sets
 `APP_DB_ENGINE=sqlite`.
 
 ```bash

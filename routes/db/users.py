@@ -14,8 +14,6 @@ import os
 import re
 from datetime import UTC, datetime, timedelta
 
-import aiosqlite
-
 import routes.database as _dbcore
 from routes.database import (
     _LOGGER,
@@ -65,8 +63,7 @@ async def get_user_by_username(username: str) -> dict | None:
 
 
 async def get_user_by_id(user_id: int) -> dict | None:
-    # Runs on every authenticated request (auth dependencies) - use the
-    # read pool so it doesn't serialize behind the SQLite writer lock.
+    # Runs on every authenticated request (auth dependencies); read-only.
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(

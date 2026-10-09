@@ -16,7 +16,6 @@ import json
 import httpx
 import netcontrol.app as app_module
 import pytest
-import routes.database as db_module
 from netcontrol.integrations.cato.client import CatoApiError, CatoClient, validate_base_url
 from netcontrol.integrations.cato.collector import SITES_QUERY_WAN, collect_account, sanitize_options
 from netcontrol.integrations.cato.normalize import (
@@ -716,8 +715,7 @@ class _CsrfClient:
 
 
 @pytest.fixture
-def api(tmp_path, monkeypatch, request):
-    monkeypatch.setattr(db_module, "DB_PATH", str(tmp_path / "cato.db"))
+def api(monkeypatch, request):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-cato")
     monkeypatch.setenv("APP_API_TOKEN", "")
     monkeypatch.setenv("APP_REQUIRE_API_TOKEN", "false")

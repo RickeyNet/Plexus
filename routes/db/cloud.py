@@ -15,8 +15,6 @@ import os
 import re
 from datetime import UTC, datetime, timedelta
 
-import aiosqlite
-
 import routes.database as _dbcore
 from routes.database import (
     _LOGGER,
@@ -267,7 +265,7 @@ async def update_cloud_account(account_id: int, **kwargs) -> dict | None:
             vals.append(value)
         if not sets:
             return await get_cloud_account(account_id)
-        sets.append("updated_at = NOW()" if _dbcore.DB_ENGINE == "postgres" else "updated_at = datetime('now')")
+        sets.append("updated_at = NOW()")
         sql, sql_params = _safe_dynamic_update("cloud_accounts", sets, vals, "id = ?", account_id)
         await db.execute(sql, sql_params)
         await db.commit()

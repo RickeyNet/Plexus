@@ -17,37 +17,13 @@ subsequent revocation event.
 
 from __future__ import annotations
 
-import os
-
 VERSION = 56
 DESCRIPTION = "Add session_epoch to users for session revocation"
-
-DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
 
 _COLUMN = ("session_epoch", "INTEGER NOT NULL DEFAULT 0")
 
 
-async def _column_exists_sqlite(db, name: str) -> bool:
-    cursor = await db.execute("PRAGMA table_info(users)")
-    rows = await cursor.fetchall()
-    return any(row[1] == name for row in rows)
-
-
-async def _up_sqlite(db) -> None:
-    name, decl = _COLUMN
-    if not await _column_exists_sqlite(db, name):
-        await db.execute(f"ALTER TABLE users ADD COLUMN {name} {decl}")
-    await db.commit()
-
-
-async def _up_postgres(db) -> None:
+async def up(db) -> None:
     name, decl = _COLUMN
     await db.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {name} {decl}")
     await db.commit()
-
-
-async def up(db) -> None:
-    if DB_ENGINE == "postgres":
-        await _up_postgres(db)
-    else:
-        await _up_sqlite(db)

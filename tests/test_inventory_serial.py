@@ -6,8 +6,9 @@ import asyncio
 
 import netcontrol.app as app_module
 import netcontrol.routes.inventory as inventory_routes
-import pytest
 import routes.database as db_module
+
+import pg_raw
 
 # ── Shared auth-client helper (mirrors test_ipam.py pattern) ─────────────────
 
@@ -38,9 +39,7 @@ class _AuthClient:
         return self._client.delete(url, **kw)
 
 
-def _make_auth_client(tmp_path, monkeypatch, request):
-    db_path = str(tmp_path / "serial_test.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+def _make_auth_client(monkeypatch, request):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-serial")
     monkeypatch.setenv("APP_API_TOKEN", "")
     monkeypatch.setenv("APP_REQUIRE_API_TOKEN", "false")
@@ -146,9 +145,9 @@ def _get_host_serial(host_id: int) -> str:
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 
-def test_fetch_serial_success(tmp_path, monkeypatch, request):
+def test_fetch_serial_success(monkeypatch, request):
     """Happy path: SSH returns a valid serial number line; it is stored and returned."""
-    client = _make_auth_client(tmp_path, monkeypatch, request)
+    client = _make_auth_client(monkeypatch, request)
 
     # Seed group, host, credential
     resp = client.post("/api/inventory", json={"name": "Core", "description": ""})
@@ -179,9 +178,9 @@ def test_fetch_serial_success(tmp_path, monkeypatch, request):
     assert _get_host_serial(host_id) == "FCW2346L0AJ"
 
 
-def test_fetch_serial_multiline_output(tmp_path, monkeypatch, request):
+def test_fetch_serial_multiline_output(monkeypatch, request):
     """Parser finds the Serial Number line even when there is surrounding output."""
-    client = _make_auth_client(tmp_path, monkeypatch, request)
+    client = _make_auth_client(monkeypatch, request)
 
     resp = client.post("/api/inventory", json={"name": "Access", "description": ""})
     group_id = resp.json()["id"]
@@ -207,9 +206,9 @@ def test_fetch_serial_multiline_output(tmp_path, monkeypatch, request):
     assert resp.json()["serial_number"] == "ABC1234WXYZ"
 
 
-def test_fetch_serial_missing_host(tmp_path, monkeypatch, request):
+def test_fetch_serial_missing_host(monkeypatch, request):
     """Returns 404 when host does not exist."""
-    client = _make_auth_client(tmp_path, monkeypatch, request)
+    client = _make_auth_client(monkeypatch, request)
     cred_id = _seed_credential()
     resp = client.post(
         "/api/hosts/99999/fetch-serial",
@@ -218,9 +217,9 @@ def test_fetch_serial_missing_host(tmp_path, monkeypatch, request):
     assert resp.status_code == 404
 
 
-def test_fetch_serial_missing_credential(tmp_path, monkeypatch, request):
+def test_fetch_serial_missing_credential(monkeypatch, request):
     """Returns 404 when credential does not exist."""
-    client = _make_auth_client(tmp_path, monkeypatch, request)
+    client = _make_auth_client(monkeypatch, request)
 
     resp = client.post("/api/inventory", json={"name": "Dist", "description": ""})
     group_id = resp.json()["id"]
@@ -233,9 +232,9 @@ def test_fetch_serial_missing_credential(tmp_path, monkeypatch, request):
     assert resp.status_code == 404
 
 
-def test_fetch_serial_ssh_failure(tmp_path, monkeypatch, request):
+def test_fetch_serial_ssh_failure(monkeypatch, request):
     """Returns 502 when SSH connection fails."""
-    client = _make_auth_client(tmp_path, monkeypatch, request)
+    client = _make_auth_client(monkeypatch, request)
 
     resp = client.post("/api/inventory", json={"name": "Edge", "description": ""})
     group_id = resp.json()["id"]
@@ -254,9 +253,9 @@ def test_fetch_serial_ssh_failure(tmp_path, monkeypatch, request):
     assert resp.status_code == 502
 
 
-def test_fetch_serial_no_serial_in_output(tmp_path, monkeypatch, request):
+def test_fetch_serial_no_serial_in_output(monkeypatch, request):
     """Returns 422 when the command output contains no serial number line."""
-    client = _make_auth_client(tmp_path, monkeypatch, request)
+    client = _make_auth_client(monkeypatch, request)
 
     resp = client.post("/api/inventory", json={"name": "WAN", "description": ""})
     group_id = resp.json()["id"]
@@ -275,7 +274,7 @@ def test_fetch_serial_no_serial_in_output(tmp_path, monkeypatch, request):
     assert resp.status_code == 422
 
 
-def test_fetch_serial_unknown_vendor_is_rejected(tmp_path, monkeypatch, request):
+def test_fetch_serial_unknown_vendor_is_rejected(monkeypatch, request):
     """A host with no registered driver must 422 before any SSH is attempted.
 
     Phase 4 of the driver framework: fetching a serial against an
@@ -286,7 +285,7 @@ def test_fetch_serial_unknown_vendor_is_rejected(tmp_path, monkeypatch, request)
     called, which catches a regression where the guard moves below the
     SSH attempt.
     """
-    client = _make_auth_client(tmp_path, monkeypatch, request)
+    client = _make_auth_client(monkeypatch, request)
 
     resp = client.post("/api/inventory", json={"name": "Mixed", "description": ""})
     group_id = resp.json()["id"]
@@ -327,7 +326,7 @@ def test_fetch_serial_unknown_vendor_is_rejected(tmp_path, monkeypatch, request)
     assert "frobozz_os" in resp.text
 
 
-def test_fetch_serial_nxos_uses_processor_board_id(tmp_path, monkeypatch, request):
+def test_fetch_serial_nxos_uses_processor_board_id(monkeypatch, request):
     """NX-OS hosts route through the NX-OS driver, not the IOS one.
 
     The driver-aware refactor's value-add is exactly this case: a
@@ -336,7 +335,7 @@ def test_fetch_serial_nxos_uses_processor_board_id(tmp_path, monkeypatch, reques
     IOS-style include filter and parsed for "System Serial Number" -
     both wrong, both silently returning "Not found in output".
     """
-    client = _make_auth_client(tmp_path, monkeypatch, request)
+    client = _make_auth_client(monkeypatch, request)
 
     resp = client.post("/api/inventory", json={"name": "DC", "description": ""})
     group_id = resp.json()["id"]
@@ -377,21 +376,12 @@ def test_fetch_serial_nxos_uses_processor_board_id(tmp_path, monkeypatch, reques
     assert seen_commands == ['show version | include "Processor Board ID"']
 
 
-@pytest.mark.sqlite_only  # inspects the schema with PRAGMA table_info
-def test_serial_number_column_exists(tmp_path, monkeypatch):
+def test_serial_number_column_exists():
     """Verify that the serial_number column is present after DB init (migration applied)."""
-    db_path = str(tmp_path / "migration_check.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
 
     async def _check():
         await db_module.init_db()
-        db = await db_module.get_db()
-        try:
-            cursor = await db.execute("PRAGMA table_info(hosts)")
-            cols = [row[1] for row in await cursor.fetchall()]
-            return cols
-        finally:
-            await db.close()
+        return await pg_raw.table_columns("hosts")
 
     cols = asyncio.run(_check())
     assert "serial_number" in cols

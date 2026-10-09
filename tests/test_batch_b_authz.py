@@ -18,12 +18,9 @@ from fastapi import HTTPException
 # ── capacity-planning projection bound (HTTP) ────────────────────────────────
 
 
-def _auth_client(tmp_path, monkeypatch, request):
+def _auth_client(monkeypatch, request):
     import netcontrol.app as app_module
-    import routes.database as db_module
 
-    db_path = str(tmp_path / "batchb.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-batchb")
     monkeypatch.setenv("APP_API_TOKEN", "")
     monkeypatch.setenv("APP_REQUIRE_API_TOKEN", "false")
@@ -39,14 +36,14 @@ def _auth_client(tmp_path, monkeypatch, request):
     return client
 
 
-def test_capacity_planning_rejects_huge_projection(tmp_path, monkeypatch, request):
-    client = _auth_client(tmp_path, monkeypatch, request)
+def test_capacity_planning_rejects_huge_projection(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
     resp = client.get("/api/metrics/capacity-planning?metric=cpu_percent&projection_days=100000000")
     assert resp.status_code == 422
 
 
-def test_capacity_planning_accepts_default(tmp_path, monkeypatch, request):
-    client = _auth_client(tmp_path, monkeypatch, request)
+def test_capacity_planning_accepts_default(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
     resp = client.get("/api/metrics/capacity-planning?metric=cpu_percent")
     # Empty dataset is fine; the point is it must not 422/500.
     assert resp.status_code == 200

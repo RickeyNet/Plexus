@@ -52,10 +52,8 @@ class DummyRequest:
 
 
 @pytest.mark.asyncio
-async def test_add_and_get_audit_event(tmp_path, monkeypatch):
+async def test_add_and_get_audit_event():
     """add_audit_event should persist a row retrievable by get_audit_events."""
-    db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
     await db_module.init_db()
 
     event_id = await db_module.add_audit_event(
@@ -78,10 +76,8 @@ async def test_add_and_get_audit_event(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_audit_events_filter_by_category(tmp_path, monkeypatch):
+async def test_get_audit_events_filter_by_category():
     """get_audit_events with category= should only return matching rows."""
-    db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
     await db_module.init_db()
 
     await db_module.add_audit_event("auth", "login.success", "userA")
@@ -91,37 +87,6 @@ async def test_get_audit_events_filter_by_category(tmp_path, monkeypatch):
     auth_rows = await db_module.get_audit_events(limit=100, category="auth")
     assert len(auth_rows) == 2
     assert all(r["category"] == "auth" for r in auth_rows)
-
-
-@pytest.mark.sqlite_only  # SQLite PRAGMA busy_timeout
-@pytest.mark.asyncio
-async def test_get_db_applies_busy_timeout_pragma(tmp_path, monkeypatch):
-    """get_db should apply configured busy_timeout to reduce lock churn."""
-    db_path = str(tmp_path / "sqlite_tuning.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
-    monkeypatch.setattr(db_module, "SQLITE_BUSY_TIMEOUT_MS", 12000)
-
-    conn = await db_module.get_db()
-    try:
-        cur = await conn.execute("PRAGMA busy_timeout")
-        busy_timeout_row = await cur.fetchone()
-        assert busy_timeout_row[0] == 12000
-    finally:
-        await conn.close()
-
-
-@pytest.mark.sqlite_only  # SQLite DB_PATH file creation
-@pytest.mark.asyncio
-async def test_get_db_creates_parent_directory(tmp_path, monkeypatch):
-    """get_db should create parent directories for APP_DB_PATH-style locations."""
-    nested_db = tmp_path / "nested" / "db" / "plexus.db"
-    monkeypatch.setattr(db_module, "DB_PATH", str(nested_db))
-
-    conn = await db_module.get_db()
-    try:
-        assert nested_db.parent.exists()
-    finally:
-        await conn.close()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -176,11 +141,12 @@ def test_db_foreign_key_violation_helper_matches_sqlite_and_postgres_messages():
     assert not db_module._is_foreign_key_violation(Exception("duplicate key value"))
 
 
-@pytest.mark.asyncio
-async def test_get_db_rejects_invalid_engine(monkeypatch):
-    monkeypatch.setattr(db_module, "DB_ENGINE", "invalid")
-    with pytest.raises(RuntimeError, match="Unsupported APP_DB_ENGINE"):
-        await db_module.get_db()
+def test_startup_guard_rejects_non_postgres_engine(monkeypatch):
+    monkeypatch.setenv("APP_DB_ENGINE", "sqlite")
+    with pytest.raises(RuntimeError, match="not supported"):
+        db_module.ensure_supported_db_engine()
+    monkeypatch.setenv("APP_DB_ENGINE", "postgres")
+    db_module.ensure_supported_db_engine()
 
 
 # ═════════════════════════════════════════════════════════════════════════════

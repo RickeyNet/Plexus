@@ -57,8 +57,8 @@ def _err_message(resp) -> str:
 
 async def _seed_shared_objects(bob_id: int, alice_id: int) -> dict:
     """Create the credentials + device-side objects the endpoints look up
-    before (or at) the credential check. Runs against the same temp DB the
-    app uses via the monkeypatched DB_PATH."""
+    before (or at) the credential check. Runs against the same per-test
+    database the app uses."""
     bob_cred = await db_module.create_credential("bob-cred", "bobdev", "x", owner_id=bob_id)
     alice_cred = await db_module.create_credential("alice-cred", "alicedev", "x", owner_id=alice_id)
 
@@ -79,11 +79,9 @@ async def _seed_shared_objects(bob_id: int, alice_id: int) -> dict:
 
 
 @pytest.fixture
-def iso_env(tmp_path, monkeypatch, request):
+def iso_env(monkeypatch, request):
     import netcontrol.app as app_module
 
-    db_path = str(tmp_path / "cred_iso_http.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-cred-iso")
     monkeypatch.setenv("APP_API_TOKEN", "")
     monkeypatch.setenv("APP_REQUIRE_API_TOKEN", "false")

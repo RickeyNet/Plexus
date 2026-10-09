@@ -9,12 +9,9 @@ from netcontrol.routes.metrics_engine import _classify_root_cause
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 
-async def _init(tmp_path, monkeypatch):
-    """Set up a fresh in-memory DB with all tables + migrations."""
-    db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+async def _init():
+    """Set up the schema with all tables + migrations."""
     await db_module.init_db()
-    return db_path
 
 
 async def _add_host(group_name="default", hostname="sw1", ip="10.0.0.1"):
@@ -47,9 +44,9 @@ async def _add_host(group_name="default", hostname="sw1", ip="10.0.0.1"):
 
 
 @pytest.mark.asyncio
-async def test_upsert_and_fetch_interface_error_stats(tmp_path, monkeypatch):
+async def test_upsert_and_fetch_interface_error_stats():
     """upsert creates a row; second upsert shifts current→prev."""
-    await _init(tmp_path, monkeypatch)
+    await _init()
     host_id = await _add_host()
 
     # First upsert - creates the row
@@ -86,9 +83,9 @@ async def test_upsert_and_fetch_interface_error_stats(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_create_and_get_error_event(tmp_path, monkeypatch):
+async def test_create_and_get_error_event():
     """create_interface_error_event stores a row; get_interface_error_event retrieves it."""
-    await _init(tmp_path, monkeypatch)
+    await _init()
     host_id = await _add_host()
 
     event_id = await db_module.create_interface_error_event(
@@ -120,9 +117,9 @@ async def test_create_and_get_error_event(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_interface_error_events_filters(tmp_path, monkeypatch):
+async def test_get_interface_error_events_filters():
     """get_interface_error_events respects host_id, severity, and unresolved_only filters."""
-    await _init(tmp_path, monkeypatch)
+    await _init()
     h1 = await _add_host(hostname="sw1", ip="10.0.0.1")
     h2 = await _add_host(hostname="sw2", ip="10.0.0.2")
 
@@ -174,9 +171,9 @@ async def test_get_interface_error_events_filters(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_acknowledge_error_event(tmp_path, monkeypatch):
+async def test_acknowledge_error_event():
     """acknowledge sets the acknowledged flag and user."""
-    await _init(tmp_path, monkeypatch)
+    await _init()
     host_id = await _add_host()
 
     eid = await db_module.create_interface_error_event(
@@ -202,16 +199,16 @@ async def test_acknowledge_error_event(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_acknowledge_nonexistent_returns_false(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_acknowledge_nonexistent_returns_false():
+    await _init()
     ok = await db_module.acknowledge_interface_error_event(99999, "admin")
     assert ok is False
 
 
 @pytest.mark.asyncio
-async def test_resolve_error_event(tmp_path, monkeypatch):
+async def test_resolve_error_event():
     """resolve sets resolved_at timestamp."""
-    await _init(tmp_path, monkeypatch)
+    await _init()
     host_id = await _add_host()
 
     eid = await db_module.create_interface_error_event(
@@ -235,16 +232,16 @@ async def test_resolve_error_event(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_resolve_nonexistent_returns_false(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_resolve_nonexistent_returns_false():
+    await _init()
     ok = await db_module.resolve_interface_error_event(99999)
     assert ok is False
 
 
 @pytest.mark.asyncio
-async def test_interface_error_summary_from_metric_samples(tmp_path, monkeypatch):
+async def test_interface_error_summary_from_metric_samples():
     """get_interface_error_summary aggregates from metric_samples."""
-    await _init(tmp_path, monkeypatch)
+    await _init()
     host_id = await _add_host()
 
     labels = json.dumps({"if_index": 1, "if_name": "Gi1/0/1"})
@@ -266,9 +263,9 @@ async def test_interface_error_summary_from_metric_samples(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_interface_error_trending_filter_by_if_index(tmp_path, monkeypatch):
+async def test_interface_error_trending_filter_by_if_index():
     """get_interface_error_trending can filter by if_index via labels_json LIKE."""
-    await _init(tmp_path, monkeypatch)
+    await _init()
     host_id = await _add_host()
 
     labels_1 = json.dumps({"if_index": 1, "if_name": "Gi1/0/1"})
@@ -290,9 +287,9 @@ async def test_interface_error_trending_filter_by_if_index(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_delete_old_interface_error_events(tmp_path, monkeypatch):
+async def test_delete_old_interface_error_events():
     """delete_old_interface_error_events removes events older than retention."""
-    await _init(tmp_path, monkeypatch)
+    await _init()
     host_id = await _add_host()
 
     eid = await db_module.create_interface_error_event(

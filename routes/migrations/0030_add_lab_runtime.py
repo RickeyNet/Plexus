@@ -25,16 +25,10 @@ Adds:
 
 from __future__ import annotations
 
-import os
-
 VERSION = 30
 DESCRIPTION = "Add containerlab runtime fields to lab_devices and lab_runtime_events"
 
-DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
-
-
-# Columns to add to lab_devices, in order. Same set for both engines except
-# the integer FK which is defined inline on postgres for parity.
+# Columns to add to lab_devices, in order.
 _RUNTIME_COLUMNS = [
     ("runtime_kind", "TEXT NOT NULL DEFAULT 'config_only'"),
     ("runtime_node_kind", "TEXT NOT NULL DEFAULT ''"),
@@ -50,49 +44,23 @@ _RUNTIME_COLUMNS = [
 ]
 
 
-async def _column_exists(db, table: str, column: str, *, engine: str) -> bool:
-    if engine == "postgres":
-        cur = await db.execute(
-            "SELECT 1 FROM information_schema.columns WHERE table_name = ? AND column_name = ?",
-            (table, column),
-        )
-        return await cur.fetchone() is not None
-    cur = await db.execute(f"PRAGMA table_info({table})")
-    rows = await cur.fetchall()
-    return any((row[1] if not isinstance(row, dict) else row.get("name")) == column for row in rows)
+async def _column_exists(db, table: str, column: str) -> bool:
+    cur = await db.execute(
+        "SELECT 1 FROM information_schema.columns WHERE table_name = ? AND column_name = ?",
+        (table, column),
+    )
+    return await cur.fetchone() is not None
 
 
-async def _add_columns(db, *, engine: str) -> None:
+async def _add_columns(db) -> None:
     for name, ddl in _RUNTIME_COLUMNS:
-        if await _column_exists(db, "lab_devices", name, engine=engine):
+        if await _column_exists(db, "lab_devices", name):
             continue
         await db.execute(f"ALTER TABLE lab_devices ADD COLUMN {name} {ddl}")
 
 
-async def _up_sqlite(db) -> None:
-    await _add_columns(db, engine="sqlite")
-    await db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS lab_runtime_events (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            lab_device_id   INTEGER NOT NULL,
-            action          TEXT    NOT NULL,
-            status          TEXT    NOT NULL DEFAULT 'ok',
-            actor           TEXT    NOT NULL DEFAULT '',
-            detail          TEXT    NOT NULL DEFAULT '',
-            created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
-            FOREIGN KEY (lab_device_id) REFERENCES lab_devices(id) ON DELETE CASCADE
-        )
-        """
-    )
-    await db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_lab_runtime_events_device ON lab_runtime_events (lab_device_id, created_at)"
-    )
-    await db.commit()
-
-
-async def _up_postgres(db) -> None:
-    await _add_columns(db, engine="postgres")
+async def up(db) -> None:
+    await _add_columns(db)
     await db.execute(
         """
         CREATE TABLE IF NOT EXISTS lab_runtime_events (
@@ -110,10 +78,3 @@ async def _up_postgres(db) -> None:
         "CREATE INDEX IF NOT EXISTS idx_lab_runtime_events_device ON lab_runtime_events (lab_device_id, created_at)"
     )
     await db.commit()
-
-
-async def up(db) -> None:
-    if DB_ENGINE == "postgres":
-        await _up_postgres(db)
-    else:
-        await _up_sqlite(db)

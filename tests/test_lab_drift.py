@@ -9,6 +9,8 @@ import netcontrol.routes.lab_drift as lab_drift
 import pytest
 import routes.database as db_module
 
+import pg_raw
+
 
 class _LabClient:
     def __init__(self, client, csrf_token):
@@ -28,9 +30,7 @@ class _LabClient:
         return self._client.post(url, **kw)
 
 
-def _auth_client(tmp_path, monkeypatch, request):
-    db_path = str(tmp_path / "lab_drift_test.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+def _auth_client(monkeypatch, request):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-drift")
     monkeypatch.setenv("APP_API_TOKEN", "")
     monkeypatch.setenv("APP_REQUIRE_API_TOKEN", "false")
@@ -59,18 +59,10 @@ def _auth_client(tmp_path, monkeypatch, request):
 # ── Migration ────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.sqlite_only  # inspects sqlite_master
 @pytest.mark.asyncio
-async def test_drift_table_exists_after_init(tmp_path, monkeypatch):
-    db_path = str(tmp_path / "drift_migrate.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+async def test_drift_table_exists_after_init():
     await db_module.init_db()
-    conn = await db_module.get_db()
-    try:
-        cur = await conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='lab_drift_runs'")
-        assert await cur.fetchone() is not None
-    finally:
-        await conn.close()
+    assert await pg_raw.table_exists("lab_drift_runs")
 
 
 # ── Helpers used by the HTTP tests ──────────────────────────────────────────
@@ -99,9 +91,9 @@ def _seed_host_with_snapshot(hostname: str, ip: str, config_text: str) -> int:
 # ── On-demand check ─────────────────────────────────────────────────────────
 
 
-def test_drift_check_in_sync(tmp_path, monkeypatch, request):
+def test_drift_check_in_sync(monkeypatch, request):
     """Twin matches the production snapshot byte-for-byte → in_sync."""
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
     config = "hostname rtr-1\ninterface Gi0/0\n ip address 10.0.0.1 255.255.255.0\n"
     host_id = _seed_host_with_snapshot("rtr-1", "10.0.0.1", config)
 
@@ -123,9 +115,9 @@ def test_drift_check_in_sync(tmp_path, monkeypatch, request):
     assert latest["status"] == "in_sync"
 
 
-def test_drift_check_detects_divergence(tmp_path, monkeypatch, request):
+def test_drift_check_detects_divergence(monkeypatch, request):
     """Modifying production after cloning should produce status='drifted'."""
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
 
     initial = "hostname rtr-2\nip domain-name example.com\n"
     host_id = _seed_host_with_snapshot("rtr-2", "10.0.0.2", initial)
@@ -164,9 +156,9 @@ def test_drift_check_detects_divergence(tmp_path, monkeypatch, request):
     assert "snmp-server community public" in detail["diff_text"]
 
 
-def test_drift_check_missing_source_for_blank_device(tmp_path, monkeypatch, request):
+def test_drift_check_missing_source_for_blank_device(monkeypatch, request):
     """A lab device authored manually (no source host) reports missing_source."""
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
     env_id = client.post("/api/lab/environments", json={"name": "blank-env"}).json()["id"]
     dev_id = client.post(
         f"/api/lab/environments/{env_id}/devices",
@@ -182,9 +174,9 @@ def test_drift_check_missing_source_for_blank_device(tmp_path, monkeypatch, requ
     assert latest["status"] == "missing_source"
 
 
-def test_drift_check_missing_when_no_prod_snapshot(tmp_path, monkeypatch, request):
+def test_drift_check_missing_when_no_prod_snapshot(monkeypatch, request):
     """Source host exists but has no captured snapshot yet."""
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
 
     async def _seed():
         gid = await db_module.create_group(name="bare-grp")
@@ -217,9 +209,9 @@ def test_drift_check_missing_when_no_prod_snapshot(tmp_path, monkeypatch, reques
 # ── Scheduler iteration ──────────────────────────────────────────────────────
 
 
-def test_run_drift_check_all_walks_only_eligible_devices(tmp_path, monkeypatch, request):
+def test_run_drift_check_all_walks_only_eligible_devices(monkeypatch, request):
     """The sweep should walk only devices with source_host_id set."""
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
 
     # Eligible: one cloned device matching prod (in_sync).
     host_id = _seed_host_with_snapshot("rtr-3", "10.0.0.4", "hostname rtr-3\n")

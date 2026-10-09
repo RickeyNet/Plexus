@@ -328,8 +328,7 @@ class _CsrfClient:
 
 
 @pytest.fixture
-def api(tmp_path, monkeypatch, request):
-    monkeypatch.setattr(db_module, "DB_PATH", str(tmp_path / "software.db"))
+def api(monkeypatch, request):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-software")
     monkeypatch.setenv("APP_API_TOKEN", "")
     monkeypatch.setenv("APP_REQUIRE_API_TOKEN", "false")
@@ -727,8 +726,7 @@ def test_api_psirt_sync_stores_advisories_for_the_tracked_versions(api, monkeypa
     assert api.get("/api/software/settings").json()["settings"]["psirt_last_sync_status"] == "failed"
 
 
-def test_api_requires_the_software_feature(tmp_path, monkeypatch, request):
-    monkeypatch.setattr(db_module, "DB_PATH", str(tmp_path / "software-perm.db"))
+def test_api_requires_the_software_feature(monkeypatch, request):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-software")
     monkeypatch.setenv("APP_API_TOKEN", "")
     monkeypatch.setenv("APP_REQUIRE_API_TOKEN", "false")

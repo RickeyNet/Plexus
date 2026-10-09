@@ -21,6 +21,8 @@ import netcontrol.routes.federation as federation_module
 import pytest
 import routes.database as db_module
 
+import pg_raw
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -52,10 +54,8 @@ class _FederationClient:
         return self._client.delete(url, **kw)
 
 
-def _auth_client(tmp_path, monkeypatch, request):
+def _auth_client(monkeypatch, request):
     """Create a TestClient with auth bootstrapped and federation tables."""
-    db_path = str(tmp_path / "fed_test.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-federation")
     monkeypatch.setenv("APP_API_TOKEN", "")
     monkeypatch.setenv("APP_REQUIRE_API_TOKEN", "false")
@@ -88,27 +88,13 @@ def _auth_client(tmp_path, monkeypatch, request):
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-@pytest.mark.sqlite_only  # inspects sqlite_master
 @pytest.mark.asyncio
-async def test_federation_tables_exist_after_init(tmp_path, monkeypatch, request):
+async def test_federation_tables_exist_after_init(request):
     """init_db should create federation_peers and federation_snapshots tables."""
-    db_path = str(tmp_path / "fed_migrate.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
     await db_module.init_db()
 
-    conn = await db_module.get_db()
-    try:
-        # Check federation_peers exists
-        cur = await conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='federation_peers'")
-        row = await cur.fetchone()
-        assert row is not None, "federation_peers table should exist"
-
-        # Check federation_snapshots exists
-        cur = await conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='federation_snapshots'")
-        row = await cur.fetchone()
-        assert row is not None, "federation_snapshots table should exist"
-    finally:
-        await conn.close()
+    assert await pg_raw.table_exists("federation_peers"), "federation_peers table should exist"
+    assert await pg_raw.table_exists("federation_snapshots"), "federation_snapshots table should exist"
 
 
 @pytest.mark.asyncio
@@ -151,9 +137,9 @@ async def test_federation_sync_loop_waits_for_tables(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_create_and_list_peers(tmp_path, monkeypatch, request):
+async def test_create_and_list_peers(monkeypatch, request):
     """CRUD: create a peer, list peers, verify it appears."""
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
 
     # Create peer
     resp = client.post(
@@ -182,9 +168,9 @@ async def test_create_and_list_peers(tmp_path, monkeypatch, request):
 
 
 @pytest.mark.asyncio
-async def test_get_single_peer(tmp_path, monkeypatch, request):
+async def test_get_single_peer(monkeypatch, request):
     """GET /api/federation/peers/{id} returns the peer."""
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
     resp = client.post(
         "/api/federation/peers",
         json={
@@ -200,9 +186,9 @@ async def test_get_single_peer(tmp_path, monkeypatch, request):
 
 
 @pytest.mark.asyncio
-async def test_update_peer(tmp_path, monkeypatch, request):
+async def test_update_peer(monkeypatch, request):
     """PUT /api/federation/peers/{id} updates fields."""
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
     resp = client.post(
         "/api/federation/peers",
         json={
@@ -227,9 +213,9 @@ async def test_update_peer(tmp_path, monkeypatch, request):
 
 
 @pytest.mark.asyncio
-async def test_delete_peer(tmp_path, monkeypatch, request):
+async def test_delete_peer(monkeypatch, request):
     """DELETE /api/federation/peers/{id} removes the peer."""
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
     resp = client.post(
         "/api/federation/peers",
         json={
@@ -249,18 +235,18 @@ async def test_delete_peer(tmp_path, monkeypatch, request):
 
 
 @pytest.mark.asyncio
-async def test_peer_not_found(tmp_path, monkeypatch, request):
+async def test_peer_not_found(monkeypatch, request):
     """GET/PUT/DELETE for nonexistent peer returns 404."""
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
     assert client.get("/api/federation/peers/9999").status_code == 404
     assert client.put("/api/federation/peers/9999", json={"name": "x"}).status_code == 404
     assert client.delete("/api/federation/peers/9999").status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_peer_url_validation(tmp_path, monkeypatch, request):
+async def test_peer_url_validation(monkeypatch, request):
     """Creating a peer with invalid URL scheme returns 422."""
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
     resp = client.post(
         "/api/federation/peers",
         json={
@@ -277,9 +263,9 @@ async def test_peer_url_validation(tmp_path, monkeypatch, request):
 
 
 @pytest.mark.asyncio
-async def test_test_peer_connectivity(tmp_path, monkeypatch, request):
+async def test_test_peer_connectivity(monkeypatch, request):
     """POST /api/federation/peers/{id}/test returns connectivity result."""
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
     resp = client.post(
         "/api/federation/peers",
         json={
@@ -303,9 +289,9 @@ async def test_test_peer_connectivity(tmp_path, monkeypatch, request):
 
 
 @pytest.mark.asyncio
-async def test_overview_empty(tmp_path, monkeypatch, request):
+async def test_overview_empty(monkeypatch, request):
     """GET /api/federation/overview with no peers returns empty totals."""
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
     resp = client.get("/api/federation/overview")
     assert resp.status_code == 200
     data = resp.json()
@@ -315,9 +301,9 @@ async def test_overview_empty(tmp_path, monkeypatch, request):
 
 
 @pytest.mark.asyncio
-async def test_overview_with_cached_snapshots(tmp_path, monkeypatch, request):
+async def test_overview_with_cached_snapshots(monkeypatch, request):
     """Overview aggregates data from cached federation_snapshots."""
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
 
     # Create a peer
     resp = client.post(
@@ -331,8 +317,6 @@ async def test_overview_with_cached_snapshots(tmp_path, monkeypatch, request):
     peer_id = resp.json()["id"]
 
     # Manually insert snapshot data (simulating a completed sync)
-    db_path = str(tmp_path / "fed_test.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
     conn = await db_module.get_db()
     try:
         await conn.execute(
@@ -370,9 +354,9 @@ async def test_overview_with_cached_snapshots(tmp_path, monkeypatch, request):
 
 
 @pytest.mark.asyncio
-async def test_peer_token_encrypted_at_rest(tmp_path, monkeypatch, request):
+async def test_peer_token_encrypted_at_rest(monkeypatch, request):
     """The api_token should be stored encrypted, not in plaintext."""
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
     resp = client.post(
         "/api/federation/peers",
         json={
@@ -384,8 +368,6 @@ async def test_peer_token_encrypted_at_rest(tmp_path, monkeypatch, request):
     peer_id = resp.json()["id"]
 
     # Read raw DB row
-    db_path = str(tmp_path / "fed_test.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
     conn = await db_module.get_db()
     try:
         cur = await conn.execute("SELECT api_token_enc FROM federation_peers WHERE id = ?", (peer_id,))
@@ -411,9 +393,9 @@ async def test_peer_token_encrypted_at_rest(tmp_path, monkeypatch, request):
 
 
 @pytest.mark.asyncio
-async def test_sync_peer_with_mocked_remote(tmp_path, monkeypatch, request):
+async def test_sync_peer_with_mocked_remote(monkeypatch, request):
     """POST /api/federation/peers/{id}/sync stores snapshot data."""
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
     resp = client.post(
         "/api/federation/peers",
         json={
@@ -439,8 +421,6 @@ async def test_sync_peer_with_mocked_remote(tmp_path, monkeypatch, request):
     assert result["data"]["devices"]["total"] == 25
 
     # Verify snapshots persisted
-    db_path = str(tmp_path / "fed_test.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
     conn = await db_module.get_db()
     try:
         cur = await conn.execute(

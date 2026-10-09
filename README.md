@@ -123,7 +123,7 @@ netcontrol/
 ├── integrations/           # Meraki, Cato, FMC, AWS, Azure, path trace, software
 └── static/frontend/        # React + TypeScript SPA (Vite; build output in dist/)
 routes/
-├── database.py             # Data layer (PostgreSQL; SQLite engine kept for tests/migration)
+├── database.py             # Data layer (PostgreSQL, with the SQL dialect translator)
 ├── db/                     # Per-domain database queries
 ├── migrations/             # Numbered schema migrations
 ├── crypto.py               # Fernet encryption for stored credentials

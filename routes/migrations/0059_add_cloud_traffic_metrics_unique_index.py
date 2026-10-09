@@ -16,7 +16,6 @@ DESCRIPTION = "Add unique sample-identity index to cloud_traffic_metrics"
 
 
 async def up(db) -> None:
-    # Identical SQL on SQLite and Postgres.
     await db.execute(
         """DELETE FROM cloud_traffic_metrics WHERE id NOT IN (
                SELECT MIN(id) FROM cloud_traffic_metrics

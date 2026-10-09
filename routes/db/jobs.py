@@ -14,8 +14,6 @@ import os
 import re
 from datetime import UTC, datetime, timedelta
 
-import aiosqlite
-
 import routes.database as _dbcore
 from routes.database import (
     _LOGGER,
@@ -188,26 +186,15 @@ async def delete_expired_jobs(retention_days: int) -> int:
     db = await _dbcore.get_db()
     try:
         safe_days = max(1, int(retention_days))
-        if _dbcore.DB_ENGINE == "postgres":
-            cursor = await db.execute(
-                """
-                DELETE FROM jobs
-                WHERE status IN ('success', 'failed', 'cancelled')
-                  AND COALESCE(finished_at, started_at, queued_at) IS NOT NULL
-                  AND COALESCE(finished_at, started_at, queued_at)::timestamp <= (NOW() - (?::int * INTERVAL '1 day'))
-                """,
-                (safe_days,),
-            )
-        else:
-            cursor = await db.execute(
-                """
-                DELETE FROM jobs
-                WHERE status IN ('success', 'failed', 'cancelled')
-                  AND COALESCE(finished_at, started_at, queued_at) IS NOT NULL
-                  AND julianday(COALESCE(finished_at, started_at, queued_at)) <= julianday('now') - ?
-                """,
-                (safe_days,),
-            )
+        cursor = await db.execute(
+            """
+            DELETE FROM jobs
+            WHERE status IN ('success', 'failed', 'cancelled')
+              AND COALESCE(finished_at, started_at, queued_at) IS NOT NULL
+              AND COALESCE(finished_at, started_at, queued_at)::timestamp <= (NOW() - (?::int * INTERVAL '1 day'))
+            """,
+            (safe_days,),
+        )
         await db.commit()
         return cursor.rowcount or 0
     finally:

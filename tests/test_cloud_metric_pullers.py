@@ -12,11 +12,8 @@ import pytest
 import routes.database as db_module
 
 
-async def _init(tmp_path, monkeypatch):
-    db_path = str(tmp_path / "test_cloud_metric_pullers.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+async def _init():
     await db_module.init_db()
-    return db_path
 
 
 class _DummyRequest:
@@ -68,8 +65,8 @@ def test_window_uses_cursor_last_pull():
 
 
 @pytest.mark.asyncio
-async def test_cursor_upsert_and_read(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_cursor_upsert_and_read():
+    await _init()
     account = await db_module.create_cloud_account(provider="aws", name="AWS Metric Test")
     account_id = int(account["id"])
 
@@ -85,8 +82,8 @@ async def test_cursor_upsert_and_read(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_list_cursors(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_list_cursors():
+    await _init()
     a1 = await db_module.create_cloud_account(provider="aws", name="AWS-1")
     a2 = await db_module.create_cloud_account(provider="azure", name="Azure-1")
     now_iso = datetime.now(UTC).isoformat()
@@ -100,8 +97,8 @@ async def test_list_cursors(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_aws_metric_puller_missing_resource_ids(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_aws_metric_puller_missing_resource_ids():
+    await _init()
     account = await db_module.create_cloud_account(
         provider="aws", name="AWS No Resource IDs", auth_config_json={"metric_namespace": "AWS/EC2"}
     )
@@ -111,8 +108,8 @@ async def test_aws_metric_puller_missing_resource_ids(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_aws_metric_puller_success_with_mock(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_aws_metric_puller_success_with_mock(monkeypatch):
+    await _init()
     account = await db_module.create_cloud_account(
         provider="aws",
         name="AWS Metric Mock",
@@ -158,8 +155,8 @@ async def test_aws_metric_puller_success_with_mock(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pull_all_skips_unconfigured_accounts(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_pull_all_skips_unconfigured_accounts():
+    await _init()
     await db_module.create_cloud_account(provider="aws", name="AWS bare", auth_config_json={})
     await db_module.create_cloud_account(provider="azure", name="Azure bare", auth_config_json={})
     await db_module.create_cloud_account(provider="gcp", name="GCP bare", auth_config_json={})
@@ -170,8 +167,8 @@ async def test_pull_all_skips_unconfigured_accounts(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_traffic_sync_config_get_and_update(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_traffic_sync_config_get_and_update():
+    await _init()
     import netcontrol.routes.state as state
 
     result = await cloud_visibility_module.get_cloud_traffic_sync_config_api()
@@ -193,8 +190,8 @@ async def test_traffic_sync_config_get_and_update(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_traffic_sync_cursors_api(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_traffic_sync_cursors_api():
+    await _init()
     account = await db_module.create_cloud_account(provider="aws", name="AWS Traffic Cursor Test")
     now_iso = datetime.now(UTC).isoformat()
     await db_module.upsert_cloud_traffic_metric_sync_cursor(int(account["id"]), last_pull_end=now_iso)
@@ -205,8 +202,8 @@ async def test_traffic_sync_cursors_api(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_manual_traffic_pull_single_account(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_manual_traffic_pull_single_account(monkeypatch):
+    await _init()
     account = await db_module.create_cloud_account(
         provider="aws",
         name="AWS Manual Metric Pull",

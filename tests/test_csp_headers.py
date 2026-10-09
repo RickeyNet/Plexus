@@ -11,15 +11,12 @@ middleware must not clobber it (it uses setdefault).
 from __future__ import annotations
 
 import pytest
-import routes.database as db_module
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch, request):
+def client(monkeypatch, request):
     import netcontrol.app as app_module
 
-    db_path = str(tmp_path / "csp.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-csp")
     monkeypatch.setenv("APP_API_TOKEN", "")
     monkeypatch.setenv("APP_REQUIRE_API_TOKEN", "false")

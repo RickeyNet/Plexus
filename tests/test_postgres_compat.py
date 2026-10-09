@@ -165,30 +165,20 @@ async def test_failed_statement_rolls_back_savepoint_not_transaction():
     assert fake.tx_depth == 0
 
 
-def test_minute_bucket_expr_branches(monkeypatch):
-    monkeypatch.setattr(db_module, "DB_ENGINE", "postgres")
+def test_minute_bucket_expr_uses_native_postgres_sql():
     pg = db_module._minute_bucket_expr("received_at", 5)
     assert "to_char" in pg and "extract(minute" in pg.lower()
-
-    monkeypatch.setattr(db_module, "DB_ENGINE", "sqlite")
-    lite = db_module._minute_bucket_expr("received_at", 5)
-    assert "strftime" in lite and "printf" in lite
+    assert "strftime" not in pg and "printf" not in pg
 
 
-def test_minute_bucket_expr_rejects_bad_column(monkeypatch):
-    monkeypatch.setattr(db_module, "DB_ENGINE", "sqlite")
+def test_minute_bucket_expr_rejects_bad_column():
     with pytest.raises(ValueError):
         db_module._minute_bucket_expr("received_at; DROP TABLE x", 5)
 
 
-def test_minutes_between_expr_branches(monkeypatch):
-    monkeypatch.setattr(db_module, "DB_ENGINE", "postgres")
+def test_minutes_between_expr_uses_extract_epoch():
     pg = db_module._minutes_between_expr("a.acknowledged_at", "a.created_at")
     assert "EXTRACT(EPOCH" in pg and "julianday" not in pg
-
-    monkeypatch.setattr(db_module, "DB_ENGINE", "sqlite")
-    lite = db_module._minutes_between_expr("a.acknowledged_at", "a.created_at")
-    assert "julianday" in lite
 
 
 @pytest.mark.asyncio

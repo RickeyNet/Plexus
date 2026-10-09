@@ -35,9 +35,7 @@ class _AuthClient:
         return self._client.delete(url, **kw)
 
 
-def _make_client(tmp_path, monkeypatch, request):
-    db_path = str(tmp_path / "geo_test.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+def _make_client(monkeypatch, request):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-geo")
     monkeypatch.setenv("APP_API_TOKEN", "")
     monkeypatch.setenv("APP_REQUIRE_API_TOKEN", "false")
@@ -86,10 +84,10 @@ def _make_client(tmp_path, monkeypatch, request):
 
 
 @pytest.fixture
-def geo_client(tmp_path, monkeypatch, request):
+def geo_client(monkeypatch, request):
     # _make_client registers a finalizer on `request` that exits the
     # TestClient, shutting down the app lifespan and its background loops.
-    return _make_client(tmp_path, monkeypatch, request)
+    return _make_client(monkeypatch, request)
 
 
 # ── Site CRUD ─────────────────────────────────────────────────────────────────

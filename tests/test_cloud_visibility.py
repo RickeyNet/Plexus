@@ -15,11 +15,8 @@ from netcontrol.routes.cloud_visibility import (
 )
 
 
-async def _init(tmp_path, monkeypatch):
-    db_path = str(tmp_path / "test_cloud_visibility.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+async def _init():
     await db_module.init_db()
-    return db_path
 
 
 async def _add_host(group_name="core", hostname="core-sw1", ip="10.0.0.10"):
@@ -52,8 +49,8 @@ class _DummyRequest:
 
 
 @pytest.mark.asyncio
-async def test_cloud_account_crud(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_cloud_account_crud():
+    await _init()
 
     created = await db_module.create_cloud_account(
         provider="aws",
@@ -90,8 +87,8 @@ async def test_cloud_account_crud(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_replace_cloud_snapshot_and_read_topology(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_replace_cloud_snapshot_and_read_topology():
+    await _init()
     host_id = await _add_host()
     account = await db_module.create_cloud_account(provider="azure", name="Azure Core")
     assert account is not None
@@ -153,8 +150,8 @@ async def test_replace_cloud_snapshot_and_read_topology(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_sample_discovery_snapshot_builds_hybrid_links(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_sample_discovery_snapshot_builds_hybrid_links():
+    await _init()
     host_id = await _add_host(hostname="edge-rtr1", ip="10.0.0.20")
     account = await db_module.create_cloud_account(provider="gcp", name="GCP Shared")
     assert account is not None
@@ -174,9 +171,9 @@ async def test_sample_discovery_snapshot_builds_hybrid_links(tmp_path, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_discover_auto_keeps_snapshot_when_live_fails(tmp_path, monkeypatch):
+async def test_discover_auto_keeps_snapshot_when_live_fails(monkeypatch):
     """Auto mode must never replace real topology with fabricated sample data."""
-    await _init(tmp_path, monkeypatch)
+    await _init()
     host_id = await _add_host(hostname="wan-edge-1", ip="10.0.0.30")
     account = await db_module.create_cloud_account(provider="aws", name="AWS Shared")
     assert account is not None
@@ -231,8 +228,8 @@ async def test_discover_auto_keeps_snapshot_when_live_fails(tmp_path, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_discover_sample_mode_still_writes_sample_snapshot(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_discover_sample_mode_still_writes_sample_snapshot():
+    await _init()
     account = await db_module.create_cloud_account(provider="aws", name="AWS Sample Explicit")
     assert account is not None
     account_id = int(account["id"])
@@ -250,8 +247,8 @@ async def test_discover_sample_mode_still_writes_sample_snapshot(tmp_path, monke
 
 
 @pytest.mark.asyncio
-async def test_discover_live_uses_collector_snapshot(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_discover_live_uses_collector_snapshot(monkeypatch):
+    await _init()
     host_id = await _add_host(hostname="wan-edge-2", ip="10.0.0.31")
     account = await db_module.create_cloud_account(provider="aws", name="AWS Live")
     assert account is not None
@@ -308,8 +305,8 @@ async def test_discover_live_uses_collector_snapshot(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_discover_live_persists_cloud_policy_rules(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_discover_live_persists_cloud_policy_rules(monkeypatch):
+    await _init()
     account = await db_module.create_cloud_account(provider="aws", name="AWS Policy Live")
     assert account is not None
 
@@ -378,8 +375,8 @@ async def test_discover_live_persists_cloud_policy_rules(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_discover_live_unavailable_raises_503(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_discover_live_unavailable_raises_503(monkeypatch):
+    await _init()
     account = await db_module.create_cloud_account(provider="azure", name="Azure Live")
     assert account is not None
 
@@ -398,8 +395,8 @@ async def test_discover_live_unavailable_raises_503(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_validate_live_returns_ready_when_collector_succeeds(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_validate_live_returns_ready_when_collector_succeeds(monkeypatch):
+    await _init()
     account = await db_module.create_cloud_account(provider="gcp", name="GCP Validate")
     assert account is not None
 
@@ -434,8 +431,8 @@ async def test_validate_live_returns_ready_when_collector_succeeds(tmp_path, mon
 
 
 @pytest.mark.asyncio
-async def test_validate_live_returns_unavailable_when_deps_missing(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_validate_live_returns_unavailable_when_deps_missing(monkeypatch):
+    await _init()
     account = await db_module.create_cloud_account(provider="aws", name="AWS Validate")
     assert account is not None
 
@@ -457,8 +454,8 @@ async def test_validate_live_returns_unavailable_when_deps_missing(tmp_path, mon
 
 
 @pytest.mark.asyncio
-async def test_ingest_cloud_flow_logs_normalized_and_query_stats(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_ingest_cloud_flow_logs_normalized_and_query_stats():
+    await _init()
     account = await db_module.create_cloud_account(provider="aws", name="AWS Flow Logs")
     assert account is not None
     account_id = int(account["id"])
@@ -537,8 +534,8 @@ async def test_ingest_cloud_flow_logs_normalized_and_query_stats(tmp_path, monke
 
 
 @pytest.mark.asyncio
-async def test_ingest_cloud_flow_logs_aws_format(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_ingest_cloud_flow_logs_aws_format():
+    await _init()
     account = await db_module.create_cloud_account(provider="aws", name="AWS VPC Flow Feed")
     assert account is not None
 
@@ -572,8 +569,8 @@ async def test_ingest_cloud_flow_logs_aws_format(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ingest_cloud_traffic_metrics_normalized_and_query_stats(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_ingest_cloud_traffic_metrics_normalized_and_query_stats():
+    await _init()
     account = await db_module.create_cloud_account(provider="azure", name="Azure Traffic Metrics")
     assert account is not None
     account_id = int(account["id"])
@@ -665,8 +662,8 @@ async def test_ingest_cloud_traffic_metrics_normalized_and_query_stats(tmp_path,
 
 
 @pytest.mark.asyncio
-async def test_ingest_cloud_traffic_metrics_aws_format(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_ingest_cloud_traffic_metrics_aws_format():
+    await _init()
     account = await db_module.create_cloud_account(provider="aws", name="AWS Traffic Metrics")
     assert account is not None
 
@@ -697,8 +694,8 @@ async def test_ingest_cloud_traffic_metrics_aws_format(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_sample_discovery_policy_rules_visible_via_api(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_sample_discovery_policy_rules_visible_via_api():
+    await _init()
     account = await db_module.create_cloud_account(provider="gcp", name="GCP Sample Policy")
     assert account is not None
 
@@ -744,10 +741,8 @@ async def test_sample_discovery_policy_rules_visible_via_api(tmp_path, monkeypat
         ),
     ],
 )
-async def test_sample_discovery_snapshot_includes_phase_d_topology(
-    tmp_path, monkeypatch, provider, resource_types, connection_types
-):
-    await _init(tmp_path, monkeypatch)
+async def test_sample_discovery_snapshot_includes_phase_d_topology(provider, resource_types, connection_types):
+    await _init()
     account = await db_module.create_cloud_account(provider=provider, name=f"{provider} Sample Topology")
     assert account is not None
 
@@ -765,8 +760,8 @@ async def test_sample_discovery_snapshot_includes_phase_d_topology(
 
 
 @pytest.mark.asyncio
-async def test_cloud_policy_rules_api_supports_action_direction_and_resource_filters(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_cloud_policy_rules_api_supports_action_direction_and_resource_filters():
+    await _init()
     account = await db_module.create_cloud_account(provider="gcp", name="GCP Filtered Policy")
     assert account is not None
 

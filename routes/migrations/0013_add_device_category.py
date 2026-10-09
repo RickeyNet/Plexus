@@ -8,13 +8,10 @@ manually.  Also backfills existing hosts based on their model string.
 
 from __future__ import annotations
 
-import os
 import re
 
 VERSION = 13
 DESCRIPTION = "Add device_category to hosts for topology icons"
-
-DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
 
 # Lightweight category inference for backfill (mirrors snmp._infer_device_category)
 _CAT_PATTERNS: list[tuple[re.Pattern, str]] = [
@@ -57,20 +54,7 @@ async def _backfill(db) -> None:
     await db.commit()
 
 
-async def _up_sqlite(db) -> None:
-    await db.execute("ALTER TABLE hosts ADD COLUMN device_category TEXT NOT NULL DEFAULT ''")
-    await db.commit()
-    await _backfill(db)
-
-
-async def _up_postgres(db) -> None:
-    await db.execute("ALTER TABLE hosts ADD COLUMN device_category TEXT NOT NULL DEFAULT ''")
-    await db.commit()
-    await _backfill(db)
-
-
 async def up(db) -> None:
-    if DB_ENGINE == "postgres":
-        await _up_postgres(db)
-    else:
-        await _up_sqlite(db)
+    await db.execute("ALTER TABLE hosts ADD COLUMN device_category TEXT NOT NULL DEFAULT ''")
+    await db.commit()
+    await _backfill(db)

@@ -6,17 +6,14 @@ and timestamp of every migration that has been applied.  On each startup
 ``run_migrations`` compares the set of migration files against the
 recorded versions and applies any that are missing, in order.
 
-Concurrency safety:
-  - **Postgres**: uses ``pg_advisory_lock`` so only one process migrates.
-  - **SQLite**: uses a filesystem lock (``<db>.migrate.lock``).
+Concurrency safety: ``pg_advisory_lock`` ensures only one process migrates
+at a time.
 """
 
 from __future__ import annotations
 
 import importlib
-import os
 import pkgutil
-import sys
 import time
 from pathlib import Path
 
@@ -24,47 +21,7 @@ from netcontrol.telemetry import configure_logging
 
 _LOGGER = configure_logging("plexus.migrations")
 
-# ── Lock helpers ────────────────────────────────────────────────────────────
-
 _ADVISORY_LOCK_ID = 0x504C5853  # "PLXS" as a 32-bit int
-
-
-class _FileLock:
-    """Cross-platform file lock for SQLite (no advisory lock support).
-
-    Uses ``fcntl.flock`` on POSIX and ``msvcrt.locking`` on Windows.
-    """
-
-    def __init__(self, path: str):
-        self._path = path
-        self._fd: int | None = None
-
-    def acquire(self) -> None:
-        self._fd = os.open(self._path, os.O_CREAT | os.O_RDWR)
-        if sys.platform == "win32":
-            import msvcrt
-
-            msvcrt.locking(self._fd, msvcrt.LK_LOCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(self._fd, fcntl.LOCK_EX)
-
-    def release(self) -> None:
-        if self._fd is not None:
-            if sys.platform == "win32":
-                import msvcrt
-
-                try:
-                    msvcrt.locking(self._fd, msvcrt.LK_UNLCK, 1)
-                except OSError as exc:
-                    _LOGGER.debug("Failed to unlock migration lock file %s: %s", self._path, exc)
-            else:
-                import fcntl
-
-                fcntl.flock(self._fd, fcntl.LOCK_UN)
-            os.close(self._fd)
-            self._fd = None
 
 
 # ── Discovery ───────────────────────────────────────────────────────────────
@@ -112,15 +69,7 @@ def _discover_migrations() -> list[dict]:
 
 # ── Schema table bootstrap ──────────────────────────────────────────────────
 
-_CREATE_TABLE_SQLITE = """
-CREATE TABLE IF NOT EXISTS schema_migrations (
-    version     INTEGER PRIMARY KEY,
-    description TEXT    NOT NULL DEFAULT '',
-    applied_at  TEXT    NOT NULL DEFAULT (datetime('now'))
-);
-"""
-
-_CREATE_TABLE_POSTGRES = """
+_CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version     INTEGER PRIMARY KEY,
     description TEXT    NOT NULL DEFAULT '',
@@ -129,9 +78,8 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 """
 
 
-async def _ensure_migrations_table(db, *, engine: str) -> None:
-    ddl = _CREATE_TABLE_POSTGRES if engine == "postgres" else _CREATE_TABLE_SQLITE
-    await db.execute(ddl)
+async def _ensure_migrations_table(db) -> None:
+    await db.execute(_CREATE_TABLE)
     await db.commit()
 
 
@@ -141,7 +89,7 @@ async def _applied_versions(db) -> set[int]:
     return {row[0] for row in rows}
 
 
-async def _bootstrap_baseline(db, *, engine: str) -> None:
+async def _bootstrap_baseline(db) -> None:
     """Record migrations 1–32 as already applied on any DB that has the v1.0.0
     SCHEMA already in place.
 
@@ -160,10 +108,7 @@ async def _bootstrap_baseline(db, *, engine: str) -> None:
     if applied:
         return  # framework already in use
 
-    if engine == "postgres":
-        cursor = await db.execute("SELECT 1 FROM information_schema.tables WHERE table_name = 'users' LIMIT 1")
-    else:
-        cursor = await db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='users' LIMIT 1")
+    cursor = await db.execute("SELECT 1 FROM information_schema.tables WHERE table_name = 'users' LIMIT 1")
     row = await cursor.fetchone()
     if row is None:
         return  # truly empty DB; SCHEMA hasn't been applied yet
@@ -171,49 +116,31 @@ async def _bootstrap_baseline(db, *, engine: str) -> None:
     _LOGGER.info("schema: marking v1.0.0 baseline migrations 1–32 as applied")
     for mig in _discover_migrations():
         if mig["version"] <= 32:
-            await _record_migration(db, mig["version"], mig["description"], engine=engine)
+            await _record_migration(db, mig["version"], mig["description"])
 
 
-async def _record_migration(db, version: int, description: str, *, engine: str) -> None:
-    if engine == "postgres":
-        await db.execute(
-            "INSERT INTO schema_migrations (version, description) VALUES ($1, $2)",
-            (version, description),
-        )
-    else:
-        await db.execute(
-            "INSERT INTO schema_migrations (version, description) VALUES (?, ?)",
-            (version, description),
-        )
+async def _record_migration(db, version: int, description: str) -> None:
+    await db.execute(
+        "INSERT INTO schema_migrations (version, description) VALUES (?, ?)",
+        (version, description),
+    )
     await db.commit()
 
 
 # ── Public API ──────────────────────────────────────────────────────────────
 
 
-async def run_migrations(db, *, engine: str = "sqlite") -> int:
+async def run_migrations(db) -> int:
     """Apply any pending migrations.  Returns the count of newly applied ones.
 
-    Parameters
-    ----------
-    db:
-        An open database connection (aiosqlite or ``_PostgresConnectionCompat``).
-    engine:
-        ``"sqlite"`` or ``"postgres"``.
+    ``db`` is an open connection from ``routes.database.get_db()`` (a
+    ``_PostgresConnectionCompat``); migrations are written in the portable
+    SQLite-style dialect and translated by it.
     """
-    lock = None
+    await db.execute(f"SELECT pg_advisory_lock({_ADVISORY_LOCK_ID})")
     try:
-        # Acquire concurrency lock
-        if engine == "postgres":
-            await db.execute(f"SELECT pg_advisory_lock({_ADVISORY_LOCK_ID})")
-        else:
-            from routes.database import DB_PATH
-
-            lock = _FileLock(DB_PATH + ".migrate.lock")
-            lock.acquire()
-
-        await _ensure_migrations_table(db, engine=engine)
-        await _bootstrap_baseline(db, engine=engine)
+        await _ensure_migrations_table(db)
+        await _bootstrap_baseline(db)
         applied = await _applied_versions(db)
         pending = [m for m in _discover_migrations() if m["version"] not in applied]
 
@@ -228,16 +155,9 @@ async def run_migrations(db, *, engine: str = "sqlite") -> int:
             desc = mig["description"]
             _LOGGER.info("schema: applying migration %04d - %s", ver, desc)
             t0 = time.monotonic()
-            # Migrations branch on a module-level DB_ENGINE read from the
-            # environment at import time.  Make the ``engine`` argument
-            # authoritative so the DDL always matches the connection we were
-            # handed (e.g. a test that opts into Postgres by patching
-            # routes.database.DB_ENGINE while APP_DB_ENGINE says sqlite).
-            if hasattr(mig["module"], "DB_ENGINE"):
-                mig["module"].DB_ENGINE = engine
             try:
                 await mig["up"](db)
-                await _record_migration(db, ver, desc, engine=engine)
+                await _record_migration(db, ver, desc)
                 elapsed = (time.monotonic() - t0) * 1000
                 _LOGGER.info("schema: migration %04d applied (%.0f ms)", ver, elapsed)
             except Exception:
@@ -251,15 +171,11 @@ async def run_migrations(db, *, engine: str = "sqlite") -> int:
         return len(pending)
 
     finally:
-        # Release concurrency lock
-        if engine == "postgres":
-            try:
-                await db.execute(f"SELECT pg_advisory_unlock({_ADVISORY_LOCK_ID})")
-            except Exception as exc:
-                _LOGGER.warning(
-                    "Migration cleanup failed: could not release Postgres advisory lock %s: %s",
-                    _ADVISORY_LOCK_ID,
-                    exc,
-                )
-        if lock is not None:
-            lock.release()
+        try:
+            await db.execute(f"SELECT pg_advisory_unlock({_ADVISORY_LOCK_ID})")
+        except Exception as exc:
+            _LOGGER.warning(
+                "Migration cleanup failed: could not release Postgres advisory lock %s: %s",
+                _ADVISORY_LOCK_ID,
+                exc,
+            )

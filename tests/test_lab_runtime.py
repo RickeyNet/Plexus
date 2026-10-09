@@ -10,6 +10,8 @@ import netcontrol.routes.lab_runtime as lab_runtime
 import pytest
 import routes.database as db_module
 
+import pg_raw
+
 
 class _LabClient:
     def __init__(self, client, csrf_token):
@@ -29,9 +31,7 @@ class _LabClient:
         return self._client.post(url, **kw)
 
 
-def _auth_client(tmp_path, monkeypatch, request):
-    db_path = str(tmp_path / "lab_runtime_test.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+def _auth_client(monkeypatch, request):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-runtime")
     monkeypatch.setenv("APP_API_TOKEN", "")
     monkeypatch.setenv("APP_REQUIRE_API_TOKEN", "false")
@@ -62,37 +62,27 @@ def _auth_client(tmp_path, monkeypatch, request):
 # ── Migration ────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.sqlite_only  # inspects the schema with PRAGMA table_info
 @pytest.mark.asyncio
-async def test_runtime_columns_exist_after_init(tmp_path, monkeypatch):
-    db_path = str(tmp_path / "rt_migrate.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+async def test_runtime_columns_exist_after_init():
     await db_module.init_db()
 
-    conn = await db_module.get_db()
-    try:
-        cur = await conn.execute("PRAGMA table_info(lab_devices)")
-        rows = await cur.fetchall()
-        cols = {r[1] for r in rows}
-        for required in (
-            "runtime_kind",
-            "runtime_node_kind",
-            "runtime_image",
-            "runtime_status",
-            "runtime_lab_name",
-            "runtime_node_name",
-            "runtime_mgmt_address",
-            "runtime_credential_id",
-            "runtime_error",
-            "runtime_workdir",
-            "runtime_started_at",
-        ):
-            assert required in cols, f"missing lab_devices.{required}"
+    cols = set(await pg_raw.table_columns("lab_devices"))
+    for required in (
+        "runtime_kind",
+        "runtime_node_kind",
+        "runtime_image",
+        "runtime_status",
+        "runtime_lab_name",
+        "runtime_node_name",
+        "runtime_mgmt_address",
+        "runtime_credential_id",
+        "runtime_error",
+        "runtime_workdir",
+        "runtime_started_at",
+    ):
+        assert required in cols, f"missing lab_devices.{required}"
 
-        cur = await conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='lab_runtime_events'")
-        assert await cur.fetchone() is not None
-    finally:
-        await conn.close()
+    assert await pg_raw.table_exists("lab_runtime_events")
 
 
 # ── Driver-level unit tests ─────────────────────────────────────────────────
@@ -185,9 +175,9 @@ def test_extract_mgmt_ipv4_legacy_shape():
 # ── HTTP endpoints (with mocked driver) ─────────────────────────────────────
 
 
-def test_runtime_status_endpoint(tmp_path, monkeypatch, request):
+def test_runtime_status_endpoint(monkeypatch, request):
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _name: None)
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
     resp = client.get("/api/lab/runtime")
     assert resp.status_code == 200
     body = resp.json()
@@ -195,9 +185,9 @@ def test_runtime_status_endpoint(tmp_path, monkeypatch, request):
     assert "linux" in body["allowed_node_kinds"]
 
 
-def test_deploy_rejected_when_unavailable(tmp_path, monkeypatch, request):
+def test_deploy_rejected_when_unavailable(monkeypatch, request):
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _name: None)
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
 
     env_id = client.post("/api/lab/environments", json={"name": "rt-env"}).json()["id"]
     dev_id = client.post(
@@ -213,7 +203,7 @@ def test_deploy_rejected_when_unavailable(tmp_path, monkeypatch, request):
     assert "containerlab" in resp.text.lower()
 
 
-def test_deploy_rejects_disallowed_node_kind(tmp_path, monkeypatch, request):
+def test_deploy_rejects_disallowed_node_kind(monkeypatch, request):
     # Pretend containerlab is available so the request hits validation.
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: "/usr/bin/containerlab")
     monkeypatch.setattr(
@@ -221,7 +211,7 @@ def test_deploy_rejects_disallowed_node_kind(tmp_path, monkeypatch, request):
         "_run_containerlab",
         AsyncMock(return_value=(0, "version 0.50\n", "")),
     )
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
     env_id = client.post("/api/lab/environments", json={"name": "rt-env"}).json()["id"]
     dev_id = client.post(
         f"/api/lab/environments/{env_id}/devices",
@@ -261,7 +251,7 @@ def test_deploy_happy_path_records_state_and_event(tmp_path, monkeypatch, reques
     monkeypatch.setattr(lab_runtime, "_run_containerlab", _fake_run)
     monkeypatch.setenv("PLEXUS_LAB_WORKDIR", str(tmp_path / "labwd"))
 
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
     env_id = client.post("/api/lab/environments", json={"name": "rt-env"}).json()["id"]
     dev_id = client.post(
         f"/api/lab/environments/{env_id}/devices",
@@ -312,7 +302,7 @@ def test_destroy_clears_state(tmp_path, monkeypatch, request):
     monkeypatch.setattr(lab_runtime, "_run_containerlab", _fake_run)
     monkeypatch.setenv("PLEXUS_LAB_WORKDIR", str(tmp_path / "labwd"))
 
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
     env_id = client.post("/api/lab/environments", json={"name": "rt-env"}).json()["id"]
     dev_id = client.post(
         f"/api/lab/environments/{env_id}/devices",
@@ -372,7 +362,7 @@ def test_simulate_live_runs_real_push(tmp_path, monkeypatch, request):
     monkeypatch.setattr(lab_runtime, "_capture_running_config", _fake_capture)
     monkeypatch.setattr(lab_runtime, "_push_config_to_device", _fake_push)
 
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
 
     # Seed a credential that the device will reference.
     async def _seed_cred():
@@ -443,7 +433,7 @@ def test_destroy_removes_workdir(tmp_path, monkeypatch, request):
     monkeypatch.setattr(lab_runtime, "_run_containerlab", _fake_run)
     monkeypatch.setenv("PLEXUS_LAB_WORKDIR", str(workroot))
 
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
     env_id = client.post("/api/lab/environments", json={"name": "wd-env"}).json()["id"]
     dev_id = client.post(
         f"/api/lab/environments/{env_id}/devices",
@@ -489,7 +479,7 @@ def test_reconcile_marks_stale_running_rows(tmp_path, monkeypatch, request):
     monkeypatch.setattr(lab_runtime, "_run_containerlab", _fake_run)
     monkeypatch.setenv("PLEXUS_LAB_WORKDIR", str(tmp_path / "labwd"))
 
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
     env_id = client.post("/api/lab/environments", json={"name": "rec-env"}).json()["id"]
     dev_id = client.post(
         f"/api/lab/environments/{env_id}/devices",
@@ -515,13 +505,10 @@ def test_reconcile_marks_stale_running_rows(tmp_path, monkeypatch, request):
     assert detail["runtime_mgmt_address"] in ("", None)
 
 
-def test_reconcile_skips_when_containerlab_unavailable(tmp_path, monkeypatch):
+def test_reconcile_skips_when_containerlab_unavailable(monkeypatch):
     monkeypatch.setattr(lab_runtime.shutil, "which", lambda _n: None)
 
     # Seed a row directly so reconcile has work to do despite no client.
-    db_path = str(tmp_path / "rec_skip.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
-
     from datetime import UTC, datetime as _datetime
 
     async def _setup():
@@ -574,7 +561,7 @@ def test_reap_idle_runtimes_destroys_old_labs(tmp_path, monkeypatch, request):
     # Set TTL to 1 second so anything started before "now" qualifies.
     monkeypatch.setenv("PLEXUS_LAB_RUNTIME_TTL_SECONDS", "1")
 
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
     env_id = client.post("/api/lab/environments", json={"name": "ttl-env"}).json()["id"]
     dev_id = client.post(
         f"/api/lab/environments/{env_id}/devices",
@@ -653,9 +640,9 @@ def _seed_compliance_profile_blocking_snmp_public(group_id: int):
     return asyncio.run(_do())
 
 
-def test_simulate_offline_includes_compliance_impact(tmp_path, monkeypatch, request):
+def test_simulate_offline_includes_compliance_impact(monkeypatch, request):
     """Phase A simulate should now surface compliance regressions when the source host has profiles."""
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
 
     async def _seed():
         gid = await db_module.create_group(name="comp-grp")

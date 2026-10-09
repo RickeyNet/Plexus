@@ -14,8 +14,6 @@ import os
 import re
 from datetime import UTC, datetime, timedelta
 
-import aiosqlite
-
 import routes.database as _dbcore
 from routes.database import (
     _LOGGER,
@@ -201,9 +199,8 @@ async def add_audit_event(
         conn = await _dbcore.get_db()
         pg_locked = False
         try:
-            if _dbcore.DB_ENGINE == "postgres":
-                await conn.execute("SELECT pg_advisory_lock(?)", (_AUDIT_CHAIN_PG_LOCK_KEY,))
-                pg_locked = True
+            await conn.execute("SELECT pg_advisory_lock(?)", (_AUDIT_CHAIN_PG_LOCK_KEY,))
+            pg_locked = True
             cursor = await conn.execute("SELECT row_hash FROM audit_events ORDER BY id DESC LIMIT 1")
             tail = await cursor.fetchone()
             prev_hash = (tail[0] if tail else "") or ""

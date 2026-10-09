@@ -14,11 +14,8 @@ import pytest
 import routes.database as db_module
 
 
-async def _init_clean_db(tmp_path, monkeypatch):
-    db_path = str(tmp_path / "approval.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+async def _init_clean_db():
     await db_module.init_db()
-    return db_path
 
 
 async def _seed_credential() -> int:
@@ -39,8 +36,8 @@ async def _seed_credential() -> int:
         await db.close()
 
 
-async def test_deployment_defaults_not_required(tmp_path, monkeypatch):
-    await _init_clean_db(tmp_path, monkeypatch)
+async def test_deployment_defaults_not_required():
+    await _init_clean_db()
     group_id = await db_module.create_group("lab")
     cred_id = await _seed_credential()
 
@@ -56,8 +53,8 @@ async def test_deployment_defaults_not_required(tmp_path, monkeypatch):
     assert (dep["approved_by"] or "") == ""
 
 
-async def test_set_deployment_approval_request_transition(tmp_path, monkeypatch):
-    await _init_clean_db(tmp_path, monkeypatch)
+async def test_set_deployment_approval_request_transition():
+    await _init_clean_db()
     group_id = await db_module.create_group("lab")
     cred_id = await _seed_credential()
     dep_id = await db_module.create_deployment(
@@ -81,8 +78,8 @@ async def test_set_deployment_approval_request_transition(tmp_path, monkeypatch)
     assert dep["approved_at"] is None
 
 
-async def test_set_deployment_approval_approve_stamps_approver(tmp_path, monkeypatch):
-    await _init_clean_db(tmp_path, monkeypatch)
+async def test_set_deployment_approval_approve_stamps_approver():
+    await _init_clean_db()
     group_id = await db_module.create_group("lab")
     cred_id = await _seed_credential()
     dep_id = await db_module.create_deployment(
@@ -112,8 +109,8 @@ async def test_set_deployment_approval_approve_stamps_approver(tmp_path, monkeyp
     assert dep["approval_comment"] == "lgtm"
 
 
-async def test_set_deployment_approval_rejects_invalid_status(tmp_path, monkeypatch):
-    await _init_clean_db(tmp_path, monkeypatch)
+async def test_set_deployment_approval_rejects_invalid_status():
+    await _init_clean_db()
     group_id = await db_module.create_group("lab")
     cred_id = await _seed_credential()
     dep_id = await db_module.create_deployment(
@@ -126,8 +123,8 @@ async def test_set_deployment_approval_rejects_invalid_status(tmp_path, monkeypa
         await db_module.set_deployment_approval(dep_id, approval_status="bogus")
 
 
-async def test_group_environment_marker_persists(tmp_path, monkeypatch):
-    await _init_clean_db(tmp_path, monkeypatch)
+async def test_group_environment_marker_persists():
+    await _init_clean_db()
     group_id = await db_module.create_group("prod-edge")
     await db_module.set_group_environment(group_id, "production")
     group = await db_module.get_group(group_id)
@@ -141,10 +138,10 @@ async def test_group_environment_marker_persists(tmp_path, monkeypatch):
 # ── Auto-flag rules (exercises the deployments router logic) ─────────────────
 
 
-async def test_create_deployment_auto_flags_for_production_group(tmp_path, monkeypatch):
+async def test_create_deployment_auto_flags_for_production_group():
     """When a deployment targets a production-marked group, the endpoint
     flips requires_approval and seeds approval_status='pending'."""
-    await _init_clean_db(tmp_path, monkeypatch)
+    await _init_clean_db()
     group_id = await db_module.create_group("prod-edge")
     await db_module.set_group_environment(group_id, "production")
     cred_id = await _seed_credential()
@@ -172,8 +169,8 @@ async def test_create_deployment_auto_flags_for_production_group(tmp_path, monke
     assert dep["approval_status"] == "pending"
 
 
-async def test_create_deployment_no_flag_for_non_production_group(tmp_path, monkeypatch):
-    await _init_clean_db(tmp_path, monkeypatch)
+async def test_create_deployment_no_flag_for_non_production_group():
+    await _init_clean_db()
     group_id = await db_module.create_group("lab")
     await db_module.set_group_environment(group_id, "lab")
     cred_id = await _seed_credential()

@@ -16,12 +16,9 @@ import routes.database as db_module
 
 
 @pytest.fixture
-def snap_db(tmp_path, monkeypatch):
-    db_path = str(tmp_path / "ipam_snapshot.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+def snap_db(monkeypatch):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-ipam-snapshot")
     asyncio.run(db_module.init_db())
-    return db_path
 
 
 async def _add_host(hostname: str, ip: str) -> None:
