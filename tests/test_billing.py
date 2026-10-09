@@ -432,6 +432,7 @@ def test_api_list_circuits_empty(app_client):
     assert len(data["circuits"]) == 0
 
 
+@pytest.mark.sqlite_only  # seeds rows with sqlite3.connect(DB_PATH)
 def test_api_circuit_crud(app_client):
     client = app_client
     headers = _admin_headers(client)

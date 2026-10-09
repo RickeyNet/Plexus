@@ -15,6 +15,7 @@ from __future__ import annotations
 import sqlite3
 
 import netcontrol.app as app_module
+import pytest
 import routes.database as db_module
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -282,6 +283,7 @@ def test_suppression_active_only_filter(tmp_path, monkeypatch, request):
 # ── Alert acknowledge ────────────────────────────────────────────────────────
 
 
+@pytest.mark.sqlite_only  # seeds rows with sqlite3.connect(DB_PATH)
 def test_acknowledge_alert(tmp_path, monkeypatch, request):
     client, db_path = _auth_client(tmp_path, monkeypatch, request)
     alert_id = _seed_alert(db_path)
@@ -298,6 +300,7 @@ def test_acknowledge_alert(tmp_path, monkeypatch, request):
     assert any(a["id"] == alert_id for a in acked)
 
 
+@pytest.mark.sqlite_only  # seeds rows with sqlite3.connect(DB_PATH)
 def test_bulk_acknowledge(tmp_path, monkeypatch, request):
     client, db_path = _auth_client(tmp_path, monkeypatch, request)
     a1 = _seed_alert(db_path)

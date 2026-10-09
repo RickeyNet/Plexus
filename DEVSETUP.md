@@ -283,7 +283,31 @@ pytest -n auto        # main suite, SQLite
 APP_DB_ENGINE=postgres APP_DATABASE_URL="$APP_DATABASE_URL" pytest tests/test_postgres_backend.py -q
 ```
 
-The main suite is SQLite-only, so check new SQL by hand on Postgres (Loop B).
+The main suite runs on SQLite by default, so check new SQL on Postgres with
+the opt-in mode below.
+
+### Running the test suite against Postgres
+
+Set `PLEXUS_TEST_PG_URL` to a database the suite may **destroy**. Its name
+must end in `_test` and must not be `plexus` (pytest refuses to start
+otherwise), so the dev database is never touched. Do not dot-source
+`scripts/dev-env.*` for this; its URL points at the dev database.
+
+```powershell
+docker exec plexus-postgres psql -U plexus -d postgres -c "CREATE DATABASE plexus_test"   # once
+$env:PLEXUS_TEST_PG_URL = "postgresql://plexus:<url-encoded POSTGRES_PASSWORD>@127.0.0.1:5432/plexus_test"
+.venv\Scripts\python.exe -m pytest tests/test_meraki_topology.py -rA
+Remove-Item Env:PLEXUS_TEST_PG_URL   # back to SQLite
+```
+
+How it works (`tests/conftest.py`): the engine is pinned to `postgres`, the
+schema is built once per session into `plexus_test_template` (`init_db()`,
+including its seed rows), and before each test that follows a test which
+touched the database, `plexus_test` is dropped and re-cloned from the
+template (about 0.2 s). Tests marked `@pytest.mark.sqlite_only` (direct
+SQLite file access, PRAGMAs, WAL, the read pool) are skipped. With
+`pytest -n auto` each xdist worker uses its own `plexus_test_<worker>`
+database.
 
 Frontend (`netcontrol/static/frontend`):
 

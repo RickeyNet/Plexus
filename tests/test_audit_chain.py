@@ -72,6 +72,7 @@ async def test_verify_audit_chain_empty_db(tmp_path, monkeypatch):
     assert result["total_rows"] == 0
 
 
+@pytest.mark.sqlite_only  # tampers via sqlite3.connect(DB_PATH)
 async def test_verify_audit_chain_detects_tamper(tmp_path, monkeypatch):
     db_path = await _init_clean_db(tmp_path, monkeypatch)
 
@@ -95,6 +96,7 @@ async def test_verify_audit_chain_detects_tamper(tmp_path, monkeypatch):
     assert result["first_break_reason"] == "row_hash_mismatch"
 
 
+@pytest.mark.sqlite_only  # tampers via sqlite3.connect(DB_PATH)
 async def test_verify_audit_chain_detects_deletion(tmp_path, monkeypatch):
     db_path = await _init_clean_db(tmp_path, monkeypatch)
 
@@ -118,6 +120,7 @@ async def test_verify_audit_chain_detects_deletion(tmp_path, monkeypatch):
     assert result["first_break_reason"] == "prev_hash_mismatch"
 
 
+@pytest.mark.sqlite_only  # exercises the SQLite trigger via sqlite3.connect(DB_PATH)
 async def test_update_trigger_blocks_raw_update(tmp_path, monkeypatch):
     db_path = await _init_clean_db(tmp_path, monkeypatch)
     await db_module.add_audit_event("auth", "login.success", "alice")
@@ -130,6 +133,7 @@ async def test_update_trigger_blocks_raw_update(tmp_path, monkeypatch):
         raw.close()
 
 
+@pytest.mark.sqlite_only  # exercises the SQLite trigger via sqlite3.connect(DB_PATH)
 async def test_delete_trigger_blocks_raw_delete(tmp_path, monkeypatch):
     db_path = await _init_clean_db(tmp_path, monkeypatch)
     await db_module.add_audit_event("auth", "login.success", "alice")
@@ -142,6 +146,7 @@ async def test_delete_trigger_blocks_raw_delete(tmp_path, monkeypatch):
         raw.close()
 
 
+@pytest.mark.sqlite_only  # rewrites rows via sqlite3.connect(DB_PATH)
 async def test_backfill_produces_clean_chain(tmp_path, monkeypatch):
     """Insert rows directly (no chain), then run migration, then verify."""
     db_path = str(tmp_path / "backfill.db")

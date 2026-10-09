@@ -377,6 +377,7 @@ def test_fetch_serial_nxos_uses_processor_board_id(tmp_path, monkeypatch, reques
     assert seen_commands == ['show version | include "Processor Board ID"']
 
 
+@pytest.mark.sqlite_only  # inspects the schema with PRAGMA table_info
 def test_serial_number_column_exists(tmp_path, monkeypatch):
     """Verify that the serial_number column is present after DB init (migration applied)."""
     db_path = str(tmp_path / "migration_check.db")

@@ -232,3 +232,56 @@ async def test_postgres_meraki_org_build_status_update(monkeypatch):
             datetime.fromisoformat(value)
     finally:
         await db_module.delete_meraki_org(org_ref)
+
+
+@pytest.mark.asyncio
+async def test_postgres_meraki_compliance_assignment_and_results(monkeypatch):
+    """Meraki compliance writes on Postgres: the create helpers return row ids
+    (lastrowid was None until the tables joined _INSERT_ID_TABLES), the
+    due-assignment query's datetime(col, '+' || col || ' seconds') rewrite
+    runs, and the retention delete accepts an int day count (``$1::text``
+    made asyncpg reject it)."""
+    monkeypatch.setattr(db_module, "DB_ENGINE", "postgres")
+    monkeypatch.setattr(db_module, "APP_DATABASE_URL", os.getenv("APP_DATABASE_URL", ""))
+
+    await db_module.init_db()
+    name = "pg_smoke_meraki_compliance_org"
+    stale = await db_module.get_meraki_org_by_name(name)
+    if stale is not None:
+        await db_module.delete_meraki_org(int(stale["id"]))
+    org = await db_module.create_meraki_org(name=name, org_id="pg-smoke")
+    assert org is not None
+    org_ref = int(org["id"])
+    profile_id = await db_module.create_compliance_profile(name="pg_smoke_meraki_profile")
+    assignment_id = None
+    result_ids: list[int] = []
+    try:
+        assignment_id = await db_module.create_meraki_compliance_assignment(profile_id, org_ref, interval_seconds=3600)
+        assert isinstance(assignment_id, int) and assignment_id > 0
+
+        due = {a["id"] for a in await db_module.get_meraki_compliance_assignments_due()}
+        assert assignment_id in due  # never scanned
+        await db_module.record_meraki_compliance_assignment_scan(assignment_id, "success", "pg smoke")
+        due = {a["id"] for a in await db_module.get_meraki_compliance_assignments_due()}
+        assert assignment_id not in due  # scanned just now, interval not elapsed
+
+        result_ids = await db_module.store_meraki_compliance_results(
+            scan_id="pg-smoke",
+            assignment_id=assignment_id,
+            profile_id=profile_id,
+            org_ref=org_ref,
+            results=[{"target_kind": "organization", "status": "non-compliant", "findings": []}],
+        )
+        assert len(result_ids) == 1 and isinstance(result_ids[0], int)
+        assert await db_module.get_meraki_compliance_result(result_ids[0]) is not None
+
+        deleted = await db_module.delete_old_meraki_compliance_results(90)
+        assert isinstance(deleted, int)
+        assert await db_module.get_meraki_compliance_result(result_ids[0]) is not None  # too new to delete
+    finally:
+        for result_id in result_ids:
+            await db_module.delete_meraki_compliance_result(result_id)
+        if assignment_id:
+            await db_module.delete_meraki_compliance_assignment(assignment_id)
+        await db_module.delete_meraki_org(org_ref)
+        await db_module.delete_compliance_profile(profile_id)

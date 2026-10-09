@@ -93,6 +93,7 @@ async def test_get_audit_events_filter_by_category(tmp_path, monkeypatch):
     assert all(r["category"] == "auth" for r in auth_rows)
 
 
+@pytest.mark.sqlite_only  # SQLite PRAGMA busy_timeout
 @pytest.mark.asyncio
 async def test_get_db_applies_busy_timeout_pragma(tmp_path, monkeypatch):
     """get_db should apply configured busy_timeout to reduce lock churn."""
@@ -109,6 +110,7 @@ async def test_get_db_applies_busy_timeout_pragma(tmp_path, monkeypatch):
         await conn.close()
 
 
+@pytest.mark.sqlite_only  # SQLite DB_PATH file creation
 @pytest.mark.asyncio
 async def test_get_db_creates_parent_directory(tmp_path, monkeypatch):
     """get_db should create parent directories for APP_DB_PATH-style locations."""
