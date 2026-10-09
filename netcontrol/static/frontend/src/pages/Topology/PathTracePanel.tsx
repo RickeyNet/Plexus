@@ -10,6 +10,7 @@ import {
   traceEnds,
   traceHighlight,
   traceRoute,
+  traceWay,
   verdictLabel,
   type TraceHighlight,
 } from './pathTrace';
@@ -72,20 +73,34 @@ function Direction({ title, direction, overall }: { title: string; direction: Pa
   );
 }
 
-function Result({ result, query }: { result: PathTraceResult; query: PathTraceQuery }) {
+/**
+ * The comparison of the two directions above it: whether the replies pass the
+ * same devices as the request. When they do not, the two ways are spelled out
+ * before the server's sentence on where they part and what that means.
+ */
+function Asymmetry({ result }: { result: PathTraceResult }) {
   const asymmetric = result.asymmetric;
+  if (!asymmetric) return null;
+  const word = asymmetric.status === 'yes' ? 'yes' : asymmetric.status === 'no' ? 'no' : 'unknown';
+  const request = traceWay(result.request);
+  const replies = traceWay(result.reply);
+  const ways = asymmetric.status === 'yes' && request && replies ? `The request passed ${request}; the replies pass ${replies}.` : '';
+  return (
+    <div style={{ color: asymmetric.status === 'yes' ? WARNING : MUTED, marginTop: '0.3rem' }}>
+      <strong>Asymmetric routing</strong>: {word}.{ways ? ` ${ways}` : ''}
+      {asymmetric.text ? ` ${asymmetric.text}` : ''}
+    </div>
+  );
+}
+
+function Result({ result, query }: { result: PathTraceResult; query: PathTraceQuery }) {
   const source = result.source?.address || query.source;
   const destination = result.destination?.address || query.destination;
   return (
     <>
-      {asymmetric && (
-        <div style={{ color: asymmetric.status === 'yes' ? WARNING : MUTED }}>
-          <strong>Asymmetric routing</strong>: {asymmetric.status === 'yes' ? 'yes' : asymmetric.status === 'no' ? 'no' : 'unknown'}
-          {asymmetric.text ? `. ${asymmetric.text}` : '.'}
-        </div>
-      )}
       <Direction title={`Request, ${source} → ${destination}`} direction={result.request} overall={result.summary} />
       <Direction title={`Replies, ${destination} → ${source}`} direction={result.reply} overall={result.summary} />
+      <Asymmetry result={result} />
       {(result.notes ?? []).map((note) => (
         <div key={note} className="text-muted">ⓘ {note}</div>
       ))}
@@ -94,10 +109,11 @@ function Result({ result, query }: { result: PathTraceResult; query: PathTraceQu
 }
 
 /**
- * The flow of one Path Mode leg traced hop by hop by the server: at every
- * device the policies, ACLs, security groups, NAT rules and routes it hits,
- * for the request and the replies, whether routing is asymmetric, and the
- * same traffic the other way round as a new connection (Reverse).
+ * The flow of one Path Mode leg traced hop by hop by the server: the verdict,
+ * the same traffic the other way round as a new connection (Reverse), then at
+ * every device the policies, ACLs, security groups, NAT rules and routes it
+ * hits, for the request and the replies, and last whether routing is
+ * asymmetric, which compares the two lists above it.
  */
 export function PathTrace({
   forward,

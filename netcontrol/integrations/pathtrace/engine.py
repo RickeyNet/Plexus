@@ -260,6 +260,13 @@ def _not_collected(names: list[str]) -> str:
     return f"{', '.join(_sentence_item(n) for n in names)} {verb} not collected"
 
 
+def _and(names: list[str]) -> str:
+    """``A``, ``A and B``, ``A, B and C``."""
+    if len(names) <= 1:
+        return "".join(names)
+    return f"{', '.join(names[:-1])} and {names[-1]}"
+
+
 _PLURAL_WORDS = ("rules", "routes", "policies", "lists", "ranges", "groups", "objects")
 
 
@@ -709,13 +716,16 @@ class Tracer:
             verdict, summary = UNKNOWN, "The walk ended before the destination."
         else:
             path = " → ".join(h["label"] for h in walk.hops)
-            summary = f"Allowed: {path}."
+            summary = f"Every hop allows it: {path}."
         if walk.not_checked:
             names = list(dict.fromkeys(walk.not_checked))
             summary += " Not checked: " + ", ".join([names[0], *(_sentence_item(n) for n in names[1:])]) + "."
         return {"verdict": verdict, "summary": summary, "hops": walk.hops}
 
     def _asymmetry(self, request: _Walk, reply: _Walk) -> dict[str, str]:
+        """Whether the replies pass the same devices as the request, in a
+        sentence that names where the two ways part, then one sentence per
+        side for the stateful firewalls that see only one of them."""
         if request.fallback or reply.fallback or not request.delivered or not reply.delivered:
             return {
                 "status": "unknown",
@@ -733,26 +743,30 @@ class Tracer:
         source = show(reply.flow.src) if reply.hops else ""
         if index < len(back) and index < len(expected):
             text = f"Replies from {source} go from {self.label(back[index - 1]) if index else 'the destination'} to "
-            text += f"{self.label(back[index])} instead of {self.label(expected[index])}."
+            text += f"{self.label(back[index])} instead of {self.label(expected[index])}, the way the request came."
         elif index == len(back):
-            skipped = ", ".join(self.label(g) for g in expected[index:])
-            text = f"Replies from {source} are delivered at {self.label(back[-1])} without passing {skipped}."
+            skipped = _and([self.label(g) for g in expected[index:]])
+            text = f"Replies from {source} end at {self.label(back[-1])} and never pass {skipped}, "
+            text += "which the request did."
         else:
-            extra = ", ".join(self.label(g) for g in back[index:])
-            text = f"Replies from {source} also pass {extra}."
+            extra = _and([self.label(g) for g in back[index:]])
+            text = f"Replies from {source} also pass {extra}, which the request did not."
         warnings = []
-        for gid in [g for g in back if g not in there and g is not None]:
-            if self._stateful(gid, there):
-                warnings.append(
-                    f"The replies pass {self.label(gid)}, whose firewall is stateful and did not see the request: "
-                    "it would drop them."
-                )
-        for gid in [g for g in there if g not in back and g is not None]:
-            if self._stateful(gid, back):
-                warnings.append(
-                    f"The replies do not pass {self.label(gid)}, whose firewall is stateful: it sees only one "
-                    "direction of the connection."
-                )
+        unseen = [self.label(g) for g in back if g not in there and g is not None and self._stateful(g, there)]
+        if unseen:
+            verb, pronoun = ("has", "it") if len(unseen) == 1 else ("have", "they")
+            warnings.append(
+                f"{_and(unseen)} {verb} a stateful firewall that never saw the request: {pronoun} would drop the replies."
+            )
+        skipped_stateful = [
+            self.label(g) for g in there if g not in back and g is not None and self._stateful(g, back)
+        ]
+        if skipped_stateful:
+            verb, pronoun = ("has", "its") if len(skipped_stateful) == 1 else ("have", "their")
+            warnings.append(
+                f"{_and(skipped_stateful)} {verb} a stateful firewall that sees the request but never the replies: "
+                f"{pronoun} connection state never completes, so the rest of the connection can be dropped there."
+            )
         return {"status": "yes", "text": " ".join([text, *warnings])}
 
     def _stateful(self, gid: Any, other_way: list) -> bool:
@@ -1265,8 +1279,7 @@ class Tracer:
     # ── Rule sets ──────────────────────────────────────────────────────────
 
     def _note(self, name: str, walk: _Walk, items: list[dict]) -> None:
-        verb = "are" if _plural(name) else "is"
-        items.append(item(NOTE, INFO, name, f"{name} {verb} not collected: not checked."))
+        items.append(item(NOTE, INFO, name, "Not collected, so not checked."))
         walk.not_checked.append(name)
 
     def _route_info(self, route_notes: list[str], walk: _Walk, ctx: _Hop) -> None:
@@ -1660,6 +1673,29 @@ class Tracer:
             last["items"].extend(found)
             walk.hops.append(last)
         if result["kind"] == "delivered":
+            # The address of an instance that is a device the trace follows
+            # itself (a vMX, an FTDv) is not the end of the way unless that
+            # device is the end: the replies to a source it hid behind its
+            # uplink address are its to translate back and send on.
+            device = self.graph_of.get((adapter.org_ref, str(result.get("instance") or "")))
+            if (
+                device is not None
+                and device not in (walk.dest, last["node"])
+                and self.forwarding(device)[0] is not None
+            ):
+                last["items"].append(
+                    item(
+                        ROUTE,
+                        OK,
+                        adapter.term,
+                        f"{show(walk.flow.dst)} is an address of {self.label(device)}, which takes the flow from here.",
+                    )
+                )
+                edge_id, passable = self._link(last["node"], device, last["items"])
+                if not passable:
+                    walk.ended = True
+                    return None
+                return _Arrival(node=device, edge=edge_id, via_ip=show(walk.flow.dst), prev=last["node"])
             walk.delivered = True
             return None
         if result["kind"] != "exit":

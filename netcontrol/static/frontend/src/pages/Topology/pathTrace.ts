@@ -163,9 +163,21 @@ export function traceRoute(direction: PathDirection | null | undefined): string 
   return `${names.join(' → ')} (${hops.length} hop${hops.length !== 1 ? 's' : ''})`;
 }
 
-/** Where an item looked, with the rule that matched: `Layer 3 firewall rules, rule 2`. */
+/**
+ * The hops of a traced direction as a plain way: `Branch 01 MX → Hub 01 MX`,
+ * with no marks and no count, for a sentence that compares two directions.
+ * Empty when there are no hops.
+ */
+export function traceWay(direction: PathDirection | null | undefined): string {
+  return (direction?.hops ?? []).map(hopName).join(' → ');
+}
+
+/**
+ * Where an item looked: the rule set, table or gateway. The rule that matched
+ * is not repeated here, since an item's text names it (`Rule 2 (...): denies it`).
+ */
 export function itemWhere(item: PathItem): string {
-  return item.rule !== null && item.rule !== undefined ? `${item.where}, rule ${item.rule}` : item.where;
+  return item.where;
 }
 
 /** `10.1.10.5 → 10.0.1.5` */

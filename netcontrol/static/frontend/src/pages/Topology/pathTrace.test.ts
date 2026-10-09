@@ -15,6 +15,7 @@ import {
   traceEnds,
   traceHighlight,
   traceRoute,
+  traceWay,
   uncheckedTraceNote,
   verdictLabel,
 } from './pathTrace';
@@ -131,11 +132,18 @@ describe('path trace display', () => {
     expect(traceRoute(undefined)).toBeNull();
   });
 
-  it('shows the matching rule with the rule set', () => {
-    const item = { stage: 'policy' as const, status: 'blocked' as const, where: 'Layer 3 firewall rules', text: 'Rule 2 matches.' };
-    expect(itemWhere({ ...item, rule: 2 })).toBe('Layer 3 firewall rules, rule 2');
+  it('names where an item looked without repeating the rule its text names', () => {
+    const item = { stage: 'policy' as const, status: 'blocked' as const, where: 'Layer 3 firewall rules', text: 'Rule 2 (deny any): denies it.' };
+    expect(itemWhere({ ...item, rule: 2 })).toBe('Layer 3 firewall rules');
     expect(itemWhere({ ...item, rule: null })).toBe('Layer 3 firewall rules');
     expect(itemWhere(item)).toBe('Layer 3 firewall rules');
+  });
+
+  it('spells a direction out as a plain way for the asymmetry sentence', () => {
+    const hops = [hop({ node: 'mx-a', label: 'Branch 01 MX' }), hop({ label: 'Internet' }), hop({ node: 'hub', status: 'blocked' })];
+    expect(traceWay({ verdict: 'allowed', summary: '', hops })).toBe('Branch 01 MX → Internet → hub');
+    expect(traceWay({ verdict: 'unknown', summary: '', hops: [] })).toBe('');
+    expect(traceWay(undefined)).toBe('');
   });
 });
 
