@@ -138,6 +138,19 @@ plexus-dev() {
 
 Loop B skips nginx and HTTPS, so run Loop A before shipping.
 
+## Updating dependencies
+
+Regenerate `requirements-lock.txt` after changing `requirements.txt` (needs `uv`,
+included in `requirements-dev.txt`; `--universal` keeps Linux-only markers such as
+`python-ldap` and `uvloop` so the lock is valid on every platform):
+
+```bash
+uv pip compile requirements.txt --universal --generate-hashes --python-version 3.14 -o requirements-lock.txt
+```
+
+The Docker image and the SBOM are built from this lock, so a changed
+`requirements.txt` without a regenerated lock does not reach the deployment.
+
 ## Tests and checks
 
 These mirror `.github/workflows/ci.yml`.
