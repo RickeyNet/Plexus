@@ -71,7 +71,7 @@ running-config | include flow|ip flow-export` to capture state, applies via
 
 If you're running Plexus in Docker, devices need to reach the **host** IP on
 UDP 2055/6343 - not the container IP. Make sure the host firewall allows
-inbound UDP on those ports; see `DEPLOYMENT.md`.
+inbound UDP on those ports; see `deploy/FIREWALL.md`.
 
 ### Retention
 
