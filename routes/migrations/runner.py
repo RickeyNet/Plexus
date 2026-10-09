@@ -93,6 +93,7 @@ def _discover_migrations() -> list[dict]:
                 "version": mod.VERSION,
                 "description": getattr(mod, "DESCRIPTION", name),
                 "up": mod.up,
+                "module": mod,
                 "filename": name,
             }
         )
@@ -227,6 +228,13 @@ async def run_migrations(db, *, engine: str = "sqlite") -> int:
             desc = mig["description"]
             _LOGGER.info("schema: applying migration %04d - %s", ver, desc)
             t0 = time.monotonic()
+            # Migrations branch on a module-level DB_ENGINE read from the
+            # environment at import time.  Make the ``engine`` argument
+            # authoritative so the DDL always matches the connection we were
+            # handed (e.g. a test that opts into Postgres by patching
+            # routes.database.DB_ENGINE while APP_DB_ENGINE says sqlite).
+            if hasattr(mig["module"], "DB_ENGINE"):
+                mig["module"].DB_ENGINE = engine
             try:
                 await mig["up"](db)
                 await _record_migration(db, ver, desc, engine=engine)

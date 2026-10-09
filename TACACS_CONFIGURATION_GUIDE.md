@@ -11,7 +11,7 @@ the worked example:
 ## 1. What Plexus Supports Today
 
 Plexus login supports four auth providers:
-- `local` (SQLite/Postgres user database)
+- `local` (Plexus user database)
 - `radius` (RADIUS PAP Access-Request, see `RADIUS_CONFIGURATION_GUIDE.md`)
 - `tacacs` (TACACS+ authentication + exec authorization - this guide)
 - `ldap` (LDAP/LDAPS bind with group-based role mapping)

@@ -58,8 +58,7 @@ Traffic Analysis page.
 If you need longer raw-flow retention (e.g. for security forensics) you
 can bump `retention_hours` - flow record rows are small but volume scales
 linearly with traffic and exporter sampling rate, so size the underlying
-DB volume accordingly. PostgreSQL backends handle the larger row counts
-more gracefully than SQLite.
+DB volume (`plexus-postgres`) accordingly.
 
 ### Tuning at runtime
 
@@ -127,5 +126,5 @@ is sensitive - credentials are Fernet-encrypted in the `credentials`
 table, but other tables (config backups, syslog events) may contain
 hostnames, interface names, neighbor IPs, and free-text command output.
 Disk-level encryption (LUKS, BitLocker, cloud-volume KMS) is recommended
-for production deployments; Plexus itself doesn't encrypt the SQLite /
-PostgreSQL volume.
+for production deployments; Plexus itself doesn't encrypt the PostgreSQL
+volume.

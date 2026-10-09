@@ -855,9 +855,18 @@ def test_a_vmx_keeps_its_own_vpc_when_a_backup_vmx_exports_the_same_range():
 # ── Cato ─────────────────────────────────────────────────────────────────────
 
 
-def test_cato_site_to_site_crosses_pops_and_the_cloud_and_the_wan_firewall_is_unknown():
-    snapshot = build_cato_snapshot(build_cato_sample_raw())
-    result = _tracer({3: snapshot}).trace(
+def _cato_tracer(raw: dict | None = None) -> Tracer:
+    return _tracer({3: build_cato_snapshot(raw or build_cato_sample_raw())})
+
+
+def _policies(hop: dict) -> list[tuple[str, str, str]]:
+    """``(status, rule set, text)`` of every policy item of a hop."""
+    return [(i["status"], i["where"], i["text"]) for i in hop["items"] if i["stage"] == "policy"]
+
+
+def test_cato_site_to_site_applies_the_wan_firewall_once_at_the_ingress_pop():
+    tracer = _cato_tracer()
+    result = tracer.trace(
         "10.60.20.5", "10.50.10.20", source_node="meraki:3:d:5003", destination_node="meraki:3:d:5001"
     )
 
@@ -869,11 +878,330 @@ def test_cato_site_to_site_crosses_pops_and_the_cloud_and_the_wan_firewall_is_un
         "PoP Ashburn",
         "HQ-DataCenter (primary)",
     ]
-    assert request["verdict"] == "unknown" and result["verdict"] == "unknown"
-    cloud = request["hops"][2]
-    assert ("policy", "unknown", "WAN firewall rules") in _items(cloud)
     assert all(h["provider"] == "cato" for h in request["hops"])
-    assert request["summary"].startswith("Could not be decided at Branch-Cleveland, WAN firewall rules")
+    # A private destination: the WAN firewall, evaluated at the PoP the flow enters by, then
+    # only said to be applied; never the Internet firewall.
+    branch, new_york, cloud, ashburn, hq = request["hops"]
+    assert _policies(branch) == _policies(hq) == []
+    # Any traffic: rule 2 allows only HTTPS, and rule 3 names a users group Plexus cannot evaluate.
+    [(status, name, text)] = _policies(new_york)
+    assert (status, name) == ("unknown", "WAN firewall rules") and text.startswith("Rule 3 Remote users to HQ")
+    already = [("info", "WAN firewall rules", "Already applied at PoP New York.")]
+    assert _policies(cloud) == _policies(ashburn) == already
+    assert request["verdict"] == "unknown" and result["verdict"] == "unknown"
+    assert request["summary"].startswith("Could not be decided at PoP New York, WAN firewall rules: Rule 3")
+    # The replies: accepted by the account's state at the first PoP they meet.
+    reply = result["reply"]
+    assert _labels(reply)[1] == "PoP Ashburn"
+    assert _policies(reply["hops"][1]) == [("info", "WAN firewall rules", STATEFUL_REPLY)]
+    assert (
+        _policies(reply["hops"][2])
+        == _policies(reply["hops"][3])
+        == [("info", "WAN firewall rules", "Already applied at PoP Ashburn.")]
+    )
+
+    # HTTPS from the branch is what rule 2 allows.
+    https = tracer.trace(
+        "10.60.20.5",
+        "10.50.10.20",
+        source_node="meraki:3:d:5003",
+        destination_node="meraki:3:d:5001",
+        protocol="tcp",
+        port=443,
+    )
+    assert https["verdict"] == "allowed"
+    [(status, _name, text)] = _policies(https["request"]["hops"][1])
+    assert status == "ok" and text.startswith("Rule 2 Sites to HQ servers")
+
+
+def test_cato_site_to_site_on_one_pop_still_meets_the_wan_firewall():
+    # HQ and the AWS IPsec site are both on PoP Ashburn: the flow never reaches the Cato Cloud.
+    result = _cato_tracer().trace(
+        "10.50.10.20",
+        "172.31.0.5",
+        source_node="meraki:3:d:5001",
+        destination_node="meraki:3:s:1004",
+        protocol="tcp",
+        port=443,
+    )
+
+    request = result["request"]
+    assert _labels(request) == ["HQ-DataCenter (primary)", "PoP Ashburn", "AWS-us-east-1"]
+    [(status, name, text)] = _policies(request["hops"][1])
+    assert (status, name) == ("ok", "WAN firewall rules") and text.startswith("Rule 4 Any to any")
+    assert result["verdict"] == "allowed"
+
+
+def test_cato_wan_firewall_rule_blocks_at_the_ingress_pop():
+    # Rule 1 applies both ways: the servers may not reach Denver either.
+    result = _cato_tracer().trace(
+        "10.50.10.20",
+        "10.61.20.5",
+        source_node="meraki:3:d:5001",
+        destination_node="meraki:3:d:5004",
+        protocol="tcp",
+        port=22,
+    )
+
+    request = result["request"]
+    assert _labels(request) == ["HQ-DataCenter (primary)", "PoP Ashburn"]
+    assert result["verdict"] == "blocked"
+    assert _items(request["hops"][-1]) == [("policy", "blocked", "WAN firewall rules")]
+    assert request["summary"].startswith(
+        "Blocked at PoP Ashburn, WAN firewall rules: Rule 1 Isolate Denver from servers (return)"
+    )
+
+
+def test_cato_internet_traffic_leaves_from_the_cloud_through_the_internet_firewall():
+    result = _cato_tracer().trace("10.60.20.5", "8.8.8.8", source_node="meraki:3:d:5003", protocol="tcp", port=443)
+
+    request = result["request"]
+    assert _labels(request) == ["Branch-Cleveland", "PoP New York", "Cato Cloud", "Internet"]
+    assert not request["summary"].startswith("No route")
+    assert all(i["status"] != "blocked" for h in request["hops"] for i in h["items"])
+    branch, new_york, cloud, internet = request["hops"]
+    # A public destination: the Internet firewall, at the ingress PoP; never the WAN firewall.
+    # Rule 1 blocks a category of sites Plexus cannot tell 8.8.8.8 is in or not.
+    [(status, name, text)] = _policies(new_york)
+    assert (status, name) == ("unknown", "Internet firewall rules") and text.startswith("Rule 1 Block malware")
+    assert _policies(cloud) == [("info", "Internet firewall rules", "Already applied at PoP New York.")]
+    assert _policies(branch) == _policies(internet) == []
+    route_item = next(i for i in cloud["items"] if i["stage"] == "route")
+    assert (route_item["status"], route_item["where"]) == ("ok", "Cato internet egress")
+    assert cloud["out"] == "Internet"
+    # The source leaves as Cato's public address, which is not collected.
+    nat_item = next(i for i in cloud["items"] if i["stage"] == "nat")
+    assert nat_item["text"] == "Source 10.60.20.5 becomes the address of Internet, which was not collected."
+    assert internet["node"] is None and "8.8.8.8 is on the internet" in internet["items"][0]["text"]
+    assert request["verdict"] == "unknown"
+    assert request["summary"].startswith(
+        "Could not be decided at PoP New York, Internet firewall rules: Rule 1 Block malware category"
+    )
+
+
+def test_cato_firewall_not_collected_is_unknown_once():
+    raw = build_cato_sample_raw()
+    raw["wan_firewall"] = raw["internet_firewall"] = None
+    result = _cato_tracer(raw).trace(
+        "10.60.20.5", "10.50.10.20", source_node="meraki:3:d:5003", destination_node="meraki:3:d:5001"
+    )
+
+    request = result["request"]
+    hops = request["hops"]
+    unknown = [(h["label"], i["where"]) for h in hops for i in h["items"] if i["status"] == "unknown"]
+    assert unknown == [("PoP New York", "WAN firewall rules")]
+    noted = [("info", "WAN firewall rules", "Already noted at PoP New York.")]
+    assert _policies(hops[2]) == _policies(hops[3]) == noted
+    assert request["summary"] == (
+        "Could not be decided at PoP New York, WAN firewall rules: WAN firewall rules are not collected: "
+        "whether they allow this flow is not known. Not checked: Internet firewall rules."
+    )
+    # The Internet firewall does not apply to a private destination: one note, at the first PoP.
+    notes = [(h["label"], i["where"]) for h in hops for i in h["items"] if i["stage"] == "note"]
+    assert notes == [("PoP New York", "Internet firewall rules")]
+
+
+def _route_item(hop: dict) -> dict:
+    return next(i for i in hop["items"] if i["stage"] == "route")
+
+
+def _link_item(hop: dict) -> dict:
+    return next(i for i in hop["items"] if i["stage"] == "link")
+
+
+_CLEVELAND_TO_HQ = {"source_node": "meraki:3:d:5003", "destination_node": "meraki:3:d:5001"}
+_HTTPS = {"protocol": "tcp", "port": 443}
+
+
+def test_cato_site_with_a_bgp_peer_makes_a_default_route_lookup_unknown():
+    raw = build_cato_sample_raw()
+    raw["bgp_peers"] = [{"id": "b-1", "name": "Core router", "site": {"id": "1002"}, "peerIp": "10.60.20.2"}]
+    result = _cato_tracer(raw).trace("10.60.20.5", "10.50.10.20", **_CLEVELAND_TO_HQ, **_HTTPS)
+
+    request = result["request"]
+    # The rest of the trace proceeds: only the branch's lookup is in doubt.
+    assert _labels(request) == [
+        "Branch-Cleveland",
+        "PoP New York",
+        "Cato Cloud",
+        "PoP Ashburn",
+        "HQ-DataCenter (primary)",
+    ]
+    lookup = _route_item(request["hops"][0])
+    assert (lookup["status"], lookup["where"]) == ("unknown", "Cato tunnel to PoP New York")
+    assert lookup["text"] == (
+        "0.0.0.0/0 over the tunnel to PoP New York. Only the default route matches 10.50.10.20; "
+        "routes learned by BGP are not collected, so a more specific route may exist."
+    )
+    unknown = [(h["label"], i["stage"]) for h in request["hops"] for i in h["items"] if i["status"] == "unknown"]
+    assert unknown == [("Branch-Cleveland", "route")]
+    assert result["verdict"] == "unknown"
+    assert request["summary"].startswith("Could not be decided at Branch-Cleveland, Cato tunnel to PoP New York")
+    # On the reply the branch's connected range answers: the note is only information.
+    last = result["reply"]["hops"][-1]
+    assert ("note", "info", "Routes learned by BGP") in _items(last, info=True)
+
+
+def test_cato_ranges_not_collected_make_the_pops_lookup_unknown():
+    raw = build_cato_sample_raw()
+    raw["ranges"] = []
+    raw["errors"] = [{"scope": "account", "path": "entityLookup siteRange", "status": 403, "message": "Denied"}]
+    result = _cato_tracer(raw).trace("10.60.20.5", "10.50.10.20", **_CLEVELAND_TO_HQ, **_HTTPS)
+
+    hops = {h["label"]: h for h in result["request"]["hops"]}
+    lookup = _route_item(hops["PoP New York"])
+    assert (lookup["status"], lookup["where"]) == ("unknown", "Cato backbone")
+    assert lookup["text"].endswith(
+        "Only the default route matches 10.50.10.20; route table (site network ranges) is not collected, "
+        "so a more specific route may exist."
+    )
+    assert result["verdict"] == "unknown"
+
+
+def _ipsec_trace(snapshot: dict) -> dict:
+    """Branch-Cleveland to the AWS VPC behind the IPsec site, on HTTPS."""
+    return _tracer({3: snapshot}).trace(
+        "10.60.20.5", "172.31.0.5", source_node="meraki:3:d:5003", destination_node="meraki:3:s:1004", **_HTTPS
+    )
+
+
+def _ipsec_edges(snapshot: dict) -> list[dict]:
+    return [e for e in snapshot["edges"] if e["a"] == "s:1004"]
+
+
+def test_cato_ipsec_site_is_reached_over_its_primary_tunnel():
+    result = _ipsec_trace(build_cato_snapshot(build_cato_sample_raw()))
+
+    request = result["request"]
+    assert _labels(request) == ["Branch-Cleveland", "PoP New York", "Cato Cloud", "PoP Ashburn", "AWS-us-east-1"]
+    ashburn = request["hops"][3]
+    assert _link_item(ashburn)["text"] == "IPsec tunnel, reachable."
+    # Rule 2 allows Cleveland to the HQ servers only; rule 4 allows the rest.
+    [(status, _name, text)] = _policies(request["hops"][1])
+    assert status == "ok" and text.startswith("Rule 4 Any to any")
+    assert result["verdict"] == "allowed"
+    assert _link_item(result["reply"]["hops"][0])["text"] == "IPsec tunnel, reachable."
+
+
+def test_cato_ipsec_site_fails_over_to_the_secondary_tunnel_then_is_cut_off():
+    snapshot = build_cato_snapshot(build_cato_sample_raw())
+    primary, secondary = _ipsec_edges(snapshot)
+    primary["status"] = "unreachable"
+    result = _ipsec_trace(snapshot)
+    assert result["verdict"] == "allowed"
+    ashburn = result["request"]["hops"][3]
+    assert _link_item(ashburn)["text"] == "IPsec tunnel, ready."
+    # The hop into the site names the edge it crossed: the secondary's.
+    assert result["request"]["hops"][4]["edge"] == f"meraki:3:{secondary['id']}"
+
+    secondary["status"] = "unreachable"
+    result = _ipsec_trace(snapshot)
+    request = result["request"]
+    assert _labels(request) == ["Branch-Cleveland", "PoP New York", "Cato Cloud", "PoP Ashburn"]
+    link = _link_item(request["hops"][-1])
+    assert (link["status"], link["text"]) == (
+        "blocked",
+        "Every link between PoP Ashburn and AWS-us-east-1 is down (unreachable).",
+    )
+    assert result["verdict"] == "blocked"
+    assert request["summary"] == (
+        "Blocked at PoP Ashburn, Link to AWS-us-east-1: "
+        "Every link between PoP Ashburn and AWS-us-east-1 is down (unreachable)."
+    )
+
+
+_DANA = {"source_node": "meraki:3:cato:user:9001"}
+
+
+def test_cato_remote_user_to_a_site_meets_the_wan_firewall_at_the_users_pop():
+    result = _cato_tracer().trace("10.41.0.11", "10.50.10.20", **_DANA, **_HTTPS)
+
+    request = result["request"]
+    assert _labels(request) == ["Dana Reyes", "PoP New York", "Cato Cloud", "PoP Ashburn", "HQ-DataCenter (primary)"]
+    # Rule 2 names sites, not users; rule 3 names a users group Plexus cannot resolve.
+    [(status, name, text)] = _policies(request["hops"][1])
+    assert (status, name) == ("unknown", "WAN firewall rules") and text.startswith("Rule 3 Remote users to HQ")
+    assert "users group VPN Users" in text
+    assert _policies(request["hops"][2]) == [("info", "WAN firewall rules", "Already applied at PoP New York.")]
+    assert result["verdict"] == "unknown"
+    assert result["asymmetric"] == {"status": "no", "text": "Replies take the same hops back."}
+    assert _labels(result["reply"]) == list(reversed(_labels(request)))
+
+
+def test_cato_remote_user_to_the_internet_meets_the_internet_firewall_at_the_users_pop():
+    result = _cato_tracer().trace("10.41.0.11", "8.8.8.8", **_DANA, **_HTTPS)
+
+    request = result["request"]
+    assert _labels(request) == ["Dana Reyes", "PoP New York", "Cato Cloud", "Internet"]
+    [(status, name, text)] = _policies(request["hops"][1])
+    assert (status, name) == ("unknown", "Internet firewall rules") and text.startswith("Rule 1 Block malware")
+    assert _policies(request["hops"][2]) == [("info", "Internet firewall rules", "Already applied at PoP New York.")]
+    assert _route_item(request["hops"][2])["where"] == "Cato internet egress"
+
+
+def test_cato_remote_user_to_a_site_on_the_same_pop_skips_the_backbone():
+    result = _cato_tracer().trace("10.41.0.11", "10.60.20.5", **_DANA, **_HTTPS)
+
+    assert _labels(result["request"]) == ["Dana Reyes", "PoP New York", "Branch-Cleveland"]
+    [(status, _name, text)] = _policies(result["request"]["hops"][1])
+    assert status == "ok" and text.startswith("Rule 4 Any to any")
+    assert result["verdict"] == "allowed"
+    assert _labels(result["reply"]) == ["Branch-Cleveland", "PoP New York", "Dana Reyes"]
+
+
+def test_cato_site_to_site_replies_take_the_same_hops_back():
+    result = _cato_tracer().trace("10.60.20.5", "10.50.10.20", **_CLEVELAND_TO_HQ, **_HTTPS)
+
+    assert result["verdict"] == "allowed"
+    assert result["asymmetric"] == {"status": "no", "text": "Replies take the same hops back."}
+    assert _labels(result["reply"]) == list(reversed(_labels(result["request"])))
+
+
+def test_cato_cloud_routing_a_range_back_to_the_ingress_pop_is_a_routing_loop():
+    snapshot = build_cato_snapshot(build_cato_sample_raw())
+    cloud = next(n for n in snapshot["nodes"] if n["id"] == "cato:cloud")
+    for entry in cloud["forwarding"]["routes"]:
+        if entry["prefix"] == "10.50.10.0/24":
+            entry["peer"] = {"org_node": "pop:New York"}
+    result = _tracer({3: snapshot}).trace("10.60.20.5", "10.50.10.20", **_CLEVELAND_TO_HQ, **_HTTPS)
+
+    # PoP New York sends HQ's range over the backbone, which sends it back.
+    request = result["request"]
+    assert _labels(request) == ["Branch-Cleveland", "PoP New York", "Cato Cloud"]
+    assert request["hops"][-1]["items"][-1]["where"] == "Routing loop"
+    assert result["verdict"] == "blocked"
+    assert result["asymmetric"]["status"] == "unknown"
+
+
+def test_cato_socket_sending_by_one_pop_and_answered_by_another_is_asymmetric():
+    # Branch-Cleveland's second WAN link is on PoP Ashburn, so HQ's PoP answers it directly,
+    # while the Socket sends by PoP New York.
+    raw = build_cato_sample_raw()
+    branch = next(s for s in raw["sites"] if s["id"] == "1002")
+    branch["devices"][0]["interfaces"][1].update(
+        {"connected": True, "popName": "Ashburn", "tunnelRemoteIP": "203.0.113.30"}
+    )
+    snapshot = build_cato_snapshot(raw)
+    socket = next(n for n in snapshot["nodes"] if n["id"] == "d:5003")
+    socket["forwarding"]["routes"][-1]["peer"] = {"org_node": "pop:New York"}
+    result = _tracer({3: snapshot}).trace("10.60.20.5", "10.50.10.20", **_CLEVELAND_TO_HQ, **_HTTPS)
+
+    assert result["verdict"] == "allowed"
+    assert _labels(result["request"]) == [
+        "Branch-Cleveland",
+        "PoP New York",
+        "Cato Cloud",
+        "PoP Ashburn",
+        "HQ-DataCenter (primary)",
+    ]
+    assert _labels(result["reply"]) == ["HQ-DataCenter (primary)", "PoP Ashburn", "Branch-Cleveland"]
+    # The account's firewall keeps one state table: PoP Ashburn, on the replies'
+    # path, sees the connection, so there is no stateful warning for the PoP and
+    # the Cloud the replies skip.
+    assert result["asymmetric"] == {
+        "status": "yes",
+        "text": "Replies from 10.50.10.20 go from PoP Ashburn to Branch-Cleveland instead of Cato Cloud.",
+    }
 
 
 # ── Asymmetry ────────────────────────────────────────────────────────────────

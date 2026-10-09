@@ -4,7 +4,7 @@
 #
 # Backs up:
 #   1. PostgreSQL database (pg_dump)
-#   2. /app/state volume (netcontrol.key, session.key, sqlite db if used)
+#   2. /app/state volume (netcontrol.key, session.key, floor plans)
 #
 # Losing netcontrol.key permanently breaks decryption of stored device
 # credentials, so the state volume is just as important as the database.

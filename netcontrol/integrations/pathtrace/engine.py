@@ -193,6 +193,9 @@ class _Walk:
     delivered: bool = False
     fallback: bool = False
     ended: bool = False
+    # Account-wide rule sets already applied (or noted as not collected) in
+    # this walk: (organization, rule set name) -> the label of that hop.
+    applied: dict[tuple[int | None, str], str] = field(default_factory=dict)
 
 
 # Address space that is never routed on the internet. The documentation
@@ -221,6 +224,26 @@ _NOT_PUBLIC = tuple(
 def _public(network: Network) -> bool:
     """Whether an address or network is reached over the internet."""
     return not any(n.version == network.version and n.overlaps(network) for n in _NOT_PUBLIC)
+
+
+def _applies(applies: str, classes: set, dst: Network) -> bool:
+    """Whether a rule set that ``applies`` to a class of traffic is
+    consulted at a step that handles ``classes``. ``traffic`` is every flow
+    a device takes in: a Cato WAN firewall applies to a private destination
+    (``wan_traffic``), its Internet firewall to a public one
+    (``internet_traffic``)."""
+    if applies == "wan_traffic":
+        return "traffic" in classes and not _public(dst)
+    if applies == "internet_traffic":
+        return "traffic" in classes and _public(dst)
+    return applies in classes
+
+
+def _account_wide(applies: str) -> bool:
+    """Whether a rule set is one policy of a whole account, enforced once
+    per flow (Cato's, at the PoP the flow enters by), rather than one of
+    each device that carries it."""
+    return applies in ("wan_traffic", "internet_traffic")
 
 
 def _pair(a: Any, b: Any) -> frozenset:
@@ -719,22 +742,31 @@ class Tracer:
             text = f"Replies from {source} also pass {extra}."
         warnings = []
         for gid in [g for g in back if g not in there and g is not None]:
-            if self._stateful(gid):
+            if self._stateful(gid, there):
                 warnings.append(
                     f"The replies pass {self.label(gid)}, whose firewall is stateful and did not see the request: "
                     "it would drop them."
                 )
         for gid in [g for g in there if g not in back and g is not None]:
-            if self._stateful(gid):
+            if self._stateful(gid, back):
                 warnings.append(
                     f"The replies do not pass {self.label(gid)}, whose firewall is stateful: it sees only one "
                     "direction of the connection."
                 )
         return {"status": "yes", "text": " ".join([text, *warnings])}
 
-    def _stateful(self, gid: Any) -> bool:
-        block = self.forwarding(gid)[0] or {}
-        return any(p.get("stateful", True) for p in block.get("policies") or [] if isinstance(p, dict))
+    def _stateful(self, gid: Any, other_way: list) -> bool:
+        """Whether a device's stateful firewall misses one direction of the
+        connection. Not when all it applies is its account's policy, which
+        keeps one state table, and a device of the same account is on the
+        other direction's path."""
+        block, org_ref = self.forwarding(gid)
+        policies = [p for p in (block or {}).get("policies") or [] if isinstance(p, dict) and p.get("stateful", True)]
+        if not policies:
+            return False
+        if all(_account_wide(str(p.get("applies") or "")) for p in policies):
+            return not any(g is not None and self.forwarding(g)[1] == org_ref for g in other_way)
+        return True
 
     # ── One direction ──────────────────────────────────────────────────────
 
@@ -836,7 +868,7 @@ class Tracer:
 
         # 2. What the device applies to traffic coming in on that kind of interface.
         self._missing_sets(walk, ctx, {f"{ctx.kind}_in", "traffic"})
-        self._sets(gid, block, walk, ctx, {f"{ctx.kind}_in"}, "")
+        self._sets(gid, block, walk, ctx, {f"{ctx.kind}_in", "traffic"}, "")
         if _blocked(items):
             return self._stop(walk, ctx)
 
@@ -1244,26 +1276,37 @@ class Tracer:
                 self._note(name, walk, ctx.items)
 
     def _leftover_notes(self, walk: _Walk, ctx: _Hop) -> None:
-        """Missing rule sets this flow did not need: notes."""
+        """Missing rule sets this flow did not need: notes (an account-wide
+        one only at the first hop that carries it)."""
         for name in ctx.missing:
             if name not in ctx.used and (name in _MISSING_SETS or name in _MISSING_NAT):
                 ctx.used.add(name)
+                if name in _MISSING_SETS and _account_wide(_MISSING_SETS[name][0]) and self._once(walk, ctx, name):
+                    continue
                 self._note(name, walk, ctx.items)
+
+    def _once(self, walk: _Walk, ctx: _Hop, name: str) -> str:
+        """For an account-wide rule set: the label of the hop of this walk
+        that already applied it, else ``""`` and this hop is recorded as the
+        one that does."""
+        key = (self.forwarding(ctx.hop["node"])[1], name)
+        if key in walk.applied:
+            return walk.applied[key]
+        walk.applied[key] = str(ctx.hop["label"])
+        return ""
 
     def _missing_sets(self, walk: _Walk, ctx: _Hop, classes: set) -> None:
         for name in ctx.missing:
             if name in ctx.used or name not in _MISSING_SETS:
                 continue
             applies, stage = _MISSING_SETS[name]
-            if applies == "wan_traffic":
-                needed = "traffic" in classes and not _public(walk.flow.dst)
-            elif applies == "internet_traffic":
-                needed = "traffic" in classes and _public(walk.flow.dst)
-            else:
-                needed = applies in classes
-            if not needed:
+            if not _applies(applies, classes, walk.flow.dst):
                 continue
             ctx.used.add(name)
+            earlier = self._once(walk, ctx, name) if _account_wide(applies) else ""
+            if earlier:
+                ctx.items.append(item(stage, INFO, name, f"Already noted at {earlier}."))
+                continue
             verb = "are" if _plural(name) else "is"
             if walk.reply and name not in _STATELESS_MISSING:
                 text = f"{name} {verb} not collected; stateful: the replies follow the request."
@@ -1277,15 +1320,27 @@ class Tracer:
     def _sets(self, gid: Any, block: dict, walk: _Walk, ctx: _Hop, classes: set, out_zone: str) -> None:
         items = ctx.items
         for policy in block.get("policies") or []:
-            if not isinstance(policy, dict) or policy.get("applies") not in classes:
+            if not isinstance(policy, dict) or not _applies(str(policy.get("applies") or ""), classes, walk.flow.dst):
                 continue
             name = str(policy.get("name") or "Rule set")
             stage = ACL if policy.get("kind") == "acl" else POLICY
             if ctx.fastpath and policy.get("kind") == "firewall":
                 items.append(item(stage, INFO, name, "Skipped: the prefilter fastpaths this flow."))
                 continue
+            account_wide = _account_wide(str(policy.get("applies") or ""))
+            earlier = self._once(walk, ctx, name) if account_wide else ""
+            if earlier:
+                items.append(item(stage, INFO, name, f"Already applied at {earlier}."))
+                continue
             if walk.reply and policy.get("stateful", True):
-                if gid in walk.request_nodes:
+                # An account's policy keeps one state table across its devices.
+                org_ref = self.forwarding(gid)[1]
+                passed = (
+                    any(self.forwarding(g)[1] == org_ref for g in walk.request_nodes)
+                    if account_wide
+                    else gid in walk.request_nodes
+                )
+                if passed:
                     items.append(item(stage, INFO, name, STATEFUL_REPLY))
                 else:
                     items.append(
@@ -1378,6 +1433,7 @@ class Tracer:
                 "fastpath": "fastpaths it: the access control policy is skipped",
                 "analyze": "hands it to the access control policy",
                 "deny": "denies it",
+                "prompt": "prompts the user",
             }
             status = BLOCKED if action == "deny" else OK if action in _ALLOWING else UNKNOWN
             found.append(item(stage, status, name, f"{_rule_name(decided)}: {words.get(action, action)}.", index))

@@ -1,5 +1,6 @@
 """
-database.py - Async SQLite database layer for Plexus.
+database.py - Async database layer for Plexus (PostgreSQL; the SQLite engine
+is kept for the test suite and the legacy migration tool).
 
 Tables:
     inventory_groups  - device groups (name, description)
@@ -58,9 +59,33 @@ from netcontrol.telemetry import configure_logging
 
 _LOGGER = configure_logging("plexus.db")
 
-DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
+# PostgreSQL is the only supported runtime backend. The sqlite engine is kept
+# for the in-process test suite and for tools/migrate_sqlite_to_postgres.py,
+# which reads legacy SQLite databases; the app refuses to boot on it unless
+# PLEXUS_ALLOW_SQLITE_ENGINE=1 (see ensure_supported_db_engine).
+DB_ENGINE = os.getenv("APP_DB_ENGINE", "postgres").strip().lower() or "postgres"
 APP_DATABASE_URL = os.getenv("APP_DATABASE_URL", "").strip()
 _VALID_DB_ENGINES = {"sqlite", "postgres"}
+ALLOW_SQLITE_ENGINE_ENV = "PLEXUS_ALLOW_SQLITE_ENGINE"
+
+
+def ensure_supported_db_engine() -> None:
+    """Refuse to run the app on anything but PostgreSQL.
+
+    The sqlite engine is test/migration-only; setting
+    ``PLEXUS_ALLOW_SQLITE_ENGINE=1`` lets the in-process test suite boot the
+    app on it. Read at call time so tests can toggle the variable.
+    """
+    if DB_ENGINE == "postgres":
+        return
+    if DB_ENGINE == "sqlite" and os.getenv(ALLOW_SQLITE_ENGINE_ENV, "").strip() == "1":
+        return
+    raise RuntimeError(
+        f"APP_DB_ENGINE={DB_ENGINE!r} is not supported: Plexus runs on PostgreSQL only "
+        "(set APP_DB_ENGINE=postgres and APP_DATABASE_URL). See docs/database-backends.md; "
+        "legacy SQLite installs can move their data with tools/migrate_sqlite_to_postgres.py."
+    )
+
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DB_PATH = os.getenv(
@@ -105,6 +130,8 @@ def _migrate_legacy_sqlite_path() -> None:
 
 
 _migrate_legacy_sqlite_path()
+# SQLite tuning knobs (APP_DB_PATH above and APP_SQLITE_* below) apply to the
+# test-only sqlite engine; they are not runtime configuration.
 SQLITE_CONNECT_TIMEOUT = float(os.getenv("APP_SQLITE_CONNECT_TIMEOUT", "30"))
 SQLITE_BUSY_TIMEOUT_MS = int(os.getenv("APP_SQLITE_BUSY_TIMEOUT_MS", "5000"))
 # Size of the read-only SQLite connection pool used by get_db(read_only=True).
@@ -223,6 +250,9 @@ _INSERT_ID_TABLES = {
     "geo_floors",
     "meraki_orgs",
     "meraki_topology_snapshots",
+    "meraki_compliance_assignments",
+    "meraki_compliance_results",
+    "software_alerts",
 }
 
 # ── SQL safety helpers ────────────────────────────────────────────────────────
@@ -2583,8 +2613,34 @@ class _PostgresCursorCompat:
         self._idx += 1
         return row
 
+    async def fetchmany(self, size: int = 1) -> list:
+        # Mirrors aiosqlite's Cursor.fetchmany (DB-API): next ``size`` rows,
+        # advancing the cursor; ``size <= 0`` yields an empty list.
+        if size <= 0:
+            return []
+        rows = self._rows[self._idx : self._idx + size]
+        self._idx += len(rows)
+        return list(rows)
+
     async def fetchall(self):
         return list(self._rows)
+
+
+# ``$N::text`` makes asyncpg infer the parameter as text and reject anything
+# that is not a str ("expected str, got int"). The datetime-modifier rewrite
+# emits exactly this shape for ``datetime('now', '-' || ? || ' days')`` and
+# callers naturally pass the day count as an int (SQLite coerces it), so
+# every parameter the SQL casts to text is bound as its string form.
+_TEXT_CAST_PARAM_RE = re.compile(r"\$(\d+)::text\b")
+
+
+def _coerce_text_cast_params(converted: str, params: tuple) -> tuple:
+    indexes = {int(m.group(1)) - 1 for m in _TEXT_CAST_PARAM_RE.finditer(converted)}
+    if not indexes:
+        return params
+    return tuple(
+        str(v) if i in indexes and v is not None and not isinstance(v, str) else v for i, v in enumerate(params)
+    )
 
 
 def _strip_nuls_from_params(params: tuple) -> tuple:
@@ -2649,6 +2705,7 @@ class _PostgresConnectionCompat:
             query = _convert_sqlite_ddl_to_postgres(query)
 
         converted = _convert_qmark_to_dollar_params(query)
+        params = _coerce_text_cast_params(converted, params)
 
         if query_upper.startswith("SELECT") or query_upper.startswith("WITH"):
             rows = await self._run_statement(lambda: self._conn.fetch(converted, *params))
@@ -2686,7 +2743,7 @@ class _PostgresConnectionCompat:
 
     async def executemany(self, query: str, params):
         converted = _convert_qmark_to_dollar_params(query)
-        cleaned = [_strip_nuls_from_params(tuple(row)) for row in params]
+        cleaned = [_coerce_text_cast_params(converted, _strip_nuls_from_params(tuple(row))) for row in params]
         await self._ensure_tx()
         await self._run_statement(lambda: self._conn.executemany(converted, cleaned))
         return _PostgresCursorCompat(rowcount=len(cleaned))
@@ -2951,7 +3008,14 @@ async def _get_pg_pool():
     async with _pg_pool_lock:
         if _pg_pool is not None:
             return _pg_pool
-        _pg_pool = await asyncpg.create_pool(APP_DATABASE_URL, min_size=1, max_size=10)
+        # Session time zone pinned to UTC: the app writes naive UTC text
+        # stamps ("YYYY-MM-DD HH:MM:SS"), and the datetime() rewrite casts
+        # them with ``::timestamptz`` and compares against ``NOW()::text``;
+        # both read the session zone, so a server whose default zone is not
+        # UTC would shift every such comparison by its offset.
+        _pg_pool = await asyncpg.create_pool(
+            APP_DATABASE_URL, min_size=1, max_size=10, server_settings={"timezone": "UTC"}
+        )
         return _pg_pool
 
 

@@ -115,6 +115,31 @@ export function MerakiOrgFormModal({ existing, defaultOptions, onClose }: Meraki
           />
         </div>
       </div>
+      <details className="text-muted" style={{ fontSize: '0.85em', marginBottom: '0.75rem' }}>
+        <summary style={{ cursor: 'pointer' }}>Where to find the API key and organization ID</summary>
+        <strong style={{ display: 'block', marginTop: '0.5rem' }}>Dashboard API key</strong>
+        <ol style={{ margin: '0.25rem 0 0', paddingLeft: '1.25rem' }}>
+          <li>In the Meraki Dashboard, click your name (top right) &gt; My profile.</li>
+          <li>
+            Under &quot;API access&quot;, click &quot;Generate new API key&quot;. Copy it at once: the
+            Dashboard shows it only once.
+          </li>
+          <li>
+            API access must be enabled for the organization: Organization &gt; Settings &gt; Dashboard
+            API access.
+          </li>
+        </ol>
+        <strong style={{ display: 'block', marginTop: '0.5rem' }}>Organization ID</strong>
+        <ol style={{ margin: '0.25rem 0 0', paddingLeft: '1.25rem' }}>
+          <li>The footer of every Dashboard page shows the organization ID.</li>
+          <li>Or open Organization &gt; Settings; the ID is shown next to the organization name.</li>
+          <li>
+            Or leave this field empty: if the key sees exactly one organization, Plexus detects it. If
+            it sees several, save, then click Test Key on the source: it lists each organization with
+            its ID, so you can edit the entry and paste the right one.
+          </li>
+        </ol>
+      </details>
 
       <h4 style={{ margin: '0.75rem 0 0.5rem' }}>Scope</h4>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>

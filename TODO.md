@@ -465,11 +465,13 @@ Everything else from that sweep was fixed the same day (see
   to the SHA the tag currently points at (leave the tag in a trailing comment)
   to close the mutable-tag supply-chain window. Deferred: needs each action's
   current SHA looked up and verified.
-- [ ] **Consistent-snapshot backup for SQLite installs** - `deploy/backup.sh`
+- [x] **Consistent-snapshot backup for SQLite installs** - `deploy/backup.sh`
   tars the live `/app/state` volume; with WAL mode a sqlite install can capture
   a torn DB. Use `sqlite3 netcontrol.db ".backup"` or `VACUUM INTO` for the
   sqlite path (Postgres already uses `pg_dump`). Low priority: the documented
-  compose deployment is Postgres.
+  compose deployment is Postgres. Dropped: SQLite is no longer a supported
+  runtime (Postgres only); legacy installs migrate with
+  `tools/migrate_sqlite_to_postgres.py`.
 
 ### Deferred hardening (from the 2026-07-07 five-agent audit)
 

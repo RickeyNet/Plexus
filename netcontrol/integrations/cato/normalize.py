@@ -12,7 +12,9 @@ How a Cato account maps onto the map:
     for its connection
   - the Cato Cloud is a single backbone node in a box of its own; every
     PoP in use is a "PoP <name>" box, its PoP node joined to the backbone;
-    each Socket has a tunnel to the PoP it is connected to
+    each Socket has a tunnel to the PoP it is connected to, and an IPsec
+    site one edge per IPsec tunnel (primary, secondary), whose state is the
+    site's: Cato reports none per tunnel
   - every connected remote user is a node of its own, in the box of the
     PoP it is connected to and linked to that PoP (a user with no PoP is in
     a "Remote users" box, linked to the backbone); its details say where it
@@ -20,19 +22,52 @@ How a Cato account maps onto the map:
     connected to in Cato (PoP, VPN IP)
 
 Forwarding data (``node["forwarding"]``, see
-``netcontrol.integrations.meraki.forwarding``) is hops only: a site's
-device holds its ranges and a default route into its PoP; a PoP routes the
-ranges and users connected to it to them and everything else to the Cato
-Cloud; the Cloud routes every range and user to its PoP. The WAN and
-internet firewall rules are not collected, so a trace says so.
+``netcontrol.integrations.meraki.forwarding``): a site's device holds its
+ranges and a default route into its PoP; a PoP routes the ranges and users
+connected to it to them and everything else to the Cato Cloud; the Cloud
+routes every range and user to its PoP, and everything else out of its
+"Internet" interface, behind a Cato public address that is not collected.
+
+Cato's API has no route table, so a route lookup that rests on data that
+was not collected says so (``not_collected``): a site with a BGP peer may
+learn routes from it ("Routes learned by BGP"), and so may every site when
+the BGP peers were not read; when the network ranges were not read, no
+Socket, PoP or Cloud knows the ranges it routes ("Route table (site network
+ranges)"). The tracer then reports a lookup only the default route answers
+as unknown rather than following it as if nothing more specific existed.
+
+Cato enforces the account's WAN and Internet firewall policies once per
+flow, at the PoP the flow enters by: the WAN rules for a private
+destination, the Internet rules for a public one. Both rule sets are on
+every PoP and on the Cloud (the way in for a Socket or user attached to no
+PoP); the tracer applies an account-wide rule set at the first of them a
+flow meets and says it was already applied at the rest. Sockets carry
+none: a flow between two LANs of one site is not subject to the WAN
+firewall. Rule objects Plexus can turn into addresses (sites, ranges,
+connected users) are resolved; the rest (groups, applications, categories,
+countries...) is kept in the rule's ``unresolved`` list, so a flow such a
+rule may cover is reported as unknown. A policy that was not collected is a
+note on the PoPs and the Cloud instead.
 """
 
 from __future__ import annotations
 
+import copy
+import ipaddress
 from datetime import UTC, datetime
 from typing import Any
 
-from netcontrol.integrations.meraki.forwarding import canonical, interface, new_block, note, route
+from netcontrol.integrations.meraki.forwarding import (
+    ANY,
+    canonical,
+    interface,
+    nat,
+    new_block,
+    note,
+    policy_set,
+    route,
+    rule,
+)
 from netcontrol.integrations.meraki.normalize import (
     SCHEMA_VERSION,
     InventoryIndex,
@@ -134,6 +169,274 @@ def _ipsec_tunnels(info: dict) -> list[dict]:
     return sorted(tunnels, key=lambda t: not t.get("isPrimary"))
 
 
+def _tunnel_label(index: int) -> str:
+    """The name of a site's IPsec tunnel, by its place in ``_ipsec_tunnels``."""
+    if index == 0:
+        return "IPsec tunnel (primary)"
+    return "IPsec tunnel (secondary)" if index == 1 else f"IPsec tunnel {index + 1} (secondary)"
+
+
+def _tunnel_status(site_status: str, index: int) -> str:
+    """The state of a site's IPsec tunnel. Cato's account snapshot reports
+    none per tunnel, only the site's connectivity, so it is derived from
+    that: a connected site has its primary up and the rest standing by
+    ("ready", up for the map and the trace), a degraded site may be on
+    either, and a disconnected one has every tunnel down."""
+    if site_status == "online":
+        return "reachable" if index == 0 else "ready"
+    return {"alerting": "degraded", "offline": "unreachable"}.get(site_status, "unknown")
+
+
+# What a device routes by that the trace must say was not collected.
+_BGP_NOTE = "Routes learned by BGP"
+_RANGES_NOTE = "Route table (site network ranges)"
+BGP_COLUMNS = ["Peer", "Peer IP", "Peer ASN", "Cato IP", "Cato ASN", "Advertises"]
+
+
+def _bgp_row(peer: dict) -> list[Any]:
+    """One BGP peer in the tables of its site and its device."""
+    advertises: list[str] = []
+    if peer.get("advertiseAllRoutes"):
+        advertises.append("All routes")
+    if peer.get("advertiseDefaultRoute"):
+        advertises.append("Default route")
+    if peer.get("advertiseSummaryRoutes"):
+        routes = [_text(r.get("route")) for r in _items_of(peer.get("summaryRoute")) if isinstance(r, dict)]
+        advertises.append("Summary routes " + ", ".join(r for r in routes if r) if any(routes) else "Summary routes")
+    return [
+        peer.get("name") or peer.get("id"),
+        peer.get("peerIp"),
+        peer.get("peerAsn"),
+        peer.get("catoIp"),
+        peer.get("catoAsn"),
+        ", ".join(advertises),
+    ]
+
+
+# ── Firewall rules ─────────────────────────────────────────────────────────
+
+# Rule objects that stand for addresses Plexus may know, by the field of a
+# rule's source or destination that names them. ``AddressBook`` maps each
+# to ``{object id or lower-cased name: CIDRs}``; ``None`` marks a name that
+# several objects share.
+AddressBook = dict[str, dict[str, list[str] | None]]
+_RESOLVABLE = ("site", "siteNetworkSubnet", "networkInterface", "floatingSubnet", "user")
+# Every object a rule can name, as the trace words it.
+_OBJECT_WORDS = {
+    "site": "site",
+    "siteNetworkSubnet": "network range",
+    "networkInterface": "network interface",
+    "floatingSubnet": "floating range",
+    "user": "user",
+    "host": "host",
+    "usersGroup": "users group",
+    "group": "group",
+    "systemGroup": "system group",
+    "globalIpRange": "global IP range",
+    "country": "country",
+    "application": "application",
+    "customApp": "custom application",
+    "appCategory": "app category",
+    "customCategory": "custom category",
+    "sanctionedAppsCategory": "sanctioned apps category",
+}
+# Plain-text values that are not addresses.
+_TEXT_WORDS = {"fqdn": "FQDN", "domain": "domain", "remoteAsn": "ASN"}
+_ACTIONS = {"ALLOW": "allow", "BLOCK": "deny", "PROMPT": "prompt", "RBI": "allow"}
+_PROTOCOLS = {"TCP": ("tcp",), "UDP": ("udp",), "TCP_UDP": ("tcp", "udp"), "ICMP": ("icmp",)}
+# Cato's predefined services that are one protocol and port.
+_STANDARD_SERVICES = {
+    "HTTP": ("tcp", "80"),
+    "HTTPS": ("tcp", "443"),
+    "SSH": ("tcp", "22"),
+    "RDP": ("tcp", "3389"),
+    "SMB": ("tcp", "445"),
+    "ICMP": ("icmp", ANY),
+}
+# A rule from the reduced query: what else it matches on is not known.
+_REDUCED = "fields Cato did not return"
+
+
+def _items_of(value: Any) -> list[Any]:
+    """A list field of the API (some schema versions return one object)."""
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
+
+
+def _ref_name(ref: Any) -> str:
+    return _text(ref.get("name") or ref.get("id")) if isinstance(ref, dict) else _text(ref)
+
+
+def _resolve(book: AddressBook, field: str, ref: Any) -> list[str] | None:
+    """The CIDRs of one object a rule names, by id and then by name."""
+    known = book.get(field) or {}
+    ref = ref if isinstance(ref, dict) else {"name": ref}
+    for key in (_text(ref.get("id")), _text(ref.get("name")).lower()):
+        if key and known.get(key):
+            return known[key]
+    return None
+
+
+def _rule_addresses(endpoint: Any, book: AddressBook) -> tuple[list[str], list[str]]:
+    """``(cidrs, unresolved)`` of a rule's source or destination.
+
+    Cato matches a flow when any object listed matches, and an empty one is
+    any address. As in ``forwarding._field``, a field Plexus cannot resolve
+    in full is treated as any address with the names kept as unresolved, so
+    a flow it might cover is reported as unknown, never as allowed."""
+    endpoint = endpoint if isinstance(endpoint, dict) else {}
+    cidrs: list[str] = []
+    unresolved: list[str] = []
+    for value in _items_of(endpoint.get("ip")) + _items_of(endpoint.get("subnet")):
+        cidr = canonical(value)
+        if cidr:
+            cidrs.append(cidr)
+        else:
+            unresolved.append(f"address {value}")
+    for span in _items_of(endpoint.get("ipRange")):
+        span = span if isinstance(span, dict) else {}
+        try:
+            first = ipaddress.ip_address(_text(span.get("from")))
+            last = ipaddress.ip_address(_text(span.get("to")))
+            cidrs += [str(n) for n in ipaddress.summarize_address_range(first, last)]
+        except TypeError, ValueError:
+            unresolved.append(f"range {_text(span.get('from'))}-{_text(span.get('to'))}")
+    for field, word in _OBJECT_WORDS.items():
+        for ref in _items_of(endpoint.get(field)):
+            found = _resolve(book, field, ref) if field in _RESOLVABLE else None
+            if found:
+                cidrs += found
+            else:
+                unresolved.append(f"{word} {_ref_name(ref)}")
+    for field, word in _TEXT_WORDS.items():
+        unresolved += [f"{word} {_text(v)}" for v in _items_of(endpoint.get(field))]
+    if unresolved:
+        return [ANY], unresolved
+    return list(dict.fromkeys(cidrs)) or [ANY], []
+
+
+def _rule_service(service: Any) -> tuple[list[tuple[str, str]], list[str]]:
+    """``([(protocol, port expression)], unresolved)`` of a rule's service:
+    one entry per protocol, ``[]`` for any service. A predefined service
+    that is not a single protocol and port is unresolved, and makes the
+    service any."""
+    service = service if isinstance(service, dict) else {}
+    ports: dict[str, list[str]] = {}
+    unresolved: list[str] = []
+    for standard in _items_of(service.get("standard")):
+        ref = standard if isinstance(standard, dict) else {"name": standard}
+        keys = (_text(ref.get("name")).upper(), _text(ref.get("id")).upper())
+        known = next((_STANDARD_SERVICES[key] for key in keys if key in _STANDARD_SERVICES), None)
+        if known is None:
+            unresolved.append(f"service {_ref_name(standard)}")
+        else:
+            ports.setdefault(known[0], []).append(known[1])
+    for custom in _items_of(service.get("custom")):
+        custom = custom if isinstance(custom, dict) else {}
+        expression = [_text(p) for p in _items_of(custom.get("port")) if _text(p)]
+        for span in _items_of(custom.get("portRange")):
+            if isinstance(span, dict) and _text(span.get("from")) and _text(span.get("to")):
+                expression.append(f"{_text(span['from'])}-{_text(span['to'])}")
+        protocol = _text(custom.get("protocol")).upper()
+        for name in _PROTOCOLS.get(protocol, (ANY,)):
+            ports.setdefault(name, []).append(",".join(expression) if expression else ANY)
+    if unresolved:
+        return [], unresolved
+    found = []
+    for protocol, expressions in ports.items():
+        # A protocol with any port on one entry is any port.
+        found.append((protocol, ANY if ANY in expressions or protocol == "icmp" else ",".join(expressions)))
+    return found, []
+
+
+def _rule_context(item: dict) -> list[str]:
+    """What a rule matches on besides addresses and services."""
+    unresolved: list[str] = []
+    # The WAN firewall's application field narrows a rule further (to
+    # applications, categories or destinations of their own): any of it
+    # is something Plexus does not evaluate.
+    application = _obj(item.get("application"))
+    for field, word in {**_OBJECT_WORDS, **_TEXT_WORDS}.items():
+        unresolved += [f"{word} {_ref_name(v)}" for v in _items_of(application.get(field))]
+    for field in ("ip", "subnet"):
+        unresolved += [f"application address {_text(v)}" for v in _items_of(application.get(field))]
+    for span in _items_of(application.get("ipRange")):
+        if isinstance(span, dict):
+            unresolved.append(f"application range {_text(span.get('from'))}-{_text(span.get('to'))}")
+    origin = _text(item.get("connectionOrigin")).upper()
+    if origin and origin != "ANY":
+        unresolved.append(f"connection origin {origin.lower()}")
+    unresolved += [f"country {_ref_name(c)}" for c in _items_of(item.get("country"))]
+    unresolved += [f"device posture {_ref_name(d)}" for d in _items_of(item.get("device"))]
+    unresolved += [f"device OS {_text(o)}" for o in _items_of(item.get("deviceOS"))]
+    schedule = item.get("schedule")
+    active = _text(schedule.get("activeOn")) if isinstance(schedule, dict) else ""
+    if active and active.upper() != "ALWAYS":
+        unresolved.append(f"schedule {active.lower().replace('_', ' ')}")
+    unresolved += [f"exception {_ref_name(e)}" for e in _items_of(item.get("exceptions"))]
+    return unresolved
+
+
+def _firewall_rules(payload: dict, book: AddressBook, *, directional: bool) -> list[dict]:
+    """A Cato firewall policy's rules as forwarding rules, in Cato's order.
+
+    ``directional`` (the WAN firewall): a rule applies from its source to its
+    destination (``TO``), the other way (``FROM``), or both ways (``BOTH``,
+    a second rule with the ends swapped). A rule matching on more services
+    than one protocol is one rule per protocol, with the same index."""
+    items = [r for r in payload.get("rules") or [] if isinstance(r, dict)]
+
+    def order(item: dict) -> tuple[int, int]:
+        index = _text(item.get("index"))
+        return (0, int(index)) if index.isdigit() else (1, 0)
+
+    found: list[dict] = []
+    # A stable sort: rules without an index keep their place, after the rest.
+    for position, item in enumerate(sorted(items, key=order), start=1):
+        index = int(_text(item.get("index"))) if _text(item.get("index")).isdigit() else position
+        src, unresolved_src = _rule_addresses(item.get("source"), book)
+        dst, unresolved_dst = _rule_addresses(item.get("destination"), book)
+        services, unresolved_service = _rule_service(item.get("service"))
+        unresolved = unresolved_src + unresolved_dst + unresolved_service + _rule_context(item)
+        if payload.get("reduced"):
+            src, dst, unresolved = [ANY], [ANY], [*unresolved, _REDUCED]
+        raw_action = _text(item.get("action")).upper()
+        action = _ACTIONS.get(raw_action, raw_action.lower() or "unknown")
+        comment = "Remote browser isolation" if raw_action == "RBI" else _text(item.get("description"))
+        direction = _text(item.get("direction")).upper() if directional else "TO"
+        ends = {"FROM": [(dst, src, "")], "BOTH": [(src, dst, ""), (dst, src, " (return)")]}.get(
+            direction, [(src, dst, "")]
+        )
+        for rule_src, rule_dst, suffix in ends:
+            for protocol, ports in services or [(ANY, ANY)]:
+                found.append(
+                    rule(
+                        index,
+                        action,
+                        name=_text(item.get("name")) + suffix,
+                        enabled=item.get("enabled", True) is not False,
+                        protocol=protocol,
+                        src=rule_src,
+                        dst=rule_dst,
+                        dst_ports=ports,
+                        comment=comment,
+                        unresolved=unresolved,
+                    )
+                )
+    return found
+
+
+def _firewall_policy(name: str, applies: str, payload: dict, book: AddressBook, *, default: str) -> dict:
+    """A collected Cato firewall policy as a rule set. A policy that is
+    turned off holds no rules, and what Cato then does with the traffic is
+    not documented: the default action is unknown, never a guess."""
+    if payload.get("enabled", True) is False:
+        return policy_set(name, "firewall", applies, [], default="unknown")
+    rules = _firewall_rules(payload, book, directional=applies == "wan_traffic")
+    return policy_set(name, "firewall", applies, rules, default=default)
+
+
 class _Builder:
     def __init__(self, raw: dict, inventory: InventoryIndex) -> None:
         self.raw = raw
@@ -156,6 +459,15 @@ class _Builder:
         self._pops: dict[str, list[str]] = {}
         self._wans: dict[str, list[tuple[str, str, bool]]] = {}
         self._users: list[tuple[str, str, str]] = []
+        # Range and interface entity id -> (site id, source, interface,
+        # CIDR), for the objects firewall rules name by id.
+        self._entities: dict[str, tuple[str, str, str, str]] = {}
+        # The BGP peers of each site id; the IPsec tunnels of each IPsec
+        # site's node as (name, remote IP, state); the tunnel behind each
+        # IPsec tunnel edge id, for its details.
+        self._bgp = self._bgp_by_site()
+        self._ipsec: dict[str, list[tuple[str, str, str]]] = {}
+        self._tunnel_of_edge: dict[str, dict] = {}
 
     # ── Graph primitives ───────────────────────────────────────────────────
 
@@ -176,12 +488,13 @@ class _Builder:
         self.nodes[node_id] = node
         return node
 
-    def _edge(self, a: str, b: str, kind: str, **fields: Any) -> None:
+    def _edge(self, a: str, b: str, kind: str, **fields: Any) -> dict | None:
         if a == b or a not in self.nodes or b not in self.nodes:
-            return
+            return None
         edge = {"id": f"e{len(self.edges) + 1}", "a": a, "b": b, "kind": kind, "a_port": "", "b_port": "", "status": ""}
         edge.update(fields)
         self.edges.append(edge)
+        return edge
 
     def _pop_node(self, name: str) -> str:
         node_id = f"pop:{name}"
@@ -217,7 +530,41 @@ class _Builder:
                 name = parts[-1] if len(parts) > 2 else ("Native range" if source == "Interface" else interface)
                 vlan = _text(helper.get("vlanTag") or helper.get("vlan"))
                 rows.setdefault(site_id, {}).setdefault(cidr, [cidr, name, interface, vlan, source])
+                if _text(entity.get("id")):
+                    self._entities[_text(entity["id"])] = (site_id, source, interface, cidr)
         return {site_id: list(found.values()) for site_id, found in rows.items()}
+
+    # ── Routing data ───────────────────────────────────────────────────────
+
+    def _bgp_by_site(self) -> dict[str, list[dict]]:
+        """The collected BGP peers per site id; each names its site by id,
+        or failing that by name."""
+        by_name = {_text((s.get("info") or {}).get("name")).lower(): _text(s["id"]) for s in self.sites_raw}
+        known = {_text(s["id"]) for s in self.sites_raw}
+        found: dict[str, list[dict]] = {}
+        for peer in self.raw.get("bgp_peers") or []:
+            if not isinstance(peer, dict):
+                continue
+            site = _obj(peer.get("site"))
+            site_id = _text(site.get("id"))
+            if site_id not in known:
+                site_id = by_name.get(_text(site.get("name")).lower(), "")
+            if site_id:
+                found.setdefault(site_id, []).append(peer)
+        return found
+
+    def _routing_notes(self) -> tuple[str, str]:
+        """``(bgp, ranges)``: the routing data that was not collected, as the
+        note every Socket and IPsec site gets (``bgp``) and the note they,
+        the PoPs and the Cloud get (``ranges``); ``""`` when there is none."""
+        if not (self.raw.get("options") or {}).get("include_ranges", True):
+            # Neither the ranges nor the BGP peers were asked for.
+            return "", _RANGES_NOTE
+        errors = [e for e in self.raw.get("errors") or [] if isinstance(e, dict)]
+        ranges = _RANGES_NOTE if any(_text(e.get("path")).startswith("entityLookup") for e in errors) else ""
+        # Not read: any site may have a BGP peer, so any may learn routes.
+        bgp = f"{_BGP_NOTE} (BGP peers were not read)" if self.raw.get("bgp_peers") is None else ""
+        return bgp, ranges
 
     # ── Sites, Sockets and their links ─────────────────────────────────────
 
@@ -287,13 +634,23 @@ class _Builder:
                 sections,
                 table_section(
                     "IPsec tunnel",
-                    ["Cato IP", "Remote IP", "IKE version", "Primary"],
+                    ["Cato IP", "Remote IP", "IKE version", "Primary", "Status"],
                     [
-                        [t.get("catoIP"), t.get("remoteIP"), t.get("ikeVersion"), t.get("isPrimary")]
-                        for t in _ipsec_tunnels(info)
+                        [
+                            t.get("catoIP"),
+                            t.get("remoteIP"),
+                            t.get("ikeVersion"),
+                            t.get("isPrimary"),
+                            _tunnel_status(status, index),
+                        ]
+                        for index, t in enumerate(_ipsec_tunnels(info))
                     ],
                 ),
             )
+            bgp = table_section("BGP peers", BGP_COLUMNS, [_bgp_row(p) for p in self._bgp.get(site_id, [])])
+            _add(sections, bgp)
+            for member in members:
+                _add(member["sections"], copy.deepcopy(bgp))
             self.sites.append(
                 {
                     "id": site_id,
@@ -339,9 +696,15 @@ class _Builder:
                     ],
                 ),
             )
-            self._tunnel(node, site_name, [site_pop] if site_pop else [], site_status != "offline")
             self._gateway[site_id] = node["id"]
-            self._pops[node["id"]] = [site_pop] if site_pop and site_status != "offline" else []
+            tunnels = _ipsec_tunnels(info)
+            if not site_pop or not tunnels:
+                self._tunnel(node, site_name, [site_pop] if site_pop else [], site_status != "offline")
+                self._pops[node["id"]] = [site_pop] if site_pop and site_status != "offline" else []
+                return [node]
+            self._ipsec_edges(node, site_name, site_pop, site_status, tunnels)
+            # Routed by the PoP even when down: the trace stops at its tunnels.
+            self._pops[node["id"]] = [site_pop]
             return [node]
 
         primary = next((d for d in devices if _is_primary(d)), devices[0])
@@ -497,6 +860,31 @@ class _Builder:
         for pop in pops:
             self._edge(node["id"], self._pop_node(pop), "vpn", status="reachable", label="Cato tunnel")
             self._pop_sites.setdefault(pop, []).append([site_name, node["label"], "connected"])
+
+    def _ipsec_edges(self, node: dict, site_name: str, pop: str, site_status: str, tunnels: list[dict]) -> None:
+        """Join a site with no Socket to its PoP by one edge per IPsec tunnel,
+        primary first: the tracer crosses the first one that is up, so the
+        secondary carries the flow when the primary is down."""
+        pop_id = self._pop_node(pop)
+        found: list[tuple[str, str, str]] = []
+        for index, tunnel in enumerate(tunnels):
+            label = _tunnel_label(index)
+            status = _tunnel_status(site_status, index)
+            edge = self._edge(
+                node["id"],
+                pop_id,
+                "vpn3p",
+                status=status,
+                label=label,
+                a_port=_text(tunnel.get("remoteIP")),
+                b_port=_text(tunnel.get("catoIP")),
+            )
+            if edge is not None:
+                self._tunnel_of_edge[edge["id"]] = tunnel
+            found.append((label, _text(tunnel.get("remoteIP")), status))
+        self._ipsec[node["id"]] = found
+        state = "disconnected" if site_status == "offline" else "connected"
+        self._pop_sites.setdefault(pop, []).append([site_name, node["label"], state])
 
     # ── The Cato cloud: PoPs, backbone, remote users ───────────────────────
 
@@ -737,19 +1125,24 @@ class _Builder:
     # ── Forwarding data ────────────────────────────────────────────────────
 
     def build_forwarding(self) -> None:
-        """Hops only: ranges, users and the tunnels between the sites, the
-        PoPs and the Cato Cloud. No firewall rules are collected."""
+        """Ranges, users and the tunnels between the sites, the PoPs and the
+        Cato Cloud; the Cloud's internet egress; the firewall policies on
+        the PoPs and the Cloud; and notes for the routing data that was not
+        collected."""
         site_names = {s["id"]: s["name"] for s in self.sites}
 
         def via(node_id: str) -> str:
             pops = self._pops.get(node_id) or []
             return f"pop:{pops[0]}" if pops else CLOUD_NODE_ID
 
+        bgp_note, ranges_note = self._routing_notes()
         for node_id, pops in self._pops.items():
             node = self.nodes[node_id]
             block = new_block()
             for name, address, connected in self._wans.get(node_id, []):
                 block["interfaces"].append(interface(name, "wan", ip=address, enabled=connected))
+            for name, address, status in self._ipsec.get(node_id, []):
+                block["interfaces"].append(interface(name, "tunnel", ip=address, enabled=status != "unreachable"))
             for row in self._ranges.get(node["site"], []):
                 name = f"{row[1] or 'Range'} ({row[0]})"
                 block["interfaces"].append(interface(name, "lan", cidr=row[0]))
@@ -763,8 +1156,12 @@ class _Builder:
                     source=f"Cato tunnel to PoP {pops[0]}" if pops else "Cato tunnel to the Cato Cloud",
                 )
             )
-            note(block, "WAN firewall rules")
-            note(block, "Internet firewall rules")
+            # Cato reports no routes: a site with a BGP peer may learn more
+            # specific ones than its ranges and the default route.
+            if self._bgp.get(node["site"]):
+                note(block, _BGP_NOTE)
+            note(block, bgp_note)
+            note(block, ranges_note)
             node["forwarding"] = block
 
         for node in self.nodes.values():
@@ -818,6 +1215,9 @@ class _Builder:
                 node["forwarding"] = block
 
         cloud = new_block()
+        # Cato egresses to the internet from the PoP, behind a Cato public
+        # address the API does not report: an interface with no address.
+        cloud["interfaces"].append(interface("Internet", "wan"))
         for site_id, gateway in self._gateway.items():
             for row in self._ranges.get(site_id, []):
                 cloud["routes"].append(
@@ -838,29 +1238,98 @@ class _Builder:
                         source=f"Remote user {self.nodes[user_id]['label']}",
                     )
                 )
-        note(cloud, "WAN firewall rules")
+        cloud["routes"].append(route("0.0.0.0/0", "default", interface="Internet", source="Cato internet egress"))
+        cloud["nat"].append(
+            nat(1, "interface_pat", name="Cato public address", original_src=[ANY], translated_src=["interface"])
+        )
         self.nodes[CLOUD_NODE_ID]["forwarding"] = cloud
+
+        # Cato enforces the account's policy at the PoP a flow enters by: the
+        # rule sets go on every PoP, and on the Cloud for a Socket or user
+        # attached to no PoP. The tracer applies them once per flow.
+        policies, missing = self._firewall_policies()
+        for node in self.nodes.values():
+            if node["id"] == CLOUD_NODE_ID or node["id"].startswith("pop:"):
+                block = node["forwarding"]
+                note(block, ranges_note)
+                block["policies"] = copy.deepcopy(policies)
+                for name in missing:
+                    note(block, name)
+
+    def _firewall_policies(self) -> tuple[list[dict], list[str]]:
+        """The account's firewall rule sets, and the names of those that
+        were not collected."""
+        book = self._address_book()
+        policies: list[dict] = []
+        missing: list[str] = []
+        for key, name, applies, default in (
+            # The WAN firewall is a whitelist: what no rule allows is blocked.
+            ("wan_firewall", "WAN firewall rules", "wan_traffic", "deny"),
+            # The Internet firewall is a blacklist: what no rule blocks is allowed.
+            ("internet_firewall", "Internet firewall rules", "internet_traffic", "allow"),
+        ):
+            payload = self.raw.get(key)
+            if isinstance(payload, dict):
+                policies.append(_firewall_policy(name, applies, payload, book, default=default))
+            else:
+                missing.append(name)
+        return policies, missing
+
+    def _address_book(self) -> AddressBook:
+        """The objects firewall rules name that stand for known addresses:
+        sites, their ranges and interfaces, and connected users."""
+        book: AddressBook = {field: {} for field in _RESOLVABLE}
+
+        def add(field: str, keys: list[str], cidrs: list[str]) -> None:
+            known = book[field]
+            for key in keys:
+                if not key or not cidrs:
+                    continue
+                if key not in known:
+                    known[key] = list(cidrs)
+                elif known[key] != cidrs:
+                    known[key] = None  # a name several objects share
+
+        site_names = {s["id"]: s["name"] for s in self.sites}
+        for site_id, rows in self._ranges.items():
+            site = site_names.get(site_id, site_id)
+            add("site", [site_id, site.lower()], [r[0] for r in rows])
+            for cidr, name, iface, *_rest in rows:
+                add("siteNetworkSubnet", [f"{site} \\ {iface} \\ {name}".lower(), name.lower()], [cidr])
+            for iface in dict.fromkeys(r[2] for r in rows if r[2]):
+                cidrs = [r[0] for r in rows if r[2] == iface]
+                add("networkInterface", [f"{site} \\ {iface}".lower(), iface.lower()], cidrs)
+        for entity_id, (site_id, source, iface, cidr) in self._entities.items():
+            if source == "Range":
+                add("siteNetworkSubnet", [entity_id], [cidr])
+            else:
+                add("networkInterface", [entity_id], [r[0] for r in self._ranges.get(site_id, []) if r[2] == iface])
+        # Cato does not list floating ranges; one may share a name with a range.
+        book["floatingSubnet"] = book["siteNetworkSubnet"]
+        for user in self.raw.get("users") or []:
+            if isinstance(user, dict) and _text(user.get("connectivityStatus")).lower() != "disconnected":
+                address = canonical(user.get("internalIP"))
+                add("user", [_text(user.get("id")), _text(_user_name(user)).lower()], [address] if address else [])
+        return book
 
     def build_edge_sections(self) -> None:
         titles = {"vpn": "Cato tunnel", "uplink": "WAN link"}
         for edge in self.edges:
             a, b = self.nodes[edge["a"]], self.nodes[edge["b"]]
-            edge["sections"] = [
-                s
-                for s in [
-                    kv_section(
-                        edge.get("label") or titles.get(edge["kind"], "Link"),
-                        [
-                            ("A end", a["label"]),
-                            ("B end", b["label"]),
-                            ("B port", edge.get("b_port")),
-                            ("Status", edge.get("status")),
-                            ("Discovered via", "Cato API"),
-                        ],
-                    )
+            rows: list[tuple[str, Any]] = [("A end", a["label"]), ("B end", b["label"])]
+            tunnel = self._tunnel_of_edge.get(edge["id"])
+            if tunnel is not None:
+                rows += [
+                    ("Site IP", tunnel.get("remoteIP")),
+                    ("Cato IP", tunnel.get("catoIP")),
+                    ("IKE version", tunnel.get("ikeVersion")),
+                    ("Primary", tunnel.get("isPrimary")),
                 ]
-                if s
-            ]
+            else:
+                rows.append(("B port", edge.get("b_port")))
+            rows += [("Status", edge.get("status")), ("Discovered via", "Cato API")]
+            section = kv_section(edge.get("label") or titles.get(edge["kind"], "Link"), rows)
+            edge["sections"] = [section] if section else []
 
 
 def _in_box_as_lan(edge: dict, nodes: dict[str, dict]) -> dict:
@@ -933,7 +1402,7 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
             "external_neighbors": 0,
             "inventory_matches": sum(1 for n in nodes if n.get("inventory")),
             "lan_links": 0,
-            "vpn_tunnels": edge_counts.get("vpn", 0),
+            "vpn_tunnels": edge_counts.get("vpn", 0) + edge_counts.get("vpn3p", 0),
             "wan_uplinks": edge_counts.get("uplink", 0),
             "vlans": builder.range_count,
             "remote_users": sum(1 for u in users if _text(u.get("connectivityStatus")).lower() != "disconnected"),

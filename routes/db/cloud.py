@@ -539,14 +539,16 @@ async def replace_cloud_discovery_snapshot(
                 ),
             )
 
+        # The timestamps are ISO-8601 text on both engines (the base schema
+        # creates these columns as TEXT on Postgres too); a ``::timestamptz``
+        # cast on the parameter would make asyncpg demand a datetime object.
         await db.execute(
             """UPDATE cloud_accounts
                SET last_sync_at = ?,
                    last_sync_status = ?,
                    last_sync_message = ?,
-                   updated_at = ?"""
-            + ("::timestamptz" if _dbcore.DB_ENGINE == "postgres" else "")
-            + " WHERE id = ?",
+                   updated_at = ?
+               WHERE id = ?""",
             (now_iso, sync_status, sync_message, now_iso, account_id),
         )
         await db.commit()

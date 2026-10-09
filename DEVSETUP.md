@@ -1,20 +1,24 @@
-# Developer Setup (WSL2 + Docker + Postgres)
+# Developer Setup (Docker + Postgres)
 
 How to run Plexus locally so that what you test matches what the VM runs.
+PostgreSQL in Docker is the only supported way to run or develop Plexus, on
+Windows (Docker Desktop) or in WSL2.
 
 ## Why this exists
 
 The deployed stack (`docker-compose.yml`) is PostgreSQL 16 + nginx (TLS, HSTS,
 Secure cookies, `FORWARDED_ALLOW_IPS=*`) + the hashed `requirements-lock.txt` +
-the cloud SDKs (`INSTALL_CLOUD_SDKS=true`). A bare `python templates/run.py` on
-Windows with SQLite differs from it in ways that hide real bugs:
+the cloud SDKs (`INSTALL_CLOUD_SDKS=true`). A bare `python templates/run.py`
+without that setup differs from it in ways that hide real bugs:
 
 - **Framework versions.** A local `pip install` can lag the lock (for example
   starlette 0.52 locally vs 1.6.0 pinned).
 - **SQLite vs Postgres.** Postgres goes through the SQL translation layer in
   `routes/database.py`: `lastrowid` only works for tables listed in
   `_INSERT_ID_TABLES`, `LIKE` is case-sensitive, and datetime math is
-  engine-specific.
+  engine-specific. This is why SQLite is not a supported way to run the app;
+  its engine is kept only for the in-process test suite and the legacy
+  migration tool.
 - **Missing cloud SDKs.** Cloud Visibility Discover and pulls take the
   "SDK not installed" branch.
 - **No reverse proxy.** No HTTPS/HSTS/CSP, and the client IP is always
@@ -22,10 +26,133 @@ Windows with SQLite differs from it in ways that hide real bugs:
 - **Vite dev server is not the built bundle.** `tsc` errors fail the Docker
   build but not `npm run dev`.
 
-So develop inside WSL2 (Ubuntu 24.04) against the same pieces, using two loops:
-Loop A (the full stack) and Loop B (Postgres in Docker, app from source).
+So develop against the same pieces, using two loops: Loop A (the full stack)
+and Loop B (Postgres in Docker, app from source). On Windows use Docker Desktop
+with a Windows venv (next section); WSL2 (Ubuntu 24.04) is the alternative.
 
-## Prerequisites (WSL2 Ubuntu 24.04)
+**Pick one path per checkout:**
+
+- **Windows path:** Docker Desktop + a Windows venv + PowerShell. The repo,
+  venv, Node and editor all live on the Windows side. No Ubuntu distro needed.
+- **WSL2 path:** clone again inside Ubuntu and use the Linux toolchain there
+  (Python, Node, Docker all inside WSL).
+
+Don't mix them for one checkout (for example a Windows venv plus WSL Node on
+the same `node_modules`).
+
+## Windows: Docker Desktop + Windows venv
+
+Everything here runs on the Windows side. Ubuntu (or any other WSL distro) is
+not needed: Docker Desktop runs its engine in its own hidden WSL2 distro,
+`docker-desktop`, which is what `wsl -l -v` lists. The
+`wsl --install --no-distribution` step below only installs the WSL2 kernel for
+that backend. Installing Ubuntu is only for the separate WSL2 path.
+
+### One-time prerequisites
+
+In PowerShell **as Administrator**:
+
+```powershell
+wsl --install --no-distribution     # WSL2 kernel for Docker Desktop's backend
+winget install -e --id Docker.DockerDesktop
+```
+
+Reboot, start Docker Desktop, then check from a normal PowerShell:
+
+```powershell
+docker compose version
+```
+
+Docker Desktop needs a paid subscription at larger companies; Podman Desktop is
+the free alternative.
+
+Install Python 3.14 and Node 24 if they are missing. Node is only needed for
+the frontend (Vite, `npm run build`). After `winget install`, open a new
+terminal so `python` and `node` are on PATH.
+
+```powershell
+winget install -e --id Python.Python.3.14
+winget install -e --id OpenJS.NodeJS.LTS
+```
+
+You also need Git for Windows (it provides Git Bash for `deploy/setup.sh`).
+
+Create the venv (skip the first line if `.venv` already exists) and install
+the dependencies with pip. `uv` is not needed on Windows; `requirements-dev.txt`
+installs it into the venv for regenerating the lock.
+
+```powershell
+python3.14 -m venv .venv     # classic installer with the py launcher: py -3.14 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --require-hashes -r requirements-lock.txt
+python -m pip install -r requirements-dev.txt -r requirements-cloud.txt
+```
+
+The lock is compiled with `--universal`, so it installs on Windows as is
+(`python-ldap` and `uvloop` carry Linux-only markers and are skipped).
+
+### Loop (Postgres in Docker, app from source)
+
+1. Run `deploy/setup.sh` once to create `.env` (it holds `POSTGRES_PASSWORD`)
+   and `certs/`. Run it from **Git Bash** (Start menu "Git Bash", or
+   right-click the repo folder > "Open Git Bash here"):
+   ```bash
+   bash deploy/setup.sh
+   ```
+   Do not type `bash` in PowerShell: there it resolves to
+   `C:\Windows\System32\bash.exe`, the WSL launcher, which tries to start a
+   WSL distro instead. To run it from PowerShell, call Git's bash by full path
+   (per-user Git install; a machine-wide install is under
+   `C:\Program Files\Git` instead):
+   ```powershell
+   & "$env:LOCALAPPDATA\Programs\Git\bin\bash.exe" deploy/setup.sh
+   ```
+   If Git Bash fails with `Permission denied` / `Exit 126` or "Access is
+   denied", endpoint policy is blocking `bash.exe`; see Troubleshooting.
+   The script is idempotent: it skips `.env` and `certs/` if they already
+   exist, so rerunning is harmless. If Docker is not installed yet it stops at
+   its Docker check, but `.env` and `certs/` are already created.
+2. Start Postgres, load the dev environment and run the app (PowerShell, repo
+   root):
+   ```powershell
+   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres
+   . .\scripts\dev-env.ps1
+   python templates/run.py
+   ```
+   Use `scripts\dev-env.ps1`; `scripts/dev-env.sh` is for Linux shells. It
+   reads `POSTGRES_PASSWORD` (and `POSTGRES_USER` / `POSTGRES_DB`) from
+   `.env`, sets `APP_DB_ENGINE=postgres`, `APP_ENV=dev` and
+   `APP_DATABASE_URL` (host `127.0.0.1`), and activates `.venv`. Dot-source it
+   (the leading `. `) so the variables stay in your session. If PowerShell
+   refuses to run scripts, run
+   `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once.
+
+   If port 8080 is taken (other Windows software can hold it; Adobe Connect
+   is one example), run the backend on another port:
+   ```powershell
+   python templates/run.py --port 8081
+   ```
+3. In a second PowerShell, start the Vite dev server (repo root):
+   ```powershell
+   cd netcontrol\static\frontend
+   $env:PLEXUS_BACKEND_URL = 'http://127.0.0.1:8081'   # only if backend is not on 8080
+   npm ci
+   npm run dev
+   ```
+   Open `http://localhost:5173/frontend/` and log in as `admin` /
+   `netcontrol` (no forced password change under `APP_ENV=dev`). Vite proxies
+   `/api`, `/static` and `/ws` to `PLEXUS_BACKEND_URL` (default
+   `http://127.0.0.1:8080`).
+
+### Full stack on Windows
+
+`docker compose up --build -d` works the same as in WSL2 or on a VM; follow
+Loop A. Run `setup.sh` from Git Bash as in step 1 above. The other Loop A
+commands are plain `docker compose` and run from PowerShell too. Instead of
+the `sed` line, edit `.env` by hand and set
+`APP_CORS_ORIGINS=https://localhost`.
+
+## WSL2 prerequisites (Ubuntu 24.04)
 
 1. **Clone into the WSL filesystem** (`~/code/plexus`), not `/mnt/c/...`. Bind
    mounts and file watching across the Windows boundary are slow, and you risk
@@ -82,15 +209,6 @@ Notes:
   `http://127.0.0.1:8080` silently fails (the browser drops the Secure
   cookie). Use `https://localhost`, or set `APP_COOKIE_SECURE=false`.
 - Compose always runs on Postgres: its `environment:` block overrides `.env`.
-  For a SQLite container, build and run the image directly:
-  ```bash
-  docker build -t plexus-app:local .
-  docker run -e APP_DB_PATH=/app/state/netcontrol.db \
-    -e APP_SESSION_KEY_FILE=/app/state/session.key \
-    -e APP_ENCRYPTION_KEY_FILE=/app/state/netcontrol.key \
-    -v plexus-sqlite:/app/state -p 127.0.0.1:8080:8080 \
-    -e APP_ENV=dev plexus-app:local
-  ```
 
 ## Loop B: fast loop (Postgres in Docker, app from source)
 
@@ -102,11 +220,12 @@ Notes:
    uv venv --python 3.14 .venv && source .venv/bin/activate
    uv pip install --require-hashes -r requirements-lock.txt
    uv pip install -r requirements-dev.txt -r requirements-cloud.txt
-   export APP_DB_ENGINE=postgres
-   export APP_DATABASE_URL="postgresql://plexus:$(grep ^POSTGRES_PASSWORD= .env | cut -d= -f2)@127.0.0.1:5432/plexus"
-   export APP_ENV=dev
+   source scripts/dev-env.sh
    python templates/run.py
    ```
+   `scripts/dev-env.sh` exports `APP_DB_ENGINE=postgres`, `APP_ENV=dev` and
+   `APP_DATABASE_URL` (built from `.env`, host `127.0.0.1`) and activates
+   `.venv`. `scripts/dev-env.ps1` is the PowerShell equivalent.
 3. In a second shell, start the Vite dev server:
    ```bash
    cd netcontrol/static/frontend && npm ci && npm run dev
@@ -117,7 +236,10 @@ Notes:
 
 Why it looks like this:
 
-- `templates/run.py` does not read `.env`; the variables must be exported.
+- `templates/run.py` does not read `.env`; the variables must be exported,
+  which is what `scripts/dev-env.sh` and `scripts/dev-env.ps1` do.
+- `.env` sets `APP_DATABASE_URL` with host `postgres` (the compose network
+  name); from the host the database is at `127.0.0.1`.
 - The hashed lock goes in its own install: `--require-hashes` cannot be mixed
   with the unhashed dev/cloud requirement files.
 - `APP_ENV=dev` bootstraps `admin` / `netcontrol` without a forced password
@@ -125,15 +247,10 @@ Why it looks like this:
 - `docker-compose.dev.yml` only publishes Postgres on `127.0.0.1:5432` and is
   never auto-loaded; pass it explicitly with `-f`.
 
-To avoid retyping the exports, keep them in a shell function in `~/.bashrc`
-(run it from the repo root):
+Optionally, keep a shortcut in `~/.bashrc` (run it from the repo root):
 
 ```bash
-plexus-dev() {
-  source .venv/bin/activate
-  export APP_DB_ENGINE=postgres APP_ENV=dev
-  export APP_DATABASE_URL="postgresql://plexus:$(grep ^POSTGRES_PASSWORD= .env | cut -d= -f2)@127.0.0.1:5432/plexus"
-}
+plexus-dev() { source scripts/dev-env.sh; }
 ```
 
 Loop B skips nginx and HTTPS, so run Loop A before shipping.
@@ -194,10 +311,40 @@ Re-verify in Loop A:
 
 - `docker: permission denied` → not in the `docker` group yet; run
   `sudo usermod -aG docker $USER` and re-login (or `newgrp docker`).
-- `Cannot connect to the Docker daemon` → systemd not enabled in WSL, or Docker
-  Desktop WSL integration is off.
-- Port 8080, 5432 or 443 already in use (a Windows-side Plexus or Postgres) →
-  stop it, or change the published port in the compose override.
+- `Cannot connect to the Docker daemon` → Docker Desktop is not running, or in
+  WSL2 systemd is not enabled or Docker Desktop WSL integration is off.
+- Port 8080, 5432 or 443 already in use (a Windows-side Plexus or Postgres,
+  or other Windows software such as Adobe Connect on 8080) → stop it, or
+  change the published port in the compose override. Find the owner in
+  PowerShell:
+  ```powershell
+  Get-NetTCPConnection -LocalPort 8080 -State Listen | Select-Object OwningProcess
+  Get-Process -Id <pid>
+  ```
+  For Loop B, run the backend on another port and point Vite at it (set the
+  variable in the Vite shell before `npm run dev`):
+  ```powershell
+  python templates/run.py --port 8081
+  $env:PLEXUS_BACKEND_URL = 'http://127.0.0.1:8081'
+  ```
+- `Failed to run '/usr/bin/bash': Permission denied` / `Exit 126` when
+  opening Git Bash, or "Access is denied" running `bash.exe` from PowerShell,
+  while `git.exe` works → an application-control / EDR rule on the machine
+  blocks `bash.exe`; it is not a Git problem. Git's `usr\bin\sh.exe` is the
+  same program under another name and is usually not blocked, and
+  `deploy/setup.sh` uses no bash-only syntax. Put Git's `usr\bin` on PATH
+  first (it holds `dirname`, `cat` and `openssl`; without it the script
+  cannot find the repo root and tries to write `.env` into the Git install
+  folder), then run it from PowerShell at the repo root:
+  ```powershell
+  $env:PATH = "$env:LOCALAPPDATA\Programs\Git\usr\bin;$env:PATH"
+  sh deploy/setup.sh
+  ```
+  (machine-wide Git: `C:\Program Files\Git\usr\bin`). Long term, ask IT for
+  an exception for Git's `bash.exe`.
+- `bash` in PowerShell starts (or complains about) a WSL distro → that is
+  `C:\Windows\System32\bash.exe`, the WSL launcher, not Git Bash. Use Git
+  Bash, or call Git's `bash.exe` by full path (Windows Loop, step 1).
 - `POSTGRES_PASSWORD must be set` → `.env` is missing; run
   `bash deploy/setup.sh`.
 - Login works, then you are logged out immediately → Secure cookie over plain
