@@ -1,128 +1,27 @@
 # Plexus - Network Automation Hub
 
-A Python-first network automation control center inspired by Ansible Tower / AWX.
+A Python-first network automation control center inspired by Ansible Tower / AWX, SolarWinds, and Catalyst Center.
 Manage device inventories, run automation playbooks, store config templates, and
 stream live job output - all through a REST API with WebSocket support.
 
 **Scope (current):** FastAPI backend with playbook runner, WebSocket streaming, SNMP discovery, IPAM, topology, compliance, and digital-twin lab mode.
 
-## Guides
+## Features
 
-- Developer setup (WSL2, Docker, Postgres dev loops): `DEVSETUP.md`
-- Operator runbook (recovery playbook + verification checklists): `OPERATOR_RUNBOOK.md`
-- Performance and scale notes: `PERFORMANCE_LIMITS.md`
-- Data handling and retention: `DATA_RETENTION.md`
-- RADIUS setup: `RADIUS_CONFIGURATION_GUIDE.md`
-- TACACS+ / Cisco ISE Device Admin login: `TACACS_CONFIGURATION_GUIDE.md`
-
-## Architecture
-
-```
-netcontrol/
-├── app.py                  # FastAPI application - all REST + WebSocket routes
-├── database.py             # Async SQLite data layer (aiosqlite)
-├── crypto.py               # Fernet encryption for stored credentials
-├── runner.py               # BasePlaybook class + executor + registry
-├── seed.py                 # Populates DB with demo inventory/playbooks/templates
-├── run.py                  # Server entry point (uvicorn)
-├── requirements.txt
-├── netcontrol.db           # SQLite database (auto-created)
-├── netcontrol.key          # Fernet encryption key (auto-created, keep safe)
-├── playbooks/
-│   ├── __init__.py         # Auto-imports all playbook modules
-│   ├── vlan1_destroyer.py  # VLAN 1 Destroyer (refactored)
-│   ├── ntp_audit.py        # NTP compliance checker
-│   └── config_backup.py    # Running-config backup
-├── static/                 # React frontend build (optional)
-└── logs/                   # Job execution logs
-```
+- **Inventory and playbooks** - device groups and hosts, Python playbooks, live job output over WebSocket.
+- **Configuration management** - config templates, config backups, drift detection and compliance audits.
+- **SNMP discovery and IPAM** - find devices on the network and track address space.
+- **Topology** - CDP/LLDP map plus Meraki, Cato, Cisco FMC, AWS and Azure sources, with path trace across them.
+- **Flow collector** - built-in NetFlow / sFlow / IPFIX receiver with traffic summaries.
+- **Cloud Visibility** - discovery of AWS and Azure accounts and their networks.
+- **Software upgrades** - software version inventory, vulnerability alerts and an IOS-XE upgrade tool.
+- **Digital-twin lab mode** - rehearse changes against lab copies of devices.
+- **Alerting** - alert rules routed to email, PagerDuty, webhook and Microsoft Teams channels.
 
 ## Quick Start
 
-From the repository root, use a single `.venv` workflow:
-
-```bash
-# create venv
-python -m venv .venv
-
-# activate (PowerShell)
-.\.venv\Scripts\Activate.ps1
-
-# install runtime dependencies
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-
-# (optional) install with PostgreSQL support (Linux/production)
-python -m pip install -r requirements-postgres.txt
-
-# (optional) reproducible install from the hashed lock (what the SBOM is built from)
-python -m pip install --require-hashes -r requirements-lock.txt
-
-# run app
-python templates/run.py --port 8090 --https
-```wd
-
-Regenerate `requirements-lock.txt` after changing `requirements.txt` (needs `uv`,
-included in `requirements-dev.txt`; `--universal` keeps Linux-only markers such as
-`python-ldap` and `uvloop` so the lock is valid on every platform):
-
-```bash
-uv pip compile requirements.txt --universal --generate-hashes --python-version 3.14 -o requirements-lock.txt
-```
-
-Common run options:
-
-```bash
-python templates/run.py --help
-```
-
-- `--host HOST` bind address (default `127.0.0.1`)
-- `--port PORT` port number
-- `--reload` auto-reload on changes
-- `--https` enable HTTPS with self-signed cert
-- `--expose` bind to `0.0.0.0`
-
-The server starts on `http://localhost:8080`. On first launch it auto-seeds
-the database with demo inventory groups, playbooks, templates, and a
-default credential.
-
-## Running locally (venv)
-
-1) Copy `.env.example` to `.env` and adjust values (host, port, https, defaults).
-- Set `APP_API_TOKEN` to enable token-based API auth via `X-API-Token` or `Authorization: Bearer <token>`.
-- Set `APP_REQUIRE_API_TOKEN=true` to fail startup when no token is configured.
-2) Activate `.venv`:
-
-```bash
-# PowerShell
-.\.venv\Scripts\Activate.ps1
-
-# cmd.exe
-.\.venv\Scripts\activate.bat
-
-# bash/zsh
-source .venv/bin/activate
-```
-
-3) Install dependencies:
-
-```bash
-# core (SQLite only - works on Windows and Linux)
-python -m pip install -r requirements.txt
-
-# with PostgreSQL support (Linux/production)
-python -m pip install -r requirements-postgres.txt
-```
-
-4) Start server:
-
-```bash
-python templates/run.py --host 0.0.0.0 --port 8080
-```
-
-5) Visit `http://localhost:8080/docs`.
-
-## Running with Docker
+Plexus runs as a Docker compose stack. You need Docker Engine with the compose
+plugin; for production hosts see `DEPLOYMENT.md` and `deploy/DEPLOYMENT.md`.
 
 `docker-compose.yml` runs three services: `plexus` (the app, built from the
 `Dockerfile` with the cloud SDKs included), `postgres` (PostgreSQL 16, data in
@@ -150,360 +49,103 @@ docker compose up --build -d plexus
 docker compose down -v
 ```
 
-Compose always runs on PostgreSQL: its `environment:` block sets `APP_DB_ENGINE`
-and `APP_DATABASE_URL`, which override anything in `.env`. To run the image on
-SQLite, build it with `docker build -t plexus-app:local .` and start it directly
-with `docker run -e APP_DB_PATH=/app/state/netcontrol.db -e APP_SESSION_KEY_FILE=/app/state/session.key -e APP_ENCRYPTION_KEY_FILE=/app/state/netcontrol.key -v plexus-sqlite:/app/state -p 127.0.0.1:8080:8080 -e APP_ENV=dev plexus-app:local`.
+`.env` sets `APP_COOKIE_SECURE=true`, so logging in over plain
+`http://127.0.0.1:8080` (bypassing nginx) silently fails: the browser drops
+the Secure session cookie. Use `https://localhost`, or set
+`APP_COOKIE_SECURE=false` in `.env` for direct access.
 
-Notes:
-- `.env` sets `APP_COOKIE_SECURE=true`, so logging in over plain
-  `http://127.0.0.1:8080` (bypassing nginx) silently fails: the browser drops
-  the Secure session cookie. Use `https://localhost`, or set
-  `APP_COOKIE_SECURE=false` in `.env` for direct access.
-- The Docker image runs `python templates/run.py --host 0.0.0.0 --port 8080` inside the container.
-- The built-in healthcheck pings `/api/health`; compose restarts the container if it becomes unhealthy.
-- Named volumes persist app state at `/app/state` (`plexus-db`: key files, firmware images) and the database (`plexus-postgres`) across restarts.
-- Docker runtime base image is currently `python:3.14-slim`.
-- For production, build/push the image to a registry and run it on your platform (Docker/Podman/Kubernetes) with real TLS and secrets provided via environment variables. See `deploy/DEPLOYMENT.md`.
+Compose always runs on PostgreSQL. To run the image on SQLite instead, see the
+Loop A notes in [DEVSETUP.md](DEVSETUP.md).
 
-## Developing on WSL with Docker and Postgres
+## Other ways to run
 
-For day-to-day development that matches the deployed stack (WSL2 prerequisites,
-the full-stack and fast Postgres loops, tests and troubleshooting), see
-`DEVSETUP.md`.
+### Local venv (Windows/Linux, SQLite)
 
-## Database Backends
-
-Plexus supports two database backends: **SQLite** (default) and **PostgreSQL** (production).
-
-| Backend    | Requirements file            | Use case                    |
-|------------|------------------------------|-----------------------------|
-| SQLite     | `requirements.txt`           | Local dev, Windows, demos   |
-| PostgreSQL | `requirements-postgres.txt`  | Linux production, VM deploy |
-
-`requirements-postgres.txt` includes `asyncpg`, which requires a C compiler to build on Windows. On Linux, prebuilt wheels are available so it installs without issues.
-
-Environment variables:
-
-- `APP_DB_ENGINE=sqlite|postgres`
-- `APP_DATABASE_URL=postgresql://<user>:<pass>@postgres:5432/<db>` (required when engine is `postgres`)
-- `APP_DB_PATH` (SQLite file path; compose pins this to `/app/state/netcontrol.db`)
-
-SQLite to PostgreSQL migration utility:
+Copy `.env.example` to `.env` and adjust values (host, port, https, defaults), then:
 
 ```bash
-# verify source and show source row counts only
-python tools/migrate_sqlite_to_postgres.py --dry-run
-
-# migrate and verify row-count parity
-python tools/migrate_sqlite_to_postgres.py \
-  --sqlite-path netcontrol.db \
-  --postgres-url postgresql://plexus:plexus@localhost:5432/plexus
-
-# migrate and verify row counts + per-table checksums
-python tools/migrate_sqlite_to_postgres.py \
-  --sqlite-path netcontrol.db \
-  --postgres-url postgresql://plexus:plexus@localhost:5432/plexus \
-  --with-checksums
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1        # PowerShell; bash/zsh: source .venv/bin/activate
+python -m pip install -r requirements.txt
+# optional: PostgreSQL support (Linux/production)
+python -m pip install -r requirements-postgres.txt
+python templates/run.py --host 0.0.0.0 --port 8080
 ```
 
-## Versioning and Release
+Visit `http://localhost:8080/docs`. `python templates/run.py --help` lists the
+run options (`--https`, `--reload`, `--expose`, ...). On first launch the
+database is seeded with demo inventory groups, playbooks, templates and a
+default credential.
 
-- Plexus follows Semantic Versioning (`MAJOR.MINOR.PATCH`).
-- Current version is `1.0.0`.
-- Check runtime version with:
-```bash
-python templates/run.py --version
+### WSL2 with Docker and Postgres (development)
+
+For day-to-day development that matches the deployed stack, see
+[DEVSETUP.md](DEVSETUP.md).
+
+## Guides
+
+**Operators**
+
+- [DEPLOYMENT.md](DEPLOYMENT.md) - production deployment notes (firewalls, storage, systemd)
+- [deploy/DEPLOYMENT.md](deploy/DEPLOYMENT.md) - Ubuntu UFW firewall ruleset for the Docker stack
+- [deploy/airgap/README.md](deploy/airgap/README.md) - air-gapped deployment on an offline VM
+- [DATA_RETENTION.md](DATA_RETENTION.md) - how long each class of data is kept
+- [RADIUS_CONFIGURATION_GUIDE.md](RADIUS_CONFIGURATION_GUIDE.md) - RADIUS login setup
+- [TACACS_CONFIGURATION_GUIDE.md](TACACS_CONFIGURATION_GUIDE.md) - TACACS+ / Cisco ISE Device Admin login
+- [docs/database-backends.md](docs/database-backends.md) - SQLite vs PostgreSQL and migration
+- [docs/versioning-and-release.md](docs/versioning-and-release.md) - versioning and release process
+
+**Developers**
+
+- [DEVSETUP.md](DEVSETUP.md) - WSL2, Docker and Postgres dev loops
+- [AGENTS.md](AGENTS.md) - architecture and conventions for coding agents
+- [docs/core-concepts.md](docs/core-concepts.md) - inventory, playbooks, templates, credentials, jobs
+- [docs/writing-playbooks.md](docs/writing-playbooks.md) - writing a playbook, simulation mode
+- [docs/api-reference.md](docs/api-reference.md) - REST API endpoints
+- [docs/websocket-usage.md](docs/websocket-usage.md) - streaming job output over WebSocket
+- [docs/FRONTEND_MIGRATION.md](docs/FRONTEND_MIGRATION.md) - archived React frontend migration plan
+
+**Features and integrations**
+
+- [docs/aws-topology.md](docs/aws-topology.md) - AWS in the topology map
+- [docs/azure-topology.md](docs/azure-topology.md) - Azure in the topology map
+- [docs/cato-topology.md](docs/cato-topology.md) - Cato Networks in the topology map
+- [docs/fmc-topology.md](docs/fmc-topology.md) - Cisco FMC in the topology map
+- [docs/meraki-topology.md](docs/meraki-topology.md) - Meraki in the topology map
+- [docs/meraki-compliance.md](docs/meraki-compliance.md) - Meraki security compliance audits
+- [docs/path-trace.md](docs/path-trace.md) - Path Mode on the topology map
+- [docs/software-versions.md](docs/software-versions.md) - software versions and vulnerability alerts
+- [docs/upgrade-tool-guide.md](docs/upgrade-tool-guide.md) - Cisco Catalyst IOS-XE upgrade procedure
+- [docs/network-documentation-usage.md](docs/network-documentation-usage.md) - automated network documentation reports
+- [docs/flow-collector.md](docs/flow-collector.md) - NetFlow / sFlow / IPFIX collector
+- [docs/alert-notification-channels.md](docs/alert-notification-channels.md) - email, PagerDuty, webhook and Teams alerts
+
+## Repository layout
+
 ```
-- See release notes in `CHANGELOG.md`.
-
-Interactive API docs: `http://localhost:8080/docs`
-
-## Core Concepts
-
-### Inventory Groups & Hosts
-Device groups (e.g. "Core Switches") containing hosts with IP, hostname,
-and device type. Similar to Ansible inventory groups.
-
-### Playbooks
-Python scripts that subclass `BasePlaybook` and register themselves with
-the `@register_playbook` decorator. Each playbook is an async generator
-that yields `LogEvent` objects - enabling real-time streaming to the frontend.
-
-### Templates
-Reusable config snippets (IOS commands) that playbooks can consume.
-Stored in the database, editable via API.
-
-### Credentials
-SSH username/password/enable-secret, encrypted at rest with Fernet.
-Referenced by ID when launching jobs.
-
-### Jobs
-An execution of a playbook against an inventory group. Jobs run as
-async background tasks. Output streams to subscribers via WebSocket.
-
-Job history retention is configurable in `Settings > Authentication Provider` via
-`Job History Retention (days)`. Completed jobs (`success`/`failed`) older than
-the configured value are deleted automatically. Minimum retention is 30 days.
-Cleanup runs at startup and periodically while the app is running.
-
-## NetFlow / sFlow / IPFIX
-
-Plexus includes a UDP flow collector that ingests NetFlow v5, NetFlow v9,
-IPFIX, and sFlow v5 records from switches and routers, then aggregates them
-into top-talkers / top-applications / top-conversations / timeline views
-under `Traffic Analysis` (also visible per-device on the Device Detail page's
-`Flow` tab).
-
-### Ports
-
-| Protocol             | Default UDP port | Setting                |
-|----------------------|------------------|------------------------|
-| NetFlow v5/v9/IPFIX  | `2055`           | `APP_NETFLOW_PORT`     |
-| sFlow v5             | `6343`           | `APP_SFLOW_PORT`       |
-
-Both listeners bind to `0.0.0.0` so any device on the management network can
-export to them. The collector is **off by default**; turn it on via
-`APP_NETFLOW_ENABLED=true` in `.env` (first boot only - after that the toggle
-lives in `Settings > NetFlow` in the UI).
-
-### Enabling the collector
-
-In the UI: `Settings > NetFlow`. Toggle `Enabled`, optionally change the
-ports/retention, and click `Save`. Changes apply immediately - the UDP
-listeners are rebound in-process, no restart required.
-
-From the API:
-
-```bash
-# read current config
-curl http://localhost:8080/api/admin/flows/config
-
-# update - rebinds listeners only when enabled/ports actually change
-curl -X PUT http://localhost:8080/api/admin/flows/config \
-  -H "Content-Type: application/json" \
-  -d '{
-        "enabled": true,
-        "netflow_port": 2055,
-        "sflow_port": 6343,
-        "retention_hours": 48,
-        "summary_retention_days": 30
-      }'
-
-# status / who's exporting
-curl http://localhost:8080/api/flows/status
-curl http://localhost:8080/api/flows/exporters
+netcontrol/
+├── app.py                  # FastAPI application entry (routers, lifespan)
+├── routes/                 # API route modules and background engines
+├── drivers/                # Per-vendor device drivers (IOS, NX-OS, Junos, ...)
+├── integrations/           # Meraki, Cato, FMC, AWS, Azure, path trace, software
+└── static/frontend/        # React + TypeScript SPA (Vite; build output in dist/)
+routes/
+├── database.py             # Data layer (SQLite or PostgreSQL)
+├── db/                     # Per-domain database queries
+├── migrations/             # Numbered schema migrations
+├── crypto.py               # Fernet encryption for stored credentials
+├── runner.py               # Playbook base class, executor and registry
+└── seed.py                 # Demo inventory/playbooks/templates on first launch
+templates/
+├── run.py                  # Server entry point (uvicorn)
+└── playbooks/              # Built-in playbooks (VLAN 1, NTP audit, NetFlow, SNMPv3)
+tests/                      # pytest suite
+deploy/                     # setup.sh, nginx.conf, backup/upgrade scripts, airgap/
+docs/                       # Reference and feature guides
+scripts/, tools/            # Admin scripts and release/migration tooling
+docker-compose.yml          # App + PostgreSQL + nginx stack
+Dockerfile                  # App image
 ```
-
-### Configuring exporters on devices
-
-The `Enable NetFlow Export` playbook (`templates/playbooks/netflow_enable.py`)
-pushes platform-appropriate exporter config to selected hosts:
-
-- **Cisco IOS** (`cisco_ios`) - classic `ip flow-export destination` plus
-  per-interface `ip flow ingress/egress`.
-- **Cisco IOS-XE** (`cisco_xe`) - Flexible NetFlow (`flow record` / `flow
-  exporter` / `flow monitor`) with an optional `sampler` block.
-- **Cisco NX-OS** (`cisco_nxos`, `cisco_nxos_ssh`) - same Flex shape with
-  NX-OS syntax plus a leading `feature netflow`.
-
-The collector destination IP resolves in priority order:
-
-1. The job parameters `collector_ip` / `collector_port`.
-2. The `PLEXUS_COLLECTOR_IP` env var + `APP_NETFLOW_PORT` env var.
-
-If no collector IP is found the playbook fails fast with an error rather than
-silently pointing devices at the wrong address. Run with `dry_run=true` first
-to see the exact config lines that would be applied; live mode runs `show
-running-config | include flow|ip flow-export` to capture state, applies via
-`send_config_set`, verifies, and `save_config`s on success.
-
-If you're running Plexus in Docker, devices need to reach the **host** IP on
-UDP 2055/6343 - not the container IP. Make sure the host firewall allows
-inbound UDP on those ports; see `DEPLOYMENT.md`.
-
-### Retention
-
-- Raw flow records: 48 hours (configurable via `retention_hours`).
-- Hourly aggregated summaries: 30 days (configurable via
-  `summary_retention_days`).
-
-Aggregation runs hourly. See `DATA_RETENTION.md` for details.
-
-## Alert Notification Channels
-
-Monitoring alerts (CPU/memory thresholds, interface/VPN down, route churn,
-baseline deviations, and user-defined rules) can be delivered to external
-on-call tooling so a 3 AM critical reaches a phone, not just an in-app toast.
-
-Supported channel types:
-
-- **Email (SMTP)** — STARTTLS or implicit TLS (SMTPS), optional auth, multiple
-  recipients.
-- **PagerDuty** — Events API v2 `trigger`. The alert's dedup key is reused as
-  PagerDuty's dedup key so repeated alerts collapse onto one incident.
-- **Webhook** — generic `POST` of a stable JSON body (`source:"plexus"`,
-  severity, host, metric, value/threshold, message, dedup key), with an
-  optional auth header.
-- **Microsoft Teams** — posts a MessageCard to an incoming-webhook connector.
-
-### Configuration
-
-Channels are managed in the UI under **Settings → Notifications** (admin only),
-or via the admin API:
-
-| Method | Endpoint                                          | Description                          |
-|--------|---------------------------------------------------|--------------------------------------|
-| GET    | `/api/admin/notification-channels`                | List channels + defaults + live stats |
-| POST   | `/api/admin/notification-channels`                | Create a channel                     |
-| PUT    | `/api/admin/notification-channels/{id}`           | Update a channel                     |
-| DELETE | `/api/admin/notification-channels/{id}`           | Delete a channel                     |
-| POST   | `/api/admin/notification-channels/{id}/test`      | Deliver a synthetic probe alert      |
-| PUT    | `/api/admin/notification-channels-defaults`       | Set the default channel set          |
-
-Secrets (SMTP password, PagerDuty routing key, webhook auth value) are masked
-as `••••••••` in API responses; submit the mask to keep the stored value.
-
-### Routing
-
-- Each alert rule (**Monitoring → Rules**) can be assigned one or more channels.
-- Alerts not tied to a rule — built-in thresholds, baseline deviations, route
-  churn — use the **default** channel set.
-- Each channel has a **severity floor**; alerts below it are dropped for that
-  channel.
-- Delivery is best-effort with a bounded per-channel queue (drop-oldest on
-  overflow) and exponential-backoff retry, so a wedged endpoint never blocks
-  alert creation. Repeated occurrences of the same alert are de-duplicated and
-  do **not** re-notify.
-
-## API Reference
-
-### Dashboard
-| Method | Endpoint         | Description                                          |
-|--------|------------------|------------------------------------------------------|
-| GET    | `/api/dashboard` | Stats, recent jobs, inventory overview               |
-| GET    | `/api/health`    | Service health + lightweight counters/timing metrics |
-
-### Inventory
-| Method | Endpoint                      | Description                                      |
-|--------|-------------------------------|--------------------------------------------------|
-| GET    | `/api/inventory`              | List all groups (with host counts)               |
-| POST   | `/api/inventory`              | Create group `{name, description}`               |
-| GET    | `/api/inventory/{id}`         | Group detail with hosts                          |
-| DELETE | `/api/inventory/{id}`         | Delete group and its hosts                       |
-| GET    | `/api/inventory/{id}/hosts`   | List hosts in group                              |
-| POST   | `/api/inventory/{id}/hosts`   | Add host `{hostname, ip_address, device_type}`   |
-| DELETE | `/api/hosts/{id}`             | Remove a host                                    |
-
-### Playbooks
-| Method | Endpoint              | Description                                      |
-|--------|-----------------------|--------------------------------------------------|
-| GET    | `/api/playbooks`      | List all (with last run status)                  |
-| POST   | `/api/playbooks`      | Register `{name, filename, description, tags}`   |
-| DELETE | `/api/playbooks/{id}` | Unregister                                       |
-
-### Templates
-| Method | Endpoint              | Description                             |
-|--------|-----------------------|-----------------------------------------|
-| GET    | `/api/templates`      | List all                                |
-| POST   | `/api/templates`      | Create `{name, content, description}`   |
-| GET    | `/api/templates/{id}` | Get one                                 |
-| PUT    | `/api/templates/{id}` | Update `{name, content, description}`   |
-| DELETE | `/api/templates/{id}` | Delete                                  |
-
-### Credentials
-| Method | Endpoint                | Description                                   |
-|--------|-------------------------|-----------------------------------------------|
-| GET    | `/api/credentials`      | List all (passwords masked)                   |
-| POST   | `/api/credentials`      | Create `{name, username, password, secret}`   |
-| DELETE | `/api/credentials/{id}` | Delete                                        |
-
-### Jobs
-| Method | Endpoint                | Description                |
-|--------|-------------------------|----------------------------|
-| GET    | `/api/jobs`             | List job history           |
-| GET    | `/api/jobs/{id}`        | Job detail                 |
-| GET    | `/api/jobs/{id}/events` | All log events for a job   |
-| POST   | `/api/jobs/launch`      | Launch a job (see below)   |
-| WS     | `/ws/jobs/{id}`         | Real-time event stream     |
-
-**Launch payload:**
-```json
-{
-  "playbook_id": 3,
-  "inventory_group_id": 1,
-  "credential_id": 1,
-  "template_id": 1,
-  "dry_run": true
-}
-```
-
-## Writing a New Playbook
-
-1. Create a file in `playbooks/`, e.g. `playbooks/my_script.py`
-2. Subclass `BasePlaybook` and decorate with `@register_playbook`
-3. Implement `async def run()` as an async generator yielding `LogEvent`s
-
-```python
-from runner import BasePlaybook, LogEvent, register_playbook
-
-
-@register_playbook
-class MyScript(BasePlaybook):
-    filename = "my_script.py"
-    display_name = "My Automation Script"
-    description = "Does something useful"
-    tags = ["example"]
-    requires_template = False
-
-    async def run(self, hosts, credentials, template_commands=None, dry_run=True):
-        yield self.log_info(f"Starting on {len(hosts)} hosts")
-
-        async def run_host(host):
-            ip = host["ip_address"]
-            yield self.log_info(f"Processing {ip}", host=ip)
-
-            # Your automation logic here
-            # Use credentials["username"], credentials["password"]
-            # Use template_commands if requires_template = True
-
-            yield self.log_success(f"Finished processing {ip}", host=ip)
-
-        async for event in self.run_hosts_concurrently(hosts, run_host):
-            yield event
-
-        yield self.log_success("All done.")
-```
-
-4. Restart the server - playbooks auto-register on import
-5. Register it in the DB via API:
-```bash
-curl -X POST http://localhost:8080/api/playbooks \
-  -H "Content-Type: application/json" \
-  -d '{"name": "My Script", "filename": "my_script.py", "description": "...", "tags": ["example"]}'
-```
-
-## WebSocket Usage
-
-Connect to `/ws/jobs/{job_id}` after launching a job:
-
-```javascript
-const ws = new WebSocket("ws://localhost:8080/ws/jobs/1");
-ws.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-  if (data.type === "job_complete") {
-    console.log("Job finished!");
-  } else {
-    console.log(`[${data.level}] ${data.host ? data.host + ": " : ""}${data.message}`);
-  }
-};
-```
-
-## Simulation Mode
-
-When Netmiko is not installed, playbooks that support it (like VLAN 1
-Remediation) automatically run in simulation mode with realistic fake
-output. This is useful for frontend development and demos.
 
 ## Security Notes
 

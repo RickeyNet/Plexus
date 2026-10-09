@@ -2,7 +2,7 @@
 
 Operational notes for running Plexus in production. This document covers
 the host-level configuration that doesn't fit cleanly in the README's
-"Running with Docker" section: firewalls, persistent storage paths, and
+"Quick Start" section: firewalls, persistent storage paths, and
 process supervision.
 
 ## Firewall rules
