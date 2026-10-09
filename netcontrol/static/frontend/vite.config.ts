@@ -3,8 +3,9 @@ import react from '@vitejs/plugin-react';
 import { fileURLToPath, URL } from 'node:url';
 
 // FastAPI serves the built bundle at /frontend/. The dev server runs on 5173
-// and proxies /api → http://127.0.0.1:8080 so cookie auth works against the
-// real backend without touching CORS.
+// and proxies /api, /static and /ws (WebSocket job/deploy/drift streams) →
+// http://127.0.0.1:8080 so cookie auth works against the real backend without
+// touching CORS.
 const BACKEND_URL = process.env.PLEXUS_BACKEND_URL ?? 'http://127.0.0.1:8080';
 
 export default defineConfig({
@@ -59,6 +60,11 @@ export default defineConfig({
         target: BACKEND_URL,
         changeOrigin: false,
         secure: false,
+      },
+      '/ws': {
+        target: BACKEND_URL,
+        ws: true,
+        changeOrigin: false,
       },
     },
   },
