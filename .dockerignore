@@ -4,6 +4,8 @@
 
 # Python
 .venv/
+# Alternate venv name; never needed in the image
+venv/
 __pycache__/
 *.pyc
 *.pyo
@@ -34,6 +36,14 @@ software_images/
 # snapshots and the rollback pointer under state/. Those dumps hold password
 # hashes and encrypted device credentials and must not end up in a layer.
 state/
+
+# Frontend build inputs/outputs. The Dockerfile's node stage runs npm ci +
+# npm run build itself.
+# Host node_modules (possibly Windows-native binaries) would overwrite the
+# stage's Linux install when the source is copied in after npm ci.
+netcontrol/static/frontend/node_modules/
+# Stale local bundle; the image gets a fresh dist from the node stage.
+netcontrol/static/frontend/dist/
 
 # IDE and editor
 .vscode/
