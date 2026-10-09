@@ -1,0 +1,9 @@
+# Development-only override: publishes the compose Postgres on host loopback so
+# the app can run from source (python templates/run.py) against it. Never
+# auto-loaded; pass it explicitly alongside the main file:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres
+# See DEVSETUP.md, "Loop B".
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"

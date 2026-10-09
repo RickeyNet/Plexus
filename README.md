@@ -8,6 +8,7 @@ stream live job output - all through a REST API with WebSocket support.
 
 ## Guides
 
+- Developer setup (WSL2, Docker, Postgres dev loops): `DEVSETUP.md`
 - Operator runbook (recovery playbook + verification checklists): `OPERATOR_RUNBOOK.md`
 - Performance and scale notes: `PERFORMANCE_LIMITS.md`
 - Data handling and retention: `DATA_RETENTION.md`
@@ -123,48 +124,53 @@ python templates/run.py --host 0.0.0.0 --port 8080
 
 ## Running with Docker
 
-This avoids installing Python/deps locally.
+`docker-compose.yml` runs three services: `plexus` (the app, built from the
+`Dockerfile` with the cloud SDKs included), `postgres` (PostgreSQL 16, data in
+the `plexus-postgres` volume) and `nginx` (TLS on 443, redirect on 80).
+`deploy/setup.sh` generates `.env` (random API token and Postgres password) and
+a self-signed certificate in `certs/`.
 
-1) Copy `.env.example` to `.env` and update values.
-2) Build and start:
+1) Generate `.env` and certs:
 ```bash
-docker compose up --build
+bash deploy/setup.sh
 ```
-3) Access at `http://localhost:8080` (mapped from the container).
-4) Stop/remove containers:
+2) Edit `.env`. For local use set `APP_CORS_ORIGINS=https://localhost`.
+3) Build and start, then watch the app log:
 ```bash
-docker compose down
+docker compose up --build -d
+docker compose logs -f plexus
 ```
+4) Open `https://localhost` (accept the self-signed certificate warning), log in
+as `admin` / `netcontrol` and change the password when prompted.
 
-PostgreSQL mode (recommended for VM/production reliability):
-
-```bash
-# in .env
-APP_DB_ENGINE=postgres
-APP_DATABASE_URL=postgresql://plexus:plexus@postgres:5432/plexus
-POSTGRES_DB=plexus
-POSTGRES_USER=plexus
-POSTGRES_PASSWORD=change_me
-
-docker compose up --build
-```
-
-SQLite mode (default/dev):
+Rebuild the app after code changes, or reset everything (deletes the database):
 
 ```bash
-# in .env
-APP_DB_ENGINE=sqlite
-
-docker compose up --build
+docker compose up --build -d plexus
+docker compose down -v
 ```
+
+Compose always runs on PostgreSQL: its `environment:` block sets `APP_DB_ENGINE`
+and `APP_DATABASE_URL`, which override anything in `.env`. To run the image on
+SQLite, build it with `docker build -t plexus-app:local .` and start it directly
+with `docker run -e APP_DB_PATH=/app/state/netcontrol.db -e APP_SESSION_KEY_FILE=/app/state/session.key -e APP_ENCRYPTION_KEY_FILE=/app/state/netcontrol.key -v plexus-sqlite:/app/state -p 127.0.0.1:8080:8080 -e APP_ENV=dev plexus-app:local`.
 
 Notes:
+- `.env` sets `APP_COOKIE_SECURE=true`, so logging in over plain
+  `http://127.0.0.1:8080` (bypassing nginx) silently fails: the browser drops
+  the Secure session cookie. Use `https://localhost`, or set
+  `APP_COOKIE_SECURE=false` in `.env` for direct access.
 - The Docker image runs `python templates/run.py --host 0.0.0.0 --port 8080` inside the container.
 - The built-in healthcheck pings `/api/health`; compose restarts the container if it becomes unhealthy.
-- Named volumes persist runtime state at `/app/state` (SQLite DB + key files) and certs at `/app/certs` across restarts.
-- Compose now includes a PostgreSQL service; SQLite remains available as a backend option.
+- Named volumes persist app state at `/app/state` (`plexus-db`: key files, firmware images) and the database (`plexus-postgres`) across restarts.
 - Docker runtime base image is currently `python:3.14-slim`.
-- For production, build/push the image to a registry and run it on your platform (Docker/Podman/Kubernetes) with real TLS and secrets provided via environment variables.
+- For production, build/push the image to a registry and run it on your platform (Docker/Podman/Kubernetes) with real TLS and secrets provided via environment variables. See `deploy/DEPLOYMENT.md`.
+
+## Developing on WSL with Docker and Postgres
+
+For day-to-day development that matches the deployed stack (WSL2 prerequisites,
+the full-stack and fast Postgres loops, tests and troubleshooting), see
+`DEVSETUP.md`.
 
 ## Database Backends
 
