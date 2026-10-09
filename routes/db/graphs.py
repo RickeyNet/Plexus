@@ -520,7 +520,9 @@ async def create_host_graph(
             (host_id, graph_template_id, title, instance_key, instance_label, int(enabled), int(pinned), options_json),
         )
         await db.commit()
-        new_id = cursor.lastrowid
+        # An ignored insert leaves lastrowid stale on SQLite (the connection's
+        # previous insert id) and None on Postgres; rowcount is 0 on both.
+        new_id = cursor.lastrowid if cursor.rowcount > 0 else None
         if new_id:
             cursor2 = await db.execute("SELECT * FROM host_graphs WHERE id = ?", (new_id,))
             return dict(await cursor2.fetchone())
@@ -609,7 +611,8 @@ async def apply_graph_templates_to_host(host_id: int) -> list[dict]:
                     (host_id, gt["id"], gt.get("title_format") or gt["name"]),
                 )
                 await db.commit()
-                if cursor4.lastrowid:
+                # rowcount guard: lastrowid is stale on SQLite after an ignored insert.
+                if cursor4.rowcount > 0 and cursor4.lastrowid:
                     cursor5 = await db.execute("SELECT * FROM host_graphs WHERE id = ?", (cursor4.lastrowid,))
                     row = await cursor5.fetchone()
                     if row:
@@ -649,7 +652,8 @@ async def apply_interface_graph_templates_to_host(host_id: int, interfaces: list
                     (host_id, gt["id"], title, if_index, if_name),
                 )
                 await db.commit()
-                if cursor2.lastrowid:
+                # rowcount guard: lastrowid is stale on SQLite after an ignored insert.
+                if cursor2.rowcount > 0 and cursor2.lastrowid:
                     cursor3 = await db.execute("SELECT * FROM host_graphs WHERE id = ?", (cursor2.lastrowid,))
                     row = await cursor3.fetchone()
                     if row:
@@ -841,7 +845,8 @@ async def create_data_source_profile(
             (host_id, profile_name, poll_interval, oids_json, int(enabled)),
         )
         await db.commit()
-        new_id = cursor.lastrowid
+        # rowcount guard: lastrowid is stale on SQLite after an ignored insert.
+        new_id = cursor.lastrowid if cursor.rowcount > 0 else None
         if new_id:
             cursor2 = await db.execute("SELECT * FROM data_source_profiles WHERE id = ?", (new_id,))
             return dict(await cursor2.fetchone())
