@@ -19,7 +19,6 @@ DESCRIPTION = "Add monitoring_polls(host_id, polled_at) and audit_events(categor
 
 
 async def up(db) -> None:
-    # Identical SQL on SQLite and Postgres.
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_monitoring_polls_host_polled ON monitoring_polls(host_id, polled_at)"
     )

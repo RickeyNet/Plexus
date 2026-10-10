@@ -559,7 +559,7 @@ async def _process_job_queue_inner():
             # its name, then resolve each device_type in memory with
             # the same rule as resolve_template_for_device_type().
             # (Looping that DB call once per device_type instead would
-            # open ~3 fresh aiosqlite connections each - the launch
+            # cost ~3 database round-trips each - the launch
             # latency the operator reported.)
             variants = await db.get_template_variants(tpl["name"])
             seen_dts = {h.get("device_type") or "" for h in hosts}

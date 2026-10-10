@@ -38,6 +38,29 @@ jobs:
         # import it - re-add them only if the target version is lowered.
         python-version: ["3.14"]
 
+    # The suite runs on PostgreSQL only (tests/conftest.py requires
+    # PLEXUS_TEST_PG_URL). It DROPs and re-creates plexus_test and
+    # plexus_test_template, so the service user must be allowed to
+    # CREATE DATABASE; the image's POSTGRES_USER is a superuser.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          # CI-only ephemeral credentials - not used in any deployed environment
+          POSTGRES_DB: plexus
+          POSTGRES_USER: plexus
+          POSTGRES_PASSWORD: plexus
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U plexus -d plexus"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      PLEXUS_TEST_PG_URL: postgresql://plexus:plexus@localhost:5432/plexus_test
+
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -92,52 +115,6 @@ jobs:
 
       - name: Critical module regression gate
         run: python tools/coverage_gate.py coverage.json
-
-  postgres-smoke:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          # CI-only ephemeral credentials - not used in any deployed environment
-          POSTGRES_DB: plexus
-          POSTGRES_USER: plexus
-          POSTGRES_PASSWORD: plexus
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U plexus -d plexus"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-    env:
-      APP_DB_ENGINE: postgres
-      APP_DATABASE_URL: postgresql://plexus:plexus@localhost:5432/plexus
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.14"
-          cache: "pip"
-          cache-dependency-path: |
-            requirements.txt
-            requirements-dev.txt
-
-      - name: Install system dependencies (python-ldap build headers)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libldap2-dev libsasl2-dev libssl-dev
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements-dev.txt
-
-      - name: Postgres backend smoke tests
-        run: pytest tests/test_postgres_backend.py -q
 
   frontend:
     runs-on: ubuntu-latest

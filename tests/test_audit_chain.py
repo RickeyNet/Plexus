@@ -3,28 +3,27 @@
 Covers:
   * add_audit_event populates prev_hash/row_hash and links rows correctly
   * verify_audit_chain accepts a clean chain and rejects a mutated one
-  * SQLite triggers block raw UPDATE and DELETE against audit_events
+  * Postgres triggers block raw UPDATE and DELETE against audit_events
   * Migration backfill produces a chain that verifies clean
 """
 
 from __future__ import annotations
 
 import hashlib
-import sqlite3
 
+import asyncpg
 import pytest
 import routes.database as db_module
 
+import pg_raw
 
-async def _init_clean_db(tmp_path, monkeypatch) -> str:
-    db_path = str(tmp_path / "audit.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+
+async def _init_clean_db() -> None:
     await db_module.init_db()
-    return db_path
 
 
-async def test_add_audit_event_populates_chain(tmp_path, monkeypatch):
-    await _init_clean_db(tmp_path, monkeypatch)
+async def test_add_audit_event_populates_chain():
+    await _init_clean_db()
 
     id1 = await db_module.add_audit_event("auth", "login.success", "alice")
     id2 = await db_module.add_audit_event("auth", "login.success", "bob")
@@ -50,8 +49,8 @@ async def test_add_audit_event_populates_chain(tmp_path, monkeypatch):
         int(rh, 16)
 
 
-async def test_verify_audit_chain_clean(tmp_path, monkeypatch):
-    await _init_clean_db(tmp_path, monkeypatch)
+async def test_verify_audit_chain_clean():
+    await _init_clean_db()
 
     for i in range(5):
         await db_module.add_audit_event("auth", "login.success", f"user{i}")
@@ -65,29 +64,27 @@ async def test_verify_audit_chain_clean(tmp_path, monkeypatch):
     }
 
 
-async def test_verify_audit_chain_empty_db(tmp_path, monkeypatch):
-    await _init_clean_db(tmp_path, monkeypatch)
+async def test_verify_audit_chain_empty_db():
+    await _init_clean_db()
     result = await db_module.verify_audit_chain()
     assert result["ok"] is True
     assert result["total_rows"] == 0
 
 
-@pytest.mark.sqlite_only  # tampers via sqlite3.connect(DB_PATH)
-async def test_verify_audit_chain_detects_tamper(tmp_path, monkeypatch):
-    db_path = await _init_clean_db(tmp_path, monkeypatch)
+async def test_verify_audit_chain_detects_tamper():
+    await _init_clean_db()
 
     await db_module.add_audit_event("auth", "login.success", "alice")
     id2 = await db_module.add_audit_event("auth", "login.success", "bob")
     await db_module.add_audit_event("config", "playbook.create", "alice")
 
-    # Tamper via raw sqlite3 (bypassing triggers requires DROPping first).
-    raw = sqlite3.connect(db_path)
+    # Tamper via a raw connection (bypassing the trigger requires dropping it first).
+    conn = await pg_raw.connect()
     try:
-        raw.execute("DROP TRIGGER IF EXISTS audit_events_no_update")
-        raw.execute("UPDATE audit_events SET detail = 'tampered' WHERE id = ?", (id2,))
-        raw.commit()
+        await conn.execute("DROP TRIGGER IF EXISTS audit_events_no_update ON audit_events")
+        await conn.execute("UPDATE audit_events SET detail = 'tampered' WHERE id = $1", id2)
     finally:
-        raw.close()
+        await conn.close()
 
     result = await db_module.verify_audit_chain()
     assert result["ok"] is False
@@ -96,21 +93,19 @@ async def test_verify_audit_chain_detects_tamper(tmp_path, monkeypatch):
     assert result["first_break_reason"] == "row_hash_mismatch"
 
 
-@pytest.mark.sqlite_only  # tampers via sqlite3.connect(DB_PATH)
-async def test_verify_audit_chain_detects_deletion(tmp_path, monkeypatch):
-    db_path = await _init_clean_db(tmp_path, monkeypatch)
+async def test_verify_audit_chain_detects_deletion():
+    await _init_clean_db()
 
     await db_module.add_audit_event("auth", "login.success", "alice")
     id2 = await db_module.add_audit_event("auth", "login.success", "bob")
     id3 = await db_module.add_audit_event("config", "playbook.create", "alice")
 
-    raw = sqlite3.connect(db_path)
+    conn = await pg_raw.connect()
     try:
-        raw.execute("DROP TRIGGER IF EXISTS audit_events_no_delete")
-        raw.execute("DELETE FROM audit_events WHERE id = ?", (id2,))
-        raw.commit()
+        await conn.execute("DROP TRIGGER IF EXISTS audit_events_no_delete ON audit_events")
+        await conn.execute("DELETE FROM audit_events WHERE id = $1", id2)
     finally:
-        raw.close()
+        await conn.close()
 
     result = await db_module.verify_audit_chain()
     assert result["ok"] is False
@@ -120,72 +115,54 @@ async def test_verify_audit_chain_detects_deletion(tmp_path, monkeypatch):
     assert result["first_break_reason"] == "prev_hash_mismatch"
 
 
-@pytest.mark.sqlite_only  # exercises the SQLite trigger via sqlite3.connect(DB_PATH)
-async def test_update_trigger_blocks_raw_update(tmp_path, monkeypatch):
-    db_path = await _init_clean_db(tmp_path, monkeypatch)
-    await db_module.add_audit_event("auth", "login.success", "alice")
+async def test_update_trigger_blocks_raw_update():
+    await _init_clean_db()
+    audit_id = await db_module.add_audit_event("auth", "login.success", "alice")
 
-    raw = sqlite3.connect(db_path)
-    try:
-        with pytest.raises(sqlite3.IntegrityError, match="audit immutable"):
-            raw.execute("UPDATE audit_events SET detail = 'oops' WHERE id = 1")
-    finally:
-        raw.close()
+    with pytest.raises(asyncpg.PostgresError, match="audit immutable"):
+        await pg_raw.execute("UPDATE audit_events SET detail = 'oops' WHERE id = $1", audit_id)
 
 
-@pytest.mark.sqlite_only  # exercises the SQLite trigger via sqlite3.connect(DB_PATH)
-async def test_delete_trigger_blocks_raw_delete(tmp_path, monkeypatch):
-    db_path = await _init_clean_db(tmp_path, monkeypatch)
-    await db_module.add_audit_event("auth", "login.success", "alice")
+async def test_delete_trigger_blocks_raw_delete():
+    await _init_clean_db()
+    audit_id = await db_module.add_audit_event("auth", "login.success", "alice")
 
-    raw = sqlite3.connect(db_path)
-    try:
-        with pytest.raises(sqlite3.IntegrityError, match="audit immutable"):
-            raw.execute("DELETE FROM audit_events WHERE id = 1")
-    finally:
-        raw.close()
+    with pytest.raises(asyncpg.PostgresError, match="audit immutable"):
+        await pg_raw.execute("DELETE FROM audit_events WHERE id = $1", audit_id)
 
 
-@pytest.mark.sqlite_only  # rewrites rows via sqlite3.connect(DB_PATH)
-async def test_backfill_produces_clean_chain(tmp_path, monkeypatch):
+async def test_backfill_produces_clean_chain():
     """Insert rows directly (no chain), then run migration, then verify."""
-    db_path = str(tmp_path / "backfill.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
-
-    # Stand up the schema WITHOUT running migrations yet by hitting
-    # init_db() then dropping the v37 columns/triggers so the migration
-    # has work to do.
+    # Stand up the schema, then drop the v37 triggers and forget the
+    # migration so re-running init_db() has backfill work to do.
     await db_module.init_db()
-    raw = sqlite3.connect(db_path)
+    conn = await pg_raw.connect()
     try:
-        raw.execute("DROP TRIGGER IF EXISTS audit_events_no_update")
-        raw.execute("DROP TRIGGER IF EXISTS audit_events_no_delete")
-        raw.execute("DELETE FROM schema_migrations WHERE version = 37")
+        await conn.execute("DROP TRIGGER IF EXISTS audit_events_no_update ON audit_events")
+        await conn.execute("DROP TRIGGER IF EXISTS audit_events_no_delete ON audit_events")
+        await conn.execute("DELETE FROM schema_migrations WHERE version = 37")
         # Wipe the chain columns to simulate a pre-migration DB.
-        raw.execute("UPDATE audit_events SET prev_hash = '', row_hash = ''")
+        await conn.execute("UPDATE audit_events SET prev_hash = '', row_hash = ''")
         # Insert a few rows with NO chain values.
         for i in range(3):
-            raw.execute(
+            await conn.execute(
                 "INSERT INTO audit_events "
                 '(timestamp, category, action, "user", detail, correlation_id) '
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    f"2026-01-0{i + 1} 00:00:00",
-                    "auth",
-                    "login.success",
-                    f"user{i}",
-                    "",
-                    "",
-                ),
+                "VALUES ($1, $2, $3, $4, $5, $6)",
+                f"2026-01-0{i + 1} 00:00:00",
+                "auth",
+                "login.success",
+                f"user{i}",
+                "",
+                "",
             )
-        raw.commit()
 
         # Sanity: rows exist with empty chain columns.
-        rows = raw.execute("SELECT id, prev_hash, row_hash FROM audit_events ORDER BY id ASC").fetchall()
+        rows = await conn.fetch("SELECT id, prev_hash, row_hash FROM audit_events ORDER BY id ASC")
         assert len(rows) == 3
-        assert all(r[1] == "" and r[2] == "" for r in rows)
+        assert all(r["prev_hash"] == "" and r["row_hash"] == "" for r in rows)
     finally:
-        raw.close()
+        await conn.close()
 
     # Re-run init_db; the migration re-applies and backfills.
     await db_module.init_db()
@@ -207,10 +184,10 @@ async def test_backfill_produces_clean_chain(tmp_path, monkeypatch):
     assert rows[2][1] == rows[1][2]
 
 
-async def test_row_hash_matches_canonical_formula(tmp_path, monkeypatch):
+async def test_row_hash_matches_canonical_formula():
     """add_audit_event must compute the same hash an external observer
     would compute from the canonical row bytes."""
-    await _init_clean_db(tmp_path, monkeypatch)
+    await _init_clean_db()
 
     await db_module.add_audit_event(
         category="auth",

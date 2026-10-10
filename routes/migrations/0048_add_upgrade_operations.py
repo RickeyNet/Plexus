@@ -8,20 +8,15 @@ activate windows that can fail or be missed after a restart.
 
 from __future__ import annotations
 
-import os
-
 VERSION = 48
 DESCRIPTION = "Add upgrade_operations history table"
-DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
 
 
 async def up(db) -> None:
-    id_column = "SERIAL PRIMARY KEY" if DB_ENGINE == "postgres" else "INTEGER PRIMARY KEY AUTOINCREMENT"
-    now_default = "NOW()::text" if DB_ENGINE == "postgres" else "datetime('now')"
     await db.execute(
-        f"""
+        """
         CREATE TABLE IF NOT EXISTS upgrade_operations (
-            id              {id_column},
+            id              SERIAL PRIMARY KEY,
             campaign_id     INTEGER NOT NULL REFERENCES upgrade_campaigns(id) ON DELETE CASCADE,
             phase           TEXT    NOT NULL DEFAULT '',
             status          TEXT    NOT NULL DEFAULT 'pending',
@@ -34,8 +29,8 @@ async def up(db) -> None:
             started_at      TEXT,
             completed_at    TEXT,
             error_message   TEXT    NOT NULL DEFAULT '',
-            created_at      TEXT    NOT NULL DEFAULT ({now_default}),
-            updated_at      TEXT    NOT NULL DEFAULT ({now_default})
+            created_at      TEXT    NOT NULL DEFAULT (NOW()::text),
+            updated_at      TEXT    NOT NULL DEFAULT (NOW()::text)
         )
         """
     )

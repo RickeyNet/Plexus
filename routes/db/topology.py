@@ -14,8 +14,6 @@ import os
 import re
 from datetime import UTC, datetime, timedelta
 
-import aiosqlite
-
 import routes.database as _dbcore
 from routes.database import (
     _LOGGER,
@@ -1854,14 +1852,6 @@ def _regex_required_literal(pattern: str) -> str:
     return max(runs, key=len, default="")
 
 
-def _build_sqlite_fts_query(search_query: str) -> str:
-    tokens = [tok for tok in re.findall(r"[A-Za-z0-9_.:/-]+", search_query or "") if tok]
-    if not tokens:
-        escaped = (search_query or "").replace('"', '""')
-        return f'"{escaped}"'
-    return " AND ".join(f'"{tok.replace(chr(34), chr(34) + chr(34))}"' for tok in tokens[:10])
-
-
 def _extract_config_backup_match_context(
     config_text: str,
     search_query: str,
@@ -2107,71 +2097,40 @@ async def search_config_backups(
     db = await _dbcore.get_db(read_only=True)
     try:
         if requested_mode == "fulltext":
-            if _dbcore.DB_ENGINE == "postgres":
-                cursor = await db.execute(
-                    f"""{base_select}
-                        WHERE b.status = 'success'
-                          AND to_tsvector('simple', COALESCE(b.config_text, ''))
-                              @@ plainto_tsquery('simple', ?)
-                        ORDER BY b.captured_at DESC, b.id DESC""",
-                    (query,),
-                )
-            else:
-                fts_query = _build_sqlite_fts_query(query)
-                try:
-                    cursor = await db.execute(
-                        f"""{base_select}
-                            JOIN config_backups_fts fts ON fts.rowid = b.id
-                            WHERE b.status = 'success'
-                              AND fts.config_backups_fts MATCH ?
-                            ORDER BY b.captured_at DESC, b.id DESC""",
-                        (fts_query,),
-                    )
-                except Exception:
-                    effective_mode = "substring"
+            cursor = await db.execute(
+                f"""{base_select}
+                    WHERE b.status = 'success'
+                      AND to_tsvector('simple', COALESCE(b.config_text, ''))
+                          @@ plainto_tsquery('simple', ?)
+                    ORDER BY b.captured_at DESC, b.id DESC""",
+                (query,),
+            )
 
         if cursor is None and effective_mode == "substring":
-            if _dbcore.DB_ENGINE == "postgres":
-                cursor = await db.execute(
-                    f"""{base_select}
-                        WHERE b.status = 'success'
-                          AND POSITION(LOWER(?) IN LOWER(COALESCE(b.config_text, ''))) > 0
-                        ORDER BY b.captured_at DESC, b.id DESC""",
-                    (query,),
-                )
-            else:
-                cursor = await db.execute(
-                    f"""{base_select}
-                        WHERE b.status = 'success'
-                          AND instr(LOWER(COALESCE(b.config_text, '')), LOWER(?)) > 0
-                        ORDER BY b.captured_at DESC, b.id DESC""",
-                    (query,),
-                )
+            cursor = await db.execute(
+                f"""{base_select}
+                    WHERE b.status = 'success'
+                      AND POSITION(LOWER(?) IN LOWER(COALESCE(b.config_text, ''))) > 0
+                    ORDER BY b.captured_at DESC, b.id DESC""",
+                (query,),
+            )
 
         if cursor is None and effective_mode == "regex":
-            # Cheap substring pre-filter so regex search never full-scans
-            # (SQLite would otherwise load every blob into Python). Patterns
-            # with no required literal must use substring/fulltext instead.
+            # Cheap substring pre-filter (literal required by the pattern) in
+            # front of the server-side ``~*`` match, so a regex search never
+            # evaluates the pattern against every backup. Patterns with no
+            # required literal must use substring/fulltext instead.
             literal = _regex_required_literal(query).lower()
             if len(literal) < _CONFIG_BACKUP_REGEX_MIN_LITERAL:
                 raise ValueError("regex_needs_literal")
-            if _dbcore.DB_ENGINE == "postgres":
-                cursor = await db.execute(
-                    f"""{base_select}
-                        WHERE b.status = 'success'
-                          AND POSITION(? IN LOWER(COALESCE(b.config_text, ''))) > 0
-                          AND COALESCE(b.config_text, '') ~* ?
-                        ORDER BY b.captured_at DESC, b.id DESC""",
-                    (literal, query),
-                )
-            else:
-                cursor = await db.execute(
-                    f"""{base_select}
-                        WHERE b.status = 'success'
-                          AND instr(LOWER(COALESCE(b.config_text, '')), ?) > 0
-                        ORDER BY b.captured_at DESC, b.id DESC""",
-                    (literal,),
-                )
+            cursor = await db.execute(
+                f"""{base_select}
+                    WHERE b.status = 'success'
+                      AND POSITION(? IN LOWER(COALESCE(b.config_text, ''))) > 0
+                      AND COALESCE(b.config_text, '') ~* ?
+                    ORDER BY b.captured_at DESC, b.id DESC""",
+                (literal, query),
+            )
 
         if cursor is None:
             raise ValueError("invalid_mode")

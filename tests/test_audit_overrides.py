@@ -29,11 +29,8 @@ from fastapi import HTTPException
 from netcontrol.routes import audit as audit_router
 
 
-async def _init_clean_db(tmp_path, monkeypatch) -> str:
-    db_path = str(tmp_path / "audit_overrides.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+async def _init_clean_db():
     await db_module.init_db()
-    return db_path
 
 
 async def _make_host(group_name: str = "g1", hostname: str = "sw1") -> int:
@@ -48,10 +45,10 @@ async def _make_host(group_name: str = "g1", hostname: str = "sw1") -> int:
 # ── CRUD round-trip ────────────────────────────────────────────────────────
 
 
-async def test_override_crud_roundtrip(tmp_path, monkeypatch):
-    await _init_clean_db(tmp_path, monkeypatch)
-    # host_id has a FOREIGN KEY to hosts(id) (enforced: the shared SQLite
-    # connection runs with PRAGMA foreign_keys=ON), so a real host is needed.
+async def test_override_crud_roundtrip():
+    await _init_clean_db()
+    # host_id has a FOREIGN KEY to hosts(id) (enforced by Postgres), so a
+    # real host is needed.
     host_id = await _make_host()
 
     created = await audit_router._create_override(
@@ -239,8 +236,8 @@ async def _fetch_findings(run_id: int) -> list[dict]:
         await conn.close()
 
 
-async def test_run_without_override_persists_finding(tmp_path, monkeypatch):
-    await _init_clean_db(tmp_path, monkeypatch)
+async def test_run_without_override_persists_finding(monkeypatch):
+    await _init_clean_db()
     host_id = await _make_host()
 
     run_id = await _run_with_fake_rule(monkeypatch)
@@ -255,8 +252,8 @@ async def test_run_without_override_persists_finding(tmp_path, monkeypatch):
     assert summary["suppressed_total"] == 0
 
 
-async def test_host_specific_override_suppresses_finding(tmp_path, monkeypatch):
-    await _init_clean_db(tmp_path, monkeypatch)
+async def test_host_specific_override_suppresses_finding(monkeypatch):
+    await _init_clean_db()
     host_id = await _make_host()
 
     await audit_router._create_override(
@@ -280,9 +277,9 @@ async def test_host_specific_override_suppresses_finding(tmp_path, monkeypatch):
     assert summary["suppressed_by_mode"]["accept_risk"] == 0
 
 
-async def test_global_override_suppresses_all_hosts(tmp_path, monkeypatch):
+async def test_global_override_suppresses_all_hosts(monkeypatch):
     """An override with host_id=NULL applies to every host."""
-    await _init_clean_db(tmp_path, monkeypatch)
+    await _init_clean_db()
     await _make_host(hostname="sw-a")
     await _make_host(group_name="g2", hostname="sw-b")
 
@@ -305,8 +302,8 @@ async def test_global_override_suppresses_all_hosts(tmp_path, monkeypatch):
     assert summary["suppressed_by_mode"]["mute"] == 0
 
 
-async def test_expired_override_does_not_suppress(tmp_path, monkeypatch):
-    await _init_clean_db(tmp_path, monkeypatch)
+async def test_expired_override_does_not_suppress(monkeypatch):
+    await _init_clean_db()
     await _make_host()
     past = (datetime.now(UTC) - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
     await audit_router._create_override(
@@ -326,10 +323,10 @@ async def test_expired_override_does_not_suppress(tmp_path, monkeypatch):
     assert summary["suppressed_total"] == 0
 
 
-async def test_unique_constraint_blocks_duplicate_override(tmp_path, monkeypatch):
+async def test_unique_constraint_blocks_duplicate_override():
     """UNIQUE(rule_id, host_id) -- second create for the same pair must
     fail. The endpoint maps that to 409; the helper itself raises."""
-    await _init_clean_db(tmp_path, monkeypatch)
+    await _init_clean_db()
     host_id = await _make_host()
 
     await audit_router._create_override(
@@ -351,8 +348,8 @@ async def test_unique_constraint_blocks_duplicate_override(tmp_path, monkeypatch
         )
 
 
-async def test_endpoint_returns_409_on_duplicate(tmp_path, monkeypatch):
-    await _init_clean_db(tmp_path, monkeypatch)
+async def test_endpoint_returns_409_on_duplicate():
+    await _init_clean_db()
     host_id = await _make_host()
     payload = {
         "rule_id": "r1",

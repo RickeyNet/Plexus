@@ -14,12 +14,9 @@ import routes.database as db_module
 
 
 @pytest.fixture
-def dep_db(tmp_path, monkeypatch):
-    db_path = str(tmp_path / "toctou.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+def dep_db(monkeypatch):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-toctou")
     asyncio.run(db_module.init_db())
-    return db_path
 
 
 async def _make_deployment(status: str = "planning") -> int:

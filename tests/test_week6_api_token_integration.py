@@ -2,15 +2,12 @@ from __future__ import annotations
 
 import netcontrol.app as app_module
 import pytest
-import routes.database as db_module
 from fastapi.testclient import TestClient
 
 
 @pytest.fixture
-def token_protected_client(monkeypatch, tmp_path):
+def token_protected_client(monkeypatch):
     """Create a real FastAPI test client with API token requirement enabled."""
-    db_path = tmp_path / "week6-token.db"
-    monkeypatch.setattr(db_module, "DB_PATH", str(db_path))
 
     monkeypatch.setenv("APP_REQUIRE_API_TOKEN", "true")
     monkeypatch.setattr(app_module, "APP_API_TOKEN", "week6-secret-token")

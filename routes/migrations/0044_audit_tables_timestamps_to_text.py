@@ -9,19 +9,13 @@ the TIMESTAMPTZ columns ("column finished_at is of type timestamp with
 time zone but expression is of type text").
 
 This migration aligns the audit tables with the rest of the schema by
-converting their datetime columns to TEXT in place. On SQLite the
-columns are already TEXT, so this is a no-op there.
+converting their datetime columns to TEXT in place.
 """
 
 from __future__ import annotations
 
-import os
-
 VERSION = 44
 DESCRIPTION = "Convert audit-table TIMESTAMPTZ columns to TEXT on Postgres"
-
-DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
-
 
 _PG_CONVERSIONS = [
     ("interface_inventory", "collected_at"),
@@ -50,7 +44,7 @@ async def _column_type(db, table: str, column: str) -> str | None:
     return row[0] if not isinstance(row, dict) else row["data_type"]
 
 
-async def _up_postgres(db) -> None:
+async def up(db) -> None:
     for table, column in _PG_CONVERSIONS:
         dtype = await _column_type(db, table, column)
         if dtype is None or dtype == "text":
@@ -59,14 +53,3 @@ async def _up_postgres(db) -> None:
         await db.execute(f"ALTER TABLE {table} ALTER COLUMN {column} DROP DEFAULT")
         await db.execute(f"ALTER TABLE {table} ALTER COLUMN {column} SET DEFAULT (NOW()::text)")
     await db.commit()
-
-
-async def _up_sqlite(db) -> None:
-    return None
-
-
-async def up(db) -> None:
-    if DB_ENGINE == "postgres":
-        await _up_postgres(db)
-    else:
-        await _up_sqlite(db)

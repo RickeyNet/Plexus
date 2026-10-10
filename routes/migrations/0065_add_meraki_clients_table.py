@@ -9,18 +9,13 @@ Adds:
     keep a client findable after it drops out of Meraki's one-day window.
 
 Timestamps are written by Plexus as UTC ``YYYY-MM-DD HH:MM:SS`` text (the
-format mac_address_table uses on SQLite), so results of both tables sort
-together on either engine.
+format mac_address_table uses), so results of both tables sort together.
 """
 
 from __future__ import annotations
 
-import os
-
 VERSION = 65
 DESCRIPTION = "Add Meraki clients table for MAC tracking"
-
-DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
 
 _COLUMNS = """
             org_ref         INTEGER NOT NULL REFERENCES meraki_orgs(id) ON DELETE CASCADE,
@@ -43,11 +38,10 @@ _COLUMNS = """
 
 
 async def up(db) -> None:
-    primary_key = "SERIAL PRIMARY KEY" if DB_ENGINE == "postgres" else "INTEGER PRIMARY KEY AUTOINCREMENT"
     await db.execute(
         f"""
         CREATE TABLE IF NOT EXISTS meraki_clients (
-            id              {primary_key},{_COLUMNS}
+            id              SERIAL PRIMARY KEY,{_COLUMNS}
         )
         """
     )

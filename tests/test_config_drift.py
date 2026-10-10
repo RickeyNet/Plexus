@@ -97,11 +97,8 @@ def test_diff_both_empty():
 
 
 @pytest.fixture
-async def drift_db(tmp_path, monkeypatch):
-    """Set up a fresh SQLite DB with schema for drift tests."""
-    db_path = str(tmp_path / "drift_test.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
-    monkeypatch.setattr(db_module, "DB_ENGINE", "sqlite")
+async def drift_db():
+    """Set up the schema for drift tests."""
     await db_module.init_db()
 
     # Insert a group and two hosts for FK references
@@ -119,8 +116,6 @@ async def drift_db(tmp_path, monkeypatch):
         await db.commit()
     finally:
         await db.close()
-
-    return db_path
 
 
 @pytest.mark.asyncio

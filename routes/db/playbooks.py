@@ -14,8 +14,6 @@ import os
 import re
 from datetime import UTC, datetime, timedelta
 
-import aiosqlite
-
 import routes.database as _dbcore
 from routes.database import (
     _LOGGER,
@@ -108,16 +106,10 @@ async def sync_playbook_filename(name: str, filename: str):
     """Update the filename for an existing playbook by name."""
     db = await _dbcore.get_db()
     try:
-        if _dbcore.DB_ENGINE == "postgres":
-            await db.execute(
-                "UPDATE playbooks SET filename = ?, updated_at = NOW()::text WHERE name = ?",
-                (filename, name),
-            )
-        else:
-            await db.execute(
-                "UPDATE playbooks SET filename = ?, updated_at = datetime('now') WHERE name = ?",
-                (filename, name),
-            )
+        await db.execute(
+            "UPDATE playbooks SET filename = ?, updated_at = NOW()::text WHERE name = ?",
+            (filename, name),
+        )
         await db.commit()
     finally:
         await db.close()
@@ -158,9 +150,7 @@ async def update_playbook(
             params.append(type)
 
         if updates:
-            updates.append(
-                "updated_at = NOW()::text" if _dbcore.DB_ENGINE == "postgres" else "updated_at = datetime('now')"
-            )
+            updates.append("updated_at = NOW()::text")
             sql, sql_params = _safe_dynamic_update("playbooks", updates, params, "id = ?", playbook_id)
             await db.execute(sql, sql_params)
             await db.commit()
@@ -306,7 +296,7 @@ def resolve_variant_in_memory(base: dict, variants: list[dict], device_type: str
 
     The job-launch path resolves many device_types against one template;
     doing it in memory off two queries (``get_template`` +
-    ``get_template_variants``) avoids the ~3 fresh aiosqlite connections
+    ``get_template_variants``) avoids the ~3 database round-trips
     per device_type that calling ``resolve_template_for_device_type`` in
     a loop would otherwise open on the queued→running critical path.
     """

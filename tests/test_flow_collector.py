@@ -23,12 +23,9 @@ from netcontrol.routes import flow_collector
 # ── shared fixture helpers ──────────────────────────────────────────────────
 
 
-async def _init_db(tmp_path, monkeypatch) -> str:
-    """Point routes.database at a fresh sqlite file and run init_db()."""
-    db_path = str(tmp_path / "flow.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+async def _init_db():
+    """Run init_db() on the per-test database."""
     await db_module.init_db()
-    return db_path
 
 
 async def _add_host(hostname: str = "exporter1", ip: str = "10.1.2.3") -> int:
@@ -400,8 +397,8 @@ def test_parse_sflow_rejects_wrong_version():
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-async def test_create_flow_records_batch_and_top_talkers(tmp_path, monkeypatch):
-    await _init_db(tmp_path, monkeypatch)
+async def test_create_flow_records_batch_and_top_talkers():
+    await _init_db()
     host_id = await _add_host(ip="10.10.10.1")
 
     rows = [
@@ -488,8 +485,8 @@ async def test_create_flow_records_batch_and_top_talkers(tmp_path, monkeypatch):
     assert top_dst[0]["ip"] == "1.1.1.1"
 
 
-async def test_create_flow_records_batch_empty_is_noop(tmp_path, monkeypatch):
-    await _init_db(tmp_path, monkeypatch)
+async def test_create_flow_records_batch_empty_is_noop():
+    await _init_db()
     assert await db_module.create_flow_records_batch([]) == 0
 
 
@@ -512,8 +509,8 @@ def _pick_free_udp_port() -> int:
         s.close()
 
 
-async def test_collector_start_stop_idempotent(tmp_path, monkeypatch):
-    await _init_db(tmp_path, monkeypatch)
+async def test_collector_start_stop_idempotent():
+    await _init_db()
 
     netflow_port = _pick_free_udp_port()
     sflow_port = _pick_free_udp_port()
@@ -552,8 +549,8 @@ async def test_collector_start_stop_idempotent(tmp_path, monkeypatch):
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-async def test_refresh_exporter_cache_loads_inventory(tmp_path, monkeypatch):
-    await _init_db(tmp_path, monkeypatch)
+async def test_refresh_exporter_cache_loads_inventory():
+    await _init_db()
     flow_collector._exporter_cache.clear()
 
     h1 = await _add_host(hostname="sw-a", ip="10.20.30.1")
@@ -565,8 +562,8 @@ async def test_refresh_exporter_cache_loads_inventory(tmp_path, monkeypatch):
     assert flow_collector._exporter_cache.get("10.20.30.2") == h2
 
 
-async def test_on_host_changed_updates_cache_and_exporter_rows(tmp_path, monkeypatch):
-    await _init_db(tmp_path, monkeypatch)
+async def test_on_host_changed_updates_cache_and_exporter_rows():
+    await _init_db()
     flow_collector._exporter_cache.clear()
 
     # Seed an exporter row for an IP that *will* later be associated

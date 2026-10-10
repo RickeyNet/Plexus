@@ -1137,8 +1137,7 @@ class _CsrfClient:
 
 
 @pytest.fixture
-def api(tmp_path, monkeypatch, request):
-    monkeypatch.setattr(db_module, "DB_PATH", str(tmp_path / "fmc.db"))
+def api(monkeypatch, request):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-fmc")
     monkeypatch.setenv("APP_API_TOKEN", "")
     monkeypatch.setenv("APP_REQUIRE_API_TOKEN", "false")
@@ -1398,9 +1397,8 @@ def test_api_fmc_build_needs_a_username(api):
 # ── Migration 0070 ───────────────────────────────────────────────────────────
 
 
-def test_migration_0070_renames_anyconnect_rows_to_fmc(tmp_path, monkeypatch):
+def test_migration_0070_renames_anyconnect_rows_to_fmc():
     migration = importlib.import_module("routes.migrations.0070_rename_anyconnect_provider_to_fmc")
-    monkeypatch.setattr(db_module, "DB_PATH", str(tmp_path / "migrate.db"))
 
     async def _run() -> dict:
         await db_module.init_db()

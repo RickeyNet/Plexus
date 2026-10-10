@@ -314,8 +314,7 @@ async def test_login_identity_tacacs_disabled_falls_to_local(monkeypatch) -> Non
 # ── Shadow user + role sync ──────────────────────────────────────────────────
 
 
-async def _fresh_db(tmp_path, monkeypatch, name):
-    monkeypatch.setattr(db_module, "DB_PATH", str(tmp_path / name))
+async def _fresh_db():
     await db_module.init_db()
 
 
@@ -326,8 +325,8 @@ def _state_cfg(monkeypatch, **overrides):
 
 
 @pytest.mark.asyncio
-async def test_upsert_tacacs_role_resyncs_when_authorizing(tmp_path, monkeypatch) -> None:
-    await _fresh_db(tmp_path, monkeypatch, "tacacs_resync.db")
+async def test_upsert_tacacs_role_resyncs_when_authorizing(monkeypatch) -> None:
+    await _fresh_db()
     _state_cfg(monkeypatch)
 
     user = await app_module.upsert_tacacs_user("jdoe", {"role": "admin"})
@@ -340,9 +339,9 @@ async def test_upsert_tacacs_role_resyncs_when_authorizing(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_upsert_tacacs_without_authorize_never_resyncs(tmp_path, monkeypatch) -> None:
+async def test_upsert_tacacs_without_authorize_never_resyncs(monkeypatch) -> None:
     # Authenticate-only mode asserts no role: a local promotion sticks.
-    await _fresh_db(tmp_path, monkeypatch, "tacacs_no_resync.db")
+    await _fresh_db()
     _state_cfg(monkeypatch, authorize=False)
 
     user = await app_module.upsert_tacacs_user("ops", {"role": None})
@@ -353,16 +352,16 @@ async def test_upsert_tacacs_without_authorize_never_resyncs(tmp_path, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_upsert_tacacs_bogus_role_falls_back_to_default(tmp_path, monkeypatch) -> None:
-    await _fresh_db(tmp_path, monkeypatch, "tacacs_default_role.db")
+async def test_upsert_tacacs_bogus_role_falls_back_to_default(monkeypatch) -> None:
+    await _fresh_db()
     _state_cfg(monkeypatch, default_role="user")
     user = await app_module.upsert_tacacs_user("x", {"role": "root"})
     assert user["role"] == "user"
 
 
 @pytest.mark.asyncio
-async def test_tacacs_shadow_user_gets_default_access_groups(tmp_path, monkeypatch) -> None:
-    await _fresh_db(tmp_path, monkeypatch, "tacacs_groups.db")
+async def test_tacacs_shadow_user_gets_default_access_groups(monkeypatch) -> None:
+    await _fresh_db()
     group_id = await db_module.create_access_group("TACACS Operators", "Default TACACS+ access", ["dashboard"])
     _state_cfg(monkeypatch, default_group_ids=[group_id])
 

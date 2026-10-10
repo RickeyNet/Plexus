@@ -395,7 +395,7 @@ Findings from the full-codebase review (security items, MAC-tracking logic fixes
 
 - [ ] **Expand `tools/coverage_gate.py`** beyond the single `netcontrol/app.py` rule - add the top untested route modules. Update 2026-07-07: `monitoring.py` (tests/test_monitoring*.py, test_sla_summary.py) and `jobs.py` (tests/test_jobs.py) now have coverage. `metrics_engine.py` now has `test_metrics_rate_calc.py` (rate calc + counter delta) and `test_batch_b_authz.py` (capacity-planning bound, vendor-OID admin gate); `admin.py` now has `test_admin_user_mgmt.py` (last-admin guard, role validation). Both still want broader coverage but are no longer at zero.
 - [ ] **Shrink the `mypy.ini` `ignore_errors = True` list** (18 modules including app, database, auth, jobs, monitoring) - one module per PR.
-- [x] **Run Postgres smoke tests on all PRs** - verified 2026-06-12: ci.yml already has a `postgres-smoke` job (postgres:16 service container) on every PR; what was thin is the coverage. Expanded `tests/test_postgres_backend.py` from 2 to 4 tests: concurrent audit-chain writers (exercises the pg_advisory_lock path that SQLite runs never touch) and category-filtered audit listing (0055 index). Full API-test matrix on Postgres remains future work - most app tests are DB_PATH/SQLite-bound by design.
+- [x] **Run Postgres smoke tests on all PRs** - verified 2026-06-12: ci.yml already has a `postgres-smoke` job (postgres:16 service container) on every PR; what was thin is the coverage. Expanded `tests/test_postgres_backend.py` from 2 to 4 tests: concurrent audit-chain writers (exercises the pg_advisory_lock path that SQLite runs never touch) and category-filtered audit listing (0055 index). Full API-test matrix on Postgres remains future work - most app tests are DB_PATH/SQLite-bound by design. Superseded 2026-10-09: the SQLite engine was removed and the whole suite now runs on Postgres (`PLEXUS_TEST_PG_URL`).
 - [ ] **Frontend coverage threshold in CI** - 5 test files for 180 components; any threshold forces improvement.
 
 ### Batch 5 - Security Follow-Ups
@@ -527,7 +527,8 @@ items were implemented 2026-07-08 in a follow-up pass:
   connection raises immediately. Hot read helpers converted (monitoring polls/
   alerts/summary/rules/suppressions, inventory groups/hosts, topology links/
   interface stats, `query_interface_ts_multi`); the rest can migrate
-  incrementally. Tests: `tests/test_sqlite_read_pool.py`.
+  incrementally. Tests: `tests/test_sqlite_read_pool.py`. Removed 2026-10-09
+  with the SQLite engine (`APP_SQLITE_READ_POOL` and its test are gone).
 - [x] **Route-table poll cadence** — `_ssh_poll` now parses `show ip route
   summary` (IOS + NX-OS formats) every tick and only pulls the full
   `show ip route` when the summary count changes or

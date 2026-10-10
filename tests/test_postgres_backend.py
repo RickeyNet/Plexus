@@ -1,54 +1,32 @@
+"""Postgres backend round-trips through the real database facade.
+
+Every test gets a fresh clone of the migrated template database (see
+tests/conftest.py), and conftest keeps one asyncpg pool per event loop and
+disposes them all after each test.
+"""
+
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import UTC, datetime
 
 import pytest
 import routes.database as db_module
 
 
-def _postgres_env_ready() -> bool:
-    return bool(os.getenv("APP_DATABASE_URL"))
-
-
-pytestmark = pytest.mark.skipif(
-    not _postgres_env_ready(),
-    reason="APP_DATABASE_URL not configured for postgres backend tests",
-)
-
-
-@pytest.fixture(autouse=True)
-async def _close_pg_pool_after_test():
-    # Each test runs on its own event loop (function-scoped loops), but the
-    # asyncpg pool is module-global. Close it after every test so the pool
-    # never outlives the loop that created it.
-    yield
-    await db_module.close_db_pool()
-
-
 @pytest.mark.asyncio
-async def test_postgres_backend_init_and_user_roundtrip(monkeypatch):
-    monkeypatch.setattr(db_module, "DB_ENGINE", "postgres")
-    monkeypatch.setattr(db_module, "APP_DATABASE_URL", os.getenv("APP_DATABASE_URL", ""))
-
+async def test_postgres_backend_init_and_user_roundtrip():
     await db_module.init_db()
 
     username = "pg_smoke_user"
-    try:
-        user_id = await db_module.create_user(
-            username=username,
-            password_hash="hash",
-            salt="salt",
-            display_name="PG Smoke",
-            role="user",
-            must_change_password=False,
-        )
-    except ValueError:
-        # User may already exist from previous runs; fetch and reuse.
-        row = await db_module.get_user_by_username(username)
-        assert row is not None
-        user_id = int(row["id"])
+    user_id = await db_module.create_user(
+        username=username,
+        password_hash="hash",
+        salt="salt",
+        display_name="PG Smoke",
+        role="user",
+        must_change_password=False,
+    )
 
     assert user_id > 0
     user = await db_module.get_user_by_username(username)
@@ -57,10 +35,7 @@ async def test_postgres_backend_init_and_user_roundtrip(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_postgres_delete_expired_jobs_path(monkeypatch):
-    monkeypatch.setattr(db_module, "DB_ENGINE", "postgres")
-    monkeypatch.setattr(db_module, "APP_DATABASE_URL", os.getenv("APP_DATABASE_URL", ""))
-
+async def test_postgres_delete_expired_jobs_path():
     await db_module.init_db()
     deleted = await db_module.delete_expired_jobs(30)
     assert isinstance(deleted, int)
@@ -68,16 +43,13 @@ async def test_postgres_delete_expired_jobs_path(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_postgres_audit_chain_concurrent_writers(monkeypatch):
+async def test_postgres_audit_chain_concurrent_writers():
     """Concurrent audit writes must not fork the hash chain on Postgres.
 
     Exercises the pg_advisory_lock acquire/release path in add_audit_event
-    (the SQLite suite never runs it) and proves prev_hash linkage stays
-    intact under concurrency within one process.
+    and proves prev_hash linkage stays intact under concurrency within one
+    process.
     """
-    monkeypatch.setattr(db_module, "DB_ENGINE", "postgres")
-    monkeypatch.setattr(db_module, "APP_DATABASE_URL", os.getenv("APP_DATABASE_URL", ""))
-
     await db_module.init_db()
     ids = await asyncio.gather(
         *(db_module.add_audit_event("ci", "pg.chain_smoke", user=f"writer{i}") for i in range(10))
@@ -90,11 +62,8 @@ async def test_postgres_audit_chain_concurrent_writers(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_postgres_audit_events_filtered_listing(monkeypatch):
+async def test_postgres_audit_events_filtered_listing():
     """Category-filtered listing works on Postgres (uses the 0055 index)."""
-    monkeypatch.setattr(db_module, "DB_ENGINE", "postgres")
-    monkeypatch.setattr(db_module, "APP_DATABASE_URL", os.getenv("APP_DATABASE_URL", ""))
-
     await db_module.init_db()
     await db_module.add_audit_event("ci_filter", "pg.listing_smoke", user="lister")
     events = await db_module.get_audit_events(limit=5, category="ci_filter")
@@ -102,16 +71,13 @@ async def test_postgres_audit_events_filtered_listing(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_postgres_cloud_discovery_snapshot_updates_sync_status(monkeypatch):
+async def test_postgres_cloud_discovery_snapshot_updates_sync_status():
     """Discovery snapshot commits and records sync status on Postgres.
 
     cloud_accounts timestamps are TEXT on Postgres; a ``::timestamptz`` cast
     on the ISO string parameter made asyncpg reject it and rolled back the
     whole snapshot.
     """
-    monkeypatch.setattr(db_module, "DB_ENGINE", "postgres")
-    monkeypatch.setattr(db_module, "APP_DATABASE_URL", os.getenv("APP_DATABASE_URL", ""))
-
     await db_module.init_db()
     account = await db_module.create_cloud_account(
         provider="aws",
@@ -200,15 +166,12 @@ async def test_postgres_cloud_discovery_snapshot_updates_sync_status(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_postgres_meraki_org_build_status_update(monkeypatch):
+async def test_postgres_meraki_org_build_status_update():
     """Recording a topology build updates the org on Postgres.
 
     meraki_orgs.last_build_at is TIMESTAMPTZ on Postgres; binding the ISO
     string callers pass made asyncpg reject the update after every build.
     """
-    monkeypatch.setattr(db_module, "DB_ENGINE", "postgres")
-    monkeypatch.setattr(db_module, "APP_DATABASE_URL", os.getenv("APP_DATABASE_URL", ""))
-
     await db_module.init_db()
     name = "pg_smoke_meraki_org"
     stale = await db_module.get_meraki_org_by_name(name)
@@ -235,15 +198,12 @@ async def test_postgres_meraki_org_build_status_update(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_postgres_meraki_compliance_assignment_and_results(monkeypatch):
+async def test_postgres_meraki_compliance_assignment_and_results():
     """Meraki compliance writes on Postgres: the create helpers return row ids
     (lastrowid was None until the tables joined _INSERT_ID_TABLES), the
     due-assignment query's datetime(col, '+' || col || ' seconds') rewrite
     runs, and the retention delete accepts an int day count (``$1::text``
     made asyncpg reject it)."""
-    monkeypatch.setattr(db_module, "DB_ENGINE", "postgres")
-    monkeypatch.setattr(db_module, "APP_DATABASE_URL", os.getenv("APP_DATABASE_URL", ""))
-
     await db_module.init_db()
     name = "pg_smoke_meraki_compliance_org"
     stale = await db_module.get_meraki_org_by_name(name)

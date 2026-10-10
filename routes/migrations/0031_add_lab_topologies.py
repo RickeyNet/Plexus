@@ -23,72 +23,19 @@ change for topology-attached devices (managed at topology level).
 
 from __future__ import annotations
 
-import os
-
 VERSION = 31
 DESCRIPTION = "Add lab_topologies, lab_topology_links, and lab_devices.topology_id"
 
-DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
 
-
-async def _column_exists(db, table: str, column: str, *, engine: str) -> bool:
-    if engine == "postgres":
-        cur = await db.execute(
-            "SELECT 1 FROM information_schema.columns WHERE table_name = ? AND column_name = ?",
-            (table, column),
-        )
-        return await cur.fetchone() is not None
-    cur = await db.execute(f"PRAGMA table_info({table})")
-    rows = await cur.fetchall()
-    return any((row[1] if not isinstance(row, dict) else row.get("name")) == column for row in rows)
-
-
-async def _up_sqlite(db) -> None:
-    await db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS lab_topologies (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            environment_id  INTEGER NOT NULL,
-            name            TEXT    NOT NULL,
-            description     TEXT    NOT NULL DEFAULT '',
-            lab_name        TEXT    NOT NULL DEFAULT '',
-            status          TEXT    NOT NULL DEFAULT '',
-            workdir         TEXT    NOT NULL DEFAULT '',
-            mgmt_subnet     TEXT    NOT NULL DEFAULT '',
-            error           TEXT    NOT NULL DEFAULT '',
-            started_at      TEXT,
-            created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
-            updated_at      TEXT    NOT NULL DEFAULT (datetime('now')),
-            FOREIGN KEY (environment_id) REFERENCES lab_environments(id) ON DELETE CASCADE,
-            UNIQUE (environment_id, name)
-        )
-        """
+async def _column_exists(db, table: str, column: str) -> bool:
+    cur = await db.execute(
+        "SELECT 1 FROM information_schema.columns WHERE table_name = ? AND column_name = ?",
+        (table, column),
     )
-    await db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS lab_topology_links (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            topology_id     INTEGER NOT NULL,
-            a_device_id     INTEGER NOT NULL,
-            a_endpoint      TEXT    NOT NULL,
-            b_device_id     INTEGER NOT NULL,
-            b_endpoint      TEXT    NOT NULL,
-            FOREIGN KEY (topology_id) REFERENCES lab_topologies(id) ON DELETE CASCADE,
-            FOREIGN KEY (a_device_id) REFERENCES lab_devices(id) ON DELETE CASCADE,
-            FOREIGN KEY (b_device_id) REFERENCES lab_devices(id) ON DELETE CASCADE
-        )
-        """
-    )
-    await db.execute("CREATE INDEX IF NOT EXISTS idx_lab_topology_links_topo ON lab_topology_links (topology_id)")
-    if not await _column_exists(db, "lab_devices", "topology_id", engine="sqlite"):
-        await db.execute(
-            "ALTER TABLE lab_devices ADD COLUMN topology_id INTEGER REFERENCES lab_topologies(id) ON DELETE SET NULL"
-        )
-    await db.execute("CREATE INDEX IF NOT EXISTS idx_lab_devices_topology ON lab_devices (topology_id)")
-    await db.commit()
+    return await cur.fetchone() is not None
 
 
-async def _up_postgres(db) -> None:
+async def up(db) -> None:
     await db.execute(
         """
         CREATE TABLE IF NOT EXISTS lab_topologies (
@@ -121,16 +68,9 @@ async def _up_postgres(db) -> None:
         """
     )
     await db.execute("CREATE INDEX IF NOT EXISTS idx_lab_topology_links_topo ON lab_topology_links (topology_id)")
-    if not await _column_exists(db, "lab_devices", "topology_id", engine="postgres"):
+    if not await _column_exists(db, "lab_devices", "topology_id"):
         await db.execute(
             "ALTER TABLE lab_devices ADD COLUMN topology_id INTEGER REFERENCES lab_topologies(id) ON DELETE SET NULL"
         )
     await db.execute("CREATE INDEX IF NOT EXISTS idx_lab_devices_topology ON lab_devices (topology_id)")
     await db.commit()
-
-
-async def up(db) -> None:
-    if DB_ENGINE == "postgres":
-        await _up_postgres(db)
-    else:
-        await _up_sqlite(db)

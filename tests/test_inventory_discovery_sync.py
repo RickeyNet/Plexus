@@ -118,10 +118,7 @@ def test_plan_sysname_match_alone_never_deletes_existing():
 
 
 @pytest.fixture
-async def inv_db(tmp_path, monkeypatch):
-    db_path = str(tmp_path / "inv_dedup.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
-    monkeypatch.setattr(db_module, "DB_ENGINE", "sqlite")
+async def inv_db():
     await db_module.init_db()
     gid = await db_module.create_group("core")
     return gid

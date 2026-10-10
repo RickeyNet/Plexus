@@ -17,8 +17,7 @@ import routes.db.graphs as graphs
 
 
 @pytest.fixture
-def graph_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(db_module, "DB_PATH", str(tmp_path / "graphs.db"))
+def graph_db(monkeypatch):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-graphs")
     asyncio.run(db_module.init_db())
 

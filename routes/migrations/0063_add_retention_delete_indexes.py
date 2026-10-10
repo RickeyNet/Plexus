@@ -19,7 +19,6 @@ DESCRIPTION = "Add age-based indexes for retention deletes"
 
 
 async def up(db) -> None:
-    # Identical SQL on SQLite and Postgres.
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_metric_samples_sampled_at ON metric_samples(sampled_at)"
     )

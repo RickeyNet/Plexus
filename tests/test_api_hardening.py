@@ -10,11 +10,11 @@ Covers:
 
 from __future__ import annotations
 
-import sqlite3
+import asyncio
 
 import netcontrol.app as app_module
-import pytest
-import routes.database as db_module
+
+import pg_raw
 
 
 class _CsrfClient:
@@ -31,9 +31,7 @@ class _CsrfClient:
         return self._c.post(url, **kw)
 
 
-def _auth_client(tmp_path, monkeypatch, request):
-    db_path = str(tmp_path / "hardening.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+def _auth_client(monkeypatch, request):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-hardening")
     monkeypatch.setenv("APP_API_TOKEN", "")
     monkeypatch.setenv("APP_REQUIRE_API_TOKEN", "false")
@@ -47,14 +45,14 @@ def _auth_client(tmp_path, monkeypatch, request):
     request.addfinalizer(lambda: client.__exit__(None, None, None))
     resp = client.post("/api/auth/login", json={"username": "admin", "password": "netcontrol"})
     csrf = resp.json().get("csrf_token", "")
-    return _CsrfClient(client, csrf), db_path
+    return _CsrfClient(client, csrf)
 
 
 # ── Field bounds ─────────────────────────────────────────────────────────────
 
 
-def test_deployment_rejects_too_many_commands(tmp_path, monkeypatch, request):
-    client, _ = _auth_client(tmp_path, monkeypatch, request)
+def test_deployment_rejects_too_many_commands(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
     body = {
         "name": "d",
         "group_id": 1,
@@ -64,8 +62,8 @@ def test_deployment_rejects_too_many_commands(tmp_path, monkeypatch, request):
     assert client.post("/api/deployments", json=body).status_code == 422
 
 
-def test_deployment_rejects_overlong_command(tmp_path, monkeypatch, request):
-    client, _ = _auth_client(tmp_path, monkeypatch, request)
+def test_deployment_rejects_overlong_command(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
     body = {
         "name": "d",
         "group_id": 1,
@@ -75,14 +73,14 @@ def test_deployment_rejects_overlong_command(tmp_path, monkeypatch, request):
     assert client.post("/api/deployments", json=body).status_code == 422
 
 
-def test_deployment_rejects_overlong_name(tmp_path, monkeypatch, request):
-    client, _ = _auth_client(tmp_path, monkeypatch, request)
+def test_deployment_rejects_overlong_name(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
     body = {"name": "n" * 201, "group_id": 1, "credential_id": 1}
     assert client.post("/api/deployments", json=body).status_code == 422
 
 
-def test_campaign_rejects_huge_image_map(tmp_path, monkeypatch, request):
-    client, _ = _auth_client(tmp_path, monkeypatch, request)
+def test_campaign_rejects_huge_image_map(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
     body = {"name": "c", "image_map": {str(i): "img.bin" for i in range(1001)}}
     assert client.post("/api/upgrades/campaigns", json=body).status_code == 422
 
@@ -90,8 +88,8 @@ def test_campaign_rejects_huge_image_map(tmp_path, monkeypatch, request):
 # ── Campaign create device-drop reporting ────────────────────────────────────
 
 
-def test_campaign_reports_unknown_host_ids(tmp_path, monkeypatch, request):
-    client, _ = _auth_client(tmp_path, monkeypatch, request)
+def test_campaign_reports_unknown_host_ids(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
     body = {"name": "c", "host_ids": [999999]}  # no such host
     resp = client.post("/api/upgrades/campaigns", json=body)
     assert resp.status_code == 200
@@ -104,26 +102,31 @@ def test_campaign_reports_unknown_host_ids(tmp_path, monkeypatch, request):
 # ── SVG stub escaping ────────────────────────────────────────────────────────
 
 
-@pytest.mark.sqlite_only  # seeds rows with sqlite3.connect(DB_PATH)
-def test_svg_stub_escapes_template_name(tmp_path, monkeypatch, request):
-    client, db_path = _auth_client(tmp_path, monkeypatch, request)
-    # Seed host + malicious-named template + host_graph via a plain sqlite conn
-    # (avoids fighting the app's loop-bound aiosqlite singleton).
-    conn = sqlite3.connect(db_path)
-    try:
-        gid = conn.execute("INSERT INTO inventory_groups (name) VALUES ('g')").lastrowid
-        hid = conn.execute(
-            "INSERT INTO hosts (group_id, hostname, ip_address) VALUES (?, 'h', '10.0.0.1')",
-            (gid,),
-        ).lastrowid
-        tid = conn.execute("INSERT INTO graph_templates (name) VALUES ('<script>alert(1)</script>')").lastrowid
-        hgid = conn.execute(
-            "INSERT INTO host_graphs (host_id, graph_template_id) VALUES (?, ?)",
-            (hid, tid),
-        ).lastrowid
-        conn.commit()
-    finally:
-        conn.close()
+def test_svg_stub_escapes_template_name(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
+
+    # Seed host + malicious-named template + host_graph via a raw connection
+    # (autocommit, so the app sees the rows immediately).
+    async def _seed() -> int:
+        conn = await pg_raw.connect()
+        try:
+            gid = await conn.fetchval("INSERT INTO inventory_groups (name) VALUES ('g') RETURNING id")
+            hid = await conn.fetchval(
+                "INSERT INTO hosts (group_id, hostname, ip_address) VALUES ($1, 'h', '10.0.0.1') RETURNING id",
+                gid,
+            )
+            tid = await conn.fetchval(
+                "INSERT INTO graph_templates (name) VALUES ('<script>alert(1)</script>') RETURNING id"
+            )
+            return await conn.fetchval(
+                "INSERT INTO host_graphs (host_id, graph_template_id) VALUES ($1, $2) RETURNING id",
+                hid,
+                tid,
+            )
+        finally:
+            await conn.close()
+
+    hgid = asyncio.run(_seed())
 
     resp = client.get(f"/api/graph-image/{hgid}.svg")
     assert resp.status_code == 200

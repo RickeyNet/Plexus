@@ -116,26 +116,23 @@ def test_window_crossing_midnight():
 # ── DB-backed gate evaluation ────────────────────────────────────────────────
 
 
-async def _init_clean_db(tmp_path, monkeypatch):
-    db_path = str(tmp_path / "windows.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+async def _init_clean_db():
     await db_module.init_db()
-    return db_path
 
 
 def _iso(dt: datetime) -> str:
     return dt.astimezone(UTC).isoformat()
 
 
-async def test_gate_allows_when_no_windows(tmp_path, monkeypatch):
-    await _init_clean_db(tmp_path, monkeypatch)
+async def test_gate_allows_when_no_windows():
+    await _init_clean_db()
     verdict = await evaluate_change_gate([1])
     assert verdict["allowed"] is True
     assert verdict["window"] is None
 
 
-async def test_gate_blocks_outside_window_for_scoped_group(tmp_path, monkeypatch):
-    await _init_clean_db(tmp_path, monkeypatch)
+async def test_gate_blocks_outside_window_for_scoped_group():
+    await _init_clean_db()
     group_id = await db_module.create_group("prod-edge")
     # Window opens in 1h, lasts 1h, only covers our group.
     future_start = datetime.now(UTC) + timedelta(hours=1)
@@ -152,8 +149,8 @@ async def test_gate_blocks_outside_window_for_scoped_group(tmp_path, monkeypatch
     assert "weekly-prod" in verdict["reason"]
 
 
-async def test_gate_ignores_window_scoped_to_other_group(tmp_path, monkeypatch):
-    await _init_clean_db(tmp_path, monkeypatch)
+async def test_gate_ignores_window_scoped_to_other_group():
+    await _init_clean_db()
     prod_group = await db_module.create_group("prod-edge")
     lab_group = await db_module.create_group("lab")
     future_start = datetime.now(UTC) + timedelta(hours=1)
@@ -170,10 +167,10 @@ async def test_gate_ignores_window_scoped_to_other_group(tmp_path, monkeypatch):
     assert verdict["allowed"] is True
 
 
-async def test_gate_allows_when_inside_block_window(tmp_path, monkeypatch):
+async def test_gate_allows_when_inside_block_window():
     """A block_outside_window that is currently active means we ARE in
     maintenance and should be allowed to change."""
-    await _init_clean_db(tmp_path, monkeypatch)
+    await _init_clean_db()
     group_id = await db_module.create_group("prod")
     start = datetime.now(UTC) - timedelta(minutes=10)
     end = datetime.now(UTC) + timedelta(minutes=10)
@@ -188,8 +185,8 @@ async def test_gate_allows_when_inside_block_window(tmp_path, monkeypatch):
     assert verdict["allowed"] is True
 
 
-async def test_gate_warns_when_outside_warn_window(tmp_path, monkeypatch):
-    await _init_clean_db(tmp_path, monkeypatch)
+async def test_gate_warns_when_outside_warn_window():
+    await _init_clean_db()
     group_id = await db_module.create_group("prod")
     future_start = datetime.now(UTC) + timedelta(hours=1)
     future_end = future_start + timedelta(hours=1)
@@ -206,9 +203,9 @@ async def test_gate_warns_when_outside_warn_window(tmp_path, monkeypatch):
     assert "advisory" in verdict["warning"]
 
 
-async def test_global_window_blocks_any_group(tmp_path, monkeypatch):
+async def test_global_window_blocks_any_group():
     """A window with no scope rows applies globally."""
-    await _init_clean_db(tmp_path, monkeypatch)
+    await _init_clean_db()
     group_id = await db_module.create_group("anything")
     future_start = datetime.now(UTC) + timedelta(hours=1)
     future_end = future_start + timedelta(hours=1)
@@ -224,8 +221,8 @@ async def test_global_window_blocks_any_group(tmp_path, monkeypatch):
     assert "global-freeze" in verdict["reason"]
 
 
-async def test_disabled_window_does_not_block(tmp_path, monkeypatch):
-    await _init_clean_db(tmp_path, monkeypatch)
+async def test_disabled_window_does_not_block():
+    await _init_clean_db()
     group_id = await db_module.create_group("prod")
     future_start = datetime.now(UTC) + timedelta(hours=1)
     future_end = future_start + timedelta(hours=1)
