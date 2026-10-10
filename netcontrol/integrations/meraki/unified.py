@@ -91,6 +91,7 @@ _SOURCE_NAME = {
     "azure": "Azure API",
     "gcp": "GCP API",
     "fmc": "FMC API",
+    "panorama": "Panorama API",
     # The FMC's provider key of earlier releases.
     "anyconnect": "FMC API",
 }
@@ -143,9 +144,10 @@ def _uplink_address(wan: dict) -> str:
 
 
 def _is_virtual_model(model: Any) -> bool:
-    """A virtual appliance (Meraki vMX, FTDv, "Threat Defense for AWS" or for Azure)."""
+    """A virtual appliance (Meraki vMX, FTDv, "Threat Defense for AWS" or for
+    Azure, a Palo Alto VM-Series "PA-VM")."""
     lowered = str(model or "").lower()
-    return lowered.startswith("vmx") or any(t in lowered for t in ("ftdv", "threat defense for", "virtual"))
+    return lowered.startswith(("vmx", "pa-vm")) or any(t in lowered for t in ("ftdv", "threat defense for", "virtual"))
 
 
 def _instance(ref: dict) -> dict | None:

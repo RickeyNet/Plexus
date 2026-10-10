@@ -13,7 +13,10 @@ A Cato Networks account is added from the same dialog and shares the map,
 search, Path Mode and export; see [cato-topology.md](cato-topology.md), as is
 a Cisco FMC and the FTDs it manages (interfaces, routing, NAT, access
 control, site-to-site and remote access VPN); see
-[fmc-topology.md](fmc-topology.md). AWS accounts, Azure subscriptions and
+[fmc-topology.md](fmc-topology.md), and a Palo Alto Panorama and the
+firewalls it manages (interfaces, zones, routing, IPsec and GlobalProtect,
+security and NAT rules); see [panorama-topology.md](panorama-topology.md).
+AWS accounts, Azure subscriptions and
 GCP projects discovered by Cloud Visibility join the map as well; see
 [aws-topology.md](aws-topology.md), [azure-topology.md](azure-topology.md) and
 [gcp-topology.md](gcp-topology.md).
@@ -26,8 +29,8 @@ other hardening controls; see [meraki-compliance.md](meraki-compliance.md).
 
 1. Open **Network → Topology** and click **Sources** in the toolbar. The
    dialog lists everything that feeds the map (neighbor discovery of the
-   inventory, Meraki organizations, Cato accounts, Cisco FMCs, AWS
-   accounts) with its last collection; **Collect All** refreshes every source
+   inventory, Meraki organizations, Cato accounts, Cisco FMCs, Palo Alto
+   Panoramas, AWS accounts) with its last collection; **Collect All** refreshes every source
    in one click.
 2. **Preview without a key.** Click **Load Sample**, then **Meraki**. A demo
    organization is added to the map so you can see the result before
@@ -63,7 +66,7 @@ belong to no inventory group).
 
 - The map opens in the **Tidy tree** layout, top to bottom. Each source is
   a region of its own, framed and titled, side by side from left to right: the
-  inventory, then Meraki, Cato, Cisco FMC, AWS, Azure and GCP. Links between
+  inventory, then Meraki, Cato, Cisco FMC, Palo Alto Panorama, AWS, Azure and GCP. Links between
   sources are still drawn, but they do not pull a device into another
   source's region, and they go around the sources rather than through them:
   up from each end, around the other sites' boxes and devices, to a lane
@@ -255,7 +258,8 @@ cloud CIDRs of Cloud Visibility and external IPAM prefixes: each VLAN,
 single LAN, switch SVI and static route is a row with source **topology**,
 its VLAN ID, and the sites that hold it in the **Preview** column (the same
 goes for Cato network ranges and the connected subnets, static routes and
-VPN address pools of a Cisco FMC's FTDs). Untick **Include
+VPN address pools of a Cisco FMC's FTDs and of a Palo Alto Panorama's
+firewalls). Untick **Include
 Topology Subnets** to leave them out (`GET /api/ipam/overview?include_topology=false`).
 
 **Overlapping Ranges** lists every range two sites both hold, or a site holds

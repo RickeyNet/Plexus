@@ -160,6 +160,7 @@ export function providerLabel(provider?: string | null): string {
   if (provider === 'azure') return 'Azure';
   if (provider === 'gcp') return 'GCP';
   if (provider === 'fmc') return 'Cisco FMC';
+  if (provider === 'panorama') return 'Palo Alto Panorama';
   return provider === 'cato' ? 'Cato' : 'Meraki';
 }
 
@@ -197,16 +198,18 @@ export function providerSourceName(provider?: string | null): string {
   if (provider === 'azure') return 'Azure API';
   if (provider === 'gcp') return 'GCP API';
   if (provider === 'fmc') return 'FMC API';
+  if (provider === 'panorama') return 'Panorama API';
   return provider === 'cato' ? 'Cato API' : 'Meraki Dashboard';
 }
 
 /**
  * The link kind shown in the link and node panels. A `stack` link from a
- * Cisco FMC joins the members of an FTD HA pair or cluster, not a switch
+ * Cisco FMC (or a Palo Alto Panorama) joins the members of a firewall HA
+ * pair or cluster, not a switch
  * stack; the box its ends sit in (`ha:...` or `cluster:...`) tells which.
  */
 export function edgeProtocolLabel(edge: TopologyEdge, a?: TopologyNode, b?: TopologyNode): string {
-  if (edge.protocol === 'stack' && edge.provider === 'fmc') {
+  if (edge.protocol === 'stack' && (edge.provider === 'fmc' || edge.provider === 'panorama')) {
     const sites = [a, b].map((n) => n?.meraki?.site_id ?? '');
     if (sites.some((s) => s.startsWith('cluster:'))) return 'CLUSTER';
     if (sites.some((s) => s.startsWith('ha:'))) return 'HA';
@@ -219,6 +222,7 @@ export function edgeProtocolLabel(edge: TopologyEdge, a?: TopologyNode, b?: Topo
 export function providerScopeName(provider?: string | null): string {
   if (provider === 'aws' || provider === 'azure' || provider === 'gcp') return cloudProviderTerms(provider).scopeTitle;
   if (provider === 'fmc') return 'Cisco FMC';
+  if (provider === 'panorama') return 'Panorama';
   return provider === 'cato' ? 'Cato account' : 'Meraki organization';
 }
 
@@ -302,7 +306,7 @@ export function edgeProtocolColor(protocol: string | null | undefined, tc: TopoT
   if (protocol === 'ospf') return tc.edgeOspf;
   if (protocol === 'bgp') return tc.edgeBgp;
   if (protocol === 'inferred-fdb') return tc.edgeInferred;
-  // A management relationship (FMC to FTD): no traffic, drawn faintly.
+  // A management relationship (FMC to FTD, Panorama to firewall): no traffic, drawn faintly.
   if (protocol === 'management') return tc.edgeInferred;
   if (protocol === 'vpn' || protocol === 'vpn-ipsec') return tc.edgeVpn;
   if (protocol === 'wan') return tc.edgeWan;
@@ -478,7 +482,7 @@ export function nodeTitle(node: TopologyNode): string {
  */
 export type SourceFilter = 'all' | 'inventory' | 'meraki' | `provider:${string}`;
 
-export const PROVIDER_ORDER = ['meraki', 'cato', 'fmc', 'aws', 'azure', 'gcp'];
+export const PROVIDER_ORDER = ['meraki', 'cato', 'fmc', 'panorama', 'aws', 'azure', 'gcp'];
 
 /** The integration a node belongs to, or '' for an inventory-only node. */
 export function nodeProvider(node: TopologyNode): string {

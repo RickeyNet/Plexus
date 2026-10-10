@@ -51,6 +51,9 @@ describe('source filter', () => {
     // A Cisco FMC sits between Cato and the clouds.
     const withFmc = { ...DATA, nodes: [...DATA.nodes, node('ftd1', 'fmc')] } as TopologyData;
     expect(mapProviders(withFmc)).toEqual(['meraki', 'cato', 'fmc', 'aws']);
+    // A Palo Alto Panorama follows the FMC.
+    const withPanorama = { ...withFmc, nodes: [...withFmc.nodes, node('pa1', 'panorama')] } as TopologyData;
+    expect(mapProviders(withPanorama)).toEqual(['meraki', 'cato', 'fmc', 'panorama', 'aws']);
   });
 
   it('keeps only one provider and the links inside it', () => {

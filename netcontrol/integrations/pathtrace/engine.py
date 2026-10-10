@@ -93,6 +93,7 @@ _MISSING_SETS = {
     "Site-to-site VPN firewall rules": ("vpn_out", POLICY),
     "Prefilter rules": ("any", POLICY),
     "Access control rules": ("any", POLICY),
+    "Security rules": ("any", POLICY),
     "Switch ACL": ("any", ACL),
     "WAN firewall rules": ("wan_traffic", POLICY),
     "Internet firewall rules": ("internet_traffic", POLICY),
@@ -127,6 +128,8 @@ _NAT_KINDS = {
     "auto": "Auto NAT",
     "manual_before": "Manual NAT",
     "manual_after": "Manual NAT after auto NAT",
+    "pre_rule": "NAT pre-rule",
+    "post_rule": "NAT post-rule",
 }
 _MERAKI_DNAT = ("one_to_one", "port_forward", "one_to_many")
 _LINK_WORDS = {
@@ -138,7 +141,12 @@ _LINK_WORDS = {
     "cloud": "Cloud attachment",
     "stack": "Stack link",
 }
-_PROVIDER_NAMES = {"meraki": "Meraki organization", "fmc": "Cisco FMC", "cato": "Cato account"}
+_PROVIDER_NAMES = {
+    "meraki": "Meraki organization",
+    "fmc": "Cisco FMC",
+    "cato": "Cato account",
+    "panorama": "Palo Alto Panorama",
+}
 
 
 @dataclass(frozen=True)

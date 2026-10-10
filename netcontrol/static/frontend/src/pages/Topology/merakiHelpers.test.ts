@@ -5,6 +5,8 @@ import type { DetailSection, MerakiBuildJob, MerakiNodeDetails } from '@/api/mer
 import {
   FALLBACK_FMC_OPTIONS,
   FMC_OPTION_TOGGLES,
+  FALLBACK_PANORAMA_OPTIONS,
+  PANORAMA_OPTION_TOGGLES,
   describeProgress,
   merakiViewSections,
   merakiViewsWithData,
@@ -229,6 +231,118 @@ describe('fmc progress', () => {
   });
 });
 
+describe('panorama detail tabs', () => {
+  it('files a firewall with interfaces, routing, VPN, GlobalProtect and policy under every tab', () => {
+    const fw = details({
+      sections: [
+        table('Overview'),
+        table('Firewall interfaces'),
+        table('Zones'),
+        table('Connected subnets'),
+        table('Virtual routers'),
+        table('Static routes'),
+        table('BGP'),
+        table('OSPF'),
+        table('Routing table'),
+        table('BGP peers'),
+        table('IKE gateways'),
+        table('IPsec tunnels'),
+        table('GlobalProtect gateways'),
+        table('VPN address pools'),
+        table('Connected users'),
+        table('Security policy'),
+        table('Security rules'),
+        table('NAT rules'),
+        table('Plexus inventory'),
+      ],
+    });
+    expect(merakiViewsWithData(fw)).toEqual(['meraki', 'interfaces', 'vlans', 'routing', 'vpn', 'firewall']);
+    expect(merakiViewSections(fw, 'interfaces').sections.map((s) => s.title)).toEqual(['Firewall interfaces', 'Zones']);
+    expect(merakiViewSections(fw, 'vlans').sections.map((s) => s.title)).toEqual(['Connected subnets', 'VPN address pools']);
+    expect(merakiViewSections(fw, 'routing').sections.map((s) => s.title)).toEqual([
+      'Virtual routers',
+      'Static routes',
+      'BGP',
+      'OSPF',
+      'Routing table',
+      'BGP peers',
+    ]);
+    expect(merakiViewSections(fw, 'vpn').sections.map((s) => s.title)).toEqual([
+      'IKE gateways',
+      'IPsec tunnels',
+      'GlobalProtect gateways',
+      'Connected users',
+    ]);
+    expect(merakiViewSections(fw, 'firewall').sections.map((s) => s.title)).toEqual([
+      'Security policy',
+      'Security rules',
+      'NAT rules',
+    ]);
+    expect(merakiViewSections(fw, 'meraki').sections.map((s) => s.title)).toEqual(['Overview', 'Plexus inventory']);
+  });
+});
+
+describe('panorama collection options', () => {
+  it('offers a toggle for every boolean option, in the documented order', () => {
+    expect(PANORAMA_OPTION_TOGGLES.map((t) => t.label)).toEqual([
+      'Interfaces',
+      'Routing',
+      'Security policies',
+      'NAT',
+      'Site-to-site VPN',
+      'GlobalProtect',
+      'Device state',
+      'Correlate with Plexus inventory',
+      'Verify the Panorama certificate',
+    ]);
+    const booleans = Object.entries(FALLBACK_PANORAMA_OPTIONS)
+      .filter(([, value]) => typeof value === 'boolean')
+      .map(([key]) => key)
+      .sort();
+    expect(PANORAMA_OPTION_TOGGLES.map((t) => t.key).sort()).toEqual(booleans);
+    expect(PANORAMA_OPTION_TOGGLES.every((t) => t.hint.length > 0)).toBe(true);
+  });
+
+  it('collects everything by default and signs in with an API key', () => {
+    expect(PANORAMA_OPTION_TOGGLES.every((t) => FALLBACK_PANORAMA_OPTIONS[t.key])).toBe(true);
+    expect(FALLBACK_PANORAMA_OPTIONS.username).toBe('');
+  });
+});
+
+describe('panorama progress', () => {
+  const at = (phase: string) => describeProgress({ progress: { phase } } as MerakiBuildJob).label;
+
+  it('names every phase of a Panorama collection', () => {
+    expect(
+      [
+        'panorama login',
+        'panorama devices',
+        'panorama device groups',
+        'panorama templates',
+        'panorama objects',
+        'panorama policies',
+        'panorama nat',
+        'panorama network',
+        'panorama vpn',
+        'panorama global protect',
+        'panorama device state',
+      ].map(at),
+    ).toEqual([
+      'Signing in to Panorama',
+      'Reading managed firewalls',
+      'Reading device groups',
+      'Reading templates and template stacks',
+      'Reading address and service objects',
+      'Reading security rules',
+      'Reading NAT rules',
+      'Reading interfaces and routing',
+      'Reading IKE gateways and IPsec tunnels',
+      'Reading GlobalProtect gateways and users',
+      'Reading firewall state',
+    ]);
+  });
+});
+
 describe('aws detail tabs', () => {
   it('files VPC sections under the shared tabs', () => {
     const vpc = details({
@@ -297,11 +411,12 @@ describe('gcp detail tabs', () => {
 
 describe('sourceTypeLabel', () => {
   it('names every kind of map source', () => {
-    expect(['neighbors', 'meraki', 'cato', 'fmc', 'aws', 'azure', 'gcp'].map(sourceTypeLabel)).toEqual([
+    expect(['neighbors', 'meraki', 'cato', 'fmc', 'panorama', 'aws', 'azure', 'gcp'].map(sourceTypeLabel)).toEqual([
       'Neighbor discovery',
       'Meraki',
       'Cato',
       'Cisco FMC',
+      'Palo Alto Panorama',
       'AWS',
       'Azure',
       'GCP',

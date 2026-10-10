@@ -46,6 +46,7 @@ PLATFORMS: dict[str, dict[str, Any]] = {
     "eos": {"label": "Arista EOS", "psirt": None},
     "fortios": {"label": "FortiOS", "psirt": None},
     "pan-os": {"label": "PAN-OS", "psirt": None},
+    "panorama": {"label": "Palo Alto Panorama", "psirt": None},
     "other": {"label": "Other", "psirt": None},
 }
 
@@ -270,6 +271,8 @@ def _version_row(node: dict) -> str:
 
 # A Cisco FMC snapshot; "anyconnect" is its provider key of earlier releases.
 _FMC_PROVIDERS = ("fmc", "anyconnect")
+# Management servers whose own node (kind "cloud") reports a version.
+_MANAGER_PLATFORMS = ("fmc", "panorama")
 
 
 def _snapshot_platform(provider: str, node: dict) -> str:
@@ -283,6 +286,10 @@ def _snapshot_platform(provider: str, node: dict) -> str:
         if "management center" in model:
             return "fmc"
         return "asa" if "adaptive security" in model else "ftd"
+    if provider == "panorama":
+        # Panorama itself, and the PAN-OS firewalls it manages (the same
+        # platform as a PAN-OS firewall found in the inventory).
+        return "panorama" if kind == "cloud" else "pan-os"
     return ""
 
 
@@ -290,13 +297,14 @@ def snapshot_devices(snapshot: dict, provider: str) -> list[dict[str, Any]]:
     """The devices of a topology snapshot that report a software version.
 
     Meraki devices carry their firmware, Cato Sockets their Socket version,
-    the FTDs of a Cisco FMC their software and the FMC its own version; all
+    the FTDs of a Cisco FMC their software and the FMC its own version, the
+    firewalls of a Palo Alto Panorama their PAN-OS and Panorama its own; all
     are read from the detail sections the snapshot already holds, so
     snapshots collected before the tracker existed are covered. Nodes
     without a version (a Cato IPsec site, a PoP, a users node) are skipped.
     AWS snapshots carry no software versions.
     """
-    if provider not in ("meraki", "cato", *_FMC_PROVIDERS):
+    if provider not in ("meraki", "cato", "panorama", *_FMC_PROVIDERS):
         return []
     site_names = {s.get("id"): s.get("name") or s.get("id") or "" for s in snapshot.get("sites") or []}
     devices: list[dict[str, Any]] = []
@@ -308,7 +316,7 @@ def snapshot_devices(snapshot: dict, provider: str) -> list[dict[str, Any]]:
             continue
         raw_version = _version_row(node)
         platform = _snapshot_platform(provider, node)
-        if not raw_version or not platform or (kind == "cloud" and platform != "fmc"):
+        if not raw_version or not platform or (kind == "cloud" and platform not in _MANAGER_PLATFORMS):
             continue
         version = canonical_version(raw_version)
         if not version:
