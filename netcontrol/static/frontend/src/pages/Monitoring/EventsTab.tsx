@@ -1,8 +1,7 @@
 import { useMemo, useState } from 'react';
 
-import { useSyslogEvents, type SyslogEvent } from '@/api/reports';
-
-import { severityBadgeClass } from './helpers';
+import { useSyslogEvents, type SyslogEvent } from '@/api/monitoring';
+import { severityBadgeClass } from '@/pages/Reports/helpers';
 
 const SEVERITIES = [
   { value: '', label: 'All severities' },
@@ -21,7 +20,7 @@ const TYPES = [
   { value: 'snmp_trap', label: 'SNMP Trap' },
 ];
 
-export function SyslogEventsTab() {
+export function EventsTab() {
   const [severity, setSeverity] = useState('');
   const [eventType, setEventType] = useState('syslog');
   const [search, setSearch] = useState('');

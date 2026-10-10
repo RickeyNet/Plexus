@@ -8,13 +8,20 @@ import {
   type MonitoringAlert,
 } from '@/api/monitoring';
 import { formatTimestamp, severityColor } from './helpers';
+import { RouteSnapshotsModal } from './RouteSnapshotsModal';
+
+// Route churn used to be its own tab; it is the alert list filtered to this
+// metric, plus a per-host route history action.
+const ROUTE_CHURN = 'route_churn';
 
 export function AlertsTab() {
   const { alert } = useDialogs();
   const [severity, setSeverity] = useState('');
   const [ackFilter, setAckFilter] = useState<'all' | 'open' | 'ack'>('open');
   const [query, setQuery] = useState('');
+  const [routeChurnOnly, setRouteChurnOnly] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [historyHost, setHistoryHost] = useState<{ id: number; hostname: string } | null>(null);
 
   const ackParam = ackFilter === 'open' ? false : ackFilter === 'ack' ? true : null;
   const alerts = useMonitoringAlerts({ acknowledged: ackParam, severity: severity || undefined, limit: 200 });
@@ -22,7 +29,8 @@ export function AlertsTab() {
   const bulkMut = useBulkAcknowledgeAlerts();
 
   const filtered = useMemo(() => {
-    const list = alerts.data ?? [];
+    let list = alerts.data ?? [];
+    if (routeChurnOnly) list = list.filter((a) => a.metric === ROUTE_CHURN);
     const q = query.trim().toLowerCase();
     if (!q) return list;
     return list.filter(
@@ -31,7 +39,7 @@ export function AlertsTab() {
         (a.message ?? '').toLowerCase().includes(q) ||
         (a.metric ?? '').toLowerCase().includes(q),
     );
-  }, [alerts.data, query]);
+  }, [alerts.data, query, routeChurnOnly]);
 
   const unackedIds = useMemo(() => filtered.filter((a) => !a.acknowledged).map((a) => a.id), [filtered]);
   const visibleSelected = useMemo(() => {
@@ -81,11 +89,25 @@ export function AlertsTab() {
           <option value="ack">Acknowledged</option>
           <option value="all">All</option>
         </select>
+        <button
+          type="button"
+          className={`btn btn-sm ${routeChurnOnly ? 'btn-primary' : 'btn-ghost'}`}
+          aria-pressed={routeChurnOnly}
+          onClick={() => setRouteChurnOnly((v) => !v)}
+        >
+          Route churn
+        </button>
       </div>
 
       {alerts.isPending && <div className="text-muted">Loading…</div>}
       {alerts.error && <div style={{ color: 'var(--danger)' }}>Error: {(alerts.error as Error).message}</div>}
-      {alerts.data && filtered.length === 0 && <div className="empty-state">No alerts</div>}
+      {alerts.data && filtered.length === 0 && (
+        <div className="empty-state">
+          {routeChurnOnly
+            ? 'No route churn alerts. They are generated when a route table changes between polling cycles.'
+            : 'No alerts'}
+        </div>
+      )}
 
       {unackedIds.length > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
@@ -122,9 +144,22 @@ export function AlertsTab() {
             checked={selected.has(a.id)}
             onToggle={(c) => toggleSelect(a.id, c)}
             onAck={() => ackMut.mutate(a.id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } })}
+            onRouteHistory={
+              a.metric === ROUTE_CHURN
+                ? () => setHistoryHost({ id: a.host_id, hostname: a.hostname ?? '' })
+                : undefined
+            }
           />
         ))}
       </div>
+
+      {historyHost && (
+        <RouteSnapshotsModal
+          hostId={historyHost.id}
+          hostname={historyHost.hostname}
+          onClose={() => setHistoryHost(null)}
+        />
+      )}
     </div>
   );
 }
@@ -134,11 +169,14 @@ function AlertRow({
   checked,
   onToggle,
   onAck,
+  onRouteHistory,
 }: {
   alert: MonitoringAlert;
   checked: boolean;
   onToggle: (checked: boolean) => void;
   onAck: () => void;
+  /** Set for route_churn alerts: opens the host's route-table history. */
+  onRouteHistory?: () => void;
 }) {
   const sev = severityColor(alert.severity);
   const occurrences = alert.occurrence_count ?? 1;
@@ -172,7 +210,10 @@ function AlertRow({
           <strong>{alert.hostname}</strong>
           <span className="text-muted" style={{ fontSize: '0.85em' }}>{alert.metric}</span>
         </div>
-        <div>
+        <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+          {onRouteHistory && (
+            <button className="btn btn-sm btn-secondary" onClick={onRouteHistory}>Route history</button>
+          )}
           {alert.acknowledged ? (
             <span style={{ color: 'var(--success)', fontSize: '0.8em' }}>
               Acknowledged{alert.acknowledged_by ? ` by ${alert.acknowledged_by}` : ''}

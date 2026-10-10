@@ -1,59 +1,13 @@
 import { useState } from 'react';
 
 import { Modal } from '@/components/Modal';
-import { useMonitoringAlerts, useMonitoringPolls, useMonitoringRouteSnapshots } from '@/api/monitoring';
+import { useMonitoringRouteSnapshots } from '@/api/monitoring';
 import { formatTimestamp } from './helpers';
 
-export function RoutesTab() {
-  const polls = useMonitoringPolls();
-  const alerts = useMonitoringAlerts({ limit: 200 });
-  const [historyHost, setHistoryHost] = useState<{ id: number; hostname: string } | null>(null);
-
-  const routeAlerts = (alerts.data ?? []).filter((a) => a.metric === 'route_churn');
-  const pollsWithRoutes = (polls.data ?? []).filter((p) => p.route_count > 0);
-
-  return (
-    <div>
-      {!routeAlerts.length ? (
-        <div className="card" style={{ padding: '1rem' }}>
-          <p className="text-muted">No route churn events detected. Routes are stable across {pollsWithRoutes.length} monitored device(s).</p>
-          <p className="text-muted" style={{ fontSize: '0.85em' }}>Route churn alerts are generated when the route table changes between polling cycles.</p>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-          {routeAlerts.map((a) => (
-            <div key={a.id} className="card" style={{ padding: '0.75rem 1rem', borderLeft: '3px solid var(--warning)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <strong>{a.hostname}</strong>
-                  <span className="text-muted" style={{ marginLeft: '0.5rem', fontSize: '0.85em' }}>{a.ip_address}</span>
-                </div>
-                <button
-                  className="btn btn-sm btn-secondary"
-                  onClick={() => setHistoryHost({ id: a.host_id, hostname: a.hostname ?? '' })}
-                >
-                  View History
-                </button>
-              </div>
-              <div style={{ marginTop: '0.3rem', fontSize: '0.9em' }}>{a.message}</div>
-              <div className="text-muted" style={{ marginTop: '0.2rem', fontSize: '0.8em' }}>{formatTimestamp(a.created_at)}</div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {historyHost && (
-        <RouteSnapshotsModal
-          hostId={historyHost.id}
-          hostname={historyHost.hostname}
-          onClose={() => setHistoryHost(null)}
-        />
-      )}
-    </div>
-  );
-}
-
-function RouteSnapshotsModal({ hostId, hostname, onClose }: { hostId: number; hostname: string; onClose: () => void }) {
+// Route-table history for one host. Opened from a route_churn alert row on
+// the Alerts tab (this used to be its own "Route Churn" tab, which was the
+// alert list filtered to that metric).
+export function RouteSnapshotsModal({ hostId, hostname, onClose }: { hostId: number; hostname: string; onClose: () => void }) {
   const snapshots = useMonitoringRouteSnapshots(hostId, 10);
   const [selected, setSelected] = useState<{ text: string; ts: string } | null>(null);
 

@@ -5,24 +5,29 @@ import { PageHelp } from '@/components/PageHelp';
 
 import { DevicesTab } from './DevicesTab';
 import { AlertsTab } from './AlertsTab';
-import { RoutesTab } from './RoutesTab';
+import { EventsTab } from './EventsTab';
+import { OidProfilesTab } from './OidProfilesTab';
 import { RulesTab } from './RulesTab';
 import { SuppressionsTab } from './SuppressionsTab';
 import { SlaTab } from './SlaTab';
 import { AvailabilityTab } from './AvailabilityTab';
 import { CapacityTab } from './CapacityTab';
 
-type Tab = 'devices' | 'alerts' | 'routes' | 'rules' | 'suppressions' | 'sla' | 'availability' | 'capacity';
+type Tab = 'devices' | 'alerts' | 'events' | 'rules' | 'suppressions' | 'sla' | 'availability' | 'capacity' | 'oid-profiles';
 
+// Route churn (formerly its own tab) is a filter on Alerts; the router sends
+// /monitoring/routes there. Events and OID Profiles moved here from Reports:
+// both are served by monitoring-gated endpoints.
 const TABS: { key: Tab; label: string; path: string }[] = [
   { key: 'devices', label: 'Devices', path: '/monitoring' },
   { key: 'alerts', label: 'Alerts', path: '/monitoring/alerts' },
-  { key: 'routes', label: 'Route Churn', path: '/monitoring/routes' },
+  { key: 'events', label: 'Events', path: '/monitoring/events' },
   { key: 'rules', label: 'Alert Rules', path: '/monitoring/rules' },
   { key: 'suppressions', label: 'Suppressions', path: '/monitoring/suppressions' },
   { key: 'sla', label: 'SLA', path: '/monitoring/sla' },
   { key: 'availability', label: 'Availability', path: '/monitoring/availability' },
   { key: 'capacity', label: 'Capacity', path: '/monitoring/capacity' },
+  { key: 'oid-profiles', label: 'OID Profiles', path: '/monitoring/oid-profiles' },
 ];
 
 function tabFromPath(pathname: string): Tab {
@@ -56,7 +61,7 @@ export function Monitoring() {
       <PageHelp
         pageKey="monitoring"
         title="Real-Time Device Monitoring"
-        text="Track CPU, memory, response time, packet loss, and interface status. Includes SLA tracking, availability history, and capacity planning trends."
+        text="Track CPU, memory, response time, packet loss, and interface status. Includes alerts, the syslog and SNMP trap event log, SLA tracking, availability history, capacity planning trends, and custom OID profiles."
       />
 
       <div role="tablist" style={{ marginBottom: '1rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
@@ -75,12 +80,13 @@ export function Monitoring() {
 
       {tab === 'devices' && <DevicesTab />}
       {tab === 'alerts' && <AlertsTab />}
-      {tab === 'routes' && <RoutesTab />}
+      {tab === 'events' && <EventsTab />}
       {tab === 'rules' && <RulesTab />}
       {tab === 'suppressions' && <SuppressionsTab />}
       {tab === 'sla' && <SlaTab />}
       {tab === 'availability' && <AvailabilityTab />}
       {tab === 'capacity' && <CapacityTab />}
+      {tab === 'oid-profiles' && <OidProfilesTab />}
     </div>
   );
 }

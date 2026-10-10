@@ -2,37 +2,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { apiRequest } from './client';
 
-// ── Syslog Events ──────────────────────────────────────────────────────────
-
-export interface SyslogEvent {
-  timestamp?: string;
-  host_id?: number;
-  hostname?: string;
-  severity?: string;
-  event_type?: string;
-  message?: string;
-  event_data?: string;
-}
-
-export interface SyslogEventsParams {
-  hostId?: number;
-  severity?: string;
-  eventType?: string;
-  limit?: number;
-}
-
-export function useSyslogEvents(params: SyslogEventsParams) {
-  const qs = new URLSearchParams();
-  qs.set('event_type', params.eventType || 'syslog');
-  if (params.hostId != null) qs.set('host_id', String(params.hostId));
-  if (params.severity) qs.set('severity', params.severity);
-  if (params.limit != null) qs.set('limit', String(params.limit));
-  return useQuery<{ events: SyslogEvent[] } | SyslogEvent[]>({
-    queryKey: ['syslog-events', params.hostId ?? null, params.severity ?? '', params.eventType ?? 'syslog', params.limit ?? 500],
-    queryFn: () => apiRequest(`/metrics/events?${qs}`),
-  });
-}
-
 // ── Report Runs ────────────────────────────────────────────────────────────
 
 export interface ReportRun {
@@ -89,69 +58,6 @@ export function useGenerateReport() {
 
 export function reportArtifactUrl(artifactId: number): string {
   return `/api/reports/artifacts/${artifactId}`;
-}
-
-// ── OID Profiles ───────────────────────────────────────────────────────────
-
-export interface OidProfile {
-  id: number;
-  name: string;
-  vendor?: string;
-  device_type?: string;
-  description?: string;
-  oids_json?: string;
-  is_default?: boolean;
-}
-
-export interface OidProfilePayload {
-  name: string;
-  vendor: string;
-  device_type: string;
-  description: string;
-  oids_json: string;
-}
-
-export function useOidProfiles(vendor?: string | null) {
-  const qs = vendor ? `?vendor=${encodeURIComponent(vendor)}` : '';
-  return useQuery<{ profiles: OidProfile[] } | OidProfile[]>({
-    queryKey: ['oid-profiles', vendor ?? ''],
-    queryFn: () => apiRequest(`/oid-profiles${qs}`),
-  });
-}
-
-export function useOidProfile(id: number | null) {
-  return useQuery<OidProfile>({
-    queryKey: ['oid-profile', id],
-    queryFn: () => apiRequest(`/oid-profiles/${id}`),
-    enabled: id != null,
-  });
-}
-
-export function useCreateOidProfile() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: OidProfilePayload) =>
-      apiRequest('/oid-profiles', { method: 'POST', body: data }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['oid-profiles'] }),
-  });
-}
-
-export function useUpdateOidProfile() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, data }: { id: number; data: OidProfilePayload }) =>
-      apiRequest(`/oid-profiles/${id}`, { method: 'PUT', body: data }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['oid-profiles'] }),
-  });
-}
-
-export function useDeleteOidProfile() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: number) =>
-      apiRequest(`/oid-profiles/${id}`, { method: 'DELETE' }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['oid-profiles'] }),
-  });
 }
 
 // ── Bandwidth Billing ──────────────────────────────────────────────────────

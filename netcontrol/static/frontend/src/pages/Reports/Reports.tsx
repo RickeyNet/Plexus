@@ -4,18 +4,14 @@ import { PageHelp } from '@/components/PageHelp';
 import { BillingTab } from './BillingTab';
 import { GenerateReportTab } from './GenerateReportTab';
 import { HistoryTab } from './HistoryTab';
-import { OidProfilesTab } from './OidProfilesTab';
-import { SyslogEventsTab } from './SyslogEventsTab';
 
-// Availability and capacity-planning views live under Monitoring (same
-// endpoints, gated on `monitoring`); Reports only exports them.
-type Tab = 'generate' | 'history' | 'events' | 'oid-profiles' | 'billing';
+// Availability, capacity planning, the syslog event log and OID profiles live
+// under Monitoring (monitoring-gated endpoints); Reports only exports them.
+type Tab = 'generate' | 'history' | 'billing';
 
 const TABS: { value: Tab; label: string }[] = [
   { value: 'generate', label: 'Generate' },
   { value: 'history', label: 'History' },
-  { value: 'events', label: 'Syslog Events' },
-  { value: 'oid-profiles', label: 'OID Profiles' },
   { value: 'billing', label: 'Bandwidth Billing' },
 ];
 
@@ -27,14 +23,6 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   history: {
     title: 'Past Reports',
     text: 'Reports you (or scheduled jobs) have generated before. Re-download, share, or delete. Useful for showing auditors the historical record.',
-  },
-  events: {
-    title: 'Syslog Events',
-    text: 'Browse syslog and SNMP trap events ingested from devices. Filter by severity and host to investigate what happened around an incident.',
-  },
-  'oid-profiles': {
-    title: 'Custom OID Profiles',
-    text: 'Define extra SNMP OIDs to poll beyond the built-in metrics - vendor-specific counters, environmental sensors, anything walkable.',
   },
   billing: {
     title: 'Bandwidth Billing (95th Percentile)',
@@ -53,8 +41,8 @@ export function Reports() {
 
       <PageHelp
         pageKey="reports"
-        title="Reports, Event Log & OID Profiles"
-        text="Generate and export availability, compliance, utilization, and network documentation reports. View syslog events and SNMP traps. Manage custom OID profiles for monitoring."
+        title="Reports"
+        text="Generate and export availability, compliance, utilization, and network documentation reports, browse past runs, and produce 95th-percentile bandwidth billing."
       />
 
       <div className="tab-controls">
@@ -75,8 +63,6 @@ export function Reports() {
       <div className="card" style={{ padding: '1rem' }}>
         {tab === 'generate' && <GenerateReportTab />}
         {tab === 'history' && <HistoryTab />}
-        {tab === 'events' && <SyslogEventsTab />}
-        {tab === 'oid-profiles' && <OidProfilesTab />}
         {tab === 'billing' && <BillingTab />}
       </div>
     </div>

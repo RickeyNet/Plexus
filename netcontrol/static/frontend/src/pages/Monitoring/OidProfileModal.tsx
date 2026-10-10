@@ -6,7 +6,7 @@ import {
   useCreateOidProfile,
   useOidProfile,
   useUpdateOidProfile,
-} from '@/api/reports';
+} from '@/api/monitoring';
 
 interface Props {
   mode: 'create' | 'edit' | null;

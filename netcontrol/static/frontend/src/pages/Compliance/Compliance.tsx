@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router';
 
+import { useAuthStatus } from '@/api/auth';
 import {
   ComplianceAssignment,
   ComplianceHostStatus,
@@ -20,6 +22,7 @@ import {
 import { PageHelp } from '@/components/PageHelp';
 import { useDialogs } from '@/components/DialogProvider-context';
 
+import { AuditContent } from '@/pages/Audit/Audit';
 import { parseBackendDate } from '@/pages/Dashboard/helpers';
 
 import { AssignProfileModal, EditProfileModal, NewProfileModal } from './ProfileModals';
@@ -32,15 +35,26 @@ function formatBackendStamp(iso: string | null | undefined, fallback = '-'): str
   return d ? d.toLocaleString() : fallback;
 }
 
-type Tab = 'profiles' | 'assignments' | 'results' | 'status' | 'meraki';
+type Tab = 'profiles' | 'assignments' | 'results' | 'status' | 'meraki' | 'audit';
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: 'profiles', label: 'Profiles' },
-  { id: 'assignments', label: 'Assignments' },
-  { id: 'results', label: 'Scan Results' },
-  { id: 'status', label: 'Host Status' },
-  { id: 'meraki', label: 'Meraki' },
+// Each tab is gated on the feature its API needs. The CIS Audit tab (the
+// former /audit page) is served by the audit router, which is gated on
+// `reports`; the sidebar shows Compliance for either feature.
+const TABS: { id: Tab; label: string; feature: string }[] = [
+  { id: 'profiles', label: 'Profiles', feature: 'compliance' },
+  { id: 'assignments', label: 'Assignments', feature: 'compliance' },
+  { id: 'results', label: 'Scan Results', feature: 'compliance' },
+  { id: 'status', label: 'Host Status', feature: 'compliance' },
+  { id: 'meraki', label: 'Meraki', feature: 'compliance' },
+  { id: 'audit', label: 'CIS Audit', feature: 'reports' },
 ];
+
+const TAB_QUERY_KEY = 'tab';
+
+function readTab(search: string): Tab | null {
+  const v = new URLSearchParams(search).get(TAB_QUERY_KEY);
+  return TABS.some((t) => t.id === v) ? (v as Tab) : null;
+}
 
 const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   profiles: {
@@ -63,6 +77,10 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
     title: 'Meraki Organizations',
     text: 'Meraki has no running config, so profiles carry rules of type "meraki" that check the Dashboard API configuration: DHCP server policy (DHCP snooping), port access policies (port security), BPDU/root guard, storm control, IPS/AMP, SSID security, dashboard login security. Assign such a profile to an organization registered on the Topology page; scans use its stored API key, read-only, and report per organization, network, switch and SSID. Load Built-in adds four Meraki baselines.',
   },
+  audit: {
+    title: 'CIS Security Audit',
+    text: 'A built-in rule engine that grades the live inventory - not just configs - against CIS-Controls-mapped checks: configuration drift, port hygiene, VLAN consistency and security posture. Run it on demand or on a schedule, then review findings by severity and mute the ones you accept.',
+  },
 };
 
 const formatInterval = (seconds: number): string => {
@@ -74,7 +92,26 @@ const formatInterval = (seconds: number): string => {
 
 export function Compliance() {
   const { alert } = useDialogs();
-  const [tab, setTab] = useState<Tab>('profiles');
+  const { data: auth } = useAuthStatus();
+  const navigate = useNavigate();
+  const { search } = useLocation();
+
+  const isAdmin = auth?.role === 'admin';
+  const access = useMemo(() => new Set(auth?.feature_access ?? []), [auth?.feature_access]);
+  const hidden = useMemo(() => new Set(auth?.feature_visibility_hidden ?? []), [auth?.feature_visibility_hidden]);
+  const visibleTabs = TABS.filter((t) => (isAdmin || access.has(t.feature)) && !hidden.has(t.feature));
+
+  const [tab, setTab] = useState<Tab>(() => readTab(search) ?? 'profiles');
+  // The selected tab is not available to this user: show the first one that
+  // is. With none available, keep the selection (the API refuses its data).
+  const shownTab = visibleTabs.some((t) => t.id === tab) ? tab : (visibleTabs[0]?.id ?? tab);
+  const isAudit = shownTab === 'audit';
+
+  function selectTab(next: Tab) {
+    setTab(next);
+    navigate({ search: `?${TAB_QUERY_KEY}=${next}` }, { replace: true });
+  }
+
   const [query, setQuery] = useState('');
   const [showNewProfile, setShowNewProfile] = useState(false);
   const [editProfileId, setEditProfileId] = useState<number | null>(null);
@@ -104,43 +141,45 @@ export function Compliance() {
         }}
       >
         <h2 style={{ margin: 0 }}>Compliance</h2>
-        <div style={{ display: 'flex', gap: '0.4rem' }}>
-          <button className="btn btn-sm btn-primary" onClick={() => setShowRunScan(true)}>
-            Run Scan
-          </button>
-          <button className="btn btn-sm btn-secondary" onClick={() => setShowNewProfile(true)}>
-            New Profile
-          </button>
-          <button
-            className="btn btn-sm btn-secondary"
-            onClick={() => {
-              loadBuiltin.mutate(undefined, {
-                onSuccess: (res) => {
-                  if (res.loaded > 0) {
+        {!isAudit && (
+          <div style={{ display: 'flex', gap: '0.4rem' }}>
+            <button className="btn btn-sm btn-primary" onClick={() => setShowRunScan(true)}>
+              Run Scan
+            </button>
+            <button className="btn btn-sm btn-secondary" onClick={() => setShowNewProfile(true)}>
+              New Profile
+            </button>
+            <button
+              className="btn btn-sm btn-secondary"
+              onClick={() => {
+                loadBuiltin.mutate(undefined, {
+                  onSuccess: (res) => {
+                    if (res.loaded > 0) {
+                      void alert({
+                        title: 'Built-in profiles loaded',
+                        message: `Loaded ${res.loaded} built-in profile(s).${res.skipped > 0 ? ` ${res.skipped} already existed.` : ''}`,
+                      });
+                    } else {
+                      void alert({
+                        title: 'Built-in profiles loaded',
+                        message: `All ${res.total_available} built-in profiles already loaded.`,
+                      });
+                    }
+                  },
+                  onError: (e) =>
                     void alert({
-                      title: 'Built-in profiles loaded',
-                      message: `Loaded ${res.loaded} built-in profile(s).${res.skipped > 0 ? ` ${res.skipped} already existed.` : ''}`,
-                    });
-                  } else {
-                    void alert({
-                      title: 'Built-in profiles loaded',
-                      message: `All ${res.total_available} built-in profiles already loaded.`,
-                    });
-                  }
-                },
-                onError: (e) =>
-                  void alert({
-                    title: 'Load failed',
-                    message: (e as Error).message,
-                    variant: 'error',
-                  }),
-              });
-            }}
-            disabled={loadBuiltin.isPending}
-          >
-            {loadBuiltin.isPending ? 'Loading…' : 'Load Built-in'}
-          </button>
-        </div>
+                      title: 'Load failed',
+                      message: (e as Error).message,
+                      variant: 'error',
+                    }),
+                });
+              }}
+              disabled={loadBuiltin.isPending}
+            >
+              {loadBuiltin.isPending ? 'Loading…' : 'Load Built-in'}
+            </button>
+          </div>
+        )}
       </div>
 
       <PageHelp
@@ -149,9 +188,9 @@ export function Compliance() {
         text="Define compliance rules and run audits against your devices. Check configurations against security policies, best practices, and industry standards."
       />
 
-      <SummaryStrip summary={summary.data} meraki={merakiSummary.data} />
+      {!isAudit && <SummaryStrip summary={summary.data} meraki={merakiSummary.data} />}
 
-      <PageHelp pageKey={`compliance.${tab}`} title={TAB_HELP[tab].title} text={TAB_HELP[tab].text} />
+      <PageHelp pageKey={`compliance.${shownTab}`} title={TAB_HELP[shownTab].title} text={TAB_HELP[shownTab].text} />
 
       <div className="card" style={{ marginTop: '0.75rem', padding: 0, overflow: 'hidden' }}>
         <div
@@ -164,25 +203,28 @@ export function Compliance() {
             flexWrap: 'wrap',
           }}
         >
-          {TABS.map((t) => (
+          {visibleTabs.map((t) => (
             <button
               key={t.id}
-              className={`btn btn-sm ${tab === t.id ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => setTab(t.id)}
+              className={`btn btn-sm ${shownTab === t.id ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={() => selectTab(t.id)}
             >
               {t.label}
             </button>
           ))}
-          <input
-            className="form-input"
-            placeholder="Search…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            style={{ marginLeft: 'auto', maxWidth: 240 }}
-          />
+          {/* The audit tab has its own severity / category filters. */}
+          {!isAudit && (
+            <input
+              className="form-input"
+              placeholder="Search…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              style={{ marginLeft: 'auto', maxWidth: 240 }}
+            />
+          )}
         </div>
         <div style={{ padding: '0.75rem' }}>
-          {tab === 'profiles' && (
+          {shownTab === 'profiles' && (
             <ProfilesTab
               profiles={profiles.data || []}
               loading={profiles.isLoading}
@@ -191,14 +233,14 @@ export function Compliance() {
               onAssign={setAssignProfileId}
             />
           )}
-          {tab === 'assignments' && (
+          {shownTab === 'assignments' && (
             <AssignmentsTab
               assignments={assignments.data || []}
               loading={assignments.isLoading}
               query={query}
             />
           )}
-          {tab === 'results' && (
+          {shownTab === 'results' && (
             <ResultsTab
               results={results.data || []}
               loading={results.isLoading}
@@ -206,10 +248,11 @@ export function Compliance() {
               onShowFindings={setFindingsResultId}
             />
           )}
-          {tab === 'status' && (
+          {shownTab === 'status' && (
             <StatusTab status={status.data || []} loading={status.isLoading} query={query} />
           )}
-          {tab === 'meraki' && <MerakiTab query={query} />}
+          {shownTab === 'meraki' && <MerakiTab query={query} />}
+          {shownTab === 'audit' && <AuditContent />}
         </div>
       </div>
 
