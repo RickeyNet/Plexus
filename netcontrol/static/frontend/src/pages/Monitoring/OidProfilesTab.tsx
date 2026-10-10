@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 
 import { useDialogs } from '@/components/DialogProvider-context';
-import { useDeleteOidProfile, useOidProfiles, type OidProfile } from '@/api/reports';
+import { useDeleteOidProfile, useOidProfiles, type OidProfile } from '@/api/monitoring';
 
 import { OidProfileModal } from './OidProfileModal';
 

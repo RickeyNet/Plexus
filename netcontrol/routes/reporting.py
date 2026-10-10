@@ -25,6 +25,10 @@ from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
 router = APIRouter()
+# Custom OID profiles configure what the SNMP poller collects, so they are
+# gated on `monitoring` (app.py) rather than `reports`; the UI shows them on
+# the Monitoring page.
+oid_profiles_router = APIRouter()
 LOGGER = configure_logging("plexus.reporting")
 
 REPORT_SCHEDULER_ENABLED = os.getenv("APP_REPORT_SCHEDULER_ENABLED", "true").strip().lower() not in {
@@ -1287,12 +1291,12 @@ class OidProfileUpdate(BaseModel):
     is_default: int | None = None
 
 
-@router.get("/api/oid-profiles")
+@oid_profiles_router.get("/api/oid-profiles")
 async def list_oid_profiles(vendor: str | None = Query(default=None)):
     return {"profiles": await db.get_custom_oid_profiles(vendor)}
 
 
-@router.get("/api/oid-profiles/{profile_id}")
+@oid_profiles_router.get("/api/oid-profiles/{profile_id}")
 async def get_oid_profile(profile_id: int):
     profile = await db.get_custom_oid_profile(profile_id)
     if not profile:
@@ -1300,7 +1304,7 @@ async def get_oid_profile(profile_id: int):
     return profile
 
 
-@router.post("/api/oid-profiles", status_code=201)
+@oid_profiles_router.post("/api/oid-profiles", status_code=201)
 async def create_oid_profile(payload: OidProfileCreate, request: Request):
     user = getattr(request.state, "user", None) or {}
     owner = user.get("username", "") if isinstance(user, dict) else ""
@@ -1316,7 +1320,7 @@ async def create_oid_profile(payload: OidProfileCreate, request: Request):
     return profile
 
 
-@router.put("/api/oid-profiles/{profile_id}")
+@oid_profiles_router.put("/api/oid-profiles/{profile_id}")
 async def update_oid_profile(profile_id: int, payload: OidProfileUpdate):
     updated = await db.update_custom_oid_profile(
         profile_id,
@@ -1332,7 +1336,7 @@ async def update_oid_profile(profile_id: int, payload: OidProfileUpdate):
     return updated
 
 
-@router.delete("/api/oid-profiles/{profile_id}")
+@oid_profiles_router.delete("/api/oid-profiles/{profile_id}")
 async def delete_oid_profile(profile_id: int):
     deleted = await db.delete_custom_oid_profile(profile_id)
     if not deleted:

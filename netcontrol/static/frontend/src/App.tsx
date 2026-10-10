@@ -41,7 +41,6 @@ const MaintenanceWindows = lazy(() => pageLoaders.maintenanceWindows().then(m =>
 const Monitoring = lazy(() => pageLoaders.monitoring().then(m => ({ default: m.Monitoring })));
 const MacTracking = lazy(() => pageLoaders.macTracking().then(m => ({ default: m.MacTracking })));
 const TrafficAnalysis = lazy(() => pageLoaders.trafficAnalysis().then(m => ({ default: m.TrafficAnalysis })));
-const Audit = lazy(() => pageLoaders.audit().then(m => ({ default: m.Audit })));
 const Reports = lazy(() => pageLoaders.reports().then(m => ({ default: m.Reports })));
 const RiskAnalysis = lazy(() => pageLoaders.riskAnalysis().then(m => ({ default: m.RiskAnalysis })));
 const Settings = lazy(() => pageLoaders.settings().then(m => ({ default: m.Settings })));
@@ -66,7 +65,6 @@ const BREADCRUMBS: Record<string, string> = {
   '/deployments': 'Deployments',
   '/maintenance-windows': 'Maintenance Windows',
   '/reports': 'Reports',
-  '/audit': 'Audit',
   '/graph-templates': 'Graph Templates',
   '/assignments': 'Delegator · Assignments',
   '/tasks': 'Delegator · Tasks',
@@ -74,12 +72,13 @@ const BREADCRUMBS: Record<string, string> = {
   '/credentials': 'Delegator · Credentials',
   '/monitoring': 'Monitoring',
   '/monitoring/alerts': 'Monitoring · Alerts',
-  '/monitoring/routes': 'Monitoring · Route Churn',
+  '/monitoring/events': 'Monitoring · Events',
   '/monitoring/rules': 'Monitoring · Alert Rules',
   '/monitoring/suppressions': 'Monitoring · Suppressions',
   '/monitoring/sla': 'Monitoring · SLA',
   '/monitoring/availability': 'Monitoring · Availability',
   '/monitoring/capacity': 'Monitoring · Capacity',
+  '/monitoring/oid-profiles': 'Monitoring · OID Profiles',
   '/cloud-visibility': 'Cloud Visibility',
   '/cloud-visibility/topology': 'Cloud · Topology',
   '/cloud-visibility/flow': 'Cloud · Flow Logs',
@@ -221,7 +220,8 @@ export function App() {
           <Route path="/deployments" element={<Deployments />} />
           <Route path="/maintenance-windows" element={<MaintenanceWindows />} />
           <Route path="/reports" element={<Reports />} />
-          <Route path="/audit" element={<Audit />} />
+          {/* The audit page is now the CIS Audit tab on Compliance. */}
+          <Route path="/audit" element={<Navigate to="/compliance?tab=audit" replace />} />
           <Route path="/graph-templates" element={<GraphTemplates />} />
           {/* Delegator: one page renders all four tabs. The legacy paths
               (/jobs, /playbooks, /templates) point at Jobs too so old deep
@@ -235,12 +235,15 @@ export function App() {
           <Route path="/templates" element={<Jobs />} />
           <Route path="/monitoring" element={<Monitoring />} />
           <Route path="/monitoring/alerts" element={<Monitoring />} />
-          <Route path="/monitoring/routes" element={<Monitoring />} />
+          <Route path="/monitoring/events" element={<Monitoring />} />
+          {/* Route Churn is now a filter on the Alerts tab. */}
+          <Route path="/monitoring/routes" element={<Navigate to="/monitoring/alerts" replace />} />
           <Route path="/monitoring/rules" element={<Monitoring />} />
           <Route path="/monitoring/suppressions" element={<Monitoring />} />
           <Route path="/monitoring/sla" element={<Monitoring />} />
           <Route path="/monitoring/availability" element={<Monitoring />} />
           <Route path="/monitoring/capacity" element={<Monitoring />} />
+          <Route path="/monitoring/oid-profiles" element={<Monitoring />} />
           <Route path="/cloud-visibility" element={<CloudVisibility />} />
           <Route path="/cloud-visibility/topology" element={<CloudVisibility />} />
           <Route path="/cloud-visibility/flow" element={<CloudVisibility />} />

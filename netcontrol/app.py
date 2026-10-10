@@ -249,7 +249,11 @@ from netcontrol.routes.playbooks import (
     sync_playbooks_from_registry,
     write_playbook_file,
 )
-from netcontrol.routes.reporting import _report_scheduler_loop, router as reporting_router
+from netcontrol.routes.reporting import (
+    _report_scheduler_loop,
+    oid_profiles_router,
+    router as reporting_router,
+)
 from netcontrol.routes.risk_analysis import (
     _CRITICAL_PATTERNS,
     RiskAnalysisRequest,
@@ -2203,6 +2207,11 @@ app.include_router(
 app.include_router(
     reporting_router,
     dependencies=[Depends(require_auth), Depends(require_feature("reports"))],
+)
+# Custom OID profiles (SNMP poller configuration) - monitoring, not reports
+app.include_router(
+    oid_profiles_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("monitoring"))],
 )
 # Audit Report Engine
 app.include_router(

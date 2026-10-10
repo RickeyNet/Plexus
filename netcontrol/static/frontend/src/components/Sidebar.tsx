@@ -254,10 +254,11 @@ const NAV: TopItem[] = [
       // Configuration - Drift tab (`config-drift`) and Backups / Config Search
       // tabs (`config-backups`); the page gates each tab itself.
       { label: 'Configuration', icon: ic.config, to: '/configuration', feature: ['config-drift', 'config-backups'], visKey: 'configuration' },
-      { label: 'Compliance', icon: ic.compliance, to: '/compliance', feature: 'compliance' },
+      // Compliance - profile tabs (`compliance`) and the CIS Audit tab, whose
+      // audit API is gated on `reports`; the page gates each tab itself.
+      { label: 'Compliance', icon: ic.compliance, to: '/compliance', feature: ['compliance', 'reports'] },
       { label: 'Changes', icon: ic.changes, to: '/change-management', feature: 'risk-analysis', altFeature: 'deployments', visKey: 'change-management' },
       { label: 'Reports', icon: ic.reports, to: '/reports', feature: 'reports' },
-      { label: 'Audit', icon: ic.reports, to: '/audit', feature: 'reports' },
       { label: 'Graphs', icon: ic.graphs, to: '/graph-templates', feature: 'graph-templates' },
       { label: 'MAC Tracking', icon: ic.mac, to: '/mac-tracking', feature: 'mac-tracking' },
       { label: 'Traffic Analysis', icon: ic.traffic, to: '/traffic-analysis', feature: 'traffic-analysis' },
