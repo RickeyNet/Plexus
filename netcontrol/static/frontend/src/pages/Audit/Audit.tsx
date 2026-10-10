@@ -74,7 +74,10 @@ function severityCounts(run: AuditRunSummary) {
   return parts.filter((p) => p.count > 0);
 }
 
-export function Audit() {
+// Body of the Compliance page's "CIS Audit" tab (formerly the standalone
+// /audit page). The tab bar supplies the heading, so this starts with the
+// run-now toolbar.
+export function AuditContent() {
   const runs = useAuditRuns();
   const trigger = useTriggerAuditRun();
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
@@ -83,17 +86,21 @@ export function Audit() {
   const runList: AuditRunSummary[] = runs.data?.runs ?? [];
 
   return (
-    <div style={{ padding: '1rem', display: 'grid', gap: '1rem' }}>
+    <div style={{ display: 'grid', gap: '1rem' }}>
       <div
         style={{
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
+          gap: '0.5rem',
+          flexWrap: 'wrap',
         }}
       >
-        <h2 style={{ margin: 0 }}>Network Audit</h2>
+        <span className="text-muted" style={{ fontSize: '0.9em' }}>
+          Grades the live inventory against CIS-style checks: configuration drift, port hygiene, VLAN consistency and security posture.
+        </span>
         <button
-          className="btn btn-primary"
+          className="btn btn-sm btn-primary"
           disabled={trigger.isPending}
           onClick={() => trigger.mutate()}
         >
