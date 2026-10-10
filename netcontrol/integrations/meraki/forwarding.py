@@ -30,6 +30,10 @@ FORWARDING_VERSION = 1
 ANY = "any"
 # The NAT pseudo address for "the address of the egress / ingress interface".
 INTERFACE = "interface"
+# The not-collected entry of an appliance whose network settings (and so its
+# deployment mode, routed or passthrough) were not read: whether it hides
+# sources behind its uplink address is then not known.
+UPLINK_NAT_MODE = "Uplink NAT (deployment mode)"
 
 _VLAN_ADDRESS = re.compile(r"^vlan\((\d+)\)\.(\*|\d+)$", re.IGNORECASE)
 _PORT_EXPRESSION = re.compile(r"^\d+(-\d+)?(,\d+(-\d+)?)*$")
@@ -692,11 +696,16 @@ def _appliance_nat(detail: dict, block: dict) -> list[dict]:
                 original_src=[canonical(vlan["subnet"])],
                 translated_src=[canonical(vlan["vpnNatSubnet"])],
             )
-    # The MX hides LAN sources behind the uplink address on the way out (WAN
-    # egress only). An MX with no LAN at all is in passthrough or VPN
-    # concentrator mode (a vMX in a VPC): it bridges and does not translate.
-    if any(i.get("kind") in ("vlan", "lan") for i in block.get("interfaces") or []):
+    # An MX in routed mode hides LAN sources behind the uplink address on the
+    # way out (WAN egress only); one in passthrough or VPN concentrator mode
+    # (a vMX in a VPC) bridges and does not translate. Only the collected
+    # deployment mode says which: nothing is assumed when it was not read.
+    settings = detail.get("appliance_settings")
+    mode = str(settings.get("deploymentMode") or "").lower() if isinstance(settings, dict) else ""
+    if mode == "routed":
         add("interface_pat", name="Uplink address", original_src=[ANY], translated_src=[INTERFACE])
+    elif not mode:
+        note(block, UPLINK_NAT_MODE)
     return entries
 
 

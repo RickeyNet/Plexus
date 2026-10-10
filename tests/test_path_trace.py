@@ -844,6 +844,42 @@ def test_replies_to_the_uplink_address_a_vmx_hid_the_source_behind_come_back_thr
     assert result["asymmetric"] == {"status": "no", "text": "Replies take the same hops back."}
 
 
+def test_an_uncollected_deployment_mode_leaves_the_source_on_the_wan_unknown():
+    # Whether an MX hides the source behind its uplink address depends on its
+    # deployment mode, read from its network settings. When they were not
+    # collected nothing is assumed: the flow leaving on the WAN is unknown
+    # there, and the replies, which leave over AutoVPN, only get a note.
+    vmx = _mx(
+        {},
+        routes=[route("10.1.10.0/24", "autovpn", peer={"site": "BR"}, source="AutoVPN from Branch 01")],
+        wan_ip="10.50.1.10",
+        gateway="10.50.1.1",
+        missing=("Layer 7 firewall rules", "Group policies", "Uplink NAT (deployment mode)"),
+    )
+    vmx["nat"] = []
+    result = _vmx_tracer(vmx).trace(
+        "10.1.10.5",
+        "10.50.2.20",
+        source_node="meraki:1:d:BR",
+        destination_node="meraki:-1:vpc:vpc-1",
+        protocol="tcp",
+        port=443,
+    )
+
+    request = result["request"]
+    assert _labels(request) == ["Branch 01 MX", "vMX", "cloud-vpc"]
+    vmx_hop = request["hops"][1]
+    assert ("nat", "unknown", "Uplink NAT (deployment mode)") in _items(vmx_hop)
+    unknown = next(i for i in vmx_hop["items"] if i["stage"] == "nat")
+    assert unknown["text"].startswith("The deployment mode is not collected: whether this MX is in routed mode")
+    assert request["verdict"] == "unknown"
+    assert request["summary"].startswith("Could not be decided at vMX, Uplink NAT (deployment mode):")
+    reply_vmx = result["reply"]["hops"][1]
+    assert reply_vmx["out"] == "AutoVPN to Branch 01"
+    assert ("note", "info", "Uplink NAT (deployment mode)") in _items(reply_vmx, info=True)
+    assert all(i["stage"] != "nat" for i in reply_vmx["items"])
+
+
 def test_a_vmx_keeps_its_own_vpc_when_a_backup_vmx_exports_the_same_range():
     # Two vMXs in one VPC both export its range into AutoVPN. Each learns the
     # range from the other; its own export (routed by its uplink) must win,
