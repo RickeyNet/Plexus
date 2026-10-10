@@ -48,6 +48,8 @@ export function providerLabel(provider: string | undefined): string {
       return 'Cato';
     case 'fmc':
       return 'Cisco FMC';
+    case 'panorama':
+      return 'Palo Alto Panorama';
     case 'aws':
       return 'AWS';
     case 'azure':

@@ -5,7 +5,7 @@ import { nodeProvider, PROVIDER_ORDER } from './helpers';
 // Tidy top-down tree layout: the default arrangement of the map.
 //
 // The map is split by source first - the inventory, then each integration
-// (Meraki, Cato, Cisco FMC, AWS, Azure, GCP) - and each source is drawn as a
+// (Meraki, Cato, Cisco FMC, Palo Alto Panorama, AWS, Azure, GCP) - and each source is drawn as a
 // region of its own, side by side, so no source's devices end up
 // scattered among another's. Links between sources are still drawn; they
 // just do not shape the layout.
@@ -84,7 +84,8 @@ export const SOURCE_GAP = 600;
 
 // Logical adjacencies ride on top of the physical network; the tree follows
 // cables first and only uses these to reach parts nothing else connects.
-// A management link (an FMC and the FTD it manages) is one of them.
+// A management link (an FMC and the FTD it manages, a Panorama and its
+// firewalls) is one of them.
 const OVERLAY_PROTOCOLS = new Set(['vpn', 'vpn-ipsec', 'ospf', 'bgp', 'management']);
 
 const GATEWAY_TYPES = new Set(['fortinet', 'paloalto_panos', 'cisco_asa', 'cisco_ftd']);

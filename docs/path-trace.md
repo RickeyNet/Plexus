@@ -9,8 +9,9 @@ It does this for the request and for the replies, says whether routing is
 asymmetric, and lets you reverse the source and the destination.
 
 The trace reads what the sources on the map collected: Meraki
-organizations, Cisco FMCs, Cato accounts, AWS accounts, Azure subscriptions
-and the routes Plexus captured from inventory devices over SSH. It never
+organizations, Cisco FMCs, Palo Alto Panoramas, Cato accounts, AWS accounts,
+Azure subscriptions and the routes Plexus captured from inventory devices
+over SSH. It never
 reports as allowed what it could not look at: what a source does not
 collect is listed at that hop, and is *unknown* when the flow depends on
 it.
@@ -181,7 +182,15 @@ leaves over AutoVPN. FTD NAT rules match
 their source and destination interfaces by name or by security zone; a
 static auto NAT rule translates the source on the way out and the mapped
 address back on the way in. A rule that translates to the same networks is
-listed as identity NAT.
+listed as identity NAT. A Palo Alto firewall's NAT rules match their source
+zones and destination zone (or interface), pre-rules before post-rules; an
+interface-address source NAT takes the egress interface's address, a
+bi-directional static NAT also translates the mapped address back on the
+way in, and a rule without translation is an exemption. PAN-OS matches a
+security rule on the destination address before NAT but the zone after it:
+since the trace applies the rules after destination NAT, a rule whose
+destination is the original address of a destination NAT rule also matches
+the translated address.
 
 NAT is applied before the policy-based VPN selectors are matched, as on an
 ASA or FTD: the selectors see the translated source. A flow that the
@@ -197,14 +206,16 @@ It changes the verdict only when the flow depends on it:
 
 - a rule set the device would consult for this flow is *unknown*: the Layer
   3 rules for traffic from the LAN, the inbound rules or the NAT rules for
-  traffic from the WAN, FTD prefilter or access control rules, a switch ACL,
+  traffic from the WAN, FTD prefilter or access control rules, Palo Alto
+  security rules, a switch ACL,
   Cato WAN firewall rules for a private destination and internet firewall
   rules for a public one
 - routes that are not collected, such as routes learned over BGP or OSPF,
   make the route lookup *unknown* when it finds no route or only a default
   route, unless a site-to-site VPN then takes the flow: a default route and
   a tunnel whose protected networks match is how a policy-based VPN is built
-- anything else, such as Layer 7 rules and group policies, is a note. The
+- anything else, such as Layer 7 rules, group policies or the rules
+  configured locally on a Panorama-managed firewall, is a note. The
   summary of each direction ends with **Not checked:** and those names, so
   you can see what an *allowed* verdict rests on
 
@@ -225,6 +236,7 @@ where its NAT and inbound rules decide. Documentation ranges such as
 |---|---|---|
 | Meraki | Layer 3 firewall rules, inbound firewall rules, site-to-site VPN firewall rules, 1:1 NAT, port forwarding, 1:Many NAT, VPN subnet translation, static and AutoVPN routes, routes to non-Meraki VPN peers, switch ACLs and SVI routes | Layer 7 firewall rules, group policies |
 | Cisco FMC | Prefilter rules, access control rules, NAT rules, connected and static routes, site-to-site VPN protected networks | Routes learned by BGP, OSPF or EIGRP, access control rules beyond the first 1000 |
+| Palo Alto Panorama | Security rules in the order each firewall applies them (shared, device group and ancestors, pre then post, the intrazone and interzone default rules) with their zones, addresses and services, NAT rules, connected routes, the firewall's routing table (static, BGP, OSPF) or else its configured static routes, IPsec tunnels and their state | Rules configured on the firewall itself, App-ID (a rule with applications or `application-default` is unknown when it matches), users, URL categories, FQDNs and dynamic address groups, routes learned by BGP or OSPF when the routing table was not read; see [panorama-topology.md](panorama-topology.md#search-and-path-mode) |
 | Cato | The hops: Socket, PoP, Cato Cloud, PoP, Socket | WAN and internet firewall rules |
 | Inventory devices | The routes of the latest SSH route table capture: Cisco IOS and IOS-XE, NX-OS, ASA and FTD, Arista EOS | Access lists |
 | AWS | Route tables, transit gateways, VPC peerings, network ACLs, security groups, as in [the AWS check of a path](aws-topology.md#the-aws-check-of-a-path) | See that section |

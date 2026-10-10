@@ -5,6 +5,7 @@ import type {
   MerakiBuildJob,
   MerakiBuildOptions,
   MerakiNodeDetails,
+  PanoramaBuildOptions,
 } from '@/api/meraki';
 
 export const DEFAULT_BASE_URL = 'https://api.meraki.com/api/v1';
@@ -81,6 +82,39 @@ export const FMC_OPTION_TOGGLES: { key: FmcToggleKey; label: string; hint: strin
   { key: 'verify_tls', label: 'Verify the FMC certificate', hint: 'Turn off only for an FMC with a self-signed certificate.' },
 ];
 
+export const PANORAMA_URL_PLACEHOLDER = 'https://panorama.example.com';
+
+// Used until the server reports its own defaults (`panorama_default_options`).
+export const FALLBACK_PANORAMA_OPTIONS: PanoramaBuildOptions = {
+  username: '',
+  verify_tls: true,
+  device_name_contains: '',
+  include_interfaces: true,
+  include_routing: true,
+  include_security_policies: true,
+  include_nat: true,
+  include_vpn: true,
+  include_global_protect: true,
+  include_device_state: true,
+  inventory_enrich: true,
+};
+
+type PanoramaToggleKey = {
+  [K in keyof PanoramaBuildOptions]: PanoramaBuildOptions[K] extends boolean ? K : never;
+}[keyof PanoramaBuildOptions];
+
+export const PANORAMA_OPTION_TOGGLES: { key: PanoramaToggleKey; label: string; hint: string }[] = [
+  { key: 'include_interfaces', label: 'Interfaces', hint: 'Template and template stack network interfaces, zones and virtual routers' },
+  { key: 'include_routing', label: 'Routing', hint: 'Static routes, BGP and OSPF of each virtual router' },
+  { key: 'include_security_policies', label: 'Security policies', hint: 'Pre and post rulebases of the shared and device group hierarchy, with the default rules' },
+  { key: 'include_nat', label: 'NAT', hint: 'Pre and post NAT rulebases' },
+  { key: 'include_vpn', label: 'Site-to-site VPN', hint: 'IKE gateways and IPsec tunnels' },
+  { key: 'include_global_protect', label: 'GlobalProtect', hint: 'Gateways, address pools and the users connected right now' },
+  { key: 'include_device_state', label: 'Device state', hint: 'Read through Panorama from each connected firewall: interface addresses, routing table, BGP peers, tunnel state and HA state' },
+  { key: 'inventory_enrich', label: 'Correlate with Plexus inventory', hint: 'Attach SNMP/SSH data Plexus already holds for a firewall that is also an inventory host.' },
+  { key: 'verify_tls', label: 'Verify the Panorama certificate', hint: 'Turn off only for a Panorama with a self-signed certificate.' },
+];
+
 type ToggleKey = {
   [K in keyof MerakiBuildOptions]: MerakiBuildOptions[K] extends boolean ? K : never;
 }[keyof MerakiBuildOptions];
@@ -111,6 +145,7 @@ export function sourceTypeLabel(type: string): string {
   if (type === 'azure') return 'Azure';
   if (type === 'gcp') return 'GCP';
   if (type === 'fmc') return 'Cisco FMC';
+  if (type === 'panorama') return 'Palo Alto Panorama';
   return type === 'cato' ? 'Cato' : 'Meraki';
 }
 
@@ -145,6 +180,17 @@ const PHASE_LABELS: Record<string, string> = {
   'fmc s2s vpn': 'Reading site-to-site VPN',
   'fmc health': 'Reading health and deployment status',
   'fmc sessions': 'Reading connected users',
+  'panorama login': 'Signing in to Panorama',
+  'panorama devices': 'Reading managed firewalls',
+  'panorama device groups': 'Reading device groups',
+  'panorama templates': 'Reading templates and template stacks',
+  'panorama objects': 'Reading address and service objects',
+  'panorama policies': 'Reading security rules',
+  'panorama nat': 'Reading NAT rules',
+  'panorama network': 'Reading interfaces and routing',
+  'panorama vpn': 'Reading IKE gateways and IPsec tunnels',
+  'panorama global protect': 'Reading GlobalProtect gateways and users',
+  'panorama device state': 'Reading firewall state',
   'building map': 'Building the map',
   saving: 'Saving snapshot',
 };
@@ -196,6 +242,8 @@ const VIEW_TITLES: Record<Exclude<MerakiView, 'meraki'>, string[]> = {
     'Network interfaces',
     'FTD interfaces',
     'Router interfaces',
+    'Firewall interfaces',
+    'Zones',
   ],
   vlans: [
     'VLANs',
@@ -229,6 +277,8 @@ const VIEW_TITLES: Record<Exclude<MerakiView, 'meraki'>, string[]> = {
     'Dynamic routes',
     'BGP sessions',
     'Learned routes',
+    'Routing table',
+    'BGP peers',
   ],
   vpn: [
     'Site-to-site VPN',
@@ -241,6 +291,9 @@ const VIEW_TITLES: Record<Exclude<MerakiView, 'meraki'>, string[]> = {
     'Access interfaces',
     'Connected users',
     'VPN tunnels',
+    'IKE gateways',
+    'IPsec tunnels',
+    'GlobalProtect gateways',
   ],
   firewall: [
     'Layer 3 firewall rules',
@@ -254,6 +307,8 @@ const VIEW_TITLES: Record<Exclude<MerakiView, 'meraki'>, string[]> = {
     'Access control rules',
     'Access control rules (note)',
     'VPC firewall rules',
+    'Security rules',
+    'Security policy',
   ],
   switching: ['Switch stacks', 'Spanning tree', 'STP bridge priority'],
   wireless: ['Wireless SSIDs'],
