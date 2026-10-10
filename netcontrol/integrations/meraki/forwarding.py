@@ -692,8 +692,11 @@ def _appliance_nat(detail: dict, block: dict) -> list[dict]:
                 original_src=[canonical(vlan["subnet"])],
                 translated_src=[canonical(vlan["vpnNatSubnet"])],
             )
-    # The MX hides LAN sources behind the uplink address on the way out (WAN egress only).
-    add("interface_pat", name="Uplink address", original_src=[ANY], translated_src=[INTERFACE])
+    # The MX hides LAN sources behind the uplink address on the way out (WAN
+    # egress only). An MX with no LAN at all is in passthrough or VPN
+    # concentrator mode (a vMX in a VPC): it bridges and does not translate.
+    if any(i.get("kind") in ("vlan", "lan") for i in block.get("interfaces") or []):
+        add("interface_pat", name="Uplink address", original_src=[ANY], translated_src=[INTERFACE])
     return entries
 
 

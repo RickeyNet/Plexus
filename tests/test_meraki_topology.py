@@ -1034,6 +1034,24 @@ def test_snapshot_branch_appliance_carries_its_forwarding_block(snapshot):
     assert block["not_collected"] == ["Layer 7 firewall rules", "Group policies"]
 
 
+def test_an_appliance_with_no_lan_is_a_concentrator_and_does_not_translate():
+    # A vMX in passthrough / VPN concentrator mode has no VLAN and no single
+    # LAN, only its uplink: it bridges the VPC and never hides a source
+    # behind the uplink address.
+    block = appliance_block(
+        detail={"vlans": [], "single_lan": {}, "static_routes": []},
+        vpn={},
+        vpn_by_net={},
+        net_details={},
+        net_names={},
+        uplinks=[{"interface": "wan1", "ip": "10.50.1.10", "gateway": "10.50.1.1", "status": "active"}],
+        peers_cfg={},
+        vpn_firewall=None,
+    )
+    assert [i["kind"] for i in block["interfaces"]] == ["wan"]
+    assert block["nat"] == []
+
+
 def _appliance_routes(detail: dict, uplinks: list[dict]) -> list[dict]:
     block = appliance_block(
         detail=detail,

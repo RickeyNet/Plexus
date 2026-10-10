@@ -402,8 +402,9 @@ def test_ftd_prefilter_fastpath_skips_the_access_policy_and_the_static_route_rea
     assert _labels(result["reply"]) == ["core-sw"]
     assert result["asymmetric"] == {
         "status": "yes",
-        "text": "Replies from 10.70.1.5 are delivered at core-sw without passing ftd-branch. The replies do not pass "
-        "ftd-branch, whose firewall is stateful: it sees only one direction of the connection.",
+        "text": "Replies from 10.70.1.5 end at core-sw and never pass ftd-branch, which the request did. ftd-branch "
+        "has a stateful firewall that sees the request but never the replies: its connection state never "
+        "completes, so the rest of the connection can be dropped there.",
     }
 
 
@@ -805,6 +806,45 @@ def test_a_passthrough_vmx_hands_the_flow_to_its_own_vpc_when_another_vpc_has_th
     assert _labels(result["reply"]) == ["cloud-vpc", "vMX", "Branch 01 MX"]
 
 
+def test_replies_to_the_uplink_address_a_vmx_hid_the_source_behind_come_back_through_it():
+    # A vMX in NAT mode hides the branch behind its uplink address, which is
+    # its own address in the VPC. The replies are addressed to the vMX: the
+    # VPC delivers them to the instance, and the vMX translates them back
+    # and sends them over AutoVPN. Routing is symmetric, not "replies end
+    # at the VPC without passing the vMX".
+    vmx = _mx(
+        {},
+        routes=[route("10.1.10.0/24", "autovpn", peer={"site": "BR"}, source="AutoVPN from Branch 01")],
+        wan_ip="10.50.1.10",
+        gateway="10.50.1.1",
+    )
+    result = _vmx_tracer(vmx).trace(
+        "10.1.10.5",
+        "10.50.2.20",
+        source_node="meraki:1:d:BR",
+        destination_node="meraki:-1:vpc:vpc-1",
+        protocol="tcp",
+        port=443,
+    )
+
+    assert result["verdict"] == "allowed", result["summary"]
+    request = result["request"]
+    assert _labels(request) == ["Branch 01 MX", "vMX", "cloud-vpc"]
+    assert ("nat", "ok", "Uplink NAT Uplink address") in _items(request["hops"][1])
+    assert request["summary"].startswith("Every hop allows it: Branch 01 MX → vMX → cloud-vpc.")
+
+    reply = result["reply"]
+    assert reply["verdict"] == "allowed", reply["summary"]
+    assert _labels(reply) == ["cloud-vpc", "vMX", "Branch 01 MX"]
+    vpc, vmx_hop, branch = reply["hops"]
+    assert vpc["items"][-2]["text"] == "10.50.1.10 is an address of vMX, which takes the flow from here."
+    assert vpc["items"][-1]["where"] == "Link to vMX"
+    assert vmx_hop["in"] == "wan1" and vmx_hop["out"] == "AutoVPN to Branch 01"
+    assert vmx_hop["items"][0]["text"] == "Replies to 10.50.1.10 are translated back to 10.1.10.5 by the session."
+    assert "delivered on VLAN 10" in branch["items"][-1]["text"]
+    assert result["asymmetric"] == {"status": "no", "text": "Replies take the same hops back."}
+
+
 def test_a_vmx_keeps_its_own_vpc_when_a_backup_vmx_exports_the_same_range():
     # Two vMXs in one VPC both export its range into AutoVPN. Each learns the
     # range from the other; its own export (routed by its uplink) must win,
@@ -1200,7 +1240,8 @@ def test_cato_socket_sending_by_one_pop_and_answered_by_another_is_asymmetric():
     # the Cloud the replies skip.
     assert result["asymmetric"] == {
         "status": "yes",
-        "text": "Replies from 10.50.10.20 go from PoP Ashburn to Branch-Cleveland instead of Cato Cloud.",
+        "text": "Replies from 10.50.10.20 go from PoP Ashburn to Branch-Cleveland instead of Cato Cloud, the way the "
+        "request came.",
     }
 
 
@@ -1241,8 +1282,10 @@ def test_a_hub_whose_return_route_points_to_the_other_hub_is_asymmetric():
     assert _labels(result["reply"]) == ["Hub 01 MX", "Hub 02 MX", "Spoke MX"]
     asymmetric = result["asymmetric"]
     assert asymmetric["status"] == "yes"
-    assert asymmetric["text"].startswith("Replies from 10.0.10.20 go from Hub 01 MX to Hub 02 MX instead of Spoke MX.")
-    assert "The replies pass Hub 02 MX, whose firewall is stateful and did not see the request" in asymmetric["text"]
+    assert asymmetric["text"].startswith(
+        "Replies from 10.0.10.20 go from Hub 01 MX to Hub 02 MX instead of Spoke MX, the way the request came."
+    )
+    assert "Hub 02 MX has a stateful firewall that never saw the request: it would drop the replies" in asymmetric["text"]
     # Hub 02's stateful VPN firewall never saw the request.
     assert ("policy", "unknown", "Site-to-site VPN firewall rules") in _items(result["reply"]["hops"][1])
 
