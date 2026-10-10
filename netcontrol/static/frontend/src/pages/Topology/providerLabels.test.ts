@@ -26,6 +26,14 @@ describe('Cisco FMC names', () => {
   });
 });
 
+describe('GCP names', () => {
+  it('labels the gcp provider everywhere', () => {
+    expect(providerLabel('gcp')).toBe('GCP');
+    expect(providerSourceName('gcp')).toBe('GCP API');
+    expect(providerScopeName('gcp')).toBe('GCP project');
+  });
+});
+
 describe('edgeProtocolLabel', () => {
   it('names an FMC stack link after the HA pair or cluster it joins', () => {
     expect(edgeProtocolLabel(link('stack', 'fmc'), ftd('a', 'ha:1'), ftd('b', 'ha:1'))).toBe('HA');

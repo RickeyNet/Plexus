@@ -266,15 +266,45 @@ describe('azure detail tabs', () => {
   });
 });
 
+describe('gcp detail tabs', () => {
+  it('files VPC network sections under the shared tabs', () => {
+    const vpc = details({
+      site_sections: [
+        table('VPC network overview'),
+        table('Subnets'),
+        table('VPC routes'),
+        table('Dynamic routes'),
+        table('VPC peerings'),
+        table('VM instances'),
+        table('VPC firewall rules'),
+      ],
+    });
+    expect(merakiViewsWithData(vpc)).toEqual(['meraki', 'vlans', 'routing', 'firewall']);
+    expect(merakiViewSections(vpc, 'firewall').siteSections.map((s) => s.title)).toEqual(['VPC firewall rules']);
+    expect(merakiViewSections(vpc, 'routing').siteSections.map((s) => s.title)).toEqual([
+      'VPC routes',
+      'Dynamic routes',
+      'VPC peerings',
+    ]);
+    expect(merakiViewSections(vpc, 'vlans').siteSections.map((s) => s.title)).toEqual(['Subnets']);
+    // VM instances have no tab of their own; they stay on the summary.
+    expect(merakiViewSections(vpc, 'meraki').siteSections.map((s) => s.title)).toEqual([
+      'VPC network overview',
+      'VM instances',
+    ]);
+  });
+});
+
 describe('sourceTypeLabel', () => {
   it('names every kind of map source', () => {
-    expect(['neighbors', 'meraki', 'cato', 'fmc', 'aws', 'azure'].map(sourceTypeLabel)).toEqual([
+    expect(['neighbors', 'meraki', 'cato', 'fmc', 'aws', 'azure', 'gcp'].map(sourceTypeLabel)).toEqual([
       'Neighbor discovery',
       'Meraki',
       'Cato',
       'Cisco FMC',
       'AWS',
       'Azure',
+      'GCP',
     ]);
   });
 });

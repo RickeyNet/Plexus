@@ -12,9 +12,9 @@ what feeds and surrounds that merge:
   - Cisco FMCs and the FTDs they manage, stored and collected the same way
     (``provider`` "fmc"; entries stored as "anyconnect" by earlier releases
     are read as "fmc")
-  - AWS and Azure: the accounts Cloud Visibility discovers are turned into
-    one more snapshot per cloud (``provider`` "aws" / "azure") whenever their
-    discovery changes
+  - AWS, Azure and GCP: the accounts Cloud Visibility discovers are turned
+    into one more snapshot per cloud (``provider`` "aws" / "azure" / "gcp")
+    whenever their discovery changes
   - On-demand collection builds as background jobs with pollable progress
   - Stored snapshots: list / fetch JSON / delete, and an in-memory cache of
     the latest one per organization
@@ -74,6 +74,9 @@ from netcontrol.integrations.fmc.collector import (
 )
 from netcontrol.integrations.fmc.normalize import build_snapshot as build_fmc_snapshot
 from netcontrol.integrations.fmc.sample import build_sample_raw as build_fmc_sample_raw
+from netcontrol.integrations.gcp.normalize import build_snapshot as build_gcp_snapshot
+from netcontrol.integrations.gcp.reachability import Reachability as GcpReachability
+from netcontrol.integrations.gcp.sample import build_sample as build_gcp_sample
 from netcontrol.integrations.meraki.client import (
     DEFAULT_BASE_URL,
     MerakiApiError,
@@ -115,7 +118,8 @@ SAMPLE_FMC_NAME = "Sample Cisco FMC (demo data)"
 SAMPLE_FMC_LEGACY_NAME = "Sample AnyConnect FMC (demo data)"
 SAMPLE_AWS_NAME = "Sample AWS Account (demo data)"
 SAMPLE_AZURE_NAME = "Sample Azure Subscription (demo data)"
-# Marks the demo AWS and Azure accounts, which scheduled discovery leaves alone.
+SAMPLE_GCP_NAME = "Sample GCP Project (demo data)"
+# Marks the demo AWS, Azure and GCP accounts, which scheduled discovery leaves alone.
 SAMPLE_AWS_AUTH_TYPE = "sample"
 # The demo FMC address: a documentation range, never contacted.
 SAMPLE_FMC_URL = "https://10.210.2.20"
@@ -129,9 +133,10 @@ PROVIDERS = (PROVIDER_MERAKI, PROVIDER_CATO, PROVIDER_FMC)
 # "anyconnect" while it only drew remote access VPN headends.
 LEGACY_PROVIDERS = {"anyconnect": PROVIDER_FMC}
 SAMPLE_ORG_NAMES = (SAMPLE_ORG_NAME, SAMPLE_CATO_NAME, SAMPLE_FMC_NAME, SAMPLE_FMC_LEGACY_NAME)
-# Not organization providers: AWS and Azure accounts are Cloud Visibility accounts.
+# Not organization providers: AWS, Azure and GCP accounts are Cloud Visibility accounts.
 PROVIDER_AWS = "aws"
 PROVIDER_AZURE = "azure"
+PROVIDER_GCP = "gcp"
 
 _require_admin = None
 
@@ -145,12 +150,13 @@ _running_builds: dict[int, str] = {}
 # are dropped when a newer build replaces them.
 _SNAPSHOT_CACHE: dict[int, dict[str, Any]] = {}
 
-# AWS and Azure accounts belong to Cloud Visibility, not to ``meraki_orgs``.
+# AWS, Azure and GCP accounts belong to Cloud Visibility, not to ``meraki_orgs``.
 # What the accounts of one cloud discovered is built into one snapshot for all
 # of them and referenced by an ``org_ref`` (and cache key) no organization or
 # stored snapshot can have.
 AWS_ORG_REF = -1
 AZURE_ORG_REF = -2
+GCP_ORG_REF = -3
 _AWS_ACCOUNT_FIELDS = (
     "id",
     "name",
@@ -199,6 +205,16 @@ CLOUDS = (
         AzureReachability,
         build_azure_sample,
         SAMPLE_AZURE_NAME,
+        "",
+    ),
+    _Cloud(
+        PROVIDER_GCP,
+        GCP_ORG_REF,
+        "GCP",
+        build_gcp_snapshot,
+        GcpReachability,
+        build_gcp_sample,
+        SAMPLE_GCP_NAME,
         "",
     ),
 )
@@ -289,7 +305,7 @@ async def ipam_subnets() -> list[dict[str, Any]]:
     """The subnets of the latest snapshot of every organization and account,
     for the IPAM overview: the ``subnet_index`` rows (Meraki VLANs, single
     LANs, SVIs and static routes, Cato network ranges, FMC connected subnets,
-    static routes and remote access VPN address pools) with their organization and provider. AWS and Azure are left
+    static routes and remote access VPN address pools) with their organization and provider. AWS, Azure and GCP are left
     out: their networks and subnets reach IPAM as Cloud Visibility resources
     already."""
     rows: list[dict[str, Any]] = []
@@ -831,7 +847,7 @@ async def _build_fmc_sample(user: str) -> dict:
 
 
 async def _build_cloud_sample(cloud: _Cloud, user: str) -> dict:
-    """Discover the demo account of an AWS or Azure cloud. It is a Cloud
+    """Discover the demo account of an AWS, Azure or GCP cloud. It is a Cloud
     Visibility account like any other (and is deleted there); only its data
     is bundled."""
     started = time.monotonic()
@@ -880,8 +896,8 @@ async def build_sample_topology_api(request: Request, provider: str = Query(defa
     ``provider=cato`` builds the demo Cato account instead of the Meraki one,
     ``provider=fmc`` (or the legacy ``anyconnect``) the demo Cisco FMC and
     its FTDs,
-    ``provider=aws`` / ``provider=azure`` the demo AWS account / Azure
-    subscription in Cloud Visibility."""
+    ``provider=aws`` / ``provider=azure`` / ``provider=gcp`` the demo AWS
+    account / Azure subscription / GCP project in Cloud Visibility."""
     user = _session_user(request)
     provider = _provider_key(provider) or PROVIDER_MERAKI
     if provider == PROVIDER_CATO:
@@ -1057,7 +1073,7 @@ def _org_source(org: dict, newest: dict | None) -> dict[str, Any]:
 
 
 def _cloud_source(account: dict) -> dict[str, Any]:
-    """A Cloud Visibility account (AWS or Azure) as a source of the map."""
+    """A Cloud Visibility account (AWS, Azure or GCP) as a source of the map."""
     provider = str(account.get("provider") or PROVIDER_AWS)
     status = str(account.get("last_sync_status") or "never")
     demo = account.get("auth_type") == SAMPLE_AWS_AUTH_TYPE
@@ -1082,7 +1098,7 @@ def _cloud_source(account: dict) -> dict[str, Any]:
 async def list_topology_sources_api():
     """Everything that feeds the topology map, with its last collection:
     neighbor discovery of the inventory, Meraki organizations, Cato accounts,
-    Cisco FMCs and the AWS and Azure accounts of Cloud Visibility. Credentials are
+    Cisco FMCs and the AWS, Azure and GCP accounts of Cloud Visibility. Credentials are
     never included."""
     newest: dict[int, dict] = {}
     for snapshot in await db.list_meraki_snapshots(limit=500):
@@ -1150,7 +1166,7 @@ async def _cloud_reachability(
             continue
         if device.get("subnets") is None:
             device["subnets"] = await asyncio.to_thread(subnet_index, device["snapshot"])
-        # An AWS instance node is ``i:<instance id>``, an Azure VM ``vm:<id>``.
+        # An AWS or GCP instance node is ``i:<instance id>``, an Azure VM ``vm:<id>``.
         key = instance.split(":", 1)[1] if ":" in instance else instance
         carriers[key] = VpnCarrier(device["snapshot"], node_id, device["subnets"])
     try:
@@ -1205,6 +1221,27 @@ async def azure_reachability_api(
     is a Meraki vMX is followed on through that appliance's VPN."""
     return await _cloud_reachability(
         _CLOUD_BY_PROVIDER[PROVIDER_AZURE], source, destination, source_vnet, destination_vnet, protocol, port
+    )
+
+
+@router.get("/api/meraki/gcp/reachability")
+async def gcp_reachability_api(
+    source: str = Query(min_length=1, max_length=64),
+    destination: str = Query(min_length=1, max_length=64),
+    source_network: str = Query(default="", max_length=300),
+    destination_network: str = Query(default="", max_length=300),
+    protocol: str = Query(default="", max_length=8),
+    port: int | None = Query(default=None, ge=0, le=65535),
+):
+    """Whether GCP carries and permits traffic from ``source`` to
+    ``destination`` (IP addresses or networks) and its replies: the routes
+    of the VPC networks (subnet routes, peerings, static routes, the dynamic
+    routes Cloud Routers learn) and the VPC firewall rules of the latest
+    discovery. ``*_network`` names the VPC network (``project:network``) of
+    an address whose range exists in several. A route to an instance that
+    is a Meraki vMX is followed on through that appliance's VPN."""
+    return await _cloud_reachability(
+        _CLOUD_BY_PROVIDER[PROVIDER_GCP], source, destination, source_network, destination_network, protocol, port
     )
 
 

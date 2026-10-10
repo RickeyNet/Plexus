@@ -16,6 +16,7 @@ from typing import Any
 
 from netcontrol.integrations.aws import collect as aws_detail
 from netcontrol.integrations.azure import collect as azure_detail
+from netcontrol.integrations.gcp import collect as gcp_detail
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.cloud_collectors")
@@ -250,55 +251,6 @@ def _aws_security_group_rules(group: dict, *, resource_uid: str) -> list[dict]:
                     "priority": None,
                 }
             )
-    return rules
-
-
-def _gcp_firewall_rules(fw: dict, *, resource_uid: str) -> list[dict]:
-    rules: list[dict] = []
-    direction = str(fw.get("direction") or "INGRESS").strip().lower()
-    if direction == "ingress":
-        normalized_direction = "inbound"
-    elif direction == "egress":
-        normalized_direction = "outbound"
-    else:
-        normalized_direction = direction
-
-    source_selector = _join_policy_selectors([str(item or "").strip() for item in (fw.get("sourceRanges") or [])])
-    destination_selector = _join_policy_selectors(
-        [str(item or "").strip() for item in (fw.get("destinationRanges") or [])]
-    )
-    if not source_selector:
-        source_selector = "any" if normalized_direction == "inbound" else "self"
-    if not destination_selector:
-        destination_selector = "any" if normalized_direction == "outbound" else "self"
-
-    entries: list[tuple[str, dict]] = []
-    for action, key in (("allow", "allowed"), ("deny", "denied")):
-        for item in fw.get(key, []) or []:
-            entries.append((action, item))
-    if not entries:
-        entries.append(("allow", {}))
-
-    for idx, (action, item) in enumerate(entries):
-        protocol = str(item.get("IPProtocol") or "all").strip().lower() or "all"
-        ports = _join_policy_selectors([str(port or "").strip() for port in (item.get("ports") or [])]) or "all"
-        rules.append(
-            {
-                "rule_uid": f"{resource_uid}:{action}:{idx + 1}",
-                "rule_name": str(fw.get("name") or "firewall-rule").strip(),
-                "direction": normalized_direction,
-                "action": action,
-                "protocol": protocol,
-                "source_selector": source_selector,
-                "destination_selector": destination_selector,
-                "port_expression": ports,
-                "priority": fw.get("priority"),
-                "metadata": {
-                    "disabled": bool(fw.get("disabled", False)),
-                    "target_tags": [str(tag).strip() for tag in (fw.get("targetTags") or []) if str(tag).strip()],
-                },
-            }
-        )
     return rules
 
 
@@ -1201,6 +1153,12 @@ def _collect_azure_network(network_client, subscription_id: str) -> tuple[list[d
 
 
 def _collect_gcp(account: dict) -> tuple[list[dict], list[dict]]:
+    """Discover one GCP project with the Compute Engine API.
+
+    Signs in with the service account key (JSON or a file on the server) of
+    the account, else with the server's application default credentials,
+    and hands the built ``compute`` client to ``_collect_gcp_compute``.
+    """
     try:
         import google.auth
         from google.oauth2 import service_account
@@ -1250,339 +1208,108 @@ def _collect_gcp(account: dict) -> tuple[list[dict], list[dict]]:
     except Exception as exc:
         raise CloudCollectorExecutionError("Failed to initialize GCP compute client") from exc
 
-    resources: list[dict] = []
-    connections: list[dict] = []
+    return _collect_gcp_compute(compute, project_id)
+
+
+def _gcp_pages(collection, method: str, **kwargs):
+    """Every page of a Compute Engine list call (``list`` / ``aggregatedList``)."""
+    request = getattr(collection, method)(**kwargs)
+    while request is not None:
+        response = request.execute() or {}
+        yield response
+        request = getattr(collection, f"{method}_next")(previous_request=request, previous_response=response)
+
+
+def _gcp_list(compute, resource: str, project_id: str) -> list[dict]:
+    """The items of a global (project-wide) list call, every page."""
+    collection = getattr(compute, resource)()
+    return [item for page in _gcp_pages(collection, "list", project=project_id) for item in page.get("items") or []]
+
+
+def _gcp_aggregated(compute, resource: str, project_id: str) -> list[dict]:
+    """The items of an aggregated list call across every region or zone. A
+    scope with nothing in it carries a ``warning`` instead of items."""
+    collection = getattr(compute, resource)()
+    found: list[dict] = []
+    for page in _gcp_pages(collection, "aggregatedList", project=project_id):
+        for scoped in (page.get("items") or {}).values():
+            found.extend(item for item in (scoped or {}).get(resource) or [] if isinstance(item, dict))
+    return found
+
+
+def _collect_gcp_compute(compute, project_id: str) -> tuple[list[dict], list[dict]]:
+    """The discovery itself, on a built Compute Engine ``compute`` client.
+
+    The base sections (networks with their peerings, subnetworks, routes and
+    firewall rules) fail the discovery when they cannot be read. The map
+    detail (Cloud Routers and their status, HA and Classic VPN gateways, VPN
+    tunnels, external VPN gateways, Interconnect attachments, Interconnects,
+    VM instances and network firewall policies) is best-effort: a section
+    that cannot be read is skipped and recorded as a ``collection_warning``
+    resource.
+    """
+    sections: dict[str, Any] = {}
+    warnings: list[dict] = []
     section_errors: list[str] = []
 
-    # Networks
+    def optional(section: str, read) -> None:
+        try:
+            sections[section] = read()
+        except Exception as exc:  # noqa: BLE001 - best-effort detail; discovery goes on
+            LOGGER.warning("gcp collector: skipped %s: %s", section, gcp_detail.error_code(exc), exc_info=True)
+            warnings.append(gcp_detail.warning_resource(section, exc))
+
     try:
-        req = compute.networks().list(project=project_id)
-        while req is not None:
-            resp = req.execute()
-            for network in resp.get("items", []) or []:
-                name = str(network.get("name") or "")
-                uid = f"gcp:vpc:{project_id}:{name}"
-                resources.append(
-                    _normalize_resource(
-                        "gcp",
-                        uid,
-                        "vpc",
-                        name=name,
-                        region="global",
-                        cidr=str(network.get("IPv4Range") or ""),
-                        status="active",
-                    )
-                )
-                for peering in network.get("peerings", []) or []:
-                    peer_url = str(peering.get("network") or "")
-                    peer_name = peer_url.split("/")[-1] if peer_url else ""
-                    if peer_name:
-                        connections.append(
-                            _normalize_connection(
-                                "gcp",
-                                uid,
-                                f"gcp:vpc:{project_id}:{peer_name}",
-                                "vpc_peering",
-                                state=str(peering.get("state") or ""),
-                                metadata={"peering_name": str(peering.get("name") or "").strip()},
-                            )
-                        )
-            req = compute.networks().list_next(previous_request=req, previous_response=resp)
+        sections["networks"] = _gcp_list(compute, "networks", project_id)
     except Exception as exc:
         raise CloudCollectorAuthError("GCP network API access failed") from exc
 
-    # Routers
-    try:
-        req = compute.routers().aggregatedList(project=project_id)
-        while req is not None:
-            resp = req.execute()
-            for scoped in (resp.get("items") or {}).values():
-                for router in scoped.get("routers", []) or []:
-                    name = str(router.get("name") or "")
-                    region_url = str(router.get("region") or "")
-                    region = region_url.split("/")[-1] if region_url else ""
-                    uid = f"gcp:cloud_router:{project_id}:{region}:{name}"
-                    resources.append(
-                        _normalize_resource(
-                            "gcp",
-                            uid,
-                            "cloud_router",
-                            name=name,
-                            region=region,
-                            status="running",
-                        )
-                    )
-                    net_url = str(router.get("network") or "")
-                    net_name = net_url.split("/")[-1] if net_url else ""
-                    if net_name:
-                        connections.append(
-                            _normalize_connection(
-                                "gcp",
-                                f"gcp:vpc:{project_id}:{net_name}",
-                                uid,
-                                "router_attachment",
-                                state="up",
-                            )
-                        )
-            req = compute.routers().aggregatedList_next(previous_request=req, previous_response=resp)
-    except Exception:
-        LOGGER.warning("gcp collector: failed router list", exc_info=True)
-        section_errors.append("routers")
+    for section, read in (
+        ("subnetworks", lambda: _gcp_aggregated(compute, "subnetworks", project_id)),
+        ("routes", lambda: _gcp_list(compute, "routes", project_id)),
+        ("firewalls", lambda: _gcp_list(compute, "firewalls", project_id)),
+    ):
+        try:
+            sections[section] = read()
+        except Exception:
+            LOGGER.warning("gcp collector: failed %s list", section, exc_info=True)
+            section_errors.append(section)
 
-    # VPN gateways
-    try:
-        req = compute.vpnGateways().aggregatedList(project=project_id)
-        while req is not None:
-            resp = req.execute()
-            for scoped in (resp.get("items") or {}).values():
-                for gateway in scoped.get("vpnGateways", []) or []:
-                    name = str(gateway.get("name") or "")
-                    region_url = str(gateway.get("region") or "")
-                    region = region_url.split("/")[-1] if region_url else ""
-                    uid = f"gcp:ha_vpn_gateway:{project_id}:{region}:{name}"
-                    resources.append(
-                        _normalize_resource(
-                            "gcp",
-                            uid,
-                            "ha_vpn_gateway",
-                            name=name,
-                            region=region,
-                            status="up",
-                        )
+    def routers() -> list[tuple[dict, dict | None]]:
+        found = _gcp_aggregated(compute, "routers", project_id)
+        statuses: list[tuple[dict, dict | None]] = []
+        failed: Exception | None = None
+        for router in found:
+            status = None
+            region = gcp_detail.link_scope(router.get("region"))
+            if failed is None and region and router.get("name"):
+                try:
+                    answer = (
+                        compute.routers()
+                        .getRouterStatus(project=project_id, region=region, router=router["name"])
+                        .execute()
                     )
-                    net_url = str(gateway.get("network") or "")
-                    net_name = net_url.split("/")[-1] if net_url else ""
-                    if net_name:
-                        connections.append(
-                            _normalize_connection(
-                                "gcp",
-                                f"gcp:vpc:{project_id}:{net_name}",
-                                uid,
-                                "vpn_tunnel",
-                                state="up",
-                            )
-                        )
-            req = compute.vpnGateways().aggregatedList_next(previous_request=req, previous_response=resp)
-    except Exception:
-        LOGGER.warning("gcp collector: failed vpn gateway list", exc_info=True)
-        section_errors.append("vpn_gateways")
+                    status = (answer or {}).get("result") or {}
+                except Exception as exc:  # noqa: BLE001 - BGP state and learned routes are detail
+                    failed = exc
+            statuses.append((router, status))
+        if failed is not None:
+            LOGGER.warning("gcp collector: skipped router_status: %s", gcp_detail.error_code(failed))
+            warnings.append(gcp_detail.warning_resource("router_status", failed))
+        return statuses
 
-    try:
-        req = compute.vpnTunnels().aggregatedList(project=project_id)
-        while req is not None:
-            resp = req.execute()
-            for scoped in (resp.get("items") or {}).values():
-                for tunnel in scoped.get("vpnTunnels", []) or []:
-                    name = str(tunnel.get("name") or "")
-                    region_url = str(tunnel.get("region") or "")
-                    region = region_url.split("/")[-1] if region_url else ""
-                    uid = f"gcp:vpn_tunnel:{project_id}:{region}:{name}"
-                    resources.append(
-                        _normalize_resource(
-                            "gcp",
-                            uid,
-                            "vpn_tunnel",
-                            name=name,
-                            region=region,
-                            status=str(tunnel.get("status") or ""),
-                            metadata={"peer_ip": str(tunnel.get("peerIp") or "").strip()},
-                        )
-                    )
-                    gateway_url = str(tunnel.get("vpnGateway") or tunnel.get("targetVpnGateway") or "")
-                    if gateway_url:
-                        gateway_name = gateway_url.split("/")[-1]
-                        connections.append(
-                            _normalize_connection(
-                                "gcp",
-                                f"gcp:ha_vpn_gateway:{project_id}:{region}:{gateway_name}",
-                                uid,
-                                "vpn_gateway_attachment",
-                                state=str(tunnel.get("status") or ""),
-                            )
-                        )
-                    router_url = str(tunnel.get("router") or "")
-                    if router_url:
-                        router_name = router_url.split("/")[-1]
-                        router_region = router_url.split("/")[-3] if "/regions/" in router_url else region
-                        connections.append(
-                            _normalize_connection(
-                                "gcp",
-                                uid,
-                                f"gcp:cloud_router:{project_id}:{router_region}:{router_name}",
-                                "router_attachment",
-                                state=str(tunnel.get("status") or ""),
-                            )
-                        )
-            req = compute.vpnTunnels().aggregatedList_next(previous_request=req, previous_response=resp)
-    except Exception:
-        LOGGER.warning("gcp collector: failed vpn tunnel list", exc_info=True)
-        section_errors.append("vpn_tunnels")
+    def network_firewall_policies() -> list[dict]:
+        return _gcp_list(compute, "networkFirewallPolicies", project_id)
 
-    try:
-        req = compute.interconnectAttachments().aggregatedList(project=project_id)
-        while req is not None:
-            resp = req.execute()
-            for scoped in (resp.get("items") or {}).values():
-                for attachment in scoped.get("interconnectAttachments", []) or []:
-                    name = str(attachment.get("name") or "")
-                    region_url = str(attachment.get("region") or "")
-                    region = region_url.split("/")[-1] if region_url else ""
-                    uid = f"gcp:interconnect_attachment:{project_id}:{region}:{name}"
-                    resources.append(
-                        _normalize_resource(
-                            "gcp",
-                            uid,
-                            "interconnect_attachment",
-                            name=name,
-                            region=region,
-                            status=str(attachment.get("operationalStatus") or attachment.get("state") or ""),
-                            metadata={
-                                "type": str(attachment.get("type") or "").strip(),
-                                "bandwidth": str(attachment.get("bandwidth") or "").strip(),
-                            },
-                        )
-                    )
-                    router_url = str(attachment.get("router") or "")
-                    if router_url:
-                        router_name = router_url.split("/")[-1]
-                        router_region = router_url.split("/")[-3] if "/regions/" in router_url else region
-                        connections.append(
-                            _normalize_connection(
-                                "gcp",
-                                f"gcp:cloud_router:{project_id}:{router_region}:{router_name}",
-                                uid,
-                                "interconnect_attachment",
-                                state=str(attachment.get("operationalStatus") or attachment.get("state") or ""),
-                            )
-                        )
-            req = compute.interconnectAttachments().aggregatedList_next(previous_request=req, previous_response=resp)
-    except Exception:
-        LOGGER.warning("gcp collector: failed interconnect attachment list", exc_info=True)
-        section_errors.append("interconnect_attachments")
-
-    try:
-        req = compute.routes().list(project=project_id)
-        while req is not None:
-            resp = req.execute()
-            for route in resp.get("items", []) or []:
-                name = str(route.get("name") or "")
-                uid = f"gcp:route:{project_id}:{name}"
-                network_url = str(route.get("network") or "")
-                network_name = network_url.split("/")[-1] if network_url else ""
-                destination = str(route.get("destRange") or "").strip()
-                next_hop = str(
-                    route.get("nextHopGateway")
-                    or route.get("nextHopVpnTunnel")
-                    or route.get("nextHopNetwork")
-                    or route.get("nextHopPeering")
-                    or route.get("nextHopIlb")
-                    or route.get("nextHopIp")
-                    or ""
-                ).strip()
-                resources.append(
-                    _normalize_resource(
-                        "gcp",
-                        uid,
-                        "route_entry",
-                        name=name,
-                        region="global",
-                        cidr=destination,
-                        status="active",
-                        metadata={
-                            "network": network_name,
-                            "priority": route.get("priority"),
-                            "next_hop": next_hop,
-                        },
-                    )
-                )
-                if network_name:
-                    connections.append(
-                        _normalize_connection(
-                            "gcp",
-                            f"gcp:vpc:{project_id}:{network_name}",
-                            uid,
-                            "route_table_association",
-                            state="active",
-                        )
-                    )
-                target_uid = ""
-                if str(route.get("nextHopVpnTunnel") or "").strip():
-                    tunnel_url = str(route.get("nextHopVpnTunnel") or "")
-                    tunnel_name = tunnel_url.split("/")[-1]
-                    tunnel_region = tunnel_url.split("/")[-3] if "/regions/" in tunnel_url else "global"
-                    target_uid = f"gcp:vpn_tunnel:{project_id}:{tunnel_region}:{tunnel_name}"
-                elif str(route.get("nextHopGateway") or "").strip():
-                    gateway_url = str(route.get("nextHopGateway") or "")
-                    gateway_name = gateway_url.split("/")[-1]
-                    target_uid = f"gcp:internet_gateway:{gateway_name}"
-                    resources.append(
-                        _normalize_resource(
-                            "gcp",
-                            target_uid,
-                            "internet_gateway",
-                            name=gateway_name,
-                            region="global",
-                            status="active",
-                        )
-                    )
-                elif str(route.get("nextHopNetwork") or "").strip():
-                    target_url = str(route.get("nextHopNetwork") or "")
-                    target_name = target_url.split("/")[-1]
-                    target_uid = f"gcp:vpc:{project_id}:{target_name}"
-                if target_uid:
-                    connections.append(
-                        _normalize_connection(
-                            "gcp",
-                            uid,
-                            target_uid,
-                            "route_next_hop",
-                            state="active",
-                            metadata={"destination": destination},
-                        )
-                    )
-            req = compute.routes().list_next(previous_request=req, previous_response=resp)
-    except Exception:
-        LOGGER.warning("gcp collector: failed route list", exc_info=True)
-        section_errors.append("routes")
-
-    # Firewall policies (network firewalls)
-    try:
-        req = compute.firewalls().list(project=project_id)
-        while req is not None:
-            resp = req.execute()
-            for fw in resp.get("items", []) or []:
-                name = str(fw.get("name") or "")
-                net_url = str(fw.get("network") or "")
-                net_name = net_url.split("/")[-1] if net_url else ""
-                uid = f"gcp:firewall_policy:{project_id}:{name}"
-                resources.append(
-                    _normalize_resource(
-                        "gcp",
-                        uid,
-                        "firewall_policy",
-                        name=name,
-                        region="global",
-                        status="active",
-                        metadata={
-                            "network": net_name,
-                            "policy_rules": _gcp_firewall_rules(fw, resource_uid=uid),
-                        },
-                    )
-                )
-                if net_name:
-                    connections.append(
-                        _normalize_connection(
-                            "gcp",
-                            f"gcp:vpc:{project_id}:{net_name}",
-                            uid,
-                            "security_boundary",
-                            state="enforced",
-                        )
-                    )
-            req = compute.firewalls().list_next(previous_request=req, previous_response=resp)
-    except Exception:
-        LOGGER.warning("gcp collector: failed firewall list", exc_info=True)
-        section_errors.append("firewalls")
+    optional("routers", routers)
+    optional("vpn_gateways", lambda: _gcp_aggregated(compute, "vpnGateways", project_id))
+    optional("target_vpn_gateways", lambda: _gcp_aggregated(compute, "targetVpnGateways", project_id))
+    optional("vpn_tunnels", lambda: _gcp_aggregated(compute, "vpnTunnels", project_id))
+    optional("external_vpn_gateways", lambda: _gcp_list(compute, "externalVpnGateways", project_id))
+    optional("interconnect_attachments", lambda: _gcp_aggregated(compute, "interconnectAttachments", project_id))
+    optional("interconnects", lambda: _gcp_list(compute, "interconnects", project_id))
+    optional("instances", lambda: _gcp_aggregated(compute, "instances", project_id))
+    optional("network_firewall_policies", network_firewall_policies)
 
     # A partial snapshot must not silently replace the last known-good one; the
     # discover endpoint keeps the previous snapshot and surfaces this message on failure.
@@ -1591,7 +1318,8 @@ def _collect_gcp(account: dict) -> tuple[list[dict], list[dict]]:
             "Partial provider discovery; failed sections: " + ", ".join(sorted(set(section_errors)))
         )
 
-    return _dedupe_resources(resources), _dedupe_connections(connections)
+    resources, connections = gcp_detail.assemble(project_id, **sections)
+    return _dedupe_resources(resources + warnings), _dedupe_connections(connections)
 
 
 def collect_provider_snapshot(account: dict) -> tuple[list[dict], list[dict]]:
