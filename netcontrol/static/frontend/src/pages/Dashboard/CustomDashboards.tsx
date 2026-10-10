@@ -6,6 +6,7 @@ import { useDialogs } from '@/components/DialogProvider-context';
 import { formatBackendDate } from '@/lib/datetime';
 
 import { CreateDashboardModal } from './CreateDashboardModal';
+import { DashboardSwitcher } from './DashboardSwitcher';
 
 export function CustomDashboards() {
   const { confirm } = useDialogs();
@@ -25,9 +26,12 @@ export function CustomDashboards() {
         }}
       >
         <h2 style={{ margin: 0 }}>Dashboards</h2>
-        <button className="btn btn-primary" onClick={() => setShowCreate(true)}>
-          + New Dashboard
-        </button>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <DashboardSwitcher current={null} />
+          <button className="btn btn-primary" onClick={() => setShowCreate(true)}>
+            + New Dashboard
+          </button>
+        </div>
       </div>
 
       {isPending && (
