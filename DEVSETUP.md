@@ -13,12 +13,12 @@ without that setup differs from it in ways that hide real bugs:
 
 - **Framework versions.** A local `pip install` can lag the lock (for example
   starlette 0.52 locally vs 1.6.0 pinned).
-- **SQLite vs Postgres.** Postgres goes through the SQL translation layer in
-  `routes/database.py`: `lastrowid` only works for tables listed in
-  `_INSERT_ID_TABLES`, `LIKE` is case-sensitive, and datetime math is
-  engine-specific. This is why SQLite is not a supported way to run the app;
-  its engine is kept only for the in-process test suite and the legacy
-  migration tool.
+- **The SQL translation layer.** Queries are written in a portable
+  SQLite-style dialect and translated for Postgres in `routes/database.py`:
+  `lastrowid` only works for tables listed in `_INSERT_ID_TABLES`, `LIKE` is
+  case-sensitive, and datetime math goes through the translator. Plexus has no
+  SQLite engine any more (only `tools/migrate_sqlite_to_postgres.py` reads
+  legacy SQLite files), so the app and the test suite both need Postgres.
 - **Missing cloud SDKs.** Cloud Visibility Discover and pulls take the
   "SDK not installed" branch.
 - **No reverse proxy.** No HTTPS/HSTS/CSP, and the client IP is always
@@ -277,37 +277,46 @@ Python (repo root, venv active):
 ```bash
 ruff check .
 mypy netcontrol templates
-pytest -n auto        # main suite, SQLite
-
-# Postgres smoke test against the Loop B database
-APP_DB_ENGINE=postgres APP_DATABASE_URL="$APP_DATABASE_URL" pytest tests/test_postgres_backend.py -q
+pytest tests/test_meraki_topology.py   # needs PLEXUS_TEST_PG_URL, see below
 ```
 
-The main suite runs on SQLite by default, so check new SQL on Postgres with
-the opt-in mode below.
+### Running the test suite
 
-### Running the test suite against Postgres
-
-Set `PLEXUS_TEST_PG_URL` to a database the suite may **destroy**. Its name
+The suite always runs on Postgres and needs `PLEXUS_TEST_PG_URL`; there is no
+default database. Point it at a database the suite may **destroy**. Its name
 must end in `_test` and must not be `plexus` (pytest refuses to start
-otherwise), so the dev database is never touched. Do not dot-source
-`scripts/dev-env.*` for this; its URL points at the dev database.
+otherwise), so the dev database is never touched. The easiest way is to
+derive it from the URL the dev-env scripts build; the suite points
+`APP_DATABASE_URL` at `PLEXUS_TEST_PG_URL` itself.
+
+PowerShell:
 
 ```powershell
 docker exec plexus-postgres psql -U plexus -d postgres -c "CREATE DATABASE plexus_test"   # once
-$env:PLEXUS_TEST_PG_URL = "postgresql://plexus:<url-encoded POSTGRES_PASSWORD>@127.0.0.1:5432/plexus_test"
+. .\scripts\dev-env.ps1
+$env:PLEXUS_TEST_PG_URL = ($env:APP_DATABASE_URL -replace '/[^/]+$', '/plexus_test')
 .venv\Scripts\python.exe -m pytest tests/test_meraki_topology.py -rA
-Remove-Item Env:PLEXUS_TEST_PG_URL   # back to SQLite
+```
+
+bash:
+
+```bash
+docker exec plexus-postgres psql -U plexus -d postgres -c "CREATE DATABASE plexus_test"   # once
+source scripts/dev-env.sh
+export PLEXUS_TEST_PG_URL="${APP_DATABASE_URL%/*}/plexus_test"
+pytest tests/test_meraki_topology.py -rA
 ```
 
 How it works (`tests/conftest.py`): the engine is pinned to `postgres`, the
 schema is built once per session into `plexus_test_template` (`init_db()`,
 including its seed rows), and before each test that follows a test which
 touched the database, `plexus_test` is dropped and re-cloned from the
-template (about 0.2 s). Tests marked `@pytest.mark.sqlite_only` (direct
-SQLite file access, PRAGMAs, WAL, the read pool) are skipped. With
-`pytest -n auto` each xdist worker uses its own `plexus_test_<worker>`
-database.
+template (about 0.2 s). With `pytest -n auto` each xdist worker uses its own
+`plexus_test_<worker>` database.
+
+The full suite takes roughly 14 minutes with `-n 6`, so while developing run
+the test files that cover your change and leave the full run to CI or a final
+check.
 
 Frontend (`netcontrol/static/frontend`):
 

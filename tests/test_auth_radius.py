@@ -190,9 +190,7 @@ def test_sanitize_auth_config_keeps_radius_default_groups():
 
 
 @pytest.mark.asyncio
-async def test_radius_shadow_user_gets_default_access_groups(tmp_path, monkeypatch):
-    db_file = tmp_path / "radius_access.db"
-    monkeypatch.setattr(db_module, "DB_PATH", str(db_file))
+async def test_radius_shadow_user_gets_default_access_groups(monkeypatch):
     await db_module.init_db()
 
     group_id = await db_module.create_access_group(
@@ -236,9 +234,7 @@ async def test_admin_run_retention_cleanup_now_returns_summary(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_delete_expired_jobs_removes_only_old_completed_jobs(tmp_path, monkeypatch):
-    db_file = tmp_path / "retention_test.db"
-    monkeypatch.setattr(db_module, "DB_PATH", str(db_file))
+async def test_delete_expired_jobs_removes_only_old_completed_jobs():
     await db_module.init_db()
 
     playbook_id = await db_module.create_playbook("Retention PB", "retention_pb.py")

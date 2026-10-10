@@ -18,20 +18,15 @@ Timestamps are written by Plexus as UTC ``YYYY-MM-DD HH:MM:SS`` text.
 
 from __future__ import annotations
 
-import os
-
 VERSION = 68
 DESCRIPTION = "Add Meraki compliance assignment and result tables"
 
-DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
-
 
 async def up(db) -> None:
-    primary_key = "SERIAL PRIMARY KEY" if DB_ENGINE == "postgres" else "INTEGER PRIMARY KEY AUTOINCREMENT"
     await db.execute(
-        f"""
+        """
         CREATE TABLE IF NOT EXISTS meraki_compliance_assignments (
-            id               {primary_key},
+            id               SERIAL PRIMARY KEY,
             profile_id       INTEGER NOT NULL REFERENCES compliance_profiles(id) ON DELETE CASCADE,
             org_ref          INTEGER NOT NULL REFERENCES meraki_orgs(id) ON DELETE CASCADE,
             enabled          INTEGER NOT NULL DEFAULT 1,
@@ -46,9 +41,9 @@ async def up(db) -> None:
         """
     )
     await db.execute(
-        f"""
+        """
         CREATE TABLE IF NOT EXISTS meraki_compliance_results (
-            id               {primary_key},
+            id               SERIAL PRIMARY KEY,
             scan_id          TEXT    NOT NULL DEFAULT '',
             assignment_id    INTEGER REFERENCES meraki_compliance_assignments(id) ON DELETE SET NULL,
             profile_id       INTEGER NOT NULL REFERENCES compliance_profiles(id) ON DELETE CASCADE,

@@ -9,16 +9,13 @@ import routes.database as db_module
 
 
 @pytest.fixture
-def vrf_db(tmp_path, monkeypatch):
-    db_path = str(tmp_path / "ipam_vrf.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+def vrf_db(monkeypatch):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-ipam-vrf")
 
     async def _prepare():
         await db_module.init_db()
 
     asyncio.run(_prepare())
-    return db_path
 
 
 async def _seed_groups_and_hosts(rows: list[tuple[str, str, str, str]]) -> None:

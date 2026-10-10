@@ -15,12 +15,9 @@ import routes.database as db_module
 
 
 @pytest.fixture
-def user_db(tmp_path, monkeypatch):
-    db_path = str(tmp_path / "admin_users.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+def user_db(monkeypatch):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-admin-users")
     asyncio.run(db_module.init_db())
-    return db_path
 
 
 async def _mk(username: str, role: str) -> int:
@@ -55,11 +52,9 @@ def test_delete_user_guarded_not_found(user_db):
 # ── HTTP role validation ─────────────────────────────────────────────────────
 
 
-def _auth_client(tmp_path, monkeypatch, request):
+def _auth_client(monkeypatch, request):
     import netcontrol.app as app_module
 
-    db_path = str(tmp_path / "admin_http.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-admin-http")
     monkeypatch.setenv("APP_API_TOKEN", "")
     monkeypatch.setenv("APP_REQUIRE_API_TOKEN", "false")
@@ -76,8 +71,8 @@ def _auth_client(tmp_path, monkeypatch, request):
     return client, csrf
 
 
-def test_create_user_rejects_invalid_role(tmp_path, monkeypatch, request):
-    client, csrf = _auth_client(tmp_path, monkeypatch, request)
+def test_create_user_rejects_invalid_role(monkeypatch, request):
+    client, csrf = _auth_client(monkeypatch, request)
     resp = client.post(
         "/api/admin/users",
         json={"username": "bob", "password": "password123", "role": "administrator"},
@@ -86,8 +81,8 @@ def test_create_user_rejects_invalid_role(tmp_path, monkeypatch, request):
     assert resp.status_code == 400
 
 
-def test_create_user_accepts_valid_role(tmp_path, monkeypatch, request):
-    client, csrf = _auth_client(tmp_path, monkeypatch, request)
+def test_create_user_accepts_valid_role(monkeypatch, request):
+    client, csrf = _auth_client(monkeypatch, request)
     resp = client.post(
         "/api/admin/users",
         json={"username": "carol", "password": "password123", "role": "user"},

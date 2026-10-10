@@ -16,11 +16,8 @@ class DummyRequest:
 
 
 @pytest.fixture
-async def docs_db(tmp_path, monkeypatch):
-    """Set up a fresh SQLite DB with sample inventory/topology/VLAN data."""
-    db_path = str(tmp_path / "docs_test.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
-    monkeypatch.setattr(db_module, "DB_ENGINE", "sqlite")
+async def docs_db():
+    """Seed the test DB with sample inventory/topology/VLAN data."""
     await db_module.init_db()
 
     db = await db_module.get_db()
@@ -70,7 +67,6 @@ async def docs_db(tmp_path, monkeypatch):
         burst_limit_bps=500_000_000,
         created_by="tests",
     )
-    return db_path
 
 
 @pytest.mark.asyncio

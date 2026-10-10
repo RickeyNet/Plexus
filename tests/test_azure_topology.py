@@ -19,7 +19,6 @@ from types import SimpleNamespace as NS
 import netcontrol.app as app_module
 import netcontrol.routes.cloud_collectors as collectors_module
 import pytest
-import routes.database as db_module
 from netcontrol.integrations.azure import collect
 from netcontrol.integrations.azure.normalize import TRANSIT_SITE_ID, build_snapshot
 from netcontrol.integrations.azure.reachability import Reachability
@@ -468,8 +467,7 @@ class _CsrfClient:
 
 
 @pytest.fixture
-def api(tmp_path, monkeypatch, request):
-    monkeypatch.setattr(db_module, "DB_PATH", str(tmp_path / "azure.db"))
+def api(monkeypatch, request):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-azure")
     monkeypatch.setenv("APP_API_TOKEN", "")
     monkeypatch.setenv("APP_REQUIRE_API_TOKEN", "false")

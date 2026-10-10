@@ -9,12 +9,9 @@ non-positive limit. This test spot-checks a representative set.
 from __future__ import annotations
 
 import netcontrol.app as app_module
-import routes.database as db_module
 
 
-def _auth_client(tmp_path, monkeypatch, request):
-    db_path = str(tmp_path / "pagination.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+def _auth_client(monkeypatch, request):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-pagination")
     monkeypatch.setenv("APP_API_TOKEN", "")
     monkeypatch.setenv("APP_REQUIRE_API_TOKEN", "false")
@@ -39,20 +36,20 @@ NEGATIVE_LIMIT_ENDPOINTS = [
 ]
 
 
-def test_negative_limit_rejected(tmp_path, monkeypatch, request):
-    client = _auth_client(tmp_path, monkeypatch, request)
+def test_negative_limit_rejected(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
     for url in NEGATIVE_LIMIT_ENDPOINTS:
         resp = client.get(url)
         assert resp.status_code == 422, f"{url} accepted a negative limit: {resp.status_code}"
 
 
-def test_zero_limit_rejected(tmp_path, monkeypatch, request):
-    client = _auth_client(tmp_path, monkeypatch, request)
+def test_zero_limit_rejected(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
     resp = client.get("/api/mac-tracking/search?limit=0")
     assert resp.status_code == 422
 
 
-def test_valid_limit_accepted(tmp_path, monkeypatch, request):
-    client = _auth_client(tmp_path, monkeypatch, request)
+def test_valid_limit_accepted(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
     resp = client.get("/api/mac-tracking/search?limit=10")
     assert resp.status_code == 200

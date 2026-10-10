@@ -10,12 +10,8 @@ which the UI already treats as "no data" for the field.
 
 from __future__ import annotations
 
-import os
-
 VERSION = 45
 DESCRIPTION = "Add icmp_alive + icmp_rtt_ms to monitoring_polls"
-
-DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
 
 _COLUMNS = (
     ("icmp_alive", "INTEGER DEFAULT NULL"),
@@ -23,28 +19,7 @@ _COLUMNS = (
 )
 
 
-async def _column_exists_sqlite(db, name: str) -> bool:
-    cursor = await db.execute("PRAGMA table_info(monitoring_polls)")
-    rows = await cursor.fetchall()
-    return any(row[1] == name for row in rows)
-
-
-async def _up_sqlite(db) -> None:
-    for name, decl in _COLUMNS:
-        if await _column_exists_sqlite(db, name):
-            continue
-        await db.execute(f"ALTER TABLE monitoring_polls ADD COLUMN {name} {decl}")
-    await db.commit()
-
-
-async def _up_postgres(db) -> None:
+async def up(db) -> None:
     for name, decl in _COLUMNS:
         await db.execute(f"ALTER TABLE monitoring_polls ADD COLUMN IF NOT EXISTS {name} {decl}")
     await db.commit()
-
-
-async def up(db) -> None:
-    if DB_ENGINE == "postgres":
-        await _up_postgres(db)
-    else:
-        await _up_sqlite(db)

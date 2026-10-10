@@ -10,16 +10,13 @@ import routes.database as db_module
 
 
 @pytest.fixture
-def report_db(tmp_path, monkeypatch):
-    db_path = str(tmp_path / "ipam_reporting.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+def report_db(monkeypatch):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-ipam-reporting")
 
     async def _prepare():
         await db_module.init_db()
 
     asyncio.run(_prepare())
-    return db_path
 
 
 async def _ensure_group(name: str) -> int:

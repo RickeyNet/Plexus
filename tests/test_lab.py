@@ -6,6 +6,8 @@ import netcontrol.app as app_module
 import pytest
 import routes.database as db_module
 
+import pg_raw
+
 
 class _LabClient:
     def __init__(self, client, csrf_token):
@@ -33,9 +35,7 @@ class _LabClient:
         return self._client.delete(url, **kw)
 
 
-def _auth_client(tmp_path, monkeypatch, request):
-    db_path = str(tmp_path / "lab_test.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+def _auth_client(monkeypatch, request):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-lab")
     monkeypatch.setenv("APP_API_TOKEN", "")
     monkeypatch.setenv("APP_REQUIRE_API_TOKEN", "false")
@@ -66,28 +66,19 @@ def _auth_client(tmp_path, monkeypatch, request):
 # ── Migration ────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.sqlite_only  # inspects sqlite_master
 @pytest.mark.asyncio
-async def test_lab_tables_exist_after_init(tmp_path, monkeypatch):
-    db_path = str(tmp_path / "lab_migrate.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+async def test_lab_tables_exist_after_init():
     await db_module.init_db()
 
-    conn = await db_module.get_db()
-    try:
-        for tbl in ("lab_environments", "lab_devices", "lab_runs"):
-            cur = await conn.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{tbl}'")
-            row = await cur.fetchone()
-            assert row is not None, f"{tbl} table should exist"
-    finally:
-        await conn.close()
+    for tbl in ("lab_environments", "lab_devices", "lab_runs"):
+        assert await pg_raw.table_exists(tbl), f"{tbl} table should exist"
 
 
 # ── Environment + device CRUD ───────────────────────────────────────────────
 
 
-def test_environment_create_list_delete(tmp_path, monkeypatch, request):
-    client = _auth_client(tmp_path, monkeypatch, request)
+def test_environment_create_list_delete(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
 
     resp = client.post(
         "/api/lab/environments",
@@ -113,8 +104,8 @@ def test_environment_create_list_delete(tmp_path, monkeypatch, request):
     assert resp.status_code == 404
 
 
-def test_device_create_and_simulate(tmp_path, monkeypatch, request):
-    client = _auth_client(tmp_path, monkeypatch, request)
+def test_device_create_and_simulate(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
 
     env_id = client.post(
         "/api/lab/environments",
@@ -172,8 +163,8 @@ def test_device_create_and_simulate(tmp_path, monkeypatch, request):
     assert "Gi0/2" in resp.json()["running_config"]
 
 
-def test_simulate_with_apply_persists_config(tmp_path, monkeypatch, request):
-    client = _auth_client(tmp_path, monkeypatch, request)
+def test_simulate_with_apply_persists_config(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
     env_id = client.post("/api/lab/environments", json={"name": "apply-env"}).json()["id"]
     device_id = client.post(
         f"/api/lab/environments/{env_id}/devices",
@@ -195,9 +186,9 @@ def test_simulate_with_apply_persists_config(tmp_path, monkeypatch, request):
 # ── Clone-from-host + promote ───────────────────────────────────────────────
 
 
-def test_clone_host_uses_latest_snapshot(tmp_path, monkeypatch, request):
+def test_clone_host_uses_latest_snapshot(monkeypatch, request):
     """Cloning a production host into the lab should pull latest config snapshot."""
-    client = _auth_client(tmp_path, monkeypatch, request)
+    client = _auth_client(monkeypatch, request)
 
     # Seed: create a group + host + snapshot synchronously via TestClient lifespan.
     import asyncio
@@ -241,8 +232,8 @@ def test_clone_host_uses_latest_snapshot(tmp_path, monkeypatch, request):
     assert "prod-rtr" in dev["running_config"]
 
 
-def test_promote_run_creates_deployment(tmp_path, monkeypatch, request):
-    client = _auth_client(tmp_path, monkeypatch, request)
+def test_promote_run_creates_deployment(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
 
     # Seed group + host + snapshot + credential so promote can target real infra.
     import asyncio

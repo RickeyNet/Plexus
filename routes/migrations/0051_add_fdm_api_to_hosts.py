@@ -17,12 +17,8 @@ host is explicitly opted in.
 
 from __future__ import annotations
 
-import os
-
 VERSION = 51
 DESCRIPTION = "Add FDM REST-API polling columns to hosts"
-
-DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
 
 _COLUMNS = (
     ("fdm_api_enabled", "INTEGER NOT NULL DEFAULT 0"),
@@ -32,28 +28,7 @@ _COLUMNS = (
 )
 
 
-async def _column_exists_sqlite(db, name: str) -> bool:
-    cursor = await db.execute("PRAGMA table_info(hosts)")
-    rows = await cursor.fetchall()
-    return any(row[1] == name for row in rows)
-
-
-async def _up_sqlite(db) -> None:
-    for name, decl in _COLUMNS:
-        if await _column_exists_sqlite(db, name):
-            continue
-        await db.execute(f"ALTER TABLE hosts ADD COLUMN {name} {decl}")
-    await db.commit()
-
-
-async def _up_postgres(db) -> None:
+async def up(db) -> None:
     for name, decl in _COLUMNS:
         await db.execute(f"ALTER TABLE hosts ADD COLUMN IF NOT EXISTS {name} {decl}")
     await db.commit()
-
-
-async def up(db) -> None:
-    if DB_ENGINE == "postgres":
-        await _up_postgres(db)
-    else:
-        await _up_sqlite(db)

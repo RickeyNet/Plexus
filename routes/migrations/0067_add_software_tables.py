@@ -22,20 +22,15 @@ Timestamps are written by Plexus as UTC ``YYYY-MM-DD HH:MM:SS`` text.
 
 from __future__ import annotations
 
-import os
-
 VERSION = 67
 DESCRIPTION = "Add software version tracking and vulnerability alert tables"
 
-DB_ENGINE = os.getenv("APP_DB_ENGINE", "sqlite").strip().lower() or "sqlite"
-
 
 async def up(db) -> None:
-    primary_key = "SERIAL PRIMARY KEY" if DB_ENGINE == "postgres" else "INTEGER PRIMARY KEY AUTOINCREMENT"
     await db.execute(
-        f"""
+        """
         CREATE TABLE IF NOT EXISTS software_versions (
-            id               {primary_key},
+            id               SERIAL PRIMARY KEY,
             device_key       TEXT    NOT NULL UNIQUE,
             source           TEXT    NOT NULL DEFAULT 'inventory',
             org_ref          INTEGER NOT NULL DEFAULT 0,
@@ -57,9 +52,9 @@ async def up(db) -> None:
     )
     await db.execute("CREATE INDEX IF NOT EXISTS idx_software_versions_platform ON software_versions (platform)")
     await db.execute(
-        f"""
+        """
         CREATE TABLE IF NOT EXISTS software_version_history (
-            id          {primary_key},
+            id          SERIAL PRIMARY KEY,
             device_key  TEXT NOT NULL,
             name        TEXT NOT NULL DEFAULT '',
             platform    TEXT NOT NULL DEFAULT '',
@@ -73,9 +68,9 @@ async def up(db) -> None:
         "CREATE INDEX IF NOT EXISTS idx_software_history_device ON software_version_history (device_key, seen_from)"
     )
     await db.execute(
-        f"""
+        """
         CREATE TABLE IF NOT EXISTS software_advisories (
-            id                     {primary_key},
+            id                     SERIAL PRIMARY KEY,
             advisory_id            TEXT    NOT NULL UNIQUE,
             source                 TEXT    NOT NULL DEFAULT 'manual',
             title                  TEXT    NOT NULL DEFAULT '',
@@ -96,9 +91,9 @@ async def up(db) -> None:
         """
     )
     await db.execute(
-        f"""
+        """
         CREATE TABLE IF NOT EXISTS software_alerts (
-            id              {primary_key},
+            id              SERIAL PRIMARY KEY,
             device_key      TEXT NOT NULL,
             advisory_id     TEXT NOT NULL,
             severity        TEXT NOT NULL DEFAULT 'medium',

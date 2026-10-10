@@ -14,8 +14,6 @@ import os
 import re
 from datetime import UTC, datetime, timedelta
 
-import aiosqlite
-
 import routes.database as _dbcore
 from routes.database import (
     _LOGGER,

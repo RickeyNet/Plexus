@@ -7,11 +7,8 @@ import routes.database as db_module
 
 
 @pytest.fixture
-async def drift_history_db(tmp_path, monkeypatch):
+async def drift_history_db():
     """Create a temporary DB with one host/baseline/snapshot/event."""
-    db_path = str(tmp_path / "drift_history_test.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
-    monkeypatch.setattr(db_module, "DB_ENGINE", "sqlite")
     await db_module.init_db()
 
     db = await db_module.get_db()

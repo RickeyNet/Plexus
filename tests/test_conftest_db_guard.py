@@ -1,32 +1,33 @@
-"""Guard: the test suite must never default to the Postgres backend.
+"""Guard: the test suite must only ever run against a throwaway Postgres database.
 
-tests/conftest.py pins APP_DB_ENGINE=sqlite so that running pytest from a
-shell with scripts/dev-env.* dot-sourced cannot write fixtures into the
-developer's dev database.  Only tests that explicitly monkeypatch
-``routes.database.DB_ENGINE`` (tests/test_postgres_backend.py) use Postgres.
+tests/conftest.py requires PLEXUS_TEST_PG_URL, refuses database names that do
+not end in ``_test`` (or that are ``plexus``, the dev database), and points the
+app at that database before anything imports ``routes.*``.  Running pytest from
+a shell with scripts/dev-env.* dot-sourced (which exports APP_DATABASE_URL for
+the developer's live database) must never let a test write there.
 """
 
 from __future__ import annotations
 
-import asyncio
 import os
+from urllib.parse import unquote, urlsplit
 
-import pytest
 import routes.database as db_module
 
-# These assert the SQLite default; PLEXUS_TEST_PG_URL deliberately changes it.
-pytestmark = pytest.mark.sqlite_only
+
+def _db_name(url: str) -> str:
+    return unquote(urlsplit(url).path.lstrip("/"))
 
 
-def test_default_engine_is_sqlite():
-    assert os.environ["APP_DB_ENGINE"] == "sqlite"
-    assert db_module.DB_ENGINE == "sqlite"
+def test_engine_is_postgres():
+    assert os.environ["APP_DB_ENGINE"] == "postgres"
 
 
-def test_db_path_tests_build_their_own_sqlite_file(tmp_path, monkeypatch):
-    # Even with APP_DATABASE_URL set (dev-env shell), a DB_PATH-based test
-    # must create and use its own SQLite file.
-    db_path = tmp_path / "guard.db"
-    monkeypatch.setattr(db_module, "DB_PATH", str(db_path))
-    asyncio.run(db_module.init_db())
-    assert db_path.exists()
+def test_app_points_at_a_throwaway_test_database():
+    name = _db_name(db_module.APP_DATABASE_URL)
+    assert name != "plexus"
+    # Under pytest-xdist each worker appends its id: <name>_test_<worker>.
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "").strip()
+    base = name[: -(len(worker) + 1)] if worker and name.endswith(f"_{worker}") else name
+    assert base.endswith("_test"), name
+    assert os.environ["APP_DATABASE_URL"] == db_module.APP_DATABASE_URL

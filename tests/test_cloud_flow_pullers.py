@@ -12,11 +12,8 @@ import pytest
 import routes.database as db_module
 
 
-async def _init(tmp_path, monkeypatch):
-    db_path = str(tmp_path / "test_cloud_flow_pullers.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+async def _init():
     await db_module.init_db()
-    return db_path
 
 
 class _DummyRequest:
@@ -62,8 +59,8 @@ def test_window_clamps_to_24h_floor():
 
 
 @pytest.mark.asyncio
-async def test_cursor_upsert_and_read(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_cursor_upsert_and_read():
+    await _init()
     account = await db_module.create_cloud_account(provider="aws", name="AWS Test")
     account_id = int(account["id"])
 
@@ -92,8 +89,8 @@ async def test_cursor_upsert_and_read(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_list_cursors(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_list_cursors():
+    await _init()
     a1 = await db_module.create_cloud_account(provider="aws", name="AWS-1")
     a2 = await db_module.create_cloud_account(provider="azure", name="Azure-1")
     now_iso = datetime.now(UTC).isoformat()
@@ -112,8 +109,8 @@ async def test_list_cursors(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_aws_puller_missing_log_group(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_aws_puller_missing_log_group():
+    await _init()
     account = await db_module.create_cloud_account(
         provider="aws",
         name="AWS No Group",
@@ -125,8 +122,8 @@ async def test_aws_puller_missing_log_group(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_aws_puller_boto3_missing(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_aws_puller_boto3_missing(monkeypatch):
+    await _init()
     account = await db_module.create_cloud_account(
         provider="aws",
         name="AWS No Boto",
@@ -149,9 +146,9 @@ async def test_aws_puller_boto3_missing(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_aws_puller_success_with_mock(tmp_path, monkeypatch):
+async def test_aws_puller_success_with_mock(monkeypatch):
     """End-to-end AWS puller with mocked CloudWatch Logs."""
-    await _init(tmp_path, monkeypatch)
+    await _init()
     account = await db_module.create_cloud_account(
         provider="aws",
         name="AWS Mock",
@@ -213,9 +210,9 @@ async def test_aws_puller_success_with_mock(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_aws_puller_failure_keeps_cursor(tmp_path, monkeypatch):
+async def test_aws_puller_failure_keeps_cursor(monkeypatch):
     """A failed pull must NOT advance the watermark — the window is retried."""
-    await _init(tmp_path, monkeypatch)
+    await _init()
     account = await db_module.create_cloud_account(
         provider="aws",
         name="AWS Fail",
@@ -253,8 +250,8 @@ async def test_aws_puller_failure_keeps_cursor(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_aws_puller_success_advances_per_region_cursor(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_aws_puller_success_advances_per_region_cursor(monkeypatch):
+    await _init()
     account = await db_module.create_cloud_account(
         provider="aws",
         name="AWS Region Marks",
@@ -401,8 +398,8 @@ def test_azure_day_partitions_cross_midnight():
 
 
 @pytest.mark.asyncio
-async def test_azure_puller_missing_storage_config(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_azure_puller_missing_storage_config():
+    await _init()
     account = await db_module.create_cloud_account(
         provider="azure",
         name="Azure No Storage",
@@ -419,8 +416,8 @@ async def test_azure_puller_missing_storage_config(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_gcp_puller_missing_project_id(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_gcp_puller_missing_project_id():
+    await _init()
     account = await db_module.create_cloud_account(
         provider="gcp",
         name="GCP No Project",
@@ -437,8 +434,8 @@ async def test_gcp_puller_missing_project_id(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pull_all_skips_unconfigured_accounts(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_pull_all_skips_unconfigured_accounts():
+    await _init()
     # Create accounts without flow-log config keys
     await db_module.create_cloud_account(provider="aws", name="AWS bare", auth_config_json={})
     await db_module.create_cloud_account(provider="azure", name="Azure bare", auth_config_json={})
@@ -450,8 +447,8 @@ async def test_pull_all_skips_unconfigured_accounts(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pull_all_processes_configured_accounts(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_pull_all_processes_configured_accounts(monkeypatch):
+    await _init()
     account = await db_module.create_cloud_account(
         provider="aws",
         name="AWS Configured",
@@ -499,8 +496,8 @@ async def test_pull_all_processes_configured_accounts(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_flow_sync_config_get_and_update(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_flow_sync_config_get_and_update():
+    await _init()
     import netcontrol.routes.state as state
 
     # GET config
@@ -528,8 +525,8 @@ async def test_flow_sync_config_get_and_update(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_flow_sync_cursors_api(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_flow_sync_cursors_api():
+    await _init()
     account = await db_module.create_cloud_account(provider="aws", name="AWS Cursor Test")
     now_iso = datetime.now(UTC).isoformat()
     await db_module.upsert_cloud_flow_sync_cursor(int(account["id"]), last_pull_end=now_iso)
@@ -540,8 +537,8 @@ async def test_flow_sync_cursors_api(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_manual_pull_single_account(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_manual_pull_single_account(monkeypatch):
+    await _init()
     account = await db_module.create_cloud_account(
         provider="aws",
         name="AWS Manual Pull",
@@ -596,8 +593,8 @@ async def test_manual_pull_single_account(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_manual_pull_nonexistent_account(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_manual_pull_nonexistent_account():
+    await _init()
     with pytest.raises(Exception) as exc_info:
         await cloud_visibility_module.trigger_cloud_flow_sync_api(
             _DummyRequest(),
@@ -644,8 +641,8 @@ def test_sanitize_cloud_flow_sync_config():
 
 
 @pytest.mark.asyncio
-async def test_aws_puller_all_regions_skips_regions_without_the_log_group(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_aws_puller_all_regions_skips_regions_without_the_log_group(monkeypatch):
+    await _init()
     account = await db_module.create_cloud_account(
         provider="aws",
         name="AWS All Regions",

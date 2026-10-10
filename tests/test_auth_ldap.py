@@ -114,9 +114,7 @@ async def test_ldap_reject_with_override_fallback(monkeypatch):
 # ── Role re-sync / provenance ────────────────────────────────────────────────
 
 
-async def _fresh_db(tmp_path, monkeypatch, name):
-    db_file = tmp_path / name
-    monkeypatch.setattr(db_module, "DB_PATH", str(db_file))
+async def _fresh_db():
     await db_module.init_db()
 
 
@@ -140,8 +138,8 @@ _NO_GROUPS = {"groups": []}
 
 
 @pytest.mark.asyncio
-async def test_ldap_role_resyncs_on_every_login(tmp_path, monkeypatch):
-    await _fresh_db(tmp_path, monkeypatch, "ldap_resync.db")
+async def test_ldap_role_resyncs_on_every_login(monkeypatch):
+    await _fresh_db()
     _ldap_state_config(monkeypatch)
 
     user = await app_module.upsert_ldap_user("jdoe", _ADMIN_GROUPS)
@@ -157,8 +155,8 @@ async def test_ldap_role_resyncs_on_every_login(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ldap_admin_group_dn_matches_spacing_and_case_variants(tmp_path, monkeypatch):
-    await _fresh_db(tmp_path, monkeypatch, "ldap_dnnorm.db")
+async def test_ldap_admin_group_dn_matches_spacing_and_case_variants(monkeypatch):
+    await _fresh_db()
     _ldap_state_config(monkeypatch)
 
     attrs = {"groups": ["cn=plexus admins, ou=groups, dc=corp, dc=local"]}
@@ -167,8 +165,8 @@ async def test_ldap_admin_group_dn_matches_spacing_and_case_variants(tmp_path, m
 
 
 @pytest.mark.asyncio
-async def test_ldap_refuses_local_admin_collision(tmp_path, monkeypatch):
-    await _fresh_db(tmp_path, monkeypatch, "ldap_collision.db")
+async def test_ldap_refuses_local_admin_collision(monkeypatch):
+    await _fresh_db()
     _ldap_state_config(monkeypatch)
 
     await db_module.create_user("admin", "hash", "salt", role="admin")
@@ -183,8 +181,8 @@ async def test_ldap_refuses_local_admin_collision(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ldap_claims_preexisting_shadow_user_then_resyncs(tmp_path, monkeypatch):
-    await _fresh_db(tmp_path, monkeypatch, "ldap_claim.db")
+async def test_ldap_claims_preexisting_shadow_user_then_resyncs(monkeypatch):
+    await _fresh_db()
     _ldap_state_config(monkeypatch)
 
     # Pre-provenance shadow account (created before the auth_provider column).
@@ -196,8 +194,8 @@ async def test_ldap_claims_preexisting_shadow_user_then_resyncs(tmp_path, monkey
 
 
 @pytest.mark.asyncio
-async def test_ldap_display_name_refreshes(tmp_path, monkeypatch):
-    await _fresh_db(tmp_path, monkeypatch, "ldap_dn_refresh.db")
+async def test_ldap_display_name_refreshes(monkeypatch):
+    await _fresh_db()
     _ldap_state_config(monkeypatch)
 
     user = await app_module.upsert_ldap_user("jdoe", {"display_name": "Jo Doe", "groups": []})
@@ -207,8 +205,8 @@ async def test_ldap_display_name_refreshes(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ldap_shadow_user_gets_default_access_groups(tmp_path, monkeypatch):
-    await _fresh_db(tmp_path, monkeypatch, "ldap_groups.db")
+async def test_ldap_shadow_user_gets_default_access_groups(monkeypatch):
+    await _fresh_db()
     group_id = await db_module.create_access_group("LDAP Operators", "Default LDAP access", ["dashboard"])
     _ldap_state_config(monkeypatch, default_group_ids=[group_id])
 
@@ -219,10 +217,10 @@ async def test_ldap_shadow_user_gets_default_access_groups(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_radius_never_resyncs_role(tmp_path, monkeypatch):
+async def test_radius_never_resyncs_role(monkeypatch):
     # RADIUS asserts no role, so a manual promotion in the Plexus UI must
     # survive subsequent RADIUS logins.
-    await _fresh_db(tmp_path, monkeypatch, "radius_no_resync.db")
+    await _fresh_db()
     cfg = app_module._sanitize_auth_config(
         {"provider": "radius", "radius": {"enabled": True, "server": "r.local", "secret": "s"}}
     )

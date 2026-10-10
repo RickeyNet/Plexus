@@ -15,12 +15,9 @@ import routes.database as db_module
 
 
 @pytest.fixture
-def sla_db(tmp_path, monkeypatch):
-    db_path = str(tmp_path / "sla.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+def sla_db(monkeypatch):
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-sla")
     asyncio.run(db_module.init_db())
-    return db_path
 
 
 async def _seed_host_with_polls(hostname: str, rts: list[float]) -> int:

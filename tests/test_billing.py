@@ -1,5 +1,7 @@
 """Tests for bandwidth billing and 95th percentile reports."""
 
+import asyncio
+
 import pytest
 import routes.database as db_module
 from netcontrol.routes.billing import (
@@ -9,15 +11,14 @@ from netcontrol.routes.billing import (
     generate_billing_for_circuit,
 )
 
+import pg_raw
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 
-async def _init(tmp_path, monkeypatch):
-    """Set up a fresh in-memory DB with all tables + migrations."""
-    db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+async def _init():
+    """Set up the schema with all tables + migrations."""
     await db_module.init_db()
-    return db_path
 
 
 async def _add_host(group_name="default", hostname="sw1", ip="10.0.0.1"):
@@ -155,8 +156,8 @@ def test_billing_period_range_weekly():
 
 
 @pytest.mark.asyncio
-async def test_create_and_get_billing_circuit(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_create_and_get_billing_circuit():
+    await _init()
     host_id = await _add_host()
 
     circuit = await db_module.create_billing_circuit(
@@ -179,8 +180,8 @@ async def test_create_and_get_billing_circuit(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_list_billing_circuits_with_filter(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_list_billing_circuits_with_filter():
+    await _init()
     host_id = await _add_host()
 
     await db_module.create_billing_circuit(name="C1", host_id=host_id, if_index=1, customer="Alpha")
@@ -198,8 +199,8 @@ async def test_list_billing_circuits_with_filter(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_update_billing_circuit(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_update_billing_circuit():
+    await _init()
     host_id = await _add_host()
 
     circuit = await db_module.create_billing_circuit(
@@ -219,8 +220,8 @@ async def test_update_billing_circuit(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_delete_billing_circuit(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_delete_billing_circuit():
+    await _init()
     host_id = await _add_host()
 
     circuit = await db_module.create_billing_circuit(
@@ -233,8 +234,8 @@ async def test_delete_billing_circuit(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_billing_period_crud(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_billing_period_crud():
+    await _init()
     host_id = await _add_host()
 
     circuit = await db_module.create_billing_circuit(
@@ -264,8 +265,8 @@ async def test_billing_period_crud(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_billing_customers(tmp_path, monkeypatch):
-    await _init(tmp_path, monkeypatch)
+async def test_billing_customers():
+    await _init()
     host_id = await _add_host()
 
     await db_module.create_billing_circuit(name="C1", host_id=host_id, if_index=1, customer="Zeta Inc")
@@ -282,9 +283,9 @@ async def test_billing_customers(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_generate_billing_with_samples(tmp_path, monkeypatch):
+async def test_generate_billing_with_samples():
     """Generate billing from interface_ts samples, verify P95 and overage."""
-    await _init(tmp_path, monkeypatch)
+    await _init()
     host_id = await _add_host()
 
     circuit = await db_module.create_billing_circuit(
@@ -329,9 +330,9 @@ async def test_generate_billing_with_samples(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_generate_billing_no_samples(tmp_path, monkeypatch):
+async def test_generate_billing_no_samples():
     """Generate billing with no samples should produce a zero-value period."""
-    await _init(tmp_path, monkeypatch)
+    await _init()
     host_id = await _add_host()
 
     circuit = await db_module.create_billing_circuit(
@@ -353,9 +354,9 @@ async def test_generate_billing_no_samples(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_generate_billing_overage_detection(tmp_path, monkeypatch):
+async def test_generate_billing_overage_detection():
     """P95 above commit rate should mark status as 'overage' with cost."""
-    await _init(tmp_path, monkeypatch)
+    await _init()
     host_id = await _add_host()
 
     circuit = await db_module.create_billing_circuit(
@@ -391,9 +392,8 @@ async def test_generate_billing_overage_detection(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def app_client(tmp_path, monkeypatch):
+def app_client(monkeypatch):
     """Create a test client with a known admin account."""
-    monkeypatch.setattr(db_module, "DB_PATH", str(tmp_path / "test.db"))
     monkeypatch.setenv("APP_ALLOW_SELF_REGISTER", "true")
     monkeypatch.setenv("APP_SECRET_KEY", "test-secret-key-for-billing")
     monkeypatch.setenv("APP_REQUIRE_API_TOKEN", "false")
@@ -432,20 +432,24 @@ def test_api_list_circuits_empty(app_client):
     assert len(data["circuits"]) == 0
 
 
-@pytest.mark.sqlite_only  # seeds rows with sqlite3.connect(DB_PATH)
 def test_api_circuit_crud(app_client):
     client = app_client
     headers = _admin_headers(client)
 
-    # Insert a host directly via sync sqlite3 (inventory API routes differ)
-    import sqlite3
+    # Insert a host directly via a raw autocommit connection (inventory API
+    # routes differ); the rows are committed before the API reads them.
+    async def _seed_host() -> int:
+        conn = await pg_raw.connect()
+        try:
+            group_id = await conn.fetchval("INSERT INTO inventory_groups (name) VALUES ('billing-test') RETURNING id")
+            return await conn.fetchval(
+                "INSERT INTO hosts (group_id, hostname, ip_address) VALUES ($1, 'router1', '10.0.0.1') RETURNING id",
+                group_id,
+            )
+        finally:
+            await conn.close()
 
-    conn = sqlite3.connect(db_module.DB_PATH)
-    conn.execute("INSERT OR IGNORE INTO inventory_groups (name) VALUES ('billing-test')")
-    conn.execute("INSERT INTO hosts (group_id, hostname, ip_address) VALUES (1, 'router1', '10.0.0.1')")
-    conn.commit()
-    host_id = conn.execute("SELECT id FROM hosts WHERE hostname='router1'").fetchone()[0]
-    conn.close()
+    host_id = asyncio.run(_seed_host())
 
     # Create circuit
     create_resp = client.post(
