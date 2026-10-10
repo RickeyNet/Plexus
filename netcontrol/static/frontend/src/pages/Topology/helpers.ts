@@ -158,6 +158,7 @@ export function isManagedNode(node: TopologyNode): boolean {
 export function providerLabel(provider?: string | null): string {
   if (provider === 'aws') return 'AWS';
   if (provider === 'azure') return 'Azure';
+  if (provider === 'gcp') return 'GCP';
   if (provider === 'fmc') return 'Cisco FMC';
   return provider === 'cato' ? 'Cato' : 'Meraki';
 }
@@ -194,6 +195,7 @@ export function draggedPanelWidth(startWidth: number, startX: number, clientX: n
 export function providerSourceName(provider?: string | null): string {
   if (provider === 'aws') return 'AWS API';
   if (provider === 'azure') return 'Azure API';
+  if (provider === 'gcp') return 'GCP API';
   if (provider === 'fmc') return 'FMC API';
   return provider === 'cato' ? 'Cato API' : 'Meraki Dashboard';
 }
@@ -476,7 +478,7 @@ export function nodeTitle(node: TopologyNode): string {
  */
 export type SourceFilter = 'all' | 'inventory' | 'meraki' | `provider:${string}`;
 
-export const PROVIDER_ORDER = ['meraki', 'cato', 'fmc', 'aws', 'azure'];
+export const PROVIDER_ORDER = ['meraki', 'cato', 'fmc', 'aws', 'azure', 'gcp'];
 
 /** The integration a node belongs to, or '' for an inventory-only node. */
 export function nodeProvider(node: TopologyNode): string {

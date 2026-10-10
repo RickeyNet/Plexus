@@ -22,10 +22,10 @@ export interface MerakiBuildOptions {
 export type CloudProvider = 'meraki' | 'cato' | 'fmc';
 
 /** Clouds whose accounts are Cloud Visibility accounts that also feed the map. */
-export type CloudAccountProvider = 'aws' | 'azure';
+export type CloudAccountProvider = 'aws' | 'azure' | 'gcp';
 
 export function isCloudAccountProvider(type: string | null | undefined): type is CloudAccountProvider {
-  return type === 'aws' || type === 'azure';
+  return type === 'aws' || type === 'azure' || type === 'gcp';
 }
 
 export interface CatoBuildOptions {
@@ -155,7 +155,7 @@ export interface DetailSection {
 }
 
 export interface MerakiNodeDetails {
-  /** Integration the node's snapshot came from ('aws' / 'azure' for Cloud Visibility's discovery). */
+  /** Integration the node's snapshot came from ('aws' / 'azure' / 'gcp' for Cloud Visibility's discovery). */
   provider?: CloudProvider | CloudAccountProvider;
   node_id: string;
   label: string;
@@ -259,7 +259,7 @@ export interface PathHop {
   edge: number | string | null;
   label: string;
   site: string;
-  /** meraki | fmc | cato | aws | azure | inventory | internet | unknown */
+  /** meraki | fmc | cato | aws | azure | gcp | inventory | internet | unknown */
   provider: string;
   /** Ingress interface or subnet, "" when none. */
   in: string;
@@ -367,7 +367,7 @@ export type TopologySourceType = 'neighbors' | CloudProvider | CloudAccountProvi
 export interface TopologySource {
   key: string;
   type: TopologySourceType;
-  /** Organization id (Meraki, Cato) or Cloud Visibility account id (AWS, Azure). */
+  /** Organization id (Meraki, Cato) or Cloud Visibility account id (AWS, Azure, GCP). */
   id: number | null;
   name: string;
   status: 'never' | 'success' | 'partial' | 'failed' | string;
@@ -380,7 +380,7 @@ export interface TopologySource {
   snapshot_id?: number | null;
   collecting: boolean;
   can_collect: boolean;
-  /** False for an AWS or Azure account switched off in Cloud Visibility. */
+  /** False for an AWS, Azure or GCP account switched off in Cloud Visibility. */
   enabled: boolean;
   demo: boolean;
 }
@@ -492,7 +492,7 @@ export function useStartMerakiBuild() {
 export function useBuildMerakiSample() {
   const qc = useQueryClient();
   return useMutation({
-    // 'aws' / 'azure' load a demo account, which lives under Cloud Visibility.
+    // 'aws' / 'azure' / 'gcp' load a demo account, which lives under Cloud Visibility.
     mutationFn: (provider: CloudProvider | CloudAccountProvider) =>
       apiRequest<MerakiBuildResult & { org_ref: number }>(
         `/meraki/sample${provider === 'meraki' ? '' : `?provider=${provider}`}`,

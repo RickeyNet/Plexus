@@ -13,9 +13,10 @@ A Cato Networks account is added from the same dialog and shares the map,
 search, Path Mode and export; see [cato-topology.md](cato-topology.md), as is
 a Cisco FMC and the FTDs it manages (interfaces, routing, NAT, access
 control, site-to-site and remote access VPN); see
-[fmc-topology.md](fmc-topology.md). AWS accounts and Azure
-subscriptions discovered by Cloud Visibility join the map as well; see
-[aws-topology.md](aws-topology.md) and [azure-topology.md](azure-topology.md).
+[fmc-topology.md](fmc-topology.md). AWS accounts, Azure subscriptions and
+GCP projects discovered by Cloud Visibility join the map as well; see
+[aws-topology.md](aws-topology.md), [azure-topology.md](azure-topology.md) and
+[gcp-topology.md](gcp-topology.md).
 
 A registered organization can also be audited by the Compliance page against
 the Meraki equivalents of DHCP snooping, port security, BPDU guard and the
@@ -62,7 +63,7 @@ belong to no inventory group).
 
 - The map opens in the **Tidy tree** layout, top to bottom. Each source is
   a region of its own, framed and titled, side by side from left to right: the
-  inventory, then Meraki, Cato, Cisco FMC, AWS and Azure. Links between
+  inventory, then Meraki, Cato, Cisco FMC, AWS, Azure and GCP. Links between
   sources are still drawn, but they do not pull a device into another
   source's region, and they go around the sources rather than through them:
   up from each end, around the other sites' boxes and devices, to a lane

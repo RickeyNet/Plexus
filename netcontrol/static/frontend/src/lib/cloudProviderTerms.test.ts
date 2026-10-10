@@ -24,7 +24,7 @@ describe('cloudProviderTerms', () => {
     expect(gcp.identifierLabel).toBe('Project ID');
     expect(gcp.network).toBe('VPC network');
     expect(gcp.flowLogs).toBe('VPC Flow Logs');
-    expect(gcp.onTopologyMap).toBe(false);
+    expect(gcp.onTopologyMap).toBe(true);
   });
 
   it('labels the identifier as the account form does', () => {

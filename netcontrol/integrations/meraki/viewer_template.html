@@ -192,7 +192,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     wan: { tag: 'WAN', name: 'WAN uplink', color: '#4dabf7', shape: 'pill' },
     vpn_peer: { tag: 'VPN', name: 'VPN peer', color: '#ae3ec9', shape: 'pill' },
     cloud: { tag: 'CLD', name: 'Cloud gateway / PoP', color: '#ae3ec9', shape: 'pill' },
-    vpc: { tag: 'VPC', name: 'AWS VPC / Azure VNet', color: '#f08c00', shape: 'square' },
+    vpc: { tag: 'VPC', name: 'AWS VPC / Azure VNet / GCP VPC', color: '#f08c00', shape: 'square' },
     users: { tag: 'USR', name: 'Remote users', color: '#0ca678', shape: 'pill' },
     user: { tag: 'USR', name: 'Remote user', color: '#0ca678', shape: 'circle' }
   };
@@ -722,7 +722,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   // ── Path mode ────────────────────────────────────────────────────────────
   // Pick a few sites, devices or subnets and see how they reach one another
   // over the links on the map that are up (topology only; route tables are
-  // not read here, the Topology page has the AWS / Azure check). A subnet
+  // not read here, the Topology page has the AWS / Azure / GCP check). A subnet
   // stands for the device that owns it.
   var MAX_PATH_PICKS = 6, pathMode = false, pathPicks = [], pathLegs = [], pathSiteIds = {}, pathPicked = {}, pathMessage = '';
   function pathActive() { return pathMode && pathPicks.length > 0; }
@@ -812,9 +812,9 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
       if (leg.notes.length) sections.push({ title: 'Warning: ' + name, kind: 'text', text: leg.notes.join('\n') });
     });
     if (pathLegs.length) {
-      var inCloud = pathPicks.some(function (p) { return p.n.provider === 'aws' || p.n.provider === 'azure'; });
+      var inCloud = pathPicks.some(function (p) { return p.n.provider === 'aws' || p.n.provider === 'azure' || p.n.provider === 'gcp'; });
       sections.push({ title: 'About this path', kind: 'text', text: 'The path drawn is the shortest way over the cables, uplinks and VPN tunnels on the map that are up: it shows how the ends are joined, not the route each device picks. A subnet is placed on the device that owns it (appliance, L3 switch, VPC or VPN peer).' +
-        (inCloud ? ' This file does not check AWS or Azure route tables and filtering rules; Path Mode on the Plexus Topology page does, between two subnets or IP addresses.' : '') });
+        (inCloud ? ' This file does not check AWS, Azure or GCP route tables and filtering rules; Path Mode on the Plexus Topology page does, between two subnets or IP addresses.' : '') });
     }
     selected = { type: 'path', ref: { title: 'Path', sub: pathPicks.length + ' picked', sections: sections } };
     renderPanel(); renderList(); dirty();
@@ -1002,8 +1002,8 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   // ── Source picker ────────────────────────────────────────────────────────
   // As on the Topology page: everything, the inventory, every integration,
   // or one integration (provider:aws, provider:cato...).
-  var PROVIDERS = ['meraki', 'cato', 'fmc', 'aws', 'azure'];
-  var PROVIDER_NAME = { meraki: 'Meraki', cato: 'Cato', fmc: 'Cisco FMC', aws: 'AWS', azure: 'Azure' };
+  var PROVIDERS = ['meraki', 'cato', 'fmc', 'aws', 'azure', 'gcp'];
+  var PROVIDER_NAME = { meraki: 'Meraki', cato: 'Cato', fmc: 'Cisco FMC', aws: 'AWS', azure: 'Azure', gcp: 'GCP' };
   var SITE_GAP = 90, source = 'all';
   function keepNode(n) {
     if (source === 'all') return true;

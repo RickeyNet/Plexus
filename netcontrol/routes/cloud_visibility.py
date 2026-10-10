@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from netcontrol.integrations.aws.sample import build_sample as build_aws_sample
 from netcontrol.integrations.azure.sample import build_sample as build_azure_sample
+from netcontrol.integrations.gcp.sample import build_sample as build_gcp_sample
 from netcontrol.routes.cloud_collectors import (
     CloudCollectorAuthError,
     CloudCollectorError,
@@ -1006,136 +1007,12 @@ def _summarize_traffic_metric_records(records: list[dict]) -> dict:
 
 
 def _sample_snapshot_for_provider(provider: str) -> tuple[list[dict], list[dict]]:
-    resources: list[dict[str, Any]]
-    connections: list[dict[str, Any]]
+    # Shared with the Topology map, which draws these discoveries too.
     if provider == "aws":
-        # Shared with the Topology map, which draws this discovery too.
         return build_aws_sample()
-
     if provider == "azure":
-        # Shared with the Topology map as well.
         return build_azure_sample()
-
-    resources = [
-        {
-            "resource_uid": "gcp:vpc:core",
-            "resource_type": "vpc",
-            "name": "gcp-core-vpc",
-            "region": "us-central1",
-            "cidr": "10.220.0.0/16",
-            "status": "active",
-        },
-        {
-            "resource_uid": "gcp:vpc:shared",
-            "resource_type": "vpc",
-            "name": "gcp-shared-vpc",
-            "region": "us-central1",
-            "cidr": "10.221.0.0/16",
-            "status": "active",
-        },
-        {
-            "resource_uid": "gcp:router:core",
-            "resource_type": "cloud_router",
-            "name": "cr-core",
-            "region": "us-central1",
-            "status": "running",
-        },
-        {
-            "resource_uid": "gcp:vpn:ha",
-            "resource_type": "ha_vpn_gateway",
-            "name": "ha-vpn-gw",
-            "region": "us-central1",
-            "status": "up",
-        },
-        {
-            "resource_uid": "gcp:interconnect_attachment:core",
-            "resource_type": "interconnect_attachment",
-            "name": "ia-core",
-            "region": "us-central1",
-            "status": "AVAILABLE",
-        },
-        {
-            "resource_uid": "gcp:route:default-egress",
-            "resource_type": "route_entry",
-            "name": "default-egress",
-            "region": "global",
-            "cidr": "0.0.0.0/0",
-            "status": "active",
-            "metadata": {"next_hop": "default-internet-gateway", "priority": 1000},
-        },
-        {
-            "resource_uid": "gcp:fw:edge",
-            "resource_type": "firewall_policy",
-            "name": "fw-edge-policy",
-            "region": "global",
-            "status": "active",
-            "metadata": {
-                "policy_rules": [
-                    {
-                        "rule_uid": "gcp:fw:edge:allow-https",
-                        "rule_name": "allow-https",
-                        "direction": "inbound",
-                        "action": "allow",
-                        "protocol": "tcp",
-                        "source_selector": "35.191.0.0/16, 130.211.0.0/22",
-                        "destination_selector": "self",
-                        "port_expression": "443",
-                        "priority": 1000,
-                    },
-                    {
-                        "rule_uid": "gcp:fw:edge:deny-ssh",
-                        "rule_name": "deny-ssh",
-                        "direction": "inbound",
-                        "action": "deny",
-                        "protocol": "tcp",
-                        "source_selector": "0.0.0.0/0",
-                        "destination_selector": "self",
-                        "port_expression": "22",
-                        "priority": 1100,
-                    },
-                ],
-            },
-        },
-    ]
-    connections = [
-        {
-            "source_resource_uid": "gcp:vpc:core",
-            "target_resource_uid": "gcp:router:core",
-            "connection_type": "router_attachment",
-            "state": "up",
-        },
-        {
-            "source_resource_uid": "gcp:router:core",
-            "target_resource_uid": "gcp:vpn:ha",
-            "connection_type": "vpn_tunnel",
-            "state": "up",
-        },
-        {
-            "source_resource_uid": "gcp:vpc:core",
-            "target_resource_uid": "gcp:vpc:shared",
-            "connection_type": "vpc_peering",
-            "state": "ACTIVE",
-        },
-        {
-            "source_resource_uid": "gcp:router:core",
-            "target_resource_uid": "gcp:interconnect_attachment:core",
-            "connection_type": "interconnect_attachment",
-            "state": "AVAILABLE",
-        },
-        {
-            "source_resource_uid": "gcp:vpc:core",
-            "target_resource_uid": "gcp:route:default-egress",
-            "connection_type": "route_table_association",
-            "state": "active",
-        },
-        {
-            "source_resource_uid": "gcp:vpc:core",
-            "target_resource_uid": "gcp:fw:edge",
-            "connection_type": "security_boundary",
-            "state": "enforced",
-        },
-    ]
-    return resources, connections
+    return build_gcp_sample()
 
 
 async def _resolve_hybrid_hosts(connect_host_ids: list[int]) -> list[dict]:

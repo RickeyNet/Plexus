@@ -10,7 +10,8 @@ Cato accounts, Cisco FMCs and AWS accounts. They are covered by the same
 search box and Path Mode, and are included in the HTML export.
 
 Azure works the way AWS does on the map; [aws-topology.md](aws-topology.md)
-describes the shared behavior. This guide covers what is different.
+describes the shared behavior. This guide covers what is different. GCP
+projects join the map the same way; see [gcp-topology.md](gcp-topology.md).
 
 - Permission: the `topology` feature to view the map; admin to manage cloud
   accounts and run discovery
