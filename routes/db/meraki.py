@@ -55,10 +55,27 @@ def _encrypt_key(api_key: str) -> str:
     return encrypt(api_key)
 
 
+def _stamp_param(value: str) -> str | datetime:
+    """Bind an ISO-8601 stamp: TIMESTAMPTZ on Postgres wants a datetime
+    (naive means UTC), the SQLite column is TEXT and keeps the string."""
+    if _dbcore.DB_ENGINE != "postgres":
+        return value
+    stamp = datetime.fromisoformat(value)
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)
+
+
+def _iso_stamps(row: dict, *columns: str) -> None:
+    """Postgres returns TIMESTAMPTZ columns as datetimes; hand out ISO strings."""
+    for column in columns:
+        if isinstance(row.get(column), datetime):
+            row[column] = row[column].isoformat()
+
+
 def _org_row(row) -> dict | None:
     org = row_to_dict(row)
     if org is None:
         return None
+    _iso_stamps(org, "last_build_at", "created_at", "updated_at")
     org["has_api_key"] = bool(org.get("has_api_key"))
     try:
         org["options"] = json.loads(org.pop("options_json", None) or "{}")
@@ -68,6 +85,7 @@ def _org_row(row) -> dict | None:
 
 
 def _snapshot_meta(row: dict) -> dict:
+    _iso_stamps(row, "created_at")
     try:
         row["summary"] = json.loads(row.pop("summary_json", None) or "{}")
     except TypeError, ValueError:
@@ -160,6 +178,8 @@ async def update_meraki_org(org_ref: int, **kwargs) -> dict | None:
             value = _encrypt_key(value)
         elif key == "options":
             value = json.dumps(value)
+        elif key == "last_build_at":
+            value = _stamp_param(value)
         sets.append(f"{column_for[key]} = ?")
         vals.append(value)
     if not sets:

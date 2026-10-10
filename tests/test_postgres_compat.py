@@ -189,3 +189,54 @@ def test_minutes_between_expr_branches(monkeypatch):
     monkeypatch.setattr(db_module, "DB_ENGINE", "sqlite")
     lite = db_module._minutes_between_expr("a.acknowledged_at", "a.created_at")
     assert "julianday" in lite
+
+
+@pytest.mark.asyncio
+async def test_datetime_modifier_int_param_is_bound_as_text():
+    """``datetime('now', '-' || ? || ' days')`` becomes ``$1::text || ' days'``;
+    asyncpg infers text for ``$1::text`` and rejects an int ("expected str,
+    got int"), so the facade must bind the day count as its string form."""
+    fake = _FakeConn()
+    conn = _PostgresConnectionCompat(fake)
+    await conn.execute(
+        "DELETE FROM meraki_compliance_results WHERE scanned_at < datetime('now', '-' || ? || ' days') AND id > ?",
+        (90, 5),
+    )
+    sql, params = next((c[1], c[2]) for c in fake.calls if c[0] == "execute")
+    assert "$1::text" in sql
+    assert params == ("90", 5)  # only the text-cast parameter is converted
+
+
+@pytest.mark.asyncio
+async def test_executemany_binds_text_cast_params_as_text():
+    calls = []
+
+    class _ManyConn(_FakeConn):
+        async def executemany(self, query, rows):
+            calls.append((query, rows))
+
+    conn = _PostgresConnectionCompat(_ManyConn())
+    await conn.executemany(
+        "DELETE FROM t WHERE ts < datetime('now', '-' || ? || ' hours') AND kind = ?",
+        [(1, "a"), (None, "b"), ("3", "c")],
+    )
+    assert calls[0][1] == [("1", "a"), (None, "b"), ("3", "c")]
+
+
+def test_coerce_text_cast_params_leaves_other_params_alone():
+    assert db_module._coerce_text_cast_params("SELECT $1, $2", (1, 2.5)) == (1, 2.5)
+    assert db_module._coerce_text_cast_params("SELECT $2::text", (1, 2.5)) == (1, "2.5")
+
+
+@pytest.mark.parametrize(
+    "table",
+    ["meraki_compliance_assignments", "meraki_compliance_results", "software_alerts"],
+)
+@pytest.mark.asyncio
+async def test_new_tables_read_for_lastrowid_get_returning_id(table):
+    """Their create helpers return ``cursor.lastrowid``: without the
+    allowlist entry it is None on Postgres."""
+    fake = _FakeConn()
+    conn = _PostgresConnectionCompat(fake)
+    cur = await conn.execute(f"INSERT INTO {table} (a) VALUES (?)", (1,))
+    assert cur.lastrowid == 42

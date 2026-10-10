@@ -55,33 +55,25 @@ docker compose down -v
 the Secure session cookie. Use `https://localhost`, or set
 `APP_COOKIE_SECURE=false` in `.env` for direct access.
 
-Compose always runs on PostgreSQL. To run the image on SQLite instead, see the
-Loop A notes in [DEVSETUP.md](DEVSETUP.md).
+Compose always runs on PostgreSQL, the only supported database backend.
 
 ## Other ways to run
 
-### Local venv (Windows/Linux, SQLite)
+### Run from source (Postgres in Docker, Windows or WSL2)
 
-Copy `.env.example` to `.env` and adjust values (host, port, https, defaults), then:
+For development, run Postgres in Docker and the app from a Python 3.14 venv.
+[DEVSETUP.md](DEVSETUP.md) has the full setup for Windows (Docker Desktop) and
+WSL2. After `bash deploy/setup.sh` and installing the venv:
 
 ```bash
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1        # PowerShell; bash/zsh: source .venv/bin/activate
-python -m pip install -r requirements.txt
-# optional: PostgreSQL support (Linux/production)
-python -m pip install -r requirements-postgres.txt
-python templates/run.py --host 0.0.0.0 --port 8080
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres
+source scripts/dev-env.sh            # PowerShell: . .\scripts\dev-env.ps1
+python templates/run.py
 ```
 
-Visit `http://localhost:8080/docs`. `python templates/run.py --help` lists the
-run options (`--https`, `--reload`, `--expose`, ...). On first launch the
-database is seeded with demo inventory groups, playbooks, templates and a
-default credential.
-
-### WSL2 with Docker and Postgres (development)
-
-For day-to-day development that matches the deployed stack, see
-[DEVSETUP.md](DEVSETUP.md).
+`python templates/run.py --help` lists the run options (`--https`, `--reload`,
+`--expose`, ...). On first launch the database is seeded with demo inventory
+groups, playbooks, templates and a default credential.
 
 ## Guides
 
@@ -93,12 +85,12 @@ For day-to-day development that matches the deployed stack, see
 - [DATA_RETENTION.md](DATA_RETENTION.md) - how long each class of data is kept
 - [RADIUS_CONFIGURATION_GUIDE.md](RADIUS_CONFIGURATION_GUIDE.md) - RADIUS login setup
 - [TACACS_CONFIGURATION_GUIDE.md](TACACS_CONFIGURATION_GUIDE.md) - TACACS+ / Cisco ISE Device Admin login
-- [docs/database-backends.md](docs/database-backends.md) - SQLite vs PostgreSQL and migration
+- [docs/database-backends.md](docs/database-backends.md) - PostgreSQL backend settings and migrating legacy SQLite installs
 - [docs/versioning-and-release.md](docs/versioning-and-release.md) - versioning and release process
 
 **Developers**
 
-- [DEVSETUP.md](DEVSETUP.md) - WSL2, Docker and Postgres dev loops
+- [DEVSETUP.md](DEVSETUP.md) - Windows (Docker Desktop) and WSL2 dev loops on Docker and Postgres
 - [AGENTS.md](AGENTS.md) - architecture and conventions for coding agents
 - [docs/core-concepts.md](docs/core-concepts.md) - inventory, playbooks, templates, credentials, jobs
 - [docs/writing-playbooks.md](docs/writing-playbooks.md) - writing a playbook, simulation mode
@@ -131,7 +123,7 @@ netcontrol/
 ├── integrations/           # Meraki, Cato, FMC, AWS, Azure, path trace, software
 └── static/frontend/        # React + TypeScript SPA (Vite; build output in dist/)
 routes/
-├── database.py             # Data layer (SQLite or PostgreSQL)
+├── database.py             # Data layer (PostgreSQL; SQLite engine kept for tests/migration)
 ├── db/                     # Per-domain database queries
 ├── migrations/             # Numbered schema migrations
 ├── crypto.py               # Fernet encryption for stored credentials

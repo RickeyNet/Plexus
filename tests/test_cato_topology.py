@@ -154,6 +154,8 @@ async def test_collect_account_falls_back_and_stays_best_effort():
             return httpx.Response(200, json={"data": {"accountSnapshot": {"id": "42", "sites": sample["sites"]}}})
         if name == "plexusUsers":
             return httpx.Response(403)
+        if name == "plexusBgpPeersOfSite":
+            return httpx.Response(200, json={"data": {"site": {"bgpPeerList": {"bgpPeer": [], "total": 0}}}})
         # entityLookup: the large page is refused, the default page size works.
         if variables["limit"] == 1000:
             return httpx.Response(200, json={"errors": [{"message": "limit too large"}]})
@@ -163,7 +165,9 @@ async def test_collect_account_falls_back_and_stays_best_effort():
 
     progress: list[dict] = []
     async with _client(handler) as client:
-        raw = await collect_account(client, "42", {"site_name_contains": "branch"}, progress.append)
+        raw = await collect_account(
+            client, "42", {"site_name_contains": "branch", "include_firewall": False}, progress.append
+        )
 
     assert [s["info"]["name"] for s in raw["sites"]] == ["Branch-Cleveland", "Branch-Denver"]
     assert raw["users"] == []
@@ -176,6 +180,8 @@ async def test_collect_account_falls_back_and_stays_best_effort():
     ]
     assert "hostCount" in raw["errors"][0]["message"] and raw["errors"][2]["status"] == 403
     assert progress[-1]["phase"] == "collected" and progress[-1]["calls_done"] == progress[-1]["calls_total"]
+    assert raw["wan_firewall"] is None and raw["internet_firewall"] is None
+    assert raw["bgp_peers"] == []
     # The reduced snapshot still builds a map.
     assert build_snapshot(raw)["summary"]["sites"] == 2
 
@@ -196,7 +202,9 @@ async def test_collect_account_keeps_the_wan_links_when_the_full_query_is_refuse
         raise AssertionError(name)
 
     async with _client(handler) as client:
-        raw = await collect_account(client, "42", {"include_users": False, "include_ranges": False})
+        raw = await collect_account(
+            client, "42", {"include_users": False, "include_ranges": False, "include_firewall": False}
+        )
 
     assert seen == ["plexusSites", "plexusSitesWan"]
     assert [e["path"] for e in raw["errors"]] == ["accountSnapshot.sites (full detail)"]
@@ -222,11 +230,221 @@ async def test_collect_account_falls_back_to_the_basic_user_query():
         raise AssertionError(name)
 
     async with _client(handler) as client:
-        raw = await collect_account(client, "42", {"include_ranges": False})
+        raw = await collect_account(client, "42", {"include_ranges": False, "include_firewall": False})
 
     assert seen == ["plexusSites", "plexusUsers", "plexusUsersBasic"]
     assert len(raw["users"]) == 3
     assert [e["path"] for e in raw["errors"]] == ["accountSnapshot.users (full detail)"]
+
+
+def _policy_response(field: str, payload: dict) -> httpx.Response:
+    """A firewall policy as Cato returns it: every rule wrapped in ``rule``."""
+    policy = {"enabled": payload["enabled"], "rules": [{"rule": r} for r in payload["rules"]]}
+    return httpx.Response(200, json={"data": {"policy": {field: {"policy": policy}}}})
+
+
+@pytest.mark.asyncio
+async def test_collect_account_reads_the_wan_and_internet_firewall_policies():
+    sample = build_sample_raw()
+    seen: list[tuple[str, dict]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = _operation(request)
+        seen.append((body["operationName"], body["variables"]))
+        if body["operationName"] == "plexusSites":
+            return httpx.Response(200, json={"data": {"accountSnapshot": {"id": "42", "sites": sample["sites"]}}})
+        if body["operationName"] == "plexusWanFirewall":
+            assert "policy(accountId: $accountId)" in body["query"] and "direction" in body["query"]
+            return _policy_response("wanFirewall", sample["wan_firewall"])
+        if body["operationName"] == "plexusInternetFirewall":
+            assert "appCategory" in body["query"] and "direction" not in body["query"]
+            return _policy_response("internetFirewall", sample["internet_firewall"])
+        raise AssertionError(body["operationName"])
+
+    progress: list[dict] = []
+    async with _client(handler) as client:
+        raw = await collect_account(client, "42", {"include_users": False, "include_ranges": False}, progress.append)
+
+    assert seen[1:] == [("plexusWanFirewall", {"accountId": "42"}), ("plexusInternetFirewall", {"accountId": "42"})]
+    assert raw["errors"] == []
+    assert raw["wan_firewall"] == sample["wan_firewall"]
+    assert raw["internet_firewall"] == sample["internet_firewall"]
+    assert progress[-1]["calls_done"] == progress[-1]["calls_total"] == 3
+
+
+@pytest.mark.asyncio
+async def test_collect_account_falls_back_to_the_reduced_firewall_queries():
+    sample = build_sample_raw()
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        name = _operation(request)["operationName"]
+        seen.append(name)
+        if name == "plexusSites":
+            return httpx.Response(200, json={"data": {"accountSnapshot": {"id": "42", "sites": sample["sites"]}}})
+        if name == "plexusWanFirewallBasic":
+            return _policy_response("wanFirewall", sample["wan_firewall"])
+        if name in ("plexusWanFirewall", "plexusInternetFirewall", "plexusInternetFirewallBasic"):
+            return httpx.Response(200, json={"errors": [{"message": 'Cannot query field "policy" on type "Query"'}]})
+        raise AssertionError(name)
+
+    async with _client(handler) as client:
+        raw = await collect_account(client, "42", {"include_users": False, "include_ranges": False})
+
+    assert seen == [
+        "plexusSites",
+        "plexusWanFirewall",
+        "plexusWanFirewallBasic",
+        "plexusInternetFirewall",
+        "plexusInternetFirewallBasic",
+    ]
+    # The reduced rules are kept, and marked as such.
+    assert raw["wan_firewall"]["reduced"] is True and len(raw["wan_firewall"]["rules"]) == 4
+    # Not collected at all: absent, not an empty policy.
+    assert raw["internet_firewall"] is None
+    assert [e["path"] for e in raw["errors"]] == [
+        "policy.wanFirewall (full detail)",
+        "policy.internetFirewall (full detail)",
+        "policy.internetFirewall",
+    ]
+    cloud = next(n for n in build_snapshot(raw)["nodes"] if n["id"] == CLOUD_NODE_ID)["forwarding"]
+    assert [p["name"] for p in cloud["policies"]] == ["WAN firewall rules"]
+    # The ranges were not asked for either.
+    assert cloud["not_collected"] == ["Route table (site network ranges)", "Internet firewall rules"]
+    # What the reduced query leaves out may narrow any rule: none is decided on addresses alone.
+    assert all(r["src"] == r["dst"] == ["any"] for r in cloud["policies"][0]["rules"])
+    assert all("fields Cato did not return" in r["unresolved"] for r in cloud["policies"][0]["rules"])
+
+
+_BGP_PEER = {
+    "id": "b-1",
+    "name": "Core router",
+    "site": {"id": "1002", "name": "Branch-Cleveland"},
+    "peerAsn": 65010,
+    "catoAsn": 8075,
+    "peerIp": "10.60.20.2",
+    "catoIp": "10.60.20.1",
+    "advertiseDefaultRoute": True,
+    "advertiseAllRoutes": False,
+    "advertiseSummaryRoutes": True,
+    "summaryRoute": [{"route": "10.0.0.0/8"}],
+}
+
+_SITE_IDS = ["1001", "1002", "1003", "1004"]
+
+
+def _bgp_handler(sample: dict, seen: list[str], answers: dict):
+    """The site list and empty lookups, then ``answers[operation](site_id)``
+    for the per-site BGP peer queries."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = _operation(request)
+        name = body["operationName"]
+        seen.append(name)
+        if name == "plexusSites":
+            return httpx.Response(200, json={"data": {"accountSnapshot": {"id": "42", "sites": sample["sites"]}}})
+        if name == "plexusLookup":
+            return httpx.Response(200, json={"data": {"entityLookup": {"total": 0, "items": []}}})
+        assert name in ("plexusBgpPeersOfSite", "plexusBgpPeersOfSiteBasic")
+        assert "site(accountId: $accountId)" in body["query"] and "bgpPeerList(input: $input)" in body["query"]
+        assert "$input: BgpPeerListInput!" in body["query"]
+        # A secret: never asked for.
+        assert "md5AuthKey" not in body["query"]
+        site_id = body["variables"]["input"]["site"]["input"]
+        assert body["variables"] == {"accountId": "42", "input": {"site": {"by": "ID", "input": site_id}}}
+        return answers[name](site_id)
+
+    return handler
+
+
+def _peers_response(peers: list[dict]) -> httpx.Response:
+    return httpx.Response(200, json={"data": {"site": {"bgpPeerList": {"bgpPeer": peers, "total": len(peers)}}}})
+
+
+def _refused(field: str) -> httpx.Response:
+    return httpx.Response(200, json={"errors": [{"message": f'Cannot query field "{field}"'}]})
+
+
+@pytest.mark.asyncio
+async def test_collect_account_reads_the_bgp_peers_site_by_site_with_the_ranges():
+    sample = build_sample_raw()
+    seen: list[str] = []
+    asked: list[str] = []
+    unnamed = {"id": "b-2", "name": "VPC router", "peerIp": "172.31.0.2"}
+
+    def of_site(site_id: str) -> httpx.Response:
+        asked.append(site_id)
+        return _peers_response({"1002": [_BGP_PEER], "1004": [unnamed]}.get(site_id, []))
+
+    progress: list[dict] = []
+    async with _client(_bgp_handler(sample, seen, {"plexusBgpPeersOfSite": of_site})) as client:
+        raw = await collect_account(client, "42", {"include_users": False, "include_firewall": False}, progress.append)
+
+    assert seen == ["plexusSites", "plexusLookup", "plexusLookup"] + ["plexusBgpPeersOfSite"] * 4
+    assert asked == _SITE_IDS
+    # A peer that does not name its site is given the one asked for.
+    assert raw["bgp_peers"] == [_BGP_PEER, {**unnamed, "site": {"id": "1004"}}]
+    assert raw["errors"] == []
+    # Progress is reported once for the routing data, not per site.
+    assert [p["phase"] for p in progress].count("cato routing") == 1
+    assert progress[-1]["calls_done"] == progress[-1]["calls_total"] == 4
+    notes = {
+        n["id"]: n["forwarding"]["not_collected"]
+        for n in build_snapshot(raw)["nodes"]
+        if n["id"] in ("d:5003", "s:1004", "d:5001")
+    }
+    assert notes == {"d:5001": [], "d:5003": ["Routes learned by BGP"], "s:1004": ["Routes learned by BGP"]}
+
+
+@pytest.mark.asyncio
+async def test_collect_account_falls_back_to_the_reduced_bgp_peer_query():
+    sample = build_sample_raw()
+    seen: list[str] = []
+    asked: list[str] = []
+    reduced = {"id": "b-1", "name": "Core router", "site": {"id": "1002"}, "peerIp": "10.60.20.2"}
+
+    def basic(site_id: str) -> httpx.Response:
+        asked.append(site_id)
+        return _peers_response([reduced] if site_id == "1002" else [])
+
+    answers = {"plexusBgpPeersOfSite": lambda _site: _refused("catoAsn"), "plexusBgpPeersOfSiteBasic": basic}
+    async with _client(_bgp_handler(sample, seen, answers)) as client:
+        raw = await collect_account(client, "42", {"include_users": False, "include_firewall": False})
+
+    # Refused once: the full query is not asked again for the later sites.
+    assert seen[3:] == ["plexusBgpPeersOfSite"] + ["plexusBgpPeersOfSiteBasic"] * 4
+    assert asked == _SITE_IDS
+    assert raw["bgp_peers"] == [reduced]
+    assert [e["path"] for e in raw["errors"]] == ["site.bgpPeerList (full detail)"]
+
+
+@pytest.mark.asyncio
+async def test_collect_account_leaves_the_bgp_peers_uncollected_when_cato_refuses_them():
+    sample = build_sample_raw()
+    seen: list[str] = []
+    answers = {
+        "plexusBgpPeersOfSite": lambda _site: _refused("catoAsn"),
+        "plexusBgpPeersOfSiteBasic": lambda _site: _refused("bgpPeer"),
+    }
+    async with _client(_bgp_handler(sample, seen, answers)) as client:
+        raw = await collect_account(client, "42", {"include_users": False, "include_firewall": False})
+
+    # The first site's reduced query is refused too: no other site is asked.
+    assert seen[3:] == ["plexusBgpPeersOfSite", "plexusBgpPeersOfSiteBasic"]
+    # None, not []: the normalizer must not take it for sites without peers.
+    assert raw["bgp_peers"] is None
+    assert [e["path"] for e in raw["errors"]] == ["site.bgpPeerList (full detail)", "site.bgpPeerList"]
+
+
+@pytest.mark.asyncio
+async def test_collect_account_asks_for_no_bgp_peers_without_the_ranges():
+    sample = build_sample_raw()
+    seen: list[str] = []
+    async with _client(_bgp_handler(sample, seen, {})) as client:
+        raw = await collect_account(
+            client, "42", {"include_users": False, "include_ranges": False, "include_firewall": False}
+        )
+    assert seen == ["plexusSites"] and raw["bgp_peers"] is None
 
 
 @pytest.mark.asyncio
@@ -272,8 +490,26 @@ def test_snapshot_joins_sockets_to_their_pop_and_pops_to_the_cloud(snapshot):
     assert links[("d:5003", "pop:New York")]["status"] == "reachable"
     assert links[("d:5001", "pop:Ashburn")]["kind"] == "vpn"
     assert ("pop:Ashburn", CLOUD_NODE_ID) in links and ("pop:New York", CLOUD_NODE_ID) in links
-    # A site without a Socket is one node standing for its connection.
-    assert links[("s:1004", "pop:Ashburn")]["status"] == "reachable"
+    # A site without a Socket is one node standing for its connection, with
+    # an edge per IPsec tunnel: the primary first, the secondary standing by.
+    tunnels = [e for e in snapshot["edges"] if (e["a"], e["b"]) == ("s:1004", "pop:Ashburn")]
+    assert [(e["kind"], e["label"], e["status"], e["a_port"], e["b_port"]) for e in tunnels] == [
+        ("vpn3p", "IPsec tunnel (primary)", "reachable", "192.0.2.90", "192.0.2.80"),
+        ("vpn3p", "IPsec tunnel (secondary)", "ready", "192.0.2.91", "192.0.2.81"),
+    ]
+    assert dict(tunnels[0]["sections"][0]["rows"]) == {
+        "A end": "AWS-us-east-1",
+        "B end": "PoP Ashburn",
+        "Site IP": "192.0.2.90",
+        "Cato IP": "192.0.2.80",
+        "IKE version": "2",
+        "Primary": "Yes",
+        "Status": "reachable",
+        "Discovered via": "Cato API",
+    }
+    assert tunnels[0]["sections"][0]["title"] == "IPsec tunnel (primary)"
+    # Four Sockets' tunnels, two PoPs' backbone links, three users' and the two IPsec tunnels.
+    assert snapshot["summary"]["vpn_tunnels"] == len([e for e in snapshot["edges"] if e["kind"] != "uplink"]) == 11
     # A site that is down stays attached to the cloud by a down tunnel.
     assert links[("d:5004", CLOUD_NODE_ID)]["status"] == "unreachable"
     down = next(n for n in snapshot["nodes"] if n["id"] == "d:5004")
@@ -285,7 +521,7 @@ def test_an_ipsec_site_reads_cato_list_of_tunnels():
     # sample has the primary second); older captures hold a single object.
     site = next(s for s in build_snapshot(build_sample_raw())["sites"] if s["id"] == "1004")
     rows = _section(site, "IPsec tunnel")["rows"]
-    assert [r[1] for r in rows] == ["192.0.2.90", "192.0.2.91"]
+    assert [(r[1], r[4]) for r in rows] == [("192.0.2.90", "reachable"), ("192.0.2.91", "ready")]
     raw = build_sample_raw()
     for item in raw["sites"]:
         if item["info"]["ipsec"]:
@@ -299,6 +535,11 @@ def test_an_ipsec_site_reads_cato_list_of_tunnels():
     built = build_snapshot(raw)
     node = next(n for n in built["nodes"] if n["id"] == "s:1004")
     assert node["ip"] == "192.0.2.90"
+    # One tunnel: one edge.
+    tunnels = [e for e in built["edges"] if e["a"] == "s:1004"]
+    assert [(e["b"], e["label"], e["a_port"]) for e in tunnels] == [
+        ("pop:Ashburn", "IPsec tunnel (primary)", "192.0.2.90")
+    ]
     primary = next(n for n in built["nodes"] if n["id"] == "d:5001")
     assert primary["serial"] == "X1700-0001-AAAA" and primary.get("site_sections") is True
 
@@ -436,6 +677,14 @@ def test_export_marks_only_the_cloud_to_pop_links_as_backbone(snapshot):
     pops = [n["id"] for n in snapshot["nodes"] if n["id"].startswith("pop:")]
     # The HTML viewer always draws these; site tunnels and users stay optional.
     assert backbone == {(f"meraki:7:{pop}", "meraki:7:cato:cloud") for pop in pops}
+    # An IPsec site's tunnels are IPsec links, not backbone.
+    ipsec = [e for e in export["edges"] if e["a"] == "meraki:7:s:1004"]
+    assert [(e["b"], e["kind"], e.get("backbone", False)) for e in ipsec] == [
+        ("meraki:7:pop:Ashburn", "vpn3p", False),
+        ("meraki:7:pop:Ashburn", "vpn3p", False),
+    ]
+    merged = [e for e in edges if e["from"] == "meraki:7:s:1004"]
+    assert [e["protocol"] for e in merged] == ["vpn-ipsec", "vpn-ipsec"]
 
 
 def test_node_details_report_the_provider_and_site(snapshot):
@@ -505,6 +754,7 @@ def test_api_cato_account_crud_keeps_the_key_write_only(api):
         "site_name_contains": "",
         "include_users": True,
         "include_ranges": True,
+        "include_firewall": True,
         "inventory_enrich": True,
     }
     assert "super-secret-key" not in created.text
@@ -689,8 +939,9 @@ def test_sockets_pops_and_the_cloud_carry_forwarding_hops(snapshot):
         ("10.60.20.0/24", "connected", None),
         ("0.0.0.0/0", "default", {"org_node": "pop:New York"}),
     ]
+    # The firewall policies are the Cloud's, not the Sockets'.
     assert socket["policies"] == [] and socket["nat"] == [] and socket["vpn"] == []
-    assert socket["not_collected"] == ["WAN firewall rules", "Internet firewall rules"]
+    assert socket["not_collected"] == []
 
     # A PoP routes its own sites to their Socket, the rest over the backbone.
     pop = {r["prefix"]: r for r in _fwd(snapshot, "pop:New York")["routes"]}
@@ -708,7 +959,149 @@ def test_sockets_pops_and_the_cloud_carry_forwarding_hops(snapshot):
     # A site that is down is reached over its down tunnel to the cloud.
     assert by_prefix["10.61.20.0/24"]["peer"] == {"org_node": "d:5004"}
     assert _fwd(snapshot, "d:5004")["routes"][-1]["peer"] == {"org_node": CLOUD_NODE_ID}
-    assert cloud["not_collected"] == ["WAN firewall rules"]
+    # Everything else leaves for the internet, behind a Cato address that is not collected.
+    assert [(i["name"], i["kind"], i["ip"]) for i in cloud["interfaces"]] == [("Internet", "wan", "")]
+    default = by_prefix["0.0.0.0/0"]
+    assert (default["kind"], default["interface"], default["peer"]) == ("default", "Internet", None)
+    assert cloud["routes"][-1] is default
+    assert [(n["kind"], n["original_src"], n["translated_src"]) for n in cloud["nat"]] == [
+        ("interface_pat", ["any"], ["interface"])
+    ]
+    assert [(p["name"], p["applies"], p["default"]) for p in cloud["policies"]] == [
+        ("WAN firewall rules", "wan_traffic", "deny"),
+        ("Internet firewall rules", "internet_traffic", "allow"),
+    ]
+    assert cloud["not_collected"] == []
+    # Cato enforces its policy at the PoP a flow enters by: every PoP carries the same rule sets.
+    for pop_id in ("pop:New York", "pop:Ashburn"):
+        assert _fwd(snapshot, pop_id)["policies"] == cloud["policies"]
+        assert _fwd(snapshot, pop_id)["policies"] is not cloud["policies"]
+
+
+def test_firewall_policies_not_collected_are_notes_on_the_pops_and_the_cloud():
+    raw = build_sample_raw()
+    raw["wan_firewall"] = raw["internet_firewall"] = None
+    snapshot = build_snapshot(raw)
+    for node_id in (CLOUD_NODE_ID, "pop:New York", "pop:Ashburn"):
+        block = _fwd(snapshot, node_id)
+        assert block["policies"] == []
+        assert block["not_collected"] == ["WAN firewall rules", "Internet firewall rules"]
+    assert _fwd(snapshot, "d:5003")["not_collected"] == []
+
+
+def _rules(snapshot: dict, name: str) -> list[dict]:
+    policy = next(p for p in _fwd(snapshot, CLOUD_NODE_ID)["policies"] if p["name"] == name)
+    return policy["rules"]
+
+
+def test_sample_firewall_rules_map_onto_forwarding_rules(snapshot):
+    wan = _rules(snapshot, "WAN firewall rules")
+    assert [(r["index"], r["name"], r["action"]) for r in wan] == [
+        (1, "Isolate Denver from servers", "deny"),
+        # Direction BOTH: a second rule with the ends swapped.
+        (1, "Isolate Denver from servers (return)", "deny"),
+        (2, "Sites to HQ servers", "allow"),
+        (3, "Remote users to HQ", "allow"),
+        (4, "Any to any", "allow"),
+    ]
+    # A site is every range of it.
+    assert (wan[0]["src"], wan[0]["dst"]) == (["10.61.20.0/24"], ["10.50.10.0/24"])
+    assert (wan[1]["src"], wan[1]["dst"]) == (["10.50.10.0/24"], ["10.61.20.0/24"])
+    # A range is found by its entity id; a custom service is its protocol and ports.
+    servers = wan[2]
+    assert servers["src"] == ["10.60.20.0/24", "172.31.0.0/16"] and servers["dst"] == ["10.50.10.0/24"]
+    assert (servers["protocol"], servers["dst_ports"], servers["unresolved"]) == ("tcp", "443", [])
+    # A users group is not addresses: any, and named as unresolved.
+    assert wan[3]["src"] == ["any"] and wan[3]["unresolved"] == ["users group VPN Users"]
+    assert wan[3]["dst"] == ["10.50.10.0/24", "10.50.20.0/24", "10.50.1.0/24"]
+    assert (wan[4]["src"], wan[4]["dst"], wan[4]["protocol"], wan[4]["dst_ports"]) == (["any"], ["any"], "any", "any")
+
+    internet = _rules(snapshot, "Internet firewall rules")
+    assert [(r["index"], r["action"], r["unresolved"]) for r in internet] == [
+        (1, "deny", ["app category Malware"]),
+        (2, "allow", []),
+    ]
+
+
+def _rule_raw(**fields) -> dict:
+    return {"id": "x", "name": "Rule", "index": 1, "enabled": True, "action": "ALLOW", **fields}
+
+
+def _one_policy(rules: list[dict], key: str = "wan_firewall") -> list[dict]:
+    raw = build_sample_raw()
+    raw[key] = {"enabled": True, "rules": rules, "reduced": False}
+    name = "WAN firewall rules" if key == "wan_firewall" else "Internet firewall rules"
+    return _rules(build_snapshot(raw), name)
+
+
+def test_firewall_rule_addresses_services_and_conditions_are_resolved_or_kept_unresolved():
+    rules = _one_policy(
+        [
+            _rule_raw(
+                index=2,
+                name="Ranges and users",
+                direction="FROM",
+                source={
+                    "ip": ["10.9.0.1"],
+                    "ipRange": [{"from": "10.9.1.0", "to": "10.9.1.255"}],
+                    "siteNetworkSubnet": [{"name": "Servers"}],
+                    "user": [{"id": "nope", "name": "Dana Reyes"}],
+                },
+                destination={"networkInterface": [{"name": "HQ-DataCenter \\ LAN 01"}]},
+                service={
+                    "custom": [
+                        {"port": ["80", "8080"], "protocol": "TCP"},
+                        {"portRange": {"from": "1000", "to": "2000"}, "protocol": "TCP_UDP"},
+                    ]
+                },
+            ),
+            _rule_raw(
+                index=1,
+                name="Shared names",
+                action="PROMPT",
+                enabled=False,
+                source={"siteNetworkSubnet": [{"name": "Users"}], "host": [{"name": "printer"}]},
+                service={"standard": [{"name": "HTTPS"}, {"name": "Microsoft Teams"}]},
+                schedule={"activeOn": "WORKING_HOURS"},
+                connectionOrigin="REMOTE",
+            ),
+            _rule_raw(index=3, name="Isolated", action="RBI", service={"standard": [{"name": "SSH"}]}),
+        ]
+    )
+    # Cato's order, by index.
+    assert [r["name"] for r in rules] == ["Shared names", "Ranges and users", "Ranges and users", "Isolated"]
+
+    shared = rules[0]
+    assert shared["enabled"] is False and shared["action"] == "prompt"
+    # "Users" is a range of several sites: not a guess at one of them.
+    assert shared["src"] == ["any"] and shared["protocol"] == "any" and shared["dst_ports"] == "any"
+    assert shared["unresolved"] == [
+        "network range Users",
+        "host printer",
+        "service Microsoft Teams",
+        "connection origin remote",
+        "schedule working hours",
+    ]
+
+    # FROM: the rule applies from its destination to its source. One rule per protocol.
+    tcp, udp = rules[1], rules[2]
+    assert tcp["src"] == ["10.50.10.0/24", "10.50.20.0/24", "10.50.1.0/24"]
+    assert tcp["dst"] == ["10.9.0.1/32", "10.9.1.0/24", "10.50.10.0/24", "10.41.0.11/32"]
+    assert (tcp["protocol"], tcp["dst_ports"]) == ("tcp", "80,8080,1000-2000")
+    assert (udp["protocol"], udp["dst_ports"], udp["src"], udp["dst"]) == ("udp", "1000-2000", tcp["src"], tcp["dst"])
+    assert tcp["unresolved"] == udp["unresolved"] == []
+
+    isolated = rules[3]
+    assert (isolated["action"], isolated["comment"]) == ("allow", "Remote browser isolation")
+    assert (isolated["protocol"], isolated["dst_ports"]) == ("tcp", "22")
+
+
+def test_a_firewall_policy_turned_off_has_no_rules_and_an_unknown_default():
+    # What Cato does with traffic when a policy is off is not documented: never a guess.
+    raw = build_sample_raw()
+    raw["wan_firewall"]["enabled"] = False
+    policy = next(p for p in _fwd(build_snapshot(raw), CLOUD_NODE_ID)["policies"] if p["name"] == "WAN firewall rules")
+    assert policy["rules"] == [] and policy["default"] == "unknown"
 
 
 def test_ha_sockets_ipsec_sites_and_users_carry_forwarding_too(snapshot):
@@ -718,9 +1111,109 @@ def test_ha_sockets_ipsec_sites_and_users_carry_forwarding_too(snapshot):
         ("172.31.0.0/16", None),
         ("0.0.0.0/0", {"org_node": "pop:Ashburn"}),
     ]
+    # Each IPsec tunnel is an interface of the site, named like its edge.
+    assert [(i["name"], i["kind"], i["ip"], i["enabled"]) for i in ipsec["interfaces"]] == [
+        ("IPsec tunnel (primary)", "tunnel", "192.0.2.90", True),
+        ("IPsec tunnel (secondary)", "tunnel", "192.0.2.91", True),
+        ("VPC (172.31.0.0/16)", "lan", "", True),
+    ]
     user = _fwd(snapshot, "cato:user:9002")
     assert user["interfaces"][0]["ip"] == "10.41.0.12" and user["interfaces"][0]["kind"] == "tunnel"
     assert [(r["prefix"], r["kind"]) for r in user["routes"]] == [
         ("10.41.0.12/32", "connected"),
         ("0.0.0.0/0", "default"),
     ]
+
+
+def _ipsec_site(raw: dict) -> dict:
+    return next(s for s in raw["sites"] if s["id"] == "1004")
+
+
+def test_ipsec_tunnel_states_follow_the_site():
+    # Cato reports no state per tunnel: a disconnected site has every tunnel down.
+    raw = build_sample_raw()
+    _ipsec_site(raw)["connectivityStatus"] = "disconnected"
+    snap = build_snapshot(raw)
+    tunnels = [e for e in snap["edges"] if e["a"] == "s:1004"]
+    assert [(e["b"], e["status"]) for e in tunnels] == [("pop:Ashburn", "unreachable"), ("pop:Ashburn", "unreachable")]
+    block = _fwd(snap, "s:1004")
+    assert [(i["name"], i["enabled"]) for i in block["interfaces"] if i["kind"] == "tunnel"] == [
+        ("IPsec tunnel (primary)", False),
+        ("IPsec tunnel (secondary)", False),
+    ]
+    # Still routed by its PoP, where the trace meets the down tunnels.
+    assert block["routes"][-1]["peer"] == {"org_node": "pop:Ashburn"}
+    assert {r["prefix"]: r["peer"] for r in _fwd(snap, "pop:Ashburn")["routes"]}["172.31.0.0/16"] == {
+        "org_node": "s:1004"
+    }
+    site = next(s for s in snap["sites"] if s["id"] == "1004")
+    assert [r[4] for r in _section(site, "IPsec tunnel")["rows"]] == ["unreachable", "unreachable"]
+
+    _ipsec_site(raw)["connectivityStatus"] = "degraded"
+    degraded = [e["status"] for e in build_snapshot(raw)["edges"] if e["a"] == "s:1004"]
+    assert degraded == ["degraded", "degraded"]
+
+    # No PoP: the one tunnel to the Cato Cloud, as for a Socket.
+    _ipsec_site(raw)["popName"] = None
+    _ipsec_site(raw)["connectivityStatus"] = "disconnected"
+    links = [(e["b"], e["kind"], e["status"]) for e in build_snapshot(raw)["edges"] if e["a"] == "s:1004"]
+    assert links == [(CLOUD_NODE_ID, "vpn", "unreachable")]
+
+
+_SITE_BLOCKS = ("d:5001", "d:5002", "d:5003", "d:5004", "s:1004")
+
+
+def test_a_site_with_a_bgp_peer_may_learn_routes_that_are_not_collected():
+    raw = build_sample_raw()
+    # Named by site name only (the reduced query's peers may lack the id).
+    raw["bgp_peers"] = [_BGP_PEER, {"id": "b-2", "name": "VPC router", "site": {"name": "aws-us-east-1"}}]
+    snap = build_snapshot(raw)
+    notes = {node_id: _fwd(snap, node_id)["not_collected"] for node_id in _SITE_BLOCKS}
+    assert notes == {
+        "d:5001": [],
+        "d:5002": [],
+        "d:5003": ["Routes learned by BGP"],
+        "d:5004": [],
+        "s:1004": ["Routes learned by BGP"],
+    }
+    assert _fwd(snap, "pop:New York")["not_collected"] == [] and _fwd(snap, CLOUD_NODE_ID)["not_collected"] == []
+
+    columns = ["Peer", "Peer IP", "Peer ASN", "Cato IP", "Cato ASN", "Advertises"]
+    row = ["Core router", "10.60.20.2", "65010", "10.60.20.1", "8075", "Default route, Summary routes 10.0.0.0/8"]
+    site = next(s for s in snap["sites"] if s["id"] == "1002")
+    socket = next(n for n in snap["nodes"] if n["id"] == "d:5003")
+    for entity in (site, socket):
+        section = _section(entity, "BGP peers")
+        assert section["columns"] == columns and section["rows"] == [row]
+    assert not any(s["title"] == "BGP peers" for s in next(x for x in snap["sites"] if x["id"] == "1001")["sections"])
+
+
+def test_bgp_peers_not_read_are_a_note_on_every_site():
+    raw = build_sample_raw()
+    raw["bgp_peers"] = None
+    snap = build_snapshot(raw)
+    for node_id in _SITE_BLOCKS:
+        assert _fwd(snap, node_id)["not_collected"] == ["Routes learned by BGP (BGP peers were not read)"]
+    # The PoPs and the Cloud have the ranges; only the sites may learn more.
+    assert _fwd(snap, "pop:Ashburn")["not_collected"] == []
+    # Read and empty: nothing is missing (the sample).
+    assert all(_fwd(build_snapshot(build_sample_raw()), n)["not_collected"] == [] for n in _SITE_BLOCKS)
+
+
+def test_ranges_not_read_leave_every_route_table_incomplete():
+    raw = build_sample_raw()
+    raw["ranges"] = raw["interfaces"] = []
+    raw["errors"] = [{"scope": "account", "path": "entityLookup siteRange", "status": 403, "message": "denied"}]
+    snap = build_snapshot(raw)
+    for node_id in (*_SITE_BLOCKS, "pop:Ashburn", "pop:New York", CLOUD_NODE_ID):
+        assert _fwd(snap, node_id)["not_collected"] == ["Route table (site network ranges)"], node_id
+    assert _fwd(snap, "cato:user:9001")["not_collected"] == []
+
+    # Not asked for: neither the ranges nor the BGP peers were read, and one note says so.
+    raw = build_sample_raw()
+    raw["options"] = {**raw["options"], "include_ranges": False}
+    raw["ranges"] = raw["interfaces"] = []
+    raw["bgp_peers"] = None
+    snap = build_snapshot(raw)
+    for node_id in (*_SITE_BLOCKS, "pop:Ashburn", CLOUD_NODE_ID):
+        assert _fwd(snap, node_id)["not_collected"] == ["Route table (site network ranges)"], node_id

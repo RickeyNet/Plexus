@@ -31,6 +31,7 @@ export const FALLBACK_CATO_OPTIONS: CatoBuildOptions = {
   site_name_contains: '',
   include_users: true,
   include_ranges: true,
+  include_firewall: true,
   inventory_enrich: true,
 };
 
@@ -40,7 +41,8 @@ type CatoToggleKey = {
 
 export const CATO_OPTION_TOGGLES: { key: CatoToggleKey; label: string; hint: string }[] = [
   { key: 'include_users', label: 'Remote users', hint: 'Users connected with the Cato Client when the collection runs, one node each next to their PoP: name, email, device, VPN IP, public IP, ISP, location and recent connections.' },
-  { key: 'include_ranges', label: 'Network ranges (subnets)', hint: 'The ranges behind every site, for search and for picking path endpoints by subnet.' },
+  { key: 'include_ranges', label: 'Network ranges (subnets)', hint: 'The ranges behind every site, for search and for picking path endpoints by subnet, and the BGP peers of each site, so path tracing knows where routes may be learned.' },
+  { key: 'include_firewall', label: 'Firewall rules', hint: 'The WAN and Internet firewall rules, which path tracing applies at the Cato Cloud.' },
   { key: 'inventory_enrich', label: 'Correlate with Plexus inventory', hint: 'Attach SNMP/SSH data Plexus already holds for a Socket that is also an inventory host.' },
 ];
 
