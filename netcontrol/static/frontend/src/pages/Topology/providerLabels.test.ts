@@ -34,6 +34,14 @@ describe('Palo Alto Panorama names', () => {
   });
 });
 
+describe('Appgate SDP names', () => {
+  it('labels the appgate provider everywhere', () => {
+    expect(providerLabel('appgate')).toBe('Appgate SDP');
+    expect(providerSourceName('appgate')).toBe('Appgate SDP API');
+    expect(providerScopeName('appgate')).toBe('Appgate collective');
+  });
+});
+
 describe('GCP names', () => {
   it('labels the gcp provider everywhere', () => {
     expect(providerLabel('gcp')).toBe('GCP');

@@ -19,7 +19,7 @@ export interface MerakiBuildOptions {
 }
 
 /** Integrations that feed the map through the same organization pipeline. */
-export type CloudProvider = 'meraki' | 'cato' | 'fmc' | 'panorama';
+export type CloudProvider = 'meraki' | 'cato' | 'fmc' | 'panorama' | 'appgate';
 
 /** Clouds whose accounts are Cloud Visibility accounts that also feed the map. */
 export type CloudAccountProvider = 'aws' | 'azure' | 'gcp';
@@ -90,17 +90,44 @@ export interface PanoramaBuildOptions {
   inventory_enrich: boolean;
 }
 
-export type OrgBuildOptions = MerakiBuildOptions | CatoBuildOptions | FmcBuildOptions | PanoramaBuildOptions;
+/**
+ * An Appgate SDP collective, read through the admin API of one of its
+ * Controllers. Every boolean but `verify_tls` is one kind of data the
+ * collector reads; see the toggles in `APPGATE_OPTION_TOGGLES`.
+ */
+export interface AppgateBuildOptions {
+  /** The admin user; the password is the entry's write-only secret. */
+  username: string;
+  verify_tls: boolean;
+  site_name_contains: string;
+  /** Appliance health, sessions and role status. */
+  include_appliance_state: boolean;
+  /** Policies, entitlements, conditions and ringfence rules. */
+  include_entitlements: boolean;
+  /** Users connected with the Appgate Client when the collection runs. */
+  include_users: boolean;
+  /** One access-details query per connected user (tunnel IP, entitlements granted). */
+  include_session_details: boolean;
+  inventory_enrich: boolean;
+}
+
+export type OrgBuildOptions =
+  | MerakiBuildOptions
+  | CatoBuildOptions
+  | FmcBuildOptions
+  | PanoramaBuildOptions
+  | AppgateBuildOptions;
 
 /**
  * A Meraki organization, a Cato account (`provider` 'cato'), a Cisco FMC
- * (`provider` 'fmc') or a Palo Alto Panorama (`provider` 'panorama').
+ * (`provider` 'fmc'), a Palo Alto Panorama (`provider` 'panorama') or an
+ * Appgate SDP collective (`provider` 'appgate').
  */
 export interface MerakiOrg {
   id: number;
   name: string;
   provider: CloudProvider;
-  /** Meraki organization ID, Cato account ID, FMC domain or Panorama device group. */
+  /** Meraki organization ID, Cato account ID, FMC domain, Panorama device group or Appgate identity provider. */
   org_id: string;
   base_url: string;
   /** The API key / password is write-only: the API only reports whether one is stored. */
@@ -134,7 +161,7 @@ export interface MerakiSnapshotSummary {
   vpn_tunnels?: number;
   wan_uplinks?: number;
   vlans?: number;
-  /** Cato only: remote users connected when the collection ran. */
+  /** Cato and Appgate only: remote users connected when the collection ran. */
   remote_users?: number;
 }
 
@@ -291,7 +318,7 @@ export interface PathHop {
   edge: number | string | null;
   label: string;
   site: string;
-  /** meraki | fmc | panorama | cato | aws | azure | gcp | inventory | internet | unknown */
+  /** meraki | fmc | panorama | cato | appgate | aws | azure | gcp | inventory | internet | unknown */
   provider: string;
   /** Ingress interface or subnet, "" when none. */
   in: string;
@@ -386,6 +413,7 @@ export function useMerakiOrgs() {
         cato_default_options: CatoBuildOptions;
         fmc_default_options: FmcBuildOptions;
         panorama_default_options: PanoramaBuildOptions;
+        appgate_default_options: AppgateBuildOptions;
       }>('/meraki/orgs'),
     // Keeps the "Building" badge honest for builds this tab isn't tracking
     // (started in another tab, or before a page reload).
@@ -409,7 +437,7 @@ export interface TopologySource {
   /** What the last collection found, e.g. "12 sites, 80 devices". */
   detail: string;
   warning_count: number;
-  /** The snapshot on the map (Meraki, Cato, Cisco FMC, Palo Alto Panorama), whose warnings can be listed. */
+  /** The snapshot on the map (Meraki, Cato, Cisco FMC, Palo Alto Panorama, Appgate SDP), whose warnings can be listed. */
   snapshot_id?: number | null;
   collecting: boolean;
   can_collect: boolean;

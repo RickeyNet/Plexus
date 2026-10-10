@@ -14,6 +14,8 @@ what feeds and surrounds that merge:
     are read as "fmc")
   - Palo Alto Panoramas and the firewalls they manage, stored and collected
     the same way (``provider`` "panorama")
+  - Appgate SDP collectives (Controllers, Gateways, connected users), stored
+    and collected the same way (``provider`` "appgate")
   - AWS, Azure and GCP: the accounts Cloud Visibility discovers are turned
     into one more snapshot per cloud (``provider`` "aws" / "azure" / "gcp")
     whenever their discovery changes
@@ -44,6 +46,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
+from netcontrol.integrations.appgate.client import (
+    AppgateApiError,
+    AppgateClient,
+    validate_base_url as validate_appgate_base_url,
+)
+from netcontrol.integrations.appgate.collector import (
+    DEFAULT_OPTIONS as APPGATE_DEFAULT_OPTIONS,
+    collect_appgate,
+    sanitize_options as sanitize_appgate_options,
+)
+from netcontrol.integrations.appgate.normalize import build_snapshot as build_appgate_snapshot
+from netcontrol.integrations.appgate.sample import build_sample_raw as build_appgate_sample_raw
 from netcontrol.integrations.aws.normalize import build_snapshot as build_aws_snapshot
 from netcontrol.integrations.aws.reachability import Reachability
 from netcontrol.integrations.aws.sample import build_sample as build_aws_sample
@@ -133,6 +147,7 @@ SAMPLE_FMC_NAME = "Sample Cisco FMC (demo data)"
 # entry under it is still flagged as demo data (and renamed when rebuilt).
 SAMPLE_FMC_LEGACY_NAME = "Sample AnyConnect FMC (demo data)"
 SAMPLE_PANORAMA_NAME = "Sample Palo Alto Panorama (demo data)"
+SAMPLE_APPGATE_NAME = "Sample Appgate SDP (demo data)"
 SAMPLE_AWS_NAME = "Sample AWS Account (demo data)"
 SAMPLE_AZURE_NAME = "Sample Azure Subscription (demo data)"
 SAMPLE_GCP_NAME = "Sample GCP Project (demo data)"
@@ -142,6 +157,8 @@ SAMPLE_AWS_AUTH_TYPE = "sample"
 SAMPLE_FMC_URL = "https://10.210.2.20"
 # The demo Panorama address: never contacted.
 SAMPLE_PANORAMA_URL = "https://10.210.2.30"
+# The demo Appgate Controller's admin address (its own interface): never contacted.
+SAMPLE_APPGATE_URL = "https://10.160.1.10:8443"
 
 PROVIDER_MERAKI = "meraki"
 PROVIDER_CATO = "cato"
@@ -149,7 +166,9 @@ PROVIDER_CATO = "cato"
 PROVIDER_FMC = "fmc"
 # A Palo Alto Panorama and the firewalls it manages.
 PROVIDER_PANORAMA = "panorama"
-PROVIDERS = (PROVIDER_MERAKI, PROVIDER_CATO, PROVIDER_FMC, PROVIDER_PANORAMA)
+# An Appgate SDP collective: its Controllers, Gateways and connected users.
+PROVIDER_APPGATE = "appgate"
+PROVIDERS = (PROVIDER_MERAKI, PROVIDER_CATO, PROVIDER_FMC, PROVIDER_PANORAMA, PROVIDER_APPGATE)
 # Provider keys of earlier releases, read as their current key: an FMC was
 # "anyconnect" while it only drew remote access VPN headends.
 LEGACY_PROVIDERS = {"anyconnect": PROVIDER_FMC}
@@ -159,6 +178,7 @@ SAMPLE_ORG_NAMES = (
     SAMPLE_FMC_NAME,
     SAMPLE_FMC_LEGACY_NAME,
     SAMPLE_PANORAMA_NAME,
+    SAMPLE_APPGATE_NAME,
 )
 # Not organization providers: AWS, Azure and GCP accounts are Cloud Visibility accounts.
 PROVIDER_AWS = "aws"
@@ -331,8 +351,9 @@ async def _subnets_of(entry: dict[str, Any]) -> list[dict[str, Any]]:
 async def ipam_subnets() -> list[dict[str, Any]]:
     """The subnets of the latest snapshot of every organization and account,
     for the IPAM overview: the ``subnet_index`` rows (Meraki VLANs, single
-    LANs, SVIs and static routes, Cato network ranges, FMC and Panorama
-    connected subnets, static routes and remote access VPN address pools)
+    LANs, SVIs and static routes, Cato and Appgate network ranges, FMC and
+    Panorama connected subnets, static routes and remote access VPN address
+    pools)
     with their organization and provider. AWS, Azure and GCP are left out:
     their networks and subnets reach IPAM as Cloud Visibility resources
     already."""
@@ -384,8 +405,8 @@ def _session_user(request: Request) -> str:
 class MerakiOrgCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     # "meraki" (organization), "cato" (account), "fmc" (FMC; the legacy
-    # "anyconnect" is accepted and stored as "fmc") or "panorama" (Palo Alto
-    # Panorama). Fixed once created.
+    # "anyconnect" is accepted and stored as "fmc"), "panorama" (Palo Alto
+    # Panorama) or "appgate" (Appgate SDP collective). Fixed once created.
     provider: str = Field(default=PROVIDER_MERAKI, max_length=20)
     org_id: str = Field(default="", max_length=64)
     base_url: str = Field(default="", max_length=200)
@@ -414,6 +435,17 @@ def _provider_of(org: dict) -> str:
 
 
 def _clean_base_url(raw: str | None, provider: str = PROVIDER_MERAKI) -> str:
+    if provider == PROVIDER_APPGATE:
+        try:
+            return validate_appgate_base_url(raw or "")
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Appgate address must be an https URL of a Controller's admin interface "
+                    "(for example https://appgate.example.com:8443)"
+                ),
+            ) from None
     if provider == PROVIDER_PANORAMA:
         try:
             return validate_panorama_base_url(raw or "")
@@ -457,6 +489,8 @@ def _options_for(provider: str, raw: object) -> dict[str, Any]:
         return sanitize_fmc_options(raw)
     if provider == PROVIDER_PANORAMA:
         return sanitize_panorama_options(raw)
+    if provider == PROVIDER_APPGATE:
+        return sanitize_appgate_options(raw)
     return sanitize_options(raw)
 
 
@@ -510,6 +544,21 @@ def _panorama_error_message(exc: PanoramaApiError) -> str:
     return f"Panorama API error (HTTP {exc.status_code}){detail}"
 
 
+def _appgate_error_message(exc: AppgateApiError) -> str:
+    # ``detail`` is the message the Controller answered with.
+    if exc.status_code in (401, 403):
+        return f"Appgate rejected the login (HTTP {exc.status_code})"
+    if exc.status_code == 406:
+        return "Appgate refused the API version"
+    if exc.transport:
+        return "Could not reach the Appgate controller"
+    if exc.status_code is None:
+        # Checks Plexus makes itself: an unsupported peer version, an admin
+        # user that needs a second factor.
+        return str(exc)
+    return f"Appgate API error (HTTP {exc.status_code}): {exc.detail or exc}"
+
+
 def _api_error_message(exc: MerakiApiError) -> str:
     if exc.status_code == 401:
         return "Meraki rejected the API key (HTTP 401)"
@@ -532,6 +581,7 @@ async def list_meraki_orgs_api():
         "cato_default_options": dict(CATO_DEFAULT_OPTIONS),
         "fmc_default_options": dict(FMC_DEFAULT_OPTIONS),
         "panorama_default_options": dict(PANORAMA_DEFAULT_OPTIONS),
+        "appgate_default_options": dict(APPGATE_DEFAULT_OPTIONS),
     }
 
 
@@ -540,7 +590,7 @@ async def create_meraki_org_api(body: MerakiOrgCreate, request: Request):
     user = _session_user(request)
     provider = _provider_key(body.provider) or PROVIDER_MERAKI
     if provider not in PROVIDERS:
-        raise HTTPException(status_code=400, detail="Provider must be meraki, cato, fmc or panorama")
+        raise HTTPException(status_code=400, detail="Provider must be meraki, cato, fmc, panorama or appgate")
     org = await db.create_meraki_org(
         body.name.strip(),
         provider=provider,
@@ -619,6 +669,8 @@ async def validate_meraki_org_api(org_ref: int):
         return await _validate_fmc(org, api_key)
     if _provider_of(org) == PROVIDER_PANORAMA:
         return await _validate_panorama(org, api_key)
+    if _provider_of(org) == PROVIDER_APPGATE:
+        return await _validate_appgate(org, api_key)
     try:
         async with MerakiClient(api_key, base_url=org["base_url"] or DEFAULT_BASE_URL, max_retries=1) as client:
             visible = await client.get_all("organizations")
@@ -741,7 +793,65 @@ async def _validate_panorama(org: dict, secret: str) -> dict:
     }
 
 
+def _appgate_client(org: dict, password: str, options: dict, **kwargs: Any) -> AppgateClient:
+    """An Appgate client for an entry. The admin user name lives in the
+    options, the identity provider it signs in with in ``org_id``, and its
+    password is the entry's write-only secret (the token the login answers
+    with is never stored)."""
+    username = str(options.get("username") or "").strip()
+    if not username:
+        raise ValueError("Set the admin user name on this entry")
+    return AppgateClient(
+        org.get("base_url") or "",
+        username,
+        password,
+        provider_name=str(org.get("org_id") or "").strip() or "local",
+        verify_tls=bool(options.get("verify_tls", True)),
+        **kwargs,
+    )
+
+
+async def _validate_appgate(org: dict, password: str) -> dict:
+    options = sanitize_appgate_options(org.get("options"))
+    try:
+        async with _appgate_client(org, password, options, max_retries=1) as client:
+            await client.login()
+            sites = await client.get("/sites", {"range": "0-0"})
+            appliances = await client.get("/appliances", {"range": "0-0"})
+    except AppgateApiError as exc:
+        return {"ok": False, "message": _appgate_error_message(exc), "organizations": []}
+    except ValueError as exc:
+        return {"ok": False, "message": str(exc), "organizations": []}
+
+    def count(body: Any) -> int:
+        if isinstance(body, dict):
+            try:
+                return int(
+                    body.get("totalCount") if body.get("totalCount") is not None else len(body.get("data") or [])
+                )
+            except TypeError, ValueError:
+                return 0
+        return len(body) if isinstance(body, list) else 0
+
+    provider = str(org.get("org_id") or "").strip() or "local"
+    return {
+        "ok": True,
+        "message": f"Login OK: Appgate SDP peer v{client.peer_version}, {count(sites)} sites, "
+        f"{count(appliances)} appliances",
+        "organizations": [{"id": provider, "name": org["name"]}],
+    }
+
+
 # ── Builds ───────────────────────────────────────────────────────────────────
+
+
+async def _collect_appgate(org: dict, password: str, options: dict, progress) -> dict:
+    async with _appgate_client(org, password, options) as client:
+        raw = await collect_appgate(client, options, progress)
+    # The snapshot is named after the entry; the collective's own name is
+    # kept as ``collective_name``.
+    raw["collective"]["name"] = org["name"]
+    return raw
 
 
 async def _collect_panorama(org: dict, secret: str, options: dict, progress) -> dict:
@@ -817,6 +927,7 @@ _SNAPSHOT_BUILDERS = {
     PROVIDER_CATO: build_cato_snapshot,
     PROVIDER_FMC: build_fmc_snapshot,
     PROVIDER_PANORAMA: build_panorama_snapshot,
+    PROVIDER_APPGATE: build_appgate_snapshot,
     # A capture stored under the legacy key builds the same way.
     "anyconnect": build_fmc_snapshot,
 }
@@ -843,6 +954,8 @@ async def _run_build(job_id: str, org: dict, user: str) -> None:
             raw = await _collect_fmc(org, api_key, options, progress)
         elif provider == PROVIDER_PANORAMA:
             raw = await _collect_panorama(org, api_key, options, progress)
+        elif provider == PROVIDER_APPGATE:
+            raw = await _collect_appgate(org, api_key, options, progress)
         else:
             async with MerakiClient(
                 api_key,
@@ -885,6 +998,10 @@ async def _run_build(job_id: str, org: dict, user: str) -> None:
     except PanoramaApiError as exc:
         error = _panorama_error_message(exc)
         LOGGER.warning("panorama: build failed for %s: %s", org["name"], redact_value(f"{exc} {exc.detail}"))
+    except AppgateApiError as exc:
+        error = _appgate_error_message(exc)
+        # The message and detail never hold the password or the token.
+        LOGGER.warning("appgate: build failed for %s: %s", org["name"], redact_value(f"{exc} {exc.detail}"))
     except ValueError as exc:
         error = str(exc)
     except Exception as exc:  # noqa: BLE001 - job must always reach a terminal state
@@ -986,6 +1103,26 @@ async def _build_panorama_sample(user: str) -> dict:
     return {"ok": True, "org_ref": org["id"], **result}
 
 
+async def _build_appgate_sample(user: str) -> dict:
+    started = time.monotonic()
+    org = await db.get_meraki_org_by_name(SAMPLE_APPGATE_NAME)
+    if not org:
+        org = await db.create_meraki_org(
+            SAMPLE_APPGATE_NAME,
+            provider=PROVIDER_APPGATE,
+            org_id="local",
+            base_url=SAMPLE_APPGATE_URL,
+            options=sanitize_appgate_options({"username": "plexus-readonly"}),
+            created_by=user,
+        )
+    if not org:
+        raise HTTPException(status_code=500, detail="Could not create the sample Appgate collective")
+    raw = build_appgate_sample_raw()
+    raw["collective"]["name"] = org["name"]
+    result = await _store_snapshot(org, build_appgate_snapshot(raw), user=user, started=started)
+    return {"ok": True, "org_ref": org["id"], **result}
+
+
 async def _build_cloud_sample(cloud: _Cloud, user: str) -> dict:
     """Discover the demo account of an AWS, Azure or GCP cloud. It is a Cloud
     Visibility account like any other (and is deleted there); only its data
@@ -1036,7 +1173,7 @@ async def build_sample_topology_api(request: Request, provider: str = Query(defa
     ``provider=cato`` builds the demo Cato account instead of the Meraki one,
     ``provider=fmc`` (or the legacy ``anyconnect``) the demo Cisco FMC and
     its FTDs, ``provider=panorama`` the demo Palo Alto Panorama and its
-    firewalls,
+    firewalls, ``provider=appgate`` the demo Appgate SDP collective,
     ``provider=aws`` / ``provider=azure`` / ``provider=gcp`` the demo AWS
     account / Azure subscription / GCP project in Cloud Visibility."""
     user = _session_user(request)
@@ -1047,6 +1184,8 @@ async def build_sample_topology_api(request: Request, provider: str = Query(defa
         return await _build_fmc_sample(user)
     if provider == PROVIDER_PANORAMA:
         return await _build_panorama_sample(user)
+    if provider == PROVIDER_APPGATE:
+        return await _build_appgate_sample(user)
     if provider in _CLOUD_BY_PROVIDER:
         return await _build_cloud_sample(_CLOUD_BY_PROVIDER[provider], user)
     started = time.monotonic()
@@ -1241,7 +1380,7 @@ def _cloud_source(account: dict) -> dict[str, Any]:
 async def list_topology_sources_api():
     """Everything that feeds the topology map, with its last collection:
     neighbor discovery of the inventory, Meraki organizations, Cato accounts,
-    Cisco FMCs, Palo Alto Panoramas and the AWS, Azure and GCP accounts of
+    Cisco FMCs, Palo Alto Panoramas, Appgate SDP collectives and the AWS, Azure and GCP accounts of
     Cloud Visibility. Credentials are never included."""
     newest: dict[int, dict] = {}
     for snapshot in await db.list_meraki_snapshots(limit=500):

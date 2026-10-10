@@ -10,7 +10,8 @@ deployments, and the remote access VPN side (AnyConnect / Secure Client
 headends, their address pools and the users connected right now). It is all
 read over the FMC REST API, read-only, and drawn on the same map as the
 devices Plexus discovers itself and any Meraki organizations, Cato accounts,
-Palo Alto Panoramas ([panorama-topology.md](panorama-topology.md)), AWS
+Palo Alto Panoramas ([panorama-topology.md](panorama-topology.md)),
+Appgate SDP collectives ([appgate-topology.md](appgate-topology.md)), AWS
 accounts and Azure subscriptions. It is covered by the same search box,
 Path Mode and IPAM page, and is included in the HTML export.
 
