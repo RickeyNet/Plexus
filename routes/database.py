@@ -253,6 +253,12 @@ _INSERT_ID_TABLES = {
     "meraki_compliance_assignments",
     "meraki_compliance_results",
     "software_alerts",
+    "ipam_subnet_utilization",
+    "ipam_reconciliation_diffs",
+    "interface_ts",
+    "trap_syslog_events",
+    "interface_inventory",
+    "vlan_definitions",
 }
 
 # ── SQL safety helpers ────────────────────────────────────────────────────────
@@ -2103,11 +2109,12 @@ CREATE TABLE IF NOT EXISTS ipam_subnet_utilization (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     subnet          TEXT    NOT NULL,
     vrf_name        TEXT    NOT NULL DEFAULT '',
-    total           INTEGER NOT NULL DEFAULT 0,
-    used            INTEGER NOT NULL DEFAULT 0,
-    reserved        INTEGER NOT NULL DEFAULT 0,
-    pending         INTEGER NOT NULL DEFAULT 0,
-    free            INTEGER NOT NULL DEFAULT 0,
+    -- BIGINT: a /64's counts are clamped to int64, which overflows int4 on Postgres.
+    total           BIGINT  NOT NULL DEFAULT 0,
+    used            BIGINT  NOT NULL DEFAULT 0,
+    reserved        BIGINT  NOT NULL DEFAULT 0,
+    pending         BIGINT  NOT NULL DEFAULT 0,
+    free            BIGINT  NOT NULL DEFAULT 0,
     utilization_pct REAL    NOT NULL DEFAULT 0,
     captured_at     TEXT    NOT NULL DEFAULT (datetime('now'))
 );
@@ -2248,11 +2255,19 @@ CREATE INDEX IF NOT EXISTS idx_lab_drift_runs_device
 """
 
 
+# SQLite ``REAL`` is an 8-byte double; Postgres ``REAL`` is float4, which
+# rounds values like an 8.6 CVSS score to 8.600000381469727. Map the column
+# type to ``DOUBLE PRECISION`` (only the uppercase type keyword after
+# whitespace, so identifiers such as ``real_ip`` are untouched).
+_REAL_TYPE_RE = re.compile(r"(?<=\s)REAL(?=[\s,)]|$)")
+
+
 def _convert_sqlite_schema_to_postgres(sqlite_schema: str) -> str:
     converted = sqlite_schema
     converted = converted.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
     converted = converted.replace("DEFAULT (datetime('now'))", "DEFAULT NOW()")
     converted = converted.replace(" BLOB", " BYTEA")
+    converted = _REAL_TYPE_RE.sub("DOUBLE PRECISION", converted)
     return converted
 
 
@@ -2570,7 +2585,17 @@ def _convert_sqlite_ddl_to_postgres(query: str) -> str:
     converted = converted.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
     converted = converted.replace("DEFAULT (datetime('now'))", "DEFAULT NOW()")
     converted = converted.replace(" BLOB", " BYTEA")
+    converted = _REAL_TYPE_RE.sub("DOUBLE PRECISION", converted)
     return converted
+
+
+# Table name of a single-row INSERT, including SQLite's conflict-clause forms
+# (``INSERT OR IGNORE INTO t`` is rewritten to ``... ON CONFLICT DO NOTHING``
+# after this match runs on the original query text).
+_INSERT_TABLE_RE = re.compile(
+    r"^\s*INSERT\s+(?:OR\s+(?:IGNORE|REPLACE)\s+)?INTO\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+    re.IGNORECASE,
+)
 
 
 def _parse_rowcount(status: str) -> int:
@@ -2715,7 +2740,7 @@ class _PostgresConnectionCompat:
 
         has_returning = "RETURNING" in query_upper
         if query_upper.startswith("INSERT") and not has_returning:
-            m = re.match(r"^\s*INSERT\s+INTO\s+([a-zA-Z_][a-zA-Z0-9_]*)", query_stripped, re.IGNORECASE)
+            m = _INSERT_TABLE_RE.match(query_stripped)
             table = m.group(1).lower() if m else ""
             if table in _INSERT_ID_TABLES:
                 converted = f"{converted.rstrip()} RETURNING id"

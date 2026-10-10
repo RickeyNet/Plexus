@@ -62,6 +62,7 @@ def _auth_client(tmp_path, monkeypatch, request):
 # ── Migration ────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.sqlite_only  # inspects the schema with PRAGMA table_info
 @pytest.mark.asyncio
 async def test_runtime_columns_exist_after_init(tmp_path, monkeypatch):
     db_path = str(tmp_path / "rt_migrate.db")

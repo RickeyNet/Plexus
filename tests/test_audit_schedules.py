@@ -41,6 +41,7 @@ async def _table_columns(table: str) -> list[str]:
 # ── Migration shape ────────────────────────────────────────────────────────
 
 
+@pytest.mark.sqlite_only  # inspects the schema with PRAGMA table_info
 async def test_migration_0043_creates_schedule_table(tmp_path, monkeypatch):
     await _init_clean_db(tmp_path, monkeypatch)
 
@@ -58,6 +59,7 @@ async def test_migration_0043_creates_schedule_table(tmp_path, monkeypatch):
     assert expected.issubset(set(cols)), f"audit_schedules missing columns: {expected - set(cols)}"
 
 
+@pytest.mark.sqlite_only  # inspects the schema with PRAGMA table_info
 async def test_migration_0043_adds_schedule_id_to_runs(tmp_path, monkeypatch):
     await _init_clean_db(tmp_path, monkeypatch)
 

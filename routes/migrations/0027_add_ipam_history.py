@@ -96,12 +96,12 @@ async def _up_postgres(db) -> None:
             id               SERIAL PRIMARY KEY,
             subnet           TEXT    NOT NULL,
             vrf_name         TEXT    NOT NULL DEFAULT '',
-            total            INTEGER NOT NULL DEFAULT 0,
-            used             INTEGER NOT NULL DEFAULT 0,
-            reserved         INTEGER NOT NULL DEFAULT 0,
-            pending          INTEGER NOT NULL DEFAULT 0,
-            free             INTEGER NOT NULL DEFAULT 0,
-            utilization_pct  REAL    NOT NULL DEFAULT 0,
+            total            BIGINT  NOT NULL DEFAULT 0,
+            used             BIGINT  NOT NULL DEFAULT 0,
+            reserved         BIGINT  NOT NULL DEFAULT 0,
+            pending          BIGINT  NOT NULL DEFAULT 0,
+            free             BIGINT  NOT NULL DEFAULT 0,
+            utilization_pct  DOUBLE PRECISION NOT NULL DEFAULT 0,
             captured_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         """

@@ -13,6 +13,7 @@ from __future__ import annotations
 import sqlite3
 
 import netcontrol.app as app_module
+import pytest
 import routes.database as db_module
 
 
@@ -103,6 +104,7 @@ def test_campaign_reports_unknown_host_ids(tmp_path, monkeypatch, request):
 # ── SVG stub escaping ────────────────────────────────────────────────────────
 
 
+@pytest.mark.sqlite_only  # seeds rows with sqlite3.connect(DB_PATH)
 def test_svg_stub_escapes_template_name(tmp_path, monkeypatch, request):
     client, db_path = _auth_client(tmp_path, monkeypatch, request)
     # Seed host + malicious-named template + host_graph via a plain sqlite conn

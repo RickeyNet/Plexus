@@ -1198,3 +1198,22 @@ async def test_collect_organization_reads_the_rule_sets_best_effort():
         bare = await collect_organization(client, "1", {"include_firewall": False, "include_switch_routing": False})
     assert "vpn_firewall" not in bare["org"] and bare["errors"] == []
     assert not {"one_to_many_nat", "inbound_firewall", "switch_acl"} & set(bare["networks_detail"]["N1"])
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [
+        # SQLite default: naive UTC text.
+        ("2026-10-09 12:00:00", "2026-10-09T12:00:00+00:00"),
+        # Postgres NOW()::text: hour-only offset, which browsers do not parse.
+        ("2026-10-09 12:00:00.123456+00", "2026-10-09T12:00:00.123456+00:00"),
+        ("2026-10-09T12:00:00Z", "2026-10-09T12:00:00+00:00"),
+        ("2026-10-09T14:00:00+02:00", "2026-10-09T14:00:00+02:00"),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_utc_iso_normalises_both_engines_stamps(stored, expected):
+    from netcontrol.routes.meraki_topology import _utc_iso
+
+    assert _utc_iso(stored) == expected

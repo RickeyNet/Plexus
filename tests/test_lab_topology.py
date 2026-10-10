@@ -65,6 +65,7 @@ def _auth_client(tmp_path, monkeypatch, request):
 # ── Migration ────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.sqlite_only  # inspects sqlite_master
 @pytest.mark.asyncio
 async def test_topology_tables_exist_after_init(tmp_path, monkeypatch):
     db_path = str(tmp_path / "topo_migrate.db")
