@@ -24,7 +24,7 @@ from netcontrol.integrations.meraki.client import MerakiApiError, MerakiClient, 
 from netcontrol.integrations.meraki.clients import client_records
 from netcontrol.integrations.meraki.collector import collect_organization, sanitize_options, scrub_secrets
 from netcontrol.integrations.meraki.enrich import enrich_snapshot, load_inventory_index, show_commands_for
-from netcontrol.integrations.meraki.forwarding import appliance_block, meraki_addresses
+from netcontrol.integrations.meraki.forwarding import UPLINK_NAT_MODE, appliance_block, meraki_addresses
 from netcontrol.integrations.meraki.html_export import export_filename, render_topology_html
 from netcontrol.integrations.meraki.normalize import VPN_PEER_SITE_ID, InventoryIndex, build_snapshot
 from netcontrol.integrations.meraki.sample import build_sample_raw
@@ -1032,22 +1032,31 @@ def test_snapshot_branch_appliance_carries_its_forwarding_block(snapshot):
     assert block["not_collected"] == ["Layer 7 firewall rules", "Group policies"]
 
 
-def test_an_appliance_with_no_lan_is_a_concentrator_and_does_not_translate():
-    # A vMX in passthrough / VPN concentrator mode has no VLAN and no single
-    # LAN, only its uplink: it bridges the VPC and never hides a source
-    # behind the uplink address.
-    block = appliance_block(
-        detail={"vlans": [], "single_lan": {}, "static_routes": []},
-        vpn={},
-        vpn_by_net={},
-        net_details={},
-        net_names={},
-        uplinks=[{"interface": "wan1", "ip": "10.50.1.10", "gateway": "10.50.1.1", "status": "active"}],
-        peers_cfg={},
-        vpn_firewall=None,
-    )
-    assert [i["kind"] for i in block["interfaces"]] == ["wan"]
-    assert block["nat"] == []
+def test_only_the_collected_deployment_mode_gives_an_appliance_its_uplink_nat():
+    # An MX in routed mode hides sources behind its uplink address; a vMX in
+    # passthrough / VPN concentrator mode (no VLAN, no single LAN, only its
+    # uplink) bridges the VPC and does not. The collected deployment mode
+    # says which; when the settings were not read nothing is assumed and the
+    # block says so, whatever LAN data came back.
+    def block(settings: dict | None, lan: dict) -> dict:
+        return appliance_block(
+            detail={"appliance_settings": settings, "vlans": [], "single_lan": lan, "static_routes": []},
+            vpn={},
+            vpn_by_net={},
+            net_details={},
+            net_names={},
+            uplinks=[{"interface": "wan1", "ip": "10.50.1.10", "gateway": "10.50.1.1", "status": "active"}],
+            peers_cfg={},
+            vpn_firewall=None,
+        )
+
+    lan = {"subnet": "192.168.128.0/24", "applianceIp": "192.168.128.1"}
+    concentrator = block({"deploymentMode": "passthrough"}, {})
+    assert [i["kind"] for i in concentrator["interfaces"]] == ["wan"]
+    assert concentrator["nat"] == [] and UPLINK_NAT_MODE not in concentrator["not_collected"]
+    assert [n["kind"] for n in block({"deploymentMode": "routed"}, lan)["nat"]] == ["interface_pat"]
+    unread = block(None, lan)
+    assert unread["nat"] == [] and UPLINK_NAT_MODE in unread["not_collected"]
 
 
 def _appliance_routes(detail: dict, uplinks: list[dict]) -> list[dict]:

@@ -295,6 +295,7 @@ async def collect_organization(
 
         add("link_layer", "topology/linkLayer")
         if "appliance" in products:
+            add("appliance_settings", "appliance/settings")  # deploymentMode: routed / passthrough
             add("vlans", "appliance/vlans")
             add("single_lan", "appliance/singleLan")
             add("static_routes", "appliance/staticRoutes")

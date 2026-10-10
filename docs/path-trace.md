@@ -170,10 +170,14 @@ hops.
 
 Meraki 1:1 NAT, port forwarding and 1:Many NAT apply to traffic arriving on
 the uplink they name. A source the rule does not allow is blocked there. The
-uplink address hides LAN sources only when the flow leaves on the WAN, and
-not at all on an MX with no LAN (a vMX in passthrough or VPN concentrator
-mode, which bridges its VPC); VPN subnet translation applies only when the
-flow leaves over AutoVPN. FTD NAT rules match
+uplink address hides LAN sources only on an MX in routed mode and only when
+the flow leaves on the WAN; an MX in passthrough or VPN concentrator mode (a
+vMX that bridges its VPC) does not translate. Only the collected deployment
+mode (the network's appliance settings) says which: when it was not
+collected, nothing is assumed, and a flow leaving on the WAN gets an unknown
+NAT item there (**Uplink NAT (deployment mode)**), since the source the next
+hop sees is not known. VPN subnet translation applies only when the flow
+leaves over AutoVPN. FTD NAT rules match
 their source and destination interfaces by name or by security zone; a
 static auto NAT rule translates the source on the way out and the mapped
 address back on the way in. A rule that translates to the same networks is
@@ -256,8 +260,11 @@ rest of the connection.
 The replies to a source an MX hid behind its uplink address are addressed
 to the MX itself: a vMX in NAT mode in a VPC gets them from the VPC,
 translates them back and sends them over AutoVPN, which the trace follows
-rather than ending at the VPC. An MX with no LAN at all (a vMX in
-passthrough or VPN concentrator mode) is taken not to translate.
+rather than ending at the VPC. A vMX in passthrough or VPN concentrator
+mode (its collected deployment mode) does not translate, so the replies are
+addressed to the branch host and the VPC routes them to the vMX by the route
+table entry for the branch range (its target is the vMX's network
+interface).
 
 **Reverse** is a different question: it traces a new connection opened
 from the destination to the source, with its own request and replies.

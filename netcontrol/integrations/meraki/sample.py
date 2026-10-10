@@ -226,6 +226,7 @@ def build_sample_raw(branches: int = 10) -> dict[str, Any]:
 
         detail: dict[str, Any] = {
             "link_layer": {"nodes": [], "links": links},
+            "appliance_settings": {"clientTrackingMethod": "MAC address", "deploymentMode": "routed"},
             "vlans": [
                 {
                     "id": 10,
