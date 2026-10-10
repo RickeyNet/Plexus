@@ -88,6 +88,7 @@ def _auth_client(tmp_path, monkeypatch, request):
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+@pytest.mark.sqlite_only  # inspects sqlite_master
 @pytest.mark.asyncio
 async def test_federation_tables_exist_after_init(tmp_path, monkeypatch, request):
     """init_db should create federation_peers and federation_snapshots tables."""

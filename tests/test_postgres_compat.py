@@ -240,3 +240,86 @@ async def test_new_tables_read_for_lastrowid_get_returning_id(table):
     conn = _PostgresConnectionCompat(fake)
     cur = await conn.execute(f"INSERT INTO {table} (a) VALUES (?)", (1,))
     assert cur.lastrowid == 42
+
+
+@pytest.mark.parametrize(
+    "table",
+    [
+        "ipam_subnet_utilization",
+        "ipam_reconciliation_diffs",
+        "interface_ts",
+        "trap_syslog_events",
+        "interface_inventory",
+        "vlan_definitions",
+    ],
+)
+@pytest.mark.asyncio
+async def test_lastrowid_reader_tables_are_allowlisted(table):
+    """Each table's create helper reads ``cursor.lastrowid`` after INSERT."""
+    fake = _FakeConn()
+    conn = _PostgresConnectionCompat(fake)
+    cur = await conn.execute(f"INSERT INTO {table} (a) VALUES (?)", (1,))
+    assert cur.lastrowid == 42
+
+
+@pytest.mark.asyncio
+async def test_insert_or_ignore_appends_returning_id():
+    """``INSERT OR IGNORE INTO`` must be recognised as an insert into the
+    allowlisted table, so it gets ``ON CONFLICT DO NOTHING RETURNING id``."""
+    fake = _FakeConn()
+    conn = _PostgresConnectionCompat(fake)
+    cur = await conn.execute("INSERT OR IGNORE INTO ipam_allocations (address) VALUES (?)", ("10.0.0.1",))
+    assert cur.lastrowid == 42
+    fetched_sql = [c[1] for c in fake.calls if c[0] == "fetch"][0]
+    assert "INSERT INTO ipam_allocations" in fetched_sql
+    assert fetched_sql.rstrip().endswith("ON CONFLICT DO NOTHING RETURNING id")
+
+
+@pytest.mark.parametrize(
+    ("query", "table"),
+    [
+        ("INSERT INTO hosts (a) VALUES (1)", "hosts"),
+        ("  insert or ignore into Hosts (a) VALUES (1)", "Hosts"),
+        ("INSERT OR REPLACE INTO hosts (a) VALUES (1)", "hosts"),
+        ("INSERT\n   OR   IGNORE\n INTO hosts(a) VALUES (1)", "hosts"),
+    ],
+)
+def test_insert_table_regex_accepts_conflict_clauses(query, table):
+    m = db_module._INSERT_TABLE_RE.match(query)
+    assert m is not None and m.group(1) == table
+
+
+@pytest.mark.asyncio
+async def test_ignored_insert_or_ignore_has_no_lastrowid():
+    """A skipped ``ON CONFLICT DO NOTHING ... RETURNING id`` returns no rows:
+    lastrowid is None and rowcount 0, so callers see the insert was ignored."""
+
+    class _NoRowsConn(_FakeConn):
+        async def fetch(self, query, *params):
+            self.calls.append(("fetch", query, params))
+            return []
+
+    conn = _PostgresConnectionCompat(_NoRowsConn())
+    cur = await conn.execute("INSERT OR IGNORE INTO ipam_allocations (address) VALUES (?)", ("10.0.0.1",))
+    assert cur.lastrowid is None
+    assert cur.rowcount == 0
+
+
+def test_real_columns_map_to_double_precision():
+    ddl = "CREATE TABLE t (\n    cvss REAL NOT NULL DEFAULT 0,\n    lat  REAL,\n    lng REAL)"
+    for convert in (db_module._convert_sqlite_ddl_to_postgres, db_module._convert_sqlite_schema_to_postgres):
+        out = convert(ddl)
+        assert "REAL" not in out
+        assert out.count("DOUBLE PRECISION") == 3
+    alter = db_module._convert_sqlite_ddl_to_postgres("ALTER TABLE t ADD COLUMN score REAL")
+    assert alter == "ALTER TABLE t ADD COLUMN score DOUBLE PRECISION"
+
+
+def test_real_mapping_leaves_identifiers_alone():
+    ddl = "CREATE TABLE t (real_ip TEXT, is_real INTEGER, surreal REAL)"
+    out = db_module._convert_sqlite_ddl_to_postgres(ddl)
+    assert out == "CREATE TABLE t (real_ip TEXT, is_real INTEGER, surreal DOUBLE PRECISION)"
+
+
+def test_postgres_schema_has_no_float4_columns():
+    assert db_module._REAL_TYPE_RE.search(db_module.POSTGRES_SCHEMA) is None

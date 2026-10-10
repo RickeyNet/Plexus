@@ -79,6 +79,9 @@ if _PG_TEST_URL_RAW:
 
 _TEST_DB_ENGINE = "postgres" if PG_MODE else "sqlite"
 os.environ["APP_DB_ENGINE"] = _TEST_DB_ENGINE
+# The app's startup guard (routes.database.ensure_supported_db_engine) refuses
+# to boot on sqlite; the in-process suite is the one sanctioned exception.
+os.environ.setdefault("PLEXUS_ALLOW_SQLITE_ENGINE", "1")
 if PG_MODE:
     os.environ["APP_DATABASE_URL"] = _PG_TEST_URL
 
@@ -141,7 +144,11 @@ async def _pg_get_pool_per_loop():
         with _pg_registry_lock:
             pool = _pg_pools.get(loop)
         if pool is None or pool._closed:
-            pool = await _db.asyncpg.create_pool(_db.APP_DATABASE_URL, min_size=1, max_size=10)
+            # Mirror routes.database._get_pg_pool, which pins the session
+            # time zone so TEXT timestamps cast to timestamptz compare to NOW().
+            pool = await _db.asyncpg.create_pool(
+                _db.APP_DATABASE_URL, min_size=1, max_size=10, server_settings={"timezone": "UTC"}
+            )
             with _pg_registry_lock:
                 _pg_pools[loop] = pool
     _db._pg_pool = pool
@@ -251,6 +258,7 @@ def _pg_fresh_database(_pg_session_template):
         _pg_clone_test_db()
         _pg_dirty = False
     yield
+
 
 # ── Leaked TestClient tracking ───────────────────────────────────────────────
 #

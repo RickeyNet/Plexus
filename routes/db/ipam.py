@@ -1213,7 +1213,11 @@ async def create_local_ipam_allocation(
             ),
         )
         await db.commit()
-        alloc_id = cursor.lastrowid
+        # An ignored insert (address already allocated for this source) must
+        # not record history. rowcount is 0 for it on both engines; lastrowid
+        # is None on Postgres but stale (the connection's previous insert) on
+        # SQLite, so it can't be trusted alone.
+        alloc_id = cursor.lastrowid if cursor.rowcount > 0 else None
         if not alloc_id:
             cursor2 = await db.execute(
                 "SELECT * FROM ipam_allocations WHERE source_id = ? AND address = ? LIMIT 1",
