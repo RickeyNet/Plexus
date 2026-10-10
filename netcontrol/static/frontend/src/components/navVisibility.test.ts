@@ -44,6 +44,16 @@ describe('isNavItemVisible', () => {
     expect(isNavItemVisible(item, ctx({ access: ['config-drift'], hidden: ['config-drift'] }))).toBe(true);
   });
 
+  it('shows Configuration to users with only config-backups', () => {
+    // The Configuration page has a drift tab and backup tabs on different
+    // features; a user with either must still reach the page.
+    const item = { feature: ['config-drift', 'config-backups'], visKey: 'configuration' };
+    expect(isNavItemVisible(item, ctx({ access: ['config-backups'] }))).toBe(true);
+    expect(isNavItemVisible(item, ctx({ access: ['config-drift'] }))).toBe(true);
+    expect(isNavItemVisible(item, ctx({ access: ['inventory'] }))).toBe(false);
+    expect(isNavItemVisible(item, ctx({ access: ['config-backups'], hidden: ['configuration'] }))).toBe(false);
+  });
+
   it('uses an explicit visKey instead of the array rule', () => {
     const item = { feature: ['a', 'b'], visKey: 'group' };
     expect(isNavItemVisible(item, ctx({ access: ['a'], hidden: ['a', 'b'] }))).toBe(true);

@@ -1,21 +1,19 @@
 import { useState } from 'react';
 
 import { PageHelp } from '@/components/PageHelp';
-import { AvailabilityTab } from './AvailabilityTab';
 import { BillingTab } from './BillingTab';
-import { CapacityPlanningTab } from './CapacityPlanningTab';
 import { GenerateReportTab } from './GenerateReportTab';
 import { HistoryTab } from './HistoryTab';
 import { OidProfilesTab } from './OidProfilesTab';
 import { SyslogEventsTab } from './SyslogEventsTab';
 
-type Tab = 'generate' | 'history' | 'capacity' | 'availability' | 'events' | 'oid-profiles' | 'billing';
+// Availability and capacity-planning views live under Monitoring (same
+// endpoints, gated on `monitoring`); Reports only exports them.
+type Tab = 'generate' | 'history' | 'events' | 'oid-profiles' | 'billing';
 
 const TABS: { value: Tab; label: string }[] = [
   { value: 'generate', label: 'Generate' },
   { value: 'history', label: 'History' },
-  { value: 'capacity', label: 'Capacity Planning' },
-  { value: 'availability', label: 'Availability' },
   { value: 'events', label: 'Syslog Events' },
   { value: 'oid-profiles', label: 'OID Profiles' },
   { value: 'billing', label: 'Bandwidth Billing' },
@@ -29,14 +27,6 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   history: {
     title: 'Past Reports',
     text: 'Reports you (or scheduled jobs) have generated before. Re-download, share, or delete. Useful for showing auditors the historical record.',
-  },
-  capacity: {
-    title: 'Capacity Planning',
-    text: 'Trend interface and device utilization to project when links will run out of headroom. Sort by growth rate to find the next bottlenecks.',
-  },
-  availability: {
-    title: 'Uptime & Availability',
-    text: 'SLA-style availability summaries per device and per group. Use this for monthly reviews and to spot devices that quietly flap.',
   },
   events: {
     title: 'Syslog Events',
@@ -85,8 +75,6 @@ export function Reports() {
       <div className="card" style={{ padding: '1rem' }}>
         {tab === 'generate' && <GenerateReportTab />}
         {tab === 'history' && <HistoryTab />}
-        {tab === 'capacity' && <CapacityPlanningTab />}
-        {tab === 'availability' && <AvailabilityTab />}
         {tab === 'events' && <SyslogEventsTab />}
         {tab === 'oid-profiles' && <OidProfilesTab />}
         {tab === 'billing' && <BillingTab />}
