@@ -979,13 +979,19 @@ def _count_text(count: object, noun: str) -> str:
 
 
 def _utc_iso(stamp: object) -> str | None:
-    """A stored timestamp as ISO 8601; the database default has no zone."""
+    """A stored timestamp as ISO 8601 with a full ``+HH:MM`` offset.
+
+    SQLite's default has no zone (``2026-10-09 12:00:00``, UTC); Postgres
+    ``NOW()::text`` ends in an hour-only offset (``...12:00:00.123+00``) that
+    browsers' ``Date`` does not parse, so both are normalised."""
     text = str(stamp or "").strip()
     if not text:
         return None
-    if "T" not in text:
-        text = text.replace(" ", "T")
-    return text if text.endswith("Z") or "+" in text[10:] or "-" in text[10:] else f"{text}+00:00"
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return text
+    return (moment if moment.tzinfo else moment.replace(tzinfo=UTC)).isoformat()
 
 
 def _source(key: str, kind: str, name: str, **fields: Any) -> dict[str, Any]:

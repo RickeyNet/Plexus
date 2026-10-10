@@ -199,9 +199,102 @@ def _user(ident: str, name: str, pop: str, vpn_ip: str, public_ip: str, os_type:
     }
 
 
+def _ref(ident: str, name: str) -> dict:
+    return {"id": ident, "name": name}
+
+
+def _endpoint(**fields: Any) -> dict:
+    """A rule's source or destination: every list the query asks for, empty
+    unless given (an empty one is any address)."""
+    empty = (
+        "ip subnet ipRange host site siteNetworkSubnet networkInterface floatingSubnet user usersGroup group "
+        "systemGroup globalIpRange"
+    )
+    return {**{name: [] for name in empty.split()}, **fields}
+
+
+def _fw_rule(
+    index: int,
+    name: str,
+    action: str,
+    *,
+    source: dict | None = None,
+    destination: dict | None = None,
+    custom: list[dict] | None = None,
+    **fields: Any,
+) -> dict:
+    """A firewall rule as ``policy { ... rules { rule } }`` returns it."""
+    return {
+        "id": f"rule-{name.lower().replace(' ', '-')}",
+        "name": name,
+        "description": "",
+        "index": index,
+        "enabled": True,
+        "action": action,
+        "section": _ref("s-1", "Demo rules"),
+        "source": source or _endpoint(),
+        "destination": destination or _endpoint(),
+        "service": {"standard": [], "custom": custom or []},
+        "connectionOrigin": "ANY",
+        "country": [],
+        "device": [],
+        "deviceOS": [],
+        "schedule": {"activeOn": "ALWAYS"},
+        "exceptions": [],
+        **fields,
+    }
+
+
+def _firewalls() -> tuple[dict, dict]:
+    """The WAN firewall (a whitelist) and the Internet firewall (a blacklist)."""
+    wan = [
+        # Both ways: neither end may open a connection to the other.
+        _fw_rule(
+            1,
+            "Isolate Denver from servers",
+            "BLOCK",
+            direction="BOTH",
+            source=_endpoint(site=[_ref("1003", "Branch-Denver")]),
+            destination=_endpoint(subnet=["10.50.10.0/24"]),
+        ),
+        _fw_rule(
+            2,
+            "Sites to HQ servers",
+            "ALLOW",
+            direction="TO",
+            source=_endpoint(site=[_ref("1002", "Branch-Cleveland"), _ref("1004", "AWS-us-east-1")]),
+            destination=_endpoint(siteNetworkSubnet=[_ref("r-HQ-DataCenter-10.50.10.0/24", "Servers")]),
+            custom=[{"port": ["443"], "portRange": None, "protocol": "TCP"}],
+        ),
+        _fw_rule(
+            3,
+            "Remote users to HQ",
+            "ALLOW",
+            direction="TO",
+            source=_endpoint(usersGroup=[_ref("g-1", "VPN Users")]),
+            destination=_endpoint(site=[_ref("1001", "HQ-DataCenter")]),
+        ),
+        _fw_rule(4, "Any to any", "ALLOW", direction="TO"),
+    ]
+    internet = [
+        _fw_rule(
+            1,
+            "Block malware category",
+            "BLOCK",
+            destination={"appCategory": [_ref("c-12", "Malware")]},
+        ),
+        _fw_rule(2, "Allow all", "ALLOW"),
+    ]
+    return (
+        {"enabled": True, "rules": wan, "reduced": False},
+        {"enabled": True, "rules": internet, "reduced": False},
+    )
+
+
 def build_sample_raw() -> dict[str, Any]:
     """A small account: an HA data center, two Socket branches (one down), an
-    IPsec site and a few remote users, across two PoPs."""
+    IPsec site and a few remote users, across two PoPs, and the account's
+    WAN and Internet firewall rules."""
     sites = [
         _site(
             "1001",
@@ -345,6 +438,7 @@ def build_sample_raw() -> dict[str, Any]:
         _user("9002", "Sam Okafor", "Ashburn", "10.41.0.12", "198.51.100.202", "OS_MAC"),
         _user("9003", "Priya Nair", "Ashburn", "10.41.0.13", "198.51.100.10", "OS_WINDOWS", office=True),
     ]
+    wan_firewall, internet_firewall = _firewalls()
     return {
         "account": {"id": "sample", "name": "Sample Cato Account"},
         "timestamp": "2026-10-01T13:00:00Z",
@@ -352,6 +446,10 @@ def build_sample_raw() -> dict[str, Any]:
         "users": users,
         "ranges": ranges,
         "interfaces": interfaces,
+        # Read, and no site has a BGP peer: the routes are the ranges.
+        "bgp_peers": [],
+        "wan_firewall": wan_firewall,
+        "internet_firewall": internet_firewall,
         "errors": [],
         "stats": {"requests": 0, "retries": 0, "rate_limited": 0},
         "options": dict(DEFAULT_OPTIONS),

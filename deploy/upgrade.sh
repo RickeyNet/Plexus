@@ -46,7 +46,6 @@ DRY_RUN=false
 ROLLBACK=false
 SKIP_BACKUP=false
 HEALTHCHECK_TIMEOUT=120
-COMPOSE_PROJECT="${COMPOSE_PROJECT_NAME:-$(basename "${PROJECT_ROOT}")}"
 ROLLBACK_FILE="${PROJECT_ROOT}/state/.upgrade-previous"
 BACKUP_DIR="${PROJECT_ROOT}/state/backups/upgrades"
 
@@ -153,38 +152,26 @@ snapshot_db() {
         log "Skipping database snapshot (--skip-backup)"
         return
     fi
+    # PostgreSQL is the only supported backend. A legacy SQLite install must
+    # migrate first: the new app refuses to start on APP_DB_ENGINE=sqlite.
     local engine
     engine="$(env_get APP_DB_ENGINE)"
     engine="${engine:-postgres}"
-    local stamp
-    stamp="$(date +%Y%m%d-%H%M%S)"
+    if [[ "${engine}" != "postgres" ]]; then
+        die "APP_DB_ENGINE=${engine} in .env: Plexus runs on PostgreSQL only. Migrate with tools/migrate_sqlite_to_postgres.py (see docs/database-backends.md) and set APP_DB_ENGINE=postgres before upgrading"
+    fi
 
-    if [[ "${engine}" == "postgres" ]]; then
-        local user db dest
-        user="$(env_get POSTGRES_USER)"; user="${user:-plexus}"
-        db="$(env_get POSTGRES_DB)"; db="${db:-plexus}"
-        dest="${BACKUP_DIR}/db-${stamp}.sql.gz"
-        log "Snapshotting Postgres → ${dest}"
-        if $DRY_RUN; then
-            echo "  DRY-RUN: docker exec plexus-postgres pg_dump -U ${user} ${db} | gzip > ${dest}"
-        else
-            docker exec plexus-postgres pg_dump -U "${user}" "${db}" | gzip > "${dest}"
-            log "  $(du -h "${dest}" | cut -f1)"
-        fi
+    local stamp user db dest
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    user="$(env_get POSTGRES_USER)"; user="${user:-plexus}"
+    db="$(env_get POSTGRES_DB)"; db="${db:-plexus}"
+    dest="${BACKUP_DIR}/db-${stamp}.sql.gz"
+    log "Snapshotting Postgres → ${dest}"
+    if $DRY_RUN; then
+        echo "  DRY-RUN: docker compose exec -T postgres pg_dump -U ${user} ${db} | gzip > ${dest}"
     else
-        # SQLite lives inside the plexus-db named volume at /app/state/netcontrol.db.
-        # Copy via a throwaway container so we don't depend on the host
-        # being able to read into the docker volume directly.
-        local volume="${COMPOSE_PROJECT}_plexus-db"
-        local dest="${BACKUP_DIR}/sqlite-${stamp}.db.gz"
-        log "Snapshotting SQLite from volume ${volume} → ${dest}"
-        if $DRY_RUN; then
-            echo "  DRY-RUN: docker run --rm -v ${volume}:/src:ro alpine cat /src/netcontrol.db | gzip > ${dest}"
-        else
-            docker run --rm -v "${volume}:/src:ro" alpine \
-                cat /src/netcontrol.db | gzip > "${dest}"
-            log "  $(du -h "${dest}" | cut -f1)"
-        fi
+        compose exec -T postgres pg_dump -U "${user}" "${db}" | gzip > "${dest}"
+        log "  $(du -h "${dest}" | cut -f1)"
     fi
 
     # Retain the last 10 upgrade snapshots; older ones go.
@@ -320,6 +307,9 @@ rollback_hint() {
         echo "  To roll back:" >&2
         echo "    bash deploy/upgrade.sh --rollback" >&2
         echo "  Database snapshot for this upgrade: ${BACKUP_DIR}/" >&2
+        echo "  --rollback restores the code/image only. If the new version already" >&2
+        echo "  migrated the schema, restore the snapshot into a fresh database" >&2
+        echo "  first (steps in deploy/DEPLOYMENT.md, \"Update to Latest Code\")." >&2
         echo "════════════════════════════════════════════════════════════════" >&2
     fi
 }

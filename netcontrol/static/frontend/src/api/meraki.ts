@@ -32,6 +32,7 @@ export interface CatoBuildOptions {
   site_name_contains: string;
   include_users: boolean;
   include_ranges: boolean;
+  include_firewall: boolean;
   inventory_enrich: boolean;
 }
 

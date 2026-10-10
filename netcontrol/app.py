@@ -1413,6 +1413,7 @@ async def _cloud_traffic_metric_sync_loop() -> None:
 async def lifespan(app: FastAPI):
     """Initialize DB and seed on startup."""
     _validate_startup_config()
+    db.ensure_supported_db_engine()
     LOGGER.info("Starting Plexus API")
     await db.init_db()
     await _ensure_default_admin()
