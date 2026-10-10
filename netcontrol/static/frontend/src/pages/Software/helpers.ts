@@ -39,6 +39,8 @@ export function sourceLabel(source: string | null | undefined): string {
       return 'Cato';
     case 'fmc':
       return 'Cisco FMC';
+    case 'panorama':
+      return 'Palo Alto Panorama';
     case 'manual':
       return 'Manual';
     case 'import':

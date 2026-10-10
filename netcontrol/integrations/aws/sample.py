@@ -3,7 +3,8 @@
 The records have the shape the Cloud Visibility AWS collector returns, so
 sample discovery exercises the same path to the Topology map as a live one:
 three VPCs in two regions, a transit gateway with its route table, a VPC
-peering, a firewall pair that forwards traffic, a site-to-site VPN with one
+peering, a firewall pair that forwards traffic (and a Palo Alto VM-Series
+firewall the Panorama sample manages), a site-to-site VPN with one
 tunnel down, a Direct Connect, and the network ACLs and security groups that
 decide what the database subnet accepts.
 Addresses are from the documentation ranges.
@@ -295,6 +296,20 @@ def build_sample() -> tuple[list[dict], list[dict]]:
                 ("subnet-0ed9e0i", "10.210.1.12", ""),
             ],
             kind="c5.xlarge",
+            forwards=True,
+            zone="us-east-1a",
+            group=sg_edge,
+        ),
+        _instance(
+            "i-0f9a001",
+            "pa-vm-edge-1",
+            edge,
+            [
+                ("subnet-0ed9e0m", "10.210.2.13", ""),
+                ("subnet-0ed9e0o", "10.210.0.13", "203.0.113.13"),
+                ("subnet-0ed9e0i", "10.210.1.13", ""),
+            ],
+            kind="m5.xlarge",
             forwards=True,
             zone="us-east-1a",
             group=sg_edge,

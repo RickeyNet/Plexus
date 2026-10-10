@@ -291,7 +291,12 @@ def test_snapshot_shows_only_instances_that_forward_traffic(snapshot):
     assert "i:i-0f3c001" not in kinds and "i:i-0a99001" not in kinds
     # ...but every instance is listed, and so searchable, in its VPC.
     edge = next(s for s in snapshot["sites"] if s["id"] == "vpc-0ed9e00002")
-    assert [r[0] for r in _section(edge, "Instances")["rows"]] == ["fmc-01", "ftdv-ravpn-1", "ftdv-ravpn-2"]
+    assert [r[0] for r in _section(edge, "Instances")["rows"]] == [
+        "fmc-01",
+        "ftdv-ravpn-1",
+        "ftdv-ravpn-2",
+        "pa-vm-edge-1",
+    ]
     ftd = _node(snapshot, "i:i-0f7d001")
     assert ftd["ip"] == "10.210.2.11" and "203.0.113.11" in ftd["alias_ips"]
     assert len(_section(ftd, "Network interfaces")["rows"]) == 3
@@ -1128,7 +1133,7 @@ def test_api_aws_sample_is_a_cloud_visibility_account(api):
     assert api.post("/api/meraki/sample?provider=aws").status_code == 201
     accounts = api.get("/api/cloud/accounts").json()["accounts"]
     assert [(a["provider"], a["auth_type"]) for a in accounts] == [("aws", "sample")]
-    assert len({n["id"] for n in _aws_nodes(api)}) == 12
+    assert len({n["id"] for n in _aws_nodes(api)}) == 13
     # It is not an organization of the Meraki / Cato dialog.
     assert api.get("/api/meraki/orgs").json()["orgs"] == []
 

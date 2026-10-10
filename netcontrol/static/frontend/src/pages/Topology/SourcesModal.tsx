@@ -29,11 +29,13 @@ import { Modal } from '@/components/Modal';
 import { CatoAccountFormModal } from './CatoAccountFormModal';
 import { FmcFormModal } from './FmcFormModal';
 import { MerakiOrgFormModal } from './MerakiOrgFormModal';
+import { PanoramaFormModal } from './PanoramaFormModal';
 import { providerLabel, providerScopeName } from './helpers';
 import {
   FALLBACK_CATO_OPTIONS,
   FALLBACK_FMC_OPTIONS,
   FALLBACK_OPTIONS,
+  FALLBACK_PANORAMA_OPTIONS,
   buildStatusBadge,
   describeProgress,
   formatWhen,
@@ -43,7 +45,7 @@ import {
 const CLOUD_ACCOUNTS_PATH = '/cloud-visibility';
 
 /** Sources that are entries of the organization dialog (collected as a tracked build). */
-const ORG_SOURCE_TYPES = new Set<string>(['meraki', 'cato', 'fmc']);
+const ORG_SOURCE_TYPES = new Set<string>(['meraki', 'cato', 'fmc', 'panorama']);
 
 function isOrgSource(source: TopologySource): boolean {
   return ORG_SOURCE_TYPES.has(source.type);
@@ -253,7 +255,7 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
     <Modal isOpen={isOpen} onClose={onClose} title="Map Sources" size="large">
       <p className="text-muted" style={{ marginTop: 0, fontSize: '0.9rem' }}>
         Everything on the map comes from one of these sources. Inventory devices are scanned for their CDP
-        and LLDP neighbors. Meraki organizations, Cato accounts, Cisco FMCs, AWS accounts, Azure
+        and LLDP neighbors. Meraki organizations, Cato accounts, Cisco FMCs, Palo Alto Panoramas, AWS accounts, Azure
         subscriptions and GCP projects are read from their APIs.
         Collect again whenever you want a fresh picture.
       </p>
@@ -311,6 +313,14 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
             >
               Cisco FMC
             </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              title="A Palo Alto Networks Panorama and the firewalls it manages"
+              onClick={() => handleAdd('panorama')}
+            >
+              Palo Alto Panorama
+            </button>
             <Link className="btn btn-secondary btn-sm" to={CLOUD_ACCOUNTS_PATH} onClick={onClose}>
               AWS Account
             </Link>
@@ -331,7 +341,7 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
         <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '0.75rem' }}>
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
             <strong>Load demo data for:</strong>
-            {(['meraki', 'cato', 'fmc', 'aws', 'azure', 'gcp'] as const).map((provider) => (
+            {(['meraki', 'cato', 'fmc', 'panorama', 'aws', 'azure', 'gcp'] as const).map((provider) => (
               <button
                 key={provider}
                 type="button"
@@ -406,7 +416,7 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
         <BuildOutcome job={job.data} onDismiss={() => setJobId(null)} onShowWarnings={setWarningsFor} />
       )}
 
-      <h4 style={{ margin: '1.25rem 0 0.5rem' }}>Collection history (Meraki, Cato and Cisco FMC)</h4>
+      <h4 style={{ margin: '1.25rem 0 0.5rem' }}>Collection history (Meraki, Cato, Cisco FMC and Palo Alto Panorama)</h4>
       {snapshots.isPending && <div className="loading">Loading history…</div>}
       {snapshots.error && (
         <div className="error">
@@ -449,6 +459,16 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
           }}
         />
       )}
+      {(adding ?? editing?.provider) === 'panorama' && (
+        <PanoramaFormModal
+          existing={editing}
+          defaultOptions={orgs.data?.panorama_default_options ?? FALLBACK_PANORAMA_OPTIONS}
+          onClose={() => {
+            setAdding(null);
+            setEditing(null);
+          }}
+        />
+      )}
     </Modal>
   );
 }
@@ -482,7 +502,8 @@ function collectTitle(source: TopologySource, isAdmin: boolean): string {
     return isAdmin ? `Discover this ${scopeName} and update the map` : `${providerLabel(source.type)} discovery needs an administrator`;
   }
   if (source.can_collect) return `Collect from ${providerLabel(source.type)} and update the map`;
-  return source.type === 'fmc' ? 'No password stored' : 'No API key stored';
+  if (source.type === 'fmc') return 'No password stored';
+  return source.type === 'panorama' ? 'No password or API key stored' : 'No API key stored';
 }
 
 function SourceRow({
@@ -514,7 +535,9 @@ function SourceRow({
             ? `${result.message}\n\nVisible organizations:\n${visible}`
             : visible && source.type === 'fmc'
               ? `${result.message}\n\nDomains the account can see:\n${visible}`
-              : result.message,
+              : visible && source.type === 'panorama'
+                ? `${result.message}\n\nDevice groups the account can see:\n${visible}`
+                : result.message,
         variant: result.ok ? undefined : 'error',
       });
     } catch (err) {
@@ -620,7 +643,7 @@ function SourceRow({
                 disabled={!source.can_collect || validate.isPending}
                 onClick={handleValidate}
               >
-                {validate.isPending ? '…' : source.type === 'fmc' ? 'Test Login' : 'Test Key'}
+                {validate.isPending ? '…' : source.type === 'fmc' || source.type === 'panorama' ? 'Test Login' : 'Test Key'}
               </button>
               <button
                 type="button"
@@ -694,6 +717,8 @@ function BuildProgress({ job, provider }: { job: MerakiBuildJob | undefined; pro
           ? 'A Cato account takes a few queries, sent slowly to stay inside the Cato API rate limits.'
           : provider === 'fmc'
             ? 'An FMC takes several requests per device (interfaces, routing, NAT, policies), sent slowly to stay inside the FMC limit of 120 requests per minute.'
+            : provider === 'panorama'
+              ? 'A Panorama takes a few requests per device group and template, plus a few per firewall when device state is collected.'
             : 'Large organizations take several minutes: Meraki limits the API to 10 requests per second.'}{' '}
         You can close this dialog; the map updates when collection finishes.
       </div>

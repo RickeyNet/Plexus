@@ -19,7 +19,7 @@ export interface MerakiBuildOptions {
 }
 
 /** Integrations that feed the map through the same organization pipeline. */
-export type CloudProvider = 'meraki' | 'cato' | 'fmc';
+export type CloudProvider = 'meraki' | 'cato' | 'fmc' | 'panorama';
 
 /** Clouds whose accounts are Cloud Visibility accounts that also feed the map. */
 export type CloudAccountProvider = 'aws' | 'azure' | 'gcp';
@@ -61,14 +61,46 @@ export interface FmcBuildOptions {
   inventory_enrich: boolean;
 }
 
-export type OrgBuildOptions = MerakiBuildOptions | CatoBuildOptions | FmcBuildOptions;
+/**
+ * A Palo Alto Networks Panorama and the firewalls it manages. Every boolean
+ * is one kind of data the collector reads; see the toggles in
+ * `PANORAMA_OPTION_TOGGLES`.
+ */
+export interface PanoramaBuildOptions {
+  /**
+   * Optional Panorama user. When set, the entry's write-only secret is that
+   * user's password; when blank, the secret is a PAN-OS API key.
+   */
+  username: string;
+  verify_tls: boolean;
+  device_name_contains: string;
+  /** Template and template stack interfaces, zones and virtual routers. */
+  include_interfaces: boolean;
+  /** Static routes, BGP and OSPF of each virtual router. */
+  include_routing: boolean;
+  /** Pre and post security rulebases of the shared and device group hierarchy. */
+  include_security_policies: boolean;
+  include_nat: boolean;
+  /** IKE gateways and IPsec tunnels. */
+  include_vpn: boolean;
+  /** GlobalProtect gateways, address pools and connected users. */
+  include_global_protect: boolean;
+  /** Live state read through Panorama from each connected firewall. */
+  include_device_state: boolean;
+  inventory_enrich: boolean;
+}
 
-/** A Meraki organization, a Cato account (`provider` 'cato') or a Cisco FMC (`provider` 'fmc'). */
+export type OrgBuildOptions = MerakiBuildOptions | CatoBuildOptions | FmcBuildOptions | PanoramaBuildOptions;
+
+/**
+ * A Meraki organization, a Cato account (`provider` 'cato'), a Cisco FMC
+ * (`provider` 'fmc') or a Palo Alto Panorama (`provider` 'panorama').
+ */
 export interface MerakiOrg {
   id: number;
   name: string;
   provider: CloudProvider;
-  /** Meraki organization ID, Cato account ID or FMC domain. */
+  /** Meraki organization ID, Cato account ID, FMC domain or Panorama device group. */
   org_id: string;
   base_url: string;
   /** The API key / password is write-only: the API only reports whether one is stored. */
@@ -259,7 +291,7 @@ export interface PathHop {
   edge: number | string | null;
   label: string;
   site: string;
-  /** meraki | fmc | cato | aws | azure | gcp | inventory | internet | unknown */
+  /** meraki | fmc | panorama | cato | aws | azure | gcp | inventory | internet | unknown */
   provider: string;
   /** Ingress interface or subnet, "" when none. */
   in: string;
@@ -353,6 +385,7 @@ export function useMerakiOrgs() {
         default_options: MerakiBuildOptions;
         cato_default_options: CatoBuildOptions;
         fmc_default_options: FmcBuildOptions;
+        panorama_default_options: PanoramaBuildOptions;
       }>('/meraki/orgs'),
     // Keeps the "Building" badge honest for builds this tab isn't tracking
     // (started in another tab, or before a page reload).
@@ -376,7 +409,7 @@ export interface TopologySource {
   /** What the last collection found, e.g. "12 sites, 80 devices". */
   detail: string;
   warning_count: number;
-  /** The snapshot on the map (Meraki, Cato, Cisco FMC), whose warnings can be listed. */
+  /** The snapshot on the map (Meraki, Cato, Cisco FMC, Palo Alto Panorama), whose warnings can be listed. */
   snapshot_id?: number | null;
   collecting: boolean;
   can_collect: boolean;

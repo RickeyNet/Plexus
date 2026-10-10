@@ -4,13 +4,13 @@ import type { TopologyEdge, TopologyNode } from '@/api/topology';
 
 import { edgeProtocolLabel, providerLabel, providerScopeName, providerSourceName } from './helpers';
 
-function ftd(id: string, site: string): TopologyNode {
+function ftd(id: string, site: string, provider = 'fmc'): TopologyNode {
   return {
     id,
     label: id,
     in_inventory: false,
     source: 'meraki',
-    meraki: { org_ref: 1, node_id: id, site_id: site, site_name: site, kind: 'appliance', status: 'online', provider: 'fmc' },
+    meraki: { org_ref: 1, node_id: id, site_id: site, site_name: site, kind: 'appliance', status: 'online', provider },
   };
 }
 
@@ -23,6 +23,14 @@ describe('Cisco FMC names', () => {
     expect(providerLabel('fmc')).toBe('Cisco FMC');
     expect(providerSourceName('fmc')).toBe('FMC API');
     expect(providerScopeName('fmc')).toBe('Cisco FMC');
+  });
+});
+
+describe('Palo Alto Panorama names', () => {
+  it('labels the panorama provider everywhere', () => {
+    expect(providerLabel('panorama')).toBe('Palo Alto Panorama');
+    expect(providerSourceName('panorama')).toBe('Panorama API');
+    expect(providerScopeName('panorama')).toBe('Panorama');
   });
 });
 
@@ -41,9 +49,16 @@ describe('edgeProtocolLabel', () => {
     expect(edgeProtocolLabel(link('stack', 'fmc'))).toBe('HA / CLUSTER');
   });
 
+  it('names a Panorama stack link after the HA pair it joins', () => {
+    const pa = (id: string) => ftd(id, 'ha:fw-pair', 'panorama');
+    expect(edgeProtocolLabel(link('stack', 'panorama'), pa('a'), pa('b'))).toBe('HA');
+    expect(edgeProtocolLabel(link('stack', 'panorama'))).toBe('HA / CLUSTER');
+  });
+
   it('keeps the protocol for every other link', () => {
     expect(edgeProtocolLabel(link('stack', 'meraki'))).toBe('STACK');
     expect(edgeProtocolLabel(link('vpn-ipsec', 'fmc'))).toBe('VPN-IPSEC');
+    expect(edgeProtocolLabel(link('vpn-ipsec', 'panorama'))).toBe('VPN-IPSEC');
     expect(edgeProtocolLabel({ id: 'e', from: 'a', to: 'b' })).toBe('L2');
   });
 });

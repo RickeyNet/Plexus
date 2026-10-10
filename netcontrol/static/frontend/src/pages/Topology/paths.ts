@@ -99,8 +99,9 @@ function edgeCost(edge: TopologyEdge): number {
   return edge.protocol === 'vpn-ipsec' ? THIRD_PARTY_VPN_COST : 1;
 }
 
-// A management relationship (an FMC and the FTDs it manages) carries no
-// traffic: two headends are not joined through their FMC.
+// A management relationship (an FMC and the FTDs it manages, a Panorama and
+// its firewalls) carries no traffic: two headends are not joined through
+// their manager.
 const NO_TRAFFIC_PROTOCOLS = new Set(['management']);
 
 /** Trace every pair of `endpoints` over the links that are up. */
