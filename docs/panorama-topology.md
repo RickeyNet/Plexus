@@ -11,7 +11,8 @@ Panorama, its operational state: the real interface addresses, the routing
 table, BGP peers, IPsec tunnel state, HA state and the GlobalProtect users
 connected right now. It is all read over the Panorama XML API, read-only,
 and drawn on the same map as the devices Plexus discovers itself and any
-Meraki organizations, Cato accounts, Cisco FMCs, AWS accounts, Azure
+Meraki organizations, Cato accounts, Cisco FMCs, Appgate SDP collectives
+([appgate-topology.md](appgate-topology.md)), AWS accounts, Azure
 subscriptions and GCP projects. It is covered by the same search box, Path
 Mode and IPAM page, and is included in the HTML export.
 

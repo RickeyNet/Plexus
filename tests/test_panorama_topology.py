@@ -984,7 +984,7 @@ def test_api_panorama_crud_keeps_the_secret_write_only(api):
     bad["base_url"] = "https://panorama.example.com/api/"
     assert api.post("/api/meraki/orgs", json=bad).status_code == 400
     unknown = api.post("/api/meraki/orgs", json={"name": "X", "provider": "fortinet"})
-    assert unknown.status_code == 400 and "meraki, cato, fmc or panorama" in unknown.text
+    assert unknown.status_code == 400 and "meraki, cato, fmc, panorama or appgate" in unknown.text
 
     updated = api.put(f"/api/meraki/orgs/{org['id']}", json={"options": {"username": "ro", "include_vpn": False}})
     assert updated.status_code == 200

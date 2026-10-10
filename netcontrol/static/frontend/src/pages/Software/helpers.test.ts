@@ -36,6 +36,7 @@ describe('sourceLabel', () => {
     expect(sourceLabel('cisco-psirt')).toBe('Cisco PSIRT');
     expect(sourceLabel('fmc')).toBe('Cisco FMC');
     expect(sourceLabel('panorama')).toBe('Palo Alto Panorama');
+    expect(sourceLabel('appgate')).toBe('Appgate SDP');
     expect(sourceLabel('custom')).toBe('custom');
     expect(sourceLabel(null)).toBe('');
   });

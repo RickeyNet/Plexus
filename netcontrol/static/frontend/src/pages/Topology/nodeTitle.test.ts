@@ -76,6 +76,27 @@ describe('nodeTitle', () => {
     expect(title).toContain('\nInstance: i-0123456789abcdef0\n');
   });
 
+  it('names the integration of an Appgate SDP node', () => {
+    const title = nodeTitle({
+      id: 'meraki:9:a:gw-1',
+      label: 'appgate-gw-hq-1',
+      ip: '10.160.1.21',
+      in_inventory: false,
+      source: 'meraki',
+      meraki: {
+        org_ref: 9,
+        node_id: 'a:gw-1',
+        site_id: 'site-hq',
+        site_name: 'HQ Data Center',
+        kind: 'appliance',
+        status: 'online',
+        provider: 'appgate',
+      },
+    });
+    expect(title).toContain('\nAppgate SDP appliance · online');
+    expect(title).toContain('\nSite: HQ Data Center');
+  });
+
   it('adds nothing for a node without an instance', () => {
     const title = nodeTitle({ ...INVENTORY_NODE, instance: undefined });
     expect(title).not.toContain('Instance:');

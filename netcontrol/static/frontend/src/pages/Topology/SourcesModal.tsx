@@ -26,12 +26,14 @@ import {
 import { useDialogs } from '@/components/DialogProvider-context';
 import { Modal } from '@/components/Modal';
 
+import { AppgateFormModal } from './AppgateFormModal';
 import { CatoAccountFormModal } from './CatoAccountFormModal';
 import { FmcFormModal } from './FmcFormModal';
 import { MerakiOrgFormModal } from './MerakiOrgFormModal';
 import { PanoramaFormModal } from './PanoramaFormModal';
 import { providerLabel, providerScopeName } from './helpers';
 import {
+  FALLBACK_APPGATE_OPTIONS,
   FALLBACK_CATO_OPTIONS,
   FALLBACK_FMC_OPTIONS,
   FALLBACK_OPTIONS,
@@ -45,7 +47,10 @@ import {
 const CLOUD_ACCOUNTS_PATH = '/cloud-visibility';
 
 /** Sources that are entries of the organization dialog (collected as a tracked build). */
-const ORG_SOURCE_TYPES = new Set<string>(['meraki', 'cato', 'fmc', 'panorama']);
+const ORG_SOURCE_TYPES = new Set<string>(['meraki', 'cato', 'fmc', 'panorama', 'appgate']);
+
+/** Organization sources that sign in with a user and password rather than an API key. */
+const LOGIN_SOURCE_TYPES = new Set<string>(['fmc', 'panorama', 'appgate']);
 
 function isOrgSource(source: TopologySource): boolean {
   return ORG_SOURCE_TYPES.has(source.type);
@@ -255,8 +260,8 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
     <Modal isOpen={isOpen} onClose={onClose} title="Map Sources" size="large">
       <p className="text-muted" style={{ marginTop: 0, fontSize: '0.9rem' }}>
         Everything on the map comes from one of these sources. Inventory devices are scanned for their CDP
-        and LLDP neighbors. Meraki organizations, Cato accounts, Cisco FMCs, Palo Alto Panoramas, AWS accounts, Azure
-        subscriptions and GCP projects are read from their APIs.
+        and LLDP neighbors. Meraki organizations, Cato accounts, Cisco FMCs, Palo Alto Panoramas, Appgate SDP
+        collectives, AWS accounts, Azure subscriptions and GCP projects are read from their APIs.
         Collect again whenever you want a fresh picture.
       </p>
 
@@ -321,6 +326,14 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
             >
               Palo Alto Panorama
             </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              title="An Appgate SDP collective: its Controllers, Gateways, sites, entitlements and connected users"
+              onClick={() => handleAdd('appgate')}
+            >
+              Appgate SDP
+            </button>
             <Link className="btn btn-secondary btn-sm" to={CLOUD_ACCOUNTS_PATH} onClick={onClose}>
               AWS Account
             </Link>
@@ -341,7 +354,7 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
         <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '0.75rem' }}>
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
             <strong>Load demo data for:</strong>
-            {(['meraki', 'cato', 'fmc', 'panorama', 'aws', 'azure', 'gcp'] as const).map((provider) => (
+            {(['meraki', 'cato', 'fmc', 'panorama', 'appgate', 'aws', 'azure', 'gcp'] as const).map((provider) => (
               <button
                 key={provider}
                 type="button"
@@ -416,7 +429,7 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
         <BuildOutcome job={job.data} onDismiss={() => setJobId(null)} onShowWarnings={setWarningsFor} />
       )}
 
-      <h4 style={{ margin: '1.25rem 0 0.5rem' }}>Collection history (Meraki, Cato, Cisco FMC and Palo Alto Panorama)</h4>
+      <h4 style={{ margin: '1.25rem 0 0.5rem' }}>Collection history (Meraki, Cato, Cisco FMC, Palo Alto Panorama and Appgate SDP)</h4>
       {snapshots.isPending && <div className="loading">Loading history…</div>}
       {snapshots.error && (
         <div className="error">
@@ -469,6 +482,16 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
           }}
         />
       )}
+      {(adding ?? editing?.provider) === 'appgate' && (
+        <AppgateFormModal
+          existing={editing}
+          defaultOptions={orgs.data?.appgate_default_options ?? FALLBACK_APPGATE_OPTIONS}
+          onClose={() => {
+            setAdding(null);
+            setEditing(null);
+          }}
+        />
+      )}
     </Modal>
   );
 }
@@ -502,7 +525,7 @@ function collectTitle(source: TopologySource, isAdmin: boolean): string {
     return isAdmin ? `Discover this ${scopeName} and update the map` : `${providerLabel(source.type)} discovery needs an administrator`;
   }
   if (source.can_collect) return `Collect from ${providerLabel(source.type)} and update the map`;
-  if (source.type === 'fmc') return 'No password stored';
+  if (source.type === 'fmc' || source.type === 'appgate') return 'No password stored';
   return source.type === 'panorama' ? 'No password or API key stored' : 'No API key stored';
 }
 
@@ -643,7 +666,7 @@ function SourceRow({
                 disabled={!source.can_collect || validate.isPending}
                 onClick={handleValidate}
               >
-                {validate.isPending ? '…' : source.type === 'fmc' || source.type === 'panorama' ? 'Test Login' : 'Test Key'}
+                {validate.isPending ? '…' : LOGIN_SOURCE_TYPES.has(source.type) ? 'Test Login' : 'Test Key'}
               </button>
               <button
                 type="button"
@@ -719,6 +742,8 @@ function BuildProgress({ job, provider }: { job: MerakiBuildJob | undefined; pro
             ? 'An FMC takes several requests per device (interfaces, routing, NAT, policies), sent slowly to stay inside the FMC limit of 120 requests per minute.'
             : provider === 'panorama'
               ? 'A Panorama takes a few requests per device group and template, plus a few per firewall when device state is collected.'
+              : provider === 'appgate'
+                ? 'An Appgate collective takes one query per connected user for the access details; large user counts take a while.'
             : 'Large organizations take several minutes: Meraki limits the API to 10 requests per second.'}{' '}
         You can close this dialog; the map updates when collection finishes.
       </div>

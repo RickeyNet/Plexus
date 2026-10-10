@@ -54,6 +54,9 @@ describe('source filter', () => {
     // A Palo Alto Panorama follows the FMC.
     const withPanorama = { ...withFmc, nodes: [...withFmc.nodes, node('pa1', 'panorama')] } as TopologyData;
     expect(mapProviders(withPanorama)).toEqual(['meraki', 'cato', 'fmc', 'panorama', 'aws']);
+    // An Appgate SDP collective follows Panorama, before the clouds.
+    const withAppgate = { ...withPanorama, nodes: [...withPanorama.nodes, node('ag1', 'appgate')] } as TopologyData;
+    expect(mapProviders(withAppgate)).toEqual(['meraki', 'cato', 'fmc', 'panorama', 'appgate', 'aws']);
   });
 
   it('keeps only one provider and the links inside it', () => {

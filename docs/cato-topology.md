@@ -2,7 +2,8 @@
 
 The Topology page (**Network → Topology**) can include a Cato Networks
 account alongside the devices Plexus discovers itself and any Meraki
-organizations. Cato sites, Sockets, WAN links, the PoPs they connect to and
+organizations, Cisco FMCs, Palo Alto Panoramas, Appgate SDP collectives
+([appgate-topology.md](appgate-topology.md)) and cloud accounts. Cato sites, Sockets, WAN links, the PoPs they connect to and
 the connected remote users appear on the same map, are covered by the same
 search box and Path Mode, and are included in the HTML export.
 
@@ -109,8 +110,8 @@ Meraki one. A path between two Cato sites runs Socket → PoP → Cato Cloud →
 PoP → Socket, and a site whose tunnel is down is not routed through.
 
 Between two subnets or addresses the path is also traced hop by hop through
-the Socket, the PoPs and the Cato Cloud. WAN and internet firewall rules are
-not collected, so such a trace reports them as unknown; see
+the Socket, the PoPs and the Cato Cloud, with the WAN firewall rules for a
+private destination and the internet firewall rules for a public one; see
 [path-trace.md](path-trace.md).
 
 A path is only drawn over links on the map. Plexus does not know that a Cato

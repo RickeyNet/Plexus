@@ -1,4 +1,5 @@
 import type {
+  AppgateBuildOptions,
   CatoBuildOptions,
   DetailSection,
   FmcBuildOptions,
@@ -115,6 +116,36 @@ export const PANORAMA_OPTION_TOGGLES: { key: PanoramaToggleKey; label: string; h
   { key: 'verify_tls', label: 'Verify the Panorama certificate', hint: 'Turn off only for a Panorama with a self-signed certificate.' },
 ];
 
+export const APPGATE_URL_PLACEHOLDER = 'https://appgate.example.com:8443';
+
+// Used until the server reports its own defaults (`appgate_default_options`).
+export const FALLBACK_APPGATE_OPTIONS: AppgateBuildOptions = {
+  username: '',
+  verify_tls: true,
+  site_name_contains: '',
+  include_appliance_state: true,
+  include_entitlements: true,
+  include_users: true,
+  include_session_details: true,
+  inventory_enrich: true,
+};
+
+// verify_tls is a checkbox of its own next to the login, not a kind of data.
+type AppgateToggleKey = Exclude<
+  {
+    [K in keyof AppgateBuildOptions]: AppgateBuildOptions[K] extends boolean ? K : never;
+  }[keyof AppgateBuildOptions],
+  'verify_tls'
+>;
+
+export const APPGATE_OPTION_TOGGLES: { key: AppgateToggleKey; label: string; hint: string }[] = [
+  { key: 'include_appliance_state', label: 'Appliance health and sessions', hint: 'Status, version, CPU, memory, disk and session counts of every Controller, Gateway, Portal, LogServer and Connector.' },
+  { key: 'include_entitlements', label: 'Policies and entitlements', hint: 'Policies, entitlements, conditions and ringfence rules, which path tracing applies at each Gateway.' },
+  { key: 'include_users', label: 'Connected users', hint: 'Users connected with the Appgate Client when the collection runs, one node each next to the Gateways they use.' },
+  { key: 'include_session_details', label: 'Per-user access details', hint: 'One query per connected user (the first 500): tunnel IP, Gateways, entitlements granted and firewall rules. Needs Connected users.' },
+  { key: 'inventory_enrich', label: 'Correlate with Plexus inventory', hint: 'Attach SNMP/SSH data Plexus already holds for an appliance that is also an inventory host.' },
+];
+
 type ToggleKey = {
   [K in keyof MerakiBuildOptions]: MerakiBuildOptions[K] extends boolean ? K : never;
 }[keyof MerakiBuildOptions];
@@ -146,6 +177,7 @@ export function sourceTypeLabel(type: string): string {
   if (type === 'gcp') return 'GCP';
   if (type === 'fmc') return 'Cisco FMC';
   if (type === 'panorama') return 'Palo Alto Panorama';
+  if (type === 'appgate') return 'Appgate';
   return type === 'cato' ? 'Cato' : 'Meraki';
 }
 
@@ -167,6 +199,8 @@ const PHASE_LABELS: Record<string, string> = {
   'cato sites': 'Reading Cato sites and Sockets',
   'cato users': 'Reading connected remote users',
   'cato ranges': 'Reading site network ranges',
+  'cato routing': 'Reading BGP peers',
+  'cato firewall': 'Reading the WAN and internet firewall rules',
   'fmc login': 'Signing in to the FMC',
   'fmc devices': 'Reading managed devices',
   'fmc ha': 'Reading HA pairs and clusters',
@@ -191,6 +225,13 @@ const PHASE_LABELS: Record<string, string> = {
   'panorama vpn': 'Reading IKE gateways and IPsec tunnels',
   'panorama global protect': 'Reading GlobalProtect gateways and users',
   'panorama device state': 'Reading firewall state',
+  'appgate version': 'Checking the Appgate API version',
+  'appgate appliances': 'Reading appliances',
+  'appgate sites': 'Reading sites',
+  'appgate policy': 'Reading policies and entitlements',
+  'appgate pools': 'Reading IP pools and identity providers',
+  'appgate users': 'Reading connected users',
+  'appgate sessions': 'Reading per-user access',
   'building map': 'Building the map',
   saving: 'Saving snapshot',
 };
@@ -244,6 +285,8 @@ const VIEW_TITLES: Record<Exclude<MerakiView, 'meraki'>, string[]> = {
     'Router interfaces',
     'Firewall interfaces',
     'Zones',
+    'Interfaces',
+    'Allowed destinations',
   ],
   vlans: [
     'VLANs',
@@ -254,6 +297,8 @@ const VIEW_TITLES: Record<Exclude<MerakiView, 'meraki'>, string[]> = {
     'Subnets',
     'VPN address pools',
     'Connected subnets',
+    'Protected resources',
+    'Name resolution',
   ],
   mac: ['Clients (MAC/ARP)', 'Network clients (MAC/ARP)'],
   routing: [
@@ -309,6 +354,12 @@ const VIEW_TITLES: Record<Exclude<MerakiView, 'meraki'>, string[]> = {
     'VPC firewall rules',
     'Security rules',
     'Security policy',
+    'Entitlements',
+    'Policies',
+    'Ringfence rules',
+    'Conditions',
+    'Entitlement results',
+    'Firewall rules',
   ],
   switching: ['Switch stacks', 'Spanning tree', 'STP bridge priority'],
   wireless: ['Wireless SSIDs'],

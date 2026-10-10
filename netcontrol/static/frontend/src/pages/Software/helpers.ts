@@ -41,6 +41,8 @@ export function sourceLabel(source: string | null | undefined): string {
       return 'Cisco FMC';
     case 'panorama':
       return 'Palo Alto Panorama';
+    case 'appgate':
+      return 'Appgate SDP';
     case 'manual':
       return 'Manual';
     case 'import':

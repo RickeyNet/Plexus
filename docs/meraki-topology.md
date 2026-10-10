@@ -15,7 +15,10 @@ a Cisco FMC and the FTDs it manages (interfaces, routing, NAT, access
 control, site-to-site and remote access VPN); see
 [fmc-topology.md](fmc-topology.md), and a Palo Alto Panorama and the
 firewalls it manages (interfaces, zones, routing, IPsec and GlobalProtect,
-security and NAT rules); see [panorama-topology.md](panorama-topology.md).
+security and NAT rules); see [panorama-topology.md](panorama-topology.md),
+and an Appgate SDP collective (its sites, Gateways, Controllers, the users
+connected with the Appgate Client and the entitlements each Gateway grants
+them); see [appgate-topology.md](appgate-topology.md).
 AWS accounts, Azure subscriptions and
 GCP projects discovered by Cloud Visibility join the map as well; see
 [aws-topology.md](aws-topology.md), [azure-topology.md](azure-topology.md) and
@@ -30,7 +33,7 @@ other hardening controls; see [meraki-compliance.md](meraki-compliance.md).
 1. Open **Network → Topology** and click **Sources** in the toolbar. The
    dialog lists everything that feeds the map (neighbor discovery of the
    inventory, Meraki organizations, Cato accounts, Cisco FMCs, Palo Alto
-   Panoramas, AWS accounts) with its last collection; **Collect All** refreshes every source
+   Panoramas, Appgate SDP collectives, AWS accounts) with its last collection; **Collect All** refreshes every source
    in one click.
 2. **Preview without a key.** Click **Load Sample**, then **Meraki**. A demo
    organization is added to the map so you can see the result before
@@ -66,7 +69,7 @@ belong to no inventory group).
 
 - The map opens in the **Tidy tree** layout, top to bottom. Each source is
   a region of its own, framed and titled, side by side from left to right: the
-  inventory, then Meraki, Cato, Cisco FMC, Palo Alto Panorama, AWS, Azure and GCP. Links between
+  inventory, then Meraki, Cato, Cisco FMC, Palo Alto Panorama, Appgate SDP, AWS, Azure and GCP. Links between
   sources are still drawn, but they do not pull a device into another
   source's region, and they go around the sources rather than through them:
   up from each end, around the other sites' boxes and devices, to a lane
@@ -257,7 +260,7 @@ the **IPAM** page, next to the subnets inferred from inventory hosts, the
 cloud CIDRs of Cloud Visibility and external IPAM prefixes: each VLAN,
 single LAN, switch SVI and static route is a row with source **topology**,
 its VLAN ID, and the sites that hold it in the **Preview** column (the same
-goes for Cato network ranges and the connected subnets, static routes and
+goes for Cato and Appgate network ranges and the connected subnets, static routes and
 VPN address pools of a Cisco FMC's FTDs and of a Palo Alto Panorama's
 firewalls). Untick **Include
 Topology Subnets** to leave them out (`GET /api/ipam/overview?include_topology=false`).

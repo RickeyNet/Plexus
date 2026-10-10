@@ -1002,8 +1002,11 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   // ── Source picker ────────────────────────────────────────────────────────
   // As on the Topology page: everything, the inventory, every integration,
   // or one integration (provider:aws, provider:cato...).
-  var PROVIDERS = ['meraki', 'cato', 'fmc', 'aws', 'azure', 'gcp'];
-  var PROVIDER_NAME = { meraki: 'Meraki', cato: 'Cato', fmc: 'Cisco FMC', aws: 'AWS', azure: 'Azure', gcp: 'GCP' };
+  var PROVIDERS = ['meraki', 'cato', 'fmc', 'panorama', 'appgate', 'aws', 'azure', 'gcp'];
+  var PROVIDER_NAME = {
+    meraki: 'Meraki', cato: 'Cato', fmc: 'Cisco FMC', panorama: 'Palo Alto Panorama', appgate: 'Appgate SDP',
+    aws: 'AWS', azure: 'Azure', gcp: 'GCP'
+  };
   var SITE_GAP = 90, source = 'all';
   function keepNode(n) {
     if (source === 'all') return true;
