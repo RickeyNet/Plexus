@@ -100,6 +100,10 @@ _MISSING_SETS = {
 _STATELESS_MISSING = ("Switch ACL",)
 # Destination NAT a flow from the WAN may meet.
 _MISSING_NAT = ("NAT rules", "1:1 NAT", "Port forwarding", "1:Many NAT")
+# Source NAT a flow leaving on the WAN may meet: an MX in routed mode hides
+# the source behind its uplink address, and only its collected deployment
+# mode says whether it is in that mode.
+_MISSING_SNAT = ("Uplink NAT (deployment mode)",)
 # Nothing at all is known beyond the device: delivery there is not checked.
 _DELIVERY_NOTES = ("Everything behind a non-Meraki VPN peer",)
 _ROUTE_NOTE_PREFIXES = (
@@ -758,9 +762,7 @@ class Tracer:
             warnings.append(
                 f"{_and(unseen)} {verb} a stateful firewall that never saw the request: {pronoun} would drop the replies."
             )
-        skipped_stateful = [
-            self.label(g) for g in there if g not in back and g is not None and self._stateful(g, back)
-        ]
+        skipped_stateful = [self.label(g) for g in there if g not in back and g is not None and self._stateful(g, back)]
         if skipped_stateful:
             verb, pronoun = ("has", "its") if len(skipped_stateful) == 1 else ("have", "their")
             warnings.append(
@@ -888,7 +890,13 @@ class Tracer:
 
         # Notes about what the device applies and Plexus does not collect.
         for name in ctx.missing:
-            if name in ctx.used or name in _MISSING_SETS or name in _MISSING_NAT or _route_note(name):
+            if (
+                name in ctx.used
+                or name in _MISSING_SETS
+                or name in _MISSING_NAT
+                or name in _MISSING_SNAT
+                or _route_note(name)
+            ):
                 continue
             ctx.used.add(name)
             self._note(name, walk, items)
@@ -1292,7 +1300,7 @@ class Tracer:
         """Missing rule sets this flow did not need: notes (an account-wide
         one only at the first hop that carries it)."""
         for name in ctx.missing:
-            if name not in ctx.used and (name in _MISSING_SETS or name in _MISSING_NAT):
+            if name not in ctx.used and (name in _MISSING_SETS or name in _MISSING_NAT or name in _MISSING_SNAT):
                 ctx.used.add(name)
                 if name in _MISSING_SETS and _account_wide(_MISSING_SETS[name][0]) and self._once(walk, ctx, name):
                     continue
@@ -1560,6 +1568,20 @@ class Tracer:
         self, gid: Any, block: dict, ctx: _Hop, egress: dict | None, out_kind: str, route: dict, walk: _Walk
     ) -> None:
         flow, items, ingress = walk.flow, ctx.items, ctx.ingress
+        if out_kind == "wan":
+            for name in ctx.missing:
+                if name in _MISSING_SNAT and name not in ctx.used:
+                    ctx.used.add(name)
+                    items.append(
+                        item(
+                            NAT,
+                            UNKNOWN,
+                            name,
+                            "The deployment mode is not collected: whether this MX is in routed mode and hides "
+                            f"{show(flow.src)} behind its uplink address is not known, so the source the next "
+                            "hop sees is not known.",
+                        )
+                    )
         for entry in block.get("nat") or []:
             if not isinstance(entry, dict) or not entry.get("enabled", True) or not entry.get("translated_src"):
                 continue
