@@ -24,7 +24,7 @@ export interface CloudProviderTerms {
   policyShort: string;
   compute: string;
   api: string;
-  /** Drawn on the Topology map by netcontrol/integrations/{aws,azure}. */
+  /** Drawn on the Topology map by netcontrol/integrations/{aws,azure,gcp}. */
   onTopologyMap: boolean;
 }
 
@@ -91,7 +91,7 @@ const GCP: CloudProviderTerms = {
   policyShort: 'Firewall rules',
   compute: 'Compute Engine instance',
   api: 'the Google Cloud APIs',
-  onTopologyMap: false,
+  onTopologyMap: true,
 };
 
 /** For a view that mixes providers ("All Providers"). */

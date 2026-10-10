@@ -11,9 +11,9 @@ stream live job output - all through a REST API with WebSocket support.
 - **Inventory and playbooks** - device groups and hosts, Python playbooks, live job output over WebSocket.
 - **Configuration management** - config templates, config backups, drift detection and compliance audits.
 - **SNMP discovery and IPAM** - find devices on the network and track address space.
-- **Topology** - CDP/LLDP map plus Meraki, Cato, Cisco FMC, AWS and Azure sources, with path trace across them.
+- **Topology** - CDP/LLDP map plus Meraki, Cato, Cisco FMC, AWS, Azure and GCP sources, with path trace across them.
 - **Flow collector** - built-in NetFlow / sFlow / IPFIX receiver with traffic summaries.
-- **Cloud Visibility** - discovery of AWS and Azure accounts and their networks.
+- **Cloud Visibility** - discovery of AWS accounts, Azure subscriptions and GCP projects and their networks.
 - **Software upgrades** - software version inventory, vulnerability alerts and an IOS-XE upgrade tool.
 - **Digital-twin lab mode** - rehearse changes against lab copies of devices.
 - **Alerting** - alert rules routed to email, PagerDuty, webhook and Microsoft Teams channels.
@@ -102,6 +102,7 @@ groups, playbooks, templates and a default credential.
 
 - [docs/aws-topology.md](docs/aws-topology.md) - AWS in the topology map
 - [docs/azure-topology.md](docs/azure-topology.md) - Azure in the topology map
+- [docs/gcp-topology.md](docs/gcp-topology.md) - GCP in the topology map
 - [docs/cato-topology.md](docs/cato-topology.md) - Cato Networks in the topology map
 - [docs/fmc-topology.md](docs/fmc-topology.md) - Cisco FMC in the topology map
 - [docs/meraki-topology.md](docs/meraki-topology.md) - Meraki in the topology map
@@ -120,7 +121,7 @@ netcontrol/
 ├── app.py                  # FastAPI application entry (routers, lifespan)
 ├── routes/                 # API route modules and background engines
 ├── drivers/                # Per-vendor device drivers (IOS, NX-OS, Junos, ...)
-├── integrations/           # Meraki, Cato, FMC, AWS, Azure, path trace, software
+├── integrations/           # Meraki, Cato, FMC, AWS, Azure, GCP, path trace, software
 └── static/frontend/        # React + TypeScript SPA (Vite; build output in dist/)
 routes/
 ├── database.py             # Data layer (PostgreSQL, with the SQL dialect translator)

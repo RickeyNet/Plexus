@@ -109,6 +109,7 @@ export function sourceTypeLabel(type: string): string {
   if (type === 'neighbors') return 'Neighbor discovery';
   if (type === 'aws') return 'AWS';
   if (type === 'azure') return 'Azure';
+  if (type === 'gcp') return 'GCP';
   if (type === 'fmc') return 'Cisco FMC';
   return type === 'cato' ? 'Cato' : 'Meraki';
 }
@@ -194,6 +195,7 @@ const VIEW_TITLES: Record<Exclude<MerakiView, 'meraki'>, string[]> = {
     'Site interfaces',
     'Network interfaces',
     'FTD interfaces',
+    'Router interfaces',
   ],
   vlans: [
     'VLANs',
@@ -223,6 +225,10 @@ const VIEW_TITLES: Record<Exclude<MerakiView, 'meraki'>, string[]> = {
     'EIGRP',
     'Policy-based routes',
     'ECMP zones',
+    'VPC routes',
+    'Dynamic routes',
+    'BGP sessions',
+    'Learned routes',
   ],
   vpn: [
     'Site-to-site VPN',
@@ -234,6 +240,7 @@ const VIEW_TITLES: Record<Exclude<MerakiView, 'meraki'>, string[]> = {
     'Connection profiles',
     'Access interfaces',
     'Connected users',
+    'VPN tunnels',
   ],
   firewall: [
     'Layer 3 firewall rules',
@@ -246,6 +253,7 @@ const VIEW_TITLES: Record<Exclude<MerakiView, 'meraki'>, string[]> = {
     'Access control',
     'Access control rules',
     'Access control rules (note)',
+    'VPC firewall rules',
   ],
   switching: ['Switch stacks', 'Spanning tree', 'STP bridge priority'],
   wireless: ['Wireless SSIDs'],

@@ -89,6 +89,7 @@ _SOURCE_NAME = {
     "cato": "Cato API",
     "aws": "AWS API",
     "azure": "Azure API",
+    "gcp": "GCP API",
     "fmc": "FMC API",
     # The FMC's provider key of earlier releases.
     "anyconnect": "FMC API",

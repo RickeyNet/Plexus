@@ -1,20 +1,23 @@
-"""The AWS and Azure hops of a path trace.
+"""The AWS, Azure and GCP hops of a path trace.
 
-A flow that reaches a VPC or VNet is handed to that cloud's reachability
-engine (``netcontrol.integrations.aws.reachability`` or
-``netcontrol.integrations.azure.reachability``), one direction at a time:
+A flow that reaches a VPC, VNet or VPC network is handed to that cloud's
+reachability engine (``netcontrol.integrations.aws.reachability``,
+``netcontrol.integrations.azure.reachability`` or
+``netcontrol.integrations.gcp.reachability``), one direction at a time:
 
   - a flow that starts in the cloud, or arrives from an instance in it (a
-    Meraki vMX, an FTDv), is walked from that subnet's route table
+    Meraki vMX, an FTDv), is walked from that subnet's routes
   - a flow that arrives from outside enters through the gateway the cloud's
     own walk back to the source leaves by, as the engine's ``check`` does
 
 The engine's steps become the items of the hops, with their ``where`` and
 ``text`` kept as they are: the route tables and network ACLs of the VPC,
 the transit gateway route tables in a hop of the transit gateway, the
-security groups or network security groups of the instances at the ends.
-How the walk leaves the cloud is mapped back to a snapshot node: the device
-at the far end of a VPN, the Internet, or the instance a device on the map is.
+security groups, network security groups or VPC firewall rules of the
+instances at the ends. How the walk leaves the cloud is mapped back to a
+snapshot node: the device at the far end of a VPN, the Internet, or the
+instance a device on the map is. GCP has no network ACLs; its VPC firewall
+rules are stateful, like security groups.
 
 Pure (no I/O).
 """
@@ -53,8 +56,11 @@ class _HandOff:
         return []
 
 
+_TERMS = {"aws": "AWS", "azure": "Azure", "gcp": "GCP"}
+
+
 class CloudAdapter:
-    """One cloud (AWS or Azure) of the map, for the tracer."""
+    """One cloud (AWS, Azure or GCP) of the map, for the tracer."""
 
     def __init__(
         self, provider: str, org_ref: int, engine: Any, snapshot: dict, handoffs: dict[str, str] | None = None
@@ -63,7 +69,8 @@ class CloudAdapter:
         self.org_ref = org_ref
         self.engine = engine
         self.azure = provider == "azure"
-        self.term = "Azure" if self.azure else "AWS"
+        self.gcp = provider == "gcp"
+        self.term = _TERMS.get(provider, "AWS")
         self._nodes = {n["id"]: n for n in snapshot.get("nodes") or [] if isinstance(n, dict)}
         self._vpn: dict[str, list[tuple[str, dict]]] = {}
         for edge in snapshot.get("edges") or []:
@@ -85,12 +92,12 @@ class CloudAdapter:
             return False
 
     def network_node(self, place: dict) -> str:
-        """The snapshot node of the VPC or VNet of ``place``."""
+        """The snapshot node of the VPC, VNet or VPC network of ``place``."""
         return f"vnet:{place['vnet_id']}" if self.azure else f"vpc:{place['vpc_id']}"
 
     @staticmethod
     def network_id(node_id: Any) -> str:
-        """The VPC or VNet id of a ``vpc:`` / ``vnet:`` snapshot node id."""
+        """The VPC, VNet or VPC network id of a ``vpc:`` / ``vnet:`` snapshot node id."""
         for prefix in ("vpc:", "vnet:"):
             if str(node_id).startswith(prefix):
                 return str(node_id)[len(prefix) :]
@@ -194,15 +201,15 @@ class CloudAdapter:
             target.append(_item(step))
 
     def _acl(self, place: dict, peer: dict, egress: bool, flow: Any, direction: str) -> list[dict]:
-        if self.azure or place["subnet"] is None:
-            return []  # Azure has no network ACLs; its security groups are stateful.
+        if self.azure or self.gcp or place["subnet"] is None:
+            return []  # Azure and GCP have no network ACLs; their filtering is stateful.
         return [_item(self.engine.acl(place, peer, egress, flow.protocol, flow.dst_ports, direction))]
 
     def _groups(self, place: dict, peer: dict, outbound: bool, flow: Any, reply: bool) -> list[dict]:
         if place["subnet"] is None:
             return []
         if reply:
-            what = "Network security groups" if self.azure else "Security groups"
+            what = "Network security groups" if self.azure else "Firewall rules" if self.gcp else "Security groups"
             return [
                 item(
                     SECURITY_GROUP,
@@ -223,12 +230,27 @@ class CloudAdapter:
             return ""
         gateway = left["exit"]
         kind = gateway.get("kind")
+        if self.gcp:
+            return self._gcp_gateway_node(gateway)
         if kind in ("vgw", "tgw", "igw", "nat"):
             return f"{kind}:{gateway.get('id')}"
         if kind == "gateway":
             return f"vng:{gateway['gateway']['rid']}"
         if kind == "internet" and gateway.get("nat"):
             return f"nat:{azure_rid(str(gateway['nat']))}"
+        return ""
+
+    @staticmethod
+    def _gcp_gateway_node(gateway: dict) -> str:
+        """The snapshot node of a GCP exit (see ``netcontrol.integrations.gcp.reachability``)."""
+        kind = gateway.get("kind")
+        if kind == "internet":
+            return f"nat:{gateway['nat']}" if gateway.get("nat") else f"igw:{gateway.get('network')}"
+        if kind == "vpn":
+            prefix = "vpngw" if gateway.get("gateway_type", "ha") == "ha" else "tvpngw"
+            return f"{prefix}:{gateway.get('gateway')}"
+        if kind == "interconnect":
+            return f"ia:{gateway.get('attachment')}"
         return ""
 
     def _far_end(self, gateway_node: str, name: str = "") -> str:
@@ -254,7 +276,13 @@ class CloudAdapter:
             self._leaves(node, segment, f"The flow leaves {self.term} here, to the internet.")
             return {"kind": "exit", "next": {"internet": True}, "address": ""}
         far = ""
-        if kind == "tgw":
+        if self.gcp and kind == "vpn":
+            self._leaves(node, segment, f"The flow leaves {self.term} here, over VPN tunnel {gateway.get('name')}.")
+            far = self._far_end(node, str(gateway.get("name") or ""))
+        elif self.gcp and kind == "interconnect":
+            # The on-premises router behind an Interconnect is not collected.
+            self._leaves(node, segment, f"The flow leaves {self.term} here, over the Interconnect attachment.")
+        elif kind == "tgw":
             attachment = gateway.get("attachment") or {}
             if attachment.get("resource_type") == "direct-connect-gateway":
                 far = f"dxgw:{attachment.get('resource_id')}"

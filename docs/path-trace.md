@@ -229,6 +229,7 @@ where its NAT and inbound rules decide. Documentation ranges such as
 | Inventory devices | The routes of the latest SSH route table capture: Cisco IOS and IOS-XE, NX-OS, ASA and FTD, Arista EOS | Access lists |
 | AWS | Route tables, transit gateways, VPC peerings, network ACLs, security groups, as in [the AWS check of a path](aws-topology.md#the-aws-check-of-a-path) | See that section |
 | Azure | Effective routes and network security groups, as in [the Azure check of a path](azure-topology.md#the-azure-check-of-a-path) | See that section |
+| GCP | Subnet, peering, static and dynamic routes, VPN tunnels, Cloud NAT and VPC firewall rules, as in [the GCP check of a path](gcp-topology.md#the-gcp-check-of-a-path) | See that section |
 
 Whether what is not collected makes a hop *unknown* or is a note is
 explained under [What is not collected](#what-is-not-collected). A Cato

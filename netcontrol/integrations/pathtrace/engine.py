@@ -78,7 +78,7 @@ PROTOCOLS = ("tcp", "udp", "icmp")
 STATEFUL_REPLY = "Stateful: the reply of an allowed request is accepted."
 _DOWN = ("unreachable", "failed")
 _NO_TRAFFIC = ("management",)
-_CLOUD_PROVIDERS = ("aws", "azure")
+_CLOUD_PROVIDERS = ("aws", "azure", "gcp")
 # Cloud snapshot nodes the cloud engine does not stand for.
 _NOT_CLOUD_HOPS = ("vpn_peer", "external", "appliance", "user", "users")
 _VERDICT_RANK = {BLOCKED: 3, UNKNOWN: 2, PARTIAL: 1, ALLOWED: 0}
@@ -468,7 +468,8 @@ class Tracer:
         self.clouds: dict[int, CloudAdapter] = {}
         for org_ref, engine in clouds.items():
             snapshot = snapshots.get(org_ref) or {}
-            provider = str(snapshot.get("provider") or ("azure" if org_ref == -2 else "aws"))
+            # Every cloud snapshot names its provider; the org_ref fallback is for none.
+            provider = str(snapshot.get("provider") or {-2: "azure", -3: "gcp"}.get(org_ref, "aws"))
             handoffs: dict[str, str] = {}
             for (ref_org, node_id), gid in self.graph_of.items():
                 if ref_org == org_ref and node_id.startswith(("i:", "vm:")) and self.forwarding(gid)[0] is not None:

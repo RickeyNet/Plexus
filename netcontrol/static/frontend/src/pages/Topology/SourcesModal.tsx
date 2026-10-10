@@ -49,7 +49,7 @@ function isOrgSource(source: TopologySource): boolean {
   return ORG_SOURCE_TYPES.has(source.type);
 }
 
-/** AWS accounts and Azure subscriptions: Cloud Visibility accounts. */
+/** AWS accounts, Azure subscriptions and GCP projects: Cloud Visibility accounts. */
 function isCloudSource(source: TopologySource): boolean {
   return isCloudAccountProvider(source.type);
 }
@@ -110,7 +110,7 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
   const [jobId, setJobId] = useState<string | null>(null);
   // Which integration the tracked collection talks to, for the progress text.
   const [jobProvider, setJobProvider] = useState<CloudProvider>('meraki');
-  // AWS / Azure accounts whose discovery request is in flight.
+  // AWS / Azure / GCP accounts whose discovery request is in flight.
   const [cloudBusy, setCloudBusy] = useState<number[]>([]);
   const [allBusy, setAllBusy] = useState(false);
   const [allNote, setAllNote] = useState<{ text: string; failed: boolean } | null>(null);
@@ -191,7 +191,7 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
 
   const canCollect = (source: TopologySource): boolean => {
     if (!source.can_collect || !source.enabled || source.collecting) return false;
-    // AWS / Azure discovery belongs to Cloud Visibility, where it is an administrator action.
+    // AWS / Azure / GCP discovery belongs to Cloud Visibility, where it is an administrator action.
     return isCloudSource(source) ? isAdmin && !cloudBusy.includes(source.id as number) : canWrite;
   };
 
@@ -253,8 +253,8 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
     <Modal isOpen={isOpen} onClose={onClose} title="Map Sources" size="large">
       <p className="text-muted" style={{ marginTop: 0, fontSize: '0.9rem' }}>
         Everything on the map comes from one of these sources. Inventory devices are scanned for their CDP
-        and LLDP neighbors. Meraki organizations, Cato accounts, Cisco FMCs, AWS accounts and Azure
-        subscriptions are read from their APIs.
+        and LLDP neighbors. Meraki organizations, Cato accounts, Cisco FMCs, AWS accounts, Azure
+        subscriptions and GCP projects are read from their APIs.
         Collect again whenever you want a fresh picture.
       </p>
 
@@ -317,10 +317,13 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
             <Link className="btn btn-secondary btn-sm" to={CLOUD_ACCOUNTS_PATH} onClick={onClose}>
               Azure Subscription
             </Link>
+            <Link className="btn btn-secondary btn-sm" to={CLOUD_ACCOUNTS_PATH} onClick={onClose}>
+              GCP Project
+            </Link>
           </div>
           <div className="text-muted" style={{ fontSize: '0.85em', marginTop: '0.4rem' }}>
-            AWS accounts and Azure subscriptions are added under Cloud Visibility, which also uses them for flow logs
-            and policy. Inventory devices are added under Inventory.
+            AWS accounts, Azure subscriptions and GCP projects are added under Cloud Visibility, which also uses them
+            for flow logs and policy. Inventory devices are added under Inventory.
           </div>
         </div>
       )}
@@ -328,7 +331,7 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
         <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '0.75rem' }}>
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
             <strong>Load demo data for:</strong>
-            {(['meraki', 'cato', 'fmc', 'aws', 'azure'] as const).map((provider) => (
+            {(['meraki', 'cato', 'fmc', 'aws', 'azure', 'gcp'] as const).map((provider) => (
               <button
                 key={provider}
                 type="button"
@@ -341,8 +344,8 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
             ))}
           </div>
           <div className="text-muted" style={{ fontSize: '0.85em', marginTop: '0.4rem' }}>
-            Each adds a demo source to the map. Delete it from this list when you are done (the AWS and Azure ones
-            under Cloud Visibility).
+            Each adds a demo source to the map. Delete it from this list when you are done (the AWS, Azure and GCP
+            ones under Cloud Visibility).
           </div>
         </div>
       )}
