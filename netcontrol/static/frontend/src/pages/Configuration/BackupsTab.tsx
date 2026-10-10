@@ -26,12 +26,10 @@ import {
 
 type SubTab = 'policies' | 'history';
 
-interface Props {
-  subTab: SubTab;
-  onSubTab: (tab: SubTab) => void;
-}
-
-export function BackupsTab({ subTab, onSubTab }: Props) {
+// The Policies / History switch is local to this tab; the page shows a single
+// "Backups" tab for both.
+export function BackupsTab() {
+  const [subTab, setSubTab] = useState<SubTab>('policies');
   const summary = useConfigBackupSummary();
   const policies = useConfigBackupPolicies();
   const backups = useConfigBackups();
@@ -60,14 +58,14 @@ export function BackupsTab({ subTab, onSubTab }: Props) {
           <button
             type="button"
             className={`btn btn-sm ${subTab === 'policies' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => onSubTab('policies')}
+            onClick={() => setSubTab('policies')}
           >
             Policies
           </button>
           <button
             type="button"
             className={`btn btn-sm ${subTab === 'history' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => onSubTab('history')}
+            onClick={() => setSubTab('history')}
           >
             History
           </button>

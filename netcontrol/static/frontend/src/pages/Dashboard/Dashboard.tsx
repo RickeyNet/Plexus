@@ -8,6 +8,7 @@ import { CriticalIssuesBanner, ISSUE_ANCHORS } from './CriticalIssuesBanner';
 import { DevicesGridPanel } from './DevicesGridPanel';
 import { GroupHealthPanel } from './GroupHealthPanel';
 import { HealthSection } from './HealthSection';
+import { DashboardSwitcher } from './DashboardSwitcher';
 import { StatRings } from './StatRings';
 
 // Chart panels pull in echarts (~606 KB). Deferring them keeps the home page
@@ -72,11 +73,24 @@ export function Dashboard() {
 
   return (
     <>
-      <h2>Dashboard</h2>
+      <div
+        className="page-header"
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '0.5rem',
+          marginBottom: '0.75rem',
+        }}
+      >
+        <h2 style={{ margin: 0 }}>Dashboard</h2>
+        <DashboardSwitcher current={null} />
+      </div>
       <PageHelp
         pageKey="dashboard"
         title="Your Network at a Glance"
-        text="View device status, recent alerts, backup summaries, and quick stats. Scroll down to manage custom dashboards with your own metric panels."
+        text="View device status, recent alerts, backup summaries, and quick stats. Use the dashboard switcher above to open or manage custom dashboards with your own metric panels."
       />
       <CriticalIssuesBanner devices={devices} alerts={alerts} />
       <Suspense fallback={<PanelSkeleton />}>

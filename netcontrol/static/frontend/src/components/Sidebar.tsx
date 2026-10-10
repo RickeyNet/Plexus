@@ -251,7 +251,9 @@ const NAV: TopItem[] = [
       { label: 'Software', icon: ic.software, to: '/software', feature: ['software', 'upgrades'] },
       { label: 'Cloud Visibility', icon: ic.cloud, to: '/cloud-visibility', feature: 'cloud-visibility' },
       { label: 'Monitoring', icon: ic.monitoring, to: '/monitoring', feature: 'monitoring' },
-      { label: 'Configuration', icon: ic.config, to: '/configuration', feature: 'config-drift', visKey: 'configuration' },
+      // Configuration - Drift tab (`config-drift`) and Backups / Config Search
+      // tabs (`config-backups`); the page gates each tab itself.
+      { label: 'Configuration', icon: ic.config, to: '/configuration', feature: ['config-drift', 'config-backups'], visKey: 'configuration' },
       { label: 'Compliance', icon: ic.compliance, to: '/compliance', feature: 'compliance' },
       { label: 'Changes', icon: ic.changes, to: '/change-management', feature: 'risk-analysis', altFeature: 'deployments', visKey: 'change-management' },
       { label: 'Reports', icon: ic.reports, to: '/reports', feature: 'reports' },

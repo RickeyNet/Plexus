@@ -12,6 +12,7 @@ import {
 } from '@/api/dashboard';
 import { useDialogs } from '@/components/DialogProvider-context';
 
+import { DashboardSwitcher } from './DashboardSwitcher';
 import { Panel } from './Panel';
 import { PanelModal } from './PanelModal';
 
@@ -114,11 +115,9 @@ export function DashboardViewer() {
           marginBottom: '0.75rem',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <Link to="/dashboards" className="btn btn-sm btn-secondary">
-            ← Back
-          </Link>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
           <h2 style={{ margin: 0, fontSize: '1.25rem' }}>{dashboard.name}</h2>
+          <DashboardSwitcher current={dashboardId} />
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <VariablesBar
