@@ -116,9 +116,11 @@ class CloudAdapter:
         through the cloud. Returns ``segments`` (``[snapshot node id, items]``
         in order), ``kind`` (``delivered``, ``exit`` or ``stop``) and, for
         an exit, ``next`` (``{"node": id}`` or ``{"internet": True}``) and
-        ``address`` (the address the next device receives the flow on).
-        ``entry_network`` is the VPC or VNet ``entry_address`` is in: a
-        range several of them use is otherwise in none."""
+        ``address`` (the address the next device receives the flow on); a
+        delivery to the address of a collected instance names it in
+        ``instance`` (its snapshot node id). ``entry_network`` is the VPC
+        or VNet ``entry_address`` is in: a range several of them use is
+        otherwise in none."""
         engine = self.engine
         direction = RETURN if reply else FORWARD
         src = self.locate(flow.src, src_network if first else "")
@@ -173,6 +175,8 @@ class CloudAdapter:
             if src["subnet"] is not dst["subnet"]:
                 arrived.extend(self._acl(dst, src, False, flow, direction))
             arrived.extend(self._groups(dst, src, False, flow, reply))
+            if dst.get("instance") is not None:
+                result["instance"] = self.instance_node(str(dst["instance"]["rid"]))
         elif left["kind"] == "exit":
             result.update(self._exit(left["exit"], segment))
         return result

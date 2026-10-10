@@ -56,21 +56,25 @@ any hop that is not ok, in place of the path drawn over the links; then:
 
 1. **The verdict** of the direction shown: **Allowed**, **Blocked**,
    **Allowed in part** or **Check incomplete**, the traffic, and a sentence
-   that names the first item that decided it.
+   that names the first item that decided it (for an allowed flow, *Every
+   hop allows it* and the hops), ending with what was not checked.
 2. **Reverse: trace B → A as a new connection** swaps the ends and shows the
    same traffic opened from the other side. Click it again to go back. The
    verdict of the other direction is always shown on the muted line below,
    so both are visible without clicking.
-3. **Asymmetric routing**: *no* when the replies take the same hops back,
-   *yes* in amber with the first place the two ways part, *unknown* when a
-   walk could not be completed. See [Replies and asymmetry](#replies-and-asymmetry).
-4. **Request** and **Replies**: the hops in order, each as
+3. **Request** and **Replies**: the hops in order, each as
    `3. Hub 01 MX · Hub 01 · in AutoVPN from Branch 01 → out VLAN 20`, with
    the items the device applied under it. Each item has a mark (✓ ok,
    ✕ blocked, ◐ partly, ? unknown, i for information), the kind of step
    (Policy, ACL, Security group, NAT, Route, Link, Note), the rule set or
-   table with the matching rule number, and what was found. Every hop and
-   item is listed; nothing is folded away.
+   table, and what was found, naming the matching rule. Every hop and item
+   is listed; nothing is folded away. The replies are numbered from the
+   destination back.
+4. **Asymmetric routing**, which compares the two lists above it: *no* when
+   the replies take the same hops back; *yes* in amber, spelling out the way
+   the request passed and the way the replies pass, then where they part
+   and which stateful firewall sees only one of them; *unknown* when a walk
+   could not be completed. See [Replies and asymmetry](#replies-and-asymmetry).
 5. Notes about the data, such as a snapshot collected before this feature,
    are listed last.
 
@@ -167,7 +171,9 @@ hops.
 Meraki 1:1 NAT, port forwarding and 1:Many NAT apply to traffic arriving on
 the uplink they name. A source the rule does not allow is blocked there. The
 uplink address hides LAN sources only when the flow leaves on the WAN, and
-VPN subnet translation only when it leaves over AutoVPN. FTD NAT rules match
+not at all on an MX with no LAN (a vMX in passthrough or VPN concentrator
+mode, which bridges its VPC); VPN subnet translation applies only when the
+flow leaves over AutoVPN. FTD NAT rules match
 their source and destination interfaces by name or by security zone; a
 static auto NAT rule translates the source on the way out and the mapped
 address back on the way in. A rule that translates to the same networks is
@@ -238,9 +244,20 @@ replies. Stateless rules, such as switch ACLs and AWS network ACLs, are
 matched again with the reply's addresses and ports.
 
 Routing is asymmetric when the replies do not pass the same devices as the
-request. The line names the first place where they part. When a stateful
-firewall is on one way and not the other, it adds a warning: that firewall
-never sees the request, so it drops the replies.
+request. The line spells out both ways, then says where they part: the
+replies go to one device instead of the one the request came by, they end
+before a device the request passed, or they also pass a device the request
+did not. A stateful firewall on one way only adds a warning, and the two
+cases differ: one the replies pass but that never saw the request drops
+them; one the request passed but the replies skip sees only half the
+connection, so its connection state never completes and it can drop the
+rest of the connection.
+
+The replies to a source an MX hid behind its uplink address are addressed
+to the MX itself: a vMX in NAT mode in a VPC gets them from the VPC,
+translates them back and sends them over AutoVPN, which the trace follows
+rather than ending at the VPC. An MX with no LAN at all (a vMX in
+passthrough or VPN concentrator mode) is taken not to translate.
 
 **Reverse** is a different question: it traces a new connection opened
 from the destination to the source, with its own request and replies.
