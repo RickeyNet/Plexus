@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import type { DetailSection, MerakiBuildJob, MerakiNodeDetails } from '@/api/meraki';
 
 import {
+  APPGATE_OPTION_TOGGLES,
+  FALLBACK_APPGATE_OPTIONS,
   FALLBACK_FMC_OPTIONS,
   FMC_OPTION_TOGGLES,
   FALLBACK_PANORAMA_OPTIONS,
@@ -343,6 +345,146 @@ describe('panorama progress', () => {
   });
 });
 
+describe('appgate detail tabs', () => {
+  it('files a gateway with interfaces, routing, users and entitlements under every tab', () => {
+    const gw = details({
+      sections: [
+        table('Overview'),
+        table('Interfaces'),
+        table('Static routes'),
+        table('Allowed destinations'),
+        table('Entitlements'),
+        table('Connected users'),
+        table('Plexus inventory'),
+      ],
+      site_sections: [
+        table('Site overview'),
+        table('Network ranges'),
+        table('Protected resources'),
+        table('Name resolution'),
+        table('Site DNS forwarding'),
+      ],
+    });
+    expect(merakiViewsWithData(gw)).toEqual(['meraki', 'interfaces', 'vlans', 'routing', 'vpn', 'firewall']);
+    expect(merakiViewSections(gw, 'interfaces').sections.map((s) => s.title)).toEqual([
+      'Interfaces',
+      'Allowed destinations',
+    ]);
+    expect(merakiViewSections(gw, 'routing').sections.map((s) => s.title)).toEqual(['Static routes']);
+    expect(merakiViewSections(gw, 'vpn').sections.map((s) => s.title)).toEqual(['Connected users']);
+    expect(merakiViewSections(gw, 'firewall').sections.map((s) => s.title)).toEqual(['Entitlements']);
+    expect(merakiViewSections(gw, 'vlans').siteSections.map((s) => s.title)).toEqual([
+      'Network ranges',
+      'Protected resources',
+      'Name resolution',
+    ]);
+    expect(merakiViewSections(gw, 'meraki').sections.map((s) => s.title)).toEqual(['Overview', 'Plexus inventory']);
+    expect(merakiViewSections(gw, 'meraki').siteSections.map((s) => s.title)).toEqual([
+      'Site overview',
+      'Site DNS forwarding',
+    ]);
+  });
+
+  it('files the collective policy tables and a user\'s access under the firewall tab', () => {
+    const collective = details({
+      sections: [
+        table('Appgate Collective'),
+        table('Appliances'),
+        table('Sites'),
+        table('Policies'),
+        table('Entitlements'),
+        table('Conditions'),
+        table('Ringfence rules'),
+        table('IP pools'),
+        table('Identity providers'),
+      ],
+    });
+    expect(merakiViewSections(collective, 'firewall').sections.map((s) => s.title)).toEqual([
+      'Policies',
+      'Entitlements',
+      'Conditions',
+      'Ringfence rules',
+    ]);
+    expect(merakiViewSections(collective, 'meraki').sections.map((s) => s.title)).toEqual([
+      'Appgate Collective',
+      'Appliances',
+      'Sites',
+      'IP pools',
+      'Identity providers',
+    ]);
+    const user = details({
+      sections: [
+        table('Remote user'),
+        table('Connecting from'),
+        table('Connected to (Appgate)'),
+        table('Entitlement results'),
+        table('Firewall rules'),
+      ],
+    });
+    expect(merakiViewsWithData(user)).toEqual(['meraki', 'firewall']);
+    expect(merakiViewSections(user, 'firewall').sections.map((s) => s.title)).toEqual([
+      'Entitlement results',
+      'Firewall rules',
+    ]);
+  });
+});
+
+describe('appgate collection options', () => {
+  it('offers a toggle for every boolean option but certificate checking, in the documented order', () => {
+    expect(APPGATE_OPTION_TOGGLES.map((t) => t.label)).toEqual([
+      'Appliance health and sessions',
+      'Policies and entitlements',
+      'Connected users',
+      'Per-user access details',
+      'Correlate with Plexus inventory',
+    ]);
+    const booleans = Object.entries(FALLBACK_APPGATE_OPTIONS)
+      .filter(([key, value]) => typeof value === 'boolean' && key !== 'verify_tls')
+      .map(([key]) => key)
+      .sort();
+    expect(APPGATE_OPTION_TOGGLES.map((t) => t.key).sort()).toEqual(booleans);
+    expect(APPGATE_OPTION_TOGGLES.every((t) => t.hint.length > 0)).toBe(true);
+  });
+
+  it('collects everything by default and checks the certificate', () => {
+    expect(APPGATE_OPTION_TOGGLES.every((t) => FALLBACK_APPGATE_OPTIONS[t.key])).toBe(true);
+    expect(FALLBACK_APPGATE_OPTIONS.verify_tls).toBe(true);
+    expect(FALLBACK_APPGATE_OPTIONS.username).toBe('');
+    expect(FALLBACK_APPGATE_OPTIONS.site_name_contains).toBe('');
+  });
+});
+
+describe('appgate and cato progress', () => {
+  const at = (phase: string) => describeProgress({ progress: { phase } } as MerakiBuildJob).label;
+
+  it('names every phase of an Appgate collection', () => {
+    expect(
+      [
+        'appgate version',
+        'appgate appliances',
+        'appgate sites',
+        'appgate policy',
+        'appgate pools',
+        'appgate users',
+        'appgate sessions',
+      ].map(at),
+    ).toEqual([
+      'Checking the Appgate API version',
+      'Reading appliances',
+      'Reading sites',
+      'Reading policies and entitlements',
+      'Reading IP pools and identity providers',
+      'Reading connected users',
+      'Reading per-user access',
+    ]);
+  });
+
+  it('names the Cato routing and firewall phases', () => {
+    expect(at('cato routing')).toBe('Reading BGP peers');
+    expect(at('cato firewall')).toBe('Reading the WAN and internet firewall rules');
+  });
+});
+
 describe('aws detail tabs', () => {
   it('files VPC sections under the shared tabs', () => {
     const vpc = details({
@@ -411,12 +553,15 @@ describe('gcp detail tabs', () => {
 
 describe('sourceTypeLabel', () => {
   it('names every kind of map source', () => {
-    expect(['neighbors', 'meraki', 'cato', 'fmc', 'panorama', 'aws', 'azure', 'gcp'].map(sourceTypeLabel)).toEqual([
+    expect(
+      ['neighbors', 'meraki', 'cato', 'fmc', 'panorama', 'appgate', 'aws', 'azure', 'gcp'].map(sourceTypeLabel),
+    ).toEqual([
       'Neighbor discovery',
       'Meraki',
       'Cato',
       'Cisco FMC',
       'Palo Alto Panorama',
+      'Appgate',
       'AWS',
       'Azure',
       'GCP',

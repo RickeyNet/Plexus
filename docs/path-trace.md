@@ -9,8 +9,8 @@ It does this for the request and for the replies, says whether routing is
 asymmetric, and lets you reverse the source and the destination.
 
 The trace reads what the sources on the map collected: Meraki
-organizations, Cisco FMCs, Palo Alto Panoramas, Cato accounts, AWS accounts,
-Azure subscriptions and the routes Plexus captured from inventory devices
+organizations, Cisco FMCs, Palo Alto Panoramas, Cato accounts, Appgate SDP
+collectives, AWS accounts, Azure subscriptions and the routes Plexus captured from inventory devices
 over SSH. It never
 reports as allowed what it could not look at: what a source does not
 collect is listed at that hop, and is *unknown* when the flow depends on
@@ -237,7 +237,8 @@ where its NAT and inbound rules decide. Documentation ranges such as
 | Meraki | Layer 3 firewall rules, inbound firewall rules, site-to-site VPN firewall rules, 1:1 NAT, port forwarding, 1:Many NAT, VPN subnet translation, static and AutoVPN routes, routes to non-Meraki VPN peers, switch ACLs and SVI routes | Layer 7 firewall rules, group policies |
 | Cisco FMC | Prefilter rules, access control rules, NAT rules, connected and static routes, site-to-site VPN protected networks | Routes learned by BGP, OSPF or EIGRP, access control rules beyond the first 1000 |
 | Palo Alto Panorama | Security rules in the order each firewall applies them (shared, device group and ancestors, pre then post, the intrazone and interzone default rules) with their zones, addresses and services, NAT rules, connected routes, the firewall's routing table (static, BGP, OSPF) or else its configured static routes, IPsec tunnels and their state | Rules configured on the firewall itself, App-ID (a rule with applications or `application-default` is unknown when it matches), users, URL categories, FQDNs and dynamic address groups, routes learned by BGP or OSPF when the routing table was not read; see [panorama-topology.md](panorama-topology.md#search-and-path-mode) |
-| Cato | The hops: Socket, PoP, Cato Cloud, PoP, Socket | WAN and internet firewall rules |
+| Cato | The hops: Socket, PoP, Cato Cloud, PoP, Socket; the WAN firewall rules for a private destination and the internet firewall rules for a public one, applied once at the PoP the flow enters by | Routes learned by BGP; rule objects Plexus cannot turn into addresses (users groups, applications, categories, countries) make a rule that matches *unknown*; see [cato-topology.md](cato-topology.md#search-and-path-mode) |
+| Appgate SDP | The hops: user, Gateway. Each Gateway applies the **Entitlements** of its site (sources the tunnel addresses of the connected users that hold each one, default deny) and its **Allowed destinations**, routes each user's tunnel address back over the tunnel, and translates the client pool when the site uses SNAT; a user routes what its entitlements cover to the Gateway that grants them and has no other route (split tunnel) unless a site is its default gateway | Entitlement hosts that are names (`dns://`, `aws://`...), HTTP method rules and, without the per-user access details, which users hold an entitlement; see [appgate-topology.md](appgate-topology.md#search-and-path-mode) |
 | Inventory devices | The routes of the latest SSH route table capture: Cisco IOS and IOS-XE, NX-OS, ASA and FTD, Arista EOS | Access lists |
 | AWS | Route tables, transit gateways, VPC peerings, network ACLs, security groups, as in [the AWS check of a path](aws-topology.md#the-aws-check-of-a-path) | See that section |
 | Azure | Effective routes and network security groups, as in [the Azure check of a path](azure-topology.md#the-azure-check-of-a-path) | See that section |
@@ -245,7 +246,9 @@ where its NAT and inbound rules decide. Documentation ranges such as
 
 Whether what is not collected makes a hop *unknown* or is a note is
 explained under [What is not collected](#what-is-not-collected). A Cato
-trace is *unknown* between sites, since the WAN firewall decides there.
+trace between sites is decided by the WAN firewall at the PoP the flow
+enters by, and is *unknown* only where a rule that names something Plexus
+cannot evaluate (a users group, an application) matches.
 
 A device with no routing data, such as an external neighbor, is passed over
 the shortest way on the map, each such hop with one unknown item, and the

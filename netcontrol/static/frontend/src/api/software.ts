@@ -15,13 +15,13 @@ export interface SoftwareDevice {
   id: number;
   /** `host:<id>` for an inventory host, `<provider>:<org_ref>:<serial>` for a topology device. */
   device_key: string;
-  source: 'inventory' | 'meraki' | 'cato' | 'fmc' | 'panorama' | string;
+  source: 'inventory' | 'meraki' | 'cato' | 'fmc' | 'panorama' | 'appgate' | string;
   org_ref: number;
   host_id: number | null;
   name: string;
   model: string;
   serial: string;
-  /** Inventory group, Meraki network, Cato site, Cisco FMC or Panorama box (device, HA pair or cluster). */
+  /** Inventory group, Meraki network, Cato site, Cisco FMC or Panorama box (device, HA pair or cluster) or Appgate site. */
   site: string;
   org_name: string;
   platform: string;

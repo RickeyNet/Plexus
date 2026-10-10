@@ -97,6 +97,9 @@ _MISSING_SETS = {
     "Switch ACL": ("any", ACL),
     "WAN firewall rules": ("wan_traffic", POLICY),
     "Internet firewall rules": ("internet_traffic", POLICY),
+    # An Appgate Gateway's entitlements, applied to every flow it forwards.
+    "Entitlements": ("any", POLICY),
+    "Allowed destinations": ("any", POLICY),
 }
 _STATELESS_MISSING = ("Switch ACL",)
 # Destination NAT a flow from the WAN may meet.
@@ -146,6 +149,7 @@ _PROVIDER_NAMES = {
     "fmc": "Cisco FMC",
     "cato": "Cato account",
     "panorama": "Palo Alto Panorama",
+    "appgate": "Appgate SDP",
 }
 
 

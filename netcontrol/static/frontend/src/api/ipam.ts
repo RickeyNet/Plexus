@@ -12,7 +12,7 @@ export interface IpamSummary {
   inventory_host_count?: number;
   total_subnets?: number;
   cloud_subnets?: number;
-  /** Distinct subnets of the latest Topology collections (Meraki, Cato, Cisco FMC, Palo Alto Panorama...). */
+  /** Distinct subnets of the latest Topology collections (Meraki, Cato, Cisco FMC, Palo Alto Panorama, Appgate SDP...). */
   topology_subnets?: number;
   external_subnets?: number;
   duplicate_ip_count?: number;

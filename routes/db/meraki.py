@@ -102,7 +102,8 @@ async def create_meraki_org(
     created_by: str = "",
 ) -> dict | None:
     """Insert a Meraki organization (``provider`` "meraki"), a Cato account
-    ("cato"), a Cisco FMC ("fmc") or a Palo Alto Panorama ("panorama").
+    ("cato"), a Cisco FMC ("fmc"), a Palo Alto Panorama ("panorama") or an
+    Appgate SDP collective ("appgate").
     Returns ``None`` when the name is taken."""
     db = await _dbcore.get_db()
     try:
