@@ -143,8 +143,11 @@ belong to no inventory group).
   address**, or type an address or network and press Enter (the most
   specific collected subnet containing it is used; if several sites have
   it, pick from the list). A subnet stands for the device that owns it -
-  the site's appliance (VLANs, single LAN, static routes), the L3 switch
-  holding its SVI, or the non-Meraki VPN peer it sits behind. Two subnets
+  the site's appliance (VLANs, single LAN, static routes, and the local
+  networks it advertises into AutoVPN that are none of these, such as
+  those an MX in VPN concentrator mode is given on its Site-to-site VPN
+  page), the L3 switch holding its SVI, or the non-Meraki VPN peer it
+  sits behind. Two subnets
   of one device are reported as routed locally. A warning is shown when
   the tunnels on the path will not carry a subnet: it is not enabled for
   VPN at its site, or it is behind a non-Meraki peer the other site has
@@ -218,7 +221,12 @@ The toolbar search box matches device name, IP, model, serial and site as you
 type. For Meraki devices it also searches everything collected: VLAN IDs and
 names, subnets, routes, VPN peers, firewall rule comments, SSIDs, port names
 and neighbors. A match inside a site's configuration resolves to that site's
-appliance, and the result shows where the match was found.
+appliance, and the result shows where the match was found. An IP address or
+a network typed here also finds the devices whose collected subnets contain
+it (a VLAN, a static route, a local network advertised into AutoVPN, an SVI,
+a subnet behind a non-Meraki VPN peer), the most specific first, so an
+address inside a network an appliance advertises leads to that appliance
+even though the address appears nowhere in the collected text.
 
 - Click a result to jump to the device; matching rows are highlighted, and
   the tabs that contain them are marked with a yellow dot.
@@ -262,7 +270,8 @@ single LAN, switch SVI and static route is a row with source **topology**,
 its VLAN ID, and the sites that hold it in the **Preview** column (the same
 goes for Cato and Appgate network ranges and the connected subnets, static routes and
 VPN address pools of a Cisco FMC's FTDs and of a Palo Alto Panorama's
-firewalls). Untick **Include
+firewalls). The addresses of connected Cato and Appgate remote users, which
+Path Mode lists as `/32` subnets, are not rows here. Untick **Include
 Topology Subnets** to leave them out (`GET /api/ipam/overview?include_topology=false`).
 
 **Overlapping Ranges** lists every range two sites both hold, or a site holds

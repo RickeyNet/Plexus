@@ -1038,13 +1038,26 @@ class _Builder:
                     ],
                 ),
             )
+        # The local networks of the VPN settings, named by the VPN status
+        # where it names them, then what the status reports exported beyond
+        # them: a route the appliance learned and advertises, or the local
+        # networks of a site whose VPN settings were not collected.
+        configured = [s for s in s2s.get("subnets") or [] if isinstance(s, dict)]
+        exported = [s for s in vpn.get("exportedSubnets") or [] if isinstance(s, dict)]
+        names = {canonical(s.get("subnet")): s.get("name") for s in exported}
+        listed = {canonical(s.get("localSubnet")) for s in configured}
         _add(
             sections,
             table_section(
                 "VPN local subnets",
                 ["Subnet", "In VPN", "Name"],
-                [[s.get("localSubnet"), s.get("useVpn"), ""] for s in s2s.get("subnets") or [] if isinstance(s, dict)]
-                or [[s.get("subnet"), True, s.get("name")] for s in vpn.get("exportedSubnets") or []],
+                [
+                    [s.get("localSubnet"), s.get("useVpn"), names.get(canonical(s.get("localSubnet")))]
+                    for s in configured
+                ]
+                + [
+                    [s.get("subnet"), True, s.get("name")] for s in exported if canonical(s.get("subnet")) not in listed
+                ],
             ),
         )
         peer_rows = [
