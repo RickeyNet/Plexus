@@ -237,7 +237,7 @@ export interface MerakiSubnet {
   provider?: CloudProvider | CloudAccountProvider;
   cidr: string;
   name: string;
-  /** vlan / lan / static (behind the appliance), svi (L3 switch), peer (non-Meraki VPN peer), range (Cato site). */
+  /** vlan / lan / static / vpn (behind the appliance), svi (L3 switch), peer (non-Meraki VPN peer), range (Cato site), user (a remote user's own address). */
   kind: string;
   site_id: string;
   site_name: string;
@@ -299,6 +299,23 @@ export type PathVerdict = 'allowed' | 'blocked' | 'partial' | 'unknown';
 /** What a step of a hop looked at. */
 export type PathItemStage = 'policy' | 'acl' | 'security_group' | 'nat' | 'route' | 'link' | 'note';
 
+/**
+ * Which ports of the traffic asked about a rule set, a direction or the whole
+ * trace lets through: per protocol (tcp, udp, icmp; only those asked about),
+ * the ports it allows for every address asked about (`allowed`), the ports it
+ * allows for only some of them (`partial`) and the ports it cannot decide
+ * (`unknown`); ports listed nowhere are denied. Ports are `80, 443, 8000-8080`,
+ * `any` for every port; icmp has no ports and is `any` or absent. `text` says
+ * the same in one line: `allowed tcp 80, 443 · udp 53 · icmp; in part tcp
+ * 8000-8080; not decided udp 1-1023`.
+ */
+export interface PathPorts {
+  allowed: Partial<Record<string, string>>;
+  partial: Partial<Record<string, string>>;
+  unknown: Partial<Record<string, string>>;
+  text: string;
+}
+
 /** One policy, ACL, security group, NAT rule, route lookup or link a flow hits at a hop. */
 export interface PathItem {
   stage: PathItemStage;
@@ -308,6 +325,8 @@ export interface PathItem {
   text: string;
   /** Index of the matching rule, when one did. */
   rule?: number | null;
+  /** The ports the rule set lets through, on the item that states its decision. */
+  ports?: PathPorts;
 }
 
 /** One device (or the Internet) the flow passes, with what it applies, in order. */
@@ -334,6 +353,8 @@ export interface PathDirection {
   verdict: PathVerdict;
   summary: string;
   hops: PathHop[];
+  /** The ports every item of the direction lets through; null when it was not traced. */
+  ports?: PathPorts | null;
 }
 
 export interface PathAsymmetry {
@@ -358,6 +379,8 @@ export interface PathTrace {
   destination?: PathEnd;
   verdict: PathVerdict;
   summary: string;
+  /** The ports allowed end to end: the request's and the replies' combined; null without a trace. */
+  ports?: PathPorts | null;
   asymmetric?: PathAsymmetry;
   request?: PathDirection;
   reply?: PathDirection;

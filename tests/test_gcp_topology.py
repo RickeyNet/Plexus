@@ -521,6 +521,20 @@ def test_reachability_blocks_a_port_the_firewall_denies(reach):
     assert result["verdict"] == "blocked" and "prod-deny-ssh" in result["summary"]
 
 
+def test_reachability_lists_the_ports_the_firewall_rules_allow(reach):
+    steps = _check(reach, APP, DB, protocol="")["steps"]
+    ingress = next(s for s in steps if s["stage"] == "security_group" and s["where"].endswith("ingress"))
+    # db-1 (tag db) takes 5432 from the app subnet; prod-deny-ssh and the implied deny the rest.
+    assert ingress["ports"] == {"allowed": {"tcp": "5432"}, "partial": {}, "unknown": {}, "text": "allowed tcp 5432"}
+    egress = next(s for s in steps if s["stage"] == "security_group" and s["where"].endswith("egress"))
+    assert egress["ports"]["text"] == "allowed tcp any · udp any · icmp"
+    # A whole subnet is not an instance: the rules for tagged instances allow in part.
+    subnet = _check(reach, APP, "10.241.20.0/24", protocol="")["steps"]
+    rules = next(s for s in subnet if s["stage"] == "security_group" and s["where"].endswith("ingress"))
+    assert rules["ports"]["text"] == "allowed none; in part tcp 443, 5432 · icmp"
+    assert all("ports" not in s for s in subnet if s["status"] == "info")
+
+
 def test_reachability_a_deny_wins_a_priority_tie():
     resources, connections = build_sample()
     resources += collect.assemble(

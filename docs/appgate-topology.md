@@ -124,7 +124,10 @@ addresses, site names and subnets, entitlement names, and users by name,
 device, tunnel address or public address.
 
 In **Path Mode** a site's network ranges can be picked like any subnet, and
-a user like any device. A trace from a user runs **user → Gateway**: the
+a user like any device. A connected user's tunnel address is also in the
+subnet list as a network of its own (`10.253.0.11/32 - Appgate clients -
+Appgate Client dana.reyes`), so typing it, or picking the entry, starts the
+trace at that user. A trace from a user runs **user → Gateway**: the
 user routes what its entitlements cover (the subnets of its Appgate firewall
 rules) to the Gateway that grants them, and the Gateway applies the
 **Entitlements** rule set of its site, first match wins:

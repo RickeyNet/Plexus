@@ -38,6 +38,11 @@ picks is a leg of the path.
   router, the Cato Socket or the VPN peer it sits behind. A device that two
   sources know, such as an FTDv that is also an AWS instance, is one node on
   the map, and the subnets of both can be picked.
+- A remote user connected with the Cato Client or the Appgate Client owns
+  its own address as a `/32` in the list, so typing that address starts the
+  trace at the user rather than at a wider range another source keeps for
+  the whole client pool (a non-Meraki VPN peer of a Meraki site that covers
+  it, behind which nothing is collected).
 - The first of two picks is the source of the request.
 
 ## The Traffic box
@@ -45,9 +50,10 @@ picks is a leg of the path.
 The **Traffic** box appears next to the subnet box as soon as a leg has two
 subnet or address ends. It takes `tcp/443`, `udp/53`, `443` (TCP), `icmp`,
 or nothing for any traffic. It applies to every traced leg. With nothing
-typed, a rule that opens only some ports gives *allowed in part*. A text the
-box cannot read is outlined in red and the legs are not traced until it is
-fixed.
+typed, a rule that opens only some ports gives *allowed in part*, and the
+trace says which ports those are (see [Which ports are
+allowed](#which-ports-are-allowed)). A text the box cannot read is outlined
+in red and the legs are not traced until it is fixed.
 
 ## Reading a trace
 
@@ -63,20 +69,25 @@ any hop that is not ok, in place of the path drawn over the links; then:
    same traffic opened from the other side. Click it again to go back. The
    verdict of the other direction is always shown on the muted line below,
    so both are visible without clicking.
-3. **Request** and **Replies**: the hops in order, each as
+3. **Ports end to end**: the ports of the traffic asked about that every
+   rule set on the way lets through, for example *allowed tcp 443 · udp 53;
+   in part tcp 80*. See [Which ports are allowed](#which-ports-are-allowed).
+4. **Request** and **Replies**: the hops in order, each as
    `3. Hub 01 MX · Hub 01 · in AutoVPN from Branch 01 → out VLAN 20`, with
    the items the device applied under it. Each item has a mark (✓ ok,
    ✕ blocked, ◐ partly, ? unknown, i for information), the kind of step
    (Policy, ACL, Security group, NAT, Route, Link, Note), the rule set or
-   table, and what was found, naming the matching rule. Every hop and item
-   is listed; nothing is folded away. The replies are numbered from the
-   destination back.
-4. **Asymmetric routing**, which compares the two lists above it: *no* when
+   table, and what was found, naming the matching rule. An item that states
+   the decision of a rule set ends with **Ports:** and the ports that rule
+   set lets through. Every hop and item is listed; nothing is folded away.
+   The replies are numbered from the destination back. A direction whose
+   ports differ from the end-to-end line shows its own after its verdict.
+5. **Asymmetric routing**, which compares the two lists above it: *no* when
    the replies take the same hops back; *yes* in amber, spelling out the way
    the request passed and the way the replies pass, then where they part
    and which stateful firewall sees only one of them; *unknown* when a walk
    could not be completed. See [Replies and asymmetry](#replies-and-asymmetry).
-5. Notes about the data, such as a snapshot collected before this feature,
+6. Notes about the data, such as a snapshot collected before this feature,
    are listed last.
 
 A leg that cannot be placed says **No trace** and why, for example when an
@@ -136,6 +147,40 @@ of what the deciding rule denies, or the other way round, the item is
 *allowed in part*. A monitor rule is listed and the next rule decides. When
 the rules were cut at collection (the first 1000 FTD rules) and none
 matches, the item is *unknown*.
+
+### Which ports are allowed
+
+Besides the verdict, every rule set the flow meets says exactly which ports
+of the traffic asked about it lets through, and the trace combines them
+into the ports allowed end to end. The set covers the protocols asked about
+(tcp, udp and icmp when nothing was typed in the Traffic box, else the one
+typed) and the port typed, or every port. For each protocol it lists:
+
+- **allowed**: the ports the rule set lets through for every address asked
+  about, as `80, 443, 8000-8080`, or `any` for every port; icmp has no
+  ports and is listed by name when it is allowed
+- **in part**: ports a rule opens or closes for only some of the addresses
+  asked about, as when a subnet is traced and a rule names part of it
+- **not decided**: ports the rule set cannot decide: a matching rule that
+  also matches on something Plexus cannot evaluate, rules cut at
+  collection, or a default action that is not known
+
+Ports listed nowhere are denied. The set is worked out the way the device
+evaluates the rules: the first rule that matches a port decides it, so a
+deny of tcp 22 ahead of an allow of tcp any leaves every tcp port but 22
+allowed, and a rule whose ports cannot be read (a service name) leaves the
+ports it may cover *in part*. AWS security groups, which only allow, give
+the union of their rules; a group named but not collected makes the rest
+*not decided*. In the replies, stateless rule sets (a switch ACL) are
+matched on the reply's source port, which is the service port, so their
+ports compare with the request's; an AWS network ACL matches the reply's
+destination port, the ephemeral range, so its reply step lists no ports.
+
+**Ports end to end** is the worst of every item of both directions, port by
+port: an item with no port set counts by its status (a rule set that was
+not collected makes every port *not decided*, a missing route denies every
+port). A trace that is *Allowed* lists everything asked about; one that is
+*Allowed in part* says exactly what passes.
 
 ### Where the flow goes next
 
@@ -304,4 +349,4 @@ from the destination to the source, with its own request and replies.
 
 | Method | Path | Notes |
 |---|---|---|
-| `GET` | `/api/topology/path` | Traces a flow hop by hop. `source`, `destination`: an IP address or network, 1 to 64 characters. Optional `source_node`, `destination_node`: the map node ids of the devices that own the ends. Optional `protocol`: `tcp`, `udp`, `icmp`, `any` or empty for any traffic. Optional `port`: 0 to 65535. Returns `applies`, `traffic`, `source`, `destination`, `verdict` (`allowed`, `blocked`, `partial`, `unknown`), `summary`, `asymmetric` (`status` `no`, `yes` or `unknown`, and `text`), `request` and `reply` (each `verdict`, `summary` and `hops`) and `notes`. Each hop has `node`, `edge`, `label`, `site`, `provider`, `in`, `out`, `status` and `items`; each item `stage`, `status`, `where`, `text` and `rule`. A bad parameter returns HTTP 400 |
+| `GET` | `/api/topology/path` | Traces a flow hop by hop. `source`, `destination`: an IP address or network, 1 to 64 characters. Optional `source_node`, `destination_node`: the map node ids of the devices that own the ends. Optional `protocol`: `tcp`, `udp`, `icmp`, `any` or empty for any traffic. Optional `port`: 0 to 65535. Returns `applies`, `traffic`, `source`, `destination`, `verdict` (`allowed`, `blocked`, `partial`, `unknown`), `summary`, `ports`, `asymmetric` (`status` `no`, `yes` or `unknown`, and `text`), `request` and `reply` (each `verdict`, `summary`, `ports` and `hops`) and `notes`. Each hop has `node`, `edge`, `label`, `site`, `provider`, `in`, `out`, `status` and `items`; each item `stage`, `status`, `where`, `text`, `rule` and, on the item that states a rule set's decision, `ports`. A `ports` value is `{"allowed": {"tcp": "80, 443", "icmp": "any"}, "partial": {"tcp": "8000-8080"}, "unknown": {}, "text": "allowed tcp 80, 443 · icmp; in part tcp 8000-8080"}`, with only the protocols asked about and only those that have ports in each list, or `null` for a direction that was not traced and for a trace that does not apply. A bad parameter returns HTTP 400 |

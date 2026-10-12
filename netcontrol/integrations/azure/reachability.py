@@ -66,6 +66,7 @@ from netcontrol.integrations.aws.reachability import (
     _traffic_cover,
 )
 from netcontrol.integrations.azure.normalize import _meta, _rid, _short, _text, next_hop_name
+from netcontrol.integrations.pathtrace import ports as port_sets
 
 _Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 _LOAD_BALANCER_PROBE = "168.63.129.16"
@@ -744,7 +745,27 @@ class Reachability:
             priority = rule.get("priority")
             return f"rule {label} ({priority})" if priority is not None else f"rule {label}"
 
-        result = {"direction": FORWARD, "stage": "security_group", "where": where}
+        own, far = (place, peer) if outbound else (peer, place)
+        matches = [
+            port_sets.Match(
+                cover=min(
+                    self._selector_cover(rule.get("source_selector"), own, place["vnet_id"]),
+                    self._selector_cover(rule.get("destination_selector"), far, place["vnet_id"]),
+                ),
+                protocol=_text(rule.get("protocol")),
+                ports=_ports_of(rule.get("port_expression")),
+                action=_text(rule.get("action")),
+            )
+            for rule in rules
+        ]
+        # No rule deciding is not known: the default rules were not collected.
+        allowed = port_sets.first_match(matches, port_sets.Asked(protocol, ports), "unknown")
+        result: dict[str, Any] = {
+            "direction": FORWARD,
+            "stage": "security_group",
+            "where": where,
+            "ports": port_sets.to_json(allowed),
+        }
         if decided is None:
             return {**result, "status": UNKNOWN, "text": "No rule matches and the default rules were not collected."}
         action = _text(decided.get("action"))
@@ -792,6 +813,7 @@ class Reachability:
                         "status": OK,
                         "where": f"Network security group on {level}, {way}",
                         "text": "None applied: Azure allows it.",
+                        "ports": port_sets.to_json(port_sets.uniform(OK, port_sets.Asked(protocol, ports))),
                     }
                 )
             else:
