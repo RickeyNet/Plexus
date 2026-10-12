@@ -5,6 +5,7 @@ import { usePathTrace, type PathDirection, type PathTrace as PathTraceResult, ty
 import {
   hopTitle,
   itemWhere,
+  portsText,
   stageLabel,
   statusMark,
   traceEnds,
@@ -28,15 +29,30 @@ function verdictWord(trace: TraceQuery): string {
   return `${verdictLabel(trace.data.verdict).label}.`;
 }
 
-/** One direction of a trace; its summary is left out when it repeats `overall`, the trace's own. */
-function Direction({ title, direction, overall }: { title: string; direction: PathDirection | undefined; overall: string }) {
+/**
+ * One direction of a trace; its summary and its ports are left out when they
+ * repeat `overall` and `overallPorts`, the trace's own.
+ */
+function Direction({
+  title,
+  direction,
+  overall,
+  overallPorts,
+}: {
+  title: string;
+  direction: PathDirection | undefined;
+  overall: string;
+  overallPorts: string | null;
+}) {
   if (!direction) return null;
   const verdict = verdictLabel(direction.verdict);
+  const ports = portsText(direction.ports);
   return (
     <div style={{ margin: '0.3rem 0 0 0' }}>
       <div>
         <strong>{title}</strong>: <span style={{ color: verdict.color }}>{verdict.label}</span>
         {direction.summary && direction.summary !== overall ? <span className="text-muted"> · {direction.summary}</span> : null}
+        {ports && ports !== overallPorts ? <span className="text-muted"> · Ports: {ports}.</span> : null}
       </div>
       {direction.hops.length > 0 && (
         <ol style={{ listStyle: 'none', margin: '0.15rem 0 0 0', padding: 0 }}>
@@ -60,6 +76,7 @@ function Direction({ title, direction, overall }: { title: string; direction: Pa
                       <span>
                         <span className="text-muted">{stageLabel(item.stage)} · </span>
                         <strong>{itemWhere(item)}:</strong> {item.text}
+                        {item.ports ? <span className="text-muted"> Ports: {portsText(item.ports)}.</span> : null}
                       </span>
                     </div>
                   );
@@ -96,10 +113,26 @@ function Asymmetry({ result }: { result: PathTraceResult }) {
 function Result({ result, query }: { result: PathTraceResult; query: PathTraceQuery }) {
   const source = result.source?.address || query.source;
   const destination = result.destination?.address || query.destination;
+  const ports = portsText(result.ports);
   return (
     <>
-      <Direction title={`Request, ${source} → ${destination}`} direction={result.request} overall={result.summary} />
-      <Direction title={`Replies, ${destination} → ${source}`} direction={result.reply} overall={result.summary} />
+      {ports && (
+        <div>
+          <strong>Ports end to end</strong>: {ports}.
+        </div>
+      )}
+      <Direction
+        title={`Request, ${source} → ${destination}`}
+        direction={result.request}
+        overall={result.summary}
+        overallPorts={ports}
+      />
+      <Direction
+        title={`Replies, ${destination} → ${source}`}
+        direction={result.reply}
+        overall={result.summary}
+        overallPorts={ports}
+      />
       <Asymmetry result={result} />
       {(result.notes ?? []).map((note) => (
         <div key={note} className="text-muted">ⓘ {note}</div>

@@ -3,6 +3,7 @@ import type {
   PathHop,
   PathItem,
   PathItemStage,
+  PathPorts,
   PathTraceQuery,
   PathVerdict,
   ReachabilityStatus,
@@ -178,6 +179,35 @@ export function traceWay(direction: PathDirection | null | undefined): string {
  */
 export function itemWhere(item: PathItem): string {
   return item.where;
+}
+
+const PORT_STATUSES: [keyof Omit<PathPorts, 'text'>, string][] = [
+  ['allowed', 'allowed'],
+  ['partial', 'in part'],
+  ['unknown', 'not decided'],
+];
+
+/** `tcp 80, 443 · udp 53 · icmp`: the protocols of one status, icmp without ports. */
+function protocolsText(ports: Partial<Record<string, string>>): string {
+  return Object.entries(ports)
+    .filter(([, value]) => value)
+    .map(([protocol, value]) => (protocol === 'icmp' ? 'icmp' : `${protocol} ${value}`))
+    .join(' · ');
+}
+
+/**
+ * The ports a rule set, a direction or the whole trace lets through, on one
+ * line: `allowed tcp 80, 443 · udp 53 · icmp; in part tcp 8000-8080; not
+ * decided udp 1-1023`. The server's own sentence when it sent one, else the
+ * same built from the lists. Null without a set.
+ */
+export function portsText(ports: PathPorts | null | undefined): string | null {
+  if (!ports) return null;
+  if (ports.text) return ports.text;
+  const parts = PORT_STATUSES.map(([key, word]) => [word, protocolsText(ports[key] ?? {})]).filter(
+    ([word, text]) => text || word === 'allowed',
+  );
+  return parts.map(([word, text]) => `${word} ${text || 'none'}`).join('; ');
 }
 
 /** `10.1.10.5 → 10.0.1.5` */

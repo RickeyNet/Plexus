@@ -307,9 +307,12 @@ class CloudAdapter:
 
 
 def _item(step: dict) -> dict:
-    return item(
+    found = item(
         _STAGES.get(str(step.get("stage")), ROUTE),
         str(step.get("status") or OK),
         str(step.get("where") or ""),
         str(step.get("text") or ""),
     )
+    if step.get("ports") is not None:
+        found["ports"] = step["ports"]
+    return found

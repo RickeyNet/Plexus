@@ -412,6 +412,24 @@ def test_reachability_blocks_a_port_the_group_does_not_open(reach):
     assert result["verdict"] == "blocked" and "nsg-db" in result["summary"]
 
 
+def test_reachability_lists_the_ports_each_network_security_group_allows(reach):
+    steps = _check(reach, "10.231.10.21", "10.231.20.31", protocol="")["steps"]
+    ports = {s["where"]: s["ports"] for s in steps if s["stage"] == "security_group"}
+    every = "allowed tcp any · udp any · icmp"
+    # nsg-app denies only the Internet out; the default AllowVnetOutBound takes the VNet.
+    assert ports["Network security group nsg-app on subnet app (10.231.10.0/24), outbound"]["text"] == every
+    # nsg-db lets the app subnet in on 5432; DenyVnetInBound takes the rest.
+    assert ports["Network security group nsg-db on subnet db (10.231.20.0/24), inbound"] == {
+        "allowed": {"tcp": "5432"},
+        "partial": {},
+        "unknown": {},
+        "text": "allowed tcp 5432",
+    }
+    # An interface with no group: Azure allows everything.
+    none_applied = [p for where, p in ports.items() if where.startswith("Network security group on interface")]
+    assert len(none_applied) == 2 and all(p["text"] == every for p in none_applied)
+
+
 def test_reachability_reaches_on_premises_through_the_hubs_gateway(reach):
     # The spoke uses the hub's VPN gateway over its peering.
     out = _check(reach, "10.231.10.21", "10.10.5.5", port=443)

@@ -2,10 +2,12 @@
 
 Path mode lets a user pick subnets instead of devices. The index is derived
 from the detail sections a snapshot already carries (VLANs, single LAN,
-static routes, switch SVIs, VPN participation, non-Meraki VPN peers, the
+static routes, the local networks advertised into AutoVPN, switch SVIs, VPN
+participation, non-Meraki VPN peers, the
 network ranges of a Cato site, the subnets of an AWS VPC, the remote access
-VPN address pools of an FTD, and the "Connected subnets" and node-level
-"Static routes" tables of an appliance such as a Cisco FMC's FTDs), so it
+VPN address pools of an FTD, the "Connected subnets" and node-level
+"Static routes" tables of an appliance such as a Cisco FMC's FTDs, and the
+address of every user connected with a remote access client), so it
 works on snapshots collected before the index existed and on the merged
 snapshot of the HTML export alike.
 
@@ -59,8 +61,9 @@ def subnet_index(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     """Every subnet the snapshot knows an owner for, sorted by address.
 
     ``node_id`` is the device traffic for the subnet enters and leaves by: the
-    site's appliance, the L3 switch holding the SVI, or the non-Meraki VPN
-    peer the subnet sits behind. ``in_vpn`` is whether the site advertises the
+    site's appliance, the L3 switch holding the SVI, the non-Meraki VPN
+    peer the subnet sits behind, or the remote user whose client holds the
+    address. ``in_vpn`` is whether the site advertises the
     subnet into the VPN (``None`` when the snapshot does not say).
     """
     nodes = [n for n in snapshot.get("nodes") or [] if isinstance(n, dict)]
@@ -137,6 +140,21 @@ def subnet_index(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
                 f"Static route {_cell(row, 0)}",
                 listed if listed is not None else _cell(row, 4) == "Yes",
             )
+        # The local networks the site advertises into AutoVPN that are none of
+        # the above: those an MX in VPN concentrator mode is given on its VPN
+        # page, or a subnet the VPN status reports exported (a learned route)
+        # with no VLAN or static route of its own collected. A row of the
+        # table that is a VLAN or a static route already has its entry.
+        for row in _rows(sections, "VPN local subnets"):
+            name = _cell(row, 2).strip()
+            add(
+                _cidr(_cell(row, 0)),
+                gateway,
+                site["id"],
+                "vpn",
+                f"VPN local network {name}".strip(),
+                _cell(row, 1) == "Yes",
+            )
         for row in _rows(sections, "Effective routes (derived)"):
             peer = peers.get(_cell(row, 2))
             if _cell(row, 1) == "Non-Meraki VPN" and peer:
@@ -199,8 +217,41 @@ def subnet_index(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
                 known.get(cidr) if known else None,
             )
 
+    # A user connected with a remote access client (a Cato Client, an Appgate
+    # Client): the address the service gave it, as a network of its own. The
+    # most specific entry wins, so a typed address starts a trace at the user
+    # rather than at the placeholder another source keeps for the whole
+    # client range (a Meraki site's non-Meraki VPN peer that covers it).
+    for node in nodes:
+        if node.get("kind") != "user" or not node.get("site"):
+            continue
+        add(
+            _cidr(node.get("ip")),
+            node["id"],
+            node["site"],
+            "user",
+            f"{node.get('model') or 'Remote user'} {node.get('label') or ''}",
+            None,
+        )
+
     def order(entry: dict[str, Any]) -> tuple:
         network = ipaddress.ip_network(entry["cidr"])
         return (network.version, int(network.network_address), network.prefixlen, entry["site_name"], entry["node_id"])
 
     return sorted(entries.values(), key=order)
+
+
+def subnets_containing(subnets: list[dict[str, Any]], text: str) -> list[dict[str, Any]]:
+    """The entries of ``subnets`` (``subnet_index`` rows) whose network holds
+    the address or network ``text``, the most specific first; none when
+    ``text`` is not an address or a network."""
+    try:
+        wanted = ipaddress.ip_network(text.strip(), strict=False)
+    except ValueError:
+        return []
+    found = []
+    for entry in subnets:
+        network = ipaddress.ip_network(entry["cidr"])
+        if network.version == wanted.version and network.supernet_of(wanted):  # type: ignore[arg-type]
+            found.append((-network.prefixlen, entry))
+    return [entry for _depth, entry in sorted(found, key=lambda pair: pair[0])]

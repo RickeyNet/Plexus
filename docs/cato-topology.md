@@ -114,6 +114,18 @@ the Socket, the PoPs and the Cato Cloud, with the WAN firewall rules for a
 private destination and the internet firewall rules for a public one; see
 [path-trace.md](path-trace.md).
 
+A connected remote user's VPN address is in the subnet list as a network of
+its own (`10.41.0.11/32 - PoP New York - Cato Client Dana Reyes`), so typing
+the address, or picking the entry, starts the trace at that user: user → PoP
+(where the WAN firewall is applied) → Cato Cloud → PoP → Socket. When the
+Socket is a vSocket in AWS or Azure the trace goes on into the VPC or VNet,
+where its route tables and security groups are checked. The user's own
+address wins over a wider range another source keeps for the whole client
+pool, such as a Meraki site's non-Meraki VPN peer that covers it; picking
+that range instead starts at the peer, which knows nothing of what is behind
+it. A user picked by clicking the person icon draws the path only, like any
+device.
+
 A path is only drawn over links on the map. Plexus does not know that a Cato
 Socket and a Meraki switch at the same location are cabled together unless
 one of them reports the other as a neighbor, so a path between a Meraki

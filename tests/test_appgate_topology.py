@@ -731,7 +731,7 @@ def test_snapshot_site_without_an_active_gateway():
 
 def test_subnet_index_puts_the_network_ranges_on_the_first_gateway(snapshot):
     index = {(e["cidr"], e["node_id"]): e for e in subnet_index(snapshot)}
-    owners = {cidr: node for cidr, node in index}
+    owners = {cidr: node for (cidr, node), e in index.items() if e["kind"] == "range"}
     assert owners == {
         "10.160.1.0/24": _a(GW_HQ_1),
         "10.160.10.0/24": _a(GW_HQ_1),
@@ -740,13 +740,15 @@ def test_subnet_index_puts_the_network_ranges_on_the_first_gateway(snapshot):
         "10.161.0.0/16": _a(GW_AWS_1),
         "10.161.0.0/24": _a(GW_AWS_1),
     }
-    assert all(e["kind"] == "range" for e in index.values())
     assert index[("10.160.10.0/24", _a(GW_HQ_1))]["name"] == "servers"
-    # Neither the users, their pool nor the collective own a subnet.
-    assert not any(
-        e["node_id"].startswith(USER_NODE_PREFIX) or e["node_id"] == COLLECTIVE_NODE_ID for e in index.values()
-    )
-    assert not any(e["cidr"].startswith("10.253.") for e in index.values())
+    # Each connected user owns its tunnel address, so it can be typed in Path
+    # Mode; the pool itself and the collective own nothing.
+    users = {cidr: e for (cidr, _node), e in index.items() if e["kind"] == "user"}
+    assert users["10.253.0.11/32"]["node_id"] == _user(DANA_DEVICE)
+    assert users["10.253.0.11/32"]["name"] == "Appgate Client dana.reyes" and users["10.253.0.11/32"]["in_vpn"] is None
+    assert {e["kind"] for e in index.values()} == {"range", "user"}
+    assert not any(e["node_id"] == COLLECTIVE_NODE_ID for e in index.values())
+    assert not any(e["cidr"].startswith("10.253.") and e["kind"] != "user" for e in index.values())
 
 
 def test_user_details(snapshot):

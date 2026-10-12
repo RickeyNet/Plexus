@@ -9,6 +9,7 @@ import {
   legKey,
   mergeHighlights,
   pathTraceQuery,
+  portsText,
   reverseTraceQuery,
   stageLabel,
   statusMark,
@@ -144,6 +145,21 @@ describe('path trace display', () => {
     expect(traceWay({ verdict: 'allowed', summary: '', hops })).toBe('Branch 01 MX → Internet → hub');
     expect(traceWay({ verdict: 'unknown', summary: '', hops: [] })).toBe('');
     expect(traceWay(undefined)).toBe('');
+  });
+
+  it('says which ports are let through, in the server words or from the lists', () => {
+    const sent = { allowed: { tcp: '443' }, partial: {}, unknown: {}, text: 'allowed tcp 443' };
+    expect(portsText(sent)).toBe('allowed tcp 443');
+    // Without the server's sentence the same line is built from the lists; icmp has no ports.
+    expect(portsText({ allowed: { tcp: '80, 443', udp: '53', icmp: 'any' }, partial: { tcp: '8000-8080' }, unknown: { udp: '1-1023' }, text: '' })).toBe(
+      'allowed tcp 80, 443 · udp 53 · icmp; in part tcp 8000-8080; not decided udp 1-1023',
+    );
+    expect(portsText({ allowed: {}, partial: {}, unknown: { tcp: 'any', udp: 'any', icmp: 'any' }, text: '' })).toBe(
+      'allowed none; not decided tcp any · udp any · icmp',
+    );
+    expect(portsText({ allowed: {}, partial: {}, unknown: {}, text: '' })).toBe('allowed none');
+    expect(portsText(null)).toBeNull();
+    expect(portsText(undefined)).toBeNull();
   });
 });
 

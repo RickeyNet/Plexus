@@ -105,7 +105,7 @@ from netcontrol.integrations.meraki.enrich import collected_sections, enrich_sna
 from netcontrol.integrations.meraki.html_export import EXPORT_CSP, export_filename, render_topology_html
 from netcontrol.integrations.meraki.normalize import build_snapshot
 from netcontrol.integrations.meraki.sample import build_sample_raw
-from netcontrol.integrations.meraki.subnets import subnet_index
+from netcontrol.integrations.meraki.subnets import subnet_index, subnets_containing
 from netcontrol.integrations.meraki.unified import (
     build_search_index,
     graph_to_snapshot,
@@ -356,7 +356,9 @@ async def ipam_subnets() -> list[dict[str, Any]]:
     pools)
     with their organization and provider. AWS, Azure and GCP are left out:
     their networks and subnets reach IPAM as Cloud Visibility resources
-    already."""
+    already. So is the address of each connected remote user (kind
+    ``user``): it is there for Path Mode and the search, and is no subnet
+    to manage."""
     rows: list[dict[str, Any]] = []
     for org_ref, entry in await _latest_entries():
         if org_ref in _CLOUD_ORG_REFS:
@@ -368,6 +370,7 @@ async def ipam_subnets() -> list[dict[str, Any]]:
         rows.extend(
             {"org_ref": org_ref, "org_name": org_name, "provider": provider, **subnet}
             for subnet in await _subnets_of(entry)
+            if subnet.get("kind") != "user"
         )
     return rows
 
@@ -1626,15 +1629,35 @@ async def topology_deep_search_api(
     VPN peers, firewall rules, ports, neighbors, serials - not just names.
 
     Hits are returned as ``(org_ref, node_id)`` references, which the
-    Topology page resolves to nodes on the merged graph.
+    Topology page resolves to nodes on the merged graph. An IP address or a
+    network finds the devices whose collected subnets hold it first, the
+    most specific first: an address inside a subnet is no substring of it.
     """
     tokens = q.lower().split()[:8]
     results: list[dict] = []
+    seen: set[tuple[int, str]] = set()
     for org_ref, entry in await _latest_entries():
+        found = subnets_containing(await _subnets_of(entry), q)
+        labels = {n.get("id"): n.get("label") or "" for n in entry["snapshot"].get("nodes") or []} if found else {}
+        for subnet in found:
+            if (org_ref, subnet["node_id"]) in seen or len(results) >= limit:
+                continue
+            seen.add((org_ref, subnet["node_id"]))
+            where = f"{subnet['site_name'] or 'VPN peer'} · Subnets: {subnet['cidr']} {subnet['name']}".strip()
+            results.append(
+                {
+                    "org_ref": org_ref,
+                    "node_id": subnet["node_id"],
+                    "label": labels.get(subnet["node_id"], ""),
+                    "snippet": where,
+                }
+            )
         if entry["index"] is None:
             entry["index"] = await asyncio.to_thread(build_search_index, entry["snapshot"])
         for hit in search_index(entry["index"], tokens, limit - len(results)):
-            results.append({"org_ref": org_ref, **hit})
+            if (org_ref, hit["node_id"]) not in seen:
+                seen.add((org_ref, hit["node_id"]))
+                results.append({"org_ref": org_ref, **hit})
         if len(results) >= limit:
             break
     return {"results": results, "truncated": len(results) >= limit}

@@ -6,7 +6,10 @@ from __future__ import annotations
 import netcontrol.app as app_module
 import pytest
 from netcontrol.integrations.aws.reachability import Reachability
-from netcontrol.integrations.cato.normalize import build_snapshot as build_cato_snapshot
+from netcontrol.integrations.cato.normalize import (
+    CLOUD_NODE_ID as CATO_CLOUD_NODE_ID,
+    build_snapshot as build_cato_snapshot,
+)
 from netcontrol.integrations.cato.sample import build_sample_raw as build_cato_sample_raw
 from netcontrol.integrations.meraki.forwarding import (
     interface,
@@ -216,6 +219,39 @@ def test_a_vpn_firewall_rule_that_denies_blocks_at_the_branch():
     assert _items(hops[0])[-1] == ("policy", "blocked", "Site-to-site VPN firewall rules")
     assert hops[0]["items"][-1]["rule"] == 1
     assert result["reply"]["hops"] == [] and result["asymmetric"]["status"] == "unknown"
+
+
+def test_any_traffic_lists_the_ports_the_rule_sets_allow():
+    only_https = [rule(1, "allow", protocol="tcp", dst_ports="443"), rule(2, "deny")]
+    tracer = _tracer(_branch_and_hub(only_https), subnets=_SUBNETS)
+    result = tracer.trace("10.1.10.5", "10.0.10.20")
+
+    assert result["verdict"] == "partial"
+    assert result["ports"] == {"allowed": {"tcp": "443"}, "partial": {}, "unknown": {}, "text": "allowed tcp 443"}
+    assert result["request"]["ports"] == result["ports"]
+    # Stateful rule sets accept every reply of an allowed request.
+    assert result["reply"]["ports"]["text"] == "allowed tcp any · udp any · icmp"
+    branch = result["request"]["hops"][0]
+    deciding = next(i for i in branch["items"] if i["where"] == "Site-to-site VPN firewall rules")
+    assert deciding["status"] == "partial" and deciding["ports"]["allowed"] == {"tcp": "443"}
+    assert "ports" not in next(i for i in branch["items"] if i["stage"] == "route")
+
+    # One port: the replies of a request that does not arrive are not traced.
+    blocked = tracer.trace("10.1.10.5", "10.0.10.20", protocol="tcp", port=22)
+    assert blocked["verdict"] == "blocked" and blocked["reply"]["ports"] is None
+    assert blocked["ports"] == {"allowed": {}, "partial": {}, "unknown": {}, "text": "allowed none"}
+
+
+def test_a_rule_set_that_is_not_collected_leaves_every_port_unknown():
+    snapshots = _branch_and_hub()
+    branch = snapshots[1]["nodes"][0]["forwarding"]
+    branch["policies"] = [p for p in branch["policies"] if p["name"] != "Layer 3 firewall rules"]
+    branch["not_collected"].append("Layer 3 firewall rules")
+    result = _tracer(snapshots, subnets=_SUBNETS).trace("10.1.10.5", "10.0.10.20")
+
+    assert result["verdict"] == "unknown"
+    assert result["ports"]["allowed"] == {}
+    assert result["ports"]["text"] == "allowed none; not decided tcp any · udp any · icmp"
 
 
 def _with_partner(status: str) -> dict:
@@ -1222,6 +1258,29 @@ def test_cato_remote_user_to_a_site_on_the_same_pop_skips_the_backbone():
     assert status == "ok" and text.startswith("Rule 4 Any to any")
     assert result["verdict"] == "allowed"
     assert _labels(result["reply"]) == ["Branch-Cleveland", "PoP New York", "Dana Reyes"]
+
+
+def test_cato_remote_user_is_found_by_its_address_ahead_of_a_range_that_covers_it():
+    from netcontrol.integrations.meraki.subnets import subnet_index
+
+    # The subnet box resolves a typed address to the most specific entry: the
+    # user's own /32 outranks a range another source keeps for the whole
+    # client pool, so the trace starts at the user without naming the node.
+    snapshot = build_cato_snapshot(build_cato_sample_raw())
+    subnets = [{"org_ref": 3, **s} for s in subnet_index(snapshot)]
+    subnets.append({"org_ref": 3, "cidr": "10.41.0.0/16", "node_id": CATO_CLOUD_NODE_ID, "kind": "peer"})
+    result = _tracer({3: snapshot}, subnets=subnets).trace("10.41.0.11", "10.50.10.20", **_HTTPS)
+
+    assert _labels(result["request"]) == [
+        "Dana Reyes",
+        "PoP New York",
+        "Cato Cloud",
+        "PoP Ashburn",
+        "HQ-DataCenter (primary)",
+    ]
+    # The WAN firewall is met at the user's PoP, as when the node is named.
+    [(status, name, text)] = _policies(result["request"]["hops"][1])
+    assert (status, name) == ("unknown", "WAN firewall rules") and text.startswith("Rule 3 Remote users to HQ")
 
 
 def test_cato_site_to_site_replies_take_the_same_hops_back():

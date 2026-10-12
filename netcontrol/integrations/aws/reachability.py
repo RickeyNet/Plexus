@@ -43,6 +43,7 @@ import re
 from typing import Any
 
 from netcontrol.integrations.aws.normalize import _meta, _rid, _text
+from netcontrol.integrations.pathtrace import ports as port_sets
 
 OK, BLOCKED, PARTIAL, UNKNOWN, INFO = "ok", "blocked", "partial", "unknown", "info"
 FORWARD, RETURN = "forward", "return"
@@ -652,7 +653,21 @@ class Reachability:
             status, text = OK, f"Allowed by {final}."
         else:
             status, text = BLOCKED, f"Denied by {final}."
-        return {"direction": direction, "stage": "acl", "status": status, "where": where, "text": text}
+        found: dict[str, Any] = {"direction": direction, "stage": "acl", "status": status, "where": where, "text": text}
+        if direction == FORWARD:
+            # A network ACL matches the destination port only: on a reply that
+            # is the client's port, not the service's, so a reply has no set.
+            matches = [
+                port_sets.Match(
+                    cover=_cidr_cover(entry.get("cidr"), peer["net"]),
+                    protocol=_text(entry.get("protocol")),
+                    ports=(_int(entry.get("port_from")), _int(entry.get("port_to"))),
+                    action=_text(entry.get("action")),
+                )
+                for entry in entries
+            ]
+            found["ports"] = port_sets.to_json(port_sets.first_match(matches, port_sets.Asked(protocol, ports), "deny"))
+        return found
 
     # ── Security groups ────────────────────────────────────────────────────
 
@@ -696,7 +711,7 @@ class Reachability:
         if place["subnet"] is None:
             return None
         way = "outbound" if outbound else "inbound"
-        result = {"direction": FORWARD, "stage": "security_group"}
+        result: dict[str, Any] = {"direction": FORWARD, "stage": "security_group"}
         if place["instance"] is None:
             what = "no collected instance has this address" if _is_host(place["net"]) else "this end is a whole subnet"
             return {
@@ -708,15 +723,25 @@ class Reachability:
         groups, missing = self._groups_of(place)
         where = f"Security groups of {self._instance_name(place['instance'])}, {way}"
         if not groups:
+            result["ports"] = port_sets.to_json(port_sets.uniform(UNKNOWN, port_sets.Asked(protocol, ports)))
             return {**result, "status": UNKNOWN, "where": where, "text": "Its security groups were not collected."}
         peer_groups = {g["rid"] for g in self._groups_of(peer)[0]} if peer["instance"] is not None else set()
         allowing: list[str] = []
         partly: list[str] = []
+        matches: list[port_sets.Match] = []
         for group in groups:
             for rule in group["meta"].get("policy_rules") or []:
                 if not isinstance(rule, dict) or _text(rule.get("direction")) != way:
                     continue
                 selector = _text(rule.get("destination_selector" if outbound else "source_selector"))
+                matches.append(
+                    port_sets.Match(
+                        cover=self._peer_cover(selector, peer, peer_groups),
+                        protocol=_text(rule.get("protocol")),
+                        ports=_port_range(rule.get("port_expression")),
+                        action="allow",
+                    )
+                )
                 cover = min(
                     self._peer_cover(selector, peer, peer_groups),
                     _traffic_cover(
@@ -732,6 +757,8 @@ class Reachability:
                 shown = f"{_text(group.get('name')) or group['rid']}: {what} {'to' if outbound else 'from'} {selector}"
                 (allowing if cover == _FULL else partly).append(shown)
         names = ", ".join(_text(g.get("name")) or g["rid"] for g in groups)
+        asked = port_sets.Asked(protocol, ports)
+        result["ports"] = port_sets.to_json(port_sets.allow_list(matches, asked, missing=bool(missing)))
         if allowing:
             return {**result, "status": OK, "where": where, "text": f"Allowed by {allowing[0]}."}
         if partly:

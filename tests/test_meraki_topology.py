@@ -28,7 +28,7 @@ from netcontrol.integrations.meraki.forwarding import UPLINK_NAT_MODE, appliance
 from netcontrol.integrations.meraki.html_export import export_filename, render_topology_html
 from netcontrol.integrations.meraki.normalize import VPN_PEER_SITE_ID, InventoryIndex, build_snapshot
 from netcontrol.integrations.meraki.sample import build_sample_raw
-from netcontrol.integrations.meraki.subnets import subnet_index
+from netcontrol.integrations.meraki.subnets import subnet_index, subnets_containing
 from netcontrol.integrations.meraki.unified import (
     build_search_index,
     external_key,
@@ -465,6 +465,77 @@ def test_subnet_index_ignores_text_that_is_not_a_network():
     assert subnet_index({}) == []
 
 
+def test_subnet_index_lists_the_local_networks_a_site_advertises_into_the_vpn():
+    # An MX in VPN concentrator mode: its local networks are given on the VPN
+    # page, not as VLANs or static routes.
+    snapshot = {
+        "sites": [
+            {
+                "id": "N1",
+                "name": "DC",
+                "sections": [
+                    {
+                        "title": "VLANs",
+                        "kind": "table",
+                        "columns": ["VLAN", "Name", "Subnet"],
+                        "rows": [["10", "Data", "10.9.10.0/24"]],
+                    },
+                    {
+                        "title": "VPN local subnets",
+                        "kind": "table",
+                        "columns": ["Subnet", "In VPN", "Name"],
+                        "rows": [
+                            ["10.9.10.0/24", "Yes", "Data"],
+                            ["10.70.0.0/16", "Yes", "Core"],
+                            ["192.168.5.0/24", "No", ""],
+                        ],
+                    },
+                ],
+            }
+        ],
+        "nodes": [{"id": "mx", "kind": "appliance", "site": "N1", "label": "dc-mx"}],
+    }
+    index = subnet_index(snapshot)
+    # The VLAN keeps its own entry; the other local networks get one, with
+    # whether the site advertises them.
+    assert [(e["cidr"], e["kind"], e["name"], e["in_vpn"]) for e in index] == [
+        ("10.9.10.0/24", "vlan", "VLAN 10 Data", True),
+        ("10.70.0.0/16", "vpn", "VPN local network Core", True),
+        ("192.168.5.0/24", "vpn", "VPN local network", False),
+    ]
+    assert all(e["node_id"] == "mx" for e in index)
+    # An address or a network typed into the search finds the subnets that hold it.
+    assert [e["cidr"] for e in subnets_containing(index, "10.70.1.5")] == ["10.70.0.0/16"]
+    assert [e["cidr"] for e in subnets_containing(index, " 10.9.10.0/25 ")] == ["10.9.10.0/24"]
+    assert subnets_containing(index, "10.1.1.1") == [] and subnets_containing(index, "guest") == []
+
+
+def test_vpn_local_subnets_merge_the_settings_with_what_the_status_exports():
+    raw = build_sample_raw(branches=1)
+    status = next(s for s in raw["org"]["vpn_statuses"] if s["networkId"] == "N_1000")
+    # A route the hub learned and advertises: exported by the status, absent
+    # from the VPN settings.
+    status["exportedSubnets"].append({"subnet": "10.70.0.0/16", "name": "Core (BGP)"})
+    snap = build_snapshot(raw)
+    hq = next(s for s in snap["sites"] if s["id"] == "N_1000")
+    rows = _section(hq, "VPN local subnets")["rows"]
+    # The settings' rows come first, named as the status names them; what the
+    # status exports beyond them follows.
+    assert rows[:3] == [["10.0.10.0/24", "Yes", "Data"], ["10.0.20.0/24", "Yes", "Voice"], ["10.0.30.0/24", "No", ""]]
+    assert rows[-1] == ["10.70.0.0/16", "Yes", "Core (BGP)"]
+    entry = next(e for e in subnet_index(snap) if e["cidr"] == "10.70.0.0/16")
+    assert (entry["kind"], entry["name"], entry["in_vpn"], entry["site_id"]) == (
+        "vpn",
+        "VPN local network Core (BGP)",
+        True,
+        "N_1000",
+    )
+    assert _node_of(snap, entry["node_id"])["kind"] == "appliance"
+    # The appliance's forwarding block advertises it too.
+    block = _node_of(snap, entry["node_id"])["forwarding"]
+    assert any(r["prefix"] == "10.70.0.0/16" and r["advertised"] is True for r in block["routes"])
+
+
 def test_export_escapes_markup_in_device_names():
     raw = build_sample_raw(branches=1)
     raw["devices"][0]["name"] = '</script><script>alert("x")</script>'
@@ -848,6 +919,15 @@ def test_api_lists_subnets_of_the_latest_snapshots(api):
         if n.get("meraki")
     }
     assert (data["org_ref"], data["node_id"]) in on_map
+
+    # An address typed into the search box finds the device whose subnet
+    # holds it, the subnet being the snippet; a network as well.
+    hits = api.get("/api/topology/search/deep", params={"q": "10.0.10.25"}).json()["results"]
+    assert hits and (hits[0]["org_ref"], hits[0]["node_id"]) == (data["org_ref"], data["node_id"])
+    assert hits[0]["snippet"] == "HQ-DataCenter · Subnets: 10.0.10.0/24 VLAN 10 Data" and hits[0]["label"]
+    assert [(h["org_ref"], h["node_id"]) for h in hits].count((data["org_ref"], data["node_id"])) == 1
+    hits = api.get("/api/topology/search/deep", params={"q": "10.0.10.0/24"}).json()["results"]
+    assert (hits[0]["org_ref"], hits[0]["node_id"]) == (data["org_ref"], data["node_id"])
 
 
 def test_api_meraki_clients_join_mac_tracking(api):

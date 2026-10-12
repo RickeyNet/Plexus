@@ -40,6 +40,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from netcontrol.integrations.meraki.subnets import _GATEWAY_ORDER, _NOT_A_GATEWAY
+from netcontrol.integrations.pathtrace import ports as port_sets
 from netcontrol.integrations.pathtrace.cloud import CloudAdapter
 from netcontrol.integrations.pathtrace.model import (
     ACL,
@@ -212,6 +213,8 @@ class _Walk:
     # Account-wide rule sets already applied (or noted as not collected) in
     # this walk: (organization, rule set name) -> the label of that hop.
     applied: dict[tuple[int | None, str], str] = field(default_factory=dict)
+    # The ports the direction asks about (``_asked``).
+    asked: port_sets.Asked | None = None
 
 
 # Address space that is never routed on the internet. The documentation
@@ -380,6 +383,45 @@ def _translate(network: Network, original: list[str], translated: list[str], int
 def _port_of(raw: Any) -> tuple[int, int] | None:
     text = str(raw or "").strip()
     return (int(text), int(text)) if text.isdigit() else None
+
+
+def _asked(flow: Flow, reply: bool) -> port_sets.Asked:
+    """The ports a direction asks about: in a reply the service port is the
+    source port. The client's port is the ephemeral range, as it is when one
+    TCP or UDP port is asked about."""
+    service, client = (flow.src_ports, flow.dst_ports) if reply else (flow.dst_ports, flow.src_ports)
+    if client is None and not flow.protocol:
+        client = EPHEMERAL_PORTS
+    return port_sets.Asked(flow.protocol, service, client)
+
+
+def _port_set(policy: dict, flow: Flow, in_zone: str, out_zone: str, reply: bool) -> port_sets.Ports:
+    """The ports a rule set lets through, as ``Tracer._evaluate`` decides
+    each one. A stateless rule set matches a reply on its source ports."""
+    service, other = ("src_ports", "dst_ports") if reply else ("dst_ports", "src_ports")
+    matches = [
+        port_sets.Match(
+            cover=min(
+                cover(rule.get("src"), flow.src),
+                cover(rule.get("dst"), flow.dst),
+                _zones(rule.get("src_zones") or [], in_zone),
+                _zones(rule.get("dst_zones") or [], out_zone),
+            ),
+            protocol=str(rule.get("protocol") or ""),
+            ports=str(rule.get(service) or ""),
+            action=str(rule.get("action") or ""),
+            other_ports=str(rule.get(other) or ""),
+            unresolved=bool(rule.get("unresolved")),
+        )
+        for rule in policy.get("rules") or []
+        if isinstance(rule, dict) and rule.get("enabled", True)
+    ]
+    return port_sets.first_match(
+        matches,
+        _asked(flow, reply),
+        str(policy.get("default") or "unknown"),
+        bool(policy.get("complete", True)),
+    )
 
 
 class Tracer:
@@ -666,8 +708,9 @@ class Tracer:
             "verdict": UNKNOWN,
             "summary": "",
             "asymmetric": {"status": "unknown", "text": "Not traced."},
-            "request": {"verdict": UNKNOWN, "summary": "Not traced.", "hops": []},
-            "reply": {"verdict": UNKNOWN, "summary": "Not traced.", "hops": []},
+            "request": {"verdict": UNKNOWN, "summary": "Not traced.", "hops": [], "ports": None},
+            "reply": {"verdict": UNKNOWN, "summary": "Not traced.", "hops": [], "ports": None},
+            "ports": None,
             "notes": [],
         }
         for place in (start, end):
@@ -711,6 +754,13 @@ class Tracer:
 
         result["notes"] = list(dict.fromkeys(request.notes + (reply.notes if reply else [])))
         forward, backward = result["request"], result["reply"]
+        if forward["ports"] is not None and request.asked is not None:
+            # Read back over the request's ports: a destination NAT may have
+            # changed the one port the replies come from.
+            both = port_sets.from_json(forward["ports"], request.asked)
+            if backward["ports"] is not None:
+                both = port_sets.combine(both, port_sets.from_json(backward["ports"], request.asked))
+            result["ports"] = port_sets.to_json(both)
         if reply is None or _VERDICT_RANK[forward["verdict"]] >= _VERDICT_RANK[backward["verdict"]]:
             result["verdict"], result["summary"] = forward["verdict"], forward["summary"]
         else:
@@ -737,7 +787,26 @@ class Tracer:
         if walk.not_checked:
             names = list(dict.fromkeys(walk.not_checked))
             summary += " Not checked: " + ", ".join([names[0], *(_sentence_item(n) for n in names[1:])]) + "."
-        return {"verdict": verdict, "summary": summary, "hops": walk.hops}
+        return {"verdict": verdict, "summary": summary, "hops": walk.hops, "ports": self._direction_ports(walk)}
+
+    @staticmethod
+    def _direction_ports(walk: _Walk) -> dict[str, Any] | None:
+        """The ports every item of a direction lets through: an item's own
+        set, else its status for every port (``info`` counts for nothing).
+        Ports of a walk that ended before the destination are at best unknown."""
+        asked = walk.asked
+        if not walk.hops or asked is None:
+            return None
+        found = port_sets.uniform(OK, asked)
+        for each in walk.hops:
+            for entry in each["items"]:
+                if entry.get("ports") is not None:
+                    found = port_sets.combine(found, port_sets.from_json(entry["ports"], asked))
+                elif entry["status"] != INFO:
+                    found = port_sets.combine(found, port_sets.uniform(entry["status"], asked))
+        if not walk.delivered:
+            found = port_sets.combine(found, port_sets.uniform(UNKNOWN, asked))
+        return port_sets.to_json(found)
 
     def _asymmetry(self, request: _Walk, reply: _Walk) -> dict[str, str]:
         """Whether the replies pass the same devices as the request, in a
@@ -801,6 +870,7 @@ class Tracer:
 
     def _walk(self, start: _Arrival, flow: Flow, *, reply: bool, dest: Any, sessions: dict, passed: set) -> _Walk:
         walk = _Walk(reply=reply, dest=dest, flow=flow, sessions=sessions, request_nodes=passed)
+        walk.asked = _asked(flow, reply)
         seen: set[tuple[Any, str]] = set()
         arrival: _Arrival | None = start
         for _count in range(MAX_HOPS):
@@ -1387,6 +1457,7 @@ class Tracer:
                     )
                 continue
             found, decided = self._evaluate(policy, walk.flow, ctx.in_zone, out_zone)
+            found[-1]["ports"] = port_sets.to_json(_port_set(policy, walk.flow, ctx.in_zone, out_zone, walk.reply))
             items.extend(found)
             if decided == "fastpath":
                 ctx.fastpath = True

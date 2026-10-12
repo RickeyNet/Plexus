@@ -98,6 +98,7 @@ from netcontrol.integrations.aws.reachability import (
 )
 from netcontrol.integrations.gcp.collect import DEFAULT_INTERNET_GATEWAY
 from netcontrol.integrations.gcp.normalize import _meta, _rid, _short, _text
+from netcontrol.integrations.pathtrace import ports as port_sets
 
 _Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 # Of two routes with the same prefix and priority, the one GCP keeps.
@@ -901,6 +902,35 @@ class Reachability:
     def _targets(meta: dict) -> tuple[set[str], set[str]]:
         return set(meta.get("target_tags") or []), set(meta.get("target_service_accounts") or [])
 
+    def _firewall_ports(
+        self,
+        candidates: list[dict],
+        skipped: list[dict],
+        network: str,
+        protocol: str,
+        ports: tuple[int, int] | None,
+    ) -> dict[str, Any]:
+        """The ports the VPC firewall rules let through. A rule for some
+        instances only covers the end in part: where it would decide
+        otherwise, the ports are partial."""
+        asked = port_sets.Asked(protocol, ports)
+        if self._policies.get(network):
+            return port_sets.to_json(port_sets.uniform(UNKNOWN, asked))
+        some = {id(rule) for rule in skipped}
+        ordered = sorted(candidates + skipped, key=lambda r: (r["priority"], r["action"] != "deny"))
+        matches = [
+            port_sets.Match(
+                cover=min(rule["peer"], _PART) if id(rule) in some else rule["peer"],
+                protocol=_text(e.get("protocol")),
+                ports=_ports_of(e.get("ports")),
+                action=rule["action"],
+            )
+            for rule in ordered
+            for e in rule["entries"]
+        ]
+        # The implied rule is among the candidates: no port is left to the default.
+        return port_sets.to_json(port_sets.first_match(matches, asked, "unknown"))
+
     def _firewall(
         self, place: dict, peer: dict, outbound: bool, protocol: str, ports: tuple[int, int] | None
     ) -> list[dict]:
@@ -921,14 +951,14 @@ class Reachability:
                 continue
             denied = [e for e in meta.get("denied") or [] if isinstance(e, dict)]
             allowed = [e for e in meta.get("allowed") or [] if isinstance(e, dict)]
+            peer_cover = self._peer_cover(meta, place, peer, outbound)
             entry = {
                 "name": _text(rule.get("name")) or _short(rule["rid"]),
                 "priority": _priority(meta.get("priority")),
                 "action": "deny" if denied else "allow",
-                "cover": min(
-                    self._peer_cover(meta, place, peer, outbound),
-                    self._protocol_cover(denied or allowed, protocol, ports),
-                ),
+                "cover": min(peer_cover, self._protocol_cover(denied or allowed, protocol, ports)),
+                "peer": peer_cover,
+                "entries": denied or allowed,
             }
             tags, accounts = self._targets(meta)
             if tags or accounts:
@@ -945,6 +975,8 @@ class Reachability:
                 "priority": _IMPLIED_PRIORITY,
                 "action": "allow" if outbound else "deny",
                 "cover": _FULL,
+                "peer": _FULL,
+                "entries": [{"protocol": "all"}],
             }
         )
         candidates.sort(key=lambda r: (r["priority"], r["action"] != "deny"))
@@ -1003,7 +1035,14 @@ class Reachability:
                 f"The VPC firewall rules decide: {text} But network firewall policy {', '.join(policies)} is "
                 "associated with this network, and its rules are not evaluated."
             )
-        steps = [{**result, "status": status, "text": text}]
+        steps: list[dict[str, Any]] = [
+            {
+                **result,
+                "status": status,
+                "text": text,
+                "ports": self._firewall_ports(candidates, skipped, network, protocol, ports),
+            }
+        ]
         if skipped:
             what = "no collected instance has this address" if _is_host(place["net"]) else "this end is a whole subnet"
             steps.append(

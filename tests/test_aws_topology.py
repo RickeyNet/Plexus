@@ -773,6 +773,26 @@ def test_reachability_of_any_traffic_is_partial_when_only_some_ports_are_open(re
     assert [s["stage"] for s in result["steps"] if s["status"] == "info"] == ["security_group", "security_group"]
 
 
+def test_reachability_lists_the_ports_the_acls_and_groups_allow(reach):
+    steps = reach.check(APP, DB)["steps"]
+    ports = {(s["direction"], s["stage"], s["where"].split(" of ")[0]): s.get("ports") for s in steps}
+    # The default ACL allows everything out.
+    assert ports[("forward", "acl", "Network ACL core-default")]["text"] == "allowed tcp any · udp any · icmp"
+    # core-db lets in tcp 5432 from the VPC and the ephemeral range from anywhere; its
+    # ssh rule is for another subnet, and the final deny takes the rest.
+    assert ports[("forward", "acl", "Network ACL core-db")] == {
+        "allowed": {"tcp": "1024-65535"},
+        "partial": {},
+        "unknown": {},
+        "text": "allowed tcp 1024-65535",
+    }
+    # Only the application servers' group reaches the database, on 5432.
+    db_group = next(s for s in steps if s["stage"] == "security_group" and "db-server-1" in s["where"])
+    assert db_group["ports"]["allowed"] == {"tcp": "5432"} and db_group["ports"]["unknown"] == {}
+    # A network ACL sees the client's port on a reply: no set for the service's.
+    assert all("ports" not in s for s in steps if s["direction"] == "return")
+
+
 def test_reachability_follows_the_transit_gateway_route_table_both_ways(reach):
     result = reach.check(APP, FIREWALL, protocol="tcp", port=443)
     assert result["verdict"] == "allowed"

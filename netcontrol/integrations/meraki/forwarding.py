@@ -385,10 +385,12 @@ def _advertised(detail: dict, vpn: dict) -> dict[str, bool]:
     for item in s2s.get("subnets") or []:
         if isinstance(item, dict) and canonical(item.get("localSubnet")):
             found[canonical(item.get("localSubnet"))] = bool(item.get("useVpn"))
-    if not found:
-        for item in vpn.get("exportedSubnets") or []:
-            if isinstance(item, dict) and canonical(item.get("subnet")):
-                found[canonical(item.get("subnet"))] = True
+    # What the VPN status reports exported beyond the configured local
+    # networks (a learned route the site advertises); the settings win for
+    # a subnet both list.
+    for item in vpn.get("exportedSubnets") or []:
+        if isinstance(item, dict) and canonical(item.get("subnet")):
+            found.setdefault(canonical(item.get("subnet")), True)
     return found
 
 

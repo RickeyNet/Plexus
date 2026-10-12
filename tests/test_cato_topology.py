@@ -27,7 +27,7 @@ from netcontrol.integrations.cato.normalize import (
     build_snapshot,
 )
 from netcontrol.integrations.cato.sample import build_sample_raw
-from netcontrol.integrations.meraki.subnets import subnet_index
+from netcontrol.integrations.meraki.subnets import subnet_index, subnets_containing
 from netcontrol.integrations.meraki.unified import graph_to_snapshot, merge_meraki_into_graph, node_details
 
 # ── Client ───────────────────────────────────────────────────────────────────
@@ -643,6 +643,33 @@ def test_subnet_index_places_ranges_on_the_site_gateway(snapshot):
     assert index["172.31.0.0/16"]["node_id"] == "s:1004"
     # Nothing is owned by a PoP, the backbone or the user group.
     assert not any(s["site_id"] == CLOUD_SITE_ID for s in index.values())
+
+
+def test_subnet_index_gives_each_remote_user_its_own_address(snapshot):
+    index = {(e["cidr"], e["node_id"]): e for e in subnet_index(snapshot)}
+    dana = index[("10.41.0.11/32", f"{USER_NODE_PREFIX}9001")]
+    assert dana["kind"] == "user" and dana["name"] == "Cato Client Dana Reyes" and dana["in_vpn"] is None
+    assert dana["site_id"] == f"{POP_SITE_ID}:New York" and dana["site_name"] == "PoP New York"
+    assert index[("10.41.0.12/32", f"{USER_NODE_PREFIX}9002")]["site_name"] == "PoP Ashburn"
+    # A typed address finds the user ahead of a range another source keeps for
+    # the whole client pool (a Meraki site's non-Meraki VPN peer).
+    pool = {"cidr": "10.41.0.0/16", "name": "Behind Cato", "kind": "peer", "node_id": "peer", "site_name": ""}
+    found = subnets_containing([*index.values(), pool], "10.41.0.11")
+    assert [(e["cidr"], e["kind"]) for e in found] == [("10.41.0.11/32", "user"), ("10.41.0.0/16", "peer")]
+
+
+@pytest.mark.asyncio
+async def test_ipam_leaves_the_remote_users_addresses_out(snapshot, monkeypatch):
+    import netcontrol.routes.meraki_topology as routes_module
+
+    async def entries():
+        return [(3, {"snapshot": snapshot})]
+
+    monkeypatch.setattr(routes_module, "_latest_entries", entries)
+    rows = await routes_module.ipam_subnets()
+    assert rows and all(r["provider"] == "cato" and r["org_ref"] == 3 for r in rows)
+    assert "10.50.10.0/24" in {r["cidr"] for r in rows}
+    assert not any(r["kind"] == "user" or r["cidr"].startswith("10.41.") for r in rows)
 
 
 def test_account_without_sites_builds_only_the_cloud():
