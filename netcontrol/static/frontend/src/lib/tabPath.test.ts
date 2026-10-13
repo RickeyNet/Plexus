@@ -59,6 +59,26 @@ describe('resolvePathTab', () => {
       redirect: { pathname: '/page/two', search: '' },
     });
   });
+  it('keeps trailing segments only for nested tabs', () => {
+    const nested = { ...input, nested: ['three'] as const };
+    expect(resolvePathTab({ ...nested, pathname: '/page/three/sub/x' })).toEqual({
+      tab: 'three',
+      redirect: null,
+    });
+    expect(resolvePathTab({ ...nested, pathname: '/page/three/' })).toEqual({
+      tab: 'three',
+      redirect: { pathname: '/page/three', search: '' },
+    });
+    expect(resolvePathTab({ ...nested, pathname: '/page/two/sub' })).toEqual({
+      tab: 'two',
+      redirect: { pathname: '/page/two', search: '' },
+    });
+    // Falling back to a nested tab does not inherit another tab's segments.
+    expect(resolvePathTab({ ...nested, pathname: '/page/two/sub', allowed: ['three'] })).toEqual({
+      tab: 'three',
+      redirect: { pathname: '/page/three', search: '' },
+    });
+  });
   it('keeps the requested tab when nothing is allowed', () => {
     expect(resolvePathTab({ ...input, pathname: '/page/three', allowed: [] })).toEqual({
       tab: 'three',

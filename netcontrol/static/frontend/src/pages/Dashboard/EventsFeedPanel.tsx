@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 
 import { useAnnotations, type Annotation } from '@/api/dashboard';
+import { SegmentedControl } from '@/components/SegmentedControl';
 import { useTimeRange } from '@/lib/timeRange-context';
 
 import { timeAgo } from './helpers';
@@ -20,11 +21,11 @@ const CATEGORY_LABELS: Record<Category, string> = {
   alert: 'Alert',
 };
 
-const FILTERS: { value: Filter; label: string }[] = [
-  { value: 'all', label: 'All' },
-  { value: 'deployment', label: 'Deploy' },
-  { value: 'config', label: 'Config' },
-  { value: 'alert', label: 'Alert' },
+const FILTERS: { key: Filter; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'deployment', label: 'Deploy' },
+  { key: 'config', label: 'Config' },
+  { key: 'alert', label: 'Alert' },
 ];
 
 export function EventsFeedPanel() {
@@ -52,21 +53,7 @@ export function EventsFeedPanel() {
     <div className="glass-card card dashboard-overview-card">
       <div className="dashboard-overview-header">
         <h3 className="dashboard-overview-title">Recent Events</h3>
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-          <div className="dashboard-range-tabs" role="tablist" aria-label="Filter">
-            {FILTERS.map((f) => (
-              <button
-                key={f.value}
-                role="tab"
-                aria-selected={filter === f.value}
-                className={`dashboard-range-tab${filter === f.value ? ' active' : ''}`}
-                onClick={() => setFilter(f.value)}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        <SegmentedControl options={FILTERS} value={filter} onChange={setFilter} size="xs" aria-label="Filter" />
       </div>
 
       {isPending ? (

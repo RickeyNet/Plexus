@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { useLocation, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { PageHelp } from '@/components/PageHelp';
@@ -19,7 +18,8 @@ import {
   useSoftwareOverview,
   useStartPsirtSync,
 } from '@/api/software';
-import { resolveTab, visibleTabs } from '@/lib/tabGating';
+import { visibleTabs } from '@/lib/tabGating';
+import { usePathTab } from '@/lib/usePathTab';
 import { UpgradesContent } from '@/pages/Upgrades/Upgrades';
 
 import { AdvisoryModal } from './AdvisoryModal';
@@ -32,7 +32,6 @@ import {
   formatTime,
   severityBadgeClass,
   severityLabel,
-  softwareTabFromPath,
   sourceLabel,
 } from './helpers';
 
@@ -47,35 +46,23 @@ const PLATFORM_FALLBACK = 'Other';
 
 // Each tab is gated on its own feature: Versions on `software`, Upgrades (the
 // firmware upgrade tool) on `upgrades`. The tool's old path /upgrades is
-// redirected here by the router, so bookmarks still land on the Upgrades tab.
-const TABS: { key: SoftwareTab; label: string; path: string; feature: string }[] = [
-  { key: 'versions', label: 'Versions', path: '/software', feature: 'software' },
-  { key: 'upgrades', label: 'Upgrades', path: '/software/upgrades', feature: 'upgrades' },
+// redirected to /software/upgrades by the router, so bookmarks still land on
+// the Upgrades tab. A tab this user may not open falls back to the other one.
+const TABS: { key: SoftwareTab; label: string; feature: string }[] = [
+  { key: 'versions', label: 'Versions', feature: 'software' },
+  { key: 'upgrades', label: 'Upgrades', feature: 'upgrades' },
 ];
+const TAB_KEYS = TABS.map((t) => t.key);
 
 export function Software() {
-  const { pathname } = useLocation();
-  const navigate = useNavigate();
   const { data: auth } = useAuthStatus();
-  const [tab, setTab] = useState<SoftwareTab>(() => softwareTabFromPath(pathname));
-
-  const [prevPathname, setPrevPathname] = useState(pathname);
-  if (pathname !== prevPathname) {
-    setPrevPathname(pathname);
-    setTab(softwareTabFromPath(pathname));
-  }
-
-  function selectTab(t: SoftwareTab) {
-    const target = TABS.find((x) => x.key === t)!;
-    setTab(t);
-    if (pathname !== target.path) navigate(target.path);
-  }
-
   const shownTabs = visibleTabs(TABS, auth);
-  // The path's tab is not available to this user but the other one is: show
-  // that one instead. With neither available, keep the path's tab (the API
-  // refuses its data anyway).
-  const shownTab = resolveTab(tab, shownTabs);
+  const [shownTab, selectTab] = usePathTab(
+    '/software',
+    TAB_KEYS,
+    'versions',
+    auth ? shownTabs.map((t) => t.key) : undefined,
+  );
 
   return (
     <div className="page">

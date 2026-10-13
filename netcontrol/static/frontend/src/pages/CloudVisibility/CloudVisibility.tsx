@@ -1,11 +1,11 @@
 import { useState } from 'react';
-import { useLocation, useNavigate } from 'react-router';
 
 import { useCloudAccounts, useCloudProviders } from '@/api/cloud';
 import { PageHelp } from '@/components/PageHelp';
 import { TabBar } from '@/components/TabBar';
 import { UntestedBanner } from '@/components/UntestedBanner';
 import { capitalize, cloudProviderTerms, cloudTerms } from '@/lib/cloudProviderTerms';
+import { usePathTab } from '@/lib/usePathTab';
 import { providerLabel } from './helpers';
 import { AccountsTab } from './AccountsTab';
 import { TopologyTab } from './TopologyTab';
@@ -15,13 +15,14 @@ import { PolicyTab } from './PolicyTab';
 
 type Tab = 'accounts' | 'topology' | 'flow' | 'traffic' | 'policy';
 
-const TABS: { key: Tab; label: string; path: string }[] = [
-  { key: 'accounts', label: 'Accounts', path: '/cloud-visibility' },
-  { key: 'topology', label: 'Topology', path: '/cloud-visibility/topology' },
-  { key: 'flow', label: 'Flow Logs', path: '/cloud-visibility/flow' },
-  { key: 'traffic', label: 'Traffic Metrics', path: '/cloud-visibility/traffic' },
-  { key: 'policy', label: 'Policy', path: '/cloud-visibility/policy' },
+const TABS: { key: Tab; label: string }[] = [
+  { key: 'accounts', label: 'Accounts' },
+  { key: 'topology', label: 'Topology' },
+  { key: 'flow', label: 'Flow Logs' },
+  { key: 'traffic', label: 'Traffic Metrics' },
+  { key: 'policy', label: 'Policy' },
 ];
+const TAB_KEYS = TABS.map((t) => t.key);
 
 /** Help for a tab, in the words of the provider selected above (all three for All Providers). */
 function tabHelp(tab: Tab, provider: string): { title: string; text: string } {
@@ -58,37 +59,17 @@ function tabHelp(tab: Tab, provider: string): { title: string; text: string } {
   }
 }
 
-function tabFromPath(pathname: string): Tab {
-  const match = TABS.find((t) => t.path === pathname);
-  return match?.key ?? 'accounts';
-}
-
 export interface CloudFilterState {
   provider: string;
   accountId: number | null;
 }
 
 export function CloudVisibility() {
-  const { pathname } = useLocation();
-  const navigate = useNavigate();
-  const [tab, setTab] = useState<Tab>(() => tabFromPath(pathname));
+  const [tab, selectTab] = usePathTab('/cloud-visibility', TAB_KEYS, 'accounts');
   const [filter, setFilter] = useState<CloudFilterState>({ provider: '', accountId: null });
-
-  const [prevPathname, setPrevPathname] = useState(pathname);
-  // Sync the active tab with the current route when navigation changes it.
-  if (pathname !== prevPathname) {
-    setPrevPathname(pathname);
-    setTab(tabFromPath(pathname));
-  }
 
   const providers = useCloudProviders();
   const accounts = useCloudAccounts(filter.provider || undefined);
-
-  function selectTab(t: Tab) {
-    const target = TABS.find((x) => x.key === t)!;
-    setTab(t);
-    if (pathname !== target.path) navigate(target.path);
-  }
 
   const accountList = accounts.data?.accounts ?? [];
   const providerOptions = (() => {

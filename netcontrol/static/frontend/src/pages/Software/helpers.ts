@@ -139,12 +139,3 @@ export function barWidth(count: number, max: number): number {
 }
 
 export type SoftwareTab = 'versions' | 'upgrades';
-
-/**
- * Tab of the Software page a path opens: `/software/upgrades` opens Upgrades,
- * anything else Versions. (The upgrade tool's old path `/upgrades` is
- * redirected to `/software/upgrades` by the router.)
- */
-export function softwareTabFromPath(pathname: string): SoftwareTab {
-  return pathname === '/software/upgrades' ? 'upgrades' : 'versions';
-}

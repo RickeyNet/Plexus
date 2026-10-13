@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 
 import type { DeviceHealth } from '@/api/dashboard';
+import { SegmentedControl } from '@/components/SegmentedControl';
 
 import { classifyDeviceHealth, type HealthStatus } from './helpers';
 
@@ -23,12 +24,12 @@ const HEALTH_LABELS: Record<HealthStatus, string> = {
 
 type Filter = 'all' | HealthStatus;
 
-const FILTERS: { value: Filter; label: string }[] = [
-  { value: 'all', label: 'All' },
-  { value: 'critical', label: 'Bad' },
-  { value: 'warning', label: 'Warn' },
-  { value: 'healthy', label: 'Good' },
-  { value: 'unknown', label: '?' },
+const FILTERS: { key: Filter; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'critical', label: 'Bad' },
+  { key: 'warning', label: 'Warn' },
+  { key: 'healthy', label: 'Good' },
+  { key: 'unknown', label: '?' },
 ];
 
 const SEVERITY_ORDER: Record<HealthStatus, number> = {
@@ -79,19 +80,7 @@ export function DevicesGridPanel({ devices }: { devices: DeviceHealth[] }) {
     <div className="glass-card card dashboard-overview-card">
       <div className="dashboard-overview-header">
         <h3 className="dashboard-overview-title">Devices</h3>
-        <div className="dashboard-range-tabs" role="tablist" aria-label="Filter">
-          {FILTERS.map((f) => (
-            <button
-              key={f.value}
-              role="tab"
-              aria-selected={filter === f.value}
-              className={`dashboard-range-tab${filter === f.value ? ' active' : ''}`}
-              onClick={() => setFilter(f.value)}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
+        <SegmentedControl options={FILTERS} value={filter} onChange={setFilter} size="xs" aria-label="Filter" />
       </div>
 
       {devices.length === 0 ? (

@@ -210,8 +210,7 @@ export function App() {
           {/* Software: one page renders the Versions and Upgrades tabs.
               /upgrades is the upgrade tool's old path (it was a Delegator
               tab); bookmarks to it are sent to the Upgrades tab. */}
-          <Route path="/software" element={<Software />} />
-          <Route path="/software/upgrades" element={<Software />} />
+          <Route path="/software/:tab?" element={<Software />} />
           <Route path="/upgrades" element={<Navigate to="/software/upgrades" replace />} />
           {/* Tabbed pages: /page is the default tab, /page/<tab> the others. */}
           <Route path="/compliance/:tab?" element={<Compliance />} />
@@ -244,11 +243,7 @@ export function App() {
           <Route path="/monitoring/rules" element={<Navigate to="/monitoring/configure" replace />} />
           <Route path="/monitoring/suppressions" element={<Navigate to="/monitoring/configure/suppressions" replace />} />
           <Route path="/monitoring/oid-profiles" element={<Navigate to="/monitoring/configure/oid-profiles" replace />} />
-          <Route path="/cloud-visibility" element={<CloudVisibility />} />
-          <Route path="/cloud-visibility/topology" element={<CloudVisibility />} />
-          <Route path="/cloud-visibility/flow" element={<CloudVisibility />} />
-          <Route path="/cloud-visibility/traffic" element={<CloudVisibility />} />
-          <Route path="/cloud-visibility/policy" element={<CloudVisibility />} />
+          <Route path="/cloud-visibility/:tab?" element={<CloudVisibility />} />
           <Route path="/topology" element={<Topology />} />
           <Route path="/settings/:tab?" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
