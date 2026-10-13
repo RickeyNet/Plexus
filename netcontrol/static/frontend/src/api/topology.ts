@@ -197,28 +197,6 @@ export function useTopologyPositions() {
   });
 }
 
-export function useTopologyChanges(unacknowledged = true, limit = 200) {
-  return useQuery<{ changes: TopologyChange[] }>({
-    queryKey: ['topology-changes', unacknowledged, limit],
-    queryFn: () =>
-      apiRequest(
-        `/topology/changes?unacknowledged=${unacknowledged}&limit=${limit}`,
-      ),
-    enabled: false,
-  });
-}
-
-export function useTopologyStpEvents(unacknowledged = true, limit = 200) {
-  return useQuery<{ events: StpEvent[]; unacknowledged_count?: number }>({
-    queryKey: ['topology-stp-events', unacknowledged, limit],
-    queryFn: () =>
-      apiRequest(
-        `/topology/stp/events?unacknowledged=${unacknowledged}&limit=${limit}`,
-      ),
-    enabled: false,
-  });
-}
-
 // ── Mutations ──────────────────────────────────────────────────────────────
 
 export function useSaveTopologyPositions() {

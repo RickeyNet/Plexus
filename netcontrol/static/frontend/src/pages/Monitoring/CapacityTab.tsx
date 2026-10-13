@@ -31,11 +31,19 @@ export function CapacityTab() {
             <option key={k} value={k}>{label}</option>
           ))}
         </select>
-        <label className="text-muted">Range:</label>
-        <select className="form-select" value={range} onChange={(e) => setRange(e.target.value)}>
+        {/* Trend projection needs 30d-365d of history; the global bar tops out at 30d. */}
+        <label className="text-muted" htmlFor="capacity-history">History:</label>
+        <select
+          id="capacity-history"
+          className="form-select"
+          value={range}
+          onChange={(e) => setRange(e.target.value)}
+          title="History window used to fit the trend (independent of the global time range)"
+        >
           <option value="30d">30 days</option>
           <option value="90d">90 days</option>
           <option value="180d">180 days</option>
+          <option value="365d">365 days</option>
         </select>
         <label className="text-muted">Group:</label>
         <select

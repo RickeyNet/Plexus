@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { ConfigDriftEvent } from '@/api/configuration';
 
 import {
+  backupDiffAvailable,
   filterDriftEvents,
   formatInterval,
   groupDriftEvents,
@@ -99,5 +100,20 @@ describe('filterDriftEvents', () => {
 
   it('is case-insensitive', () => {
     expect(filterDriftEvents(events, 'CORE-SW1')).toHaveLength(1);
+  });
+});
+
+describe('backupDiffAvailable', () => {
+  it('allows diffing successful backups', () => {
+    expect(backupDiffAvailable('success')).toBe(true);
+  });
+
+  it('blocks diffing failed backups', () => {
+    expect(backupDiffAvailable('failed')).toBe(false);
+  });
+
+  it('allows the diff view while status is unknown', () => {
+    expect(backupDiffAvailable(undefined)).toBe(true);
+    expect(backupDiffAvailable(null)).toBe(true);
   });
 });

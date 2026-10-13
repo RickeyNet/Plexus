@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 
 import { useDialogs } from '@/components/DialogProvider-context';
+import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
 import {
   useAuditRuns,
   useAuditFindings,
@@ -564,7 +565,7 @@ function SchedulesCard() {
                     ? formatBackendDateTime(s.last_run_at)
                     : 'never'}
                 </td>
-                <td style={{ textAlign: 'right' }}>
+                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                   <button
                     className="btn btn-sm"
                     disabled={runNow.isPending}
@@ -572,40 +573,36 @@ function SchedulesCard() {
                   >
                     Run now
                   </button>
-                  <button
-                    className="btn btn-sm"
-                    style={{ marginLeft: '0.25rem' }}
-                    disabled={update.isPending}
-                    onClick={() =>
-                      update.mutate({
-                        id: s.id,
-                        payload: { enabled: !s.enabled },
-                      })
-                    }
-                  >
-                    {s.enabled ? 'Pause' : 'Resume'}
-                  </button>
-                  <button
-                    className="btn btn-sm"
-                    style={{ marginLeft: '0.25rem' }}
-                    onClick={() => setEditing(s)}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    className="btn btn-sm btn-danger"
-                    style={{ marginLeft: '0.25rem' }}
-                    disabled={remove.isPending}
-                    onClick={async () => {
-                      if (
-                        await confirm(`Delete schedule "${s.name}"?`)
-                      ) {
-                        remove.mutate(s.id);
-                      }
-                    }}
-                  >
-                    Delete
-                  </button>
+                  <span style={{ marginLeft: '0.25rem' }}>
+                    <KebabMenu label={`Actions for ${s.name}`}>
+                      <MenuItem
+                        disabled={update.isPending}
+                        onSelect={() =>
+                          update.mutate({
+                            id: s.id,
+                            payload: { enabled: !s.enabled },
+                          })
+                        }
+                      >
+                        {s.enabled ? 'Pause' : 'Resume'}
+                      </MenuItem>
+                      <MenuItem onSelect={() => setEditing(s)}>Edit</MenuItem>
+                      <MenuSeparator />
+                      <MenuItem
+                        danger
+                        disabled={remove.isPending}
+                        onSelect={async () => {
+                          if (
+                            await confirm(`Delete schedule "${s.name}"?`)
+                          ) {
+                            remove.mutate(s.id);
+                          }
+                        }}
+                      >
+                        Delete
+                      </MenuItem>
+                    </KebabMenu>
+                  </span>
                 </td>
               </tr>
             ))}

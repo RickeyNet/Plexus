@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router';
 
 import { useAuthStatus } from '@/api/auth';
 import {
@@ -21,6 +20,9 @@ import {
 } from '@/api/compliance';
 import { PageHelp } from '@/components/PageHelp';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { TabBar } from '@/components/TabBar';
+import { visibleTabs } from '@/lib/tabGating';
+import { usePathTab } from '@/lib/usePathTab';
 
 import { AuditContent } from '@/pages/Audit/Audit';
 import { parseBackendDate } from '@/pages/Dashboard/helpers';
@@ -40,21 +42,15 @@ type Tab = 'profiles' | 'assignments' | 'results' | 'status' | 'meraki' | 'audit
 // Each tab is gated on the feature its API needs. The CIS Audit tab (the
 // former /audit page) is served by the audit router, which is gated on
 // `reports`; the sidebar shows Compliance for either feature.
-const TABS: { id: Tab; label: string; feature: string }[] = [
-  { id: 'profiles', label: 'Profiles', feature: 'compliance' },
-  { id: 'assignments', label: 'Assignments', feature: 'compliance' },
-  { id: 'results', label: 'Scan Results', feature: 'compliance' },
-  { id: 'status', label: 'Host Status', feature: 'compliance' },
-  { id: 'meraki', label: 'Meraki', feature: 'compliance' },
-  { id: 'audit', label: 'CIS Audit', feature: 'reports' },
+const TABS: { key: Tab; label: string; feature: string }[] = [
+  { key: 'profiles', label: 'Profiles', feature: 'compliance' },
+  { key: 'assignments', label: 'Assignments', feature: 'compliance' },
+  { key: 'results', label: 'Scan Results', feature: 'compliance' },
+  { key: 'status', label: 'Host Status', feature: 'compliance' },
+  { key: 'meraki', label: 'Meraki', feature: 'compliance' },
+  { key: 'audit', label: 'CIS Audit', feature: 'reports' },
 ];
-
-const TAB_QUERY_KEY = 'tab';
-
-function readTab(search: string): Tab | null {
-  const v = new URLSearchParams(search).get(TAB_QUERY_KEY);
-  return TABS.some((t) => t.id === v) ? (v as Tab) : null;
-}
+const TAB_KEYS = TABS.map((t) => t.key);
 
 const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   profiles: {
@@ -93,24 +89,15 @@ const formatInterval = (seconds: number): string => {
 export function Compliance() {
   const { alert } = useDialogs();
   const { data: auth } = useAuthStatus();
-  const navigate = useNavigate();
-  const { search } = useLocation();
 
-  const isAdmin = auth?.role === 'admin';
-  const access = useMemo(() => new Set(auth?.feature_access ?? []), [auth?.feature_access]);
-  const hidden = useMemo(() => new Set(auth?.feature_visibility_hidden ?? []), [auth?.feature_visibility_hidden]);
-  const visibleTabs = TABS.filter((t) => (isAdmin || access.has(t.feature)) && !hidden.has(t.feature));
-
-  const [tab, setTab] = useState<Tab>(() => readTab(search) ?? 'profiles');
-  // The selected tab is not available to this user: show the first one that
-  // is. With none available, keep the selection (the API refuses its data).
-  const shownTab = visibleTabs.some((t) => t.id === tab) ? tab : (visibleTabs[0]?.id ?? tab);
+  const shownTabs = visibleTabs(TABS, auth);
+  const [shownTab, selectTab] = usePathTab(
+    '/compliance',
+    TAB_KEYS,
+    'profiles',
+    auth ? shownTabs.map((t) => t.key) : undefined,
+  );
   const isAudit = shownTab === 'audit';
-
-  function selectTab(next: Tab) {
-    setTab(next);
-    navigate({ search: `?${TAB_QUERY_KEY}=${next}` }, { replace: true });
-  }
 
   const [query, setQuery] = useState('');
   const [showNewProfile, setShowNewProfile] = useState(false);
@@ -190,39 +177,28 @@ export function Compliance() {
 
       {!isAudit && <SummaryStrip summary={summary.data} meraki={merakiSummary.data} />}
 
-      <PageHelp pageKey={`compliance.${shownTab}`} title={TAB_HELP[shownTab].title} text={TAB_HELP[shownTab].text} />
-
-      <div className="card" style={{ marginTop: '0.75rem', padding: 0, overflow: 'hidden' }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            padding: '0.5rem 0.75rem',
-            borderBottom: '1px solid var(--border)',
-            flexWrap: 'wrap',
-          }}
-        >
-          {visibleTabs.map((t) => (
-            <button
-              key={t.id}
-              className={`btn btn-sm ${shownTab === t.id ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => selectTab(t.id)}
-            >
-              {t.label}
-            </button>
-          ))}
-          {/* The audit tab has its own severity / category filters. */}
-          {!isAudit && (
+      {/* The audit tab has its own severity / category filters, so no search box. */}
+      <TabBar
+        tabs={shownTabs}
+        active={shownTab}
+        onChange={selectTab}
+        aria-label="Compliance sections"
+        trailing={
+          !isAudit && (
             <input
               className="form-input"
               placeholder="Search…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              style={{ marginLeft: 'auto', maxWidth: 240 }}
+              style={{ maxWidth: 240 }}
             />
-          )}
-        </div>
+          )
+        }
+      />
+
+      <PageHelp pageKey={`compliance.${shownTab}`} title={TAB_HELP[shownTab].title} text={TAB_HELP[shownTab].text} />
+
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ padding: '0.75rem' }}>
           {shownTab === 'profiles' && (
             <ProfilesTab

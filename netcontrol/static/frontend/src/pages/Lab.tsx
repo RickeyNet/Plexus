@@ -167,7 +167,7 @@ export function Lab() {
       <PageHelp
         pageKey="lab"
         title="Pre-Production Change Sandbox"
-        text="Clone a production device, apply proposed commands or templates against the simulated snapshot, review the diff and risk score, then promote a successful change to a real deployment."
+        text="Clone a production device, apply proposed commands or templates against the simulated snapshot, and review the diff and risk score before making the change on the real device."
       />
 
       <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
@@ -722,7 +722,6 @@ function DevicePanel({ deviceId }: { deviceId: number }) {
                 <th>Risk</th>
                 <th>+/−</th>
                 <th>Status</th>
-                <th>Promoted</th>
               </tr>
             </thead>
             <tbody>
@@ -738,9 +737,6 @@ function DevicePanel({ deviceId }: { deviceId: number }) {
                   <td>{riskBadge(r.risk_level)}</td>
                   <td>+{r.diff_added}/−{r.diff_removed}</td>
                   <td>{r.status}</td>
-                  <td>
-                    {r.promoted_deployment_id ? `#${r.promoted_deployment_id}` : '-'}
-                  </td>
                 </tr>
               ))}
             </tbody>
@@ -1191,17 +1187,11 @@ function TopologyEditor({
       <div style={{ display: 'flex', gap: 4, margin: '8px 0' }}>
         <button
           type="button"
-          className={`btn btn-sm ${viewMode === 'list' ? 'btn-primary' : 'btn-secondary'}`}
-          onClick={() => setViewMode('list')}
+          className="btn btn-sm btn-secondary"
+          aria-pressed={viewMode === 'canvas'}
+          onClick={() => setViewMode(viewMode === 'canvas' ? 'list' : 'canvas')}
         >
-          List
-        </button>
-        <button
-          type="button"
-          className={`btn btn-sm ${viewMode === 'canvas' ? 'btn-primary' : 'btn-secondary'}`}
-          onClick={() => setViewMode('canvas')}
-        >
-          Canvas
+          {viewMode === 'canvas' ? 'Hide canvas' : 'Show canvas'}
         </button>
       </div>
 

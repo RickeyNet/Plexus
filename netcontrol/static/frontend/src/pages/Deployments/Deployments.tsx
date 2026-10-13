@@ -11,6 +11,7 @@ import {
   useRollbackDeployment,
 } from '@/api/deployments';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
 
 import { DeploymentCorrelationModal } from './DeploymentCorrelationModal';
 import { DeploymentDetailModal } from './DeploymentDetailModal';
@@ -22,6 +23,7 @@ import {
   canRollback,
   filterDeployments,
   formatStamp,
+  isApprovalBlocking,
   rollbackStatusColor,
   statusColor,
 } from './helpers';
@@ -278,6 +280,9 @@ function DeploymentRow({
   const color = statusColor(deployment.status);
   const created = formatStamp(deployment.created_at);
   const finished = formatStamp(deployment.finished_at);
+  const approvalBlocking = isApprovalBlocking(deployment);
+  const showRollback = canRollback(deployment.status);
+  const showDelete = canDelete(deployment.status);
 
   const handleExecute = async () => {
     if (
@@ -373,30 +378,31 @@ function DeploymentRow({
           {canExecute(deployment.status) && (
             <button
               className="btn btn-sm btn-primary"
-              disabled={execute.isPending}
+              disabled={execute.isPending || approvalBlocking}
+              title={
+                approvalBlocking
+                  ? 'Awaiting approval - open Details to request or review it'
+                  : undefined
+              }
               onClick={handleExecute}
             >
               {execute.isPending ? 'Starting…' : 'Execute'}
             </button>
           )}
-          {canRollback(deployment.status) && (
-            <button
-              className="btn btn-sm"
-              style={{ color: 'var(--warning)', border: '1px solid var(--warning)' }}
-              disabled={rollback.isPending}
-              onClick={handleRollback}
-            >
-              {rollback.isPending ? 'Starting…' : 'Rollback'}
-            </button>
-          )}
-          {canDelete(deployment.status) && (
-            <button
-              className="btn btn-sm"
-              style={{ color: 'var(--danger)' }}
-              onClick={handleDelete}
-            >
-              Delete
-            </button>
+          {(showRollback || showDelete) && (
+            <KebabMenu label={`Actions for ${deployment.name}`}>
+              {showRollback && (
+                <MenuItem danger disabled={rollback.isPending} onSelect={handleRollback}>
+                  {rollback.isPending ? 'Starting…' : 'Rollback'}
+                </MenuItem>
+              )}
+              {showRollback && showDelete && <MenuSeparator />}
+              {showDelete && (
+                <MenuItem danger onSelect={handleDelete}>
+                  Delete
+                </MenuItem>
+              )}
+            </KebabMenu>
           )}
         </div>
       </div>

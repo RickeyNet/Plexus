@@ -41,27 +41,14 @@ export function SubnetDrilldown({ subnet, detail, isLoading, onRefresh }: Props)
 
   return (
     <div style={{ display: 'grid', gap: '1rem' }}>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          gap: '0.75rem',
-          alignItems: 'flex-start',
-          flexWrap: 'wrap',
-        }}
-      >
-        <div>
-          <div style={{ fontSize: '1rem', fontWeight: 700 }}>
-            {detail.subnet || subnet}
-          </div>
-          <div className="text-muted" style={{ fontSize: '0.9em' }}>
-            {summary.total_addresses ?? 0} total addresses ·{' '}
-            {summary.usable_address_count ?? 0} usable
-          </div>
+      <div>
+        <div style={{ fontSize: '1rem', fontWeight: 700 }}>
+          {detail.subnet || subnet}
         </div>
-        <button type="button" className="btn btn-secondary" onClick={onRefresh}>
-          Refresh Detail
-        </button>
+        <div className="text-muted" style={{ fontSize: '0.9em' }}>
+          {summary.total_addresses ?? 0} total addresses ·{' '}
+          {summary.usable_address_count ?? 0} usable
+        </div>
       </div>
       <div
         style={{

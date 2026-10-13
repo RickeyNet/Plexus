@@ -21,6 +21,7 @@ import {
   commandCount,
   formatStamp,
   formatTime,
+  isApprovalBlocking,
   rollbackStatusColor,
   statusColor,
 } from './helpers';
@@ -102,7 +103,7 @@ function DetailBody({
   const color = statusColor(deployment.status);
   const requiresApproval = !!deployment.requires_approval;
   const approvalStatus = deployment.approval_status || 'not_required';
-  const approvalBlocking = requiresApproval && approvalStatus !== 'approved';
+  const approvalBlocking = isApprovalBlocking(deployment);
   const isApprover =
     !!auth?.username &&
     auth.username !== (deployment.created_by || '');

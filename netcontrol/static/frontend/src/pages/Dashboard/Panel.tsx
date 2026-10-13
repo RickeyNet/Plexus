@@ -8,6 +8,7 @@ import {
   useMetricsQuery,
 } from '@/api/dashboard';
 import { BarChart, GaugeChart, HeatmapChart, TimeSeriesChart } from '@/lib/echart';
+import type { TimeRangePreset } from '@/lib/timeRange-context';
 
 import { parseBackendDate } from './helpers';
 
@@ -36,7 +37,7 @@ function resolveVariables(value: string | undefined, vars: Record<string, string
 interface PanelProps {
   panel: DashboardPanel;
   variables: Record<string, string>;
-  range: string;
+  range: TimeRangePreset;
   editing: boolean;
   onEdit: (panel: DashboardPanel) => void;
   onDelete: (panel: DashboardPanel) => void;
@@ -48,12 +49,11 @@ export function Panel({ panel, variables, range, editing, onEdit, onDelete }: Pa
   const host = resolveVariables(raw.host ?? '*', variables) || '*';
   const group = raw.group ? resolveVariables(raw.group, variables) : null;
   const groupNum = group && group !== '*' ? Number(group) : null;
-  const queryRange = range === 'custom' ? '24h' : range;
 
   const query = useMetricsQuery({
     metric,
     host,
-    range: queryRange,
+    range,
     group: groupNum != null && Number.isFinite(groupNum) ? groupNum : null,
   });
 
@@ -61,7 +61,7 @@ export function Panel({ panel, variables, range, editing, onEdit, onDelete }: Pa
   const isLine = !['gauge', 'bar', 'heatmap', 'table'].includes(panel.chart_type);
   const annotationsQuery = useAnnotations({
     host,
-    range: queryRange,
+    range,
     enabled: isLine,
   });
 

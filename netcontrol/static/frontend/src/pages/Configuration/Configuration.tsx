@@ -2,6 +2,10 @@ import { useState } from 'react';
 
 import { useAuthStatus } from '@/api/auth';
 import { PageHelp } from '@/components/PageHelp';
+import { TabBar } from '@/components/TabBar';
+import { visibleTabs } from '@/lib/tabGating';
+import { usePathTab } from '@/lib/usePathTab';
+
 import { BackupsTab } from './BackupsTab';
 import { DriftTab } from './DriftTab';
 import { SearchTab } from './SearchTab';
@@ -12,11 +16,12 @@ type Tab = 'drift' | 'backups' | 'search';
 // Each tab is gated on the feature its API needs: drift on `config-drift`,
 // backups and config search (served by the config-backups router) on
 // `config-backups`. The sidebar entry shows for either feature.
-const TABS: { value: Tab; label: string; feature: string }[] = [
-  { value: 'drift', label: 'Config Drift', feature: 'config-drift' },
-  { value: 'backups', label: 'Backups', feature: 'config-backups' },
-  { value: 'search', label: 'Config Search', feature: 'config-backups' },
+const TABS: { key: Tab; label: string; feature: string }[] = [
+  { key: 'drift', label: 'Config Drift', feature: 'config-drift' },
+  { key: 'backups', label: 'Backups', feature: 'config-backups' },
+  { key: 'search', label: 'Config Search', feature: 'config-backups' },
 ];
+const TAB_KEYS = TABS.map((t) => t.key);
 
 const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   drift: {
@@ -35,17 +40,15 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
 
 export function Configuration() {
   const { data: auth } = useAuthStatus();
-  const [tab, setTab] = useState<Tab>('drift');
+  const shownTabs = visibleTabs(TABS, auth);
+  const [shownTab, selectTab] = usePathTab(
+    '/configuration',
+    TAB_KEYS,
+    'drift',
+    auth ? shownTabs.map((t) => t.key) : undefined,
+  );
   const [captureJob, setCaptureJob] = useState<string | null>(null);
   const [revertJob, setRevertJob] = useState<string | null>(null);
-
-  const isAdmin = auth?.role === 'admin';
-  const access = new Set(auth?.feature_access ?? []);
-  const hidden = new Set(auth?.feature_visibility_hidden ?? []);
-  const visibleTabs = TABS.filter((t) => (isAdmin || access.has(t.feature)) && !hidden.has(t.feature));
-  // The selected tab is not available to this user: show the first one that
-  // is. With none available, keep the selection (the API refuses its data).
-  const shownTab = visibleTabs.some((t) => t.value === tab) ? tab : (visibleTabs[0]?.value ?? tab);
 
   const tabHelp = TAB_HELP[shownTab];
 
@@ -61,19 +64,8 @@ export function Configuration() {
         text="Manage device configurations in one place. Detect drift against baselines, schedule automatic backups, browse backup history, and restore previous configurations."
       />
 
-      {visibleTabs.length > 1 && (
-        <div className="tab-controls">
-          {visibleTabs.map((t) => (
-            <button
-              key={t.value}
-              type="button"
-              className={`btn btn-sm btn-secondary upgrade-tab-btn${shownTab === t.value ? ' active' : ''}`}
-              onClick={() => setTab(t.value)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+      {shownTabs.length > 1 && (
+        <TabBar tabs={shownTabs} active={shownTab} onChange={selectTab} aria-label="Configuration sections" />
       )}
 
       <PageHelp pageKey={`configuration.${shownTab}`} title={tabHelp.title} text={tabHelp.text} />

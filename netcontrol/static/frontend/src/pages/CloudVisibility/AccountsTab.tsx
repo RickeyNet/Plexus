@@ -132,11 +132,13 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
   return (
     <div>
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
-        {providers.map((p) => (
-          <button key={p} className="btn btn-primary" onClick={() => setModal({ account: null, provider: p })}>
-            Add {cloudProviderTerms(p).scopeTitle}
-          </button>
-        ))}
+        <button
+          className="btn btn-primary"
+          disabled={providers.length === 0}
+          onClick={() => setModal({ account: null, provider: providers[0] })}
+        >
+          Add account
+        </button>
       </div>
 
       {actionMsg && (
@@ -309,6 +311,7 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
         <AccountFormModal
           account={modal.account}
           provider={modal.provider}
+          providerOptions={providers}
           onClose={() => setModal(null)}
           onSaved={(msg) => {
             showMsg('success', msg);
@@ -369,8 +372,10 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
 
 interface FormProps {
   account: CloudAccount | null;
-  /** Fixed: a stored sign-in only fits the provider it was written for. */
+  /** Initial provider; fixed once saved, since a stored sign-in only fits the provider it was written for. */
   provider: string;
+  /** Providers offered when adding an account. */
+  providerOptions: string[];
   onClose: () => void;
   onSaved: (msg: string) => void;
 }
@@ -381,10 +386,11 @@ function sectionsSummary(titles: string[]): string {
   return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : (parts[0] ?? '');
 }
 
-function AccountFormModal({ account, provider: providerProp, onClose, onSaved }: FormProps) {
+function AccountFormModal({ account, provider: providerProp, providerOptions, onClose, onSaved }: FormProps) {
   const create = useCreateCloudAccount();
   const update = useUpdateCloudAccount();
-  const provider = String(account?.provider ?? providerProp).toLowerCase();
+  const [providerChoice, setProviderChoice] = useState(providerProp);
+  const provider = String(account?.provider ?? providerChoice).toLowerCase();
   const terms = cloudProviderTerms(provider);
   const [name, setName] = useState(account?.name ?? '');
   const [accountIdentifier, setAccountIdentifier] = useState(account?.account_identifier ?? '');
@@ -450,9 +456,34 @@ function AccountFormModal({ account, provider: providerProp, onClose, onSaved }:
   return (
     <Modal isOpen onClose={onClose} title={`${account?.id ? 'Edit' : 'Add'} ${terms.scopeTitle}`} size="large">
       <form onSubmit={submit} style={{ display: 'grid', gap: '0.75rem' }}>
-        <div>
-          Provider: {terms.fullName === terms.label ? terms.label : `${terms.fullName} (${terms.label})`}
-        </div>
+        {account?.id ? (
+          <div>
+            Provider: {terms.fullName === terms.label ? terms.label : `${terms.fullName} (${terms.label})`}
+          </div>
+        ) : (
+          <label>
+            Provider
+            <select
+              className="form-select"
+              value={providerChoice}
+              onChange={(e) => {
+                setProviderChoice(e.target.value);
+                // Sign-in methods and fields differ per provider.
+                setMethodKey('');
+                setValues({});
+              }}
+            >
+              {providerOptions.map((p) => {
+                const t = cloudProviderTerms(p);
+                return (
+                  <option key={p} value={p}>
+                    {t.fullName === t.label ? t.label : `${t.fullName} (${t.label})`}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+        )}
         <label>
           Name
           <input className="form-input" type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder={`Prod ${terms.label}`} required />
