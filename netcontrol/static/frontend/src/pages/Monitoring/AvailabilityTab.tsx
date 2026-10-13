@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import { useInventoryGroups } from '@/api/compliance';
+import { TabBar } from '@/components/TabBar';
 import {
   useAvailabilityOutages,
   useAvailabilitySummary,
@@ -9,6 +10,12 @@ import {
 import { formatTimestamp, formatUptime } from './helpers';
 
 type SubTab = 'hosts' | 'outages' | 'transitions';
+
+const SUB_TABS: { key: SubTab; label: string }[] = [
+  { key: 'hosts', label: 'Hosts' },
+  { key: 'outages', label: 'Outages' },
+  { key: 'transitions', label: 'Transitions' },
+];
 
 export function AvailabilityTab() {
   const groups = useInventoryGroups();
@@ -60,22 +67,7 @@ export function AvailabilityTab() {
         ))}
       </div>
 
-      {/* tab-bar/tab-btn are not in the legacy stylesheet (would render
-          as bare unstyled boxes); use the established working tab-row
-          convention - see Jobs.tsx / Monitoring.tsx. */}
-      <div role="tablist" style={{ marginBottom: '0.75rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-        {(['hosts', 'outages', 'transitions'] as SubTab[]).map((t) => (
-          <button
-            key={t}
-            role="tab"
-            aria-selected={subTab === t}
-            className={`btn btn-sm btn-secondary mon-tab-btn${subTab === t ? ' active' : ''}`}
-            onClick={() => setSubTab(t)}
-          >
-            {t === 'hosts' ? 'Hosts' : t === 'outages' ? 'Outages' : 'Transitions'}
-          </button>
-        ))}
-      </div>
+      <TabBar tabs={SUB_TABS} active={subTab} onChange={setSubTab} size="sm" aria-label="Availability views" />
 
       {subTab === 'hosts' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>

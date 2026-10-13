@@ -263,28 +263,6 @@ export function useRun(runId: number | null) {
   });
 }
 
-export function usePromoteRun() {
-  return useMutation({
-    mutationFn: ({
-      runId,
-      body,
-    }: {
-      runId: number;
-      body: {
-        name: string;
-        description?: string;
-        credential_id: number;
-        target_host_ids?: number[];
-        target_group_id?: number;
-      };
-    }) =>
-      apiRequest<{ ok: true; deployment_id: number }>(
-        `/lab/runs/${runId}/promote`,
-        { method: 'POST', body },
-      ),
-  });
-}
-
 // ── Runtime (Phase B-1) ─────────────────────────────────────────────────────
 
 export function useRuntimeStatus() {

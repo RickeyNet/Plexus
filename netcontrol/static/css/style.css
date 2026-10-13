@@ -1970,7 +1970,40 @@ body {
     margin-bottom: 1rem;
 }
 
-/* Page tab buttons */
+/* Page tab buttons (shared <TabBar> renders .page-tab-btn) */
+.tab-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+.tab-bar-sm { gap: 0.35rem; margin-bottom: 0.75rem; }
+.tab-bar-sm .page-tab-btn { padding: 0.25rem 0.7rem; font-size: 0.78rem; }
+.tab-bar-trailing {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-left: auto;
+}
+.tab-bar-badge {
+    margin-left: 0.4rem;
+    padding: 0 0.4rem;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    background: rgba(255, 255, 255, 0.12);
+}
+.page-tab-btn.active .tab-bar-badge { background: rgba(0, 0, 0, 0.18); }
+
+/* Shared <SegmentedControl> */
+.segmented {
+    display: inline-flex;
+    gap: 0.25rem;
+    flex-wrap: wrap;
+}
+.segmented-xs .btn { padding: 0.15rem 0.5rem; font-size: 0.75rem; }
+
+.page-tab-btn,
 .config-tab-btn,
 .change-tab-btn,
 .cred-tab-btn,
@@ -1989,6 +2022,7 @@ body {
     white-space: nowrap;
 }
 
+.page-tab-btn.active,
 .config-tab-btn.active,
 .change-tab-btn.active,
 .cred-tab-btn.active,
@@ -5350,3 +5384,52 @@ code {
         grid-column: span 1 !important;
     }
 }
+
+/* Shared <Menu> dropdown (components/Menu.tsx); rendered in a portal on body */
+.menu {
+    position: fixed;
+    z-index: 1100;
+    min-width: 180px;
+    max-height: 70vh;
+    overflow-y: auto;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 0.4rem;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+    padding: 0.25rem 0;
+}
+.menu-item {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    border: none;
+    background: transparent;
+    color: inherit;
+    text-decoration: none;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.85rem;
+}
+.menu-item[role="menuitemcheckbox"] { flex-direction: row; align-items: center; }
+.menu-item:hover,
+.menu-item:focus { background: var(--bg-secondary); outline: none; }
+.menu-item:disabled,
+.menu-item[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; background: transparent; }
+.menu-item.danger { color: var(--danger); }
+.menu-item-rich + .menu-item-rich { border-top: 1px solid var(--border); }
+.menu-item-label { font-weight: 500; }
+.menu-item-description {
+    margin-top: 0.15rem;
+    font-size: 0.75rem;
+    line-height: 1.35;
+    color: var(--text-muted);
+}
+.menu-item-check { display: inline-block; width: 1.2em; flex-shrink: 0; }
+.menu-separator { height: 1px; margin: 0.25rem 0; background: var(--border); }
+.menu-kebab { padding: 0.15rem 0.5rem; line-height: 1; font-size: 1rem; }
+
+/* Topology toolbar menus (pages/Topology/Topology.tsx) */
+.topo-toolbar-badge { margin-left: 0.3rem; }
+.topo-menu-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }

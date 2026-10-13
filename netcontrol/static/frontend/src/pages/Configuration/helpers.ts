@@ -6,6 +6,14 @@ export function formatStamp(iso: string | null | undefined): string {
   return new Date(iso + (hasZone ? '' : 'Z')).toLocaleString();
 }
 
+export type BackupView = 'config' | 'diff';
+
+// Only successful captures have a config to diff. An unknown status (detail
+// still loading) leaves the diff view available.
+export function backupDiffAvailable(status: string | null | undefined): boolean {
+  return status == null || status === 'success';
+}
+
 export function formatRelative(iso: string | null | undefined): string {
   if (!iso) return 'Never';
   const hasZone = iso.includes('Z') || iso.includes('+');

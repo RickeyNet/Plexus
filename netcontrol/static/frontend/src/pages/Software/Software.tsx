@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 
 import { PageHelp } from '@/components/PageHelp';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { TabBar } from '@/components/TabBar';
 import { useAuthStatus } from '@/api/auth';
 import {
   type SoftwareAdvisory,
@@ -18,6 +19,7 @@ import {
   useSoftwareOverview,
   useStartPsirtSync,
 } from '@/api/software';
+import { resolveTab, visibleTabs } from '@/lib/tabGating';
 import { UpgradesContent } from '@/pages/Upgrades/Upgrades';
 
 import { AdvisoryModal } from './AdvisoryModal';
@@ -69,14 +71,11 @@ export function Software() {
     if (pathname !== target.path) navigate(target.path);
   }
 
-  const isAdmin = auth?.role === 'admin';
-  const access = new Set(auth?.feature_access ?? []);
-  const hidden = new Set(auth?.feature_visibility_hidden ?? []);
-  const visibleTabs = TABS.filter((t) => (isAdmin || access.has(t.feature)) && !hidden.has(t.feature));
+  const shownTabs = visibleTabs(TABS, auth);
   // The path's tab is not available to this user but the other one is: show
   // that one instead. With neither available, keep the path's tab (the API
   // refuses its data anyway).
-  const shownTab = visibleTabs.some((t) => t.key === tab) ? tab : (visibleTabs[0]?.key ?? tab);
+  const shownTab = resolveTab(tab, shownTabs);
 
   return (
     <div className="page">
@@ -84,20 +83,8 @@ export function Software() {
         <h2>Software</h2>
       </div>
 
-      {visibleTabs.length > 1 && (
-        <div role="tablist" style={{ marginBottom: '1rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-          {visibleTabs.map((t) => (
-            <button
-              key={t.key}
-              role="tab"
-              aria-selected={shownTab === t.key}
-              className={`btn btn-sm btn-secondary mon-tab-btn${shownTab === t.key ? ' active' : ''}`}
-              onClick={() => selectTab(t.key)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+      {shownTabs.length > 1 && (
+        <TabBar tabs={shownTabs} active={shownTab} onChange={selectTab} aria-label="Software sections" />
       )}
 
       {shownTab === 'versions' && <VersionsTab />}

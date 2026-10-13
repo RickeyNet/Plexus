@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 
 import { useAnnotations, type Annotation } from '@/api/dashboard';
+import { useTimeRange } from '@/lib/timeRange-context';
 
 import { timeAgo } from './helpers';
 
@@ -19,13 +20,6 @@ const CATEGORY_LABELS: Record<Category, string> = {
   alert: 'Alert',
 };
 
-type Range = '24h' | '7d';
-
-const RANGES: { value: Range; label: string }[] = [
-  { value: '24h', label: '24h' },
-  { value: '7d', label: '7d' },
-];
-
 const FILTERS: { value: Filter; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'deployment', label: 'Deploy' },
@@ -34,7 +28,7 @@ const FILTERS: { value: Filter; label: string }[] = [
 ];
 
 export function EventsFeedPanel() {
-  const [range, setRange] = useState<Range>('24h');
+  const { range } = useTimeRange();
   const [filter, setFilter] = useState<Filter>('all');
   const { data, isPending, error } = useAnnotations({ range });
 
@@ -69,19 +63,6 @@ export function EventsFeedPanel() {
                 onClick={() => setFilter(f.value)}
               >
                 {f.label}
-              </button>
-            ))}
-          </div>
-          <div className="dashboard-range-tabs" role="tablist" aria-label="Time range">
-            {RANGES.map((r) => (
-              <button
-                key={r.value}
-                role="tab"
-                aria-selected={range === r.value}
-                className={`dashboard-range-tab${range === r.value ? ' active' : ''}`}
-                onClick={() => setRange(r.value)}
-              >
-                {r.label}
               </button>
             ))}
           </div>

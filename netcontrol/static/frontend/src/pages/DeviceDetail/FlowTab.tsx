@@ -1,7 +1,12 @@
 import { useMemo, useState } from 'react';
 
+import { SegmentedControl } from '@/components/SegmentedControl';
+import { TabBar } from '@/components/TabBar';
+import { ClampedRangeHint } from '@/components/TimeRangeBar';
 import { formatBackendDateTime } from '@/lib/datetime';
 import { BarChart, TimeSeriesChart } from '@/lib/echart';
+import type { TimeRangePreset } from '@/lib/timeRange-context';
+import { clampPreset, toHours } from '@/lib/timeRangeMap';
 import {
   FlowApplication,
   FlowConversation,
@@ -18,53 +23,44 @@ import {
 
 interface Props {
   hostId: number;
-  /** Range string from DeviceDetail (e.g. '1h', '6h', '24h', '7d', '30d'). */
-  range: string;
+  range: TimeRangePreset;
 }
 
-const RANGE_HOURS: Record<string, number> = {
-  '1h': 1,
-  '6h': 6,
-  '24h': 24,
-  '7d': 168,
-  '30d': 720,
-};
+// /api/flows/* caps `hours` at 168.
+const FLOW_RANGES = ['1h', '6h', '24h', '7d'] as const;
 
 type SubTab = 'talkers' | 'applications' | 'conversations' | 'timeline';
 
-const SUB_TABS: { id: SubTab; label: string }[] = [
-  { id: 'talkers', label: 'Top Talkers' },
-  { id: 'applications', label: 'Applications' },
-  { id: 'conversations', label: 'Conversations' },
-  { id: 'timeline', label: 'Timeline' },
+const SUB_TABS: { key: SubTab; label: string }[] = [
+  { key: 'talkers', label: 'Top Talkers' },
+  { key: 'applications', label: 'Applications' },
+  { key: 'conversations', label: 'Conversations' },
+  { key: 'timeline', label: 'Timeline' },
+];
+
+const DIRECTION_OPTIONS: { key: FlowDirection; label: string }[] = [
+  { key: 'src', label: 'Sources' },
+  { key: 'dst', label: 'Destinations' },
 ];
 
 export function FlowTab({ hostId, range }: Props) {
-  const hours = RANGE_HOURS[range] ?? 24;
+  const flowRange = clampPreset(range, FLOW_RANGES);
+  const hours = toHours(flowRange);
   const [sub, setSub] = useState<SubTab>('talkers');
 
   return (
     <div>
       <ExporterStatus hostId={hostId} />
 
-      <div
-        style={{
-          display: 'flex',
-          gap: '0.25rem',
-          marginTop: '0.75rem',
-          marginBottom: '0.5rem',
-          flexWrap: 'wrap',
-        }}
-      >
-        {SUB_TABS.map((t) => (
-          <button
-            key={t.id}
-            className={`btn btn-sm ${sub === t.id ? 'btn-primary' : 'btn-ghost'}`}
-            onClick={() => setSub(t.id)}
-          >
-            {t.label}
-          </button>
-        ))}
+      <div style={{ marginTop: '0.75rem' }}>
+        <TabBar
+          tabs={SUB_TABS}
+          active={sub}
+          onChange={setSub}
+          size="sm"
+          aria-label="Flow views"
+          trailing={flowRange !== range && <ClampedRangeHint requested={range} shown={flowRange} />}
+        />
       </div>
 
       {sub === 'talkers' && <TalkersView hostId={hostId} hours={hours} />}
@@ -168,20 +164,12 @@ function TalkersView({ hostId, hours }: { hostId: number; hours: number }) {
         <h4 style={{ margin: 0, fontSize: '0.95rem' }}>
           Top {direction === 'src' ? 'Sources' : 'Destinations'}
         </h4>
-        <div style={{ display: 'flex', gap: '0.25rem' }}>
-          <button
-            className={`btn btn-sm ${direction === 'src' ? 'btn-primary' : 'btn-ghost'}`}
-            onClick={() => setDirection('src')}
-          >
-            Sources
-          </button>
-          <button
-            className={`btn btn-sm ${direction === 'dst' ? 'btn-primary' : 'btn-ghost'}`}
-            onClick={() => setDirection('dst')}
-          >
-            Destinations
-          </button>
-        </div>
+        <SegmentedControl
+          options={DIRECTION_OPTIONS}
+          value={direction}
+          onChange={setDirection}
+          aria-label="Talker direction"
+        />
       </div>
       <div style={{ padding: '0.5rem 0.75rem' }}>
         <TalkersBody query={q} />

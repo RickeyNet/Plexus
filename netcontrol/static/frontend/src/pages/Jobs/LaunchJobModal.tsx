@@ -136,7 +136,7 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
       <form onSubmit={handleSubmit}>
         <div className="form-group">
           <label className="form-label">Playbook</label>
-          <select className="form-select" value={playbookId} onChange={(e) => setPlaybookId(e.target.value)} required>
+          <select className="form-select" value={playbookId} onChange={(e) => setPlaybookId(e.target.value)} required disabled={playbooksQuery.isError}>
             <option value="">Select a playbook…</option>
             {(playbooksQuery.data ?? []).map((pb) => (
               <option key={pb.id} value={pb.id}>
@@ -144,13 +144,18 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
               </option>
             ))}
           </select>
+          {playbooksQuery.isError && (
+            <small className="text-muted">Tasks could not be loaded. You may not have access to Tasks.</small>
+          )}
         </div>
 
         <div className="form-group">
           <label className="form-label">Select Targets</label>
           <div style={{ background: 'var(--bg-secondary)', padding: '1rem', borderRadius: 6, maxHeight: 320, overflowY: 'auto', border: '1px solid var(--border)' }}>
             {(groupsQuery.data ?? []).length === 0 ? (
-              <div className="empty-state">No inventory groups available</div>
+              <div className="empty-state">
+                {groupsQuery.isError ? 'Inventory could not be loaded. Enter ad-hoc IPs below.' : 'No inventory groups available'}
+              </div>
             ) : (groupsQuery.data ?? []).map((group) => {
               const hosts = group.hosts ?? [];
               const groupHostIds = hosts.map((h) => h.id);
@@ -203,24 +208,31 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
 
         <div className="form-group">
           <label className="form-label">Credential (optional)</label>
-          <select className="form-select" value={credentialId} onChange={(e) => setCredentialId(e.target.value)}>
+          <select className="form-select" value={credentialId} onChange={(e) => setCredentialId(e.target.value)} disabled={credsQuery.isError}>
             <option value="">None</option>
             {(credsQuery.data ?? []).map((c) => (
               <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </select>
+          {credsQuery.isError && (
+            <small className="text-muted">Credentials could not be loaded. You may not have access to Credentials.</small>
+          )}
         </div>
 
         {!isAnsible && (
           <div className="form-group">
             <label className="form-label">Template (optional)</label>
-            <select className="form-select" value={templateId} onChange={(e) => setTemplateId(e.target.value)}>
+            <select className="form-select" value={templateId} onChange={(e) => setTemplateId(e.target.value)} disabled={tplQuery.isError}>
               <option value="">None</option>
               {(tplQuery.data ?? []).map((t) => (
                 <option key={t.id} value={t.id}>{t.name}</option>
               ))}
             </select>
-            <small className="text-muted">Required if the selected playbook expects a template.</small>
+            <small className="text-muted">
+              {tplQuery.isError
+                ? 'Instructions could not be loaded. You may not have access to Instructions.'
+                : 'Required if the selected playbook expects a template.'}
+            </small>
           </div>
         )}
 

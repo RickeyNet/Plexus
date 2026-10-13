@@ -7,6 +7,7 @@ import {
   useConfigDriftSummary,
   useUpdateDriftEventStatus,
 } from '@/api/configuration';
+import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
 
 import { CaptureSnapshotModal } from './CaptureSnapshotModal';
 import { DriftDiffModal } from './DriftDiffModal';
@@ -22,7 +23,7 @@ import {
   statusColor,
 } from './helpers';
 
-type DriftStatusFilter = 'all' | 'open' | 'accepted' | 'resolved';
+type DriftStatusFilter = 'open' | 'accepted' | 'resolved';
 type ViewMode = 'grouped' | 'flat';
 
 interface Props {
@@ -36,11 +37,7 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>('grouped');
 
   const summary = useConfigDriftSummary();
-  // "All statuses" means all *unresolved* drift - once a drift is accepted or
-  // resolved it's handled and shouldn't clutter the working list. Accepted and
-  // Resolved are still reachable via their explicit filter options.
-  const fetchStatus = statusFilter === 'all' ? 'open' : statusFilter;
-  const events = useConfigDriftEvents(fetchStatus);
+  const events = useConfigDriftEvents(statusFilter);
   const updateStatus = useUpdateDriftEventStatus();
   const bulkAccept = useBulkAcceptDriftEvents();
 
@@ -81,7 +78,6 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value as DriftStatusFilter)}
         >
-          <option value="all">All open</option>
           <option value="open">Open</option>
           <option value="accepted">Accepted</option>
           <option value="resolved">Resolved</option>
@@ -345,38 +341,19 @@ function DriftEventCard({
         >
           View Diff
         </button>
-        <button
-          type="button"
-          className="btn btn-sm btn-secondary"
-          onClick={() => onShowLog(ev.id)}
-        >
-          Event Log
-        </button>
-        {ev.status === 'open' && (
-          <>
-            <button
-              type="button"
-              className="btn btn-sm btn-primary"
-              onClick={() => onAccept(ev.id)}
-            >
-              Accept
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm btn-danger"
-              onClick={() => onShowRevert(ev.id)}
-            >
-              Revert
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm btn-secondary"
-              onClick={() => onResolve(ev.id)}
-            >
-              Resolve
-            </button>
-          </>
-        )}
+        <KebabMenu label={`Actions for ${ev.hostname || ev.ip_address || 'drift event'}`}>
+          <MenuItem onSelect={() => onShowLog(ev.id)}>Event Log</MenuItem>
+          {ev.status === 'open' && (
+            <>
+              <MenuItem onSelect={() => onAccept(ev.id)}>Accept</MenuItem>
+              <MenuItem onSelect={() => onResolve(ev.id)}>Resolve</MenuItem>
+              <MenuSeparator />
+              <MenuItem danger onSelect={() => onShowRevert(ev.id)}>
+                Revert
+              </MenuItem>
+            </>
+          )}
+        </KebabMenu>
       </div>
     </div>
   );

@@ -8,6 +8,7 @@ import {
   canRollback,
   commandCount,
   filterDeployments,
+  isApprovalBlocking,
   rollbackStatusColor,
   statusColor,
 } from './helpers';
@@ -21,6 +22,21 @@ describe('action predicates', () => {
     expect(canExecute('failed')).toBe(true);
     expect(canExecute('completed')).toBe(false);
     expect(canExecute('executing')).toBe(false);
+  });
+
+  it('isApprovalBlocking blocks gated deployments until approved', () => {
+    expect(isApprovalBlocking(make({}))).toBe(false);
+    expect(isApprovalBlocking(make({ requires_approval: 0 }))).toBe(false);
+    expect(isApprovalBlocking(make({ requires_approval: 1 }))).toBe(true);
+    expect(
+      isApprovalBlocking(make({ requires_approval: true, approval_status: 'pending' })),
+    ).toBe(true);
+    expect(
+      isApprovalBlocking(make({ requires_approval: 1, approval_status: 'rejected' })),
+    ).toBe(true);
+    expect(
+      isApprovalBlocking(make({ requires_approval: 1, approval_status: 'approved' })),
+    ).toBe(false);
   });
 
   it('canRollback covers terminal-success and verification states', () => {

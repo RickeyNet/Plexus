@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router';
 
 import { useCloudAccounts, useCloudProviders } from '@/api/cloud';
 import { PageHelp } from '@/components/PageHelp';
+import { TabBar } from '@/components/TabBar';
 import { UntestedBanner } from '@/components/UntestedBanner';
 import { capitalize, cloudProviderTerms, cloudTerms } from '@/lib/cloudProviderTerms';
 import { providerLabel } from './helpers';
@@ -173,19 +174,7 @@ export function CloudVisibility() {
         </div>
       </div>
 
-      <div role="tablist" style={{ marginBottom: '1rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            role="tab"
-            aria-selected={tab === t.key}
-            className={`btn btn-sm btn-secondary mon-tab-btn${tab === t.key ? ' active' : ''}`}
-            onClick={() => selectTab(t.key)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <TabBar tabs={TABS} active={tab} onChange={selectTab} aria-label="Cloud visibility sections" />
 
       <PageHelp pageKey={`cloud-visibility.${tab}`} title={help.title} text={help.text} />
 

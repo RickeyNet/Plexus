@@ -13,18 +13,25 @@ import {
   useDeleteBackupPolicy,
   useRunBackupPolicy,
 } from '@/api/configuration';
+import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
+import { SegmentedControl } from '@/components/SegmentedControl';
 
-import { BackupDetailModal } from './BackupDetailModal';
-import { BackupDiffModal } from './BackupDiffModal';
+import { BackupModal } from './BackupModal';
 import { BackupPolicyModal } from './BackupPolicyModal';
 import { RestoreBackupModal } from './RestoreBackupModal';
 import {
+  type BackupView,
   formatInterval,
   formatRelative,
   formatStamp,
 } from './helpers';
 
 type SubTab = 'policies' | 'history';
+
+const SUB_TABS: { key: SubTab; label: string }[] = [
+  { key: 'policies', label: 'Policies' },
+  { key: 'history', label: 'History' },
+];
 
 // The Policies / History switch is local to this tab; the page shows a single
 // "Backups" tab for both.
@@ -37,8 +44,7 @@ export function BackupsTab() {
 
   const [createPolicy, setCreatePolicy] = useState(false);
   const [editPolicy, setEditPolicy] = useState<ConfigBackupPolicy | null>(null);
-  const [detailId, setDetailId] = useState<number | null>(null);
-  const [diffId, setDiffId] = useState<number | null>(null);
+  const [viewing, setViewing] = useState<{ id: number; view: BackupView } | null>(null);
   const [restoreId, setRestoreId] = useState<number | null>(null);
 
   return (
@@ -54,22 +60,7 @@ export function BackupsTab() {
           margin: '0.75rem 0',
         }}
       >
-        <div style={{ display: 'flex', gap: '0.25rem' }}>
-          <button
-            type="button"
-            className={`btn btn-sm ${subTab === 'policies' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setSubTab('policies')}
-          >
-            Policies
-          </button>
-          <button
-            type="button"
-            className={`btn btn-sm ${subTab === 'history' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setSubTab('history')}
-          >
-            History
-          </button>
-        </div>
+        <SegmentedControl options={SUB_TABS} value={subTab} onChange={setSubTab} aria-label="Backups view" />
         <input
           className="form-input"
           placeholder="Search…"
@@ -110,8 +101,8 @@ export function BackupsTab() {
           backups={backups.data || []}
           loading={backups.isPending}
           query={query}
-          onView={setDetailId}
-          onDiff={setDiffId}
+          onView={(id) => setViewing({ id, view: 'config' })}
+          onDiff={(id) => setViewing({ id, view: 'diff' })}
           onRestore={setRestoreId}
         />
       )}
@@ -125,11 +116,12 @@ export function BackupsTab() {
           }}
         />
       )}
-      <BackupDetailModal
-        backupId={detailId}
-        onClose={() => setDetailId(null)}
+      <BackupModal
+        backupId={viewing?.id ?? null}
+        view={viewing?.view ?? 'config'}
+        onViewChange={(view) => setViewing((v) => (v ? { ...v, view } : v))}
+        onClose={() => setViewing(null)}
       />
-      <BackupDiffModal backupId={diffId} onClose={() => setDiffId(null)} />
       <RestoreBackupModal
         backupId={restoreId}
         onClose={() => setRestoreId(null)}
@@ -280,32 +272,28 @@ function PoliciesList({
                 >
                   {isRunning ? 'Running…' : 'Run Now'}
                 </button>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-secondary"
-                  onClick={() => onEdit(p)}
-                >
-                  Edit
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-danger"
-                  onClick={async () => {
-                    if (
-                      !(await confirm(
-                        `Delete the backup policy "${p.name}"? This cannot be undone.`,
-                      ))
-                    )
-                      return;
-                    remove.mutate(p.id, {
-                      onError: (e) => {
-                        void alert({ message: (e as Error).message, variant: 'error' });
-                      },
-                    });
-                  }}
-                >
-                  Delete
-                </button>
+                <KebabMenu label={`Actions for ${p.name}`}>
+                  <MenuItem onSelect={() => onEdit(p)}>Edit</MenuItem>
+                  <MenuSeparator />
+                  <MenuItem
+                    danger
+                    onSelect={async () => {
+                      if (
+                        !(await confirm(
+                          `Delete the backup policy "${p.name}"? This cannot be undone.`,
+                        ))
+                      )
+                        return;
+                      remove.mutate(p.id, {
+                        onError: (e) => {
+                          void alert({ message: (e as Error).message, variant: 'error' });
+                        },
+                      });
+                    }}
+                  >
+                    Delete
+                  </MenuItem>
+                </KebabMenu>
               </div>
             </div>
             <div
@@ -416,51 +404,42 @@ function HistoryList({
                 >
                   View
                 </button>
-                {b.status === 'success' && (
-                  <>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-secondary"
-                      onClick={() => onDiff(b.id)}
-                    >
-                      Diff
-                    </button>
-                    <a
-                      className="btn btn-sm btn-secondary"
-                      href={configBackupDownloadUrl(b.id)}
-                      download
-                      title="Download running-config as .txt"
-                    >
-                      Download
-                    </a>
-                  </>
-                )}
-                <button
-                  type="button"
-                  className="btn btn-sm btn-secondary"
-                  onClick={() => onRestore(b.id)}
-                >
-                  Restore
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-danger"
-                  onClick={async () => {
-                    if (
-                      !(await confirm(
-                        'Delete this backup? This cannot be undone.',
-                      ))
-                    )
-                      return;
-                    remove.mutate(b.id, {
-                      onError: (e) => {
-                        void alert({ message: (e as Error).message, variant: 'error' });
-                      },
-                    });
-                  }}
-                >
-                  Delete
-                </button>
+                <KebabMenu label={`Actions for ${b.hostname || b.ip_address || 'backup'}`}>
+                  {b.status === 'success' && (
+                    <>
+                      <MenuItem onSelect={() => onDiff(b.id)}>Diff</MenuItem>
+                      <MenuItem
+                        href={configBackupDownloadUrl(b.id)}
+                        download
+                        title="Download running-config as .txt"
+                      >
+                        Download
+                      </MenuItem>
+                      <MenuSeparator />
+                    </>
+                  )}
+                  <MenuItem danger onSelect={() => onRestore(b.id)}>
+                    Restore
+                  </MenuItem>
+                  <MenuItem
+                    danger
+                    onSelect={async () => {
+                      if (
+                        !(await confirm(
+                          'Delete this backup? This cannot be undone.',
+                        ))
+                      )
+                        return;
+                      remove.mutate(b.id, {
+                        onError: (e) => {
+                          void alert({ message: (e as Error).message, variant: 'error' });
+                        },
+                      });
+                    }}
+                  >
+                    Delete
+                  </MenuItem>
+                </KebabMenu>
               </div>
             </div>
             <div

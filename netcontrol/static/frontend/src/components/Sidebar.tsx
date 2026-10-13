@@ -165,18 +165,6 @@ const ic = {
       <path d="M6 20v-6" />
     </svg>
   ),
-  mac: (
-    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
-      <line x1="8" y1="21" x2="16" y2="21" />
-      <line x1="12" y1="17" x2="12" y2="21" />
-    </svg>
-  ),
-  traffic: (
-    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-    </svg>
-  ),
   upgrades: (
     <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -230,27 +218,44 @@ const ic = {
 
 const NAV: TopItem[] = [
   { label: 'Dashboard', icon: ic.dashboard, to: '/', feature: 'dashboard' },
-  { label: 'Inventory', icon: ic.inventory, to: '/inventory', feature: 'inventory' },
-  // Delegator - single entry covering Assignments / Tasks / Instructions /
-  // Credentials. Visible if the user has any of the four underlying
-  // sub-features. Lands on the Assignments tab by default.
   {
-    label: 'Delegator',
-    icon: ic.playbooks,
-    to: '/assignments',
-    feature: ['playbooks', 'jobs', 'templates', 'credentials'],
-  },
-  {
-    id: 'network',
-    label: 'Network',
-    icon: ic.network,
+    id: 'assets',
+    label: 'Assets',
+    icon: ic.templates,
     children: [
-      { label: 'Topology', icon: ic.topology, to: '/topology', feature: 'topology' },
+      { label: 'Inventory', icon: ic.inventory, to: '/inventory', feature: 'inventory' },
       { label: 'IPAM', icon: ic.ipam, to: '/ipam', feature: 'ipam' },
       // Software - Versions tab (`software`) and Upgrades tab (`upgrades`).
       { label: 'Software', icon: ic.software, to: '/software', feature: ['software', 'upgrades'] },
+      { label: 'Federation', icon: ic.federation, to: '/federation', feature: 'federation' },
+    ],
+  },
+  {
+    id: 'observe',
+    label: 'Observe',
+    icon: ic.graphs,
+    children: [
+      // Monitoring - its tabs gate on `monitoring`; the Configure tab also
+      // holds the graph templates (`graph-templates`, the former Graphs page).
+      { label: 'Monitoring', icon: ic.monitoring, to: '/monitoring', feature: ['monitoring', 'graph-templates'] },
+      { label: 'Topology', icon: ic.topology, to: '/topology', feature: 'topology' },
+      { label: 'Floor Plans', icon: ic.floorPlan, to: '/floor-plan', feature: 'floor-plan' },
+      // Network Tools - MAC Tracking and Traffic Analysis tabs, each gated on
+      // its own feature by the page.
+      { label: 'Network Tools', icon: ic.network, to: '/network-tools', feature: ['mac-tracking', 'traffic-analysis'] },
       { label: 'Cloud Visibility', icon: ic.cloud, to: '/cloud-visibility', feature: 'cloud-visibility' },
-      { label: 'Monitoring', icon: ic.monitoring, to: '/monitoring', feature: 'monitoring' },
+      { label: 'Reports', icon: ic.reports, to: '/reports', feature: 'reports' },
+    ],
+  },
+  {
+    id: 'change',
+    label: 'Change',
+    icon: ic.jobs,
+    children: [
+      // Delegator - single entry covering Assignments / Tasks / Instructions /
+      // Credentials. Visible if the user has any of the four underlying
+      // sub-features. Lands on the Assignments tab by default.
+      { label: 'Delegator', icon: ic.playbooks, to: '/assignments', feature: ['playbooks', 'jobs', 'templates', 'credentials'] },
       // Configuration - Drift tab (`config-drift`) and Backups / Config Search
       // tabs (`config-backups`); the page gates each tab itself.
       { label: 'Configuration', icon: ic.config, to: '/configuration', feature: ['config-drift', 'config-backups'], visKey: 'configuration' },
@@ -258,15 +263,9 @@ const NAV: TopItem[] = [
       // audit API is gated on `reports`; the page gates each tab itself.
       { label: 'Compliance', icon: ic.compliance, to: '/compliance', feature: ['compliance', 'reports'] },
       { label: 'Changes', icon: ic.changes, to: '/change-management', feature: 'risk-analysis', altFeature: 'deployments', visKey: 'change-management' },
-      { label: 'Reports', icon: ic.reports, to: '/reports', feature: 'reports' },
-      { label: 'Graphs', icon: ic.graphs, to: '/graph-templates', feature: 'graph-templates' },
-      { label: 'MAC Tracking', icon: ic.mac, to: '/mac-tracking', feature: 'mac-tracking' },
-      { label: 'Traffic Analysis', icon: ic.traffic, to: '/traffic-analysis', feature: 'traffic-analysis' },
-      { label: 'Federation', icon: ic.federation, to: '/federation', feature: 'federation' },
-      { label: 'Floor Plans', icon: ic.floorPlan, to: '/floor-plan', feature: 'floor-plan' },
+      { label: 'Lab / Digital Twin', icon: ic.lab, to: '/lab', feature: 'lab' },
     ],
   },
-  { label: 'Lab / Digital Twin', icon: ic.lab, to: '/lab', feature: 'lab' },
   { label: 'Settings', icon: ic.settings, to: '/settings' },
 ];
 
@@ -301,7 +300,10 @@ function NavGroupItem({ group, currentPath }: { group: NavGroup; currentPath: st
   const hasActiveChild = group.children.some(
     (c) => isRoute(c) && (c.to === currentPath || (c.to !== '/' && currentPath.startsWith(c.to))),
   );
-  const [expanded, setExpanded] = useState(hasActiveChild);
+  // Groups start expanded: the nav is split into a few small groups, and
+  // starting them collapsed would hide nearly every page behind a click.
+  // Expand state is per-mount only (nothing is persisted).
+  const [expanded, setExpanded] = useState(true);
   return (
     <div className={`nav-group${expanded ? ' expanded' : ''}`}>
       <a

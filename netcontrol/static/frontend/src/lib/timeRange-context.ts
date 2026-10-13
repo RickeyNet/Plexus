@@ -1,23 +1,12 @@
 import { createContext, useContext } from 'react';
 
-export type TimeRangePreset = '1h' | '6h' | '24h' | '7d' | '30d' | 'custom';
+export const TIME_RANGE_PRESETS = ['1h', '6h', '24h', '7d', '30d'] as const;
 
-export interface TimeRangeState {
+export type TimeRangePreset = (typeof TIME_RANGE_PRESETS)[number];
+
+export interface TimeRangeContextValue {
   range: TimeRangePreset;
-  customStart: string | null;
-  customEnd: string | null;
-}
-
-export interface TimeRangeParams {
-  range: TimeRangePreset;
-  start?: string;
-  end?: string;
-}
-
-export interface TimeRangeContextValue extends TimeRangeState {
   setRange: (range: TimeRangePreset) => void;
-  setCustomRange: (start: string, end: string) => void;
-  params: TimeRangeParams;
 }
 
 export const TimeRangeContext = createContext<TimeRangeContextValue | null>(null);

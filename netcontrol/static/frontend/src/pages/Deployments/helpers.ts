@@ -61,6 +61,12 @@ export function canExecute(status: DeploymentStatus | string): boolean {
   return status === 'planning' || status === 'failed';
 }
 
+export function isApprovalBlocking(
+  d: Pick<Deployment, 'requires_approval' | 'approval_status'>,
+): boolean {
+  return !!d.requires_approval && d.approval_status !== 'approved';
+}
+
 export function canRollback(status: DeploymentStatus | string): boolean {
   return (
     status === 'completed' ||

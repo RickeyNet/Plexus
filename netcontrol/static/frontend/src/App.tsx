@@ -25,11 +25,9 @@ const Configuration = lazy(() => pageLoaders.configuration().then(m => ({ defaul
 const CustomDashboards = lazy(() => pageLoaders.customDashboards().then(m => ({ default: m.CustomDashboards })));
 const Dashboard = lazy(() => pageLoaders.dashboard().then(m => ({ default: m.Dashboard })));
 const DashboardViewer = lazy(() => pageLoaders.dashboardViewer().then(m => ({ default: m.DashboardViewer })));
-const Deployments = lazy(() => pageLoaders.deployments().then(m => ({ default: m.Deployments })));
 const DeviceDetail = lazy(() => pageLoaders.deviceDetail().then(m => ({ default: m.DeviceDetail })));
 const Federation = lazy(() => pageLoaders.federation().then(m => ({ default: m.Federation })));
 const FloorPlan = lazy(() => pageLoaders.floorPlan().then(m => ({ default: m.FloorPlan })));
-const GraphTemplates = lazy(() => pageLoaders.graphTemplates().then(m => ({ default: m.GraphTemplates })));
 const ChangeManagement = lazy(() => pageLoaders.changeManagement().then(m => ({ default: m.ChangeManagement })));
 const CloudVisibility = lazy(() => pageLoaders.cloudVisibility().then(m => ({ default: m.CloudVisibility })));
 const Inventory = lazy(() => pageLoaders.inventory().then(m => ({ default: m.Inventory })));
@@ -37,12 +35,9 @@ const Ipam = lazy(() => pageLoaders.ipam().then(m => ({ default: m.Ipam })));
 const Software = lazy(() => pageLoaders.software().then(m => ({ default: m.Software })));
 const Jobs = lazy(() => pageLoaders.jobs().then(m => ({ default: m.Jobs })));
 const Lab = lazy(() => pageLoaders.lab().then(m => ({ default: m.Lab })));
-const MaintenanceWindows = lazy(() => pageLoaders.maintenanceWindows().then(m => ({ default: m.MaintenanceWindows })));
 const Monitoring = lazy(() => pageLoaders.monitoring().then(m => ({ default: m.Monitoring })));
-const MacTracking = lazy(() => pageLoaders.macTracking().then(m => ({ default: m.MacTracking })));
-const TrafficAnalysis = lazy(() => pageLoaders.trafficAnalysis().then(m => ({ default: m.TrafficAnalysis })));
+const NetworkTools = lazy(() => pageLoaders.networkTools().then(m => ({ default: m.NetworkTools })));
 const Reports = lazy(() => pageLoaders.reports().then(m => ({ default: m.Reports })));
-const RiskAnalysis = lazy(() => pageLoaders.riskAnalysis().then(m => ({ default: m.RiskAnalysis })));
 const Settings = lazy(() => pageLoaders.settings().then(m => ({ default: m.Settings })));
 const Topology = lazy(() => pageLoaders.topology().then(m => ({ default: m.Topology })));
 
@@ -50,8 +45,6 @@ const BREADCRUMBS: Record<string, string> = {
   '/': 'Dashboard',
   '/dashboards': 'Dashboards',
   '/lab': 'Lab / Digital Twin',
-  '/mac-tracking': 'MAC Tracking',
-  '/traffic-analysis': 'Traffic Analysis',
   '/federation': 'Federation',
   '/floor-plan': 'Floor Plans',
   '/inventory': 'Inventory',
@@ -59,13 +52,12 @@ const BREADCRUMBS: Record<string, string> = {
   '/software': 'Software · Versions',
   '/software/upgrades': 'Software · Upgrades',
   '/compliance': 'Compliance',
+  '/compliance/audit': 'Compliance · CIS Audit',
   '/configuration': 'Configuration',
   '/change-management': 'Changes',
-  '/risk-analysis': 'Risk Analysis',
-  '/deployments': 'Deployments',
-  '/maintenance-windows': 'Maintenance Windows',
+  '/change-management/deployments': 'Changes · Deployments',
+  '/change-management/maintenance': 'Changes · Maintenance',
   '/reports': 'Reports',
-  '/graph-templates': 'Graph Templates',
   '/assignments': 'Delegator · Assignments',
   '/tasks': 'Delegator · Tasks',
   '/instructions': 'Delegator · Instructions',
@@ -73,12 +65,10 @@ const BREADCRUMBS: Record<string, string> = {
   '/monitoring': 'Monitoring',
   '/monitoring/alerts': 'Monitoring · Alerts',
   '/monitoring/events': 'Monitoring · Events',
-  '/monitoring/rules': 'Monitoring · Alert Rules',
-  '/monitoring/suppressions': 'Monitoring · Suppressions',
   '/monitoring/sla': 'Monitoring · SLA',
   '/monitoring/availability': 'Monitoring · Availability',
   '/monitoring/capacity': 'Monitoring · Capacity',
-  '/monitoring/oid-profiles': 'Monitoring · OID Profiles',
+  '/monitoring/configure': 'Monitoring · Configure',
   '/cloud-visibility': 'Cloud Visibility',
   '/cloud-visibility/topology': 'Cloud · Topology',
   '/cloud-visibility/flow': 'Cloud · Flow Logs',
@@ -86,6 +76,8 @@ const BREADCRUMBS: Record<string, string> = {
   '/cloud-visibility/policy': 'Cloud · Policy',
   '/topology': 'Topology',
   '/settings': 'Settings',
+  '/network-tools': 'Network Tools · MAC Tracking',
+  '/network-tools/traffic': 'Network Tools · Traffic Analysis',
 };
 
 function Breadcrumb() {
@@ -93,6 +85,9 @@ function Breadcrumb() {
   let label = BREADCRUMBS[pathname];
   if (!label && pathname.startsWith('/devices/')) label = 'Device Detail';
   if (!label && pathname.startsWith('/dashboards/')) label = 'Dashboard';
+  // Path-addressed tabs (/compliance/results, /settings/users) fall back to
+  // their page's label.
+  if (!label) label = BREADCRUMBS[pathname.slice(0, pathname.lastIndexOf('/'))];
   if (!label) label = 'Plexus';
   return (
     <div className="breadcrumb-bar">
@@ -105,13 +100,15 @@ function Breadcrumb() {
   );
 }
 
-// Mirrors the legacy app.js METRIC_PAGES list - pages where the global
-// time range is meaningful (Dashboard, Monitoring, Device Detail).
+// Pages whose queries read useTimeRange(): the overview dashboard, custom
+// dashboards and device detail. Monitoring tabs poll on their own schedule
+// (Capacity has its own 30-365d history selector), so the bar is not shown
+// there.
 function MetricTimeRangeBar() {
   const { pathname } = useLocation();
   const show =
     pathname === '/' ||
-    pathname.startsWith('/monitoring') ||
+    pathname.startsWith('/dashboards') ||
     pathname.startsWith('/devices/');
   if (!show) return null;
   return <TimeRangeBar />;
@@ -201,8 +198,11 @@ export function App() {
           <Route path="/dashboards/:id" element={<DashboardViewer />} />
           <Route path="/devices/:hostId" element={<DeviceDetail />} />
           <Route path="/lab" element={<Lab />} />
-          <Route path="/mac-tracking" element={<MacTracking />} />
-          <Route path="/traffic-analysis" element={<TrafficAnalysis />} />
+          {/* Network Tools: MAC Tracking (default) and Traffic Analysis tabs.
+              Their old standalone paths redirect to the matching tab. */}
+          <Route path="/network-tools/:tab?" element={<NetworkTools />} />
+          <Route path="/mac-tracking" element={<Navigate to="/network-tools" replace />} />
+          <Route path="/traffic-analysis" element={<Navigate to="/network-tools/traffic" replace />} />
           <Route path="/federation" element={<Federation />} />
           <Route path="/floor-plan" element={<FloorPlan />} />
           <Route path="/inventory" element={<Inventory />} />
@@ -213,16 +213,17 @@ export function App() {
           <Route path="/software" element={<Software />} />
           <Route path="/software/upgrades" element={<Software />} />
           <Route path="/upgrades" element={<Navigate to="/software/upgrades" replace />} />
-          <Route path="/compliance" element={<Compliance />} />
-          <Route path="/configuration" element={<Configuration />} />
-          <Route path="/change-management" element={<ChangeManagement />} />
-          <Route path="/risk-analysis" element={<RiskAnalysis />} />
-          <Route path="/deployments" element={<Deployments />} />
-          <Route path="/maintenance-windows" element={<MaintenanceWindows />} />
-          <Route path="/reports" element={<Reports />} />
-          {/* The audit page is now the CIS Audit tab on Compliance. */}
-          <Route path="/audit" element={<Navigate to="/compliance?tab=audit" replace />} />
-          <Route path="/graph-templates" element={<GraphTemplates />} />
+          {/* Tabbed pages: /page is the default tab, /page/<tab> the others. */}
+          <Route path="/compliance/:tab?" element={<Compliance />} />
+          <Route path="/configuration/:tab?" element={<Configuration />} />
+          <Route path="/change-management/:tab?" element={<ChangeManagement />} />
+          <Route path="/reports/:tab?" element={<Reports />} />
+          {/* Retired standalone pages, now tabs of the pages above. */}
+          <Route path="/audit" element={<Navigate to="/compliance/audit" replace />} />
+          <Route path="/risk-analysis" element={<Navigate to="/change-management" replace />} />
+          <Route path="/deployments" element={<Navigate to="/change-management/deployments" replace />} />
+          <Route path="/maintenance-windows" element={<Navigate to="/change-management/maintenance" replace />} />
+          <Route path="/graph-templates" element={<Navigate to="/monitoring/configure/graph-templates" replace />} />
           {/* Delegator: one page renders all four tabs. The legacy paths
               (/jobs, /playbooks, /templates) point at Jobs too so old deep
               links keep working - Jobs.tsx maps them to the right tab. */}
@@ -233,25 +234,23 @@ export function App() {
           <Route path="/jobs" element={<Jobs />} />
           <Route path="/playbooks" element={<Jobs />} />
           <Route path="/templates" element={<Jobs />} />
-          <Route path="/monitoring" element={<Monitoring />} />
-          <Route path="/monitoring/alerts" element={<Monitoring />} />
-          <Route path="/monitoring/events" element={<Monitoring />} />
+          {/* Monitoring: /monitoring/<tab>, and /monitoring/configure/<sub>
+              for the Configure tab's sub-tabs. */}
+          <Route path="/monitoring/:tab?/:sub?" element={<Monitoring />} />
           {/* Route Churn is now a filter on the Alerts tab. */}
           <Route path="/monitoring/routes" element={<Navigate to="/monitoring/alerts" replace />} />
-          <Route path="/monitoring/rules" element={<Monitoring />} />
-          <Route path="/monitoring/suppressions" element={<Monitoring />} />
-          <Route path="/monitoring/sla" element={<Monitoring />} />
-          <Route path="/monitoring/availability" element={<Monitoring />} />
-          <Route path="/monitoring/capacity" element={<Monitoring />} />
-          <Route path="/monitoring/oid-profiles" element={<Monitoring />} />
+          {/* Configuration tabs that moved under Configure. Alert Rules is
+              Configure's default sub-tab, so it lands on /monitoring/configure. */}
+          <Route path="/monitoring/rules" element={<Navigate to="/monitoring/configure" replace />} />
+          <Route path="/monitoring/suppressions" element={<Navigate to="/monitoring/configure/suppressions" replace />} />
+          <Route path="/monitoring/oid-profiles" element={<Navigate to="/monitoring/configure/oid-profiles" replace />} />
           <Route path="/cloud-visibility" element={<CloudVisibility />} />
           <Route path="/cloud-visibility/topology" element={<CloudVisibility />} />
           <Route path="/cloud-visibility/flow" element={<CloudVisibility />} />
           <Route path="/cloud-visibility/traffic" element={<CloudVisibility />} />
           <Route path="/cloud-visibility/policy" element={<CloudVisibility />} />
           <Route path="/topology" element={<Topology />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/network-tools" element={<MacTracking />} />
+          <Route path="/settings/:tab?" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         </Suspense>

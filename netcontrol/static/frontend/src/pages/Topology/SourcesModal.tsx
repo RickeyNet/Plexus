@@ -26,23 +26,15 @@ import {
 import { useDialogs } from '@/components/DialogProvider-context';
 import { Modal } from '@/components/Modal';
 
-import { AppgateFormModal } from './AppgateFormModal';
-import { CatoAccountFormModal } from './CatoAccountFormModal';
-import { FmcFormModal } from './FmcFormModal';
-import { MerakiOrgFormModal } from './MerakiOrgFormModal';
-import { PanoramaFormModal } from './PanoramaFormModal';
 import { providerLabel, providerScopeName } from './helpers';
 import {
-  FALLBACK_APPGATE_OPTIONS,
-  FALLBACK_CATO_OPTIONS,
-  FALLBACK_FMC_OPTIONS,
-  FALLBACK_OPTIONS,
-  FALLBACK_PANORAMA_OPTIONS,
   buildStatusBadge,
   describeProgress,
   formatWhen,
   sourceTypeLabel,
 } from './merakiHelpers';
+import { SourceFormModal } from './SourceFormModal';
+import { defaultOptionsFor } from './sourceForm';
 
 const CLOUD_ACCOUNTS_PATH = '/cloud-visibility';
 
@@ -253,6 +245,7 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
   };
 
   const rows = sources.data?.sources ?? [];
+  const formProvider = adding ?? editing?.provider ?? null;
   const orgById = new Map((orgs.data?.orgs ?? []).map((org) => [org.id, org]));
   const anyCollectable = rows.some(canCollect);
 
@@ -442,50 +435,11 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
 
       {warningsFor && <WarningsModal target={warningsFor} onClose={() => setWarningsFor(null)} />}
 
-      {(adding ?? editing?.provider) === 'meraki' && (
-        <MerakiOrgFormModal
+      {formProvider && (
+        <SourceFormModal
+          provider={formProvider}
           existing={editing}
-          defaultOptions={orgs.data?.default_options ?? FALLBACK_OPTIONS}
-          onClose={() => {
-            setAdding(null);
-            setEditing(null);
-          }}
-        />
-      )}
-      {(adding ?? editing?.provider) === 'cato' && (
-        <CatoAccountFormModal
-          existing={editing}
-          defaultOptions={orgs.data?.cato_default_options ?? FALLBACK_CATO_OPTIONS}
-          onClose={() => {
-            setAdding(null);
-            setEditing(null);
-          }}
-        />
-      )}
-      {(adding ?? editing?.provider) === 'fmc' && (
-        <FmcFormModal
-          existing={editing}
-          defaultOptions={orgs.data?.fmc_default_options ?? FALLBACK_FMC_OPTIONS}
-          onClose={() => {
-            setAdding(null);
-            setEditing(null);
-          }}
-        />
-      )}
-      {(adding ?? editing?.provider) === 'panorama' && (
-        <PanoramaFormModal
-          existing={editing}
-          defaultOptions={orgs.data?.panorama_default_options ?? FALLBACK_PANORAMA_OPTIONS}
-          onClose={() => {
-            setAdding(null);
-            setEditing(null);
-          }}
-        />
-      )}
-      {(adding ?? editing?.provider) === 'appgate' && (
-        <AppgateFormModal
-          existing={editing}
-          defaultOptions={orgs.data?.appgate_default_options ?? FALLBACK_APPGATE_OPTIONS}
+          defaultOptions={defaultOptionsFor(formProvider, orgs.data)}
           onClose={() => {
             setAdding(null);
             setEditing(null);

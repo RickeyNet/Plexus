@@ -6,9 +6,8 @@ import {
 } from '@/api/configuration';
 import { useDialogs } from '@/components/DialogProvider-context';
 
-import { BackupDetailModal } from './BackupDetailModal';
-import { BackupDiffModal } from './BackupDiffModal';
-import { formatStamp } from './helpers';
+import { BackupModal } from './BackupModal';
+import { type BackupView, formatStamp } from './helpers';
 
 type Mode = 'fulltext' | 'substring' | 'regex';
 
@@ -33,8 +32,7 @@ export function SearchTab() {
   const [mode, setMode] = useState<Mode>('fulltext');
   const [limit, setLimit] = useState(50);
   const search = useSearchConfigBackups();
-  const [detailId, setDetailId] = useState<number | null>(null);
-  const [diffId, setDiffId] = useState<number | null>(null);
+  const [viewing, setViewing] = useState<{ id: number; view: BackupView } | null>(null);
 
   const hint = MODE_HINTS[mode];
 
@@ -124,7 +122,13 @@ export function SearchTab() {
           Search failed: {(search.error as Error).message}
         </p>
       )}
-      {search.data && <Results data={search.data} onView={setDetailId} onDiff={setDiffId} />}
+      {search.data && (
+        <Results
+          data={search.data}
+          onView={(id) => setViewing({ id, view: 'config' })}
+          onDiff={(id) => setViewing({ id, view: 'diff' })}
+        />
+      )}
       {!search.data && !search.isPending && !search.error && (
         <div
           className="card"
@@ -138,11 +142,12 @@ export function SearchTab() {
         </div>
       )}
 
-      <BackupDetailModal
-        backupId={detailId}
-        onClose={() => setDetailId(null)}
+      <BackupModal
+        backupId={viewing?.id ?? null}
+        view={viewing?.view ?? 'config'}
+        onViewChange={(view) => setViewing((v) => (v ? { ...v, view } : v))}
+        onClose={() => setViewing(null)}
       />
-      <BackupDiffModal backupId={diffId} onClose={() => setDiffId(null)} />
     </>
   );
 }

@@ -1,8 +1,10 @@
-import { Fragment, FormEvent, useEffect, useState } from 'react';
+import { Fragment, FormEvent, type ReactNode, useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { Modal } from '@/components/Modal';
 import { PageHelp } from '@/components/PageHelp';
+import { SegmentedControl } from '@/components/SegmentedControl';
+import { TabBar } from '@/components/TabBar';
 import {
   MacEntry,
   MacHostRollup,
@@ -27,6 +29,12 @@ import { formatTimestamp } from './formatting';
 
 type Tab = 'search' | 'moves' | 'hosts';
 
+const TABS: { key: Tab; label: string }[] = [
+  { key: 'search', label: 'Search' },
+  { key: 'moves', label: 'Moves' },
+  { key: 'hosts', label: 'By Host' },
+];
+
 export function MacTracking() {
   const [tab, setTab] = useState<Tab>('search');
   const [fleetJobId, setFleetJobId] = useState<string | null>(null);
@@ -48,8 +56,8 @@ export function MacTracking() {
 
   return (
     <>
-      <div className="page-header">
-        <h2>MAC / ARP Tracking</h2>
+      {/* Rendered inside Network Tools, which owns the page header. */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <button
             type="button"
@@ -138,29 +146,7 @@ export function MacTracking() {
         </div>
       )}
 
-      <div className="tab-controls" style={{ marginBottom: '1rem' }}>
-        <button
-          type="button"
-          className={`btn btn-sm btn-secondary upgrade-tab-btn${tab === 'search' ? ' active' : ''}`}
-          onClick={() => setTab('search')}
-        >
-          Search
-        </button>
-        <button
-          type="button"
-          className={`btn btn-sm btn-secondary upgrade-tab-btn${tab === 'moves' ? ' active' : ''}`}
-          onClick={() => setTab('moves')}
-        >
-          Moves
-        </button>
-        <button
-          type="button"
-          className={`btn btn-sm btn-secondary upgrade-tab-btn${tab === 'hosts' ? ' active' : ''}`}
-          onClick={() => setTab('hosts')}
-        >
-          By Host
-        </button>
-      </div>
+      <TabBar tabs={TABS} active={tab} onChange={setTab} size="sm" aria-label="MAC tracking views" />
 
       {tab === 'search' && <SearchTab />}
       {tab === 'moves' && <MovesTab />}
@@ -518,31 +504,21 @@ function HostsTab() {
   const visible =
     filter === 'silent' ? silent : filter === 'reporting' ? reporting : rows;
 
-  const filterPill = (
-    id: 'silent' | 'reporting' | 'all',
-    label: string,
-    count: number,
-    accent?: 'warning' | 'success',
-  ) => {
-    const isActive = filter === id;
-    const tone =
-      accent === 'warning'
-        ? 'var(--warning)'
-        : accent === 'success'
-          ? 'var(--success)'
-          : 'var(--text)';
-    return (
-      <button
-        key={id}
-        type="button"
-        className={`btn btn-sm${isActive ? ' btn-primary' : ' btn-secondary'}`}
-        onClick={() => setFilter(id)}
-        style={isActive ? undefined : { color: tone }}
-      >
+  type HostFilter = 'silent' | 'reporting' | 'all';
+  // Inactive options keep their accent colour so the counts read at a glance.
+  const filterLabel = (id: HostFilter, label: string, count: number, accent?: 'warning' | 'success') =>
+    filter === id || !accent ? (
+      `${label} (${count})`
+    ) : (
+      <span style={{ color: `var(--${accent})` }}>
         {label} ({count})
-      </button>
+      </span>
     );
-  };
+  const filterOptions: { key: HostFilter; label: ReactNode }[] = [
+    { key: 'silent', label: filterLabel('silent', 'Silent', silent.length, 'warning') },
+    { key: 'reporting', label: filterLabel('reporting', 'Reporting', reporting.length, 'success') },
+    { key: 'all', label: filterLabel('all', 'All hosts', rows.length) },
+  ];
 
   return (
     <>
@@ -572,9 +548,7 @@ function HostsTab() {
         className="page-header"
         style={{ marginTop: 0, alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}
       >
-        {filterPill('silent', 'Silent', silent.length, 'warning')}
-        {filterPill('reporting', 'Reporting', reporting.length, 'success')}
-        {filterPill('all', 'All hosts', rows.length)}
+        <SegmentedControl options={filterOptions} value={filter} onChange={setFilter} aria-label="Host filter" />
         <span style={{ marginLeft: 'auto', fontSize: '0.85em', opacity: 0.7 }}>
           {visible.length} host{visible.length === 1 ? '' : 's'} shown
         </span>

@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 
 import { useDialogs } from '@/components/DialogProvider-context';
+import { ExportMenu } from '@/components/ExportMenu';
 import { useInventoryGroups } from '@/api/compliance';
 import {
   reportArtifactUrl,
@@ -147,12 +148,14 @@ function ResultBlock({ reportType, groupId, result }: ResultBlockProps) {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
         <span>{rows.length} row{rows.length !== 1 ? 's' : ''} · Run #{result.run_id ?? '-'}</span>
-        <div style={{ display: 'flex', gap: '0.4rem' }}>
-          {svgUrl && <button className="btn btn-sm btn-secondary" onClick={() => tryDownload(svgUrl, 'network_documentation_topology.svg')}>Export SVG</button>}
-          {drawioUrl && <button className="btn btn-sm btn-secondary" onClick={() => tryDownload(drawioUrl, 'network_documentation_topology.drawio')}>Export draw.io</button>}
-          {pdfUrl && <button className="btn btn-sm btn-secondary" onClick={() => tryDownload(pdfUrl, 'network_documentation_report.pdf')}>Export PDF</button>}
-          {csvUrl && <button className="btn btn-sm btn-secondary" onClick={() => tryDownload(csvUrl, `report_${result.run_id}.csv`)}>Export CSV</button>}
-        </div>
+        <ExportMenu
+          items={[
+            ...(svgUrl ? [{ label: 'SVG', onClick: () => tryDownload(svgUrl, 'network_documentation_topology.svg') }] : []),
+            ...(drawioUrl ? [{ label: 'draw.io', onClick: () => tryDownload(drawioUrl, 'network_documentation_topology.drawio') }] : []),
+            ...(pdfUrl ? [{ label: 'PDF', onClick: () => tryDownload(pdfUrl, 'network_documentation_report.pdf') }] : []),
+            ...(csvUrl ? [{ label: 'CSV', onClick: () => tryDownload(csvUrl, `report_${result.run_id}.csv`) }] : []),
+          ]}
+        />
       </div>
       <div style={{ overflowX: 'auto' }}>
         <table className="data-table">

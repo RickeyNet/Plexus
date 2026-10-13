@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { CONFIGURE_FEATURES, CONFIGURE_TABS } from '@/pages/Monitoring/configureTabs';
+
 import { isNavItemVisible, type NavVisibilityContext } from './navVisibility';
 
 function ctx(opts: { isAdmin?: boolean; access?: string[]; hidden?: string[] } = {}): NavVisibilityContext {
@@ -77,5 +79,43 @@ describe('isNavItemVisible', () => {
     expect(
       isNavItemVisible({ feature: ['software', 'upgrades'] }, ctx({ isAdmin: true, hidden: ['software', 'upgrades'] })),
     ).toBe(false);
+  });
+
+  it('shows Network Tools when the user has either tool', () => {
+    const item = { feature: ['mac-tracking', 'traffic-analysis'] };
+    expect(isNavItemVisible(item, ctx({ access: ['mac-tracking'] }))).toBe(true);
+    expect(isNavItemVisible(item, ctx({ access: ['traffic-analysis'] }))).toBe(true);
+    expect(isNavItemVisible(item, ctx({ access: ['ipam'] }))).toBe(false);
+    const access = ['mac-tracking', 'traffic-analysis'];
+    expect(isNavItemVisible(item, ctx({ access, hidden: ['mac-tracking'] }))).toBe(true);
+    expect(isNavItemVisible(item, ctx({ access, hidden: ['mac-tracking', 'traffic-analysis'] }))).toBe(false);
+  });
+});
+
+describe('Monitoring Configure tab gate', () => {
+  const configure = { feature: CONFIGURE_FEATURES };
+  const shownSubTabs = (c: NavVisibilityContext) => CONFIGURE_TABS.filter((t) => isNavItemVisible(t, c)).map((t) => t.key);
+
+  it('gates on every feature its sub-tabs need', () => {
+    expect([...CONFIGURE_FEATURES].sort()).toEqual(['graph-templates', 'monitoring']);
+  });
+
+  it('shows Configure with only the graph sub-tabs to a graph-templates-only user', () => {
+    const c = ctx({ access: ['graph-templates'] });
+    expect(isNavItemVisible(configure, c)).toBe(true);
+    expect(shownSubTabs(c)).toEqual(['graph-templates', 'host-templates', 'graph-trees']);
+  });
+
+  it('shows Configure with only the monitoring sub-tabs to a monitoring-only user', () => {
+    const c = ctx({ access: ['monitoring'] });
+    expect(isNavItemVisible(configure, c)).toBe(true);
+    expect(shownSubTabs(c)).toEqual(['rules', 'suppressions', 'sla-targets', 'oid-profiles']);
+  });
+
+  it('hides Configure when neither feature is available', () => {
+    expect(isNavItemVisible(configure, ctx({ access: ['ipam'] }))).toBe(false);
+    const access = ['monitoring', 'graph-templates'];
+    expect(isNavItemVisible(configure, ctx({ access, hidden: ['graph-templates'] }))).toBe(true);
+    expect(isNavItemVisible(configure, ctx({ access, hidden: ['monitoring', 'graph-templates'] }))).toBe(false);
   });
 });

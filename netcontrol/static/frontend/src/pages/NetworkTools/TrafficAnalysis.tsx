@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 
 import { PageHelp } from '@/components/PageHelp';
+import { TabBar } from '@/components/TabBar';
 import { BarChart, TimeSeriesChart } from '@/lib/echart';
 import { useInventoryGroupsFull } from '@/api/inventory';
 import {
@@ -30,12 +31,12 @@ const TIME_RANGES = [
 
 type Tab = 'talkers' | 'applications' | 'conversations' | 'timeline' | 'exporters';
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: 'talkers', label: 'Top Talkers' },
-  { id: 'applications', label: 'Top Applications' },
-  { id: 'conversations', label: 'Conversations' },
-  { id: 'timeline', label: 'Timeline' },
-  { id: 'exporters', label: 'Exporters' },
+const TABS: { key: Tab; label: string }[] = [
+  { key: 'talkers', label: 'Top Talkers' },
+  { key: 'applications', label: 'Top Applications' },
+  { key: 'conversations', label: 'Conversations' },
+  { key: 'timeline', label: 'Timeline' },
+  { key: 'exporters', label: 'Exporters' },
 ];
 
 const TAB_HELP: Record<Tab, { title: string; text: string }> = {
@@ -83,8 +84,8 @@ export function TrafficAnalysis() {
 
   return (
     <>
-      <div className="page-header">
-        <h2>Traffic Analysis</h2>
+      {/* Rendered inside Network Tools, which owns the page header. */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <select
             className="form-select list-control-select"
@@ -121,27 +122,9 @@ export function TrafficAnalysis() {
         text="Analyze NetFlow/sFlow/IPFIX traffic patterns by talker, application, conversation, or over time. Filter by host to scope to a single exporter, or view all collected flows."
       />
 
+      <TabBar tabs={TABS} active={tab} onChange={setTab} size="sm" aria-label="Traffic views" />
+
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            padding: '0.5rem 0.75rem',
-            borderBottom: '1px solid var(--border)',
-            flexWrap: 'wrap',
-          }}
-        >
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              className={`btn btn-sm ${tab === t.id ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => setTab(t.id)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
         <div style={{ padding: '0.75rem' }}>
           <PageHelp
             pageKey={`traffic-analysis.${tab}`}

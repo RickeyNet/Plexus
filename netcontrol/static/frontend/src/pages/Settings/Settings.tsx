@@ -1,9 +1,9 @@
-import { useState } from 'react';
-
 import { useAdminCapabilities } from '@/api/settings';
 import { useAuthStatus } from '@/api/auth';
 import { ApiError } from '@/api/client';
 import { PageHelp } from '@/components/PageHelp';
+import { TabBar } from '@/components/TabBar';
+import { usePathTab } from '@/lib/usePathTab';
 
 import { AccessGroupsTab } from './AccessGroupsTab';
 import { AppearanceTab } from './AppearanceTab';
@@ -83,30 +83,37 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   },
 };
 
-const ADMIN_TABS: { id: Tab; label: string }[] = [
-  { id: 'appearance', label: 'Appearance' },
-  { id: 'users', label: 'Users' },
-  { id: 'access-groups', label: 'Access Groups' },
-  { id: 'auth', label: 'Authentication' },
-  { id: 'logging', label: 'Logging' },
-  { id: 'siem', label: 'SIEM' },
-  { id: 'discovery', label: 'Discovery' },
-  { id: 'monitoring', label: 'Monitoring' },
-  { id: 'netflow', label: 'NetFlow' },
-  { id: 'notifications', label: 'Notifications' },
-  { id: 'features', label: 'Features' },
-  { id: 'system', label: 'System' },
+const ADMIN_TABS: { key: Tab; label: string }[] = [
+  { key: 'appearance', label: 'Appearance' },
+  { key: 'users', label: 'Users' },
+  { key: 'access-groups', label: 'Access Groups' },
+  { key: 'auth', label: 'Authentication' },
+  { key: 'logging', label: 'Logging' },
+  { key: 'siem', label: 'SIEM' },
+  { key: 'discovery', label: 'Discovery' },
+  { key: 'monitoring', label: 'Monitoring' },
+  { key: 'netflow', label: 'NetFlow' },
+  { key: 'notifications', label: 'Notifications' },
+  { key: 'features', label: 'Features' },
+  { key: 'system', label: 'System' },
 ];
+const TAB_KEYS = ADMIN_TABS.map((t) => t.key);
 
-const NON_ADMIN_TABS: { id: Tab; label: string }[] = [
-  { id: 'appearance', label: 'Appearance' },
+const NON_ADMIN_TABS: { key: Tab; label: string }[] = [
+  { key: 'appearance', label: 'Appearance' },
 ];
+const NON_ADMIN_KEYS = NON_ADMIN_TABS.map((t) => t.key);
 
 export function Settings() {
   const auth = useAuthStatus();
   const isAdmin = auth.data?.role === 'admin';
   const capabilities = useAdminCapabilities();
-  const [tab, setTab] = useState<Tab>('appearance');
+  const [tab, selectTab] = usePathTab(
+    '/settings',
+    TAB_KEYS,
+    'appearance',
+    !auth.data ? undefined : isAdmin ? TAB_KEYS : NON_ADMIN_KEYS,
+  );
 
   if (auth.isLoading) {
     return (
@@ -136,30 +143,10 @@ export function Settings() {
           <h2 style={{ margin: 0 }}>Settings</h2>
         </div>
 
-        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem',
-              padding: '0.5rem 0.75rem',
-              borderBottom: '1px solid var(--border)',
-              flexWrap: 'wrap',
-            }}
-          >
-            {NON_ADMIN_TABS.map((t) => (
-              <button
-                key={t.id}
-                className={`btn btn-sm ${tab === t.id ? 'btn-primary' : 'btn-ghost'}`}
-                onClick={() => setTab(t.id)}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-          <div style={{ padding: '0.75rem' }}>
-            <AppearanceTab />
-          </div>
+        <TabBar tabs={NON_ADMIN_TABS} active={tab} onChange={selectTab} aria-label="Settings sections" />
+
+        <div className="card" style={{ padding: '0.75rem' }}>
+          <AppearanceTab />
         </div>
       </div>
     );
@@ -217,27 +204,9 @@ export function Settings() {
         text="Configure polling intervals, feature toggles, default credentials, and other application-wide settings. Admin access required."
       />
 
+      <TabBar tabs={ADMIN_TABS} active={tab} onChange={selectTab} aria-label="Settings sections" />
+
       <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            padding: '0.5rem 0.75rem',
-            borderBottom: '1px solid var(--border)',
-            flexWrap: 'wrap',
-          }}
-        >
-          {ADMIN_TABS.map((t) => (
-            <button
-              key={t.id}
-              className={`btn btn-sm ${tab === t.id ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => setTab(t.id)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
         <div style={{ padding: '0.75rem' }}>
           <PageHelp pageKey={`settings.${tab}`} title={TAB_HELP[tab].title} text={TAB_HELP[tab].text} />
           {tab === 'appearance' && <AppearanceTab />}

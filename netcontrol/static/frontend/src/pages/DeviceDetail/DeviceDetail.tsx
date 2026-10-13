@@ -3,8 +3,10 @@ import { useNavigate, useParams } from 'react-router';
 
 import { useAuthStatus } from '@/api/auth';
 import { PageHelp } from '@/components/PageHelp';
+import { TabBar } from '@/components/TabBar';
 import { formatBackendDateTime } from '@/lib/datetime';
 import { TimeSeriesChart, TimeSeries } from '@/lib/echart';
+import { useTimeRange } from '@/lib/timeRange-context';
 import {
   MetricQueryResult,
   MonitoringPoll,
@@ -65,15 +67,13 @@ const TAB_HELP: Record<TabId, { title: string; text: string }> = {
   },
 };
 
-const RANGES = ['1h', '6h', '24h', '7d', '30d'];
-
 export function DeviceDetail() {
   const { hostId: hostIdParam } = useParams<{ hostId: string }>();
   const navigate = useNavigate();
   const parsedHostId = hostIdParam ? parseInt(hostIdParam, 10) : NaN;
   const hostId = Number.isFinite(parsedHostId) ? parsedHostId : null;
   const [tab, setTab] = useState<TabId>('overview');
-  const [range, setRange] = useState('24h');
+  const { range } = useTimeRange();
 
   const auth = useAuthStatus();
   const flowHidden = useMemo(
@@ -148,20 +148,6 @@ export function DeviceDetail() {
           </button>
           <span style={{ fontSize: '1.25rem', fontWeight: 600 }}>{title}</span>
         </div>
-        <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
-          <span className="text-muted" style={{ fontSize: '0.85rem' }}>
-            Range:
-          </span>
-          {RANGES.map((r) => (
-            <button
-              key={r}
-              className={`btn btn-sm ${r === range ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => setRange(r)}
-            >
-              {r}
-            </button>
-          ))}
-        </div>
       </div>
 
       <DeviceInfoBar poll={latestPoll} hostId={hostId} />
@@ -173,28 +159,16 @@ export function DeviceDetail() {
         text="Everything Plexus knows about one device - health metrics, interface stats, alerts, compliance status, and syslog - scoped to the time range above."
       />
 
-      <div
-        className="card"
-        style={{ marginTop: '0.75rem', padding: 0, overflow: 'hidden' }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            gap: '0.25rem',
-            padding: '0.5rem 0.75rem',
-            borderBottom: '1px solid var(--border)',
-          }}
-        >
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              className={`btn btn-sm ${tab === t.id ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => setTab(t.id)}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+      <div style={{ marginTop: '0.75rem' }}>
+        <TabBar
+          tabs={TABS.map((t) => ({ key: t.id, label: t.label }))}
+          active={tab}
+          onChange={setTab}
+          aria-label="Device sections"
+        />
+      </div>
+
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ padding: '0.75rem' }}>
           <PageHelp pageKey={`device-detail.${tab}`} title={TAB_HELP[tab].title} text={TAB_HELP[tab].text} />
           {tab === 'overview' && (
@@ -203,7 +177,7 @@ export function DeviceDetail() {
           {tab === 'interfaces' && (
             <InterfaceTab ifData={ifData.data} latestPoll={latestPoll} />
           )}
-          {tab === 'errors' && <ErrorTrendingTab hostId={hostId} />}
+          {tab === 'errors' && <ErrorTrendingTab hostId={hostId} range={range} />}
           {tab === 'flow' && !flowHidden && <FlowTab hostId={hostId} range={range} />}
           {tab === 'alerts' && (
             <AlertsTab alerts={alerts.data?.alerts || []} loading={alerts.isLoading} />

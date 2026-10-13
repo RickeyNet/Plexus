@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import { useDialogs } from '@/components/DialogProvider-context';
+import { TabBar } from '@/components/TabBar';
 import {
   NotificationChannel,
   NotificationChannelStats,
@@ -155,25 +156,13 @@ function SetupInstructions() {
       <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
         How to set up each channel type
       </summary>
-      <div
-        style={{
-          display: 'flex',
-          gap: '0.4rem',
-          flexWrap: 'wrap',
-          margin: '0.75rem 0',
-        }}
-      >
-        {TYPES.map((t) => (
-          <button
-            key={t}
-            type="button"
-            className={`btn btn-sm ${tab === t ? 'btn-primary' : 'btn-ghost'}`}
-            onClick={() => setTab(t)}
-          >
-            {TYPE_LABELS[t]}
-          </button>
-        ))}
-      </div>
+      <TabBar
+        size="sm"
+        tabs={TYPES.map((t) => ({ key: t, label: TYPE_LABELS[t] }))}
+        active={tab}
+        onChange={setTab}
+        aria-label="Channel type"
+      />
       <div style={{ fontSize: '0.85rem' }}>{SETUP_GUIDE[tab]}</div>
       <p className="text-muted" style={{ fontSize: '0.8rem', marginTop: '0.75rem', marginBottom: 0 }}>
         For every type: <strong>Severity floor</strong> drops alerts below the chosen level; check{' '}

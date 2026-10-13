@@ -1,77 +1,31 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
 
-import { useDialogs } from '@/components/DialogProvider-context';
 import { invalidateMetricQueries } from '@/lib/invalidateMetricQueries';
-import { useTimeRange, type TimeRangePreset } from '@/lib/timeRange-context';
-
-const PRESETS: TimeRangePreset[] = ['1h', '6h', '24h', '7d', '30d', 'custom'];
-const PRESET_LABELS: Record<TimeRangePreset, string> = {
-  '1h': '1h',
-  '6h': '6h',
-  '24h': '24h',
-  '7d': '7d',
-  '30d': '30d',
-  custom: 'Custom',
-};
+import { TIME_RANGE_PRESETS, useTimeRange, type TimeRangePreset } from '@/lib/timeRange-context';
 
 export function TimeRangeBar() {
-  const { alert } = useDialogs();
-  const { range, customStart, customEnd, setRange, setCustomRange } = useTimeRange();
+  const { range, setRange } = useTimeRange();
   const qc = useQueryClient();
-  const [start, setStart] = useState(customStart ?? '');
-  const [end, setEnd] = useState(customEnd ?? '');
-
-  function applyCustom() {
-    if (!start || !end) {
-      void alert('Please select both start and end times');
-      return;
-    }
-    setCustomRange(start, end);
-  }
-
-  function refresh() {
-    invalidateMetricQueries(qc);
-  }
 
   return (
     <div className="time-range-bar">
-      <div className="time-range-presets">
-        {PRESETS.map((p) => (
+      <div className="time-range-presets" role="group" aria-label="Time range">
+        {TIME_RANGE_PRESETS.map((p) => (
           <button
             key={p}
             type="button"
             className={`time-range-btn${range === p ? ' active' : ''}`}
+            aria-pressed={range === p}
             onClick={() => setRange(p)}
           >
-            {PRESET_LABELS[p]}
+            {p}
           </button>
         ))}
       </div>
-      {range === 'custom' && (
-        <div className="time-range-custom">
-          <input
-            type="datetime-local"
-            className="form-input"
-            value={start}
-            onChange={(e) => setStart(e.target.value)}
-          />
-          <span style={{ color: 'var(--text-muted)' }}>to</span>
-          <input
-            type="datetime-local"
-            className="form-input"
-            value={end}
-            onChange={(e) => setEnd(e.target.value)}
-          />
-          <button type="button" className="btn btn-sm btn-primary" onClick={applyCustom}>
-            Apply
-          </button>
-        </div>
-      )}
       <button
         type="button"
         className="btn btn-sm btn-secondary time-range-refresh"
-        onClick={refresh}
+        onClick={() => invalidateMetricQueries(qc)}
         title="Refresh"
         aria-label="Refresh"
       >
@@ -81,5 +35,19 @@ export function TimeRangeBar() {
         </svg>
       </button>
     </div>
+  );
+}
+
+/** Muted note shown when a panel can't honor the global range and clamps it. */
+export function ClampedRangeHint({ requested, shown }: { requested: TimeRangePreset; shown: TimeRangePreset }) {
+  if (requested === shown) return null;
+  return (
+    <span
+      className="text-muted"
+      style={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+      title={`This view supports up to ${shown}`}
+    >
+      (showing {shown})
+    </span>
   );
 }

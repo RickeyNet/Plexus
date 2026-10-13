@@ -1,23 +1,21 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 
 import { useTopInterfaces, type TopInterface } from '@/api/dashboard';
+import { ClampedRangeHint } from '@/components/TimeRangeBar';
 import { TimeSeriesChart, type TimeSeries } from '@/lib/echart';
+import { useTimeRange } from '@/lib/timeRange-context';
+import { clampPreset } from '@/lib/timeRangeMap';
 
-type Range = '1h' | '6h' | '24h' | '7d';
-
-const RANGES: { value: Range; label: string }[] = [
-  { value: '1h', label: '1h' },
-  { value: '6h', label: '6h' },
-  { value: '24h', label: '24h' },
-  { value: '7d', label: '7d' },
-];
+// /api/dashboard/top-interfaces only knows 1h..7d and falls back to 6h otherwise.
+const TOP_INTERFACE_RANGES = ['1h', '6h', '24h', '7d'] as const;
 
 // Distinct line colors for up to 5 interfaces. Picked to stay legible in both
 // light and dark themes.
 const LINE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#a855f7', '#ef4444'];
 
 export function BandwidthTrendPanel() {
-  const [range, setRange] = useState<Range>('6h');
+  const { range: globalRange } = useTimeRange();
+  const range = clampPreset(globalRange, TOP_INTERFACE_RANGES);
   const { data, isPending, error } = useTopInterfaces({ range, limit: 5 });
 
   const series = useMemo<TimeSeries[]>(() => {
@@ -42,19 +40,7 @@ export function BandwidthTrendPanel() {
     <div className="glass-card card dashboard-overview-card">
       <div className="dashboard-overview-header">
         <h3 className="dashboard-overview-title">Busiest Interfaces</h3>
-        <div className="dashboard-range-tabs" role="tablist" aria-label="Time range">
-          {RANGES.map((r) => (
-            <button
-              key={r.value}
-              role="tab"
-              aria-selected={range === r.value}
-              className={`dashboard-range-tab${range === r.value ? ' active' : ''}`}
-              onClick={() => setRange(r.value)}
-            >
-              {r.label}
-            </button>
-          ))}
-        </div>
+        <ClampedRangeHint requested={globalRange} shown={range} />
       </div>
 
       {isPending ? (
