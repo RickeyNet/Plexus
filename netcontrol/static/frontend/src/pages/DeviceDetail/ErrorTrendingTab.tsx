@@ -7,11 +7,14 @@ import {
   useResolveErrorEvent,
 } from '@/api/deviceDetail';
 import { formatBackendDateTime } from '@/lib/datetime';
+import type { TimeRangePreset } from '@/lib/timeRange-context';
+import { toDays } from '@/lib/timeRangeMap';
 
 import { ErrorChart } from './ErrorChart';
 
-export function ErrorTrendingTab({ hostId }: { hostId: number }) {
-  const summary = useInterfaceErrorSummary(hostId);
+export function ErrorTrendingTab({ hostId, range }: { hostId: number; range: TimeRangePreset }) {
+  const days = toDays(range);
+  const summary = useInterfaceErrorSummary(hostId, days);
   const events = useInterfaceErrorEvents(hostId);
   const ack = useAcknowledgeErrorEvent();
   const resolve = useResolveErrorEvent();
@@ -64,7 +67,7 @@ export function ErrorTrendingTab({ hostId }: { hostId: number }) {
       {interfaces.length > 0 && (
         <div className="card" style={{ marginBottom: '1rem' }}>
           <div className="card-body" style={{ padding: '0.75rem' }}>
-            <h4 style={{ margin: '0 0 0.5rem' }}>Interface Error Summary (Last 24h)</h4>
+            <h4 style={{ margin: '0 0 0.5rem' }}>Interface Error Summary (Last {days === 1 ? '24h' : `${days}d`})</h4>
             <ErrorSummaryTable interfaces={interfaces} />
           </div>
         </div>

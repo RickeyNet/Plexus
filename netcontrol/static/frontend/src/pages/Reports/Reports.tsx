@@ -1,6 +1,7 @@
-import { useState } from 'react';
-
 import { PageHelp } from '@/components/PageHelp';
+import { TabBar } from '@/components/TabBar';
+import { usePathTab } from '@/lib/usePathTab';
+
 import { BillingTab } from './BillingTab';
 import { GenerateReportTab } from './GenerateReportTab';
 import { HistoryTab } from './HistoryTab';
@@ -9,11 +10,12 @@ import { HistoryTab } from './HistoryTab';
 // under Monitoring (monitoring-gated endpoints); Reports only exports them.
 type Tab = 'generate' | 'history' | 'billing';
 
-const TABS: { value: Tab; label: string }[] = [
-  { value: 'generate', label: 'Generate' },
-  { value: 'history', label: 'History' },
-  { value: 'billing', label: 'Bandwidth Billing' },
+const TABS: { key: Tab; label: string }[] = [
+  { key: 'generate', label: 'Generate' },
+  { key: 'history', label: 'History' },
+  { key: 'billing', label: 'Bandwidth Billing' },
 ];
+const TAB_KEYS = TABS.map((t) => t.key);
 
 const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   generate: {
@@ -31,7 +33,7 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
 };
 
 export function Reports() {
-  const [tab, setTab] = useState<Tab>('generate');
+  const [tab, selectTab] = usePathTab('/reports', TAB_KEYS, 'generate');
 
   return (
     <div>
@@ -45,18 +47,7 @@ export function Reports() {
         text="Generate and export availability, compliance, utilization, and network documentation reports, browse past runs, and produce 95th-percentile bandwidth billing."
       />
 
-      <div className="tab-controls">
-        {TABS.map((t) => (
-          <button
-            key={t.value}
-            type="button"
-            className={`btn btn-sm btn-secondary upgrade-tab-btn${tab === t.value ? ' active' : ''}`}
-            onClick={() => setTab(t.value)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <TabBar tabs={TABS} active={tab} onChange={selectTab} aria-label="Reports sections" />
 
       <PageHelp pageKey={`reports.${tab}`} title={TAB_HELP[tab].title} text={TAB_HELP[tab].text} />
 

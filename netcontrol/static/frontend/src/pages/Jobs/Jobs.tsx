@@ -1,7 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 
+import { useAuthStatus } from '@/api/auth';
 import { PageHelp } from '@/components/PageHelp';
+import { TabBar } from '@/components/TabBar';
+import { resolveTab, visibleTabs } from '@/lib/tabGating';
 
 import { JobsTab } from './JobsTab';
 import { PlaybooksTab } from './PlaybooksTab';
@@ -10,11 +13,13 @@ import { CredentialsTab } from './CredentialsTab';
 
 type Tab = 'assignments' | 'tasks' | 'instructions' | 'credentials';
 
-const TABS: { key: Tab; label: string; path: string }[] = [
-  { key: 'assignments', label: 'Assignments', path: '/assignments' },
-  { key: 'tasks', label: 'Tasks', path: '/tasks' },
-  { key: 'instructions', label: 'Instructions', path: '/instructions' },
-  { key: 'credentials', label: 'Credentials', path: '/credentials' },
+// Each tab gates on the backend feature its API requires, so a user granted
+// only some Delegator features never lands on a tab whose data they can't load.
+const TABS: { key: Tab; label: string; path: string; feature: string }[] = [
+  { key: 'assignments', label: 'Assignments', path: '/assignments', feature: 'jobs' },
+  { key: 'tasks', label: 'Tasks', path: '/tasks', feature: 'playbooks' },
+  { key: 'instructions', label: 'Instructions', path: '/instructions', feature: 'templates' },
+  { key: 'credentials', label: 'Credentials', path: '/credentials', feature: 'credentials' },
 ];
 
 // Tab-level help. Each tab dismisses independently of the page banner
@@ -57,13 +62,24 @@ function tabFromPath(pathname: string): Tab {
 export function Jobs() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
-  const [tab, setTab] = useState<Tab>(() => tabFromPath(pathname));
+  const { data: auth } = useAuthStatus();
+  const [requestedTab, setTab] = useState<Tab>(() => tabFromPath(pathname));
 
   const [prevPathname, setPrevPathname] = useState(pathname);
   if (pathname !== prevPathname) {
     setPrevPathname(pathname);
     setTab(tabFromPath(pathname));
   }
+
+  const shownTabs = visibleTabs(TABS, auth);
+  const tab = resolveTab(requestedTab, shownTabs);
+  const tabPath = TABS.find((x) => x.key === tab)!.path;
+
+  // The sidebar always links to /assignments; send users without `jobs` to
+  // the first tab they can open so the URL matches what is rendered.
+  useEffect(() => {
+    if (auth && tab !== requestedTab) navigate(tabPath, { replace: true });
+  }, [auth, tab, requestedTab, tabPath, navigate]);
 
   function selectTab(t: Tab) {
     const target = TABS.find((x) => x.key === t)!;
@@ -85,19 +101,12 @@ export function Jobs() {
         text="Assign automated tasks against your devices - audits, config pushes, remediations - and track them through to completion. Build the inventory of reusable tasks, instructions, and credentials that operators draw from at run time."
       />
 
-      <div role="tablist" style={{ marginBottom: '1rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            role="tab"
-            aria-selected={tab === t.key}
-            className={`btn btn-sm btn-secondary mon-tab-btn${tab === t.key ? ' active' : ''}`}
-            onClick={() => selectTab(t.key)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <TabBar
+        tabs={shownTabs}
+        active={tab}
+        onChange={selectTab}
+        aria-label="Delegator sections"
+      />
 
       <PageHelp pageKey={`delegator.${tab}`} title={tabHelp.title} text={tabHelp.text} />
 

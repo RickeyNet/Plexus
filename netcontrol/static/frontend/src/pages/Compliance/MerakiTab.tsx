@@ -11,6 +11,7 @@ import {
   useUpdateMerakiAssignment,
 } from '@/api/compliance';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { TabBar } from '@/components/TabBar';
 import { parseBackendDate } from '@/pages/Dashboard/helpers';
 
 import { MerakiAssignModal } from './MerakiAssignModal';
@@ -34,6 +35,12 @@ const formatInterval = (seconds: number): string => {
 
 type View = 'assignments' | 'status' | 'results';
 
+const VIEWS: { key: View; label: string }[] = [
+  { key: 'assignments', label: 'Assignments' },
+  { key: 'status', label: 'Target Status' },
+  { key: 'results', label: 'Scan Results' },
+];
+
 /**
  * Meraki organizations scanned against profiles with "meraki" rules: the
  * assignments (with Scan Now as a background job), the latest status per
@@ -52,34 +59,18 @@ export function MerakiTab({ query }: { query: string }) {
 
   return (
     <div>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.4rem',
-          flexWrap: 'wrap',
-          marginBottom: '0.75rem',
-        }}
-      >
-        {(['assignments', 'status', 'results'] as View[]).map((v) => (
-          <button
-            key={v}
-            type="button"
-            className={`btn btn-sm ${view === v ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setView(v)}
-          >
-            {v === 'assignments' ? 'Assignments' : v === 'status' ? 'Target Status' : 'Scan Results'}
+      <TabBar
+        size="sm"
+        tabs={VIEWS}
+        active={view}
+        onChange={setView}
+        aria-label="Meraki views"
+        trailing={
+          <button type="button" className="btn btn-sm btn-secondary" onClick={() => setShowAssign(true)}>
+            Assign to Organization
           </button>
-        ))}
-        <button
-          type="button"
-          className="btn btn-sm btn-secondary"
-          style={{ marginLeft: 'auto' }}
-          onClick={() => setShowAssign(true)}
-        >
-          Assign to Organization
-        </button>
-      </div>
+        }
+      />
 
       {jobId && (
         <MerakiScanProgress

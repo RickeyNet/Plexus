@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router';
 
 import {
@@ -11,6 +12,8 @@ import {
   useInventoryGroupsForDashboard,
 } from '@/api/dashboard';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { invalidateMetricQueries } from '@/lib/invalidateMetricQueries';
+import { useTimeRange } from '@/lib/timeRange-context';
 
 import { DashboardSwitcher } from './DashboardSwitcher';
 import { Panel } from './Panel';
@@ -28,6 +31,8 @@ function parseVariables(json: string | undefined): DashboardVariable[] {
 
 export function DashboardViewer() {
   const { confirm, alert } = useDialogs();
+  const qc = useQueryClient();
+  const { range } = useTimeRange();
   const { id } = useParams<{ id: string }>();
   const dashboardId =
     id != null && Number.isFinite(Number(id)) ? Number(id) : null;
@@ -134,7 +139,10 @@ export function DashboardViewer() {
           </button>
           <button
             className="btn btn-secondary"
-            onClick={() => dashQuery.refetch()}
+            onClick={() => {
+              void dashQuery.refetch();
+              invalidateMetricQueries(qc);
+            }}
           >
             Refresh
           </button>
@@ -175,7 +183,7 @@ export function DashboardViewer() {
               key={p.id}
               panel={p}
               variables={variableValues}
-              range="6h"
+              range={range}
               editing={editing}
               onEdit={(panel) => setEditPanel(panel)}
               onDelete={handleDeletePanel}

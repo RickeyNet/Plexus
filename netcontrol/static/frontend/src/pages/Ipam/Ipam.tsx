@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { FormEvent, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { PageHelp } from '@/components/PageHelp';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
 import { cloudProviderTerms } from '@/lib/cloudProviderTerms';
 
 import {
@@ -10,6 +11,7 @@ import {
   type IpamOverlap,
   type IpamOverlapSide,
   type IpamSource,
+  type IpamSyncConfig,
   useDeleteDhcpServer,
   useDeleteIpamSource,
   useDhcpCorrelation,
@@ -25,6 +27,7 @@ import {
   useRunReconcile,
   useSyncDhcpServer,
   useSyncIpamSource,
+  useUpdateIpamSyncConfig,
 } from '@/api/ipam';
 import { useInventoryGroups } from '@/api/compliance';
 
@@ -32,7 +35,6 @@ import { DefineSubnetModal } from './DefineSubnetModal';
 import { DhcpServerModal } from './DhcpServerModal';
 import { IpamSourceModal } from './IpamSourceModal';
 import { SubnetDrilldown } from './SubnetDrilldown';
-import { SyncScheduleModal } from './SyncScheduleModal';
 import {
   driftBadgeClass,
   driftLabel,
@@ -46,8 +48,7 @@ type ModalState =
   | { kind: 'none' }
   | { kind: 'define-subnet' }
   | { kind: 'source'; source: IpamSource | null }
-  | { kind: 'dhcp'; server: DhcpServer | null }
-  | { kind: 'schedule' };
+  | { kind: 'dhcp'; server: DhcpServer | null };
 
 export function Ipam() {
   const qc = useQueryClient();
@@ -79,7 +80,6 @@ export function Ipam() {
   const overlaps = overview.data?.overlaps ?? [];
   const sourceList = sources.data?.sources ?? [];
   const config = syncConfig.data?.config ?? { enabled: true, interval_seconds: 1800 };
-  const intervalMin = Math.round((config.interval_seconds ?? 1800) / 60);
 
   const handleRefresh = () => {
     // Query keys must match the hyphenated keys registered in api/ipam.ts
@@ -433,11 +433,9 @@ export function Ipam() {
 
           <SourcesCard
             sources={sourceList}
-            syncEnabled={config.enabled}
-            intervalMin={intervalMin}
+            syncConfig={config}
             onAddSource={() => setModal({ kind: 'source', source: null })}
             onEditSource={(s) => setModal({ kind: 'source', source: s })}
-            onSchedule={() => setModal({ kind: 'schedule' })}
           />
 
           <ReconcileCard
@@ -606,12 +604,6 @@ export function Ipam() {
           onClose={() => setModal({ kind: 'none' })}
         />
       )}
-      {modal.kind === 'schedule' && (
-        <SyncScheduleModal
-          config={config}
-          onClose={() => setModal({ kind: 'none' })}
-        />
-      )}
     </div>
   );
 }
@@ -701,22 +693,89 @@ function OverlapsCard({ overlaps, total, vpnTotal, includeTopology }: OverlapsCa
   );
 }
 
+function SyncScheduleBar({ config }: { config: IpamSyncConfig }) {
+  const { alert } = useDialogs();
+  const update = useUpdateIpamSyncConfig();
+  const savedMin = Math.max(5, Math.round(config.interval_seconds / 60));
+  const [enabled, setEnabled] = useState(config.enabled);
+  const [intervalMin, setIntervalMin] = useState(savedMin);
+  const isDirty = enabled !== config.enabled || intervalMin !== savedMin;
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    update.mutate(
+      { enabled, interval_seconds: Math.max(300, intervalMin * 60) },
+      {
+        onError: (err) => {
+          void alert({ message: (err as Error).message, variant: 'error' });
+        },
+      },
+    );
+  };
+
+  return (
+    <form
+      onSubmit={submit}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '0.75rem',
+        flexWrap: 'wrap',
+        padding: '0.6rem 0.75rem',
+        background: 'rgba(255,255,255,0.03)',
+        borderRadius: 8,
+        marginBottom: '0.75rem',
+      }}
+    >
+      <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => setEnabled(e.target.checked)}
+        />
+        Scheduled auto-sync
+      </label>
+      <label
+        className="text-muted"
+        style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.9em' }}
+      >
+        Every
+        <input
+          className="form-input"
+          type="number"
+          min={5}
+          max={1440}
+          value={intervalMin}
+          onChange={(e) => setIntervalMin(Number(e.target.value || 30))}
+          style={{ width: 80 }}
+          aria-label="Sync interval in minutes"
+        />
+        min
+      </label>
+      <button
+        type="submit"
+        className="btn btn-sm btn-primary"
+        style={{ marginLeft: 'auto' }}
+        disabled={!isDirty || update.isPending}
+      >
+        {update.isPending ? 'Saving…' : 'Save'}
+      </button>
+    </form>
+  );
+}
+
 interface SourcesCardProps {
   sources: IpamSource[];
-  syncEnabled: boolean;
-  intervalMin: number;
+  syncConfig: IpamSyncConfig;
   onAddSource: () => void;
   onEditSource: (s: IpamSource) => void;
-  onSchedule: () => void;
 }
 
 function SourcesCard({
   sources,
-  syncEnabled,
-  intervalMin,
+  syncConfig,
   onAddSource,
   onEditSource,
-  onSchedule,
 }: SourcesCardProps) {
   const { confirm, alert } = useDialogs();
   const sync = useSyncIpamSource();
@@ -781,39 +840,10 @@ function SourcesCard({
           + Add Source
         </button>
       </div>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.75rem',
-          flexWrap: 'wrap',
-          padding: '0.6rem 0.75rem',
-          background: 'rgba(255,255,255,0.03)',
-          borderRadius: 8,
-          marginBottom: '0.75rem',
-        }}
-      >
-        <span
-          className={`badge ${syncEnabled ? 'badge-success' : 'badge-secondary'}`}
-        >
-          {syncEnabled ? 'Auto-sync on' : 'Auto-sync off'}
-        </span>
-        <span className="text-muted" style={{ fontSize: '0.9em' }}>
-          Every {intervalMin} min
-        </span>
-        <button
-          type="button"
-          className="btn btn-secondary"
-          style={{
-            padding: '0.2rem 0.55rem',
-            fontSize: '0.82em',
-            marginLeft: 'auto',
-          }}
-          onClick={onSchedule}
-        >
-          Schedule
-        </button>
-      </div>
+      <SyncScheduleBar
+        key={`${syncConfig.enabled}-${syncConfig.interval_seconds}`}
+        config={syncConfig}
+      />
       {sources.length === 0 ? (
         <p className="text-muted" style={{ margin: 0 }}>
           No external IPAM sources configured. Add one to start syncing
@@ -892,35 +922,19 @@ function SourcesCard({
               >
                 Sync Now
               </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                style={{ fontSize: '0.82em', padding: '0.25rem 0.6rem' }}
-                onClick={() => handleReconcile(src.id)}
-                disabled={reconcile.isPending}
-              >
-                Reconcile
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                style={{ fontSize: '0.82em', padding: '0.25rem 0.6rem' }}
-                onClick={() => onEditSource(src)}
-              >
-                Edit
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                style={{
-                  fontSize: '0.82em',
-                  padding: '0.25rem 0.6rem',
-                  color: 'var(--danger-color)',
-                }}
-                onClick={() => handleDelete(src.id, src.name)}
-              >
-                Delete
-              </button>
+              <KebabMenu label={`Actions for ${src.name}`}>
+                <MenuItem
+                  onSelect={() => handleReconcile(src.id)}
+                  disabled={reconcile.isPending}
+                >
+                  Reconcile
+                </MenuItem>
+                <MenuItem onSelect={() => onEditSource(src)}>Edit</MenuItem>
+                <MenuSeparator />
+                <MenuItem danger onSelect={() => handleDelete(src.id, src.name)}>
+                  Delete
+                </MenuItem>
+              </KebabMenu>
             </div>
           </div>
         ))
@@ -1259,22 +1273,15 @@ function DhcpCard({
                     >
                       Sync
                     </button>
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      style={{ marginLeft: '0.3rem' }}
-                      onClick={() => onEdit(s)}
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-danger btn-sm"
-                      style={{ marginLeft: '0.3rem' }}
-                      onClick={() => handleDelete(s.id)}
-                    >
-                      Delete
-                    </button>
+                    <span style={{ marginLeft: '0.3rem' }}>
+                      <KebabMenu label={`Actions for ${s.name}`}>
+                        <MenuItem onSelect={() => onEdit(s)}>Edit</MenuItem>
+                        <MenuSeparator />
+                        <MenuItem danger onSelect={() => handleDelete(s.id)}>
+                          Delete
+                        </MenuItem>
+                      </KebabMenu>
+                    </span>
                   </td>
                 </tr>
               ))}

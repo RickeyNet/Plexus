@@ -1,19 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 
 import { useMetricsQuery } from '@/api/dashboard';
 import { TimeSeriesChart } from '@/lib/echart';
-
-type Range = '1h' | '6h' | '24h' | '7d';
-
-const RANGES: { value: Range; label: string }[] = [
-  { value: '1h', label: '1h' },
-  { value: '6h', label: '6h' },
-  { value: '24h', label: '24h' },
-  { value: '7d', label: '7d' },
-];
+import { useTimeRange } from '@/lib/timeRange-context';
 
 export function ResponseTimePanel() {
-  const [range, setRange] = useState<Range>('6h');
+  const { range } = useTimeRange();
   const query = useMetricsQuery({ metric: 'response_time_ms', range });
 
   const { series, avgMs, maxMs } = useMemo(() => {
@@ -51,19 +43,6 @@ export function ResponseTimePanel() {
     <div className="glass-card card dashboard-overview-card">
       <div className="dashboard-overview-header">
         <h3 className="dashboard-overview-title">Average Response Time</h3>
-        <div className="dashboard-range-tabs" role="tablist" aria-label="Time range">
-          {RANGES.map((r) => (
-            <button
-              key={r.value}
-              role="tab"
-              aria-selected={range === r.value}
-              className={`dashboard-range-tab${range === r.value ? ' active' : ''}`}
-              onClick={() => setRange(r.value)}
-            >
-              {r.label}
-            </button>
-          ))}
-        </div>
       </div>
 
       <div className="dashboard-response-summary">

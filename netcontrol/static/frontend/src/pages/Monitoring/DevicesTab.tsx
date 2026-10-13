@@ -18,7 +18,6 @@ import {
 
 export function DevicesTab() {
   const navigate = useNavigate();
-  const summary = useMonitoringSummary();
   const polls = useMonitoringPolls();
   const [query, setQuery] = useState('');
   const [historyHost, setHistoryHost] = useState<{ id: number; hostname: string } | null>(null);
@@ -55,9 +54,7 @@ export function DevicesTab() {
         />
         <button className="btn btn-primary" onClick={pollNow} disabled={progress.active}>
           {progress.active ? 'Polling…' : 'Poll Now'}
-        </button>
-        <button className="btn btn-secondary" onClick={() => { polls.refetch(); summary.refetch(); }}>Refresh</button>
-      </div>
+        </button>      </div>
 
       {showProgress && (
         <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '0.75rem' }}>

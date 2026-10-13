@@ -1,41 +1,31 @@
-import { useMemo, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router';
-
 import { useAuthStatus } from '@/api/auth';
 import { PageHelp } from '@/components/PageHelp';
+import { TabBar } from '@/components/TabBar';
+import { visibleTabs } from '@/lib/tabGating';
+import { usePathTab } from '@/lib/usePathTab';
 import { Deployments } from '@/pages/Deployments/Deployments';
 import { MaintenanceWindows } from '@/pages/MaintenanceWindows/MaintenanceWindows';
 import { RiskAnalysis } from '@/pages/RiskAnalysis/RiskAnalysis';
 
 type Tab = 'risk' | 'deployments' | 'maintenance';
 
-const TAB_QUERY_KEY = 'tab';
-
-function readTab(search: string): Tab | null {
-  const v = new URLSearchParams(search).get(TAB_QUERY_KEY);
-  return v === 'risk' || v === 'deployments' || v === 'maintenance' ? v : null;
-}
+// Maintenance windows ride on the deployments feature key.
+const TABS: { key: Tab; label: string; feature: string }[] = [
+  { key: 'risk', label: 'Risk Analysis', feature: 'risk-analysis' },
+  { key: 'deployments', label: 'Deployments', feature: 'deployments' },
+  { key: 'maintenance', label: 'Maintenance', feature: 'deployments' },
+];
+const TAB_KEYS = TABS.map((t) => t.key);
 
 export function ChangeManagement() {
   const { data: auth } = useAuthStatus();
-  const navigate = useNavigate();
-  const { search } = useLocation();
-
-  const isAdmin = auth?.role === 'admin';
-  const access = useMemo(() => new Set(auth?.feature_access ?? []), [auth?.feature_access]);
-  const canRisk = isAdmin || access.has('risk-analysis');
-  const canDeploy = isAdmin || access.has('deployments');
-  // Maintenance windows ride on the deployments feature key.
-  const canMaintenance = canDeploy;
-
-  const queryTab = readTab(search);
-  const defaultTab: Tab = canRisk ? 'risk' : canDeploy ? 'deployments' : 'maintenance';
-  const [tab, setTab] = useState<Tab>(queryTab ?? defaultTab);
-
-  function selectTab(next: Tab) {
-    setTab(next);
-    navigate({ search: `?${TAB_QUERY_KEY}=${next}` }, { replace: true });
-  }
+  const shownTabs = visibleTabs(TABS, auth);
+  const [tab, selectTab] = usePathTab(
+    '/change-management',
+    TAB_KEYS,
+    'risk',
+    auth ? shownTabs.map((t) => t.key) : undefined,
+  );
 
   return (
     <div>
@@ -45,41 +35,9 @@ export function ChangeManagement() {
         text="Assess risk before pushing changes, deploy with staged rollouts, and roll back if needed. The full change lifecycle in one place."
       />
 
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.5rem',
-          marginBottom: '0.75rem',
-          flexWrap: 'wrap',
-        }}
-      >
-        {canRisk && (
-          <button
-            className={`btn btn-sm ${tab === 'risk' ? 'btn-primary' : 'btn-ghost'}`}
-            onClick={() => selectTab('risk')}
-          >
-            Risk Analysis
-          </button>
-        )}
-        {canDeploy && (
-          <button
-            className={`btn btn-sm ${tab === 'deployments' ? 'btn-primary' : 'btn-ghost'}`}
-            onClick={() => selectTab('deployments')}
-          >
-            Deployments
-          </button>
-        )}
-        {canMaintenance && (
-          <button
-            className={`btn btn-sm ${tab === 'maintenance' ? 'btn-primary' : 'btn-ghost'}`}
-            onClick={() => selectTab('maintenance')}
-          >
-            Maintenance
-          </button>
-        )}
-      </div>
-      {tab === 'risk' && canRisk && (
+      <TabBar tabs={shownTabs} active={tab} onChange={selectTab} aria-label="Change management sections" />
+
+      {tab === 'risk' && (
         <>
           <PageHelp
             pageKey="change-management.risk"
@@ -89,7 +47,7 @@ export function ChangeManagement() {
           <RiskAnalysis />
         </>
       )}
-      {tab === 'deployments' && canDeploy && (
+      {tab === 'deployments' && (
         <>
           <PageHelp
             pageKey="change-management.deployments"
@@ -99,9 +57,7 @@ export function ChangeManagement() {
           <Deployments />
         </>
       )}
-      {tab === 'maintenance' && canMaintenance && (
-        <MaintenanceWindows />
-      )}
+      {tab === 'maintenance' && <MaintenanceWindows />}
     </div>
   );
 }

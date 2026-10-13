@@ -25,6 +25,7 @@ import {
   type UtilizationStreamEdge,
 } from '@/api/topology';
 import { topologyExportUrl, useMerakiSubnets, useTopologyDeepSearch } from '@/api/meraki';
+import { Menu, MenuCheckboxItem, MenuItem, MenuSeparator } from '@/components/Menu';
 import { PageHelp } from '@/components/PageHelp';
 import { AddToInventoryModal } from './AddToInventoryModal';
 import { ChangesModal } from './ChangesModal';
@@ -71,8 +72,14 @@ import {
   TopologySearchPanel,
   type HighlightTarget,
 } from './TopologySearchPanel';
+import {
+  LAYOUT_OPTIONS,
+  badgeText,
+  enabledOverlayCount,
+  layoutLabel,
+  type LayoutMode,
+} from './toolbarModel';
 
-type LayoutMode = 'tidy' | 'physics' | 'circular' | 'hierarchical-UD' | 'hierarchical-DU' | 'hierarchical-LR' | 'hierarchical-RL';
 
 interface NodeMeta {
   raw: TopologyNode;
@@ -252,6 +259,8 @@ export function Topology() {
   );
   const showAllTunnels = tunnelPref ?? tunnelCount <= AUTO_HIDE_TUNNELS;
   const showAllTunnelsRef = useRef(showAllTunnels);
+  const overlayCount = enabledOverlayCount({ util: utilOverlay, stp: stpOverlay, status: statusOverlay });
+  const eventsBadge = badgeText(stpBadge + changeBadge);
   showAllTunnelsRef.current = showAllTunnels;
   const positions = positionsQuery.data;
   const deepSearch = useTopologyDeepSearch(hasMeraki ? debouncedSearch : '');
@@ -1874,15 +1883,6 @@ export function Topology() {
             <option key={g.id} value={g.id}>{g.name}</option>
           ))}
         </select>
-        <select className="form-select" style={{ minWidth: 170 }} value={layout} onChange={(e) => setLayout(e.target.value as LayoutMode)}>
-          <option value="tidy">Tidy tree (top→bottom)</option>
-          <option value="physics">Physics (force-directed)</option>
-          <option value="circular">Circular</option>
-          <option value="hierarchical-UD">Hierarchical (top→bottom)</option>
-          <option value="hierarchical-DU">Hierarchical (bottom→top)</option>
-          <option value="hierarchical-LR">Hierarchical (left→right)</option>
-          <option value="hierarchical-RL">Hierarchical (right→left)</option>
-        </select>
         {hasMeraki && (
           <select
             className="form-select"
@@ -1966,35 +1966,88 @@ export function Topology() {
 
         <button className="btn btn-primary btn-sm" onClick={() => setSourcesOpen(true)} title="Everything that feeds the map - neighbor discovery, Meraki, Cato, Cisco FMC, Palo Alto Panorama, Appgate SDP, AWS, Azure, GCP: add, collect, history">Sources</button>
         <button className="btn btn-secondary btn-sm" onClick={handleRefresh}>Refresh</button>
-        <button className="btn btn-secondary btn-sm" onClick={handleFit}>Fit</button>
         <button className={`btn btn-sm ${pathMode ? 'btn-primary' : 'btn-secondary'}`} onClick={togglePathMode} title="Pick devices or sites and see how they reach one another">{pathMode ? 'Exit Path' : 'Path Mode'}</button>
         <button className={`btn btn-sm ${searchPanelOpen ? 'btn-primary' : 'btn-secondary'}`} onClick={toggleSearchPanel}>{searchPanelOpen ? 'Close Search' : 'Find MAC/IP/VLAN'}</button>
-        <button className={`btn btn-sm ${labelsVisible ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setLabelsVisible((v) => !v)}>Labels</button>
-        {tunnelCount > 0 && (
-          <button
-            className={`btn btn-sm ${showAllTunnels ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setTunnelPref(!showAllTunnels)}
-            title={
-              showAllTunnels
-                ? `Showing all ${tunnelCount} VPN tunnels. Click to show only the tunnels of the selected device.`
-                : `Showing only the VPN tunnels of the selected device. Click to draw all ${tunnelCount}.`
-            }
-          >
-            VPN Tunnels
-          </button>
-        )}
-        <button className={`btn btn-sm ${utilOverlay ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setUtilOverlay((v) => !v)}>Util Overlay</button>
-        <button className={`btn btn-sm ${stpOverlay ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setStpOverlay((v) => !v)}>STP Overlay</button>
-        <button className={`btn btn-sm ${statusOverlay ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setStatusOverlay((v) => !v)}>Status Overlay</button>
-        <button className="btn btn-secondary btn-sm" onClick={handleScanStp} disabled={stpScan.isPending}>{stpScan.isPending ? 'Scanning…' : 'Scan STP'}</button>
-        <button className="btn btn-secondary btn-sm" onClick={() => setStpEventsOpen(true)}>
-          STP Events {stpBadge > 0 && <span className="badge badge-danger" style={{ marginLeft: '0.25rem' }}>{stpBadge > 99 ? '99+' : stpBadge}</span>}
-        </button>
-        <button className="btn btn-secondary btn-sm" onClick={() => setChangesOpen(true)}>
-          Changes {changeBadge > 0 && <span className="badge badge-warning" style={{ marginLeft: '0.25rem' }}>{changeBadge > 99 ? '99+' : changeBadge}</span>}
-        </button>
-        <button className="btn btn-secondary btn-sm" onClick={handleResetPositions}>Reset Positions</button>
-        <button className="btn btn-secondary btn-sm" onClick={() => setSettingsOpen((v) => !v)}>Settings</button>
+        <Menu
+          label="View"
+          align="start"
+          width={240}
+          trigger={(isOpen) => (
+            <button type="button" className={`btn btn-sm ${isOpen ? 'btn-primary' : 'btn-secondary'}`} title="Labels and map overlays">
+              View{overlayCount > 0 && <span className="badge badge-info topo-toolbar-badge">{overlayCount}</span>} ▾
+            </button>
+          )}
+        >
+          <MenuCheckboxItem checked={labelsVisible} onChange={setLabelsVisible}>Labels</MenuCheckboxItem>
+          {tunnelCount > 0 && (
+            <MenuCheckboxItem
+              checked={showAllTunnels}
+              onChange={setTunnelPref}
+              title={
+                showAllTunnels
+                  ? `Showing all ${tunnelCount} VPN tunnels. Click to show only the tunnels of the selected device.`
+                  : `Showing only the VPN tunnels of the selected device. Click to draw all ${tunnelCount}.`
+              }
+            >
+              VPN Tunnels
+            </MenuCheckboxItem>
+          )}
+          <MenuSeparator />
+          <MenuCheckboxItem checked={utilOverlay} onChange={setUtilOverlay}>Util Overlay</MenuCheckboxItem>
+          <MenuCheckboxItem checked={stpOverlay} onChange={setStpOverlay}>STP Overlay</MenuCheckboxItem>
+          <MenuCheckboxItem checked={statusOverlay} onChange={setStatusOverlay}>Status Overlay</MenuCheckboxItem>
+        </Menu>
+        <Menu
+          label="Layout"
+          align="start"
+          width={240}
+          trigger={(isOpen) => (
+            <button type="button" className={`btn btn-sm ${isOpen ? 'btn-primary' : 'btn-secondary'}`} title={`Layout: ${layoutLabel(layout)}`}>
+              Layout ▾
+            </button>
+          )}
+        >
+          {LAYOUT_OPTIONS.map((o) => (
+            <MenuCheckboxItem key={o.value} checked={layout === o.value} onChange={() => setLayout(o.value)}>
+              {o.label}
+            </MenuCheckboxItem>
+          ))}
+          <MenuSeparator />
+          <MenuItem onSelect={handleFit}>Fit to screen</MenuItem>
+          <MenuItem onSelect={handleResetPositions}>Reset Positions</MenuItem>
+          <MenuCheckboxItem checked={settingsOpen} onChange={setSettingsOpen}>Layout settings</MenuCheckboxItem>
+        </Menu>
+        <Menu
+          label="Events"
+          align="start"
+          width={220}
+          trigger={(isOpen) => (
+            <button
+              type="button"
+              className={`btn btn-sm ${isOpen ? 'btn-primary' : 'btn-secondary'}`}
+              title="Unacknowledged STP events and topology changes"
+            >
+              Events
+              {eventsBadge && (
+                <span className={`badge ${stpBadge > 0 ? 'badge-danger' : 'badge-warning'} topo-toolbar-badge`}>{eventsBadge}</span>
+              )}{' '}
+              ▾
+            </button>
+          )}
+        >
+          <MenuItem onSelect={() => setStpEventsOpen(true)}>
+            <span className="topo-menu-row">
+              STP Events…
+              {badgeText(stpBadge) && <span className="badge badge-danger">{badgeText(stpBadge)}</span>}
+            </span>
+          </MenuItem>
+          <MenuItem onSelect={() => setChangesOpen(true)}>
+            <span className="topo-menu-row">
+              Changes…
+              {badgeText(changeBadge) && <span className="badge badge-warning">{badgeText(changeBadge)}</span>}
+            </span>
+          </MenuItem>
+        </Menu>
         <ExportMenu
           onPNG={handleExportPNG}
           onSVG={handleExportSVG}
@@ -2013,6 +2066,7 @@ export function Topology() {
 
       {(stpOverlay || stpScan.isPending) && (
         <div className="card" style={{ padding: '0.5rem 0.75rem', marginBottom: '0.6rem', display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <button className="btn btn-secondary btn-sm" onClick={handleScanStp} disabled={stpScan.isPending}>{stpScan.isPending ? 'Scanning…' : 'Scan STP'}</button>
           <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', fontSize: '0.85rem' }}>
             <input type="checkbox" checked={stpAllVlans} onChange={(e) => setStpAllVlans(e.target.checked)} />
             All VLANs
@@ -2105,7 +2159,6 @@ export function Topology() {
               />
             )}
             <button type="button" className="btn btn-sm btn-secondary" onClick={() => { setPathPicks([]); setPathNote(''); }} disabled={!pathPicks.length}>Clear</button>
-            <button type="button" className="btn btn-sm btn-secondary" onClick={clearPathMode}>Exit</button>
           </div>
           {pathNote && (
             <div role="status" style={{ marginTop: '0.45rem', color: 'var(--warning, #f59f00)' }}>{pathNote}</div>

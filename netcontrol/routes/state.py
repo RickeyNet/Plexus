@@ -429,7 +429,7 @@ _FEATURE_CATALOG = [
     {"key": "change-management", "label": "Changes", "gateable": False, "writable": False, "visible_in_nav": True},
     {"key": "risk-analysis", "label": "Risk Analysis", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "reports", "label": "Reports", "gateable": True, "writable": False, "visible_in_nav": True},
-    {"key": "graph-templates", "label": "Graphs", "gateable": True, "writable": True, "visible_in_nav": True},
+    {"key": "graph-templates", "label": "Graph Templates", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "mac-tracking", "label": "MAC Tracking", "gateable": True, "writable": False, "visible_in_nav": True},
     {"key": "software", "label": "Software Versions", "gateable": True, "writable": True, "visible_in_nav": True},
     {

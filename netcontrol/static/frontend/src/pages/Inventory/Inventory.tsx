@@ -3,6 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 
 import { PageHelp } from '@/components/PageHelp';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
 
 import {
   type InventoryGroupFull,
@@ -19,11 +20,10 @@ import {
 } from '@/api/inventory';
 
 import { BulkMoveModal } from './BulkMoveModal';
-import { BulkSerialModal } from './BulkSerialModal';
 import { DiscoveryModal, type DiscoveryMode } from './DiscoveryModal';
-import { FetchSerialModal } from './FetchSerialModal';
 import { GroupModal } from './GroupModal';
 import { HostModal } from './HostModal';
+import { SerialModal, type SerialTarget } from './SerialModal';
 import { SnmpProfilesModal } from './SnmpProfilesModal';
 import {
   filterGroups,
@@ -47,8 +47,7 @@ type ModalState =
       host: InventoryHost & { group_id: number };
     }
   | { kind: 'bulk-move'; sourceGroupId: number; hostIds: number[] }
-  | { kind: 'fetch-serial'; hostId: number; hostname?: string }
-  | { kind: 'bulk-serial'; groupId: number; groupName?: string }
+  | { kind: 'serial'; target: SerialTarget }
   | { kind: 'snmp-profiles' }
   | {
       kind: 'discovery';
@@ -359,7 +358,10 @@ export function Inventory() {
             setModal({ kind: 'discovery', mode: 'sync', group })
           }
           onBulkSerial={() =>
-            setModal({ kind: 'bulk-serial', groupId: group.id, groupName: group.name })
+            setModal({
+              kind: 'serial',
+              target: { mode: 'bulk', groupId: group.id, groupName: group.name },
+            })
           }
           onAddHost={() => setModal({ kind: 'add-host', groupId: group.id })}
           onEditHost={(host) =>
@@ -371,9 +373,8 @@ export function Inventory() {
           onDeleteHost={handleDeleteHost}
           onFetchSerial={(host) =>
             setModal({
-              kind: 'fetch-serial',
-              hostId: host.id,
-              hostname: host.hostname,
+              kind: 'serial',
+              target: { mode: 'single', hostId: host.id, hostname: host.hostname },
             })
           }
           onBulkMove={() => {
@@ -426,19 +427,8 @@ export function Inventory() {
           }}
         />
       )}
-      {modal.kind === 'fetch-serial' && (
-        <FetchSerialModal
-          hostId={modal.hostId}
-          hostname={modal.hostname}
-          onClose={closeModal}
-        />
-      )}
-      {modal.kind === 'bulk-serial' && (
-        <BulkSerialModal
-          groupId={modal.groupId}
-          groupName={modal.groupName}
-          onClose={closeModal}
-        />
+      {modal.kind === 'serial' && (
+        <SerialModal target={modal.target} onClose={closeModal} />
       )}
       {modal.kind === 'snmp-profiles' && (
         <SnmpProfilesModal onClose={closeModal} />
@@ -648,27 +638,14 @@ function GroupCard({
           >
             Sync
           </button>
-          <button
-            type="button"
-            className="btn btn-sm btn-secondary"
-            onClick={onBulkSerial}
-          >
-            Fetch Serials
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm btn-secondary"
-            onClick={onEditGroup}
-          >
-            Edit
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm btn-danger"
-            onClick={onDeleteGroup}
-          >
-            Delete
-          </button>
+          <KebabMenu label={`Actions for ${group.name}`}>
+            <MenuItem onSelect={onBulkSerial}>Fetch Serials</MenuItem>
+            <MenuItem onSelect={onEditGroup}>Edit</MenuItem>
+            <MenuSeparator />
+            <MenuItem danger onSelect={onDeleteGroup}>
+              Delete
+            </MenuItem>
+          </KebabMenu>
         </div>
       </div>
 
@@ -700,22 +677,13 @@ function GroupCard({
               {selectedSet.size > 0 && (
                 <>
                   {singleSelected && selectedHostObj && (
-                    <>
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-secondary"
-                        onClick={() => onEditHost(selectedHostObj)}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-secondary"
-                        onClick={() => onFetchSerial(selectedHostObj)}
-                      >
-                        Serial
-                      </button>
-                    </>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-secondary"
+                      onClick={() => onFetchSerial(selectedHostObj)}
+                    >
+                      Serial
+                    </button>
                   )}
                   <button
                     type="button"

@@ -327,8 +327,61 @@ adding `react-hook-form` - but not before.
   - `feature` - backend feature key for per-user gating
   - `visKey` - admin-side visibility key (groups multiple entries
     together when both halves of a legacy module are split)
+  An array `feature` shows the entry when the user has any of the
+  features and hides it globally only when all of them are hidden - use it
+  for a page whose tabs gate on different features (Delegator, Software,
+  Network Tools, Monitoring).
+- `NAV` order: Dashboard, then three groups, then Settings. Every child keeps
+  its own gate; a group with no visible child is dropped, and groups start
+  expanded.
+  - **Assets** - Inventory, IPAM, Software, Federation
+  - **Observe** - Monitoring, Topology, Floor Plans, Network Tools, Cloud
+    Visibility, Reports
+  - **Change** - Delegator, Configuration, Compliance, Changes, Lab / Digital
+    Twin
+  New pages go into the group that matches what the user does there; prefer
+  a tab on an existing page over a new entry.
 - Use `useNavigate()` for programmatic navigation. Don't `window.location.assign`
   unless you specifically need a full page reload (e.g. session expiry).
+
+---
+
+## Tabs
+
+**A page's tab lives in the URL path.** `/page` is the default tab,
+`/page/<tab>` the others, so tabs are bookmarkable and Back works. Don't
+keep page tabs in `useState` or in a `?tab=` query.
+
+- Route: one optional-segment route per page in `App.tsx`,
+  `<Route path="/compliance/:tab?" element={<Compliance />} />`. Breadcrumbs
+  for `/page/<tab>` fall back to the `/page` label; add an explicit
+  `BREADCRUMBS` entry only when the tab deserves its own.
+- State: `const [tab, selectTab] = usePathTab(base, TAB_KEYS, defaultTab, allowed)`
+  from `@/lib/usePathTab`. It derives the tab from the path (pure helpers in
+  `@/lib/tabPath`), navigates on select, and rewrites the URL with `replace`
+  when it names an unknown tab, a tab the user may not open, or uses a legacy
+  `?tab=` query - the URL always names the rendered tab.
+- Per-tab feature gates: give each tab `feature` (and optional `altFeature` /
+  `visKey`) and pass `visibleTabs(TABS, auth)` from `@/lib/tabGating`, both to
+  `<TabBar>` and (as keys, once `auth` has loaded) as `allowed`. Same rules as
+  the sidebar: admin bypass, `feature_access`, `feature_visibility_hidden`.
+- Tab row: `<TabBar tabs active onChange trailing? />` from
+  `@/components/TabBar`. Use `size="sm"` for nested sub-tabs inside a tab
+  (Compliance → Meraki views). Put a search box or action buttons in
+  `trailing`, not beside the bar.
+- Small view toggles that aren't navigation (Policies / History, list /
+  canvas, time range) use `<SegmentedControl>` from
+  `@/components/SegmentedControl` and stay local state.
+- Retiring a tab or folding a page into another page's tab: keep the old
+  path alive with `<Route path="/old" element={<Navigate to="/new/tab" replace />} />`.
+
+Pages following this: Monitoring, Network Tools, Software, Delegator
+(Jobs), CloudVisibility, Compliance, ChangeManagement, Reports,
+Configuration, Settings. (Software, Jobs and CloudVisibility predate
+`usePathTab` and enumerate their tab routes explicitly.) Monitoring nests a
+second level: `/monitoring/:tab?/:sub?`, where Configure resolves its
+sub-tab with `usePathTab('/monitoring/configure', ...)` and the top level
+keeps that extra segment instead of canonicalising it away.
 
 ---
 
@@ -460,3 +513,6 @@ Append a one-liner each time you change a rule here.
   legacy-CSS rule, modal/confirm/form patterns actually in use, and the
   `apiRequest` + WebSocket conventions from `client.ts` and the
   Deployments port.
+- 2026-10-12 - Added the Tabs section: tab in the URL path via
+  `usePathTab`, `<TabBar>` / `<SegmentedControl>`, `tabGating` for per-tab
+  feature gates, `<Navigate replace>` for retired tabs.

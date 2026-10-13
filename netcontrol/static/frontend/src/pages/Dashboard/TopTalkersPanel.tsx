@@ -3,16 +3,15 @@ import { Link } from 'react-router';
 import { echarts } from '@/lib/echart-core';
 
 import { useFlowStatus, useFlowTopTalkers } from '@/api/networkTools';
+import { ClampedRangeHint } from '@/components/TimeRangeBar';
+import { useTimeRange } from '@/lib/timeRange-context';
+import { clampPreset, toHours } from '@/lib/timeRangeMap';
 import { formatBytes } from '@/pages/NetworkTools/formatting';
 
-type Hours = 1 | 6 | 24;
 type Direction = 'src' | 'dst';
 
-const RANGES: { value: Hours; label: string }[] = [
-  { value: 1, label: '1h' },
-  { value: 6, label: '6h' },
-  { value: 24, label: '24h' },
-];
+// /api/flows/top-talkers caps `hours` at 168.
+const FLOW_RANGES = ['1h', '6h', '24h', '7d'] as const;
 
 const DIRECTIONS: { value: Direction; label: string }[] = [
   { value: 'src', label: 'Source' },
@@ -21,7 +20,9 @@ const DIRECTIONS: { value: Direction; label: string }[] = [
 
 export function TopTalkersPanel() {
   const status = useFlowStatus();
-  const [hours, setHours] = useState<Hours>(1);
+  const { range } = useTimeRange();
+  const flowRange = clampPreset(range, FLOW_RANGES);
+  const hours = toHours(flowRange);
   const [direction, setDirection] = useState<Direction>('src');
   const talkers = useFlowTopTalkers({ hours, direction, hostId: null, limit: 10 });
 
@@ -32,6 +33,7 @@ export function TopTalkersPanel() {
       <div className="dashboard-overview-header">
         <h3 className="dashboard-overview-title">Top Talkers</h3>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <ClampedRangeHint requested={range} shown={flowRange} />
           <div className="dashboard-range-tabs" role="tablist" aria-label="Direction">
             {DIRECTIONS.map((d) => (
               <button
@@ -42,19 +44,6 @@ export function TopTalkersPanel() {
                 onClick={() => setDirection(d.value)}
               >
                 {d.label}
-              </button>
-            ))}
-          </div>
-          <div className="dashboard-range-tabs" role="tablist" aria-label="Time range">
-            {RANGES.map((r) => (
-              <button
-                key={r.value}
-                role="tab"
-                aria-selected={hours === r.value}
-                className={`dashboard-range-tab${hours === r.value ? ' active' : ''}`}
-                onClick={() => setHours(r.value)}
-              >
-                {r.label}
               </button>
             ))}
           </div>

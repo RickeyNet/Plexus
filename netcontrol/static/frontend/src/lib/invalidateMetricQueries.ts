@@ -1,12 +1,14 @@
 import type { QueryClient } from '@tanstack/react-query';
 
-// Query keys touched by the global time-range bar (Dashboard, Monitoring).
+// Query keys touched by the global time-range bar (Dashboard, Monitoring, Device detail).
 const METRIC_QUERY_KEYS = [
   'metrics',
   'metrics-query',
   'interface-timeseries',
   'top-interfaces',
   'annotations',
+  'interface-error-summary',
+  'capacity-planning',
   'flows',
   'dashboard',
   'monitoring-poll-history',
