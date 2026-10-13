@@ -360,7 +360,9 @@ keep page tabs in `useState` or in a `?tab=` query.
   from `@/lib/usePathTab`. It derives the tab from the path (pure helpers in
   `@/lib/tabPath`), navigates on select, and rewrites the URL with `replace`
   when it names an unknown tab, a tab the user may not open, or uses a legacy
-  `?tab=` query - the URL always names the rendered tab.
+  `?tab=` query - the URL always names the rendered tab. A tab that owns a
+  second level of tabs (`/page/<tab>/<sub>`) goes in the fifth argument,
+  `nested`, so its trailing segments survive for the inner `usePathTab`.
 - Per-tab feature gates: give each tab `feature` (and optional `altFeature` /
   `visKey`) and pass `visibleTabs(TABS, auth)` from `@/lib/tabGating`, both to
   `<TabBar>` and (as keys, once `auth` has loaded) as `allowed`. Same rules as
@@ -375,13 +377,12 @@ keep page tabs in `useState` or in a `?tab=` query.
 - Retiring a tab or folding a page into another page's tab: keep the old
   path alive with `<Route path="/old" element={<Navigate to="/new/tab" replace />} />`.
 
-Pages following this: Monitoring, Network Tools, Software, Delegator
-(Jobs), CloudVisibility, Compliance, ChangeManagement, Reports,
-Configuration, Settings. (Software, Jobs and CloudVisibility predate
-`usePathTab` and enumerate their tab routes explicitly.) Monitoring nests a
-second level: `/monitoring/:tab?/:sub?`, where Configure resolves its
-sub-tab with `usePathTab('/monitoring/configure', ...)` and the top level
-keeps that extra segment instead of canonicalising it away.
+Pages following this: Monitoring, Network Tools, Software, CloudVisibility,
+Compliance, ChangeManagement, Reports, Configuration, Settings. (Delegator's
+tabs are top-level paths - /assignments, /tasks, ... - so Jobs.tsx maps them
+itself.) Monitoring nests a second level: `/monitoring/:tab?/:sub?`, where
+the top level passes `nested: ['configure']` and ConfigureTab resolves its
+sub-tab with `usePathTab('/monitoring/configure', ...)`.
 
 ---
 

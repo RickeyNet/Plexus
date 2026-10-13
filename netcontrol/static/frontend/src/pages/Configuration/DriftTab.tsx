@@ -8,6 +8,7 @@ import {
   useUpdateDriftEventStatus,
 } from '@/api/configuration';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
+import { SegmentedControl } from '@/components/SegmentedControl';
 
 import { CaptureSnapshotModal } from './CaptureSnapshotModal';
 import { DriftDiffModal } from './DriftDiffModal';
@@ -25,6 +26,10 @@ import {
 
 type DriftStatusFilter = 'open' | 'accepted' | 'resolved';
 type ViewMode = 'grouped' | 'flat';
+const VIEW_MODES: { key: ViewMode; label: string; title: string }[] = [
+  { key: 'grouped', label: 'Grouped', title: 'Group similar changes' },
+  { key: 'flat', label: 'Flat', title: 'Show individual events' },
+];
 
 interface Props {
   onCaptureStarted: (jobId: string) => void;
@@ -89,24 +94,12 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
           onChange={(e) => setQuery(e.target.value)}
           style={{ maxWidth: 240 }}
         />
-        <div style={{ display: 'flex', gap: '0.25rem' }}>
-          <button
-            type="button"
-            className={`btn btn-sm ${viewMode === 'grouped' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setViewMode('grouped')}
-            title="Group similar changes"
-          >
-            Grouped
-          </button>
-          <button
-            type="button"
-            className={`btn btn-sm ${viewMode === 'flat' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setViewMode('flat')}
-            title="Show individual events"
-          >
-            Flat
-          </button>
-        </div>
+        <SegmentedControl
+          options={VIEW_MODES}
+          value={viewMode}
+          onChange={setViewMode}
+          aria-label="Drift view"
+        />
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.4rem' }}>
           <button
             type="button"
@@ -428,7 +421,7 @@ function DriftGroupCard({
             </span>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', alignItems: 'center' }}>
           {openInGroup.length > 1 ? (
             <button
               type="button"
@@ -438,23 +431,28 @@ function DriftGroupCard({
               Accept Group ({openInGroup.length})
             </button>
           ) : openInGroup.length === 1 ? (
-            <>
-              <button
-                type="button"
-                className="btn btn-sm btn-primary"
-                onClick={() => onAccept(openInGroup[0])}
-              >
-                Accept
-              </button>
-              <button
-                type="button"
-                className="btn btn-sm btn-secondary"
-                onClick={() => onResolve(openInGroup[0])}
-              >
-                Resolve
-              </button>
-            </>
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              onClick={() => onAccept(openInGroup[0])}
+            >
+              Accept
+            </button>
           ) : null}
+          {evs.length === 1 && (
+            <KebabMenu label={`Actions for ${evs[0].hostname || evs[0].ip_address || 'drift event'}`}>
+              <MenuItem onSelect={() => onShowLog(evs[0].id)}>Event Log</MenuItem>
+              {openInGroup.length === 1 && (
+                <>
+                  <MenuItem onSelect={() => onResolve(evs[0].id)}>Resolve</MenuItem>
+                  <MenuSeparator />
+                  <MenuItem danger onSelect={() => onShowRevert(evs[0].id)}>
+                    Revert
+                  </MenuItem>
+                </>
+              )}
+            </KebabMenu>
+          )}
         </div>
       </div>
 

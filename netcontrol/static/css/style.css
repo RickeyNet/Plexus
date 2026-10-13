@@ -2003,17 +2003,7 @@ body {
 }
 .segmented-xs .btn { padding: 0.15rem 0.5rem; font-size: 0.75rem; }
 
-.page-tab-btn,
-.config-tab-btn,
-.change-tab-btn,
-.cred-tab-btn,
-.mon-tab-btn,
-.sla-tab-btn,
-.avail-tab-btn,
-.report-tab-btn,
-.dev-tab-btn,
-.upgrade-tab-btn,
-.compliance-tab-btn {
+.page-tab-btn {
     padding: 0.4rem 1rem;
     font-size: 0.85rem;
     font-weight: 500;
@@ -2022,17 +2012,7 @@ body {
     white-space: nowrap;
 }
 
-.page-tab-btn.active,
-.config-tab-btn.active,
-.change-tab-btn.active,
-.cred-tab-btn.active,
-.mon-tab-btn.active,
-.sla-tab-btn.active,
-.avail-tab-btn.active,
-.report-tab-btn.active,
-.dev-tab-btn.active,
-.upgrade-tab-btn.active,
-.compliance-tab-btn.active {
+.page-tab-btn.active {
     background: linear-gradient(135deg, var(--primary-light), var(--primary), var(--primary-dark));
     color: var(--bg-dark);
     font-weight: 600;
@@ -4815,16 +4795,6 @@ code {
     font-weight: 600;
 }
 
-.device-tab {
-    /* default visible; hidden via inline style */
-}
-
-.dev-tab-btn.active {
-    background: var(--primary);
-    color: #fff;
-    border-color: var(--primary);
-}
-
 /* Badges for alert severity */
 .badge {
     display: inline-block;
@@ -4925,34 +4895,6 @@ code {
     height: 9px;
     border-radius: 50%;
     display: inline-block;
-}
-
-.dashboard-range-tabs {
-    display: inline-flex;
-    gap: 0.15rem;
-    border: 1px solid var(--border);
-    border-radius: 0.4rem;
-    padding: 2px;
-    background: var(--bg-secondary, transparent);
-}
-
-.dashboard-range-tab {
-    background: transparent;
-    border: none;
-    color: var(--text-muted);
-    padding: 0.2rem 0.6rem;
-    font-size: 0.75rem;
-    border-radius: 0.3rem;
-    cursor: pointer;
-}
-
-.dashboard-range-tab:hover {
-    color: var(--text);
-}
-
-.dashboard-range-tab.active {
-    background: var(--accent, #3b82f6);
-    color: #fff;
 }
 
 .dashboard-response-summary {
