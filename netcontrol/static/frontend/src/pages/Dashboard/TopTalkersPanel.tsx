@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { echarts } from '@/lib/echart-core';
 
 import { useFlowStatus, useFlowTopTalkers } from '@/api/networkTools';
+import { SegmentedControl } from '@/components/SegmentedControl';
 import { ClampedRangeHint } from '@/components/TimeRangeBar';
 import { useTimeRange } from '@/lib/timeRange-context';
 import { clampPreset, toHours } from '@/lib/timeRangeMap';
@@ -13,9 +14,9 @@ type Direction = 'src' | 'dst';
 // /api/flows/top-talkers caps `hours` at 168.
 const FLOW_RANGES = ['1h', '6h', '24h', '7d'] as const;
 
-const DIRECTIONS: { value: Direction; label: string }[] = [
-  { value: 'src', label: 'Source' },
-  { value: 'dst', label: 'Destination' },
+const DIRECTIONS: { key: Direction; label: string }[] = [
+  { key: 'src', label: 'Source' },
+  { key: 'dst', label: 'Destination' },
 ];
 
 export function TopTalkersPanel() {
@@ -34,19 +35,13 @@ export function TopTalkersPanel() {
         <h3 className="dashboard-overview-title">Top Talkers</h3>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <ClampedRangeHint requested={range} shown={flowRange} />
-          <div className="dashboard-range-tabs" role="tablist" aria-label="Direction">
-            {DIRECTIONS.map((d) => (
-              <button
-                key={d.value}
-                role="tab"
-                aria-selected={direction === d.value}
-                className={`dashboard-range-tab${direction === d.value ? ' active' : ''}`}
-                onClick={() => setDirection(d.value)}
-              >
-                {d.label}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            options={DIRECTIONS}
+            value={direction}
+            onChange={setDirection}
+            size="xs"
+            aria-label="Direction"
+          />
         </div>
       </div>
 
