@@ -529,21 +529,21 @@ def test_api_discovered_azure_subscription_is_on_the_topology(api):
     org_ref = azure[0]["meraki"]["org_ref"]
     assert org_ref == -2
 
-    details = api.get(f"/api/meraki/nodes?org_ref={org_ref}&node_id=vnet:{PROD}").json()
+    details = api.get(f"/api/sources/nodes?org_ref={org_ref}&node_id=vnet:{PROD}").json()
     assert details["provider"] == "azure" and details["site_name"] == "prod-vnet (eastus)"
 
-    subnets = api.get("/api/meraki/subnets").json()["subnets"]
+    subnets = api.get("/api/sources/subnets").json()["subnets"]
     db_subnet = next(s for s in subnets if s["cidr"] == "10.231.20.0/24")
     assert db_subnet["provider"] == "azure" and db_subnet["site_id"] == PROD
 
-    check = "/api/meraki/azure/reachability?source=10.231.10.21&destination=10.231.20.31&protocol=tcp"
+    check = "/api/sources/azure/reachability?source=10.231.10.21&destination=10.231.20.31&protocol=tcp"
     allowed = api.get(f"{check}&port=5432&source_vnet={PROD}").json()
     assert allowed["applies"] and allowed["verdict"] == "allowed"
     assert api.get(f"{check}&port=22").json()["verdict"] == "blocked"
-    assert api.get("/api/meraki/azure/reachability?source=nope&destination=10.231.20.31").status_code == 400
+    assert api.get("/api/sources/azure/reachability?source=nope&destination=10.231.20.31").status_code == 400
     # The AWS check does not see Azure.
     assert (
-        api.get("/api/meraki/aws/reachability?source=10.231.10.21&destination=10.231.20.31").json()["applies"] is False
+        api.get("/api/sources/aws/reachability?source=10.231.10.21&destination=10.231.20.31").json()["applies"] is False
     )
 
     export = api.get("/api/topology/export.html")
@@ -554,11 +554,11 @@ def test_api_discovered_azure_subscription_is_on_the_topology(api):
 
 
 def test_api_azure_sample_and_sources(api):
-    built = api.post("/api/meraki/sample?provider=azure")
+    built = api.post("/api/sources/sample?provider=azure")
     assert built.status_code == 201, built.text
     assert built.json()["org_ref"] == -2 and built.json()["summary"]["sites"] == 3
-    assert api.post("/api/meraki/sample?provider=azure").status_code == 201
-    assert api.post("/api/meraki/sample?provider=aws").status_code == 201
+    assert api.post("/api/sources/sample?provider=azure").status_code == 201
+    assert api.post("/api/sources/sample?provider=aws").status_code == 201
     accounts = api.get("/api/cloud/accounts").json()["accounts"]
     assert sorted((a["provider"], a["auth_type"]) for a in accounts) == [("aws", "sample"), ("azure", "sample")]
     providers = {(n.get("meraki") or {}).get("provider") for n in api.get("/api/topology").json()["nodes"]}

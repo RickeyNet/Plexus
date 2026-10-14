@@ -53,6 +53,7 @@ from netcontrol.integrations.fmc.sample import (
     ZONE_OUTSIDE,
     build_sample_raw,
 )
+from netcontrol.integrations.fmc.sessions import command_output, command_path, parse_vpn_sessiondb, session_record
 from netcontrol.integrations.meraki.normalize import VPN_PEER_SITE_ID
 from netcontrol.integrations.meraki.subnets import subnet_index
 from netcontrol.integrations.meraki.unified import (
@@ -73,6 +74,70 @@ LOGIN_HEADERS = {
 
 D1, D2, D3, D4, D5 = DEVICE_1, DEVICE_2, DEVICE_3, DEVICE_4, DEVICE_5
 ALL_DEVICES = ["ftd-branch-dc", "ftd-dc-unit-1", "ftd-dc-unit-2", "ftdv-ravpn-1", "ftdv-ravpn-2"]
+
+NO_SESSIONS_TEXT = "INFO: There are presently no active sessions of the type specified"
+# ``show vpn-sessiondb detail anyconnect`` as an FTD prints it: two sessions,
+# the per-tunnel blocks repeating some fields of the first.
+SESSIONDB_TEXT = """\
+Session Type: AnyConnect Detailed
+
+Username     : dana.reyes             Index        : 51
+Assigned IP  : 10.220.0.14            Public IP    : 198.51.100.77
+Protocol     : AnyConnect-Parent SSL-Tunnel DTLS-Tunnel
+License      : AnyConnect Premium
+Encryption   : AnyConnect-Parent: (1)none  SSL-Tunnel: (1)AES-GCM-256  DTLS-Tunnel: (1)AES-GCM-256
+Hashing      : AnyConnect-Parent: (1)none  SSL-Tunnel: (1)SHA384  DTLS-Tunnel: (1)SHA384
+Bytes Tx     : 9123311                Bytes Rx     : 48211344
+Pkts Tx      : 10                     Pkts Rx      : 185
+Pkts Tx Drop : 0                      Pkts Rx Drop : 0
+Group Policy : Corp-GP                Tunnel Group : Employees
+Login Time   : 12:01:07 UTC Tue Sep 30 2026
+Duration     : 2h:14m:05s
+Inactivity   : 0h:00m:00s
+VLAN Mapping : N/A                    VLAN         : none
+Audt Sess ID : 0ad2000b000330005f1e2d3c
+Security Grp : none                   Tunnel Zone  : 0
+
+AnyConnect-Parent Tunnels: 1
+SSL-Tunnel Tunnels: 1
+DTLS-Tunnel Tunnels: 1
+
+AnyConnect-Parent:
+  Tunnel ID    : 51.1
+  Public IP    : 198.51.100.77
+  Encryption   : none                   Hashing      : none
+  TCP Src Port : 54321                  TCP Dst Port : 443
+  Auth Mode    : userPassword
+  Idle Time Out: 30 Minutes             Idle TO Left : 25 Minutes
+  Client OS    : win
+  Client OS Ver: 10.0.22631
+  Client Type  : AnyConnect
+  Client Ver   : Cisco AnyConnect VPN Agent for Windows 5.1.2.42
+  Bytes Tx     : 7869                   Bytes Rx     : 788
+
+SSL-Tunnel:
+  Tunnel ID    : 51.2
+  Assigned IP  : 10.220.0.14            Public IP    : 198.51.100.77
+  Encryption   : AES-GCM-256            Hashing      : SHA384
+  Ciphersuite  : ECDHE-RSA-AES256-GCM-SHA384
+  Bytes Tx     : 5000                   Bytes Rx     : 6000
+
+Username     : priya.nair             Index        : 52
+Assigned IP  : 10.220.0.21            Public IP    : 203.0.113.140
+Protocol     : AnyConnect-Parent SSL-Tunnel
+License      : AnyConnect Premium
+Bytes Tx     : 100                    Bytes Rx     : 200
+Group Policy : Corp-GP                Tunnel Group : Employees
+Login Time   : 13:40:52 UTC Tue Sep 30 2026
+Duration     : 0h:35m:10s
+
+AnyConnect-Parent:
+  Tunnel ID    : 52.1
+  Client OS    : mac-intel
+  Client OS Ver: 14.6.1
+  Client Type  : AnyConnect
+  Client Ver   : Cisco AnyConnect VPN Agent for Mac OS X 5.1.2.42
+"""
 
 # Interface resource -> the ``type`` of its items in the sample.
 _INTERFACE_TYPES = {resource: kind for resource, kind, _newer in collector_module.INTERFACE_RESOURCES}
@@ -103,6 +168,10 @@ class _FakeFmc:
         self.missing: set[str] = set()  # path fragments the release does not serve (404)
         self.expire_token_once = False
         self.page_devices = False
+        # Device id -> what ``show vpn-sessiondb detail anyconnect`` prints on
+        # it through the command relay; other parameters print no sessions.
+        self.cli: dict[str, str] = {}
+        self.relay_params: list[dict[str, str]] = []
 
     @staticmethod
     def _items(items: list, request: httpx.Request | None = None) -> httpx.Response:
@@ -205,6 +274,22 @@ class _FakeFmc:
                 return httpx.Response(200, json=ike)
             if rel == f"{base}/ipsecsettings":
                 return self._items(detail["ipsec"])
+        if rel.startswith("/devices/devicerecords/") and rel.endswith("/operational/commands"):
+            device_id = rel.removeprefix("/devices/devicerecords/").removesuffix("/operational/commands")
+            if device_id not in self.cli:
+                return None
+            params = {
+                "filter": request.url.params.get("filter", ""),
+                "parameter": request.url.params.get("parameter", ""),
+            }
+            self.relay_params.append(params)
+            text = self.cli[device_id]
+            if params["parameter"] != "detail anyconnect" and not text.startswith("ERROR"):
+                text = NO_SESSIONS_TEXT
+            return httpx.Response(
+                200,
+                json={"items": [{"command": params["parameter"], "response": text, "type": "Command"}], "paging": {}},
+            )
         if rel.startswith("/devices/devicerecords/"):
             return self._device_resource(rel.removeprefix("/devices/devicerecords/"))
         return None
@@ -578,6 +663,96 @@ async def test_collect_fmc_is_best_effort_past_the_device_list():
     # The reduced capture still builds a map, every filtered device on it.
     snapshot = build_snapshot(raw)
     assert snapshot["summary"]["devices"] == 2 and snapshot["summary"]["remote_users"] == 0
+    # The command relay was tried on each device for the sessions; a release
+    # without it is a gap, not one more failure.
+    assert f"/devices/devicerecords/{D1}/operational/commands" in raw["unsupported"]
+
+
+# ── Sessions over the command relay ──────────────────────────────────────────
+
+
+def test_parse_vpn_sessiondb_reads_the_detail_output():
+    sessions = parse_vpn_sessiondb(SESSIONDB_TEXT)
+    assert sessions is not None and [s["username"] for s in sessions] == ["dana.reyes", "priya.nair"]
+    dana = sessions[0]
+    assert dana["index"] == 51 and dana["assignedIp"] == "10.220.0.14" and dana["publicIp"] == "198.51.100.77"
+    assert dana["protocol"] == "AnyConnect-Parent SSL-Tunnel DTLS-Tunnel" and dana["license"] == "AnyConnect Premium"
+    # The session's own counters, not the per-tunnel ones that follow.
+    assert dana["bytesTx"] == 9123311 and dana["bytesRx"] == 48211344
+    assert dana["groupPolicy"] == "Corp-GP" and dana["tunnelGroup"] == "Employees"
+    assert dana["loginTime"] == "12:01:07 UTC Tue Sep 30 2026" and dana["duration"] == "2h:14m:05s"
+    assert dana["clientOs"] == "win" and dana["clientOsVersion"] == "10.0.22631"
+    assert dana["clientApplication"] == "Cisco AnyConnect VPN Agent for Windows 5.1.2.42"
+    assert "pktsTx" not in dana and "tunnelId" not in dana
+    priya = sessions[1]
+    assert priya["clientOs"] == "mac-intel" and priya["bytesTx"] == 100 and "inactivity" not in priya
+
+    record = session_record(D1, "ftdv-ravpn-1", dana)
+    assert record["device"] == {"id": D1, "name": "ftdv-ravpn-1", "type": "Device"}
+    assert record["type"] == "RAVpnSession" and record["source"] == "show vpn-sessiondb"
+    assert record["clientOs"] == "Windows 10.0.22631" and record["connectionProfile"] == "Employees"
+    assert session_record(D1, "x", priya)["clientOs"] == "macOS 14.6.1"
+
+
+def test_parse_vpn_sessiondb_tells_no_sessions_from_a_refusal():
+    assert parse_vpn_sessiondb(NO_SESSIONS_TEXT) == []
+    assert parse_vpn_sessiondb("") is None
+    assert parse_vpn_sessiondb("ERROR: % Invalid input detected at '^' marker.") is None
+    assert command_output({"items": [{"response": "a"}, {"response": "b"}]}) == "a\nb"
+    assert command_output({"output": "c"}) == "c" and command_output("d") == "d" and command_output(None) == ""
+    path = command_path("/api/fmc_config/v1/domain/uuid", "dev-1", "show vpn-sessiondb", "detail anyconnect")
+    assert path == (
+        "/api/fmc_config/v1/domain/uuid/devices/devicerecords/dev-1/operational/commands"
+        "?filter=command:show%20vpn-sessiondb&parameter=detail%20anyconnect"
+    )
+
+
+@pytest.mark.asyncio
+async def test_collect_fmc_reads_sessions_from_the_headends_when_the_health_api_fails():
+    fake = _FakeFmc()
+    fake.fail = {"ravpnsessions": 500}
+    fake.cli = {D1: SESSIONDB_TEXT}  # the second pair member does not serve the relay
+    progress: list[dict] = []
+    async with _client(fake, max_retries=0) as client:
+        raw = await collect_fmc(client, "", None, progress.append)
+    assert [s["username"] for s in raw["sessions"]] == ["dana.reyes", "priya.nair"]
+    assert all(s["device"]["id"] == D1 and s["device"]["name"] == "ftdv-ravpn-1" for s in raw["sessions"])
+    # Only the remote access headends were asked, with the documented request.
+    assert fake.relay_params == [
+        {"filter": "command:show vpn-sessiondb", "parameter": "detail anyconnect"},
+        {"filter": "command:show vpn-sessiondb", "parameter": "detail ra-ikev2-ipsec"},
+    ]
+    assert not any(f"/devices/devicerecords/{D3}/operational/commands" in c for c in fake.calls)
+    # The health API's failure became a gap, the member without the relay too.
+    assert raw["errors"] == []
+    assert raw["unsupported"] == [f"/devices/devicerecords/{D2}/operational/commands", "/health/ravpnsessions"]
+    assert progress[-1]["phase"] == "collected" and progress[-1]["calls_done"] == progress[-1]["calls_total"]
+
+    snapshot = build_snapshot(raw)
+    assert snapshot["summary"]["remote_users"] == 2
+    users = _node(snapshot, f"u:{D1}")
+    assert users["label"] == "AnyConnect users (2)"
+    rows = _section(users, "Connected users")["rows"]
+    assert rows[0][:4] == ["dana.reyes", "10.220.0.14", "198.51.100.77", "Employees"]
+    assert rows[0][5] == "Cisco AnyConnect VPN Agent for Windows 5.1.2.42" and rows[0][6] == "Windows 10.0.22631"
+    assert rows[0][8] == "12:01:07 UTC Tue Sep 30 2026" and rows[0][10] == "48211344"
+    assert _node(snapshot, f"u:{D2}")["label"] == "AnyConnect users (0)"
+
+
+@pytest.mark.asyncio
+async def test_collect_fmc_keeps_the_health_api_failure_when_the_relay_answers_nonsense():
+    fake = _FakeFmc()
+    fake.fail = {"ravpnsessions": 500}
+    fake.cli = {D1: "ERROR: % Invalid input detected at '^' marker.", D2: "ERROR: % Invalid input"}
+    async with _client(fake, max_retries=0) as client:
+        raw = await collect_fmc(client, "", None)
+    assert raw["sessions"] is None
+    paths = [e["path"] for e in raw["errors"]]
+    assert paths[0] == "/health/ravpnsessions" and raw["errors"][0]["status"] == 500
+    relay = [e for e in raw["errors"] if e["path"].endswith("/operational/commands")]
+    assert len(relay) == 4 and relay[0]["status"] is None and "Invalid input" in relay[0]["message"]
+    assert relay[0]["scope"] == "sessions of ftdv-ravpn-1"
+    assert build_snapshot(raw)["summary"]["remote_users"] == 0
 
 
 @pytest.mark.asyncio
@@ -889,6 +1064,25 @@ def test_snapshot_ra_vpn_sections_sit_on_the_pair_box(snapshot):
     assert f"u:{D3}" not in {n["id"] for n in snapshot["nodes"]}
 
 
+def test_snapshot_draws_users_of_a_device_whose_policy_was_not_read():
+    # No VPN permission: the policies and assignments are missing, but the
+    # headend's sessions came over the command relay.
+    raw = build_sample_raw()
+    raw["policies"], raw["policy_details"], raw["assignments"] = [], {}, []
+    parsed = parse_vpn_sessiondb(SESSIONDB_TEXT) or []
+    raw["sessions"] = [session_record(D1, "ftdv-ravpn-1", s) for s in parsed]
+    snapshot = build_snapshot(raw)
+    assert snapshot["summary"]["remote_users"] == 2
+    users = _node(snapshot, f"u:{D1}")
+    assert users["label"] == "AnyConnect users (2)" and users["status"] == "online"
+    assert _kv(users, "Remote access users")["Policy"] == "not collected"
+    assert [r[0] for r in _section(users, "Connected users")["rows"]] == ["dana.reyes", "priya.nair"]
+    links = {(e["a"], e["b"]): e for e in snapshot["edges"]}
+    assert links[(f"u:{D1}", f"d:{D1}")]["label"] == "AnyConnect"
+    ids = {n["id"] for n in snapshot["nodes"]}
+    assert f"u:{D2}" not in ids and f"u:{D3}" not in ids
+
+
 def test_snapshot_fmc_node_lists_the_whole_fmc(snapshot):
     fmc = _node(snapshot, FMC_NODE_ID)
     assert fmc["kind"] == "cloud" and fmc["ip"] == "10.210.2.20"
@@ -1159,14 +1353,14 @@ def api(monkeypatch, request):
 def _wait(api, job_id: str) -> dict:
     job: dict = {}
     for _ in range(400):
-        job = api.get(f"/api/meraki/builds/{job_id}").json()
+        job = api.get(f"/api/sources/builds/{job_id}").json()
         if job["status"] != "running":
             break
     return job
 
 
 def test_api_fmc_crud_keeps_the_password_write_only(api):
-    listing = api.get("/api/meraki/orgs").json()
+    listing = api.get("/api/sources").json()
     assert listing["fmc_default_options"] == DEFAULT_OPTIONS and "anyconnect_default_options" not in listing
 
     body = {
@@ -1177,28 +1371,28 @@ def test_api_fmc_crud_keeps_the_password_write_only(api):
         "api_key": "super-secret-password",
         "options": {"username": "plexus", "verify_tls": False, "include_nat": 0},
     }
-    created = api.post("/api/meraki/orgs", json=body)
+    created = api.post("/api/sources", json=body)
     assert created.status_code == 201, created.text
     org = created.json()["org"]
     assert org["provider"] == "fmc" and org["has_api_key"] is True
     assert org["base_url"] == "https://fmc.example.com"
     assert org["options"] == {**DEFAULT_OPTIONS, "username": "plexus", "verify_tls": False, "include_nat": False}
     assert "super-secret-password" not in created.text
-    assert "super-secret-password" not in api.get("/api/meraki/orgs").text
+    assert "super-secret-password" not in api.get("/api/sources").text
 
     # The credentials only ever go to an https host, with no path.
     bad = {"name": "Evil", "provider": "fmc", "base_url": "http://fmc.example.com"}
-    assert api.post("/api/meraki/orgs", json=bad).status_code == 400
+    assert api.post("/api/sources", json=bad).status_code == 400
     bad["base_url"] = "https://fmc.example.com/api/fmc_platform"
-    assert api.post("/api/meraki/orgs", json=bad).status_code == 400
-    unknown = api.post("/api/meraki/orgs", json={"name": "X", "provider": "fortinet"})
+    assert api.post("/api/sources", json=bad).status_code == 400
+    unknown = api.post("/api/sources", json={"name": "X", "provider": "fortinet"})
     assert unknown.status_code == 400 and "Provider must be meraki, cato, fmc, panorama or appgate" in unknown.text
 
-    updated = api.put(f"/api/meraki/orgs/{org['id']}", json={"options": {"username": "ro", "include_sessions": False}})
+    updated = api.put(f"/api/sources/{org['id']}", json={"options": {"username": "ro", "include_sessions": False}})
     assert updated.status_code == 200
     assert updated.json()["org"]["options"]["include_sessions"] is False
     assert updated.json()["org"]["options"]["username"] == "ro" and updated.json()["org"]["has_api_key"] is True
-    assert api.delete(f"/api/meraki/orgs/{org['id']}").status_code == 200
+    assert api.delete(f"/api/sources/{org['id']}").status_code == 200
 
 
 def test_api_accepts_the_legacy_anyconnect_provider_as_fmc(api):
@@ -1209,14 +1403,14 @@ def test_api_accepts_the_legacy_anyconnect_provider_as_fmc(api):
         "api_key": "pw",
         "options": {"username": "plexus"},
     }
-    created = api.post("/api/meraki/orgs", json=body)
+    created = api.post("/api/sources", json=body)
     assert created.status_code == 201, created.text
     org = created.json()["org"]
     assert org["provider"] == "fmc" and org["options"]["include_routing"] is True
     stored = asyncio.run(db_module.get_meraki_org(org["id"]))
     assert stored["provider"] == "fmc"
     # The legacy sample key builds the FMC sample.
-    built = api.post("/api/meraki/sample?provider=anyconnect")
+    built = api.post("/api/sources/sample?provider=anyconnect")
     assert built.status_code == 201
     sample = asyncio.run(db_module.get_meraki_org(built.json()["org_ref"]))
     assert sample["provider"] == "fmc" and sample["name"] == "Sample Cisco FMC (demo data)"
@@ -1233,23 +1427,23 @@ def test_api_reads_a_stored_anyconnect_entry_and_snapshot_as_fmc(api):
         return org["id"]
 
     org_ref = asyncio.run(_seed())
-    org = next(o for o in api.get("/api/meraki/orgs").json()["orgs"] if o["id"] == org_ref)
+    org = next(o for o in api.get("/api/sources").json()["orgs"] if o["id"] == org_ref)
     assert org["provider"] == "fmc" and org["options"]["include_all_devices"] is True
     source = next(s for s in api.get("/api/topology/sources").json()["sources"] if s.get("id") == org_ref)
     # The demo entry of the earlier release is still flagged as demo data.
     assert source["type"] == "fmc" and source["demo"] is True
     graph = api.get("/api/topology").json()
     assert {(n.get("meraki") or {}).get("provider") for n in graph["nodes"] if n.get("meraki")} == {"fmc"}
-    assert api.get(f"/api/meraki/nodes?org_ref={org_ref}&node_id=d:{D3}").json()["provider"] == "fmc"
+    assert api.get(f"/api/sources/nodes?org_ref={org_ref}&node_id=d:{D3}").json()["provider"] == "fmc"
     # Rebuilding the sample renames that entry instead of adding a second demo FMC.
-    built = api.post("/api/meraki/sample?provider=fmc").json()
+    built = api.post("/api/sources/sample?provider=fmc").json()
     assert built["org_ref"] == org_ref
-    names = [o["name"] for o in api.get("/api/meraki/orgs").json()["orgs"]]
+    names = [o["name"] for o in api.get("/api/sources").json()["orgs"]]
     assert names.count("Sample Cisco FMC (demo data)") == 1 and "Sample AnyConnect FMC (demo data)" not in names
 
 
 def test_api_fmc_sample_is_merged_into_the_topology(api):
-    built = api.post("/api/meraki/sample?provider=fmc")
+    built = api.post("/api/sources/sample?provider=fmc")
     assert built.status_code == 201, built.text
     assert built.json()["summary"]["remote_users"] == 4 and built.json()["summary"]["ha_pairs"] == 1
     org_ref = built.json()["org_ref"]
@@ -1261,14 +1455,14 @@ def test_api_fmc_sample_is_merged_into_the_topology(api):
     protocols = {e["protocol"] for e in graph["edges"] if e.get("provider") == "fmc"}
     assert {"management", "stack", "vpn", "vpn-ipsec", "wan"} <= protocols
 
-    details = api.get(f"/api/meraki/nodes?org_ref={org_ref}&node_id=d:{D3}").json()
+    details = api.get(f"/api/sources/nodes?org_ref={org_ref}&node_id=d:{D3}").json()
     assert details["provider"] == "fmc" and details["site_name"] == "ftd-branch-dc"
     titles = [s["title"] for s in details["sections"]]
     for title in ("Connected subnets", "Static routes", "BGP neighbors", "NAT rules", "Access control rules"):
         assert title in titles
 
     # Connected subnets, static routes and pools can be picked as path endpoints.
-    subnets = api.get("/api/meraki/subnets").json()["subnets"]
+    subnets = api.get("/api/sources/subnets").json()["subnets"]
     pool = next(s for s in subnets if s["cidr"] == "10.220.8.0/24")
     assert pool["provider"] == "fmc" and pool["kind"] == "pool" and pool["org_ref"] == org_ref
     voice = next(s for s in subnets if s["cidr"] == "10.60.20.0/24")
@@ -1292,15 +1486,15 @@ def test_api_fmc_sample_is_merged_into_the_topology(api):
     assert export.status_code == 200 and "AnyConnect users (2)" in export.text
 
     # Loading the AWS sample too joins the FTDv instances to the pair members.
-    assert api.post("/api/meraki/sample?provider=aws").status_code == 201
+    assert api.post("/api/sources/sample?provider=aws").status_code == 201
     merged = api.get("/api/topology").json()["nodes"]
     assert {(n.get("meraki") or {}).get("provider") for n in merged if n.get("meraki")} == {"fmc", "aws"}
     assert not any(n["id"] in ("meraki:-1:i:i-0f7d001", "meraki:-1:i:i-0f7d002") for n in merged)
 
 
 def test_api_ipam_overview_lists_the_fmc_subnets(api):
-    assert api.post("/api/meraki/sample?provider=fmc").status_code == 201
-    assert api.post("/api/meraki/sample?provider=aws").status_code == 201
+    assert api.post("/api/sources/sample?provider=fmc").status_code == 201
+    assert api.post("/api/sources/sample?provider=aws").status_code == 201
 
     body = api.get("/api/ipam/overview").json()
     subnets = {s["subnet"]: s for s in body["subnets"]}
@@ -1342,13 +1536,13 @@ def test_api_fmc_build_job_runs_the_fmc_collector(api, monkeypatch):
         "api_key": "pw",
         "options": {"username": "plexus"},
     }
-    org = api.post("/api/meraki/orgs", json=body).json()["org"]
-    started = api.post(f"/api/meraki/orgs/{org['id']}/build")
+    org = api.post("/api/sources", json=body).json()["org"]
+    started = api.post(f"/api/sources/{org['id']}/build")
     assert started.status_code == 202, started.text
     job = _wait(api, started.json()["job_id"])
     assert job["status"] == "completed", job
     assert job["result"]["summary"]["sites"] == 3 and "clients_tracked" not in job["result"]
-    snapshot = api.get(f"/api/meraki/snapshots/{job['result']['snapshot_id']}/data").json()
+    snapshot = api.get(f"/api/sources/snapshots/{job['result']['snapshot_id']}/data").json()
     assert snapshot["org"]["name"] == "Prod FMC" and snapshot["provider"] == "fmc"
 
 
@@ -1372,25 +1566,25 @@ def test_api_fmc_build_job_against_the_fake_fmc_is_partial_on_a_failed_resource(
         "api_key": "pw",
         "options": {"username": "plexus"},
     }
-    org = api.post("/api/meraki/orgs", json=body).json()["org"]
-    job = _wait(api, api.post(f"/api/meraki/orgs/{org['id']}/build").json()["job_id"])
+    org = api.post("/api/sources", json=body).json()["org"]
+    job = _wait(api, api.post(f"/api/sources/{org['id']}/build").json()["job_id"])
     assert job["status"] == "partial", job
     assert job["result"]["warning_count"] == 1 and job["result"]["summary"]["devices"] == 5
-    warnings = api.get(f"/api/meraki/snapshots/{job['result']['snapshot_id']}/warnings").json()
+    warnings = api.get(f"/api/sources/snapshots/{job['result']['snapshot_id']}/warnings").json()
     assert "natrules" in json.dumps(warnings)
-    stored = api.get(f"/api/meraki/snapshots/{job['result']['snapshot_id']}/data").text
+    stored = api.get(f"/api/sources/snapshots/{job['result']['snapshot_id']}/data").text
     assert "pre-shared-secret-value" not in stored
 
 
 def test_api_fmc_build_needs_a_username(api):
     body = {"name": "NoUser", "provider": "fmc", "base_url": "https://fmc.example.com", "api_key": "pw"}
-    org = api.post("/api/meraki/orgs", json=body).json()["org"]
-    started = api.post(f"/api/meraki/orgs/{org['id']}/build")
+    org = api.post("/api/sources", json=body).json()["org"]
+    started = api.post(f"/api/sources/{org['id']}/build")
     assert started.status_code == 202
     job = _wait(api, started.json()["job_id"])
     assert job["status"] == "failed" and "username" in job["error"]
     # Validation says the same, without contacting anything.
-    checked = api.post(f"/api/meraki/orgs/{org['id']}/validate").json()
+    checked = api.post(f"/api/sources/{org['id']}/validate").json()
     assert checked["ok"] is False and "username" in checked["message"]
 
 

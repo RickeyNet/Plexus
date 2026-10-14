@@ -403,8 +403,8 @@ def _device(overview: dict, name: str) -> dict:
 
 def test_api_overview_tracks_inventory_hosts_and_topology_devices(api):
     _seed_hosts()
-    assert api.post("/api/meraki/sample?provider=meraki").status_code == 201
-    assert api.post("/api/meraki/sample?provider=fmc").status_code == 201
+    assert api.post("/api/sources/sample?provider=meraki").status_code == 201
+    assert api.post("/api/sources/sample?provider=fmc").status_code == 201
 
     overview = api.get("/api/software/overview").json()
     summary = overview["summary"]
@@ -673,7 +673,7 @@ def _wait(api, job_id: str) -> dict:
 
 def test_api_psirt_sync_stores_advisories_for_the_tracked_versions(api, monkeypatch):
     _seed_hosts()
-    assert api.post("/api/meraki/sample?provider=fmc").status_code == 201
+    assert api.post("/api/sources/sample?provider=fmc").status_code == 201
     api.get("/api/software/overview")
     fake = _FakePsirt()
     monkeypatch.setattr(software_routes, "_PSIRT_TRANSPORT", httpx.MockTransport(fake.handler))

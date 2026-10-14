@@ -16,7 +16,7 @@ projects join the map the same way; see [gcp-topology.md](gcp-topology.md).
 - Permission: the `topology` feature to view the map; admin to manage cloud
   accounts and run discovery
 - API: `/api/cloud/*` for accounts and discovery, `/api/topology` and
-  `/api/meraki/*` for the map
+  `/api/sources/*` for the map
 
 ## Quick start
 
@@ -102,7 +102,7 @@ a VNet, Plexus checks the flow against what discovery collected. Between two
 subnets or addresses the path is traced hop by hop across every device on
 the map, and the hops in Azure list these checks as their items; see
 [path-trace.md](path-trace.md). The **Traffic** box works as for AWS.
-`GET /api/meraki/azure/reachability` still answers the Azure part on its
+`GET /api/sources/azure/reachability` still answers the Azure part on its
 own.
 
 - **Effective routes.** Plexus rebuilds what Azure applies to the source
@@ -143,8 +143,8 @@ endpoints, load balancers and application gateways are not collected.
 |---|---|---|
 | `POST` | `/api/cloud/accounts` | `{"provider": "azure", "name", "account_identifier": "<subscription id>", "auth_config"}` (admin) |
 | `POST` | `/api/cloud/accounts/{id}/discover` | Run discovery; the map updates when it succeeds (admin) |
-| `POST` | `/api/meraki/sample?provider=azure` | Add / refresh the demo subscription |
+| `POST` | `/api/sources/sample?provider=azure` | Add / refresh the demo subscription |
 | `GET` | `/api/topology` | Azure nodes carry `source: "meraki"` and a `meraki` reference whose `provider` is `azure` and whose `org_ref` is `-2` |
-| `GET` | `/api/meraki/nodes?org_ref=-2&node_id=…` | Detail sections of one Azure node |
-| `GET` | `/api/meraki/subnets` | Includes the subnets of every VNet (`provider: "azure"`, `site_id` is `subscription:resource group:vnet`) |
-| `GET` | `/api/meraki/azure/reachability?source=&destination=` | The Azure check of a flow. Optional `protocol`, `port`, and `source_vnet` / `destination_vnet` for a range that exists in several VNets. Same answer shape as the AWS check |
+| `GET` | `/api/sources/nodes?org_ref=-2&node_id=…` | Detail sections of one Azure node |
+| `GET` | `/api/sources/subnets` | Includes the subnets of every VNet (`provider: "azure"`, `site_id` is `subscription:resource group:vnet`) |
+| `GET` | `/api/sources/azure/reachability?source=&destination=` | The Azure check of a flow. Optional `protocol`, `port`, and `source_vnet` / `destination_vnet` for a range that exists in several VNets. Same answer shape as the AWS check |

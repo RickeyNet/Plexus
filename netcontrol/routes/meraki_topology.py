@@ -32,6 +32,10 @@ what feeds and surrounds that merge:
 Registered under the ``topology`` feature: reads need ``topology``, builds
 and deletes need ``topology.write``, organization (credential) management
 needs admin.
+
+The routes live under ``/api/sources`` (``/api/sources/{id}/validate``,
+``/api/sources/snapshots``...), since an entry can be any of the providers
+above; nothing here is named after Meraki.
 """
 
 from __future__ import annotations
@@ -508,7 +512,7 @@ def _serialize_org(org: dict) -> dict:
 async def _get_org_or_404(org_ref: int) -> dict:
     org = await db.get_meraki_org(org_ref)
     if not org:
-        raise HTTPException(status_code=404, detail="Meraki organization not found")
+        raise HTTPException(status_code=404, detail="Source not found")
     return org
 
 
@@ -575,7 +579,7 @@ def _api_error_message(exc: MerakiApiError) -> str:
 # ── Organizations ────────────────────────────────────────────────────────────
 
 
-@router.get("/api/meraki/orgs")
+@router.get("/api/sources")
 async def list_meraki_orgs_api():
     orgs = await db.list_meraki_orgs()
     return {
@@ -588,7 +592,7 @@ async def list_meraki_orgs_api():
     }
 
 
-@router.post("/api/meraki/orgs", status_code=201, dependencies=[Depends(_require_admin_dep)])
+@router.post("/api/sources", status_code=201, dependencies=[Depends(_require_admin_dep)])
 async def create_meraki_org_api(body: MerakiOrgCreate, request: Request):
     user = _session_user(request)
     provider = _provider_key(body.provider) or PROVIDER_MERAKI
@@ -615,7 +619,7 @@ async def create_meraki_org_api(body: MerakiOrgCreate, request: Request):
     return {"ok": True, "org": _serialize_org(org)}
 
 
-@router.put("/api/meraki/orgs/{org_ref}", dependencies=[Depends(_require_admin_dep)])
+@router.put("/api/sources/{org_ref}", dependencies=[Depends(_require_admin_dep)])
 async def update_meraki_org_api(org_ref: int, body: MerakiOrgUpdate, request: Request):
     provider = _provider_of(await _get_org_or_404(org_ref))
     updates: dict[str, Any] = {}
@@ -642,7 +646,7 @@ async def update_meraki_org_api(org_ref: int, body: MerakiOrgUpdate, request: Re
     return {"ok": True, "org": _serialize_org(org)}
 
 
-@router.delete("/api/meraki/orgs/{org_ref}", dependencies=[Depends(_require_admin_dep)])
+@router.delete("/api/sources/{org_ref}", dependencies=[Depends(_require_admin_dep)])
 async def delete_meraki_org_api(org_ref: int, request: Request):
     org = await _get_org_or_404(org_ref)
     if org_ref in _running_builds:
@@ -659,9 +663,10 @@ async def delete_meraki_org_api(org_ref: int, request: Request):
     return {"ok": True}
 
 
-@router.post("/api/meraki/orgs/{org_ref}/validate", dependencies=[Depends(_require_admin_dep)])
+@router.post("/api/sources/{org_ref}/validate", dependencies=[Depends(_require_admin_dep)])
 async def validate_meraki_org_api(org_ref: int):
-    """Check the stored API key and list the organizations it can see."""
+    """Check the stored credentials of a source: the organizations a Meraki
+    key can see, or a sign-in to a Cato, FMC, Panorama or Appgate entry."""
     org = await _get_org_or_404(org_ref)
     api_key = await db.get_meraki_org_api_key(org_ref)
     if not api_key:
@@ -1022,9 +1027,9 @@ async def _run_build(job_id: str, org: dict, user: str) -> None:
     background_jobs.finish_job(job_id, "failed", error=error)
 
 
-@router.post("/api/meraki/orgs/{org_ref}/build", status_code=202)
+@router.post("/api/sources/{org_ref}/build", status_code=202)
 async def build_meraki_topology_api(org_ref: int, request: Request):
-    """Start a Meraki collection build. Poll ``/api/meraki/builds/{job_id}`` for progress."""
+    """Start a collection of the source. Poll ``/api/sources/builds/{job_id}`` for progress."""
     org = await _get_org_or_404(org_ref)
     if not org.get("has_api_key"):
         raise HTTPException(status_code=400, detail="No API key is stored for this organization")
@@ -1037,7 +1042,7 @@ async def build_meraki_topology_api(org_ref: int, request: Request):
     return {"job_id": job["job_id"], "status": "running"}
 
 
-@router.get("/api/meraki/builds/{job_id}")
+@router.get("/api/sources/builds/{job_id}")
 async def get_meraki_build_api(job_id: str):
     job = background_jobs.get_job(job_id, kind=_JOB_KIND)
     if job is None:
@@ -1170,7 +1175,7 @@ async def _build_cloud_sample(cloud: _Cloud, user: str) -> dict:
     }
 
 
-@router.post("/api/meraki/sample", status_code=201)
+@router.post("/api/sources/sample", status_code=201)
 async def build_sample_topology_api(request: Request, provider: str = Query(default=PROVIDER_MERAKI)):
     """Build a snapshot from bundled demo data (no API key needed).
     ``provider=cato`` builds the demo Cato account instead of the Meraki one,
@@ -1207,7 +1212,7 @@ async def build_sample_topology_api(request: Request, provider: str = Query(defa
 # ── Snapshots ────────────────────────────────────────────────────────────────
 
 
-@router.get("/api/meraki/snapshots")
+@router.get("/api/sources/snapshots")
 async def list_meraki_snapshots_api(
     org_ref: int | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
@@ -1222,18 +1227,18 @@ async def _get_snapshot_or_404(snapshot_id: int, *, include_body: bool) -> dict:
     return row
 
 
-@router.get("/api/meraki/snapshots/{snapshot_id}")
+@router.get("/api/sources/snapshots/{snapshot_id}")
 async def get_meraki_snapshot_api(snapshot_id: int):
     return await _get_snapshot_or_404(snapshot_id, include_body=False)
 
 
-@router.get("/api/meraki/snapshots/{snapshot_id}/data")
+@router.get("/api/sources/snapshots/{snapshot_id}/data")
 async def get_meraki_snapshot_data_api(snapshot_id: int):
     """The full node/edge snapshot as JSON (for scripting / other tools)."""
     return (await _get_snapshot_or_404(snapshot_id, include_body=True))["snapshot"]
 
 
-@router.get("/api/meraki/snapshots/{snapshot_id}/warnings")
+@router.get("/api/sources/snapshots/{snapshot_id}/warnings")
 async def get_meraki_snapshot_warnings_api(snapshot_id: int):
     """The collection warnings of a snapshot (API calls that failed or were
     refused), for the Map Sources dialog."""
@@ -1254,7 +1259,7 @@ async def get_meraki_snapshot_warnings_api(snapshot_id: int):
     }
 
 
-@router.delete("/api/meraki/snapshots/{snapshot_id}")
+@router.delete("/api/sources/snapshots/{snapshot_id}")
 async def delete_meraki_snapshot_api(snapshot_id: int, request: Request):
     await _get_snapshot_or_404(snapshot_id, include_body=False)
     await db.delete_meraki_snapshot(snapshot_id)
@@ -1401,7 +1406,7 @@ async def list_topology_sources_api():
 # ── Node details and whole-map search ────────────────────────────────────────
 
 
-@router.get("/api/meraki/nodes")
+@router.get("/api/sources/nodes")
 async def get_meraki_node_api(org_ref: int = Query(), node_id: str = Query(min_length=1, max_length=300)):
     """Detail sections for one Meraki node on the topology map."""
     for ref, snapshot in await latest_snapshots():
@@ -1412,7 +1417,7 @@ async def get_meraki_node_api(org_ref: int = Query(), node_id: str = Query(min_l
     raise HTTPException(status_code=404, detail="Meraki node not found in the latest snapshot")
 
 
-@router.get("/api/meraki/subnets")
+@router.get("/api/sources/subnets")
 async def list_meraki_subnets_api():
     """Subnets of the latest snapshots with the device that owns each one, for
     picking path endpoints by subnet. ``(org_ref, node_id)`` references are
@@ -1468,7 +1473,7 @@ async def _cloud_reachability(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/api/meraki/aws/reachability")
+@router.get("/api/sources/aws/reachability")
 async def aws_reachability_api(
     source: str = Query(min_length=1, max_length=64),
     destination: str = Query(min_length=1, max_length=64),
@@ -1488,7 +1493,7 @@ async def aws_reachability_api(
     )
 
 
-@router.get("/api/meraki/azure/reachability")
+@router.get("/api/sources/azure/reachability")
 async def azure_reachability_api(
     source: str = Query(min_length=1, max_length=64),
     destination: str = Query(min_length=1, max_length=64),
@@ -1509,7 +1514,7 @@ async def azure_reachability_api(
     )
 
 
-@router.get("/api/meraki/gcp/reachability")
+@router.get("/api/sources/gcp/reachability")
 async def gcp_reachability_api(
     source: str = Query(min_length=1, max_length=64),
     destination: str = Query(min_length=1, max_length=64),

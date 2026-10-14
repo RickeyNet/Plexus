@@ -1034,20 +1034,20 @@ def test_api_discovered_aws_account_is_on_the_topology(api):
     graph = api.get("/api/topology").json()
     assert any(e.get("provider") == "aws" and e["protocol"] == "cloud" for e in graph["edges"])
 
-    details = api.get(f"/api/meraki/nodes?org_ref={org_ref}&node_id=vpc:vpc-0c0re00001").json()
+    details = api.get(f"/api/sources/nodes?org_ref={org_ref}&node_id=vpc:vpc-0c0re00001").json()
     assert details["provider"] == "aws" and details["site_name"] == "prod-core-vpc (us-east-1)"
 
-    subnets = api.get("/api/meraki/subnets").json()["subnets"]
+    subnets = api.get("/api/sources/subnets").json()["subnets"]
     db_subnet = next(s for s in subnets if s["cidr"] == "10.200.20.0/24")
     assert db_subnet["org_ref"] == org_ref and db_subnet["node_id"] == "vpc:vpc-0c0re00001"
     assert db_subnet["provider"] == "aws" and db_subnet["site_id"] == "vpc-0c0re00001"
 
-    check = "/api/meraki/aws/reachability?source=10.200.10.21&destination=10.200.20.31&protocol=tcp"
+    check = "/api/sources/aws/reachability?source=10.200.10.21&destination=10.200.20.31&protocol=tcp"
     allowed = api.get(f"{check}&port=5432&source_vpc=vpc-0c0re00001").json()
     assert allowed["applies"] and allowed["verdict"] == "allowed" and allowed["traffic"] == "tcp/5432"
     assert api.get(f"{check}&port=22").json()["verdict"] == "blocked"
-    assert api.get("/api/meraki/aws/reachability?source=nope&destination=10.200.20.31").status_code == 400
-    assert api.get("/api/meraki/aws/reachability?source=192.0.2.1&destination=192.0.2.2").json()["applies"] is False
+    assert api.get("/api/sources/aws/reachability?source=nope&destination=10.200.20.31").status_code == 400
+    assert api.get("/api/sources/aws/reachability?source=192.0.2.1&destination=192.0.2.2").json()["applies"] is False
 
     hits = api.get("/api/topology/search/deep?q=fmc-01").json()["results"]
     assert [(h["org_ref"], h["node_id"]) for h in hits] == [(org_ref, "vpc:vpc-0ed9e00002")]
@@ -1107,7 +1107,7 @@ def test_api_a_host_added_after_discovery_is_its_instance_on_the_map(api):
         assert any({e["from"], e["to"]} == {host_id, vpc_id} and e["protocol"] == "cloud" for e in graph["edges"])
 
     # Its details, though the cached snapshot has no node for it.
-    details = api.get(f"/api/meraki/nodes?org_ref={org_ref}&node_id=i:i-0f3c001")
+    details = api.get(f"/api/sources/nodes?org_ref={org_ref}&node_id=i:i-0f3c001")
     assert details.status_code == 200, details.text
     assert details.json()["provider"] == "aws"
     overview = dict(next(s for s in details.json()["sections"] if s["title"] == "Overview")["rows"])
@@ -1134,28 +1134,28 @@ def test_api_a_host_added_after_discovery_is_its_instance_on_the_map(api):
 def test_api_aws_shares_the_map_with_meraki_and_cato(api):
     account = api.post("/api/cloud/accounts", json={"provider": "aws", "name": "Prod AWS"}).json()["account"]
     api.post(f"/api/cloud/accounts/{account['id']}/discover", json={"mode": "sample", "include_hybrid_links": False})
-    assert api.post("/api/meraki/sample").status_code == 201
-    assert api.post("/api/meraki/sample?provider=cato").status_code == 201
+    assert api.post("/api/sources/sample").status_code == 201
+    assert api.post("/api/sources/sample?provider=cato").status_code == 201
     nodes = api.get("/api/topology").json()["nodes"]
     assert {(n.get("meraki") or {}).get("provider") for n in nodes if n.get("meraki")} == {"meraki", "cato", "aws"}
     # The AWS check looks for virtual appliances among every snapshot.
-    check = api.get("/api/meraki/aws/reachability?source=10.200.10.21&destination=10.200.20.31&protocol=tcp&port=5432")
+    check = api.get("/api/sources/aws/reachability?source=10.200.10.21&destination=10.200.20.31&protocol=tcp&port=5432")
     assert check.status_code == 200 and check.json()["verdict"] == "allowed"
     # The snapshot history lists stored snapshots only; AWS has none of its own.
-    assert all(s["org_ref"] > 0 for s in api.get("/api/meraki/snapshots").json()["snapshots"])
+    assert all(s["org_ref"] > 0 for s in api.get("/api/sources/snapshots").json()["snapshots"])
 
 
 def test_api_aws_sample_is_a_cloud_visibility_account(api):
-    built = api.post("/api/meraki/sample?provider=aws")
+    built = api.post("/api/sources/sample?provider=aws")
     assert built.status_code == 201, built.text
     assert built.json()["org_ref"] < 0 and built.json()["summary"]["sites"] == 3
     # Loading it again refreshes the same account.
-    assert api.post("/api/meraki/sample?provider=aws").status_code == 201
+    assert api.post("/api/sources/sample?provider=aws").status_code == 201
     accounts = api.get("/api/cloud/accounts").json()["accounts"]
     assert [(a["provider"], a["auth_type"]) for a in accounts] == [("aws", "sample")]
     assert len({n["id"] for n in _aws_nodes(api)}) == 13
     # It is not an organization of the Meraki / Cato dialog.
-    assert api.get("/api/meraki/orgs").json()["orgs"] == []
+    assert api.get("/api/sources").json()["orgs"] == []
 
 
 def test_api_sources_lists_everything_that_feeds_the_map(api):
@@ -1169,9 +1169,9 @@ def test_api_sources_lists_everything_that_feeds_the_map(api):
     assert list(listed) == ["neighbors"]
     assert listed["neighbors"]["type"] == "neighbors" and listed["neighbors"]["status"] == "never"
 
-    org = api.post("/api/meraki/orgs", json={"name": "HQ", "api_key": "k" * 40}).json()["org"]
-    assert api.post("/api/meraki/sample?provider=cato").status_code == 201
-    assert api.post("/api/meraki/sample?provider=aws").status_code == 201
+    org = api.post("/api/sources", json={"name": "HQ", "api_key": "k" * 40}).json()["org"]
+    assert api.post("/api/sources/sample?provider=cato").status_code == 201
+    assert api.post("/api/sources/sample?provider=aws").status_code == 201
     body = {"provider": "aws", "name": "Prod AWS", "auth_config": {"secret_access_key": "hunter2"}}
     account = api.post("/api/cloud/accounts", json=body).json()["account"]
 

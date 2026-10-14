@@ -49,7 +49,7 @@ All API endpoints and their required authentication/authorization levels.
 |---------|-------|--------|
 | `inventory` | `/api/inventory/*` | inventory |
 | `topology` | `/api/topology/*` | topology |
-| `topology` | `/api/meraki/*`, `/api/topology/search/deep`, `/api/topology/export.html` (collections/deletes need `topology.write`; org and API-key management `POST/PUT/DELETE /api/meraki/orgs*` is admin-only in the handlers) | meraki_topology |
+| `topology` | `/api/sources/*`, `/api/topology/search/deep`, `/api/topology/export.html` (collections/deletes need `topology.write`; source and credential management `POST/PUT/DELETE /api/sources*` is admin-only in the handlers) | meraki_topology |
 | `jobs` | `/api/jobs/*` | jobs |
 | `templates` | `/api/templates/*` | templates |
 | `credentials` | `/api/credentials/*` | credentials |
@@ -57,7 +57,7 @@ All API endpoints and their required authentication/authorization levels.
 | `config-drift` | `/api/config-drift/*` | config_drift |
 | `config-backups` | `/api/config-backups/*` | config_backups |
 | `compliance` | `/api/compliance/*` | compliance |
-| `compliance` | `/api/compliance/meraki/*` (scans use the organization's stored Dashboard API key, read-only; organizations themselves are managed under `/api/meraki/orgs*`, admin-only) | meraki_compliance |
+| `compliance` | `/api/compliance/meraki/*` (scans use the organization's stored Dashboard API key, read-only; organizations themselves are managed under `/api/sources*`, admin-only) | meraki_compliance |
 | `risk-analysis` | `/api/risk-analysis/*` | risk_analysis |
 | `deployments` | `/api/deployments/*` | deployments |
 | `monitoring` | `/api/monitoring/*`, `/api/sla/*` | monitoring |

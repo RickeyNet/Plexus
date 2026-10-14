@@ -33,16 +33,19 @@ picks is a leg of the path.
 - **Devices and sites draw the path only.** A device clicked on the map or a
   site typed into **Add a site** has no address to trace. A leg between a
   subnet and a device says which end to add with the subnet box instead.
+  The exception is a remote user (a person icon): it has one address, so a
+  click picks it with that address and its legs are traced.
 - A subnet stands for the device that owns it: the site's appliance, the L3
   switch holding its SVI, the FTD it is connected to, the VPC or VNet
   router, the Cato Socket or the VPN peer it sits behind. A device that two
   sources know, such as an FTDv that is also an AWS instance, is one node on
   the map, and the subnets of both can be picked.
 - A remote user connected with the Cato Client or the Appgate Client owns
-  its own address as a `/32` in the list, so typing that address starts the
-  trace at the user rather than at a wider range another source keeps for
-  the whole client pool (a non-Meraki VPN peer of a Meraki site that covers
-  it, behind which nothing is collected).
+  its own address as a `/32` in the list, so typing that address, or
+  clicking the user on the map, starts the trace at the user rather than at
+  a wider range another source keeps for the whole client pool (a non-Meraki
+  VPN peer of a Meraki site that covers it, behind which nothing is
+  collected).
 - The first of two picks is the source of the request.
 
 ## The Traffic box

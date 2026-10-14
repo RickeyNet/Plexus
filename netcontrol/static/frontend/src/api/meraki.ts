@@ -266,7 +266,7 @@ export function useMerakiNodeDetails(orgRef: number | null, nodeId: string | nul
     queryKey: ['meraki', 'node', orgRef, nodeId],
     queryFn: () =>
       apiRequest<MerakiNodeDetails>(
-        `/meraki/nodes?org_ref=${orgRef}&node_id=${encodeURIComponent(nodeId ?? '')}`,
+        `/sources/nodes?org_ref=${orgRef}&node_id=${encodeURIComponent(nodeId ?? '')}`,
       ),
     enabled: orgRef != null && nodeId != null,
   });
@@ -275,7 +275,7 @@ export function useMerakiNodeDetails(orgRef: number | null, nodeId: string | nul
 export function useMerakiSubnets(enabled: boolean) {
   return useQuery({
     queryKey: ['meraki', 'subnets'],
-    queryFn: () => apiRequest<{ subnets: MerakiSubnet[] }>('/meraki/subnets'),
+    queryFn: () => apiRequest<{ subnets: MerakiSubnet[] }>('/sources/subnets'),
     enabled,
   });
 }
@@ -437,7 +437,7 @@ export function useMerakiOrgs() {
         fmc_default_options: FmcBuildOptions;
         panorama_default_options: PanoramaBuildOptions;
         appgate_default_options: AppgateBuildOptions;
-      }>('/meraki/orgs'),
+      }>('/sources'),
     // Keeps the "Building" badge honest for builds this tab isn't tracking
     // (started in another tab, or before a page reload).
     refetchInterval: (query) => (query.state.data?.orgs.some((o) => o.building) ? 4000 : false),
@@ -482,7 +482,7 @@ export function useTopologySources(enabled = true) {
 export function useMerakiSnapshots() {
   return useQuery({
     queryKey: ['meraki', 'snapshots'],
-    queryFn: () => apiRequest<{ snapshots: MerakiSnapshot[] }>('/meraki/snapshots'),
+    queryFn: () => apiRequest<{ snapshots: MerakiSnapshot[] }>('/sources/snapshots'),
   });
 }
 
@@ -499,7 +499,7 @@ export function useSnapshotWarnings(snapshotId: number | null) {
   return useQuery({
     queryKey: ['meraki', 'snapshot-warnings', snapshotId],
     queryFn: () =>
-      apiRequest<{ snapshot_id: number; warnings: CollectionWarning[] }>(`/meraki/snapshots/${snapshotId}/warnings`),
+      apiRequest<{ snapshot_id: number; warnings: CollectionWarning[] }>(`/sources/snapshots/${snapshotId}/warnings`),
     enabled: snapshotId != null,
   });
 }
@@ -507,7 +507,7 @@ export function useSnapshotWarnings(snapshotId: number | null) {
 export function useMerakiBuildJob(jobId: string | null) {
   return useQuery({
     queryKey: ['meraki', 'build', jobId],
-    queryFn: () => apiRequest<MerakiBuildJob>(`/meraki/builds/${jobId}`),
+    queryFn: () => apiRequest<MerakiBuildJob>(`/sources/builds/${jobId}`),
     enabled: jobId != null,
     // A build is a background job with no push channel; poll until it settles
     // (or the job record is gone, which surfaces as an error).
@@ -532,7 +532,7 @@ export function useCreateMerakiOrg() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: MerakiOrgInput) =>
-      apiRequest<{ org: MerakiOrg }>('/meraki/orgs', { method: 'POST', body }),
+      apiRequest<{ org: MerakiOrg }>('/sources', { method: 'POST', body }),
     onSuccess: () => invalidateMeraki(qc),
   });
 }
@@ -541,7 +541,7 @@ export function useUpdateMerakiOrg() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, body }: { id: number; body: Partial<MerakiOrgInput> }) =>
-      apiRequest<{ org: MerakiOrg }>(`/meraki/orgs/${id}`, { method: 'PUT', body }),
+      apiRequest<{ org: MerakiOrg }>(`/sources/${id}`, { method: 'PUT', body }),
     onSuccess: () => invalidateMeraki(qc),
   });
 }
@@ -549,7 +549,7 @@ export function useUpdateMerakiOrg() {
 export function useDeleteMerakiOrg() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: number) => apiRequest<void>(`/meraki/orgs/${id}`, { method: 'DELETE' }),
+    mutationFn: (id: number) => apiRequest<void>(`/sources/${id}`, { method: 'DELETE' }),
     onSuccess: () => invalidateMeraki(qc),
   });
 }
@@ -557,7 +557,7 @@ export function useDeleteMerakiOrg() {
 export function useValidateMerakiOrg() {
   return useMutation({
     mutationFn: (id: number) =>
-      apiRequest<MerakiValidateResult>(`/meraki/orgs/${id}/validate`, { method: 'POST' }),
+      apiRequest<MerakiValidateResult>(`/sources/${id}/validate`, { method: 'POST' }),
   });
 }
 
@@ -565,7 +565,7 @@ export function useStartMerakiBuild() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: number) =>
-      apiRequest<{ job_id: string }>(`/meraki/orgs/${id}/build`, { method: 'POST' }),
+      apiRequest<{ job_id: string }>(`/sources/${id}/build`, { method: 'POST' }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['meraki', 'orgs'] });
       qc.invalidateQueries({ queryKey: ['meraki', 'sources'] });
@@ -579,7 +579,7 @@ export function useBuildMerakiSample() {
     // 'aws' / 'azure' / 'gcp' load a demo account, which lives under Cloud Visibility.
     mutationFn: (provider: CloudProvider | CloudAccountProvider) =>
       apiRequest<MerakiBuildResult & { org_ref: number }>(
-        `/meraki/sample${provider === 'meraki' ? '' : `?provider=${provider}`}`,
+        `/sources/sample${provider === 'meraki' ? '' : `?provider=${provider}`}`,
         { method: 'POST' },
       ),
     onSuccess: () => {
@@ -593,7 +593,7 @@ export function useBuildMerakiSample() {
 export function useDeleteMerakiSnapshot() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: number) => apiRequest<void>(`/meraki/snapshots/${id}`, { method: 'DELETE' }),
+    mutationFn: (id: number) => apiRequest<void>(`/sources/snapshots/${id}`, { method: 'DELETE' }),
     onSuccess: () => invalidateMeraki(qc),
   });
 }
