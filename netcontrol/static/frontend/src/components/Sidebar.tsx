@@ -300,10 +300,16 @@ function NavGroupItem({ group, currentPath }: { group: NavGroup; currentPath: st
   const hasActiveChild = group.children.some(
     (c) => isRoute(c) && (c.to === currentPath || (c.to !== '/' && currentPath.startsWith(c.to))),
   );
-  // Groups start expanded: the nav is split into a few small groups, and
-  // starting them collapsed would hide nearly every page behind a click.
-  // Expand state is per-mount only (nothing is persisted).
-  const [expanded, setExpanded] = useState(true);
+  // Groups start collapsed to keep the nav short. The group holding the
+  // current page is open so its active link is never hidden; a click
+  // overrides that until navigation moves into or out of the group.
+  const [override, setOverride] = useState<boolean | null>(null);
+  const [prevActive, setPrevActive] = useState(hasActiveChild);
+  if (prevActive !== hasActiveChild) {
+    setPrevActive(hasActiveChild);
+    setOverride(null);
+  }
+  const expanded = override ?? hasActiveChild;
   return (
     <div className={`nav-group${expanded ? ' expanded' : ''}`}>
       <a
@@ -312,7 +318,7 @@ function NavGroupItem({ group, currentPath }: { group: NavGroup; currentPath: st
         aria-expanded={expanded}
         onClick={(e) => {
           e.preventDefault();
-          setExpanded((v) => !v);
+          setOverride(!expanded);
         }}
       >
         {group.icon}
