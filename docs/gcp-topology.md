@@ -16,7 +16,7 @@ describes the shared behavior. This guide covers what is different.
 - Permission: the `topology` feature to view the map; admin to manage cloud
   accounts and run discovery
 - API: `/api/cloud/*` for accounts and discovery, `/api/topology` and
-  `/api/meraki/*` for the map
+  `/api/sources/*` for the map
 
 ## Quick start
 
@@ -121,7 +121,7 @@ a VPC network, Plexus checks the flow against what discovery collected.
 Between two subnets or addresses the path is traced hop by hop across every
 device on the map, and the hops in GCP list these checks as their items;
 see [path-trace.md](path-trace.md). The **Traffic** box works as for AWS.
-`GET /api/meraki/gcp/reachability` answers the GCP part on its own.
+`GET /api/sources/gcp/reachability` answers the GCP part on its own.
 
 - **Routes.** Routing belongs to the network, not to the subnet. The
   candidate routes are the subnet routes of every range of the network
@@ -186,8 +186,8 @@ Center hubs and the custom routes a peering exchanges are not collected.
 |---|---|---|
 | `POST` | `/api/cloud/accounts` | `{"provider": "gcp", "name", "account_identifier": "<project id>", "auth_config"}` (admin) |
 | `POST` | `/api/cloud/accounts/{id}/discover` | Run discovery; the map updates when it succeeds (admin) |
-| `POST` | `/api/meraki/sample?provider=gcp` | Add / refresh the demo project |
+| `POST` | `/api/sources/sample?provider=gcp` | Add / refresh the demo project |
 | `GET` | `/api/topology` | GCP nodes carry `source: "meraki"` and a `meraki` reference whose `provider` is `gcp` and whose `org_ref` is `-3` |
-| `GET` | `/api/meraki/nodes?org_ref=-3&node_id=…` | Detail sections of one GCP node |
-| `GET` | `/api/meraki/subnets` | Includes the subnets of every VPC network (`provider: "gcp"`, `site_id` is `project:network`) |
-| `GET` | `/api/meraki/gcp/reachability?source=&destination=` | The GCP check of a flow. Optional `protocol`, `port`, and `source_network` / `destination_network` (`project:network`) for a range that exists in several networks. Same answer shape as the AWS check, with `in_gcp` on each end |
+| `GET` | `/api/sources/nodes?org_ref=-3&node_id=…` | Detail sections of one GCP node |
+| `GET` | `/api/sources/subnets` | Includes the subnets of every VPC network (`provider: "gcp"`, `site_id` is `project:network`) |
+| `GET` | `/api/sources/gcp/reachability?source=&destination=` | The GCP check of a flow. Optional `protocol`, `port`, and `source_network` / `destination_network` (`project:network`) for a range that exists in several networks. Same answer shape as the AWS check, with `in_gcp` on each end |

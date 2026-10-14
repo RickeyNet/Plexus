@@ -220,7 +220,7 @@ def _bgp_row(peer: dict) -> list[Any]:
 # to ``{object id or lower-cased name: CIDRs}``; ``None`` marks a name that
 # several objects share.
 AddressBook = dict[str, dict[str, list[str] | None]]
-_RESOLVABLE = ("site", "siteNetworkSubnet", "networkInterface", "floatingSubnet", "user")
+_RESOLVABLE = ("site", "siteNetworkSubnet", "networkInterface", "floatingSubnet", "user", "globalIpRange")
 # Every object a rule can name, as the trace words it.
 _OBJECT_WORDS = {
     "site": "site",
@@ -276,6 +276,27 @@ def _resolve(book: AddressBook, field: str, ref: Any) -> list[str] | None:
         if key and known.get(key):
             return known[key]
     return None
+
+
+def _global_range_cidrs(item: dict) -> list[str]:
+    """The networks of one global IP range object: its ``subnet`` when the
+    range is one, else its ``ipRange`` (``from-to`` text, or one address or
+    network); ``[]`` when neither can be read."""
+    subnet = canonical(item.get("subnet"))
+    if subnet:
+        return [subnet]
+    text = _text(item.get("ipRange")).replace(" ", "")
+    if "-" in text:
+        first, _sep, last = text.partition("-")
+        try:
+            return [
+                str(n)
+                for n in ipaddress.summarize_address_range(ipaddress.ip_address(first), ipaddress.ip_address(last))
+            ]
+        except TypeError, ValueError:
+            return []
+    single = canonical(text)
+    return [single] if single else []
 
 
 def _rule_addresses(endpoint: Any, book: AddressBook) -> tuple[list[str], list[str]]:
@@ -1277,7 +1298,8 @@ class _Builder:
 
     def _address_book(self) -> AddressBook:
         """The objects firewall rules name that stand for known addresses:
-        sites, their ranges and interfaces, and connected users."""
+        sites, their ranges and interfaces, connected users, and the
+        account's global IP ranges."""
         book: AddressBook = {field: {} for field in _RESOLVABLE}
 
         def add(field: str, keys: list[str], cidrs: list[str]) -> None:
@@ -1310,6 +1332,12 @@ class _Builder:
             if isinstance(user, dict) and _text(user.get("connectivityStatus")).lower() != "disconnected":
                 address = canonical(user.get("internalIP"))
                 add("user", [_text(user.get("id")), _text(_user_name(user)).lower()], [address] if address else [])
+        # None when not collected: a rule naming one stays unresolved.
+        for item in self.raw.get("global_ip_ranges") or []:
+            if isinstance(item, dict):
+                add(
+                    "globalIpRange", [_text(item.get("id")), _text(item.get("name")).lower()], _global_range_cidrs(item)
+                )
         return book
 
     def build_edge_sections(self) -> None:

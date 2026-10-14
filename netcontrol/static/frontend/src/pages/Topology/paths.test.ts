@@ -11,6 +11,7 @@ import {
   parseTraffic,
   pathSites,
   subnetOptionLabel,
+  userPick,
   type PathPick,
 } from './paths';
 
@@ -213,6 +214,43 @@ describe('path mode with AWS', () => {
     expect(connectEndpoints(['vpc-core', 'vpc-edge'], attached).legs[0].path).toEqual(['vpc-core', 'tgw', 'vpc-edge']);
     const broken = [attached[0], edge('a-edge', 'vpc-edge', 'tgw', 'cloud', 'failed')];
     expect(connectEndpoints(['vpc-core', 'vpc-edge'], broken).legs[0].path).toBeNull();
+  });
+});
+
+describe('a remote user clicked in path mode', () => {
+  const dana: TopologyNode = {
+    id: 'meraki:4:cato:user:7',
+    label: 'Dana Reyes',
+    in_inventory: false,
+    source: 'meraki',
+    meraki: { org_ref: 4, node_id: 'cato:user:7', site_id: '__cato_pop__:New York', site_name: 'PoP New York', kind: 'user', status: 'online' },
+  };
+  const own: MerakiSubnet = {
+    org_ref: 4,
+    cidr: '10.41.0.11/32',
+    name: 'Cato Client Dana Reyes',
+    kind: 'user',
+    site_id: '__cato_pop__:New York',
+    site_name: 'PoP New York',
+    node_id: 'cato:user:7',
+    in_vpn: null,
+  };
+  const pool: MerakiSubnet = { ...own, org_ref: 1, cidr: '10.41.0.0/16', name: 'Behind Cato_Cloud', kind: 'peer', site_id: '', site_name: '', node_id: 'p:Cato_Cloud' };
+
+  it('is picked with its own address, the same pick as typing it, so the leg is traced', () => {
+    const pick = userPick(dana, [pool, own]);
+    expect(pick).toEqual({
+      key: 's:4:10.41.0.11:cato:user:7',
+      node: 'meraki:4:cato:user:7',
+      label: 'Dana Reyes (10.41.0.11) · PoP New York',
+      subnet: own,
+      address: '10.41.0.11',
+    });
+  });
+
+  it('is a device pick when its address is not in the list, like any other node', () => {
+    expect(userPick(dana, [pool])).toBeNull();
+    expect(userPick(meraki('mx-a', 'a', 'appliance'), [pool, own])).toBeNull();
   });
 });
 

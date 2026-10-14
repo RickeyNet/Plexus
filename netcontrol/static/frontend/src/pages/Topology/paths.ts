@@ -1,7 +1,7 @@
 import type { MerakiSubnet } from '@/api/meraki';
 import type { TopologyEdge, TopologyNode } from '@/api/topology';
 
-import { isEdgeDown } from './helpers';
+import { isEdgeDown, isRemoteUserNode } from './helpers';
 import { layoutGroupKey } from './layout';
 
 // Path mode: how a set of picked devices / sites reach one another over the
@@ -45,6 +45,29 @@ export interface PathPick {
   subnet?: MerakiSubnet;
   /** The address typed to pick `subnet`, when it is narrower than the subnet. */
   address?: string;
+}
+
+/**
+ * The pick a click on a remote user (a Cato or Appgate client) makes: the
+ * user's own address, so the leg is traced hop by hop like a typed address,
+ * since a user has exactly one. The same pick as typing the address, so the
+ * two ways meet in one entry. Null for any other node, and for a user whose
+ * address is not in `subnets` (a snapshot collected before the index had it).
+ */
+export function userPick(node: TopologyNode, subnets: MerakiSubnet[]): PathPick | null {
+  const ref = node.meraki;
+  if (!ref || !isRemoteUserNode(node)) return null;
+  const subnet = subnets.find((s) => s.kind === 'user' && s.org_ref === ref.org_ref && s.node_id === ref.node_id);
+  if (!subnet) return null;
+  const address = subnet.cidr.replace(/\/32$/, '');
+  const site = subnet.site_name || ref.site_name || '';
+  return {
+    key: `s:${subnet.org_ref}:${address}:${subnet.node_id}`,
+    node: node.id,
+    label: `${node.label || address} (${address})${site ? ` · ${site}` : ''}`,
+    subnet,
+    address,
+  };
 }
 
 export interface PickLeg {

@@ -15,7 +15,7 @@ different.
 
 - Permission: the `topology` feature to view, `topology.write` to collect or
   delete snapshots, admin to manage entries and passwords
-- API: `/api/meraki/*` with `provider: "appgate"`
+- API: `/api/sources/*` with `provider: "appgate"`
 
 ## Quick start
 
@@ -123,10 +123,10 @@ The toolbar search covers everything collected: appliance names and
 addresses, site names and subnets, entitlement names, and users by name,
 device, tunnel address or public address.
 
-In **Path Mode** a site's network ranges can be picked like any subnet, and
-a user like any device. A connected user's tunnel address is also in the
-subnet list as a network of its own (`10.253.0.11/32 - Appgate clients -
-Appgate Client dana.reyes`), so typing it, or picking the entry, starts the
+In **Path Mode** a site's network ranges can be picked like any subnet. A
+connected user's tunnel address is in the subnet list as a network of its
+own (`10.253.0.11/32 - Appgate clients - Appgate Client dana.reyes`), so
+typing it, picking the entry, or clicking the user on the map starts the
 trace at that user. A trace from a user runs **user → Gateway**: the
 user routes what its entitlements cover (the subnets of its Appgate firewall
 rules) to the Gateway that grants them, and the Gateway applies the
@@ -203,11 +203,11 @@ An Appgate collective uses the organization endpoints listed in
 
 | Method | Path | Notes for Appgate |
 |---|---|---|
-| `GET` | `/api/meraki/orgs` | Each entry has `provider`; `appgate_default_options` lists the Appgate collection options |
-| `POST` | `/api/meraki/orgs` | `{"name", "provider": "appgate", "org_id": "<identity provider>", "base_url": "https://controller:8443", "api_key": "<password>", "options": {"username", ...}}` (admin) |
-| `POST` | `/api/meraki/orgs/{id}/validate` | Signs in and counts sites and appliances (admin); needs `options.username` |
-| `POST` | `/api/meraki/orgs/{id}/build` | Start a collection; returns `job_id` |
-| `POST` | `/api/meraki/sample?provider=appgate` | Add / refresh the demo Appgate collective |
+| `GET` | `/api/sources` | Each entry has `provider`; `appgate_default_options` lists the Appgate collection options |
+| `POST` | `/api/sources` | `{"name", "provider": "appgate", "org_id": "<identity provider>", "base_url": "https://controller:8443", "api_key": "<password>", "options": {"username", ...}}` (admin) |
+| `POST` | `/api/sources/{id}/validate` | Signs in and counts sites and appliances (admin); needs `options.username` |
+| `POST` | `/api/sources/{id}/build` | Start a collection; returns `job_id` |
+| `POST` | `/api/sources/sample?provider=appgate` | Add / refresh the demo Appgate collective |
 | `GET` | `/api/topology` | Appgate nodes carry `source: "meraki"` and a `meraki` reference whose `provider` is `appgate` |
 
 The options are `username`, `verify_tls`, `site_name_contains`,

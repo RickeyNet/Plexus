@@ -258,17 +258,29 @@ async def test_collect_account_reads_the_wan_and_internet_firewall_policies():
         if body["operationName"] == "plexusInternetFirewall":
             assert "appCategory" in body["query"] and "direction" not in body["query"]
             return _policy_response("internetFirewall", sample["internet_firewall"])
+        if body["operationName"] == "plexusGlobalIpRanges":
+            # The objects rules name, read with the rules: one unpaged list.
+            assert "object(accountId: $accountId)" in body["query"] and "globalIpRangeList" in body["query"]
+            items = sample["global_ip_ranges"]
+            return httpx.Response(
+                200, json={"data": {"object": {"globalIpRangeList": {"items": items, "total": len(items)}}}}
+            )
         raise AssertionError(body["operationName"])
 
     progress: list[dict] = []
     async with _client(handler) as client:
         raw = await collect_account(client, "42", {"include_users": False, "include_ranges": False}, progress.append)
 
-    assert seen[1:] == [("plexusWanFirewall", {"accountId": "42"}), ("plexusInternetFirewall", {"accountId": "42"})]
+    assert seen[1:] == [
+        ("plexusWanFirewall", {"accountId": "42"}),
+        ("plexusInternetFirewall", {"accountId": "42"}),
+        ("plexusGlobalIpRanges", {"accountId": "42"}),
+    ]
     assert raw["errors"] == []
     assert raw["wan_firewall"] == sample["wan_firewall"]
     assert raw["internet_firewall"] == sample["internet_firewall"]
-    assert progress[-1]["calls_done"] == progress[-1]["calls_total"] == 3
+    assert raw["global_ip_ranges"] == sample["global_ip_ranges"]
+    assert progress[-1]["calls_done"] == progress[-1]["calls_total"] == 4
 
 
 @pytest.mark.asyncio
@@ -285,6 +297,8 @@ async def test_collect_account_falls_back_to_the_reduced_firewall_queries():
             return _policy_response("wanFirewall", sample["wan_firewall"])
         if name in ("plexusWanFirewall", "plexusInternetFirewall", "plexusInternetFirewallBasic"):
             return httpx.Response(200, json={"errors": [{"message": 'Cannot query field "policy" on type "Query"'}]})
+        if name == "plexusGlobalIpRanges":
+            return httpx.Response(403)
         raise AssertionError(name)
 
     async with _client(handler) as client:
@@ -296,15 +310,17 @@ async def test_collect_account_falls_back_to_the_reduced_firewall_queries():
         "plexusWanFirewallBasic",
         "plexusInternetFirewall",
         "plexusInternetFirewallBasic",
+        "plexusGlobalIpRanges",
     ]
     # The reduced rules are kept, and marked as such.
     assert raw["wan_firewall"]["reduced"] is True and len(raw["wan_firewall"]["rules"]) == 4
-    # Not collected at all: absent, not an empty policy.
-    assert raw["internet_firewall"] is None
+    # Not collected at all: absent, not an empty policy. The same for the objects.
+    assert raw["internet_firewall"] is None and raw["global_ip_ranges"] is None
     assert [e["path"] for e in raw["errors"]] == [
         "policy.wanFirewall (full detail)",
         "policy.internetFirewall (full detail)",
         "policy.internetFirewall",
+        "object.globalIpRangeList",
     ]
     cloud = next(n for n in build_snapshot(raw)["nodes"] if n["id"] == CLOUD_NODE_ID)["forwarding"]
     assert [p["name"] for p in cloud["policies"]] == ["WAN firewall rules"]
@@ -764,11 +780,11 @@ def api(monkeypatch, request):
 
 
 def test_api_cato_account_crud_keeps_the_key_write_only(api):
-    listing = api.get("/api/meraki/orgs").json()
+    listing = api.get("/api/sources").json()
     assert listing["cato_default_options"]["include_users"] is True
 
     created = api.post(
-        "/api/meraki/orgs",
+        "/api/sources",
         json={"name": "Acme Cato", "provider": "cato", "org_id": "4242", "api_key": "super-secret-key"},
     )
     assert created.status_code == 201, created.text
@@ -783,27 +799,27 @@ def test_api_cato_account_crud_keeps_the_key_write_only(api):
         "inventory_enrich": True,
     }
     assert "super-secret-key" not in created.text
-    assert "super-secret-key" not in api.get("/api/meraki/orgs").text
+    assert "super-secret-key" not in api.get("/api/sources").text
 
     # The key only ever goes to a Cato host, and the provider is a known one.
     bad_url = {"name": "Evil", "provider": "cato", "base_url": "https://api.meraki.com/api/v1"}
-    assert api.post("/api/meraki/orgs", json=bad_url).status_code == 400
-    assert api.post("/api/meraki/orgs", json={"name": "Other", "provider": "zscaler"}).status_code == 400
+    assert api.post("/api/sources", json=bad_url).status_code == 400
+    assert api.post("/api/sources", json={"name": "Other", "provider": "zscaler"}).status_code == 400
 
-    updated = api.put(f"/api/meraki/orgs/{org['id']}", json={"options": {"include_users": False}})
+    updated = api.put(f"/api/sources/{org['id']}", json={"options": {"include_users": False}})
     assert updated.status_code == 200
     assert updated.json()["org"]["options"]["include_users"] is False
     assert updated.json()["org"]["has_api_key"] is True
 
     # A Meraki organization is unaffected by the provider column.
-    meraki = api.post("/api/meraki/orgs", json={"name": "Acme Meraki"}).json()["org"]
+    meraki = api.post("/api/sources", json={"name": "Acme Meraki"}).json()["org"]
     assert meraki["provider"] == "meraki" and "include_lldp_cdp" in meraki["options"]
 
-    assert api.delete(f"/api/meraki/orgs/{org['id']}").status_code == 200
+    assert api.delete(f"/api/sources/{org['id']}").status_code == 200
 
 
 def test_api_cato_sample_is_merged_into_the_topology(api):
-    built = api.post("/api/meraki/sample?provider=cato")
+    built = api.post("/api/sources/sample?provider=cato")
     assert built.status_code == 201, built.text
     assert built.json()["summary"]["remote_users"] == 3
     org_ref = built.json()["org_ref"]
@@ -826,11 +842,11 @@ def test_api_cato_sample_is_merged_into_the_topology(api):
     assert dana["source"] == "meraki" and not dana["in_inventory"]
     assert any(e.get("provider") == "cato" and e["protocol"] == "vpn" for e in graph["edges"])
 
-    details = api.get(f"/api/meraki/nodes?org_ref={org_ref}&node_id=d:5003").json()
+    details = api.get(f"/api/sources/nodes?org_ref={org_ref}&node_id=d:5003").json()
     assert details["provider"] == "cato" and details["site_name"] == "Branch-Cleveland"
 
     # Subnets of Cato sites can be picked as path endpoints.
-    subnets = api.get("/api/meraki/subnets").json()["subnets"]
+    subnets = api.get("/api/sources/subnets").json()["subnets"]
     vpc = next(s for s in subnets if s["cidr"] == "172.31.0.0/16")
     assert vpc["site_name"] == "AWS-us-east-1" and vpc["org_ref"] == org_ref
 
@@ -842,7 +858,7 @@ def test_api_cato_sample_is_merged_into_the_topology(api):
     ]
 
     # Both samples share the map and the HTML export.
-    assert api.post("/api/meraki/sample").status_code == 201
+    assert api.post("/api/sources/sample").status_code == 201
     merged = api.get("/api/topology").json()["nodes"]
     assert {(n.get("meraki") or {}).get("provider") for n in merged if n.get("meraki")} == {"meraki", "cato"}
     export = api.get("/api/topology/export.html")
@@ -859,19 +875,19 @@ def test_api_cato_build_job_runs_the_cato_collector(api, monkeypatch):
 
     monkeypatch.setattr(routes_module, "collect_account", _fake_collect)
     body = {"name": "Acme Cato", "provider": "cato", "org_id": "4242", "api_key": "k"}
-    org = api.post("/api/meraki/orgs", json=body).json()["org"]
-    started = api.post(f"/api/meraki/orgs/{org['id']}/build")
+    org = api.post("/api/sources", json=body).json()["org"]
+    started = api.post(f"/api/sources/{org['id']}/build")
     assert started.status_code == 202, started.text
 
     job = {}
     for _ in range(200):
-        job = api.get(f"/api/meraki/builds/{started.json()['job_id']}").json()
+        job = api.get(f"/api/sources/builds/{started.json()['job_id']}").json()
         if job["status"] != "running":
             break
     assert job["status"] == "completed", job
     assert job["result"]["summary"]["sites"] == 4 and "clients_tracked" not in job["result"]
     # The snapshot is named after the entry, not the collector's placeholder.
-    snapshot = api.get(f"/api/meraki/snapshots/{job['result']['snapshot_id']}/data").json()
+    snapshot = api.get(f"/api/sources/snapshots/{job['result']['snapshot_id']}/data").json()
     assert snapshot["org"]["name"] == "Acme Cato"
 
 
@@ -887,11 +903,11 @@ def test_api_collection_warnings_are_listed_for_the_sources_dialog(api, monkeypa
 
     monkeypatch.setattr(routes_module, "collect_account", _fake_collect)
     body = {"name": "Warned Cato", "provider": "cato", "org_id": "4243", "api_key": "k"}
-    org = api.post("/api/meraki/orgs", json=body).json()["org"]
-    started = api.post(f"/api/meraki/orgs/{org['id']}/build")
+    org = api.post("/api/sources", json=body).json()["org"]
+    started = api.post(f"/api/sources/{org['id']}/build")
     job = {}
     for _ in range(200):
-        job = api.get(f"/api/meraki/builds/{started.json()['job_id']}").json()
+        job = api.get(f"/api/sources/builds/{started.json()['job_id']}").json()
         if job["status"] != "running":
             break
     assert job["status"] == "partial", job
@@ -900,20 +916,20 @@ def test_api_collection_warnings_are_listed_for_the_sources_dialog(api, monkeypa
     source = next(s for s in sources if s["key"] == f"org:{org['id']}")
     assert source["warning_count"] == 1 and source["snapshot_id"] == job["result"]["snapshot_id"]
 
-    listed = api.get(f"/api/meraki/snapshots/{source['snapshot_id']}/warnings").json()
+    listed = api.get(f"/api/sources/snapshots/{source['snapshot_id']}/warnings").json()
     assert listed["warnings"] == [
         {"scope": "account", "path": "accountSnapshot.users", "status": 403, "message": "Permission denied"}
     ]
-    assert api.get("/api/meraki/snapshots/999999/warnings").status_code == 404
+    assert api.get("/api/sources/snapshots/999999/warnings").status_code == 404
 
 
 def test_api_cato_build_needs_an_account_id(api):
-    org = api.post("/api/meraki/orgs", json={"name": "NoAccount", "provider": "cato", "api_key": "k"}).json()["org"]
-    started = api.post(f"/api/meraki/orgs/{org['id']}/build")
+    org = api.post("/api/sources", json={"name": "NoAccount", "provider": "cato", "api_key": "k"}).json()["org"]
+    started = api.post(f"/api/sources/{org['id']}/build")
     assert started.status_code == 202
     job = {}
     for _ in range(200):
-        job = api.get(f"/api/meraki/builds/{started.json()['job_id']}").json()
+        job = api.get(f"/api/sources/builds/{started.json()['job_id']}").json()
         if job["status"] != "running":
             break
     assert job["status"] == "failed" and "account ID" in job["error"]
@@ -1119,6 +1135,34 @@ def test_firewall_rule_addresses_services_and_conditions_are_resolved_or_kept_un
     isolated = rules[3]
     assert (isolated["action"], isolated["comment"]) == ("allow", "Remote browser isolation")
     assert (isolated["protocol"], isolated["dst_ports"]) == ("tcp", "22")
+
+
+def test_global_ip_range_objects_named_by_rules_are_resolved_when_collected():
+    rules = _one_policy(
+        [
+            _rule_raw(
+                index=1,
+                name="VDI to scanners",
+                source={"globalIpRange": [{"id": "gr-1", "name": "VDI-Azure"}]},
+                # By name, and a from-to range that is not one subnet.
+                destination={"ip": ["10.9.0.1"], "globalIpRange": [{"name": "Scanners"}]},
+            ),
+            _rule_raw(index=2, name="Retired object", source={"globalIpRange": [{"id": "gr-9", "name": "Retired"}]}),
+        ]
+    )
+    vdi, retired = rules
+    assert vdi["src"] == ["10.12.128.0/22"] and vdi["dst"] == ["10.9.0.1/32", "10.50.10.200/30"]
+    assert vdi["unresolved"] == []
+    # An object the account does not list: any, and named as unresolved.
+    assert retired["src"] == ["any"] and retired["unresolved"] == ["global IP range Retired"]
+
+    # The objects were not read (the query failed): never a guess from the name.
+    raw = build_sample_raw()
+    raw["global_ip_ranges"] = None
+    vdi_rule = _rule_raw(index=1, name="VDI", source={"globalIpRange": [{"id": "gr-1", "name": "VDI-Azure"}]})
+    raw["wan_firewall"] = {"enabled": True, "rules": [vdi_rule], "reduced": False}
+    (vdi,) = _rules(build_snapshot(raw), "WAN firewall rules")
+    assert vdi["src"] == ["any"] and vdi["unresolved"] == ["global IP range VDI-Azure"]
 
 
 def test_a_firewall_policy_turned_off_has_no_rules_and_an_unknown_default():

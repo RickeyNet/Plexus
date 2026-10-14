@@ -713,21 +713,21 @@ def test_api_discovered_gcp_project_is_on_the_topology(api):
     org_ref = gcp[0]["meraki"]["org_ref"]
     assert org_ref == -3
 
-    details = api.get(f"/api/meraki/nodes?org_ref={org_ref}&node_id=vpc:{PROD}").json()
+    details = api.get(f"/api/sources/nodes?org_ref={org_ref}&node_id=vpc:{PROD}").json()
     assert details["provider"] == "gcp" and details["site_name"] == "prod-vpc"
 
-    subnets = api.get("/api/meraki/subnets").json()["subnets"]
+    subnets = api.get("/api/sources/subnets").json()["subnets"]
     db_subnet = next(s for s in subnets if s["cidr"] == "10.241.20.0/24")
     assert db_subnet["provider"] == "gcp" and db_subnet["site_id"] == PROD
 
-    check = f"/api/meraki/gcp/reachability?source={APP}&destination={DB}&protocol=tcp"
+    check = f"/api/sources/gcp/reachability?source={APP}&destination={DB}&protocol=tcp"
     allowed = api.get(f"{check}&port=5432&source_network={PROD}").json()
     assert allowed["applies"] and allowed["verdict"] == "allowed"
     assert api.get(f"{check}&port=22").json()["verdict"] == "blocked"
-    assert api.get(f"/api/meraki/gcp/reachability?source=nope&destination={DB}").status_code == 400
+    assert api.get(f"/api/sources/gcp/reachability?source=nope&destination={DB}").status_code == 400
     # The AWS and Azure checks do not see GCP.
     for other in ("aws", "azure"):
-        assert api.get(f"/api/meraki/{other}/reachability?source={APP}&destination={DB}").json()["applies"] is False
+        assert api.get(f"/api/sources/{other}/reachability?source={APP}&destination={DB}").json()["applies"] is False
 
     export = api.get("/api/topology/export.html")
     assert export.status_code == 200 and "prod-vpc" in export.text
@@ -737,7 +737,7 @@ def test_api_discovered_gcp_project_is_on_the_topology(api):
 
 
 def test_api_traces_a_path_between_two_gcp_subnets(api):
-    assert api.post("/api/meraki/sample?provider=gcp").status_code == 201
+    assert api.post("/api/sources/sample?provider=gcp").status_code == 201
     path = f"/api/topology/path?source={APP}&destination={DB}&protocol=tcp"
     allowed = api.get(f"{path}&port=5432")
     assert allowed.status_code == 200, allowed.text
@@ -752,10 +752,10 @@ def test_api_traces_a_path_between_two_gcp_subnets(api):
 
 
 def test_api_gcp_sample_and_sources(api):
-    built = api.post("/api/meraki/sample?provider=gcp")
+    built = api.post("/api/sources/sample?provider=gcp")
     assert built.status_code == 201, built.text
     assert built.json()["org_ref"] == -3 and built.json()["summary"]["sites"] == 2
-    assert api.post("/api/meraki/sample?provider=gcp").status_code == 201
+    assert api.post("/api/sources/sample?provider=gcp").status_code == 201
     accounts = api.get("/api/cloud/accounts").json()["accounts"]
     assert [(a["provider"], a["auth_type"]) for a in accounts] == [("gcp", "sample")]
     providers = {(n.get("meraki") or {}).get("provider") for n in api.get("/api/topology").json()["nodes"]}
