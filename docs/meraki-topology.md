@@ -7,7 +7,7 @@ the same search box, and are included in the HTML export.
 
 - Permission: the `topology` feature to view, `topology.write` to collect or
   delete snapshots, admin to manage organizations and API keys
-- API: `/api/meraki/*`, `/api/topology/search/deep`, `/api/topology/export.html`
+- API: `/api/sources/*`, `/api/topology/search/deep`, `/api/topology/export.html`
 
 A Cato Networks account is added from the same dialog and shares the map,
 search, Path Mode and export; see [cato-topology.md](cato-topology.md), as is
@@ -152,7 +152,7 @@ belong to no inventory group).
   the tunnels on the path will not carry a subnet: it is not enabled for
   VPN at its site, or it is behind a non-Meraki peer the other site has
   no tunnel of its own to. The subnet list comes from the latest
-  collection (`GET /api/meraki/subnets`); IPv4 only when typing.
+  collection (`GET /api/sources/subnets`); IPv4 only when typing.
 - **Path trace.** Between two subnets or addresses the server traces the
   flow hop by hop across every device on the map, for the request and for
   the replies. Under the leg it lists each hop in order with the policies,
@@ -400,15 +400,15 @@ it shows. The selector appears only when the export includes an integration.
 | `GET` | `/api/topology/search/deep?q=` | Search collected Meraki detail; returns node references and snippets |
 | `GET` | `/api/topology/export.html` | Interactive HTML map (`?group_id=`, `?download=1` to save) |
 | `GET` | `/api/topology/path?source=&destination=` | Trace a flow hop by hop across every device on the map, request and replies. Optional `source_node`, `destination_node` (map node ids of the ends), `protocol` (`tcp`, `udp`, `icmp`, empty for any traffic) and `port`; see [path-trace.md](path-trace.md#api-reference) |
-| `GET` | `/api/meraki/nodes?org_ref=&node_id=` | Detail sections for one Meraki node |
-| `GET` | `/api/meraki/orgs` | List organizations and default collection options |
-| `POST` | `/api/meraki/orgs` | Add an organization (admin) |
-| `PUT` / `DELETE` | `/api/meraki/orgs/{id}` | Edit / delete an organization (admin) |
-| `POST` | `/api/meraki/orgs/{id}/validate` | Test the stored key, list visible organizations (admin) |
-| `POST` | `/api/meraki/orgs/{id}/build` | Start a collection; returns `job_id` |
-| `GET` | `/api/meraki/builds/{job_id}` | Collection progress and result |
-| `POST` | `/api/meraki/sample` | Add / refresh the demo organization |
-| `GET` | `/api/meraki/snapshots` | List snapshots (`?org_ref=` to filter) |
-| `GET` | `/api/meraki/snapshots/{id}/data` | Snapshot as JSON |
-| `GET` | `/api/meraki/snapshots/{id}/warnings` | Collection warnings of a snapshot (scope, request, HTTP status, message) |
-| `DELETE` | `/api/meraki/snapshots/{id}` | Delete a snapshot |
+| `GET` | `/api/sources/nodes?org_ref=&node_id=` | Detail sections for one Meraki node |
+| `GET` | `/api/sources` | List organizations and default collection options |
+| `POST` | `/api/sources` | Add an organization (admin) |
+| `PUT` / `DELETE` | `/api/sources/{id}` | Edit / delete an organization (admin) |
+| `POST` | `/api/sources/{id}/validate` | Test the stored key, list visible organizations (admin) |
+| `POST` | `/api/sources/{id}/build` | Start a collection; returns `job_id` |
+| `GET` | `/api/sources/builds/{job_id}` | Collection progress and result |
+| `POST` | `/api/sources/sample` | Add / refresh the demo organization |
+| `GET` | `/api/sources/snapshots` | List snapshots (`?org_ref=` to filter) |
+| `GET` | `/api/sources/snapshots/{id}/data` | Snapshot as JSON |
+| `GET` | `/api/sources/snapshots/{id}/warnings` | Collection warnings of a snapshot (scope, request, HTTP status, message) |
+| `DELETE` | `/api/sources/snapshots/{id}` | Delete a snapshot |

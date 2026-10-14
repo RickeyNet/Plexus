@@ -19,7 +19,7 @@ see [azure-topology.md](azure-topology.md) and [gcp-topology.md](gcp-topology.md
 - Permission: the `topology` feature to view the map; admin to manage cloud
   accounts and run discovery
 - API: `/api/cloud/*` for accounts and discovery, `/api/topology` and
-  `/api/meraki/*` for the map
+  `/api/sources/*` for the map
 
 ## Quick start
 
@@ -250,7 +250,7 @@ see [path-trace.md](path-trace.md).
 When both ends of a path are subnets or IP addresses and at least one is in
 a VPC, Plexus checks the flow against what discovery collected. In a path
 trace these are the items of the VPC and transit gateway hops, with their
-wording as below; `GET /api/meraki/aws/reachability` still answers the AWS
+wording as below; `GET /api/sources/aws/reachability` still answers the AWS
 part on its own. An end
 picked as a device or site (a Meraki appliance clicked on the map, a VPC
 picked as a site) has no address to check; the path then says which end to
@@ -347,11 +347,11 @@ Ranges** (see the [Meraki guide](meraki-topology.md#ipam)).
 |---|---|---|
 | `POST` | `/api/cloud/accounts` | `{"provider": "aws", "name", "region_scope", "auth_config"}` (admin) |
 | `POST` | `/api/cloud/accounts/{id}/discover` | Run discovery; the map updates when it succeeds (admin) |
-| `POST` | `/api/meraki/sample?provider=aws` | Add / refresh the demo AWS account |
+| `POST` | `/api/sources/sample?provider=aws` | Add / refresh the demo AWS account |
 | `GET` | `/api/topology` | AWS nodes carry `source: "meraki"` and a `meraki` reference whose `provider` is `aws` and whose `org_ref` is `-1` (all AWS accounts share one reference) |
-| `GET` | `/api/meraki/nodes?org_ref=-1&node_id=…` | Detail sections of one AWS node |
-| `GET` | `/api/meraki/subnets` | Includes the subnets of every VPC (`provider: "aws"`, `site_id` is the VPC ID) |
-| `GET` | `/api/meraki/aws/reachability?source=&destination=` | The AWS check of a flow. `source` / `destination` are IP addresses or networks; optional `protocol` (`tcp`, `udp`, `icmp`), `port`, and `source_vpc` / `destination_vpc` for a range that exists in several VPCs. Returns `applies`, `verdict` (`allowed`, `blocked`, `partial`, `unknown`), `summary` and `steps` |
+| `GET` | `/api/sources/nodes?org_ref=-1&node_id=…` | Detail sections of one AWS node |
+| `GET` | `/api/sources/subnets` | Includes the subnets of every VPC (`provider: "aws"`, `site_id` is the VPC ID) |
+| `GET` | `/api/sources/aws/reachability?source=&destination=` | The AWS check of a flow. `source` / `destination` are IP addresses or networks; optional `protocol` (`tcp`, `udp`, `icmp`), `port`, and `source_vpc` / `destination_vpc` for a range that exists in several VPCs. Returns `applies`, `verdict` (`allowed`, `blocked`, `partial`, `unknown`), `summary` and `steps` |
 
 ## The Sources dialog
 

@@ -139,7 +139,7 @@ export function isSourceFormReady(fields: readonly RequiredRule[], values: Sourc
   });
 }
 
-/** The per-provider defaults the `/meraki/orgs` listing reports. */
+/** The per-provider defaults the `/sources` listing reports. */
 export interface SourceDefaults {
   default_options?: MerakiBuildOptions;
   cato_default_options?: CatoBuildOptions;

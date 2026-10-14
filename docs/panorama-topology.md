@@ -24,7 +24,7 @@ different.
 
 - Permission: the `topology` feature to view, `topology.write` to collect or
   delete snapshots, admin to manage Panoramas and credentials
-- API: `/api/meraki/*` with `provider: "panorama"` (see the
+- API: `/api/sources/*` with `provider: "panorama"` (see the
   [API reference](#api-reference))
 
 Only Panorama-managed firewalls are read: a standalone firewall is not, nor
@@ -320,11 +320,11 @@ A Panorama uses the organization endpoints listed in
 
 | Method | Path | Notes for Palo Alto Panorama |
 |---|---|---|
-| `GET` | `/api/meraki/orgs` | Each entry has `provider` (`meraki`, `cato`, `fmc` or `panorama`); `panorama_default_options` lists the Panorama collection options |
-| `POST` | `/api/meraki/orgs` | `{"name", "provider": "panorama", "base_url": "https://<panorama>", "org_id": "<device group or blank>", "api_key": "<API key, or the password of options.username>", "options": {"username"?, "verify_tls"?, "device_name_contains"?, "include_interfaces"?, "include_routing"?, "include_security_policies"?, "include_nat"?, "include_vpn"?, "include_global_protect"?, "include_device_state"?, "inventory_enrich"?}}` (admin). `api_key` is the API key when `options.username` is blank, else that admin's password |
-| `POST` | `/api/meraki/orgs/{id}/validate` | Signs in to Panorama; `organizations` lists its device groups (admin) |
-| `POST` | `/api/meraki/orgs/{id}/build` | Start a collection; returns `job_id`. Progress phases: `panorama login`, `panorama devices`, `panorama device groups`, `panorama templates`, `panorama objects`, `panorama policies`, `panorama nat`, `panorama network`, `panorama vpn`, `panorama global protect`, `panorama device state`, `collected` |
-| `POST` | `/api/meraki/sample?provider=panorama` | Add / refresh the demo Panorama ("Sample Palo Alto Panorama (demo data)") |
+| `GET` | `/api/sources` | Each entry has `provider` (`meraki`, `cato`, `fmc` or `panorama`); `panorama_default_options` lists the Panorama collection options |
+| `POST` | `/api/sources` | `{"name", "provider": "panorama", "base_url": "https://<panorama>", "org_id": "<device group or blank>", "api_key": "<API key, or the password of options.username>", "options": {"username"?, "verify_tls"?, "device_name_contains"?, "include_interfaces"?, "include_routing"?, "include_security_policies"?, "include_nat"?, "include_vpn"?, "include_global_protect"?, "include_device_state"?, "inventory_enrich"?}}` (admin). `api_key` is the API key when `options.username` is blank, else that admin's password |
+| `POST` | `/api/sources/{id}/validate` | Signs in to Panorama; `organizations` lists its device groups (admin) |
+| `POST` | `/api/sources/{id}/build` | Start a collection; returns `job_id`. Progress phases: `panorama login`, `panorama devices`, `panorama device groups`, `panorama templates`, `panorama objects`, `panorama policies`, `panorama nat`, `panorama network`, `panorama vpn`, `panorama global protect`, `panorama device state`, `collected` |
+| `POST` | `/api/sources/sample?provider=panorama` | Add / refresh the demo Panorama ("Sample Palo Alto Panorama (demo data)") |
 | `GET` | `/api/topology` | Panorama nodes carry `source: "meraki"` and a `meraki` reference whose `provider` is `panorama`; the Panorama links have `protocol: "management"`, HA links `stack`, tunnels between firewalls `vpn`, tunnels to other peers `vpn-ipsec` |
-| `GET` | `/api/meraki/subnets` | Includes every firewall's connected subnets (`kind: "connected"`), static route destinations (`kind: "static"`) and GlobalProtect address pools (`kind: "pool"`), with `provider: "panorama"` |
+| `GET` | `/api/sources/subnets` | Includes every firewall's connected subnets (`kind: "connected"`), static route destinations (`kind: "static"`) and GlobalProtect address pools (`kind: "pool"`), with `provider: "panorama"` |
 | `GET` | `/api/topology/path` | Traces through each firewall's security policy, NAT rules, routes and IPsec tunnels; see [path-trace.md](path-trace.md) |

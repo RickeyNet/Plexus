@@ -812,36 +812,64 @@ def api(monkeypatch, request):
 
 def test_api_requires_authentication(api):
     api._c.cookies.clear()
-    assert api.get("/api/meraki/orgs").status_code == 401
+    assert api.get("/api/sources").status_code == 401
 
 
 def test_api_org_crud_never_returns_the_api_key(api):
-    created = api.post("/api/meraki/orgs", json={"name": "Acme", "api_key": "super-secret-key", "org_id": "123"})
+    created = api.post("/api/sources", json={"name": "Acme", "api_key": "super-secret-key", "org_id": "123"})
     assert created.status_code == 201, created.text
     org = created.json()["org"]
     assert org["has_api_key"] is True and org["options"]["include_lldp_cdp"] is True
     assert "super-secret-key" not in created.text
 
-    listing = api.get("/api/meraki/orgs")
+    listing = api.get("/api/sources")
     assert "super-secret-key" not in listing.text and "api_key_enc" not in listing.text
 
     # Duplicate name and non-Meraki base URL are rejected.
-    assert api.post("/api/meraki/orgs", json={"name": "Acme"}).status_code == 409
-    bad = api.post("/api/meraki/orgs", json={"name": "Evil", "base_url": "https://evil.example.com/api/v1"})
+    assert api.post("/api/sources", json={"name": "Acme"}).status_code == 409
+    bad = api.post("/api/sources", json={"name": "Evil", "base_url": "https://evil.example.com/api/v1"})
     assert bad.status_code == 400
 
     # An update without api_key keeps the stored key.
-    updated = api.put(f"/api/meraki/orgs/{org['id']}", json={"options": {"ssh_enrich": True}})
+    updated = api.put(f"/api/sources/{org['id']}", json={"options": {"ssh_enrich": True}})
     assert updated.status_code == 200
     assert updated.json()["org"]["has_api_key"] is True and updated.json()["org"]["options"]["ssh_enrich"] is True
 
-    assert api.delete(f"/api/meraki/orgs/{org['id']}").status_code == 200
-    assert api.get("/api/meraki/orgs").json()["orgs"] == []
+    assert api.delete(f"/api/sources/{org['id']}").status_code == 200
+    assert api.get("/api/sources").json()["orgs"] == []
 
 
 def test_api_build_requires_api_key(api):
-    org = api.post("/api/meraki/orgs", json={"name": "NoKey"}).json()["org"]
-    assert api.post(f"/api/meraki/orgs/{org['id']}/build").status_code == 400
+    org = api.post("/api/sources", json={"name": "NoKey"}).json()["org"]
+    assert api.post(f"/api/sources/{org['id']}/build").status_code == 400
+
+
+def test_api_sources_paths_serve_every_provider_and_the_meraki_paths_are_gone(api):
+    # The provider-neutral paths are the only ones: nothing a non-Meraki
+    # source does is requested from a path that says Meraki.
+    created = api.post(
+        "/api/sources", json={"name": "Branch FMC", "provider": "fmc", "base_url": "https://fmc.example"}
+    )
+    assert created.status_code == 201, created.text
+    org = created.json()["org"]
+    assert org["provider"] == "fmc"
+
+    assert [o["id"] for o in api.get("/api/sources").json()["orgs"]] == [org["id"]]
+    assert api.get("/api/meraki/orgs").status_code == 404
+
+    checked = api.post(f"/api/sources/{org['id']}/validate")
+    assert checked.status_code == 200 and checked.json()["ok"] is False
+    assert api.post(f"/api/meraki/orgs/{org['id']}/validate").status_code == 404
+    assert api.post(f"/api/sources/{org['id']}/build").status_code == 400
+
+    updated = api.put(f"/api/sources/{org['id']}", json={"name": "HQ FMC"})
+    assert updated.status_code == 200 and updated.json()["org"]["name"] == "HQ FMC"
+    assert api.get("/api/sources/snapshots").status_code == 200
+    assert api.get("/api/sources/subnets").status_code == 200
+    assert api.post("/api/sources/999999/validate").status_code == 404
+
+    assert api.delete(f"/api/sources/{org['id']}").status_code == 200
+    assert api.get("/api/sources").json()["orgs"] == []
 
 
 def _add_inventory_host(api, hostname: str, ip: str) -> int:
@@ -858,14 +886,14 @@ def _add_inventory_host(api, hostname: str, ip: str) -> int:
 def test_api_sample_build_is_merged_into_the_topology(api):
     assert not any(n.get("meraki") for n in api.get("/api/topology").json()["nodes"])
 
-    built = api.post("/api/meraki/sample")
+    built = api.post("/api/sources/sample")
     assert built.status_code == 201, built.text
     snapshot_id, org_ref = built.json()["snapshot_id"], built.json()["org_ref"]
 
-    listed = api.get("/api/meraki/snapshots").json()["snapshots"]
+    listed = api.get("/api/sources/snapshots").json()["snapshots"]
     assert listed[0]["id"] == snapshot_id and listed[0]["summary"]["sites"] > 0
     assert "snapshot_json" not in listed[0]
-    data = api.get(f"/api/meraki/snapshots/{snapshot_id}/data").json()
+    data = api.get(f"/api/sources/snapshots/{snapshot_id}/data").json()
     assert data["schema"] == 1 and data["nodes"]
 
     # The build shows up on the normal topology graph straight away.
@@ -887,10 +915,10 @@ def test_api_sample_build_is_merged_into_the_topology(api):
     assert not any(n.get("meraki") for n in api.get("/api/topology?group_id=999").json()["nodes"])
 
     appliance = next(n for n in meraki_nodes if n["meraki"]["kind"] == "appliance")
-    details = api.get("/api/meraki/nodes", params={"org_ref": org_ref, "node_id": appliance["meraki"]["node_id"]})
+    details = api.get("/api/sources/nodes", params={"org_ref": org_ref, "node_id": appliance["meraki"]["node_id"]})
     assert details.status_code == 200
     assert details.json()["sections"] and details.json()["site_sections"]
-    assert api.get("/api/meraki/nodes", params={"org_ref": org_ref, "node_id": "nope"}).status_code == 404
+    assert api.get("/api/sources/nodes", params={"org_ref": org_ref, "node_id": "nope"}).status_code == 404
 
     hits = api.get("/api/topology/search/deep", params={"q": "guest isolation"}).json()["results"]
     assert hits and hits[0]["org_ref"] == org_ref
@@ -899,17 +927,17 @@ def test_api_sample_build_is_merged_into_the_topology(api):
     assert api.get("/api/topology/search/deep", params={"q": "x"}).status_code == 422
 
     # Deleting the snapshot takes Meraki back off the map.
-    assert api.delete(f"/api/meraki/snapshots/{snapshot_id}").status_code == 200
-    assert api.get(f"/api/meraki/snapshots/{snapshot_id}").status_code == 404
+    assert api.delete(f"/api/sources/snapshots/{snapshot_id}").status_code == 200
+    assert api.get(f"/api/sources/snapshots/{snapshot_id}").status_code == 404
     assert not any(n.get("meraki") for n in api.get("/api/topology").json()["nodes"])
     assert api.get("/api/topology/search/deep", params={"q": "guest isolation"}).json()["results"] == []
 
 
 def test_api_lists_subnets_of_the_latest_snapshots(api):
-    assert api.get("/api/meraki/subnets").json() == {"subnets": []}
-    assert api.post("/api/meraki/sample").status_code == 201
+    assert api.get("/api/sources/subnets").json() == {"subnets": []}
+    assert api.post("/api/sources/sample").status_code == 201
 
-    subnets = api.get("/api/meraki/subnets").json()["subnets"]
+    subnets = api.get("/api/sources/subnets").json()["subnets"]
     data = next(s for s in subnets if s["cidr"] == "10.0.10.0/24")
     assert data["site_name"] == "HQ-DataCenter" and data["in_vpn"] is True
     # The owner is a node of the merged map.
@@ -932,7 +960,7 @@ def test_api_lists_subnets_of_the_latest_snapshots(api):
 
 def test_api_meraki_clients_join_mac_tracking(api):
     assert api.get("/api/mac-tracking/stats").json()["meraki_clients"] == 0
-    built = api.post("/api/meraki/sample")
+    built = api.post("/api/sources/sample")
     assert built.status_code == 201, built.text
     org_ref, tracked = built.json()["org_ref"], built.json()["clients_tracked"]
     assert tracked > 0
@@ -961,13 +989,13 @@ def test_api_meraki_clients_join_mac_tracking(api):
     assert _mac_search(api, "zz-no-such-client") == []
 
     # A second collection refreshes the same rows instead of adding more.
-    assert api.post("/api/meraki/sample").json()["clients_tracked"] == tracked
+    assert api.post("/api/sources/sample").json()["clients_tracked"] == tracked
     assert api.get("/api/mac-tracking/stats").json()["meraki_clients"] == tracked
 
     # Clients outlive their snapshot but not their organization.
     assert api.post("/api/mac-tracking/cleanup", params={"days": 1}).json()["removed"] == tracked
-    assert api.post("/api/meraki/sample").json()["clients_tracked"] == tracked
-    assert api.delete(f"/api/meraki/orgs/{org_ref}").status_code == 200
+    assert api.post("/api/sources/sample").json()["clients_tracked"] == tracked
+    assert api.delete(f"/api/sources/{org_ref}").status_code == 200
     assert api.get("/api/mac-tracking/stats").json()["meraki_clients"] == 0
 
 
@@ -979,7 +1007,7 @@ def test_api_meraki_neighbor_collapses_into_inventory_host(api):
     # The sample's LLDP neighbor is core-sw1 / 10.0.0.2. The host is added
     # *after* nothing has been built, and has no discovered links of its own.
     _add_inventory_host(api, "core-sw1", "10.0.0.2")
-    assert api.post("/api/meraki/sample").status_code == 201
+    assert api.post("/api/sources/sample").status_code == 201
 
     graph = api.get("/api/topology").json()
     host = next(n for n in graph["nodes"] if (n.get("meraki") or {}).get("kind") == "external")
@@ -990,7 +1018,7 @@ def test_api_meraki_neighbor_collapses_into_inventory_host(api):
 
 def test_api_topology_html_export(api):
     _add_inventory_host(api, "core-sw1", "10.0.0.2")
-    assert api.post("/api/meraki/sample").status_code == 201
+    assert api.post("/api/sources/sample").status_code == 201
 
     inline = api.get("/api/topology/export.html")
     assert inline.status_code == 200 and inline.headers["content-type"].startswith("text/html")
@@ -1027,18 +1055,18 @@ def test_api_build_job_runs_collector_and_stores_snapshot(api, monkeypatch):
         return build_sample_raw(branches=2)
 
     monkeypatch.setattr(routes_module, "collect_organization", _fake_collect)
-    org = api.post("/api/meraki/orgs", json={"name": "Acme", "api_key": "k", "org_id": "sample"}).json()["org"]
-    started = api.post(f"/api/meraki/orgs/{org['id']}/build")
+    org = api.post("/api/sources", json={"name": "Acme", "api_key": "k", "org_id": "sample"}).json()["org"]
+    started = api.post(f"/api/sources/{org['id']}/build")
     assert started.status_code == 202, started.text
 
     job = {}
     for _ in range(200):
-        job = api.get(f"/api/meraki/builds/{started.json()['job_id']}").json()
+        job = api.get(f"/api/sources/builds/{started.json()['job_id']}").json()
         if job["status"] != "running":
             break
     assert job["status"] == "completed", job
     assert job["result"]["summary"]["sites"] == 4
-    refreshed = api.get("/api/meraki/orgs").json()["orgs"][0]
+    refreshed = api.get("/api/sources").json()["orgs"][0]
     assert refreshed["last_build_status"] == "success" and refreshed["snapshot_count"] == 1
 
 

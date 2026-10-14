@@ -1076,14 +1076,14 @@ def api(monkeypatch, request):
 def _wait(api, job_id: str) -> dict:
     job: dict = {}
     for _ in range(400):
-        job = api.get(f"/api/meraki/builds/{job_id}").json()
+        job = api.get(f"/api/sources/builds/{job_id}").json()
         if job["status"] != "running":
             break
     return job
 
 
 def test_api_appgate_crud_keeps_the_password_write_only(api):
-    listing = api.get("/api/meraki/orgs").json()
+    listing = api.get("/api/sources").json()
     assert listing["appgate_default_options"] == DEFAULT_OPTIONS and "panorama_default_options" in listing
     body = {
         "name": "Prod Appgate",
@@ -1093,32 +1093,32 @@ def test_api_appgate_crud_keeps_the_password_write_only(api):
         "api_key": PASSWORD,
         "options": {"username": "plexus", "verify_tls": False, "include_users": 0},
     }
-    created = api.post("/api/meraki/orgs", json=body)
+    created = api.post("/api/sources", json=body)
     assert created.status_code == 201, created.text
     org = created.json()["org"]
     assert org["provider"] == "appgate" and org["has_api_key"] is True and org["org_id"] == "local"
     assert org["base_url"] == "https://appgate.example.com:8443"
     assert org["options"] == {**DEFAULT_OPTIONS, "username": "plexus", "verify_tls": False, "include_users": False}
-    assert PASSWORD not in created.text and PASSWORD not in api.get("/api/meraki/orgs").text
+    assert PASSWORD not in created.text and PASSWORD not in api.get("/api/sources").text
 
     bad = {"name": "Evil", "provider": "appgate", "base_url": "http://appgate.example.com"}
-    assert api.post("/api/meraki/orgs", json=bad).status_code == 400
+    assert api.post("/api/sources", json=bad).status_code == 400
     bad["base_url"] = "https://appgate.example.com/ui"
-    assert api.post("/api/meraki/orgs", json=bad).status_code == 400
-    unknown = api.post("/api/meraki/orgs", json={"name": "X", "provider": "zscaler"})
+    assert api.post("/api/sources", json=bad).status_code == 400
+    unknown = api.post("/api/sources", json={"name": "X", "provider": "zscaler"})
     assert unknown.status_code == 400 and "Provider must be meraki, cato, fmc, panorama or appgate" in unknown.text
 
-    updated = api.put(f"/api/meraki/orgs/{org['id']}", json={"options": {"username": "ro"}})
+    updated = api.put(f"/api/sources/{org['id']}", json={"options": {"username": "ro"}})
     assert updated.json()["org"]["options"]["username"] == "ro" and updated.json()["org"]["has_api_key"] is True
-    assert api.delete(f"/api/meraki/orgs/{org['id']}").status_code == 200
+    assert api.delete(f"/api/sources/{org['id']}").status_code == 200
 
 
 def test_api_appgate_sample_is_merged_into_the_topology(api):
-    built = api.post("/api/meraki/sample?provider=appgate")
+    built = api.post("/api/sources/sample?provider=appgate")
     assert built.status_code == 201, built.text
     assert built.json()["summary"]["remote_users"] == 4
     org_ref = built.json()["org_ref"]
-    org = next(o for o in api.get("/api/meraki/orgs").json()["orgs"] if o["id"] == org_ref)
+    org = next(o for o in api.get("/api/sources").json()["orgs"] if o["id"] == org_ref)
     assert org["name"] == "Sample Appgate SDP (demo data)" and org["base_url"] == "https://10.160.1.10:8443"
     assert org["options"]["username"] == "plexus-readonly" and org["org_id"] == "local"
 
@@ -1127,9 +1127,9 @@ def test_api_appgate_sample_is_merged_into_the_topology(api):
     assert {n["meraki"]["kind"] for n in ours} == {"appliance", "cloud", "user"}
     assert {"management", "vpn"} == {e["protocol"] for e in graph["edges"] if e.get("provider") == "appgate"}
 
-    details = api.get(f"/api/meraki/nodes?org_ref={org_ref}&node_id={_a(GW_HQ_1)}").json()
+    details = api.get(f"/api/sources/nodes?org_ref={org_ref}&node_id={_a(GW_HQ_1)}").json()
     assert details["provider"] == "appgate" and "Entitlements" in [s["title"] for s in details["sections"]]
-    subnets = api.get("/api/meraki/subnets").json()["subnets"]
+    subnets = api.get("/api/sources/subnets").json()["subnets"]
     servers = next(s for s in subnets if s["cidr"] == "10.160.10.0/24")
     assert servers["provider"] == "appgate" and servers["kind"] == "range" and servers["node_id"] == _a(GW_HQ_1)
     hits = api.get("/api/topology/search/deep?q=dana.reyes").json()["results"]
@@ -1145,7 +1145,7 @@ def test_api_appgate_sample_is_merged_into_the_topology(api):
     )
     assert path.status_code == 200 and path.json()["verdict"] == "allowed", path.text
     # Rebuilding refreshes the same entry.
-    assert api.post("/api/meraki/sample?provider=appgate").json()["org_ref"] == org_ref
+    assert api.post("/api/sources/sample?provider=appgate").json()["org_ref"] == org_ref
 
 
 def test_api_appgate_build_job_runs_the_collector_with_the_fake_controller(api, monkeypatch):
@@ -1169,36 +1169,36 @@ def test_api_appgate_build_job_runs_the_collector_with_the_fake_controller(api, 
         "api_key": PASSWORD,
         "options": {"username": "plexus", "verify_tls": False},
     }
-    org = api.post("/api/meraki/orgs", json=body).json()["org"]
-    job = _wait(api, api.post(f"/api/meraki/orgs/{org['id']}/build").json()["job_id"])
+    org = api.post("/api/sources", json=body).json()["org"]
+    job = _wait(api, api.post(f"/api/sources/{org['id']}/build").json()["job_id"])
     assert job["status"] == "partial", job
     assert job["result"]["warning_count"] == 1 and job["result"]["summary"]["devices"] == 8
-    snapshot = api.get(f"/api/meraki/snapshots/{job['result']['snapshot_id']}/data")
+    snapshot = api.get(f"/api/sources/snapshots/{job['result']['snapshot_id']}/data")
     assert snapshot.json()["provider"] == "appgate" and snapshot.json()["org"]["name"] == "Prod Appgate"
     for secret in (PASSWORD, "token-1", P12, SHARED_SECRET):
         assert secret not in snapshot.text
     assert fake.logouts >= 1
 
-    checked = api.post(f"/api/meraki/orgs/{org['id']}/validate").json()
+    checked = api.post(f"/api/sources/{org['id']}/validate").json()
     assert checked == {
         "ok": True,
         "message": "Login OK: Appgate SDP peer v22, 3 sites, 8 appliances",
         "organizations": [{"id": "local", "name": "Prod Appgate"}],
     }
-    api.put(f"/api/meraki/orgs/{org['id']}", json={"api_key": "wrong"})
+    api.put(f"/api/sources/{org['id']}", json={"api_key": "wrong"})
 
     def _any_password(base_url, username, password, **kwargs):
         return real_client(base_url, username, password, **{**kwargs, "transport": httpx.MockTransport(fake.handler)})
 
     monkeypatch.setattr(routes_module, "AppgateClient", _any_password)
-    checked = api.post(f"/api/meraki/orgs/{org['id']}/validate").json()
+    checked = api.post(f"/api/sources/{org['id']}/validate").json()
     assert checked["ok"] is False and checked["message"] == "Appgate rejected the login (HTTP 401)"
 
 
 def test_api_appgate_needs_a_user_name(api):
     body = {"name": "No user", "provider": "appgate", "base_url": BASE, "api_key": PASSWORD}
-    org = api.post("/api/meraki/orgs", json=body).json()["org"]
-    checked = api.post(f"/api/meraki/orgs/{org['id']}/validate").json()
+    org = api.post("/api/sources", json=body).json()["org"]
+    checked = api.post(f"/api/sources/{org['id']}/validate").json()
     assert checked == {"ok": False, "message": "Set the admin user name on this entry", "organizations": []}
-    job = _wait(api, api.post(f"/api/meraki/orgs/{org['id']}/build").json()["job_id"])
+    job = _wait(api, api.post(f"/api/sources/{org['id']}/build").json()["job_id"])
     assert job["status"] == "failed" and job["error"] == "Set the admin user name on this entry"

@@ -23,6 +23,8 @@ What is read:
   - ``policy.wanFirewall``      the WAN firewall rules (site, user and range
                                 to site, user and range), for path tracing
   - ``policy.internetFirewall`` the Internet firewall rules, for path tracing
+  - ``object.globalIpRangeList`` the account's global IP range objects, so a
+                                rule that names one can be evaluated
 
 Failure policy: the site list is required; everything else is best-effort and
 a failure is recorded in ``errors`` and surfaced in the map's collection
@@ -53,7 +55,7 @@ DEFAULT_OPTIONS: dict[str, Any] = {
     # the routing data path tracing has.
     "include_ranges": True,
     # The WAN and Internet firewall rules, which path tracing evaluates at
-    # the Cato Cloud.
+    # the Cato Cloud, and the global IP range objects the rules name.
     "include_firewall": True,
     # Attach data Plexus already collected over SNMP/SSH for inventory hosts
     # that match a Socket.
@@ -337,6 +339,22 @@ _FIREWALLS = (
     ("internet_firewall", "internetFirewall", INTERNET_FIREWALL_QUERY, INTERNET_FIREWALL_QUERY_BASIC),
 )
 
+# The account's global IP ranges: objects defined once (Networking > IP
+# Ranges) and named by rules of any policy. ``ipRange`` is ``from-to`` text,
+# ``subnet`` the CIDR when the range is one. The schema is confirmed from
+# Cato's CLI repository (``queryPayloads/query.object.txt``); the list input
+# only filters, there is no paging, so one query returns every object.
+GLOBAL_IP_RANGES_QUERY = """
+query plexusGlobalIpRanges($accountId: ID!) {
+  object(accountId: $accountId) {
+    globalIpRangeList {
+      items { id name description ipRange subnet }
+      total
+    }
+  }
+}
+"""
+
 VALIDATE_QUERY = """
 query plexusValidate($accountID: ID!) {
   accountSnapshot(accountID: $accountID) { id }
@@ -460,7 +478,7 @@ async def collect_account(
         1
         + int(opts["include_users"])
         + 3 * int(opts["include_ranges"])
-        + len(_FIREWALLS) * int(opts["include_firewall"])
+        + (len(_FIREWALLS) + 1) * int(opts["include_firewall"])
     )
     done = 0
 
@@ -544,19 +562,32 @@ async def collect_account(
                 errors.append(_error("account", f"policy.{field}", exc))
             done += 1
 
+    # None: not collected, so a rule naming a global IP range stays unresolved.
+    global_ip_ranges: list[dict] | None = None
+    if opts["include_firewall"]:
+        report("cato firewall")
+        try:
+            data = await client.query("plexusGlobalIpRanges", GLOBAL_IP_RANGES_QUERY, {"accountId": account_id})
+            found = ((data.get("object") or {}).get("globalIpRangeList") or {}).get("items") or []
+            global_ip_ranges = scrub_secrets([r for r in found if isinstance(r, dict)])
+        except CatoApiError as exc:
+            errors.append(_error("account", "object.globalIpRangeList", exc))
+        done += 1
+
     def rule_count(key: str) -> int:
         return len((firewalls[key] or {}).get("rules") or [])
 
     report("collected")
     LOGGER.info(
         "cato: collected account %s - %d sites, %d users, %d BGP peers, %d WAN and %d internet firewall rules, "
-        "%d calls, %d errors",
+        "%d global IP ranges, %d calls, %d errors",
         account_id,
         len(sites),
         len(users),
         len(bgp_peers or []),
         rule_count("wan_firewall"),
         rule_count("internet_firewall"),
+        len(global_ip_ranges or []),
         client.stats["requests"],
         len(errors),
     )
@@ -570,6 +601,7 @@ async def collect_account(
         "bgp_peers": bgp_peers,
         "wan_firewall": firewalls["wan_firewall"],
         "internet_firewall": firewalls["internet_firewall"],
+        "global_ip_ranges": global_ip_ranges,
         "errors": errors,
         "stats": dict(client.stats),
         "options": opts,

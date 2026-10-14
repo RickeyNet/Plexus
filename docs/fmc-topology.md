@@ -23,7 +23,7 @@ different.
 
 - Permission: the `topology` feature to view, `topology.write` to collect or
   delete snapshots, admin to manage FMCs and credentials
-- API: `/api/meraki/*` with `provider: "fmc"` (the `anyconnect` key of
+- API: `/api/sources/*` with `provider: "fmc"` (the `anyconnect` key of
   earlier releases is still accepted, see the [API reference](#api-reference))
 
 Only an FMC-managed deployment is supported: an ASA, or an FTD managed
@@ -226,7 +226,7 @@ Each **Data to collect** toggle of the entry turns one part on or off.
 | Access control policies, the rules of the ones in use, prefilter policies | `policies/accesspolicies`, `.../{id}/accessrules`, `policies/prefilterpolicies` | Access control policies |
 | Site-to-site VPN topologies, their endpoints, IKE and IPsec settings, tunnel status | `policies/ftds2svpns`, `.../{id}/endpoints`, `.../ikesettings`, `.../ipsecsettings`, `health/tunnelstatuses` | Site-to-site VPN |
 | Health alerts and devices with a pending deployment | `health/alerts`, `deployment/deployabledevices` | Health |
-| Connected remote access users | `health/ravpnsessions` | Connected users |
+| Connected remote access users | `health/ravpnsessions`; when it does not answer, `show vpn-sessiondb detail anyconnect` and `show vpn-sessiondb detail ra-ikev2-ipsec` run on each headend through `devices/devicerecords/{id}/operational/commands` | Connected users |
 
 All configuration resources are under `/api/fmc_config/v1/domain/{uuid}/`;
 every list is read with `expanded=true`. Requests are sent one at a time and
@@ -260,9 +260,20 @@ simply absent, the collection is not marked partial, and the path is counted
 under **Unsupported resources** on the FMC node (and listed in the
 snapshot's `collection.unsupported`). Without virtual routers the routing is
 read at the device level. Connected users come from the health API for
-remote access VPN sessions, which exists on FMC 7.3 and later; on an older
-FMC that request fails, is reported, and the users nodes show **not
-collected**.
+remote access VPN sessions, which exists on FMC 7.3 and later and needs the
+**Devices > VPN** permission. When that request fails, each remote access
+headend (every device on the map when the policy assignments could not be
+read) is asked itself: the FMC's command relay runs `show vpn-sessiondb
+detail anyconnect` and `show vpn-sessiondb detail ra-ikev2-ipsec` on the
+FTD (**Devices > Device Management** permission, FTD 6.6 and later) and the
+users, their assigned and public addresses, connection profile, group
+policy, client, OS, protocol, login time, duration and byte counts are read
+from its answer. The health API's failure is then counted under
+**Unsupported resources** instead of being reported. A device that does not
+serve the relay is counted there too; only when no device answers do the
+failures stay reported and the users nodes show **not collected**. A device
+whose remote access VPN policy could not be read (no VPN permission) still
+gets its users node, with the policy shown as *not collected*.
 
 **Caps.** The first 1000 access control rules of each policy are read (one
 page); the policy's real rule count is kept, and when it has more the
@@ -289,19 +300,19 @@ An FMC uses the organization endpoints listed in
 
 | Method | Path | Notes for Cisco FMC |
 |---|---|---|
-| `GET` | `/api/meraki/orgs` | Each entry has `provider` (`meraki`, `cato` or `fmc`); `fmc_default_options` lists the FMC collection options |
-| `POST` | `/api/meraki/orgs` | `{"name", "provider": "fmc", "base_url": "https://<fmc>", "org_id": "<domain>", "api_key": "<password>", "options": {"username": ..., "verify_tls"?, "device_name_contains"?, "include_all_devices"?, "include_interfaces"?, "include_routing"?, "include_s2s_vpn"?, "include_nat"?, "include_access_policies"?, "include_health"?, "include_sessions"?, "inventory_enrich"?}}` (admin). `api_key` carries the password |
-| `POST` | `/api/meraki/orgs/{id}/validate` | Signs in to the FMC; `organizations` lists the domains the user can see (admin) |
-| `POST` | `/api/meraki/orgs/{id}/build` | Start a collection; returns `job_id`. Progress phases: `fmc login`, `fmc devices`, `fmc ha`, `fmc objects`, `fmc vpn policies`, `fmc pools`, `fmc interfaces`, `fmc routing`, `fmc nat`, `fmc access policies`, `fmc s2s vpn`, `fmc health`, `fmc sessions`, `collected` |
-| `POST` | `/api/meraki/sample?provider=fmc` | Add / refresh the demo FMC ("Sample Cisco FMC (demo data)") |
+| `GET` | `/api/sources` | Each entry has `provider` (`meraki`, `cato` or `fmc`); `fmc_default_options` lists the FMC collection options |
+| `POST` | `/api/sources` | `{"name", "provider": "fmc", "base_url": "https://<fmc>", "org_id": "<domain>", "api_key": "<password>", "options": {"username": ..., "verify_tls"?, "device_name_contains"?, "include_all_devices"?, "include_interfaces"?, "include_routing"?, "include_s2s_vpn"?, "include_nat"?, "include_access_policies"?, "include_health"?, "include_sessions"?, "inventory_enrich"?}}` (admin). `api_key` carries the password |
+| `POST` | `/api/sources/{id}/validate` | Signs in to the FMC; `organizations` lists the domains the user can see (admin) |
+| `POST` | `/api/sources/{id}/build` | Start a collection; returns `job_id`. Progress phases: `fmc login`, `fmc devices`, `fmc ha`, `fmc objects`, `fmc vpn policies`, `fmc pools`, `fmc interfaces`, `fmc routing`, `fmc nat`, `fmc access policies`, `fmc s2s vpn`, `fmc health`, `fmc sessions`, `collected` |
+| `POST` | `/api/sources/sample?provider=fmc` | Add / refresh the demo FMC ("Sample Cisco FMC (demo data)") |
 | `GET` | `/api/topology` | FMC nodes carry `source: "meraki"` and a `meraki` reference whose `provider` is `fmc`; the FMC links have `protocol: "management"`, HA and cluster links `stack`, tunnels between FTDs `vpn`, tunnels to extranet peers `vpn-ipsec` |
-| `GET` | `/api/meraki/subnets` | Includes every FTD's connected subnets (`kind: "connected"`), static route destinations (`kind: "static"`) and address pools (`kind: "pool"`), with `provider: "fmc"` |
+| `GET` | `/api/sources/subnets` | Includes every FTD's connected subnets (`kind: "connected"`), static route destinations (`kind: "static"`) and address pools (`kind: "pool"`), with `provider: "fmc"` |
 
 **Earlier releases.** This integration was the `anyconnect` provider while it
 only drew remote access VPN headends. The `anyconnect` key is still accepted
-on input (`POST /api/meraki/orgs` stores it as `fmc`, and
-`POST /api/meraki/sample?provider=anyconnect` builds the FMC sample); stored
+on input (`POST /api/sources` stores it as `fmc`, and
+`POST /api/sources/sample?provider=anyconnect` builds the FMC sample); stored
 entries were renamed by migration 0070, together with the software tracker's
 rows of their devices, and a snapshot stored under `anyconnect` is served as
-`fmc`. The `anyconnect_default_options` key of `GET /api/meraki/orgs` is
+`fmc`. The `anyconnect_default_options` key of `GET /api/sources` is
 gone; read `fmc_default_options`.

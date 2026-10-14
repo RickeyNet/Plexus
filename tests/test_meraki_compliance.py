@@ -488,7 +488,7 @@ def test_api_catalog_lists_checks_with_rule_templates(api):
 
     # Only Meraki organizations are offered (never their keys).
     assert api.get("/api/compliance/meraki/orgs").json() == []
-    api.post("/api/meraki/sample")
+    api.post("/api/sources/sample")
     orgs = api.get("/api/compliance/meraki/orgs").json()
     assert len(orgs) == 1 and orgs[0]["is_sample"] and not orgs[0]["has_api_key"]
     assert "api_key" not in orgs[0] and "api_key_enc" not in orgs[0]
@@ -513,7 +513,7 @@ def test_api_profile_validation_rejects_unknown_meraki_check(api):
 
 
 def test_api_assignment_crud_and_scan_of_the_demo_organization(api):
-    org_ref = api.post("/api/meraki/sample").json()["org_ref"]
+    org_ref = api.post("/api/sources/sample").json()["org_ref"]
     profile_id = _meraki_profile_id(api, "Meraki Switch Security Baseline")
 
     # A profile without Meraki rules cannot be assigned to an organization.
@@ -585,7 +585,7 @@ def test_api_assignment_crud_and_scan_of_the_demo_organization(api):
 
 
 def test_api_on_demand_scan_runs_one_per_organization(api):
-    org_ref = api.post("/api/meraki/sample").json()["org_ref"]
+    org_ref = api.post("/api/sources/sample").json()["org_ref"]
     profile_id = _meraki_profile_id(api, "Meraki Dashboard Access Hardening")
     started = api.post("/api/compliance/meraki/scan", json={"profile_id": profile_id, "org_ref": org_ref})
     assert started.status_code == 202, started.text
@@ -605,7 +605,7 @@ def test_api_on_demand_scan_runs_one_per_organization(api):
 
 
 def test_api_scan_requires_an_api_key_unless_sample(api, monkeypatch):
-    org = api.post("/api/meraki/orgs", json={"name": "Acme", "org_id": "1"}).json()["org"]
+    org = api.post("/api/sources", json={"name": "Acme", "org_id": "1"}).json()["org"]
     profile_id = _meraki_profile_id(api, "Meraki Wireless Security Baseline")
     refused = api.post("/api/compliance/meraki/scan", json={"profile_id": profile_id, "org_ref": org["id"]})
     assert refused.status_code == 400
@@ -621,7 +621,7 @@ def test_api_scan_requires_an_api_key_unless_sample(api, monkeypatch):
         return raw
 
     monkeypatch.setattr(routes_module, "collect_compliance_data", _fake_collect)
-    api.put(f"/api/meraki/orgs/{org['id']}", json={"api_key": "k"})
+    api.put(f"/api/sources/{org['id']}", json={"api_key": "k"})
     started = api.post("/api/compliance/meraki/scan", json={"profile_id": profile_id, "org_ref": org["id"]})
     assert started.status_code == 202, started.text
     job = _wait_for_job(api, started.json()["job_id"])
@@ -636,7 +636,7 @@ def test_scheduled_loop_runs_due_meraki_assignments(api):
 
     import netcontrol.routes.compliance as compliance_module
 
-    org_ref = api.post("/api/meraki/sample").json()["org_ref"]
+    org_ref = api.post("/api/sources/sample").json()["org_ref"]
     profile_id = _meraki_profile_id(api, "Meraki Security Appliance Baseline")
     created = api.post("/api/compliance/meraki/assignments", json={"profile_id": profile_id, "org_ref": org_ref})
     assert created.status_code == 201

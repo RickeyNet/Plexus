@@ -1343,6 +1343,13 @@ class _Builder:
                 policy = self.device_policy.get(device_id)
                 if policy is not None:
                     box_nodes += self._headend(node, device_id, policy, access_rows)
+                elif self.device_sessions.get(device_id):
+                    # Users connected to a device whose remote access VPN
+                    # policy could not be read (no VPN permission, or the
+                    # policies were not collected) still belong on the map.
+                    box_nodes.append(
+                        self._users_node(node, device_id, {"name": "not collected"}, self.device_sessions[device_id])
+                    )
                 box_nodes += self._wan_stubs(node, device_id)
             if ra_members:
                 policy = self.device_policy[ra_members[0]]

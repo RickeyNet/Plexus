@@ -450,6 +450,24 @@ def build_sample_raw() -> dict[str, Any]:
         "bgp_peers": [],
         "wan_firewall": wan_firewall,
         "internet_firewall": internet_firewall,
+        # The account's global IP range objects (Networking > IP Ranges), as
+        # ``object.globalIpRangeList`` returns them.
+        "global_ip_ranges": [
+            {
+                "id": "gr-1",
+                "name": "VDI-Azure",
+                "description": "Azure VDI pool",
+                "ipRange": "10.12.128.0-10.12.131.255",
+                "subnet": "10.12.128.0/22",
+            },
+            {
+                "id": "gr-2",
+                "name": "Scanners",
+                "description": "",
+                "ipRange": "10.50.10.200-10.50.10.203",
+                "subnet": None,
+            },
+        ],
         "errors": [],
         "stats": {"requests": 0, "retries": 0, "rate_limited": 0},
         "options": dict(DEFAULT_OPTIONS),

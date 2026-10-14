@@ -1580,7 +1580,7 @@ def api(monkeypatch, request):
 
 def test_api_traces_the_demo_flows_end_to_end(api):
     for provider in ("meraki", "fmc", "aws"):
-        assert api.post(f"/api/meraki/sample?provider={provider}").status_code == 201
+        assert api.post(f"/api/sources/sample?provider={provider}").status_code == 201
 
     # The graph nodes of Branch-Atlanta's MX and HQ's (which may be an inventory host too).
     graph = api.get("/api/topology").json()["nodes"]

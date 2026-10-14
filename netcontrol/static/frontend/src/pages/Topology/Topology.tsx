@@ -62,7 +62,7 @@ import {
 import { crowdedGroups, fitTitles, labelWidth, straighten, tidyLabel, tidyTree, type XY } from './layout';
 import { distanceToRoute, routeSourceLinks, traceRoute } from './routes';
 import { EdgeDetails } from './EdgeDetails';
-import { MAX_PATH_ENDPOINTS, connectPicks, findSubnets, isAddressText, parseTraffic, pathSites, subnetOptionLabel, type PathPick } from './paths';
+import { MAX_PATH_ENDPOINTS, connectPicks, findSubnets, isAddressText, parseTraffic, pathSites, subnetOptionLabel, userPick, type PathPick } from './paths';
 import { PathTrace } from './PathTracePanel';
 import { legKey, mergeHighlights, pathTraceQuery, reverseTraceQuery, uncheckedTraceNote, type TraceHighlight } from './pathTrace';
 import { NodeDetails } from './NodeDetails';
@@ -1284,6 +1284,9 @@ export function Topology() {
     });
     return { list, owners };
   }, [subnetsQuery.data, merakiNodeIds]);
+  // Read by the map's click handler, which is bound once per network build.
+  const pathSubnetsRef = useRef(pathSubnets);
+  pathSubnetsRef.current = pathSubnets;
   const pathResult = useMemo(() => connectPicks(pathPicks, data?.edges ?? []), [pathPicks, data]);
   const trafficFilter = useMemo(() => parseTraffic(pathTraffic), [pathTraffic]);
   // Legs between two subnets or addresses, which the server traces hop by hop.
@@ -1507,8 +1510,12 @@ export function Topology() {
     if (!pathPicksRef.current.some((p) => p.key === pick.key)) togglePathPick(pick);
   }
 
+  // A remote user is picked with its address, so its legs are traced hop by
+  // hop (the user has one address); any other node is picked as a device.
   function nodePick(nodeId: number | string): PathPick {
     const raw = nodeMetaRef.current.get(nodeId)?.raw;
+    const user = raw ? userPick(raw, pathSubnetsRef.current.list) : null;
+    if (user) return user;
     const site = raw?.meraki?.site_name;
     const label = raw?.label ?? String(nodeId);
     return { key: `n:${nodeId}`, node: nodeId, label: site && !label.includes(site) ? `${label} · ${site}` : label };

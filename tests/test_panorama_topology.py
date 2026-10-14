@@ -953,14 +953,14 @@ def api(monkeypatch, request):
 def _wait(api, job_id: str) -> dict:
     job: dict = {}
     for _ in range(400):
-        job = api.get(f"/api/meraki/builds/{job_id}").json()
+        job = api.get(f"/api/sources/builds/{job_id}").json()
         if job["status"] != "running":
             break
     return job
 
 
 def test_api_panorama_crud_keeps_the_secret_write_only(api):
-    listing = api.get("/api/meraki/orgs").json()
+    listing = api.get("/api/sources").json()
     assert listing["panorama_default_options"] == DEFAULT_OPTIONS and "fmc_default_options" in listing
     body = {
         "name": "Prod Panorama",
@@ -970,34 +970,34 @@ def test_api_panorama_crud_keeps_the_secret_write_only(api):
         "api_key": "super-secret-api-key",
         "options": {"verify_tls": False, "include_nat": 0},
     }
-    created = api.post("/api/meraki/orgs", json=body)
+    created = api.post("/api/sources", json=body)
     assert created.status_code == 201, created.text
     org = created.json()["org"]
     assert org["provider"] == "panorama" and org["has_api_key"] is True
     assert org["base_url"] == "https://panorama.example.com" and org["org_id"] == "Branches"
     assert org["options"] == {**DEFAULT_OPTIONS, "verify_tls": False, "include_nat": False}
     assert "super-secret-api-key" not in created.text
-    assert "super-secret-api-key" not in api.get("/api/meraki/orgs").text
+    assert "super-secret-api-key" not in api.get("/api/sources").text
 
     bad = {"name": "Evil", "provider": "panorama", "base_url": "http://panorama.example.com"}
-    assert api.post("/api/meraki/orgs", json=bad).status_code == 400
+    assert api.post("/api/sources", json=bad).status_code == 400
     bad["base_url"] = "https://panorama.example.com/api/"
-    assert api.post("/api/meraki/orgs", json=bad).status_code == 400
-    unknown = api.post("/api/meraki/orgs", json={"name": "X", "provider": "fortinet"})
+    assert api.post("/api/sources", json=bad).status_code == 400
+    unknown = api.post("/api/sources", json={"name": "X", "provider": "fortinet"})
     assert unknown.status_code == 400 and "meraki, cato, fmc, panorama or appgate" in unknown.text
 
-    updated = api.put(f"/api/meraki/orgs/{org['id']}", json={"options": {"username": "ro", "include_vpn": False}})
+    updated = api.put(f"/api/sources/{org['id']}", json={"options": {"username": "ro", "include_vpn": False}})
     assert updated.status_code == 200
     assert updated.json()["org"]["options"]["username"] == "ro" and updated.json()["org"]["has_api_key"] is True
-    assert api.delete(f"/api/meraki/orgs/{org['id']}").status_code == 200
+    assert api.delete(f"/api/sources/{org['id']}").status_code == 200
 
 
 def test_api_panorama_sample_is_merged_into_the_topology(api):
-    built = api.post("/api/meraki/sample?provider=panorama")
+    built = api.post("/api/sources/sample?provider=panorama")
     assert built.status_code == 201, built.text
     assert built.json()["summary"]["ha_pairs"] == 1 and built.json()["summary"]["remote_users"] == 3
     org_ref = built.json()["org_ref"]
-    org = next(o for o in api.get("/api/meraki/orgs").json()["orgs"] if o["id"] == org_ref)
+    org = next(o for o in api.get("/api/sources").json()["orgs"] if o["id"] == org_ref)
     assert org["name"] == "Sample Palo Alto Panorama (demo data)" and org["base_url"] == "https://10.210.2.30"
     assert org["options"]["username"] == "plexus-readonly"
 
@@ -1009,9 +1009,9 @@ def test_api_panorama_sample_is_merged_into_the_topology(api):
     protocols = {e["protocol"] for e in graph["edges"] if e.get("provider") == "panorama"}
     assert {"management", "stack", "vpn", "vpn-ipsec", "wan"} <= protocols
 
-    details = api.get(f"/api/meraki/nodes?org_ref={org_ref}&node_id=d:{BRANCH}").json()
+    details = api.get(f"/api/sources/nodes?org_ref={org_ref}&node_id=d:{BRANCH}").json()
     assert details["provider"] == "panorama" and "Security rules" in [s["title"] for s in details["sections"]]
-    subnets = api.get("/api/meraki/subnets").json()["subnets"]
+    subnets = api.get("/api/sources/subnets").json()["subnets"]
     lan = next(s for s in subnets if s["cidr"] == "10.151.10.0/24")
     assert lan["provider"] == "panorama" and lan["kind"] == "connected" and lan["node_id"] == f"d:{BRANCH}"
     assert any(s["cidr"] == "10.252.0.0/22" and s["kind"] == "pool" for s in subnets)
@@ -1022,7 +1022,7 @@ def test_api_panorama_sample_is_merged_into_the_topology(api):
     export = api.get("/api/topology/export.html")
     assert export.status_code == 200 and "GlobalProtect users (3)" in export.text
     # Rebuilding refreshes the same entry.
-    assert api.post("/api/meraki/sample?provider=panorama").json()["org_ref"] == org_ref
+    assert api.post("/api/sources/sample?provider=panorama").json()["org_ref"] == org_ref
 
 
 def test_api_panorama_build_job_runs_the_collector(api, monkeypatch):
@@ -1042,12 +1042,12 @@ def test_api_panorama_build_job_runs_the_collector(api, monkeypatch):
         "base_url": "https://panorama.example.com:8443",
         "api_key": API_KEY,
     }
-    org = api.post("/api/meraki/orgs", json=body).json()["org"]
-    started = api.post(f"/api/meraki/orgs/{org['id']}/build")
+    org = api.post("/api/sources", json=body).json()["org"]
+    started = api.post(f"/api/sources/{org['id']}/build")
     assert started.status_code == 202, started.text
     job = _wait(api, started.json()["job_id"])
     assert job["status"] == "completed", job
-    snapshot = api.get(f"/api/meraki/snapshots/{job['result']['snapshot_id']}/data").json()
+    snapshot = api.get(f"/api/sources/snapshots/{job['result']['snapshot_id']}/data").json()
     assert snapshot["provider"] == "panorama" and snapshot["org"]["name"] == "Prod Panorama"
 
 
@@ -1072,23 +1072,23 @@ def test_api_panorama_build_against_the_fake_is_partial_on_a_failed_resource(api
         "api_key": "s3cret",
         "options": {"username": "plexus"},
     }
-    org = api.post("/api/meraki/orgs", json=body).json()["org"]
-    job = _wait(api, api.post(f"/api/meraki/orgs/{org['id']}/build").json()["job_id"])
+    org = api.post("/api/sources", json=body).json()["org"]
+    job = _wait(api, api.post(f"/api/sources/{org['id']}/build").json()["job_id"])
     assert job["status"] == "partial", job
     assert job["result"]["warning_count"] == 6 and job["result"]["summary"]["devices"] == 4
-    warnings = api.get(f"/api/meraki/snapshots/{job['result']['snapshot_id']}/warnings").json()
+    warnings = api.get(f"/api/sources/snapshots/{job['result']['snapshot_id']}/warnings").json()
     assert "nat/rules" in json.dumps(warnings)
-    stored = api.get(f"/api/meraki/snapshots/{job['result']['snapshot_id']}/data").text
+    stored = api.get(f"/api/sources/snapshots/{job['result']['snapshot_id']}/data").text
     assert PSK not in stored and "s3cret" not in stored and GENERATED_KEY not in stored
 
-    checked = api.post(f"/api/meraki/orgs/{org['id']}/validate").json()
+    checked = api.post(f"/api/sources/{org['id']}/validate").json()
     assert checked["ok"] is True and checked["message"].startswith("Signed in to Panorama panorama-01 (11.1.4-h7)")
     assert [o["name"] for o in checked["organizations"]] == ["Branches", "Corporate"]
-    api.put(f"/api/meraki/orgs/{org['id']}", json={"org_id": "Nope"})
-    checked = api.post(f"/api/meraki/orgs/{org['id']}/validate").json()
+    api.put(f"/api/sources/{org['id']}", json={"org_id": "Nope"})
+    checked = api.post(f"/api/sources/{org['id']}/validate").json()
     assert checked["ok"] is False and "no device group Nope" in checked["message"]
-    api.put(f"/api/meraki/orgs/{org['id']}", json={"api_key": "wrong"})
-    checked = api.post(f"/api/meraki/orgs/{org['id']}/validate").json()
+    api.put(f"/api/sources/{org['id']}", json={"api_key": "wrong"})
+    checked = api.post(f"/api/sources/{org['id']}/validate").json()
     assert checked["ok"] is False and checked["message"].startswith("Panorama rejected the credentials (HTTP 403)")
 
 
@@ -1097,7 +1097,7 @@ def _labels(direction: dict) -> list[str]:
 
 
 def test_api_traces_flows_through_the_panorama_sample(api):
-    assert api.post("/api/meraki/sample?provider=panorama").status_code == 201
+    assert api.post("/api/sources/sample?provider=panorama").status_code == 201
     graph = api.get("/api/topology").json()["nodes"]
     label = {(n.get("meraki") or {}).get("node_id"): n["label"] for n in graph}
     hq, branch = label[f"d:{HQ_1}"], label[f"d:{BRANCH}"]

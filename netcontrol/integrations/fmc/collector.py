@@ -31,7 +31,9 @@ What is read (under ``/api/fmc_config/v1/domain/{uuid}`` unless noted):
     ``health/tunnelstatuses``                    site-to-site VPN
   - ``health/alerts``, ``deployment/deployabledevices``
   - ``health/ravpnsessions``                      connected remote access users
-                                                  (FMC 7.3 and later)
+                                                  (FMC 7.3 and later); when it
+    does not answer, ``show vpn-sessiondb`` run on each headend through
+    ``devices/devicerecords/{id}/operational/commands`` (see ``sessions.py``)
 
 Failure policy: the login and the device list are required; everything else
 is best-effort and a failure is recorded in ``errors`` and surfaced in the
@@ -53,6 +55,13 @@ from datetime import UTC, datetime
 from typing import Any
 
 from netcontrol.integrations.fmc.client import CONFIG_PATH, PLATFORM_PATH, FmcApiError, FmcClient
+from netcontrol.integrations.fmc.sessions import (
+    SESSION_COMMANDS,
+    command_output,
+    command_path,
+    parse_vpn_sessiondb,
+    session_record,
+)
 from netcontrol.integrations.meraki.collector import scrub_secrets
 from netcontrol.telemetry import configure_logging
 
@@ -77,7 +86,8 @@ DEFAULT_OPTIONS: dict[str, Any] = {
     "include_access_policies": True,
     # Health alerts and devices with a pending deployment.
     "include_health": True,
-    # Connected remote access users (FMC 7.3+ health API).
+    # Connected remote access users (FMC 7.3+ health API, else ``show
+    # vpn-sessiondb`` on each headend through the FMC's command relay).
     "include_sessions": True,
     # Verify the FMC's TLS certificate.
     "verify_tls": True,
@@ -356,8 +366,9 @@ async def collect_fmc(
     base = ""  # the domain's configuration root, known after login
 
     def short(path: str) -> str:
-        # Reported relative to the domain, which is what an operator reads.
-        relative = path.removeprefix(base) if base else path
+        # Reported relative to the domain, which is what an operator reads;
+        # a command relay request is reported without its query.
+        relative = (path.removeprefix(base) if base else path).split("?", 1)[0]
         return relative.removeprefix(CONFIG_PATH).removeprefix(PLATFORM_PATH)
 
     async def best_effort(path: str, scope: str, *, mode: str = "all", optional: bool = False, limit: int = 0) -> Any:
@@ -662,9 +673,46 @@ async def collect_fmc(
     sessions: list[dict] | None = None
     if opts["include_sessions"]:
         report("fmc sessions")
-        found_sessions = await best_effort(f"{base}/health/ravpnsessions", "sessions")
+        sessions_path = f"{base}/health/ravpnsessions"
+        found_sessions = await best_effort(sessions_path, "sessions")
         if found_sessions is not None:
             sessions = _dicts(_scrub(found_sessions))
+        else:
+            # The health API is 7.3+ and needs the VPN permission. Ask each
+            # headend itself: the FMC relays ``show vpn-sessiondb`` to the
+            # device (Device Management permission, FTD 6.6+).
+            targets = [d for d in on_map_ids if d in headends] if headends else list(on_map_ids)
+            total += len(SESSION_COMMANDS) * len(targets)
+            cli_sessions: list[dict] = []
+            answered = 0
+            for device_id in targets:
+                report("fmc sessions", devices=len(targets))
+                scope = f"sessions of {owner_name(device_id)}"
+                for command, parameter in SESSION_COMMANDS:
+                    path = command_path(base, device_id, command, parameter)
+                    found = await best_effort(path, scope, mode="one", optional=True)
+                    if found is None:
+                        continue
+                    parsed = parse_vpn_sessiondb(command_output(found))
+                    if parsed is None:
+                        first_line = next((ln.strip() for ln in command_output(found).splitlines() if ln.strip()), "")
+                        errors.append(
+                            {
+                                "scope": scope,
+                                "path": short(path),
+                                "status": None,
+                                "message": f"{command} {parameter}: not the command's output: {first_line[:200]}",
+                            }
+                        )
+                        continue
+                    answered += 1
+                    cli_sessions += [session_record(device_id, owner_name(device_id), s) for s in parsed]
+            if answered:
+                sessions = _scrub(cli_sessions)
+                # The health API's refusal is a gap the devices filled, not a loss.
+                errors[:] = [e for e in errors if e["path"] != short(sessions_path)]
+                if short(sessions_path) not in unsupported:
+                    unsupported.append(short(sessions_path))
 
     report("collected")
     LOGGER.info(

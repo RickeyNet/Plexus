@@ -15,7 +15,7 @@ different.
 
 - Permission: the `topology` feature to view, `topology.write` to collect or
   delete snapshots, admin to manage accounts and API keys
-- API: `/api/meraki/*` with `provider: "cato"`
+- API: `/api/sources/*` with `provider: "cato"`
 
 ## Quick start
 
@@ -112,7 +112,12 @@ PoP → Socket, and a site whose tunnel is down is not routed through.
 Between two subnets or addresses the path is also traced hop by hop through
 the Socket, the PoPs and the Cato Cloud, with the WAN firewall rules for a
 private destination and the internet firewall rules for a public one; see
-[path-trace.md](path-trace.md).
+[path-trace.md](path-trace.md). A rule is matched on the addresses behind
+the objects it names: sites, their network ranges and interfaces, connected
+users, and the account's global IP ranges (**Networking > IP Ranges**),
+which are read with the rules. An object Plexus does not read (a users
+group, a host, an application, a category, a country) makes a rule that may
+match *not decided*, never allowed.
 
 A connected remote user's VPN address is in the subnet list as a network of
 its own (`10.41.0.11/32 - PoP New York - Cato Client Dana Reyes`), so typing
@@ -123,8 +128,9 @@ where its route tables and security groups are checked. The user's own
 address wins over a wider range another source keeps for the whole client
 pool, such as a Meraki site's non-Meraki VPN peer that covers it; picking
 that range instead starts at the peer, which knows nothing of what is behind
-it. A user picked by clicking the person icon draws the path only, like any
-device.
+it. Clicking the person icon in Path Mode picks the user with that address
+too, so the leg is traced either way; the pick reads `Dana Reyes
+(10.41.0.11) · PoP New York`.
 
 A path is only drawn over links on the map. Plexus does not know that a Cato
 Socket and a Meraki switch at the same location are cabled together unless
@@ -147,6 +153,8 @@ both hold, or that sits inside a VPC, is listed under **Overlapping Ranges**
 | Sites, Sockets, WAN links, PoP, HA state | `accountSnapshot` (sites) | always |
 | Connected remote users | `accountSnapshot` (users) | Remote users |
 | Network ranges and LAN interface subnets | `entityLookup` (`siteRange`, `networkInterface`) | Network ranges |
+| WAN and Internet firewall rules | `policy.wanFirewall`, `policy.internetFirewall` | Firewall rules |
+| Global IP range objects the rules name (Networking > IP Ranges) | `object.globalIpRangeList` | Firewall rules |
 
 A collection is a handful of queries, sent one at a time and spaced out to
 stay inside Cato's API rate limits. A rate-limit answer is retried after a
@@ -171,9 +179,9 @@ A Cato account uses the organization endpoints listed in
 
 | Method | Path | Notes for Cato |
 |---|---|---|
-| `GET` | `/api/meraki/orgs` | Each entry has `provider` (`meraki` or `cato`); `cato_default_options` lists the Cato collection options |
-| `POST` | `/api/meraki/orgs` | `{"name", "provider": "cato", "org_id": "<account ID>", "api_key", "base_url"?, "options"?}` (admin) |
-| `POST` | `/api/meraki/orgs/{id}/validate` | Runs one query against the account (admin) |
-| `POST` | `/api/meraki/orgs/{id}/build` | Start a collection; returns `job_id` |
-| `POST` | `/api/meraki/sample?provider=cato` | Add / refresh the demo Cato account |
+| `GET` | `/api/sources` | Each entry has `provider` (`meraki` or `cato`); `cato_default_options` lists the Cato collection options |
+| `POST` | `/api/sources` | `{"name", "provider": "cato", "org_id": "<account ID>", "api_key", "base_url"?, "options"?}` (admin) |
+| `POST` | `/api/sources/{id}/validate` | Runs one query against the account (admin) |
+| `POST` | `/api/sources/{id}/build` | Start a collection; returns `job_id` |
+| `POST` | `/api/sources/sample?provider=cato` | Add / refresh the demo Cato account |
 | `GET` | `/api/topology` | Cato nodes carry `source: "meraki"` and a `meraki` reference whose `provider` is `cato` |
