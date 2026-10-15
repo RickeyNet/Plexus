@@ -110,9 +110,14 @@ Meraki one. A path between two Cato sites runs Socket → PoP → Cato Cloud →
 PoP → Socket, and a site whose tunnel is down is not routed through.
 
 Between two subnets or addresses the path is also traced hop by hop through
-the Socket, the PoPs and the Cato Cloud, with the WAN firewall rules for a
-private destination and the internet firewall rules for a public one; see
-[path-trace.md](path-trace.md). A rule is matched on the addresses behind
+the Socket, the PoPs and the Cato Cloud, with the firewall Cato would apply:
+the WAN firewall rules when a site's network range or a connected user's
+address covers the destination (WAN traffic), the internet firewall rules
+otherwise (internet traffic), a private destination no site claims included,
+since Cato routes such a destination to its internet egress; see
+[path-trace.md](path-trace.md). When the site ranges were not collected and
+only the default route matches, neither firewall is picked and both are
+*not decided*. A rule is matched on the addresses behind
 the objects it names: sites, their network ranges and interfaces, connected
 users, and the account's global IP ranges (**Networking > IP Ranges**),
 which are read with the rules. An object Plexus does not read (a users
@@ -120,7 +125,7 @@ group, a host, an application, a category, a country) makes a rule that may
 match *not decided*, never allowed.
 
 A connected remote user's VPN address is in the subnet list as a network of
-its own (`10.41.0.11/32 - PoP New York - Cato Client Dana Reyes`), so typing
+its own (`10.88.0.11/32 - PoP New York - Cato Client Dana Reyes`), so typing
 the address, or picking the entry, starts the trace at that user: user → PoP
 (where the WAN firewall is applied) → Cato Cloud → PoP → Socket. When the
 Socket is a vSocket in AWS or Azure the trace goes on into the VPC or VNet,
@@ -130,7 +135,7 @@ pool, such as a Meraki site's non-Meraki VPN peer that covers it; picking
 that range instead starts at the peer, which knows nothing of what is behind
 it. Clicking the person icon in Path Mode picks the user with that address
 too, so the leg is traced either way; the pick reads `Dana Reyes
-(10.41.0.11) · PoP New York`.
+(10.88.0.11) · PoP New York`.
 
 A path is only drawn over links on the map. Plexus does not know that a Cato
 Socket and a Meraki switch at the same location are cabled together unless

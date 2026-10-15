@@ -993,7 +993,8 @@ def test_trace_an_admin_may_use_ssh(tracer):
 
 def test_trace_to_the_internet_has_no_route_on_a_split_tunnel(tracer):
     result = tracer.trace("10.253.0.11", "8.8.8.8", **_from(DANA_DEVICE), protocol="tcp", port=443)
-    assert result["verdict"] == "blocked" and _labels(result["request"]) == ["dana.reyes"]
+    # No route is a missing path, not a rule that denies the flow.
+    assert result["verdict"] == "unreachable" and _labels(result["request"]) == ["dana.reyes"]
     items = result["request"]["hops"][0]["items"]
     assert any(i["where"] == SPLIT_TUNNEL_NOTE for i in items)
     assert next(i for i in items if i["stage"] == "route")["text"] == "No route to 8.8.8.8."

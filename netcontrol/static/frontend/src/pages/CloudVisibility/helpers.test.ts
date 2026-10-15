@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  addProviderFromSearch,
   discoverOutcome,
   liveMissingDependencies,
   liveUnavailableReason,
@@ -8,6 +9,22 @@ import {
   topologyConnectionLabel,
   topologyResourceTypeLabel,
 } from './helpers';
+
+describe('addProviderFromSearch', () => {
+  const offered = ['aws', 'azure', 'gcp'];
+
+  it('names the offered provider an Add Source link asks for', () => {
+    expect(addProviderFromSearch('?add=azure', offered)).toBe('azure');
+    expect(addProviderFromSearch('?add=GCP&tab=accounts', offered)).toBe('gcp');
+  });
+
+  it('is null without the parameter or for a provider not offered', () => {
+    expect(addProviderFromSearch('', offered)).toBeNull();
+    expect(addProviderFromSearch('?add=', offered)).toBeNull();
+    expect(addProviderFromSearch('?add=oracle', offered)).toBeNull();
+    expect(addProviderFromSearch('?add=azure', ['aws'])).toBeNull();
+  });
+});
 
 describe('pullOutcome', () => {
   it('reports what was ingested', () => {

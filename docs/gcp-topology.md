@@ -27,7 +27,9 @@ describes the shared behavior. This guide covers what is different.
 2. **Install the Google API client** on the Plexus server, once:
    `pip install -r requirements-cloud.txt`.
 3. **Add the project.** Open **Cloud Visibility → Accounts → Add GCP
-   project**, enter the **Project ID** and pick how Plexus signs in: the
+   project** (or **Sources → Add Source → GCP Project** on the Topology
+   page, which opens the same dialog), enter the **Project ID** and pick how
+   Plexus signs in: the
    JSON key of a service account (**Service account key**), or the
    **Credentials of the Plexus server** (its Application Default
    Credentials). A key file already on the server can be named instead,

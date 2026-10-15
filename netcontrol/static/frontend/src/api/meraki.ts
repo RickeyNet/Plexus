@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
+import type { PathPick, TrafficFilter } from '@/pages/Topology/paths';
+
 import { apiRequest } from './client';
 
 export interface MerakiBuildOptions {
@@ -253,10 +255,24 @@ export interface TopologyDeepSearchHit {
   snippet: string;
 }
 
-export function topologyExportUrl(groupId: number | null, download = false): string {
+/** The Path Mode path an HTML export carries, with the traffic its traces ask about. */
+export interface TopologyExportPath {
+  picks: PathPick[];
+  traffic: TrafficFilter;
+}
+
+/**
+ * URL of the self-contained HTML map. With a `path` of at least one pick the
+ * file also carries that path and the hop-by-hop traces Plexus runs for it.
+ */
+export function topologyExportUrl(groupId: number | null, download = false, path?: TopologyExportPath | null): string {
   const params = new URLSearchParams();
   if (groupId != null) params.set('group_id', String(groupId));
   if (download) params.set('download', '1');
+  if (path && path.picks.length) {
+    const picks = path.picks.map(({ key, node, label, subnet, address }) => ({ key, node, label, subnet, address }));
+    params.set('path', JSON.stringify({ traffic: path.traffic, picks }));
+  }
   const query = params.toString();
   return `/api/topology/export.html${query ? `?${query}` : ''}`;
 }
@@ -294,7 +310,8 @@ export interface PathTraceQuery {
   port?: number;
 }
 
-export type PathVerdict = 'allowed' | 'blocked' | 'partial' | 'unknown';
+/** `unreachable`: no route carries the flow or the link it needs is down, rather than a rule denying it. */
+export type PathVerdict = 'allowed' | 'blocked' | 'unreachable' | 'partial' | 'unknown';
 
 /** What a step of a hop looked at. */
 export type PathItemStage = 'policy' | 'acl' | 'security_group' | 'nat' | 'route' | 'link' | 'note';

@@ -59,6 +59,7 @@ from netcontrol.integrations.pathtrace.model import (
     POLICY,
     ROUTE,
     UNKNOWN,
+    UNREACHABLE,
     Network,
     contains,
     cover,
@@ -82,7 +83,9 @@ _NO_TRAFFIC = ("management",)
 _CLOUD_PROVIDERS = ("aws", "azure", "gcp")
 # Cloud snapshot nodes the cloud engine does not stand for.
 _NOT_CLOUD_HOPS = ("vpn_peer", "external", "appliance", "user", "users")
-_VERDICT_RANK = {BLOCKED: 3, UNKNOWN: 2, PARTIAL: 1, ALLOWED: 0}
+# Blocked and unreachable both end a flow for certain; on a tie the request's
+# verdict is the trace's.
+_VERDICT_RANK = {BLOCKED: 3, UNREACHABLE: 3, UNKNOWN: 2, PARTIAL: 1, ALLOWED: 0}
 _ALLOWING = ("allow", "trust", "fastpath", "analyze")
 
 # Rule sets a device consults that may be missing from its block, with when
@@ -152,6 +155,17 @@ _PROVIDER_NAMES = {
     "panorama": "Palo Alto Panorama",
     "appgate": "Appgate SDP",
 }
+# Who reports the state of a link, by the provider of the snapshot it is from.
+_REPORTERS = {
+    "meraki": "Meraki",
+    "fmc": "the FMC",
+    "cato": "Cato",
+    "panorama": "Panorama",
+    "appgate": "Appgate",
+    "aws": "AWS",
+    "azure": "Azure",
+    "gcp": "Google Cloud",
+}
 
 
 @dataclass(frozen=True)
@@ -195,6 +209,10 @@ class _Hop:
     # The route item of a lookup that only a default route answered while
     # learned routes are not collected, with its text before that was said.
     default_lookup: tuple[dict, str] | None = None
+    # On a device that carries an account-wide rule set: whether the flow is
+    # WAN traffic (``True``), internet traffic (``False``) or not known to be
+    # either (``None``); see ``Tracer._classify``.
+    wan: bool | None = None
 
 
 @dataclass
@@ -245,16 +263,17 @@ def _public(network: Network) -> bool:
     return not any(n.version == network.version and n.overlaps(network) for n in _NOT_PUBLIC)
 
 
-def _applies(applies: str, classes: set, dst: Network) -> bool:
+def _applies(applies: str, classes: set, wan: bool | None) -> bool:
     """Whether a rule set that ``applies`` to a class of traffic is
     consulted at a step that handles ``classes``. ``traffic`` is every flow
-    a device takes in: a Cato WAN firewall applies to a private destination
-    (``wan_traffic``), its Internet firewall to a public one
-    (``internet_traffic``)."""
+    a device takes in: a Cato WAN firewall applies to WAN traffic
+    (``wan_traffic``), its Internet firewall to internet traffic
+    (``internet_traffic``), as the device's routes class the flow (``wan``,
+    from ``Tracer._classify``)."""
     if applies == "wan_traffic":
-        return "traffic" in classes and not _public(dst)
+        return "traffic" in classes and wan is True
     if applies == "internet_traffic":
-        return "traffic" in classes and _public(dst)
+        return "traffic" in classes and wan is False
     return applies in classes
 
 
@@ -536,6 +555,18 @@ class Tracer:
     def _down(edge: dict) -> bool:
         return str(edge.get("status") or "").lower() in _DOWN
 
+    def _reporter(self, edge: dict) -> str:
+        """Who reports the state of a link: the provider of the snapshot the
+        edge is from (``meraki:<org_ref>:<edge id>``), else *the source*."""
+        parts = str(edge.get("id") or "").split(":")
+        if len(parts) > 2 and parts[0] == "meraki":
+            try:
+                snapshot = self.snapshots.get(int(parts[1])) or {}
+            except ValueError:
+                snapshot = {}
+            return _REPORTERS.get(str(snapshot.get("provider") or "meraki"), "the source")
+        return "the source"
+
     def forwarding(self, gid: Any) -> tuple[dict | None, int | None]:
         """The forwarding block of a graph node and the organization it
         comes from: its own snapshot node's, else a node collapsed into it,
@@ -773,7 +804,12 @@ class Tracer:
         verdict, at, lead = verdict_of(walk.hops)
         if lead is not None and at is not None:
             where = f"{at['label']}, {lead['where']}" if lead["where"] else at["label"]
-            if verdict == BLOCKED:
+            if verdict == BLOCKED and lead["stage"] in (ROUTE, LINK):
+                # Nothing denies the flow: no route carries it, or the link it
+                # needs is down. A different finding from a rule that blocks it.
+                verdict = UNREACHABLE
+                summary = f"No path at {where}: {lead['text']}"
+            elif verdict == BLOCKED:
                 summary = f"Blocked at {where}: {lead['text']}"
             elif verdict == UNKNOWN:
                 summary = f"Could not be decided at {where}: {lead['text']}"
@@ -956,6 +992,7 @@ class Tracer:
         items = ctx.items
         current["in"] = at.label or (ingress or {}).get("name", "")
         vrf = str((ingress or {}).get("vrf") or "")
+        self._classify(block, walk, ctx, vrf)
 
         # 1. NAT in: the session of the request for a reply, destination NAT for a request.
         if walk.reply:
@@ -1063,6 +1100,11 @@ class Tracer:
                 "so a more specific route may exist."
             )
         else:
+            if target.get("internet") and is_default(route) and not narrower and not _public(flow.dst):
+                # A private destination that only the default route carries:
+                # the table was collected and holds nothing closer to it.
+                lookup = next(i for i in reversed(items) if i["stage"] == ROUTE)
+                lookup["text"] += f" No other route covers {show(flow.dst)}, a private address."
             self._route_info(route_notes, walk, ctx)
         return self._leave(at, walk, block, ctx, target.get("egress", egress), target, route)
 
@@ -1354,12 +1396,25 @@ class Tracer:
             return None, True
         up = [e for e in edges if not self._down(e)]
         if not up:
-            states = ", ".join(sorted({str(e.get("status")) for e in edges}))
-            items.append(
-                item(
-                    LINK, BLOCKED, where, f"Every link between {self.label(a)} and {self.label(b)} is down ({states})."
+            # The route points at this link and only its state stops the flow:
+            # say what kind of link it is and who reports it down.
+            reporter = self._reporter(edges[0])
+            if len(edges) == 1:
+                only = edges[0]
+                word = _LINK_WORDS.get(str(only.get("protocol") or ""), f"{only.get('protocol') or 'Link'} link")
+                # Mid-sentence: "the IPsec tunnel", "the LAN link", "the cloud attachment".
+                if word[1:2].islower():
+                    word = word[0].lower() + word[1:]
+                text = (
+                    f"The {word} between {self.label(a)} and {self.label(b)} is down: "
+                    f"{reporter} reports it {only.get('status')}."
                 )
-            )
+            else:
+                states = ", ".join(sorted({str(e.get("status")) for e in edges}))
+                text = (
+                    f"Every link between {self.label(a)} and {self.label(b)} is down ({states}), as {reporter} reports."
+                )
+            items.append(item(LINK, BLOCKED, where, text))
             return edges[0].get("id"), False
         chosen = next((e for e in up if prefer and str(e.get("protocol", "")).startswith(prefer)), up[0])
         word = _LINK_WORDS.get(str(chosen.get("protocol") or ""), f"{chosen.get('protocol') or 'Link'} link")
@@ -1399,12 +1454,47 @@ class Tracer:
         walk.applied[key] = str(ctx.hop["label"])
         return ""
 
+    def _classify(self, block: dict, walk: _Walk, ctx: _Hop, vrf: str) -> None:
+        """On a device that carries an account-wide rule set (a Cato PoP or
+        the Cato Cloud), whether the flow is WAN traffic: its far end, the
+        destination of a request or the source of a reply, is covered by a
+        route of the device other than its default, that is a site's range
+        or a user's address. What only the default route carries is internet
+        traffic, whatever its address. Not known when only the default
+        matches and the device's routes are not all collected."""
+        kinds = [str(p.get("applies") or "") for p in block.get("policies") or [] if isinstance(p, dict)]
+        kinds += [_MISSING_SETS[n][0] for n in ctx.missing if n in _MISSING_SETS]
+        if not any(_account_wide(k) for k in kinds):
+            return
+        far = walk.flow.src if walk.reply else walk.flow.dst
+        route, _narrower = longest_route(block.get("routes") or [], far, vrf)
+        if route is not None and not is_default(route):
+            ctx.wan = True
+        elif not any(_route_note(n) for n in ctx.missing):
+            ctx.wan = False
+
+    def _applies_here(self, applies: str, classes: set, ctx: _Hop) -> bool | None:
+        """Whether a rule set applies at this step; ``None`` for an
+        account-wide one when the flow's class is not known."""
+        if _account_wide(applies) and "traffic" in classes and ctx.wan is None:
+            return None
+        return _applies(applies, classes, ctx.wan)
+
+    def _undecided(self, name: str, walk: _Walk, ctx: _Hop) -> dict[str, Any]:
+        far = show(walk.flow.src if walk.reply else walk.flow.dst)
+        notes = [n for n in ctx.missing if _route_note(n)]
+        text = (
+            f"Whether {name} apply is not known: no route but the default covers {far}, and "
+            f"{_not_collected(notes)}, so it may be WAN traffic or internet traffic."
+        )
+        return item(POLICY, UNKNOWN, name, text)
+
     def _missing_sets(self, walk: _Walk, ctx: _Hop, classes: set) -> None:
         for name in ctx.missing:
             if name in ctx.used or name not in _MISSING_SETS:
                 continue
             applies, stage = _MISSING_SETS[name]
-            if not _applies(applies, classes, walk.flow.dst):
+            if self._applies_here(applies, classes, ctx) is False:
                 continue
             ctx.used.add(name)
             earlier = self._once(walk, ctx, name) if _account_wide(applies) else ""
@@ -1424,7 +1514,10 @@ class Tracer:
     def _sets(self, gid: Any, block: dict, walk: _Walk, ctx: _Hop, classes: set, out_zone: str) -> None:
         items = ctx.items
         for policy in block.get("policies") or []:
-            if not isinstance(policy, dict) or not _applies(str(policy.get("applies") or ""), classes, walk.flow.dst):
+            if not isinstance(policy, dict):
+                continue
+            consulted = self._applies_here(str(policy.get("applies") or ""), classes, ctx)
+            if consulted is False:
                 continue
             name = str(policy.get("name") or "Rule set")
             stage = ACL if policy.get("kind") == "acl" else POLICY
@@ -1434,7 +1527,8 @@ class Tracer:
             account_wide = _account_wide(str(policy.get("applies") or ""))
             earlier = self._once(walk, ctx, name) if account_wide else ""
             if earlier:
-                items.append(item(stage, INFO, name, f"Already applied at {earlier}."))
+                verb = "noted" if consulted is None else "applied"
+                items.append(item(stage, INFO, name, f"Already {verb} at {earlier}."))
                 continue
             if walk.reply and policy.get("stateful", True):
                 # An account's policy keeps one state table across its devices.
@@ -1455,6 +1549,9 @@ class Tracer:
                             "Stateful, and the request did not pass this device: it would drop the replies.",
                         )
                     )
+                continue
+            if consulted is None:
+                items.append(self._undecided(name, walk, ctx))
                 continue
             found, decided = self._evaluate(policy, walk.flow, ctx.in_zone, out_zone)
             found[-1]["ports"] = port_sets.to_json(_port_set(policy, walk.flow, ctx.in_zone, out_zone, walk.reply))

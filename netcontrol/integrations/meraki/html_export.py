@@ -72,13 +72,18 @@ def _embed_json(snapshot: dict[str, Any]) -> str:
     )
 
 
-def render_topology_html(snapshot: dict[str, Any]) -> str:
-    """Return the complete standalone HTML document for ``snapshot``."""
+def render_topology_html(snapshot: dict[str, Any], *, path: dict[str, Any] | None = None) -> str:
+    """Return the complete standalone HTML document for ``snapshot``.
+
+    ``path`` is the Path Mode state the export carries (picks, traffic and
+    the traces of its legs), embedded as ``data.path`` when given."""
     org_name = str((snapshot.get("org") or {}).get("name") or "Meraki")
     title = html.escape(f"{org_name} - Network Topology")
     # Title first: the JSON may itself contain the title placeholder text.
     # The viewer picks path endpoints by subnet from this index.
     data = {**snapshot, "subnets": subnet_index(snapshot)}
+    if path:
+        data["path"] = path
     return (
         _template()
         .replace(_TITLE_PLACEHOLDER, title, 1)

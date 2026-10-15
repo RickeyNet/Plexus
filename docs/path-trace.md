@@ -61,13 +61,22 @@ in red and the legs are not traced until it is fixed.
 ## Reading a trace
 
 Under each traced leg, the hops of the request on one line, for example
-`Branch 01 MX → Hub 01 MX → Corp East Backup ✕ (3 hops)`, with the mark of
+`Branch 01 MX → Hub 01 MX → Hub 02 MX ✕ (3 hops)`, with the mark of
 any hop that is not ok, in place of the path drawn over the links; then:
 
 1. **The verdict** of the direction shown: **Allowed**, **Blocked**,
-   **Allowed in part** or **Check incomplete**, the traffic, and a sentence
-   that names the first item that decided it (for an allowed flow, *Every
-   hop allows it* and the hops), ending with what was not checked.
+   **No path**, **Allowed in part** or **Check incomplete**, the traffic,
+   and a sentence that names the first item that decided it (for an allowed
+   flow, *Every hop allows it* and the hops), ending with what was not
+   checked. *Blocked* means a rule denies the flow (a firewall rule, ACL,
+   security group or NAT rule). *No path* means nothing denies it but the
+   flow cannot get there: a device has no route to the destination, the
+   route is a blackhole or loops, or every link or tunnel the route points
+   at is down, as its source reports (*The IPsec tunnel between Branch 01
+   MX and Partner is down: Meraki reports it unreachable*). A device that
+   sends a private destination down its default route to the internet says
+   so (*No other route covers 10.9.0.0/24, a private address*) and the
+   check stays incomplete, since the internet path is not on the map.
 2. **Reverse: trace B → A as a new connection** swaps the ends and shows the
    same traffic opened from the other side. Click it again to go back. The
    verdict of the other direction is always shown on the muted line below,
@@ -256,8 +265,8 @@ It changes the verdict only when the flow depends on it:
   3 rules for traffic from the LAN, the inbound rules or the NAT rules for
   traffic from the WAN, FTD prefilter or access control rules, Palo Alto
   security rules, a switch ACL,
-  Cato WAN firewall rules for a private destination and internet firewall
-  rules for a public one
+  Cato WAN firewall rules for a destination a site range or a user address
+  covers and internet firewall rules for any other
 - routes that are not collected, such as routes learned over BGP or OSPF,
   make the route lookup *unknown* when it finds no route or only a default
   route, unless a site-to-site VPN then takes the flow: a default route and
@@ -285,7 +294,7 @@ where its NAT and inbound rules decide. Documentation ranges such as
 | Meraki | Layer 3 firewall rules, inbound firewall rules, site-to-site VPN firewall rules, 1:1 NAT, port forwarding, 1:Many NAT, VPN subnet translation, static and AutoVPN routes, routes to non-Meraki VPN peers, switch ACLs and SVI routes | Layer 7 firewall rules, group policies |
 | Cisco FMC | Prefilter rules, access control rules, NAT rules, connected and static routes, site-to-site VPN protected networks | Routes learned by BGP, OSPF or EIGRP, access control rules beyond the first 1000 |
 | Palo Alto Panorama | Security rules in the order each firewall applies them (shared, device group and ancestors, pre then post, the intrazone and interzone default rules) with their zones, addresses and services, NAT rules, connected routes, the firewall's routing table (static, BGP, OSPF) or else its configured static routes, IPsec tunnels and their state | Rules configured on the firewall itself, App-ID (a rule with applications or `application-default` is unknown when it matches), users, URL categories, FQDNs and dynamic address groups, routes learned by BGP or OSPF when the routing table was not read; see [panorama-topology.md](panorama-topology.md#search-and-path-mode) |
-| Cato | The hops: Socket, PoP, Cato Cloud, PoP, Socket; the WAN firewall rules for a private destination and the internet firewall rules for a public one, applied once at the PoP the flow enters by | Routes learned by BGP; rule objects Plexus cannot turn into addresses (users groups, applications, categories, countries) make a rule that matches *unknown*; see [cato-topology.md](cato-topology.md#search-and-path-mode) |
+| Cato | The hops: Socket, PoP, Cato Cloud, PoP, Socket; the WAN firewall rules for a destination a site's range or a user's address covers (WAN traffic) and the internet firewall rules for any other destination, a private one included (internet traffic), applied once at the PoP the flow enters by | Routes learned by BGP; rule objects Plexus cannot turn into addresses (users groups, applications, categories, countries) make a rule that matches *unknown*; see [cato-topology.md](cato-topology.md#search-and-path-mode) |
 | Appgate SDP | The hops: user, Gateway. Each Gateway applies the **Entitlements** of its site (sources the tunnel addresses of the connected users that hold each one, default deny) and its **Allowed destinations**, routes each user's tunnel address back over the tunnel, and translates the client pool when the site uses SNAT; a user routes what its entitlements cover to the Gateway that grants them and has no other route (split tunnel) unless a site is its default gateway | Entitlement hosts that are names (`dns://`, `aws://`...), HTTP method rules and, without the per-user access details, which users hold an entitlement; see [appgate-topology.md](appgate-topology.md#search-and-path-mode) |
 | Inventory devices | The routes of the latest SSH route table capture: Cisco IOS and IOS-XE, NX-OS, ASA and FTD, Arista EOS | Access lists |
 | AWS | Route tables, transit gateways, VPC peerings, network ACLs, security groups, as in [the AWS check of a path](aws-topology.md#the-aws-check-of-a-path) | See that section |
@@ -337,7 +346,12 @@ from the destination to the source, with its own request and replies.
 
 - Only IPv4 addresses and networks can be typed in Path Mode.
 - ICMP types are not told apart.
-- The HTML export draws paths only. It has no trace.
+- The HTML export carries the traces of the path open in Path Mode when the
+  export is made: both directions of every leg between two subnets or
+  addresses, for the traffic asked about. The file cannot trace anything
+  else offline (the trace needs the server), so a leg picked inside the
+  file, or one with a device at either end, shows the path over the links
+  only.
 - A snapshot collected before this release has no routing or policy data
   for the trace: its devices are passed over with an unknown item and the
   trace says to collect the source again.

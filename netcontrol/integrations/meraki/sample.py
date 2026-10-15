@@ -513,7 +513,7 @@ def build_sample_raw(branches: int = 10) -> dict[str, Any]:
                     {
                         "name": "AWS-Transit",
                         "publicIp": "192.0.2.50",
-                        "privateSubnets": ["172.31.0.0/16"],
+                        "privateSubnets": ["172.21.0.0/16"],
                         "ikeVersion": "2",
                         "networkTags": ["hub"],
                     }
