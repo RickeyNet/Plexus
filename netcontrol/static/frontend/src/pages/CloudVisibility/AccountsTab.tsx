@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 
 import {
   type CloudAccount,
@@ -21,6 +21,7 @@ import {
   providerForm,
 } from './accountForm';
 import {
+  addProviderFromSearch,
   discoverOutcome,
   formatTimestamp,
   liveMissingDependencies,
@@ -129,16 +130,39 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
   const deleteTerms = cloudProviderTerms(confirmDelete?.provider);
   const discoverTerms = cloudProviderTerms(confirmDiscover?.provider);
 
+  // The Topology page's Add Source buttons link here as `?add=<provider>`:
+  // the dialog is open on that provider while the parameter is in the URL,
+  // and closing it drops the parameter.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const linkedAdd = addProviderFromSearch(searchParams.toString(), providers);
+  const openModal = modal ?? (linkedAdd ? { account: null, provider: linkedAdd } : null);
+  function closeModal() {
+    setModal(null);
+    if (!searchParams.has('add')) return;
+    setSearchParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        next.delete('add');
+        return next;
+      },
+      { replace: true },
+    );
+  }
+
   return (
     <div>
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
-        <button
-          className="btn btn-primary"
-          disabled={providers.length === 0}
-          onClick={() => setModal({ account: null, provider: providers[0] })}
-        >
-          Add account
-        </button>
+        {providers.map((p) => (
+          <button
+            key={p}
+            type="button"
+            className="btn btn-primary"
+            title={`Add ${withArticle(cloudProviderTerms(p).scopeTitle)} to read its ${cloudProviderTerms(p).networks}, ${cloudProviderTerms(p).flowLogs} and ${cloudProviderTerms(p).policy}`}
+            onClick={() => setModal({ account: null, provider: p })}
+          >
+            Add {cloudProviderTerms(p).scopeTitle}
+          </button>
+        ))}
       </div>
 
       {actionMsg && (
@@ -307,15 +331,15 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
         </div>
       )}
 
-      {modal && (
+      {openModal && (
         <AccountFormModal
-          account={modal.account}
-          provider={modal.provider}
+          account={openModal.account}
+          provider={openModal.provider}
           providerOptions={providers}
-          onClose={() => setModal(null)}
+          onClose={closeModal}
           onSaved={(msg) => {
             showMsg('success', msg);
-            setModal(null);
+            closeModal();
           }}
         />
       )}

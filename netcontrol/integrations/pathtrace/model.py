@@ -48,6 +48,7 @@ __all__ = [
     "ROUTE",
     "SECURITY_GROUP",
     "UNKNOWN",
+    "UNREACHABLE",
     "Network",
     "contains",
     "cover",
@@ -73,6 +74,9 @@ POLICY, ACL, SECURITY_GROUP, NAT, ROUTE, LINK, NOTE = (
     "note",
 )
 ALLOWED = "allowed"
+# A direction that fails on a route or a link rather than a rule: no route,
+# a blackhole, a routing loop, or every link or tunnel to the next device down.
+UNREACHABLE = "unreachable"
 
 Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 

@@ -1725,11 +1725,29 @@ class _Builder:
     def _access(self, policy: dict) -> tuple[list[dict], dict]:
         """The access interface entries of a policy and its port settings."""
         settings = self._policy_detail(policy)["access_interfaces"]
-        ports = next((s for s in settings if s.get("sslPort") or s.get("dtlsPort")), settings[0] if settings else {})
+        # The resource of older releases says ``sslPort`` and lists the
+        # entries under ``accessInterfaceSettings``; the settings an FMC 7.6
+        # policy carries itself say ``webPort``, ``interfaceSettings`` and
+        # ``enableIPSecIkev2``. Both are read into the first spelling.
+        found = next(
+            (s for s in settings if s.get("sslPort") or s.get("webPort") or s.get("dtlsPort")),
+            settings[0] if settings else {},
+        )
+        ports = {"sslPort": found.get("sslPort") or found.get("webPort"), "dtlsPort": found.get("dtlsPort")}
         access: list[dict] = []
         for setting in settings:
-            entries = setting.get("accessInterfaceSettings") or setting.get("interfaces") or []
-            access.extend(e for e in (entries if isinstance(entries, list) else [entries]) if isinstance(e, dict))
+            entries = (
+                setting.get("accessInterfaceSettings")
+                or setting.get("interfaceSettings")
+                or setting.get("interfaces")
+                or []
+            )
+            for entry in entries if isinstance(entries, list) else [entries]:
+                if not isinstance(entry, dict):
+                    continue
+                if "enableIPSecIKEv2" not in entry and "enableIPSecIkev2" in entry:
+                    entry = {**entry, "enableIPSecIKEv2": entry["enableIPSecIkev2"]}
+                access.append(entry)
         return access, ports
 
     def _ra_site_sections(

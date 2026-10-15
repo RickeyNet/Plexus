@@ -503,7 +503,7 @@ async def test_collect_panorama_skips_the_state_of_a_disconnected_firewall():
     assert {r["Interface"]: r["IP address"] for r in _table(branch, "Firewall interfaces")}["ethernet1/1"] == (
         "198.51.100.134"
     )
-    assert any(r["prefix"] == "10.150.0.0/16" and r["kind"] == "static" for r in branch["forwarding"]["routes"])
+    assert any(r["prefix"] == "10.130.0.0/16" and r["kind"] == "static" for r in branch["forwarding"]["routes"])
 
 
 @pytest.mark.asyncio
@@ -610,7 +610,7 @@ def test_snapshot_firewall_sections_follow_the_contract(snapshot):
     ):
         assert title in titles, title
     interfaces = {r["Interface"]: r for r in _table(hq, "Firewall interfaces")}
-    assert interfaces["ethernet1/2"]["Zone"] == "trust" and interfaces["ethernet1/2"]["Subnet"] == "10.150.10.0/24"
+    assert interfaces["ethernet1/2"]["Zone"] == "trust" and interfaces["ethernet1/2"]["Subnet"] == "10.130.10.0/24"
     assert interfaces["tunnel.1"]["Type"] == "Tunnel" and interfaces["ethernet1/1"]["Source"] == "firewall"
     zones = {r["Zone"]: r for r in _table(hq, "Zones")}
     assert zones["vpn"]["Interfaces"] == "tunnel.1, tunnel.2" and zones["trust"]["Vsys"] == "vsys1"
@@ -618,7 +618,7 @@ def test_snapshot_firewall_sections_follow_the_contract(snapshot):
     assert connected["columns"] == ["Subnet", "Interface", "Name", "Zone", "Virtual router"]
     statics = _section(hq, "Static routes")
     assert statics["columns"][:2] == ["Destination", "Subnet"]
-    assert ["to-branch", "10.151.0.0/16", "tunnel.1", "", "10", "default", "Yes", "No"] in statics["rows"]
+    assert ["to-branch", "10.131.0.0/16", "tunnel.1", "", "10", "default", "Yes", "No"] in statics["rows"]
     table = {r["Destination"]: r for r in _table(hq, "Routing table")}
     assert table["198.18.0.0/15"]["Protocol"] == "BGP" and table["0.0.0.0/0"]["Protocol"] == "Static"
     assert _kv(hq, "BGP")["Local AS"] == "65150"
@@ -663,7 +663,7 @@ def test_snapshot_effective_rule_order_targets_and_default_rules(snapshot):
     hq_rules = _table(_node(snapshot, f"d:{HQ_1}"), "Security rules")
     web = next(r for r in hq_rules if r["Name"] == "Allow-DMZ-Web")
     assert web["Service"] == "application-default" and web["Application"] == "Web-Apps"
-    assert web["Destination"] == "web-public (203.0.113.132), web-server (10.150.50.10)"
+    assert web["Destination"] == "web-public (203.0.113.132), web-server (10.130.50.10)"
     assert next(r for r in hq_rules if r["Name"] == "Legacy-FTP")["Enabled"] == "No"
     assert hq_rules[-1]["Log"] == "end" and hq_rules[-1]["Action"] == "deny"
     policy = _kv(_node(snapshot, f"d:{BRANCH}"), "Security policy")
@@ -695,7 +695,7 @@ def test_snapshot_tunnels_between_firewalls_and_to_a_peer(snapshot):
     hq = _node(snapshot, f"d:{HQ_1}")
     tunnels = {r["Tunnel"]: r for r in _table(hq, "IPsec tunnels")}
     assert tunnels["tun-branch"]["Peer"] == "branch-fw-01" and tunnels["tun-partner"]["State"] == "down"
-    assert tunnels["tun-partner"]["Proxy IDs"] == "10.150.10.0/24 > 172.16.40.0/24"
+    assert tunnels["tun-partner"]["Proxy IDs"] == "10.130.10.0/24 > 172.16.40.0/24"
     assert {r["Gateway"]: r["Version"] for r in _table(hq, "IKE gateways")} == {
         "gw-branch": "IKEv2",
         "gw-partner": "IKEv1",
@@ -768,12 +768,12 @@ def test_software_tracker_reads_pan_os_and_panorama(snapshot):
 
 def test_subnet_index_lists_connected_subnets_routes_and_pools(snapshot):
     index = {(s["cidr"], s["node_id"]): s for s in subnet_index(snapshot)}
-    trust = index[("10.150.10.0/24", f"d:{HQ_1}")]
+    trust = index[("10.130.10.0/24", f"d:{HQ_1}")]
     assert trust["kind"] == "connected" and trust["name"] == "Corporate LAN (trust)"
     assert not any(node == f"d:{HQ_2}" for _cidr, node in index)
-    assert index[("10.151.0.0/16", f"d:{HQ_1}")]["name"] == "Static route to-branch"
+    assert index[("10.131.0.0/16", f"d:{HQ_1}")]["name"] == "Static route to-branch"
     assert index[("10.252.0.0/22", f"d:{HQ_1}")]["kind"] == "pool"
-    assert index[("10.151.30.0/24", f"d:{BRANCH}")]["name"] == "Guest Wi-Fi (guest)"
+    assert index[("10.131.30.0/24", f"d:{BRANCH}")]["name"] == "Guest Wi-Fi (guest)"
     assert not any(s["site_id"] in (PANORAMA_SITE_ID, VPN_PEER_SITE_ID) for s in index.values())
 
 
@@ -819,19 +819,19 @@ def test_forwarding_block_of_the_hq_firewall(snapshot):
     assert interfaces["ethernet1/2"]["zone"] == "trust" and interfaces["ethernet1/2"]["vrf"] == ""
     routes = {r["prefix"]: r for r in block["routes"]}
     assert routes["0.0.0.0/0"]["kind"] == "default" and routes["0.0.0.0/0"]["next_hop"] == "203.0.113.129"
-    assert routes["10.151.0.0/16"]["peer"] == {"org_node": f"d:{BRANCH}"} and routes["10.151.0.0/16"]["next_hop"] == ""
+    assert routes["10.131.0.0/16"]["peer"] == {"org_node": f"d:{BRANCH}"} and routes["10.131.0.0/16"]["next_hop"] == ""
     assert routes["172.16.40.0/24"]["peer"] == {"org_node": f"p:{PARTNER_PEER}"}
-    assert routes["198.18.0.0/15"]["kind"] == "dynamic" and routes["10.150.10.0/24"]["kind"] == "connected"
+    assert routes["198.18.0.0/15"]["kind"] == "dynamic" and routes["10.130.10.0/24"]["kind"] == "connected"
     vpn = {v["name"]: v for v in block["vpn"]}
     assert vpn["tun-branch"] | {} == {
         "name": "tun-branch",
         "interface": "tunnel.1",
         "local": ["any"],
-        "remote": ["10.151.0.0/16"],
+        "remote": ["10.131.0.0/16"],
         "peer": {"org_node": f"d:{BRANCH}"},
         "status": "up",
     }
-    assert vpn["tun-partner"]["local"] == ["10.150.10.0/24"] and vpn["tun-partner"]["status"] == "down"
+    assert vpn["tun-partner"]["local"] == ["10.130.10.0/24"] and vpn["tun-partner"]["status"] == "down"
     [policy] = block["policies"]
     assert (policy["name"], policy["kind"], policy["applies"], policy["default"]) == (
         "Security policy",
@@ -842,7 +842,7 @@ def test_forwarding_block_of_the_hq_firewall(snapshot):
     rules = policy["rules"]
     web = next(r for r in rules if r["name"] == "Allow-DMZ-Web")
     # Matched before destination NAT on the firewall; after it in the tracer.
-    assert web["dst"] == ["203.0.113.132/32", "10.150.50.10/32"]
+    assert web["dst"] == ["203.0.113.132/32", "10.130.50.10/32"]
     assert "application Web-Apps" in web["unresolved"] and "application-default ports" in web["unresolved"]
     https = next(r for r in rules if r["name"] == "Allow-Trust-DMZ-HTTPS")
     assert (https["protocol"], https["dst_ports"], https["unresolved"]) == ("tcp", "443", [])
@@ -857,10 +857,10 @@ def test_forwarding_block_of_the_hq_firewall(snapshot):
     assert {(n["src_interface"], n["dst_interface"]) for n in pat} == {("trust", "untrust"), ("dmz", "untrust")}
     assert pat[0]["translated_src"] == ["interface"] and pat[0]["kind"] == "pre_rule"
     dnat = next(n for n in nat if n["name"] == "Web-DNAT")
-    assert dnat["original_dst"] == ["203.0.113.132/32"] and dnat["translated_dst"] == ["10.150.50.10/32"]
+    assert dnat["original_dst"] == ["203.0.113.132/32"] and dnat["translated_dst"] == ["10.130.50.10/32"]
     assert dnat["protocol"] == "tcp" and dnat["original_port"] == "443" and dnat["translated_port"] == "443"
     reverse = next(n for n in nat if n["name"] == "Mail-Static (bi-directional)")
-    assert reverse["original_dst"] == ["203.0.113.133/32"] and reverse["translated_dst"] == ["10.150.50.25/32"]
+    assert reverse["original_dst"] == ["203.0.113.133/32"] and reverse["translated_dst"] == ["10.130.50.25/32"]
     assert reverse["src_interface"] == "untrust"
     exempt = next(n for n in nat if n["name"] == "No-NAT-VPN")
     assert exempt["translated_src"] == exempt["original_src"] == ["any"]
@@ -873,8 +873,8 @@ def test_forwarding_without_the_routing_table_uses_static_routes_and_notes_bgp()
     block = _node(build_snapshot(raw), f"d:{HQ_1}")["forwarding"]
     assert "Routes learned by BGP" in block["not_collected"]
     routes = {r["prefix"]: r for r in block["routes"]}
-    assert routes["10.151.0.0/16"]["source"] == "Static route to-branch"
-    assert routes["10.151.0.0/16"]["peer"] == {"org_node": f"d:{BRANCH}"}
+    assert routes["10.131.0.0/16"]["source"] == "Static route to-branch"
+    assert routes["10.131.0.0/16"]["peer"] == {"org_node": f"d:{BRANCH}"}
     raw["security_rules"] = None
     raw["nat_rules"] = None
     block = _node(build_snapshot(raw), f"d:{BRANCH}")["forwarding"]
@@ -1012,7 +1012,7 @@ def test_api_panorama_sample_is_merged_into_the_topology(api):
     details = api.get(f"/api/sources/nodes?org_ref={org_ref}&node_id=d:{BRANCH}").json()
     assert details["provider"] == "panorama" and "Security rules" in [s["title"] for s in details["sections"]]
     subnets = api.get("/api/sources/subnets").json()["subnets"]
-    lan = next(s for s in subnets if s["cidr"] == "10.151.10.0/24")
+    lan = next(s for s in subnets if s["cidr"] == "10.131.10.0/24")
     assert lan["provider"] == "panorama" and lan["kind"] == "connected" and lan["node_id"] == f"d:{BRANCH}"
     assert any(s["cidr"] == "10.252.0.0/22" and s["kind"] == "pool" for s in subnets)
     hits = api.get("/api/topology/search/deep?q=dana.reyes").json()["results"]
@@ -1103,7 +1103,7 @@ def test_api_traces_flows_through_the_panorama_sample(api):
     hq, branch = label[f"d:{HQ_1}"], label[f"d:{BRANCH}"]
 
     # HQ's LAN to the branch LAN: allowed by the HQ and the branch security rules, over the tunnel.
-    allowed = api.get("/api/topology/path?source=10.150.10.0/24&destination=10.151.10.0/24&protocol=tcp&port=443")
+    allowed = api.get("/api/topology/path?source=10.130.10.0/24&destination=10.131.10.0/24&protocol=tcp&port=443")
     assert allowed.status_code == 200, allowed.text
     body = allowed.json()
     assert body["verdict"] == "allowed", body["summary"]
@@ -1117,12 +1117,12 @@ def test_api_traces_flows_through_the_panorama_sample(api):
     assert "Local firewall rules" in body["summary"]
 
     # HQ's LAN to the mail server in the DMZ over SSH: no rule allows it, the interzone default denies it.
-    denied = api.get("/api/topology/path?source=10.150.10.0/24&destination=10.150.50.25&protocol=tcp&port=22").json()
+    denied = api.get("/api/topology/path?source=10.130.10.0/24&destination=10.130.50.25&protocol=tcp&port=22").json()
     assert denied["verdict"] == "blocked", denied["summary"]
     [hop] = denied["request"]["hops"]
     blocked = next(i for i in hop["items"] if i["status"] == "blocked")
     assert blocked["where"] == "Security policy" and "interzone-default" in blocked["text"]
 
     # The same flow on 443 is allowed by Allow-Trust-DMZ-HTTPS.
-    https = api.get("/api/topology/path?source=10.150.10.0/24&destination=10.150.50.25&protocol=tcp&port=443").json()
+    https = api.get("/api/topology/path?source=10.130.10.0/24&destination=10.130.50.25&protocol=tcp&port=443").json()
     assert https["verdict"] == "allowed", https["summary"]

@@ -451,7 +451,7 @@ def test_snapshot_keeps_an_attachment_to_a_vpc_it_did_not_collect():
 def _peered_vpc(**account: str) -> tuple[dict, dict]:
     """A collected VPC peered with one of another account, and the snapshot."""
     resources = [
-        {"resource_uid": "aws:vpc:vpc-1", "resource_type": "vpc", "name": "core", "cidr": "172.30.0.0/16"},
+        {"resource_uid": "aws:vpc:vpc-1", "resource_type": "vpc", "name": "core", "cidr": "172.22.0.0/16"},
         {"resource_uid": "aws:route_table:rtb-1", "resource_type": "route_table", "name": "main",
          "metadata": {"vpc_id": "vpc-1", "routes": [
              {"destination": "10.7.1.0/24", "target": "pcx-1", "state": "active"},
@@ -469,7 +469,7 @@ def _peered_vpc(**account: str) -> tuple[dict, dict]:
             "requester_cidrs": ["10.7.1.0/24", "10.7.2.0/24"],
             "requester_owner_id": "222222222222",
             "requester_region": "us-east-2",
-            "accepter_cidr": "172.30.0.0/16",
+            "accepter_cidr": "172.22.0.0/16",
             "accepter_owner_id": "111111111111",
             "accepter_region": "us-east-1",
         },
@@ -490,7 +490,7 @@ def test_a_peered_vpc_not_collected_shows_what_its_peering_records():
     details = node_details(snap, "x:vpc:vpc-far")
     by_title = {s["title"]: s["rows"] for s in details["site_sections"]}
     assert by_title["VPC peerings"] == [
-        ["pcx-1", "core", "172.30.0.0/16", "us-east-1", "Prod (111111111111)", "active"]
+        ["pcx-1", "core", "172.22.0.0/16", "us-east-1", "Prod (111111111111)", "active"]
     ]
     # Only the routes over the peering, not the VPC's other routes.
     assert by_title["Routes to this VPC"] == [["core", "main", "10.7.1.0/24", "pcx-1", "active"]]

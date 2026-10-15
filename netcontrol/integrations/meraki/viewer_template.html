@@ -93,6 +93,16 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
 .scroll-x { overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--muted) transparent; }
 .scroll-x::-webkit-scrollbar { height: 8px; }
 .scroll-x::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 4px; }
+/* A leg traced hop by hop (Path mode): the verdict, the hops of the request
+   and the replies, each with the policies, ACLs, NAT and routes it hits. */
+.trace { font-size: 12px; margin-bottom: 10px; word-break: break-word; }
+.trace > div { margin-top: 3px; }
+.trace .t-dir { margin-top: 6px; }
+.trace .t-hop, .trace .t-item { display: flex; gap: 6px; margin-top: 3px; }
+.trace .t-item { margin-left: 20px; margin-top: 1px; }
+.trace .t-mark { min-width: 1em; text-align: center; flex: none; }
+.trace .t-btn { margin-left: 8px; padding: 1px 8px; font-size: 12px; white-space: normal; text-align: left; }
+.c-ok { color: var(--online); } .c-bad { color: var(--offline); } .c-warn { color: var(--alerting); } .c-muted { color: var(--muted); }
 @media (max-width: 900px) { #left { display: none; } #panel { position: absolute; right: 0; top: 0; bottom: 0; max-width: 92vw; z-index: 4; } }
 @media print { header .btn, #left, #layers { display: none; } }
 </style>
@@ -614,7 +624,11 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   }
   function renderSection(section, terms, filtering, openDefault) {
     var det = el('details'), sum = el('summary', null, section.title), hits = 0, shown = 0, body;
-    if (section.kind === 'text') {
+    if (section.kind === 'trace') {
+      body = traceBody(section);
+      hits = terms.length && rowMatches(body.textContent, terms) ? 1 : 0;
+      if (filtering && !hits) return null;
+    } else if (section.kind === 'text') {
       body = el('pre', null, section.text);
       hits = terms.length && rowMatches(section.text, terms) ? 1 : 0; shown = 1;
       if (filtering && !hits) return null;
@@ -723,9 +737,167 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   // Pick a few sites, devices or subnets and see how they reach one another
   // over the links on the map that are up (topology only; route tables are
   // not read here, the Topology page has the AWS / Azure / GCP check). A subnet
-  // stands for the device that owns it.
+  // stands for the device that owns it. The file also carries the hop-by-hop
+  // traces Plexus ran for the path open on the page when it was exported
+  // (DATA.path): a leg between two of those picks shows its trace instead.
   var MAX_PATH_PICKS = 6, pathMode = false, pathPicks = [], pathLegs = [], pathSiteIds = {}, pathPicked = {}, pathMessage = '';
+  // Legs shown the other way round (Reverse), by leg key ("<from key>|<to key>").
+  var pathReversed = {};
   function pathActive() { return pathMode && pathPicks.length > 0; }
+
+  // ── Traces carried by the file ───────────────────────────────────────────
+  // What GET /api/topology/path returned for each leg of the exported path,
+  // both ways; the node and edge ids are this file's own.
+  var EMBEDDED_PATH = DATA.path && DATA.path.picks && DATA.path.picks.length ? DATA.path : null;
+  var embeddedLegs = {}, edgeById = {};
+  ((EMBEDDED_PATH && EMBEDDED_PATH.legs) || []).forEach(function (l) {
+    if (l && l.from && l.to) embeddedLegs[l.from + '|' + l.to] = l;
+  });
+  var hasTraces = Object.keys(embeddedLegs).length > 0;
+  allEdges.forEach(function (e) { edgeById[e.id] = e; });
+  // The traces of a leg from `from` to `to` (forward: from → to), whichever
+  // order the export listed the two picks in; null when the file has none.
+  function legTrace(from, to) {
+    var l = embeddedLegs[from.key + '|' + to.key];
+    if (l) return { forward: l.forward || null, backward: l.backward || null };
+    l = embeddedLegs[to.key + '|' + from.key];
+    return l ? { forward: l.backward || null, backward: l.forward || null } : null;
+  }
+  function trafficText(t) {
+    if (!t || !t.protocol) return 'any traffic';
+    return t.protocol + (t.port !== null && t.port !== undefined && t.port !== '' ? '/' + t.port : '');
+  }
+  var MARKS = { ok: ['✓', 'c-ok'], blocked: ['✕', 'c-bad'], partial: ['◐', 'c-warn'], unknown: ['?', 'c-warn'], info: ['i', 'c-muted'] };
+  function statusMark(status) { return MARKS[status] || MARKS.unknown; }
+  var VERDICTS = { allowed: ['Allowed', 'c-ok'], blocked: ['Blocked', 'c-bad'], unreachable: ['No path', 'c-bad'], partial: ['Allowed in part', 'c-warn'], unknown: ['Check incomplete', 'c-warn'] };
+  function verdictLabel(verdict) { return VERDICTS[verdict] || VERDICTS.unknown; }
+  var STAGES = { policy: 'Policy', acl: 'ACL', security_group: 'Security group', nat: 'NAT', route: 'Route', link: 'Link', note: 'Note' };
+  function stageLabel(stage) { return STAGES[stage] || String(stage || ''); }
+  function hopName(hop) { return hop.label || (hop.node === null || hop.node === undefined ? 'Internet' : String(hop.node)); }
+  // `3. Hub 01 MX · Hub 01 · in AutoVPN from Branch 01 → out VLAN 20`
+  function hopTitle(hop, index) {
+    var parts = [hopName(hop)];
+    if (hop.site && hop.site !== hop.label) parts.push(hop.site);
+    var ports = [hop['in'] ? 'in ' + hop['in'] : '', hop.out ? 'out ' + hop.out : ''].filter(Boolean).join(' → ');
+    if (ports) parts.push(ports);
+    return (index + 1) + '. ' + parts.join(' · ');
+  }
+  // `Branch 01 MX → Hub 01 MX → Hub 02 MX ✕ (3 hops)`; null without hops.
+  function traceRoute(direction) {
+    var hops = (direction && direction.hops) || [];
+    if (!hops.length) return null;
+    return hops.map(function (hop) { return hop.status === 'ok' ? hopName(hop) : hopName(hop) + ' ' + statusMark(hop.status)[0]; }).join(' → ') +
+      ' (' + hops.length + ' hop' + (hops.length !== 1 ? 's' : '') + ')';
+  }
+  function traceWay(direction) { return ((direction && direction.hops) || []).map(hopName).join(' → '); }
+  function protocolsText(ports) {
+    return Object.keys(ports || {}).filter(function (p) { return ports[p]; })
+      .map(function (p) { return p === 'icmp' ? 'icmp' : p + ' ' + ports[p]; }).join(' · ');
+  }
+  // `allowed tcp 80, 443 · udp 53; in part tcp 8000-8080; not decided udp 1-1023`
+  function portsText(ports) {
+    if (!ports) return null;
+    if (ports.text) return ports.text;
+    return [['allowed', 'allowed'], ['partial', 'in part'], ['unknown', 'not decided']].map(function (pair) {
+      return [pair[1], protocolsText(ports[pair[0]])];
+    }).filter(function (pair) { return pair[1] || pair[0] === 'allowed'; })
+      .map(function (pair) { return pair[0] + ' ' + (pair[1] || 'none'); }).join('; ');
+  }
+  function verdictWord(trace) {
+    return trace && trace.applies ? verdictLabel(trace.verdict)[0] + '.' : 'no trace.';
+  }
+  // Marks the devices and links the request of a shown trace passes; whether
+  // it has any device to mark (else the leg keeps the path over the links).
+  function markTrace(trace) {
+    if (!trace || !trace.applies || !trace.request) return false;
+    var any = false;
+    (trace.request.hops || []).forEach(function (hop) {
+      if (hop.node !== null && hop.node !== undefined) {
+        any = true;
+        if (nodeById[hop.node]) nodeById[hop.node].onPath = true;
+      }
+      if (hop.edge !== null && hop.edge !== undefined && edgeById[hop.edge]) edgeById[hop.edge].onPath = true;
+    });
+    return any;
+  }
+  function reversePathLeg(key) {
+    var body = $('p-body'), top = body.scrollTop;
+    pathReversed[key] = !pathReversed[key];
+    computePath(); showPath();
+    body.scrollTop = top;
+  }
+  // One direction of a trace; its summary and ports only when they differ
+  // from the trace's own.
+  function traceDirection(title, direction, overall, overallPorts) {
+    var box = el('div', 't-dir'), head = el('div'), v = verdictLabel(direction.verdict), ports = portsText(direction.ports);
+    head.appendChild(el('strong', null, title)); head.appendChild(document.createTextNode(': '));
+    head.appendChild(el('span', v[1], v[0]));
+    if (direction.summary && direction.summary !== overall) head.appendChild(el('span', 'c-muted', ' · ' + direction.summary));
+    if (ports && ports !== overallPorts) head.appendChild(el('span', 'c-muted', ' · Ports: ' + ports + '.'));
+    box.appendChild(head);
+    (direction.hops || []).forEach(function (hop, index) {
+      var mark = statusMark(hop.status), line = el('div', 't-hop');
+      line.appendChild(el('span', 't-mark ' + mark[1], mark[0]));
+      line.appendChild(el('strong', null, hopTitle(hop, index)));
+      box.appendChild(line);
+      (hop.items || []).forEach(function (item) {
+        var im = statusMark(item.status), row = el('div', 't-item'), text = el('span');
+        row.appendChild(el('span', 't-mark ' + im[1], im[0]));
+        text.appendChild(el('span', 'c-muted', stageLabel(item.stage) + ' · '));
+        text.appendChild(el('strong', null, (item.where || '') + ':'));
+        text.appendChild(document.createTextNode(' ' + (item.text || '')));
+        if (item.ports) text.appendChild(el('span', 'c-muted', ' Ports: ' + portsText(item.ports) + '.'));
+        row.appendChild(text); box.appendChild(row);
+      });
+    });
+    return box;
+  }
+  // A leg's trace as the Topology page shows it, or a note on why it has none.
+  function traceBody(section) {
+    var box = el('div', 'trace');
+    if (section.note) { box.appendChild(el('div', 'c-muted', 'ⓘ ' + section.note)); return box; }
+    var rev = !!pathReversed[section.key], ends = section.ends;
+    var shown = rev ? section.backward : section.forward, other = rev ? section.forward : section.backward;
+    var otherEnds = rev ? ends[0] + ' → ' + ends[1] : ends[1] + ' → ' + ends[0];
+    var applies = !!(shown && shown.applies), route = applies ? traceRoute(shown.request) : null;
+    if (route) box.appendChild(el('div', null, route));
+    var head = el('div');
+    if (!applies) head.appendChild(el('span', 'c-muted', 'ⓘ No trace: ' + ((shown && shown.summary) || 'this file carries no trace of this direction.')));
+    else {
+      var v = verdictLabel(shown.verdict);
+      head.appendChild(el('strong', v[1], v[0]));
+      if (shown.traffic) head.appendChild(el('span', 'c-muted', ' (' + shown.traffic + ')'));
+      head.appendChild(document.createTextNode(': ' + (shown.summary || '')));
+    }
+    var button = el('button', 'btn t-btn', rev ? 'Reverse: back to ' + otherEnds : 'Reverse: trace ' + otherEnds + ' as a new connection');
+    button.type = 'button'; button.setAttribute('aria-pressed', rev ? 'true' : 'false');
+    button.addEventListener('click', function () { reversePathLeg(section.key); });
+    head.appendChild(button); box.appendChild(head);
+    box.appendChild(el('div', 'c-muted', (rev ? 'Original direction (' + otherEnds + ')' : 'Reverse direction (' + otherEnds + ', new connection)') +
+      ': ' + verdictWord(other)));
+    if (!applies) return box;
+    var src = (shown.source && shown.source.address) || (rev ? ends[1] : ends[0]);
+    var dst = (shown.destination && shown.destination.address) || (rev ? ends[0] : ends[1]);
+    var ports = portsText(shown.ports);
+    if (ports) {
+      var line = el('div'); line.appendChild(el('strong', null, 'Ports end to end'));
+      line.appendChild(document.createTextNode(': ' + ports + '.')); box.appendChild(line);
+    }
+    if (shown.request) box.appendChild(traceDirection('Request, ' + src + ' → ' + dst, shown.request, shown.summary, ports));
+    if (shown.reply) box.appendChild(traceDirection('Replies, ' + dst + ' → ' + src, shown.reply, shown.summary, ports));
+    var asym = shown.asymmetric;
+    if (asym) {
+      var yes = asym.status === 'yes', word = yes ? 'yes' : (asym.status === 'no' ? 'no' : 'unknown');
+      var request = traceWay(shown.request), replies = traceWay(shown.reply);
+      var ways = yes && request && replies ? ' The request passed ' + request + '; the replies pass ' + replies + '.' : '';
+      var a = el('div', yes ? 'c-warn' : 'c-muted');
+      a.appendChild(el('strong', null, 'Asymmetric routing'));
+      a.appendChild(document.createTextNode(': ' + word + '.' + ways + (asym.text ? ' ' + asym.text : '')));
+      box.appendChild(a);
+    }
+    (shown.notes || []).forEach(function (note) { box.appendChild(el('div', 'c-muted', 'ⓘ ' + note)); });
+    return box;
+  }
   function siteGateway(s) {
     var best = null, bestRank = 99, order = ['vpc', 'appliance', 'switch', 'wireless'];
     nodes.forEach(function (n) {
@@ -766,55 +938,95 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     return s.in_vpn === false ? [s.cidr + ' is not advertised into the VPN at ' + (s.site_name || 'its site') + ', so a tunnel will not carry it.'] : [];
   }
   function computePath() {
-    nodes.forEach(function (n) { n.onPath = false; });
-    edges.forEach(function (e) { e.onPath = false; });
+    allNodes.forEach(function (n) { n.onPath = false; });
+    allEdges.forEach(function (e) { e.onPath = false; });
     pathLegs = []; pathSiteIds = {}; pathPicked = {};
     pathPicks.forEach(function (p) { p.n.onPath = true; pathPicked[p.n.id] = true; if (p.n.site) pathSiteIds[p.n.site] = true; });
     var reachFrom = {};
     for (var i = 0; i < pathPicks.length - 1; i++) {
       for (var j = i + 1; j < pathPicks.length; j++) {
-        var from = pathPicks[i], to = pathPicks[j];
-        if (from.n === to.n) { pathLegs.push({ from: from, to: to, hops: null, same: true, notes: [] }); continue; }
+        var from = pathPicks[i], to = pathPicks[j], key = from.key + '|' + to.key;
+        // A traced leg lights up the hops of the direction shown, else the
+        // path over the links.
+        var traced = from.subnet && to.subnet ? legTrace(from, to) : null;
+        var lit = traced ? markTrace(pathReversed[key] ? traced.backward : traced.forward) : false;
+        if (from.n === to.n) { pathLegs.push({ key: key, from: from, to: to, hops: null, same: true, notes: [], traced: traced, lit: lit }); continue; }
         var reach = reachFrom[from.n.id] || (reachFrom[from.n.id] = shortestFrom(from.n));
         var hops = [], tunnels = 0, at = reach[to.n.id];
         while (at) {
-          hops.unshift(at); at.n.onPath = true;
-          if (at.edge) { at.edge.onPath = true; if (isCurved(at.edge)) tunnels++; }
+          hops.unshift(at);
+          if (!lit) at.n.onPath = true;
+          if (at.edge) { if (!lit) at.edge.onPath = true; if (isCurved(at.edge)) tunnels++; }
           at = at.prev ? reach[at.prev.id] : null;
         }
-        pathLegs.push({ from: from, to: to, hops: hops.length ? hops : null, same: false,
+        pathLegs.push({ key: key, from: from, to: to, hops: hops.length ? hops : null, same: false, traced: traced, lit: lit,
           notes: subnetNotes(from, tunnels).concat(subnetNotes(to, tunnels)) });
       }
     }
   }
   function nodeSiteName(n) { return (siteById[n.site] || {}).name || ''; }
-  function pickName(p) { return p.subnet ? p.subnet.cidr : (nodeSiteName(p.n) || p.n.label); }
+  function pickName(p) { return p.subnet ? p.address || p.subnet.cidr : (nodeSiteName(p.n) || p.n.label); }
+  // The address a trace runs from or to: the typed address, else the subnet.
+  function pickEnd(p) { return p.address || (p.subnet ? p.subnet.cidr : p.label || p.n.label); }
+  // The section under a leg's path: its trace, or why it has none.
+  function legTraceSection(leg, name) {
+    if (leg.traced) {
+      var shown = pathReversed[leg.key] ? leg.traced.backward : leg.traced.forward;
+      return { title: name + ' · ' + (shown && shown.applies ? verdictLabel(shown.verdict)[0] : 'no trace'), kind: 'trace', key: leg.key,
+        ends: [pickEnd(leg.from), pickEnd(leg.to)], forward: leg.traced.forward, backward: leg.traced.backward };
+    }
+    var note = null;
+    if (leg.from.subnet && leg.to.subnet) {
+      note = 'Not traced: this file carries the traces Plexus ran for the picks open when it was exported. Open Path Mode on the Topology page to trace other ends.';
+    } else if (!leg.same && (leg.from.subnet || leg.to.subnet)) {
+      var device = leg.from.subnet ? leg.to : leg.from;
+      note = 'Routes, policies and NAT are checked only between two subnets or IP addresses: add ' + (device.label || device.n.label) +
+        ' with the subnet box instead (one of its subnets, or an IP address).';
+    }
+    return note ? { title: name + ' · not traced', kind: 'trace', note: note } : null;
+  }
   function showPath() {
     var sections = [];
     if (pathMessage) sections.push({ title: 'Note', kind: 'text', text: pathMessage });
     if (pathPicks.length < 2) {
       sections.push({ title: 'How to use', kind: 'text', text: 'Click two or more sites in the list, or sites and devices on the map, to see how they reach one another.' +
         (subnets.length ? ' Or pick subnets in the box above: choose one from its list, or type an IP address or network and press Enter.' : '') +
-        ' Click a pick again to remove it. Up to ' + MAX_PATH_PICKS + ' picks.' });
+        ' Click a pick again to remove it. Up to ' + MAX_PATH_PICKS + ' picks.' +
+        (hasTraces ? ' This file carries the hop-by-hop traces Plexus ran for the picks that were open when it was exported (' + trafficText(EMBEDDED_PATH.traffic) +
+          '): pick two of them again to see, at every device, the policies, ACLs, security groups, NAT rules and routes the flow hits. Other picks show the path over the links only.' : '') });
     }
     if (pathPicks.length) {
       sections.push({ title: 'Picked', kind: 'table', columns: ['Pick', 'Device', 'Site'],
-        rows: pathPicks.map(function (p) { return [p.subnet ? p.subnet.cidr + ' (' + p.subnet.name + ')' : 'Device', p.n.label, nodeSiteName(p.n)]; }) });
-    }
-    pathLegs.forEach(function (leg) {
-      var name = pickName(leg.from) + '  →  ' + pickName(leg.to);
-      if (leg.same) { sections.push({ title: name + ' (same device)', kind: 'text', text: 'Routed locally by ' + leg.from.n.label + '.' }); return; }
-      if (!leg.hops) { sections.push({ title: name + ' (no path)', kind: 'text', text: 'No path over links that are up.' }); return; }
-      sections.push({ title: name + ' (' + (leg.hops.length - 1) + (leg.hops.length === 2 ? ' hop)' : ' hops)'), kind: 'table', columns: ['#', 'Device', 'Site', 'Reached over'],
-        rows: leg.hops.map(function (h, i) {
-          return [String(i), h.n.label, nodeSiteName(h.n), h.edge ? (EDGE[h.edge.kind] || EDGE.lan).name : 'start'];
+        rows: pathPicks.map(function (p) {
+          return [p.subnet ? (p.address || p.subnet.cidr) + ' (' + p.subnet.name + ')' : 'Device', p.n.label, nodeSiteName(p.n)];
         }) });
+      if (hasTraces) sections.push({ title: 'Traces in this file', kind: 'kv', rows: [['Traffic traced', trafficText(EMBEDDED_PATH.traffic)],
+        ['Picks traced', EMBEDDED_PATH.picks.map(function (p) { return p.label || p.key; }).join('; ')]] });
+    }
+    var anyTraced = false;
+    pathLegs.forEach(function (leg) {
+      var name = pickName(leg.from) + '  →  ' + pickName(leg.to), trace = legTraceSection(leg, name);
+      if (leg.traced) anyTraced = true;
+      if (leg.same) sections.push({ title: name + ' (same device)', kind: 'text', text: 'Routed locally by ' + leg.from.n.label + '.' });
+      else if (!leg.hops) sections.push({ title: name + ' (no path)', kind: 'text', text: 'No path over links that are up.' });
+      // A traced leg lists the hops of its trace instead of the path over the links.
+      else if (!leg.lit) {
+        sections.push({ title: name + ' (' + (leg.hops.length - 1) + (leg.hops.length === 2 ? ' hop)' : ' hops)'), kind: 'table', columns: ['#', 'Device', 'Site', 'Reached over'],
+          rows: leg.hops.map(function (h, i) {
+            return [String(i), h.n.label, nodeSiteName(h.n), h.edge ? (EDGE[h.edge.kind] || EDGE.lan).name : 'start'];
+          }) });
+      }
+      if (trace) sections.push(trace);
       if (leg.notes.length) sections.push({ title: 'Warning: ' + name, kind: 'text', text: leg.notes.join('\n') });
     });
     if (pathLegs.length) {
       var inCloud = pathPicks.some(function (p) { return p.n.provider === 'aws' || p.n.provider === 'azure' || p.n.provider === 'gcp'; });
-      sections.push({ title: 'About this path', kind: 'text', text: 'The path drawn is the shortest way over the cables, uplinks and VPN tunnels on the map that are up: it shows how the ends are joined, not the route each device picks. A subnet is placed on the device that owns it (appliance, L3 switch, VPC or VPN peer).' +
-        (inCloud ? ' This file does not check AWS, Azure or GCP route tables and filtering rules; Path Mode on the Plexus Topology page does, between two subnets or IP addresses.' : '') });
+      sections.push({ title: 'About this path', kind: 'text', text: 'The path drawn is the shortest way over the cables, uplinks and VPN tunnels on the map that are up: it shows how the ends are joined, not the route each device picks.' +
+        (anyTraced ? ' A traced leg lists the hops of its trace instead.' : '') +
+        ' A subnet is placed on the device that owns it (appliance, L3 switch, VPC or VPN peer).' +
+        (hasTraces ? ' This file carries the hop-by-hop traces Plexus ran for the picks that were open when it was exported (' + trafficText(EMBEDDED_PATH.traffic) +
+          '): between two of them it lists, at every device, the policies, ACLs, security groups, NAT rules and routes the flow hits, for the request and for the replies, and says whether routing is asymmetric. Reverse swaps the ends. Anything a source does not collect is reported as unknown, never as allowed. Other ends are not traced here; Path Mode on the Plexus Topology page traces them.' :
+          (inCloud ? ' This file does not check AWS, Azure or GCP route tables and filtering rules; Path Mode on the Plexus Topology page does, between two subnets or IP addresses.' : '')) });
     }
     selected = { type: 'path', ref: { title: 'Path', sub: pathPicks.length + ' picked', sections: sections } };
     renderPanel(); renderList(); dirty();
@@ -830,10 +1042,25 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   }
   function togglePick(target) {
     var n = target.type === 'node' ? target.ref : (target.type === 'site' ? siteGateway(target.ref) : null);
-    if (n) togglePathPick({ key: 'n:' + n.id, n: n, subnet: null }, false);
+    if (!n) return;
+    var user = target.type === 'node' ? userPick(n) : null;
+    if (user) { togglePathPick(user, false); return; }
+    togglePathPick({ key: 'n:' + n.id, n: n, subnet: null, address: null,
+      label: target.type === 'site' ? target.ref.name : n.label }, false);
+  }
+  // A remote user (a Cato or Appgate client) is picked with its own address,
+  // so the leg is traced like a typed address: the same pick as typing it.
+  function userPick(n) {
+    if (n.kind !== 'user') return null;
+    var subnet = null;
+    subnets.forEach(function (s) { if (!subnet && s.kind === 'user' && s.node_id === n.id) subnet = s; });
+    if (!subnet) return null;
+    var address = subnet.cidr.replace(/\/32$/, ''), site = subnet.site_name || nodeSiteName(n);
+    return { key: 's:' + address + ':' + n.id, n: n, subnet: subnet, address: address,
+      label: (n.label || address) + ' (' + address + ')' + (site ? ' · ' + site : '') };
   }
   function setPathMode(on) {
-    pathMode = on; pathPicks = []; pathMessage = '';
+    pathMode = on; pathPicks = []; pathMessage = ''; pathReversed = {};
     $('btn-path').classList.toggle('on', on);
     $('p-subnet-row').style.display = on && subnets.length ? '' : 'none';
     $('p-subnet').value = '';
@@ -877,9 +1104,13 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     });
     return found;
   }
-  function addSubnetPick(s) {
+  // A typed address inside the subnet is kept, as on the page: the trace is
+  // run for it, and it is part of the pick's key.
+  function addSubnetPick(s, typed) {
     $('p-subnet').value = '';
-    togglePathPick({ key: 's:' + s.cidr + ':' + s.node_id, n: nodeById[s.node_id], subnet: s }, true);
+    var address = typed && parseV4(typed) && typed !== s.cidr ? typed : null;
+    togglePathPick({ key: 's:' + (address || s.cidr) + ':' + s.node_id, n: nodeById[s.node_id], subnet: s, address: address,
+      label: (address || s.cidr) + ' · ' + (s.site_name || s.name) }, true);
   }
   $('p-subnet').addEventListener('input', function () {
     var s = subnetByLabel[this.value.trim()];
@@ -889,7 +1120,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     if (ev.key !== 'Enter' || !pathMode) return;
     var text = this.value.trim(), found = subnetByLabel[text] ? [subnetByLabel[text]] : findSubnets(text);
     if (!text) return;
-    if (found.length === 1) { addSubnetPick(found[0]); return; }
+    if (found.length === 1) { addSubnetPick(found[0], subnetByLabel[text] ? null : text); return; }
     pathMessage = found.length ? text + ' exists at ' + found.length + ' sites - pick the one you mean from the list.' : 'No collected subnet contains ' + text + '.';
     showPath();
   });
@@ -1268,7 +1499,26 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   window.addEventListener('resize', resize);
 
   if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) document.body.classList.add('light');
-  readTheme(); buildChrome(); buildSourcePicker(); resize(); applySource('all');
+  // The path open on the page when the file was exported, with its traces:
+  // restored once, over everything the file shows.
+  function restoreEmbeddedPath() {
+    if (!EMBEDDED_PATH) return;
+    setPathMode(true);
+    EMBEDDED_PATH.picks.forEach(function (pick) {
+      var n = pick && nodeById[pick.node], subnet = null;
+      if (!n || pathPicks.length >= MAX_PATH_PICKS || pathPicks.some(function (p) { return p.key === pick.key; })) return;
+      if (pick.subnet) {
+        var owner = pick.subnet.node_id || pick.node;
+        allSubnets.forEach(function (s) { if (!subnet && s.cidr === pick.subnet.cidr && s.node_id === owner) subnet = s; });
+        subnet = subnet || pick.subnet;
+      }
+      pathPicks.push({ key: pick.key, n: n, subnet: subnet, address: subnet ? pick.address || null : null, label: pick.label || n.label });
+    });
+    computePath(); showPath();
+    if (pathPicks.length) zoomTo({ type: 'path' });
+  }
+
+  readTheme(); buildChrome(); buildSourcePicker(); resize(); applySource('all'); restoreEmbeddedPath();
 })();
 </script>
 </body>

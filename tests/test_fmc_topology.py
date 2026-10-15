@@ -228,12 +228,12 @@ class _FakeFmc:
             "/devicehapairs/ftddevicehapairs": raw["ha_pairs"],
             "/deviceclusters/ftddevicecluster": raw["clusters"],
             "/assignment/policyassignments": raw["assignments"],
-            "/policies/ravpns": raw["policies"],
+            "/policy/ravpns": raw["policies"],
             "/object/ipv4addresspools": raw["pools"],
-            "/policies/ftdnatpolicies": raw["nat_policies"],
-            "/policies/accesspolicies": raw["access_policies"],
-            "/policies/prefilterpolicies": raw["prefilter_policies"],
-            "/policies/ftds2svpns": raw["s2s_vpns"],
+            "/policy/ftdnatpolicies": raw["nat_policies"],
+            "/policy/accesspolicies": raw["access_policies"],
+            "/policy/prefilterpolicies": raw["prefilter_policies"],
+            "/policy/ftds2svpns": raw["s2s_vpns"],
             "/health/tunnelstatuses": raw["tunnel_status"],
             "/health/alerts": raw["health_alerts"],
             "/deployment/deployabledevices": raw["deployable"],
@@ -247,7 +247,7 @@ class _FakeFmc:
             if rel == f"/devicehapairs/ftddevicehapairs/{pair_id}/monitoredinterfaces":
                 return self._items(monitored)
         for policy_id, detail in raw["policy_details"].items():
-            base = f"/policies/ravpns/{policy_id}"
+            base = f"/policy/ravpns/{policy_id}"
             if rel == f"{base}/connectionprofiles":
                 return self._items(detail["connection_profiles"])
             if rel == f"{base}/addressassignmentsettings":
@@ -255,16 +255,16 @@ class _FakeFmc:
             if rel == f"{base}/accessinterfacesettings":
                 return self._items(detail["access_interfaces"])
         for policy_id, rules in raw["nat_rules"].items():
-            if rel == f"/policies/ftdnatpolicies/{policy_id}/natrules":
+            if rel == f"/policy/ftdnatpolicies/{policy_id}/natrules":
                 return self._items(rules, request)
         for policy_id, rules in raw["access_rules"].items():
-            if rel == f"/policies/accesspolicies/{policy_id}/accessrules":
+            if rel == f"/policy/accesspolicies/{policy_id}/accessrules":
                 return self._items(rules, request)
         for policy_id, rules in raw["prefilter_rules"].items():
-            if rel == f"/policies/prefilterpolicies/{policy_id}/prefilterrules":
+            if rel == f"/policy/prefilterpolicies/{policy_id}/prefilterrules":
                 return self._items(rules, request)
         for topology_id, detail in raw["s2s_details"].items():
-            base = f"/policies/ftds2svpns/{topology_id}"
+            base = f"/policy/ftds2svpns/{topology_id}"
             if rel == f"{base}/endpoints":
                 return self._items(detail["endpoints"])
             if rel == f"{base}/ikesettings":
@@ -278,17 +278,22 @@ class _FakeFmc:
             device_id = rel.removeprefix("/devices/devicerecords/").removesuffix("/operational/commands")
             if device_id not in self.cli:
                 return None
+            # A real FMC (7.6) refuses any other query: "parameter is an invalid
+            # query parameter", "Max word size for commands filter is 2".
+            if set(request.url.params.keys()) - {"command", "parameters"}:
+                return httpx.Response(400, json={"error": {"messages": [{"description": "invalid query parameter"}]}})
             params = {
-                "filter": request.url.params.get("filter", ""),
-                "parameter": request.url.params.get("parameter", ""),
+                "command": request.url.params.get("command", ""),
+                "parameters": request.url.params.get("parameters", ""),
             }
             self.relay_params.append(params)
             text = self.cli[device_id]
-            if params["parameter"] != "detail anyconnect" and not text.startswith("ERROR"):
+            if params["parameters"] != "detail anyconnect" and not text.startswith("ERROR"):
                 text = NO_SESSIONS_TEXT
+            line = f"{params['command']} {params['parameters']}".strip()
             return httpx.Response(
                 200,
-                json={"items": [{"command": params["parameter"], "response": text, "type": "Command"}], "paging": {}},
+                json={"items": [{"commandInput": line, "commandOutput": text}], "paging": {}},
             )
         if rel.startswith("/devices/devicerecords/"):
             return self._device_resource(rel.removeprefix("/devices/devicerecords/"))
@@ -358,7 +363,7 @@ async def test_client_logs_in_with_basic_auth_and_learns_the_domains():
         with pytest.raises(FmcApiError) as excinfo:
             client.resolve_domain("Nope")
         assert "Global/Branch" in excinfo.value.detail
-        body = await client.get(f"{CONFIG_PATH}/domain/{DOMAIN_UUID}/policies/ravpns")
+        body = await client.get(f"{CONFIG_PATH}/domain/{DOMAIN_UUID}/policy/ravpns")
         assert body["items"][0]["name"] == "Corp-RAVPN"
     assert fake.logins == 1
 
@@ -400,7 +405,7 @@ async def test_client_logs_in_again_once_when_the_token_expires():
     fake = _FakeFmc()
     fake.expire_token_once = True
     async with _client(fake) as client:
-        body = await client.get(f"{CONFIG_PATH}/domain/{DOMAIN_UUID}/policies/ravpns")
+        body = await client.get(f"{CONFIG_PATH}/domain/{DOMAIN_UUID}/policy/ravpns")
     assert body["items"] and fake.logins == 2
 
 
@@ -625,7 +630,7 @@ async def test_collect_fmc_records_a_nat_rules_failure_and_still_builds():
     async with _client(fake, max_retries=0) as client:
         raw = await collect_fmc(client, "", None)
     assert [(e["path"], e["status"]) for e in raw["errors"]] == [
-        (f"/policies/ftdnatpolicies/{NAT_POLICY_ID}/natrules", 500)
+        (f"/policy/ftdnatpolicies/{NAT_POLICY_ID}/natrules", 500)
     ]
     assert raw["nat_rules"] == {} and raw["unsupported"] == []
     snapshot = build_snapshot(raw)
@@ -646,6 +651,55 @@ async def test_collect_fmc_caps_access_rules_and_keeps_the_real_count(monkeypatc
     assert len(_section(branch, "Access control rules")["rows"]) == 2
     assert _section(branch, "Access control rules (note)")["text"] == "Showing the first 2 of 3 rules"
     assert _kv(branch, "Access control")["Rules"] == "3"
+
+
+@pytest.mark.asyncio
+async def test_collect_fmc_reads_the_access_interfaces_an_fmc_76_policy_carries_itself():
+    # An FMC 7.6.5 lists the settings in the policy (other names: webPort,
+    # interfaceSettings, enableIPSecIkev2) and answers the resource with
+    # "404 Invalid URL", so it is not asked for.
+    fake = _FakeFmc()
+    fake.missing.add("accessinterfacesettings")
+    fake.raw["policies"][0]["accessInterfaceSettings"] = {
+        "bypassACPolicyForDecryptTraffic": False,
+        "interfaceSettings": [
+            {
+                "accessInterface": {"name": "outside", "id": ZONE_OUTSIDE, "type": "SecurityZone"},
+                "configureInterfaceIDCertificate": False,
+                "enableSSL": True,
+                "enableIPSecIkev2": True,
+                "enableDTLS": True,
+            }
+        ],
+        "webPort": 8443,
+        "dtlsPort": 4433,
+        "sslIdCertificate": {"name": "wildcard", "id": "cert-1", "type": "CertEnrollment"},
+        "allowConnectionProfileSelection": True,
+    }
+    progress: list[dict] = []
+    async with _client(fake, max_retries=0) as client:
+        raw = await collect_fmc(client, "", None, progress.append)
+    assert not any("accessinterfacesettings" in c for c in fake.calls)
+    assert raw["errors"] == [] and raw["unsupported"] == []
+    assert raw["policy_details"][POLICY_ID]["access_interfaces"][0]["webPort"] == 8443
+    assert progress[-1]["calls_done"] == progress[-1]["calls_total"]
+    snapshot = build_snapshot(raw)
+    site = next(s for s in snapshot["sites"] if s["id"] == f"ha:{HA_PAIR}")
+    ra = _kv(site, "Remote access VPN")
+    assert ra["Access interfaces"] == "outside" and ra["Protocols"] == "IPsec IKEv2, SSL"
+    assert ra["SSL port"] == "8443" and ra["DTLS port"] == "4433"
+    assert [r[3:] for r in _section(site, "Access interfaces")["rows"]] == [["Yes", "Yes"], ["Yes", "Yes"]]
+    wan = _kv(_node(snapshot, f"w:{D1}:outside"), "VPN access interface")
+    assert wan["IPsec IKEv2"] == "Yes" and wan["SSL port"] == "8443"
+
+    # A release without the inline settings that does not serve the
+    # resource either: a gap, not a failure.
+    fake = _FakeFmc()
+    fake.missing.add("accessinterfacesettings")
+    async with _client(fake, max_retries=0) as client:
+        raw = await collect_fmc(client, "", None)
+    assert raw["errors"] == [] and raw["unsupported"] == [f"/policy/ravpns/{POLICY_ID}/accessinterfacesettings"]
+    assert raw["policy_details"][POLICY_ID]["access_interfaces"] == []
 
 
 @pytest.mark.asyncio
@@ -698,12 +752,12 @@ def test_parse_vpn_sessiondb_tells_no_sessions_from_a_refusal():
     assert parse_vpn_sessiondb(NO_SESSIONS_TEXT) == []
     assert parse_vpn_sessiondb("") is None
     assert parse_vpn_sessiondb("ERROR: % Invalid input detected at '^' marker.") is None
-    assert command_output({"items": [{"response": "a"}, {"response": "b"}]}) == "a\nb"
+    assert command_output({"items": [{"commandInput": "show x", "commandOutput": "a"}, {"response": "b"}]}) == "a\nb"
     assert command_output({"output": "c"}) == "c" and command_output("d") == "d" and command_output(None) == ""
     path = command_path("/api/fmc_config/v1/domain/uuid", "dev-1", "show vpn-sessiondb", "detail anyconnect")
     assert path == (
         "/api/fmc_config/v1/domain/uuid/devices/devicerecords/dev-1/operational/commands"
-        "?filter=command:show%20vpn-sessiondb&parameter=detail%20anyconnect"
+        "?command=show%20vpn-sessiondb&parameters=detail%20anyconnect"
     )
 
 
@@ -719,8 +773,8 @@ async def test_collect_fmc_reads_sessions_from_the_headends_when_the_health_api_
     assert all(s["device"]["id"] == D1 and s["device"]["name"] == "ftdv-ravpn-1" for s in raw["sessions"])
     # Only the remote access headends were asked, with the documented request.
     assert fake.relay_params == [
-        {"filter": "command:show vpn-sessiondb", "parameter": "detail anyconnect"},
-        {"filter": "command:show vpn-sessiondb", "parameter": "detail ra-ikev2-ipsec"},
+        {"command": "show vpn-sessiondb", "parameters": "detail anyconnect"},
+        {"command": "show vpn-sessiondb", "parameters": "detail ra-ikev2-ipsec"},
     ]
     assert not any(f"/devices/devicerecords/{D3}/operational/commands" in c for c in fake.calls)
     # The health API's failure became a gap, the member without the relay too.
@@ -1824,7 +1878,7 @@ async def test_collect_fmc_reads_port_objects_and_prefilter_rules_best_effort():
         denied = await collect_fmc(client, "", None)
     assert sorted(e["path"] for e in denied["errors"]) == [
         "/object/protocolportobjects",
-        f"/policies/prefilterpolicies/{PREFILTER_ID}/prefilterrules",
+        f"/policy/prefilterpolicies/{PREFILTER_ID}/prefilterrules",
     ]
     assert denied["prefilter_rules"] == {} and denied["objects"]["ports"] == []
     block = _fwd(build_snapshot(denied), D3)
@@ -1838,7 +1892,7 @@ async def test_collect_fmc_reads_port_objects_and_prefilter_rules_best_effort():
     async with _client(fake) as client:
         older = await collect_fmc(client, "", None)
     assert older["errors"] == [] and older["unsupported"] == [
-        f"/policies/prefilterpolicies/{PREFILTER_ID}/prefilterrules"
+        f"/policy/prefilterpolicies/{PREFILTER_ID}/prefilterrules"
     ]
 
     # The default prefilter policy holds no rules: they are not asked for.

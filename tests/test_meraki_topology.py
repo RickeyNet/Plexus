@@ -1232,7 +1232,7 @@ def test_snapshot_hub_appliance_has_nat_and_inbound_rules(snapshot):
     # AutoVPN routes back to every spoke, and the subnets of the non-Meraki peer.
     routes = {(r["prefix"], r["kind"]): r for r in block["routes"]}
     assert routes[("10.2.10.0/24", "autovpn")]["peer"] == {"site": "N_1002"}
-    assert routes[("172.31.0.0/16", "vpn3p")]["peer"] == {"org_node": "p:AWS-Transit"}
+    assert routes[("172.21.0.0/16", "vpn3p")]["peer"] == {"org_node": "p:AWS-Transit"}
     assert routes[("10.0.10.0/24", "connected")]["interface"] == "VLAN 10"
     assert "Routes learned by BGP" in block["not_collected"]
 
@@ -1252,7 +1252,7 @@ def test_snapshot_l3_switch_and_vpn_peer_carry_forwarding(snapshot):
     # A switch with no SVI forwards nothing of its own.
     assert "forwarding" not in _node_of(snapshot, "d:Q2SW-0002-0001")
     peer = _node_of(snapshot, "p:AWS-Transit")["forwarding"]
-    assert [(r["prefix"], r["kind"]) for r in peer["routes"]] == [("172.31.0.0/16", "connected")]
+    assert [(r["prefix"], r["kind"]) for r in peer["routes"]] == [("172.21.0.0/16", "connected")]
     assert peer["not_collected"] == ["Everything behind a non-Meraki VPN peer"]
 
 
@@ -1274,7 +1274,7 @@ def test_forwarding_of_a_capture_without_the_new_collections():
         for key in ("inbound_firewall", "one_to_many_nat", "switch_acl", "l3_firewall"):
             detail.pop(key, None)
     detail = raw["networks_detail"]["N_1002"]
-    detail["vlans"][0]["vpnNatSubnet"] = "172.30.10.0/24"
+    detail["vlans"][0]["vpnNatSubnet"] = "172.23.10.0/24"
     # A warm spare forwards like the primary.
     primary = next(d for d in raw["devices"] if d["serial"] == "Q2MX-0002-0001")
     raw["devices"].append(dict(primary, serial="Q2MX-0002-0002", name="spare"))
@@ -1290,7 +1290,7 @@ def test_forwarding_of_a_capture_without_the_new_collections():
         "Group policies",
     ]
     vpn_nat = next(n for n in block["nat"] if n["kind"] == "vpn_nat")
-    assert (vpn_nat["original_src"], vpn_nat["translated_src"]) == (["10.2.10.0/24"], ["172.30.10.0/24"])
+    assert (vpn_nat["original_src"], vpn_nat["translated_src"]) == (["10.2.10.0/24"], ["172.23.10.0/24"])
     assert _node_of(snap, "d:Q2MX-0002-0002")["forwarding"] == block
     assert _node_of(snap, "d:Q2SW-0000-0001")["forwarding"]["not_collected"] == ["Switch ACL"]
 

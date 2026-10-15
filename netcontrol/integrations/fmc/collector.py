@@ -16,18 +16,18 @@ What is read (under ``/api/fmc_config/v1/domain/{uuid}`` unless noted):
     ``protocolportobjects``, ``portobjectgroups``,
     ``icmpv4objects``                             the names routes, NAT, VPN and
                                                   policies refer to
-  - ``policies/ravpns`` (+ connection profiles, address assignment and
+  - ``policy/ravpns`` (+ connection profiles, address assignment and
     access interface settings), ``object/ipv4addresspools``
                                                   the remote access VPN side
   - per device on the map, every interface kind (physical, sub-interface,
     EtherChannel, redundant, VLAN, VTI, loopback, bridge group, inline set)
   - per device on the map, its routing: virtual routers, static routes,
     BGP, OSPF, EIGRP, ECMP zones, policy-based routes
-  - ``policies/ftdnatpolicies`` (+ the rules of the ones in use)
-  - ``policies/accesspolicies`` (+ the first rules of the ones in use),
-    ``policies/prefilterpolicies`` (+ the first rules of the ones in use
+  - ``policy/ftdnatpolicies`` (+ the rules of the ones in use)
+  - ``policy/accesspolicies`` (+ the first rules of the ones in use),
+    ``policy/prefilterpolicies`` (+ the first rules of the ones in use
     that are not the default prefilter policy)
-  - ``policies/ftds2svpns`` (+ endpoints, IKE and IPsec settings),
+  - ``policy/ftds2svpns`` (+ endpoints, IKE and IPsec settings),
     ``health/tunnelstatuses``                    site-to-site VPN
   - ``health/alerts``, ``deployment/deployabledevices``
   - ``health/ravpnsessions``                      connected remote access users
@@ -230,6 +230,17 @@ def _items_or_self(body: Any) -> list[dict]:
     if isinstance(body, dict) and "items" in body:
         return [i for i in body.get("items") or [] if isinstance(i, dict)]
     return [body] if isinstance(body, dict) and body else []
+
+
+def _inline_access(policy: dict) -> dict | None:
+    """The access interface settings a remote access VPN policy carries
+    itself (FMC 7.6: ``accessInterfaceSettings`` with ``interfaceSettings``,
+    ``webPort`` and ``dtlsPort``), or ``None`` when the release serves them
+    as a resource of the policy (``accessinterfacesettings``)."""
+    inline = policy.get("accessInterfaceSettings")
+    if isinstance(inline, dict) and ("interfaceSettings" in inline or "accessInterfaceSettings" in inline):
+        return inline
+    return None
 
 
 def _dicts(value: Any) -> list[dict]:
@@ -440,18 +451,17 @@ async def collect_fmc(
         objects[key] = _dicts(_scrub(await best_effort(f"{base}/object/{resource}", "objects") or []))
 
     report("fmc vpn policies")
-    policies = [
-        p for p in _dicts(_scrub(await best_effort(f"{base}/policies/ravpns", "policies") or [])) if p.get("id")
-    ]
+    policies = [p for p in _dicts(_scrub(await best_effort(f"{base}/policy/ravpns", "policies") or [])) if p.get("id")]
     policies = [p for p in policies if is_ra_vpn_policy(p) or not p.get("type")]
 
-    total += 3 * len(policies)
+    total += sum(2 if _inline_access(p) else 3 for p in policies)
     policy_details: dict[str, dict[str, Any]] = {}
     for policy in policies:
         pid = _text(policy["id"])
         report("fmc vpn policies", networks=len(policies))
-        detail_base = f"{base}/policies/ravpns/{pid}"
+        detail_base = f"{base}/policy/ravpns/{pid}"
         scope = f"policy {policy.get('name')}"
+        inline_access = _inline_access(policy)
         policy_details[pid] = _scrub(
             {
                 "connection_profiles": await best_effort(f"{detail_base}/connectionprofiles", scope) or [],
@@ -460,8 +470,13 @@ async def collect_fmc(
                 "address_assignment": _items_or_self(
                     await best_effort(f"{detail_base}/addressassignmentsettings", scope, mode="one")
                 ),
-                "access_interfaces": _items_or_self(
-                    await best_effort(f"{detail_base}/accessinterfacesettings", scope, mode="one")
+                # An FMC 7.6 carries the access interface settings in the
+                # policy itself and answers the resource with 404 Invalid
+                # URL; older releases serve the resource.
+                "access_interfaces": [inline_access]
+                if inline_access
+                else _items_or_self(
+                    await best_effort(f"{detail_base}/accessinterfacesettings", scope, mode="one", optional=True)
                 ),
             }
         )
@@ -540,14 +555,14 @@ async def collect_fmc(
     if opts["include_nat"]:
         report("fmc nat")
         nat_policies = [
-            p for p in _dicts(_scrub(await best_effort(f"{base}/policies/ftdnatpolicies", "nat") or [])) if p.get("id")
+            p for p in _dicts(_scrub(await best_effort(f"{base}/policy/ftdnatpolicies", "nat") or [])) if p.get("id")
         ]
         in_use = _policies_in_use(nat_policies, assignments, NAT_POLICY_TYPES, resolver, set(on_map_ids))
         total += len(in_use)
         for policy in in_use:
             report("fmc nat", policies=len(in_use))
             body = await best_effort(
-                f"{base}/policies/ftdnatpolicies/{_text(policy['id'])}/natrules",
+                f"{base}/policy/ftdnatpolicies/{_text(policy['id'])}/natrules",
                 f"NAT policy {policy.get('name')}",
                 mode="page",
                 limit=MAX_NAT_RULES,
@@ -565,11 +580,11 @@ async def collect_fmc(
         report("fmc access policies")
         access_policies = [
             p
-            for p in _dicts(_scrub(await best_effort(f"{base}/policies/accesspolicies", "access policies") or []))
+            for p in _dicts(_scrub(await best_effort(f"{base}/policy/accesspolicies", "access policies") or []))
             if p.get("id")
         ]
         prefilter_policies = _dicts(
-            _scrub(await best_effort(f"{base}/policies/prefilterpolicies", "access policies", optional=True) or [])
+            _scrub(await best_effort(f"{base}/policy/prefilterpolicies", "access policies", optional=True) or [])
         )
         in_use = _policies_in_use(access_policies, assignments, ACCESS_POLICY_TYPES, resolver, set(on_map_ids))
         # A device record names its access policy even when no assignment does.
@@ -583,7 +598,7 @@ async def collect_fmc(
             pid = _text(policy["id"])
             report("fmc access policies", policies=len(in_use))
             body = await best_effort(
-                f"{base}/policies/accesspolicies/{pid}/accessrules",
+                f"{base}/policy/accesspolicies/{pid}/accessrules",
                 f"access policy {policy.get('name')}",
                 mode="page",
                 limit=MAX_ACCESS_RULES,
@@ -617,7 +632,7 @@ async def collect_fmc(
         for pid in prefilters:
             report("fmc access policies", policies=len(in_use))
             body = await best_effort(
-                f"{base}/policies/prefilterpolicies/{pid}/prefilterrules",
+                f"{base}/policy/prefilterpolicies/{pid}/prefilterrules",
                 f"prefilter policy {by_id.get(pid, {}).get('name') or pid}",
                 mode="page",
                 limit=MAX_ACCESS_RULES,
@@ -639,7 +654,7 @@ async def collect_fmc(
         report("fmc s2s vpn")
         s2s_vpns = [
             t
-            for t in _dicts(_scrub(await best_effort(f"{base}/policies/ftds2svpns", "site-to-site VPN") or []))
+            for t in _dicts(_scrub(await best_effort(f"{base}/policy/ftds2svpns", "site-to-site VPN") or []))
             if t.get("id")
         ]
         total += 3 * len(s2s_vpns)
@@ -647,7 +662,7 @@ async def collect_fmc(
             tid = _text(topology["id"])
             report("fmc s2s vpn", topologies=len(s2s_vpns))
             scope = f"VPN topology {topology.get('name')}"
-            detail_base = f"{base}/policies/ftds2svpns/{tid}"
+            detail_base = f"{base}/policy/ftds2svpns/{tid}"
             s2s_details[tid] = _scrub(
                 {
                     "endpoints": await best_effort(f"{detail_base}/endpoints", scope) or [],

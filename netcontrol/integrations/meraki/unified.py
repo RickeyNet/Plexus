@@ -784,6 +784,8 @@ def graph_to_snapshot(
         util = g.get("utilization") or {}
         edge: dict[str, Any] = {
             "id": f"e{index}",
+            # The graph edge's id: a path trace names the links it crosses by it.
+            "gid": "" if g.get("id") is None else str(g["id"]),
             "a": a,
             "b": b,
             "kind": kind,

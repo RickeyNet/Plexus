@@ -362,6 +362,13 @@ for every device, site and link, layer toggles, and a build report. For
 inventory devices it embeds the interfaces, VLANs, neighbors and route table
 Plexus has collected.
 
+With **Path Mode** open, the export also carries the path: its picks, the
+traffic asked about, and the hop-by-hop trace in both directions of every
+leg between two subnets or addresses, which the file's **Path** panel shows
+as the page does and highlights on the map. Picks made inside the file are
+drawn over the links only, since the trace needs the server (see
+`docs/path-trace.md`, *Limits*).
+
 No internet access, Plexus login, or web server is needed to open the file,
 so it can be emailed or placed on a file share. It contains addressing and
 firewall rules, so treat it as sensitive network documentation. It never
@@ -398,7 +405,7 @@ it shows. The selector appears only when the export includes an integration.
 |---|---|---|
 | `GET` | `/api/topology` | Topology graph; Meraki nodes carry `source: "meraki"` and a `meraki` reference |
 | `GET` | `/api/topology/search/deep?q=` | Search collected Meraki detail; returns node references and snippets |
-| `GET` | `/api/topology/export.html` | Interactive HTML map (`?group_id=`, `?download=1` to save) |
+| `GET` | `/api/topology/export.html` | Interactive HTML map (`?group_id=`, `?download=1` to save, `?path=` the Path Mode picks and traffic as JSON, to embed the path and its traces) |
 | `GET` | `/api/topology/path?source=&destination=` | Trace a flow hop by hop across every device on the map, request and replies. Optional `source_node`, `destination_node` (map node ids of the ends), `protocol` (`tcp`, `udp`, `icmp`, empty for any traffic) and `port`; see [path-trace.md](path-trace.md#api-reference) |
 | `GET` | `/api/sources/nodes?org_ref=&node_id=` | Detail sections for one Meraki node |
 | `GET` | `/api/sources` | List organizations and default collection options |

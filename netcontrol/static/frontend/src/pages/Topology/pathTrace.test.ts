@@ -104,9 +104,10 @@ describe('path trace display', () => {
     expect(['ok', 'blocked', 'partial', 'unknown', 'info'].map((s) => statusMark(s).mark)).toEqual(['✓', '✕', '◐', '?', 'i']);
     expect(statusMark('blocked').color).toBe('var(--danger)');
     expect(statusMark('info').color).toBe('var(--text-muted, #868e96)');
-    expect(['allowed', 'blocked', 'partial', 'unknown'].map((v) => verdictLabel(v).label)).toEqual([
+    expect(['allowed', 'blocked', 'unreachable', 'partial', 'unknown'].map((v) => verdictLabel(v).label)).toEqual([
       'Allowed',
       'Blocked',
+      'No path',
       'Allowed in part',
       'Check incomplete',
     ]);
@@ -116,14 +117,14 @@ describe('path trace display', () => {
   it('lists the hops of a direction on one line, marking those not ok', () => {
     const blocked: PathDirection = {
       verdict: 'blocked',
-      summary: 'Blocked at 1000 - Corp East Backup.',
+      summary: 'Blocked at Hub 02 MX.',
       hops: [
-        hop({ node: 1049, label: '1049 - Data Eng HQ' }),
-        hop({ node: 1000, edge: 7, label: '1000 - AWS Corp East VMX-Large' }),
-        hop({ node: 1001, edge: 8, label: '1000 - Corp East Backup', status: 'blocked' }),
+        hop({ node: 1049, label: 'Branch 01 MX' }),
+        hop({ node: 1000, edge: 7, label: 'Hub 01 MX' }),
+        hop({ node: 1001, edge: 8, label: 'Hub 02 MX', status: 'blocked' }),
       ],
     };
-    expect(traceRoute(blocked)).toBe('1049 - Data Eng HQ → 1000 - AWS Corp East VMX-Large → 1000 - Corp East Backup ✕ (3 hops)');
+    expect(traceRoute(blocked)).toBe('Branch 01 MX → Hub 01 MX → Hub 02 MX ✕ (3 hops)');
     // The Internet pseudo hop has no node; one hop is "1 hop".
     expect(traceRoute({ verdict: 'unknown', summary: '', hops: [hop({ status: 'unknown' })] })).toBe('Internet ? (1 hop)');
     expect(

@@ -168,7 +168,7 @@ async def test_collect_account_falls_back_and_stays_best_effort():
             client, "42", {"site_name_contains": "branch", "include_firewall": False}, progress.append
         )
 
-    assert [s["info"]["name"] for s in raw["sites"]] == ["Branch-Cleveland", "Branch-Denver"]
+    assert [s["info"]["name"] for s in raw["sites"]] == ["Branch-Madison", "Branch-Denver"]
     assert raw["users"] == []
     assert len(raw["ranges"]) == len(sample["ranges"]) and len(raw["interfaces"]) == len(sample["interfaces"])
     scopes = [e["path"] for e in raw["errors"]]
@@ -334,7 +334,7 @@ async def test_collect_account_falls_back_to_the_reduced_firewall_queries():
 _BGP_PEER = {
     "id": "b-1",
     "name": "Core router",
-    "site": {"id": "1002", "name": "Branch-Cleveland"},
+    "site": {"id": "1002", "name": "Branch-Madison"},
     "peerAsn": 65010,
     "catoAsn": 8075,
     "peerIp": "10.60.20.2",
@@ -385,7 +385,7 @@ async def test_collect_account_reads_the_bgp_peers_site_by_site_with_the_ranges(
     sample = build_sample_raw()
     seen: list[str] = []
     asked: list[str] = []
-    unnamed = {"id": "b-2", "name": "VPC router", "peerIp": "172.31.0.2"}
+    unnamed = {"id": "b-2", "name": "VPC router", "peerIp": "172.21.0.2"}
 
     def of_site(site_id: str) -> httpx.Response:
         asked.append(site_id)
@@ -574,7 +574,7 @@ def test_every_remote_user_is_a_node_in_the_box_of_its_pop(snapshot):
     users = {n["label"]: n for n in snapshot["nodes"] if n["kind"] == "user"}
     assert sorted(users) == ["Dana Reyes", "Priya Nair", "Sam Okafor"]
     dana = users["Dana Reyes"]
-    assert dana["id"] == f"{USER_NODE_PREFIX}9001" and dana["ip"] == "10.41.0.11"
+    assert dana["id"] == f"{USER_NODE_PREFIX}9001" and dana["ip"] == "10.88.0.11"
     assert dana["site"] == f"{POP_SITE_ID}:New York" and users["Sam Okafor"]["site"] == f"{POP_SITE_ID}:Ashburn"
     boxes = {s["id"]: s for s in snapshot["sites"]}
     ashburn = boxes[f"{POP_SITE_ID}:Ashburn"]
@@ -590,7 +590,7 @@ def test_every_remote_user_is_a_node_in_the_box_of_its_pop(snapshot):
     assert ["Remote users connected", "2"] in _section(pop, "Cato PoP")["rows"]
     rows = _section(pop, "Connected remote users")["rows"]
     assert [r[0] for r in rows] == ["Priya Nair", "Sam Okafor"]
-    assert rows[1][3:5] == ["10.41.0.12", "198.51.100.202"]
+    assert rows[1][3:5] == ["10.88.0.12", "198.51.100.202"]
 
 
 def test_a_remote_user_says_where_it_connects_from_and_to(snapshot):
@@ -599,9 +599,9 @@ def test_a_remote_user_says_where_it_connects_from_and_to(snapshot):
     assert ["Email", "dana.reyes@example.com"] in _section(dana, "Remote user")["rows"]
     origin = dict(_section(dana, "Connecting from")["rows"])
     assert origin["Connected from"] == "Remote (not in an office)" and origin["Public IP"] == "198.51.100.201"
-    assert origin["ISP"] == "Example ISP" and origin["City"] == "Columbus" and origin["State"] == "Ohio"
+    assert origin["ISP"] == "Example ISP" and origin["City"] == "Helena" and origin["State"] == "Montana"
     target = dict(_section(dana, "Connected to (Cato)")["rows"])
-    assert target["PoP"] == "New York" and target["VPN IP"] == "10.41.0.11"
+    assert target["PoP"] == "New York" and target["VPN IP"] == "10.88.0.11"
     assert dict(_section(dana, "Device")["rows"])["Device"] == "LT-DANA"
     recent = _section(dana, "Recent connections")
     assert recent["rows"][0][4] == "New York" and recent["rows"][0][3] == "Wi-Fi"
@@ -647,7 +647,7 @@ def test_snapshot_ranges_are_deduplicated_per_site(snapshot):
     hq = next(s for s in snapshot["sites"] if s["name"] == "HQ-DataCenter")
     subnets = [r[0] for r in _section(hq, "Network ranges")["rows"]]
     assert sorted(subnets) == ["10.50.1.0/24", "10.50.10.0/24", "10.50.20.0/24"]
-    branch = next(s for s in snapshot["sites"] if s["name"] == "Branch-Cleveland")
+    branch = next(s for s in snapshot["sites"] if s["name"] == "Branch-Madison")
     # Listed both as a range and as the interface's native range: kept once.
     assert [r[:2] for r in _section(branch, "Network ranges")["rows"]] == [["10.60.20.0/24", "Users"]]
 
@@ -656,22 +656,22 @@ def test_subnet_index_places_ranges_on_the_site_gateway(snapshot):
     index = {s["cidr"]: s for s in subnet_index(snapshot)}
     assert index["10.50.10.0/24"]["node_id"] == "d:5001" and index["10.50.10.0/24"]["kind"] == "range"
     assert index["10.50.10.0/24"]["name"] == "Servers (VLAN 10)" and index["10.50.10.0/24"]["in_vpn"] is True
-    assert index["172.31.0.0/16"]["node_id"] == "s:1004"
+    assert index["172.21.0.0/16"]["node_id"] == "s:1004"
     # Nothing is owned by a PoP, the backbone or the user group.
     assert not any(s["site_id"] == CLOUD_SITE_ID for s in index.values())
 
 
 def test_subnet_index_gives_each_remote_user_its_own_address(snapshot):
     index = {(e["cidr"], e["node_id"]): e for e in subnet_index(snapshot)}
-    dana = index[("10.41.0.11/32", f"{USER_NODE_PREFIX}9001")]
+    dana = index[("10.88.0.11/32", f"{USER_NODE_PREFIX}9001")]
     assert dana["kind"] == "user" and dana["name"] == "Cato Client Dana Reyes" and dana["in_vpn"] is None
     assert dana["site_id"] == f"{POP_SITE_ID}:New York" and dana["site_name"] == "PoP New York"
-    assert index[("10.41.0.12/32", f"{USER_NODE_PREFIX}9002")]["site_name"] == "PoP Ashburn"
+    assert index[("10.88.0.12/32", f"{USER_NODE_PREFIX}9002")]["site_name"] == "PoP Ashburn"
     # A typed address finds the user ahead of a range another source keeps for
     # the whole client pool (a Meraki site's non-Meraki VPN peer).
-    pool = {"cidr": "10.41.0.0/16", "name": "Behind Cato", "kind": "peer", "node_id": "peer", "site_name": ""}
-    found = subnets_containing([*index.values(), pool], "10.41.0.11")
-    assert [(e["cidr"], e["kind"]) for e in found] == [("10.41.0.11/32", "user"), ("10.41.0.0/16", "peer")]
+    pool = {"cidr": "10.88.0.0/16", "name": "Behind Cato", "kind": "peer", "node_id": "peer", "site_name": ""}
+    found = subnets_containing([*index.values(), pool], "10.88.0.11")
+    assert [(e["cidr"], e["kind"]) for e in found] == [("10.88.0.11/32", "user"), ("10.88.0.0/16", "peer")]
 
 
 @pytest.mark.asyncio
@@ -685,7 +685,7 @@ async def test_ipam_leaves_the_remote_users_addresses_out(snapshot, monkeypatch)
     rows = await routes_module.ipam_subnets()
     assert rows and all(r["provider"] == "cato" and r["org_ref"] == 3 for r in rows)
     assert "10.50.10.0/24" in {r["cidr"] for r in rows}
-    assert not any(r["kind"] == "user" or r["cidr"].startswith("10.41.") for r in rows)
+    assert not any(r["kind"] == "user" or r["cidr"].startswith("10.88.") for r in rows)
 
 
 def test_account_without_sites_builds_only_the_cloud():
@@ -703,7 +703,7 @@ def test_merge_marks_cato_nodes_with_their_provider(snapshot):
     merge_meraki_into_graph(nodes, edges, [(7, snapshot)], host_node=lambda _id: None, resolve_external=lambda *_: None)
     socket = nodes["meraki:7:d:5003"]
     assert socket["device_type"] == "cato" and socket["device_category"] == "firewall"
-    assert socket["meraki"]["provider"] == "cato" and socket["meraki"]["site_name"] == "Branch-Cleveland"
+    assert socket["meraki"]["provider"] == "cato" and socket["meraki"]["site_name"] == "Branch-Madison"
     assert nodes["meraki:7:cato:cloud"]["meraki"]["kind"] == "cloud"
     tunnel = next(e for e in edges if e["from"] == "meraki:7:d:5003" and e["to"] == "meraki:7:pop:New York")
     assert tunnel["protocol"] == "vpn" and tunnel["provider"] == "cato"
@@ -830,7 +830,7 @@ def test_api_cato_sample_is_merged_into_the_topology(api):
     assert group.status_code in (200, 201), group.text
     host = api.post(
         f"/api/inventory/{group.json()['id']}/hosts",
-        json={"hostname": "not-dana", "ip_address": "10.41.0.11", "device_type": "cisco_xe"},
+        json={"hostname": "not-dana", "ip_address": "10.88.0.11", "device_type": "cisco_xe"},
     )
     assert host.status_code in (200, 201), host.text
 
@@ -838,16 +838,16 @@ def test_api_cato_sample_is_merged_into_the_topology(api):
     cato = [n for n in graph["nodes"] if (n.get("meraki") or {}).get("provider") == "cato"]
     assert {n["meraki"]["kind"] for n in cato} == {"appliance", "wan", "cloud", "user"}
     dana = next(n for n in cato if n["label"] == "Dana Reyes")
-    assert dana["ip"] == "10.41.0.11" and dana["meraki"]["site_name"] == "PoP New York"
+    assert dana["ip"] == "10.88.0.11" and dana["meraki"]["site_name"] == "PoP New York"
     assert dana["source"] == "meraki" and not dana["in_inventory"]
     assert any(e.get("provider") == "cato" and e["protocol"] == "vpn" for e in graph["edges"])
 
     details = api.get(f"/api/sources/nodes?org_ref={org_ref}&node_id=d:5003").json()
-    assert details["provider"] == "cato" and details["site_name"] == "Branch-Cleveland"
+    assert details["provider"] == "cato" and details["site_name"] == "Branch-Madison"
 
     # Subnets of Cato sites can be picked as path endpoints.
     subnets = api.get("/api/sources/subnets").json()["subnets"]
-    vpc = next(s for s in subnets if s["cidr"] == "172.31.0.0/16")
+    vpc = next(s for s in subnets if s["cidr"] == "172.21.0.0/16")
     assert vpc["site_name"] == "AWS-us-east-1" and vpc["org_ref"] == org_ref
 
     # A remote user is found by name, on their own node and their PoP.
@@ -970,7 +970,7 @@ def _fwd(snapshot: dict, node_id: str) -> dict:
 
 
 def test_sockets_pops_and_the_cloud_carry_forwarding_hops(snapshot):
-    socket = _fwd(snapshot, "d:5003")  # Branch-Cleveland, on PoP New York
+    socket = _fwd(snapshot, "d:5003")  # Branch-Madison, on PoP New York
     assert set(socket) == {"version", "interfaces", "routes", "vpn", "policies", "nat", "not_collected"}
     assert [(i["name"], i["kind"], i["ip"], i["cidr"]) for i in socket["interfaces"]] == [
         ("WAN 01", "wan", "198.51.100.30", ""),
@@ -988,7 +988,7 @@ def test_sockets_pops_and_the_cloud_carry_forwarding_hops(snapshot):
     pop = {r["prefix"]: r for r in _fwd(snapshot, "pop:New York")["routes"]}
     assert pop["10.60.20.0/24"]["peer"] == {"org_node": "d:5003"} and pop["10.60.20.0/24"]["kind"] == "static"
     assert pop["10.50.10.0/24"]["peer"] == {"org_node": CLOUD_NODE_ID}
-    assert pop["10.41.0.11/32"]["peer"] == {"org_node": "cato:user:9001"}
+    assert pop["10.88.0.11/32"]["peer"] == {"org_node": "cato:user:9001"}
     assert pop["0.0.0.0/0"]["kind"] == "default" and pop["0.0.0.0/0"]["peer"] == {"org_node": CLOUD_NODE_ID}
 
     # The Cato Cloud hands each range to the PoP of its site.
@@ -996,7 +996,7 @@ def test_sockets_pops_and_the_cloud_carry_forwarding_hops(snapshot):
     by_prefix = {r["prefix"]: r for r in cloud["routes"]}
     assert by_prefix["10.50.10.0/24"]["peer"] == {"org_node": "pop:Ashburn"}
     assert by_prefix["10.60.20.0/24"]["peer"] == {"org_node": "pop:New York"}
-    assert by_prefix["172.31.0.0/16"]["peer"] == {"org_node": "pop:Ashburn"}
+    assert by_prefix["172.21.0.0/16"]["peer"] == {"org_node": "pop:Ashburn"}
     # A site that is down is reached over its down tunnel to the cloud.
     assert by_prefix["10.61.20.0/24"]["peer"] == {"org_node": "d:5004"}
     assert _fwd(snapshot, "d:5004")["routes"][-1]["peer"] == {"org_node": CLOUD_NODE_ID}
@@ -1050,7 +1050,7 @@ def test_sample_firewall_rules_map_onto_forwarding_rules(snapshot):
     assert (wan[1]["src"], wan[1]["dst"]) == (["10.50.10.0/24"], ["10.61.20.0/24"])
     # A range is found by its entity id; a custom service is its protocol and ports.
     servers = wan[2]
-    assert servers["src"] == ["10.60.20.0/24", "172.31.0.0/16"] and servers["dst"] == ["10.50.10.0/24"]
+    assert servers["src"] == ["10.60.20.0/24", "172.21.0.0/16"] and servers["dst"] == ["10.50.10.0/24"]
     assert (servers["protocol"], servers["dst_ports"], servers["unresolved"]) == ("tcp", "443", [])
     # A users group is not addresses: any, and named as unresolved.
     assert wan[3]["src"] == ["any"] and wan[3]["unresolved"] == ["users group VPN Users"]
@@ -1127,7 +1127,7 @@ def test_firewall_rule_addresses_services_and_conditions_are_resolved_or_kept_un
     # FROM: the rule applies from its destination to its source. One rule per protocol.
     tcp, udp = rules[1], rules[2]
     assert tcp["src"] == ["10.50.10.0/24", "10.50.20.0/24", "10.50.1.0/24"]
-    assert tcp["dst"] == ["10.9.0.1/32", "10.9.1.0/24", "10.50.10.0/24", "10.41.0.11/32"]
+    assert tcp["dst"] == ["10.9.0.1/32", "10.9.1.0/24", "10.50.10.0/24", "10.88.0.11/32"]
     assert (tcp["protocol"], tcp["dst_ports"]) == ("tcp", "80,8080,1000-2000")
     assert (udp["protocol"], udp["dst_ports"], udp["src"], udp["dst"]) == ("udp", "1000-2000", tcp["src"], tcp["dst"])
     assert tcp["unresolved"] == udp["unresolved"] == []
@@ -1142,27 +1142,27 @@ def test_global_ip_range_objects_named_by_rules_are_resolved_when_collected():
         [
             _rule_raw(
                 index=1,
-                name="VDI to scanners",
-                source={"globalIpRange": [{"id": "gr-1", "name": "VDI-Azure"}]},
+                name="Lab pool to scanners",
+                source={"globalIpRange": [{"id": "gr-1", "name": "Lab-Pool"}]},
                 # By name, and a from-to range that is not one subnet.
                 destination={"ip": ["10.9.0.1"], "globalIpRange": [{"name": "Scanners"}]},
             ),
             _rule_raw(index=2, name="Retired object", source={"globalIpRange": [{"id": "gr-9", "name": "Retired"}]}),
         ]
     )
-    vdi, retired = rules
-    assert vdi["src"] == ["10.12.128.0/22"] and vdi["dst"] == ["10.9.0.1/32", "10.50.10.200/30"]
-    assert vdi["unresolved"] == []
+    pool, retired = rules
+    assert pool["src"] == ["10.77.128.0/22"] and pool["dst"] == ["10.9.0.1/32", "10.50.10.200/30"]
+    assert pool["unresolved"] == []
     # An object the account does not list: any, and named as unresolved.
     assert retired["src"] == ["any"] and retired["unresolved"] == ["global IP range Retired"]
 
     # The objects were not read (the query failed): never a guess from the name.
     raw = build_sample_raw()
     raw["global_ip_ranges"] = None
-    vdi_rule = _rule_raw(index=1, name="VDI", source={"globalIpRange": [{"id": "gr-1", "name": "VDI-Azure"}]})
-    raw["wan_firewall"] = {"enabled": True, "rules": [vdi_rule], "reduced": False}
-    (vdi,) = _rules(build_snapshot(raw), "WAN firewall rules")
-    assert vdi["src"] == ["any"] and vdi["unresolved"] == ["global IP range VDI-Azure"]
+    pool_rule = _rule_raw(index=1, name="Lab pool", source={"globalIpRange": [{"id": "gr-1", "name": "Lab-Pool"}]})
+    raw["wan_firewall"] = {"enabled": True, "rules": [pool_rule], "reduced": False}
+    (pool,) = _rules(build_snapshot(raw), "WAN firewall rules")
+    assert pool["src"] == ["any"] and pool["unresolved"] == ["global IP range Lab-Pool"]
 
 
 def test_a_firewall_policy_turned_off_has_no_rules_and_an_unknown_default():
@@ -1177,19 +1177,19 @@ def test_ha_sockets_ipsec_sites_and_users_carry_forwarding_too(snapshot):
     assert _fwd(snapshot, "d:5002")["routes"] == _fwd(snapshot, "d:5001")["routes"]
     ipsec = _fwd(snapshot, "s:1004")
     assert [(r["prefix"], r["peer"]) for r in ipsec["routes"]] == [
-        ("172.31.0.0/16", None),
+        ("172.21.0.0/16", None),
         ("0.0.0.0/0", {"org_node": "pop:Ashburn"}),
     ]
     # Each IPsec tunnel is an interface of the site, named like its edge.
     assert [(i["name"], i["kind"], i["ip"], i["enabled"]) for i in ipsec["interfaces"]] == [
         ("IPsec tunnel (primary)", "tunnel", "192.0.2.90", True),
         ("IPsec tunnel (secondary)", "tunnel", "192.0.2.91", True),
-        ("VPC (172.31.0.0/16)", "lan", "", True),
+        ("VPC (172.21.0.0/16)", "lan", "", True),
     ]
     user = _fwd(snapshot, "cato:user:9002")
-    assert user["interfaces"][0]["ip"] == "10.41.0.12" and user["interfaces"][0]["kind"] == "tunnel"
+    assert user["interfaces"][0]["ip"] == "10.88.0.12" and user["interfaces"][0]["kind"] == "tunnel"
     assert [(r["prefix"], r["kind"]) for r in user["routes"]] == [
-        ("10.41.0.12/32", "connected"),
+        ("10.88.0.12/32", "connected"),
         ("0.0.0.0/0", "default"),
     ]
 
@@ -1212,7 +1212,7 @@ def test_ipsec_tunnel_states_follow_the_site():
     ]
     # Still routed by its PoP, where the trace meets the down tunnels.
     assert block["routes"][-1]["peer"] == {"org_node": "pop:Ashburn"}
-    assert {r["prefix"]: r["peer"] for r in _fwd(snap, "pop:Ashburn")["routes"]}["172.31.0.0/16"] == {
+    assert {r["prefix"]: r["peer"] for r in _fwd(snap, "pop:Ashburn")["routes"]}["172.21.0.0/16"] == {
         "org_node": "s:1004"
     }
     site = next(s for s in snap["sites"] if s["id"] == "1004")

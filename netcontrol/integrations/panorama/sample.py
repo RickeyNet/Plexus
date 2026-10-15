@@ -133,14 +133,14 @@ def _objects() -> dict[str, dict[str, list[dict]]]:
         },
         "Corporate": {
             "address": [
-                address("HQ-LAN", "10.150.10.0/24", tag=["hq"]),
-                address("HQ-DMZ", "10.150.50.0/24", tag=["hq"]),
-                address("web-server", "10.150.50.10"),
+                address("HQ-LAN", "10.130.10.0/24", tag=["hq"]),
+                address("HQ-DMZ", "10.130.50.0/24", tag=["hq"]),
+                address("web-server", "10.130.50.10"),
                 address("web-public", WEB_PUBLIC),
-                address("mail-server", "10.150.50.25"),
+                address("mail-server", "10.130.50.25"),
                 address("mail-public", MAIL_PUBLIC),
                 address("GP-Pool", GP_POOL),
-                address("Branch-Networks", "10.151.0.0/16"),
+                address("Branch-Networks", "10.131.0.0/16"),
                 address("Partner-Net", "172.16.40.0/24"),
             ],
             "address-group": [
@@ -152,7 +152,7 @@ def _objects() -> dict[str, dict[str, list[dict]]]:
             "application-group": [],
         },
         "Branches": {
-            "address": [address("Branch-LAN", "10.151.10.0/24"), address("Branch-Guest", "10.151.30.0/24")],
+            "address": [address("Branch-LAN", "10.131.10.0/24"), address("Branch-Guest", "10.131.30.0/24")],
             "address-group": [],
             "service": [],
             "service-group": [],
@@ -394,11 +394,11 @@ def _template_config() -> dict[str, dict[str, Any]]:
             "interface": {
                 "ethernet": [
                     _ethernet("ethernet1/1", "$untrust-ip", "Internet (ISP-A)"),
-                    _ethernet("ethernet1/2", "10.150.10.1/24", "Corporate LAN"),
-                    _ethernet("ethernet1/3", "10.150.50.1/24", "DMZ"),
+                    _ethernet("ethernet1/2", "10.130.10.1/24", "Corporate LAN"),
+                    _ethernet("ethernet1/3", "10.130.50.1/24", "DMZ"),
                 ],
                 "loopback": {
-                    "units": [{"@name": "loopback.1", "ip": [{"@name": "10.150.0.1/32"}], "comment": "Router ID"}]
+                    "units": [{"@name": "loopback.1", "ip": [{"@name": "10.130.0.1/32"}], "comment": "Router ID"}]
                 },
                 "tunnel": {
                     "units": [
@@ -435,13 +435,13 @@ def _template_config() -> dict[str, dict[str, Any]]:
                 hq_interfaces,
                 [
                     _static("default", "0.0.0.0/0", "ethernet1/1", "203.0.113.129"),
-                    _static("to-branch", "10.151.0.0/16", "tunnel.1"),
+                    _static("to-branch", "10.131.0.0/16", "tunnel.1"),
                     _static("to-partner", "172.16.40.0/24", "tunnel.2"),
                 ],
                 {
                     "bgp": {
                         "enable": "yes",
-                        "router-id": "10.150.0.1",
+                        "router-id": "10.130.0.1",
                         "local-as": "65150",
                         "peer-group": [
                             {
@@ -478,7 +478,7 @@ def _template_config() -> dict[str, dict[str, Any]]:
                         "proxy-id": [
                             {
                                 "@name": "partner",
-                                "local": "10.150.10.0/24",
+                                "local": "10.130.10.0/24",
                                 "remote": "172.16.40.0/24",
                                 "protocol": {"any": ""},
                             }
@@ -502,13 +502,13 @@ def _template_config() -> dict[str, dict[str, Any]]:
                     _ethernet("ethernet1/1", "$untrust-ip", "Internet (broadband)"),
                     _ethernet(
                         "ethernet1/2",
-                        "10.151.10.1/24",
+                        "10.131.10.1/24",
                         "Branch LAN",
                         units=[
                             {
                                 "@name": "ethernet1/2.30",
                                 "tag": "30",
-                                "ip": [{"@name": "10.151.30.1/24"}],
+                                "ip": [{"@name": "10.131.30.1/24"}],
                                 "comment": "Guest Wi-Fi",
                             }
                         ],
@@ -532,7 +532,7 @@ def _template_config() -> dict[str, dict[str, Any]]:
                 ["ethernet1/1", "ethernet1/2", "ethernet1/2.30", "tunnel.1"],
                 [
                     _static("default", "0.0.0.0/0", "ethernet1/1", "198.51.100.133"),
-                    _static("to-hq", "10.150.0.0/16", "tunnel.1"),
+                    _static("to-hq", "10.130.0.0/16", "tunnel.1"),
                     _static("to-gp-users", GP_POOL, "tunnel.1"),
                 ],
             ),
@@ -604,9 +604,9 @@ def _hq_state(*, active: bool) -> dict[str, Any]:
         "interfaces": {
             "ifnet": [
                 _ifnet("ethernet1/1", "untrust", f"{HQ_PUBLIC}/28"),
-                _ifnet("ethernet1/2", "trust", "10.150.10.1/24"),
-                _ifnet("ethernet1/3", "dmz", "10.150.50.1/24"),
-                _ifnet("loopback.1", "trust", "10.150.0.1/32"),
+                _ifnet("ethernet1/2", "trust", "10.130.10.1/24"),
+                _ifnet("ethernet1/3", "dmz", "10.130.50.1/24"),
+                _ifnet("loopback.1", "trust", "10.130.0.1/32"),
                 _ifnet("tunnel.1", "vpn", "169.254.10.1/30"),
                 _ifnet("tunnel.2", "vpn"),
                 _ifnet("tunnel.10", "gp-vpn"),
@@ -621,11 +621,11 @@ def _hq_state(*, active: bool) -> dict[str, Any]:
             "flags": _FLAGS,
             "entry": [
                 _route("0.0.0.0/0", "203.0.113.129", "ethernet1/1", "A S"),
-                _route("10.150.0.1/32", "0.0.0.0", "loopback.1", "A C", "0"),
-                _route("10.150.10.0/24", "10.150.10.1", "ethernet1/2", "A C", "0"),
-                _route("10.150.10.1/32", "0.0.0.0", "ethernet1/2", "A H", "0"),
-                _route("10.150.50.0/24", "10.150.50.1", "ethernet1/3", "A C", "0"),
-                _route("10.151.0.0/16", "0.0.0.0", "tunnel.1", "A S"),
+                _route("10.130.0.1/32", "0.0.0.0", "loopback.1", "A C", "0"),
+                _route("10.130.10.0/24", "10.130.10.1", "ethernet1/2", "A C", "0"),
+                _route("10.130.10.1/32", "0.0.0.0", "ethernet1/2", "A H", "0"),
+                _route("10.130.50.0/24", "10.130.50.1", "ethernet1/3", "A C", "0"),
+                _route("10.131.0.0/16", "0.0.0.0", "tunnel.1", "A S"),
                 _route("169.254.10.0/30", "169.254.10.1", "tunnel.1", "A C", "0"),
                 _route("172.16.40.0/24", "0.0.0.0", "tunnel.2", "A S"),
                 _route("203.0.113.128/28", HQ_PUBLIC, "ethernet1/1", "A C", "0"),
@@ -638,12 +638,12 @@ def _hq_state(*, active: bool) -> dict[str, Any]:
                 "local-info": {
                     "state": "active" if active else "passive",
                     "priority": "100" if active else "110",
-                    "mgmt-ip": "10.150.254.11/24" if active else "10.150.254.12/24",
+                    "mgmt-ip": "10.130.254.11/24" if active else "10.130.254.12/24",
                 },
                 "peer-info": {
                     "state": "passive" if active else "active",
                     "conn-status": "up",
-                    "mgmt-ip": "10.150.254.12/24" if active else "10.150.254.11/24",
+                    "mgmt-ip": "10.130.254.12/24" if active else "10.130.254.11/24",
                 },
                 "running-sync": "synchronized",
             },
@@ -728,8 +728,8 @@ def _branch_state() -> dict[str, Any]:
         "interfaces": {
             "ifnet": [
                 _ifnet("ethernet1/1", "untrust", f"{BRANCH_PUBLIC}/30"),
-                _ifnet("ethernet1/2", "trust", "10.151.10.1/24"),
-                _ifnet("ethernet1/2.30", "guest", "10.151.30.1/24", "30"),
+                _ifnet("ethernet1/2", "trust", "10.131.10.1/24"),
+                _ifnet("ethernet1/2.30", "guest", "10.131.30.1/24", "30"),
                 _ifnet("tunnel.1", "vpn", "169.254.10.2/30"),
             ],
             "hw": [_hw("ethernet1/1", "up", "d4:f4:be:00:01:01"), _hw("ethernet1/2", "up", "d4:f4:be:00:01:02")],
@@ -738,9 +738,9 @@ def _branch_state() -> dict[str, Any]:
             "flags": _FLAGS,
             "entry": [
                 _route("0.0.0.0/0", "198.51.100.133", "ethernet1/1", "A S"),
-                _route("10.150.0.0/16", "0.0.0.0", "tunnel.1", "A S"),
-                _route("10.151.10.0/24", "10.151.10.1", "ethernet1/2", "A C", "0"),
-                _route("10.151.30.0/24", "10.151.30.1", "ethernet1/2.30", "A C", "0"),
+                _route("10.130.0.0/16", "0.0.0.0", "tunnel.1", "A S"),
+                _route("10.131.10.0/24", "10.131.10.1", "ethernet1/2", "A C", "0"),
+                _route("10.131.30.0/24", "10.131.30.1", "ethernet1/2.30", "A C", "0"),
                 _route(GP_POOL, "0.0.0.0", "tunnel.1", "A S"),
                 _route("198.51.100.132/30", BRANCH_PUBLIC, "ethernet1/1", "A C", "0"),
             ],
@@ -799,9 +799,9 @@ def _aws_state() -> dict[str, Any]:
 def build_sample_raw() -> dict[str, Any]:
     """A fresh copy of the demo Panorama's raw payloads."""
     devices = [
-        _device(HQ_1, "hq-fw-01", "PA-5220", "10.150.254.11", "11.1.4-h7", ha_state="active", peer=HQ_2),
-        _device(HQ_2, "hq-fw-02", "PA-5220", "10.150.254.12", "11.1.4-h7", ha_state="passive", peer=HQ_1),
-        _device(BRANCH, "branch-fw-01", "PA-440", "10.151.254.11", "11.1.2-h3"),
+        _device(HQ_1, "hq-fw-01", "PA-5220", "10.130.254.11", "11.1.4-h7", ha_state="active", peer=HQ_2),
+        _device(HQ_2, "hq-fw-02", "PA-5220", "10.130.254.12", "11.1.4-h7", ha_state="passive", peer=HQ_1),
+        _device(BRANCH, "branch-fw-01", "PA-440", "10.131.254.11", "11.1.2-h3"),
         _device(AWS_VM, "aws-vm-fw-01", "PA-VM", "10.210.2.13", "11.1.4-h7", policy="Out of Sync"),
     ]
     stack_config = [

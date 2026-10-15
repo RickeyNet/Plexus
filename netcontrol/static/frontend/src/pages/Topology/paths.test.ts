@@ -116,7 +116,7 @@ describe('path mode', () => {
   it('warns when the tunnels on the path will not carry a picked subnet', () => {
     const guest = pick(subnet('10.1.30.0/24', 'mx-a', 'A', { in_vpn: false }));
     const remote = pick(subnet('10.2.10.0/24', 'mx-b', 'B'));
-    const cloud = pick(subnet('172.31.0.0/16', 'peer', '', { kind: 'peer', in_vpn: null, site_name: '' }));
+    const cloud = pick(subnet('172.21.0.0/16', 'peer', '', { kind: 'peer', in_vpn: null, site_name: '' }));
     const result = connectPicks([guest, remote, cloud], EDGES);
     expect(result.legs[0].notes).toEqual(['10.1.30.0/24 is not advertised into the VPN at Site A, so a tunnel will not carry it.']);
     // Each site has its own tunnel to the peer: nothing to warn about there.
@@ -227,7 +227,7 @@ describe('a remote user clicked in path mode', () => {
   };
   const own: MerakiSubnet = {
     org_ref: 4,
-    cidr: '10.41.0.11/32',
+    cidr: '10.88.0.11/32',
     name: 'Cato Client Dana Reyes',
     kind: 'user',
     site_id: '__cato_pop__:New York',
@@ -235,16 +235,16 @@ describe('a remote user clicked in path mode', () => {
     node_id: 'cato:user:7',
     in_vpn: null,
   };
-  const pool: MerakiSubnet = { ...own, org_ref: 1, cidr: '10.41.0.0/16', name: 'Behind Cato_Cloud', kind: 'peer', site_id: '', site_name: '', node_id: 'p:Cato_Cloud' };
+  const pool: MerakiSubnet = { ...own, org_ref: 1, cidr: '10.88.0.0/16', name: 'Behind Partner', kind: 'peer', site_id: '', site_name: '', node_id: 'p:Partner' };
 
   it('is picked with its own address, the same pick as typing it, so the leg is traced', () => {
     const pick = userPick(dana, [pool, own]);
     expect(pick).toEqual({
-      key: 's:4:10.41.0.11:cato:user:7',
+      key: 's:4:10.88.0.11:cato:user:7',
       node: 'meraki:4:cato:user:7',
-      label: 'Dana Reyes (10.41.0.11) · PoP New York',
+      label: 'Dana Reyes (10.88.0.11) · PoP New York',
       subnet: own,
-      address: '10.41.0.11',
+      address: '10.88.0.11',
     });
   });
 

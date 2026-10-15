@@ -1,13 +1,17 @@
 """Remote access VPN sessions read from the FTD itself.
 
 The FMC health API for remote access VPN sessions (``health/ravpnsessions``)
-exists on FMC 7.3 and later and needs the VPN permission. When it does not
-answer, each headend is asked directly through the FMC's device command
-relay (``devices/devicerecords/{id}/operational/commands``, Devices > Device
-Management permission, FTD 6.6 and later), which runs ``show vpn-sessiondb``
-on the device and returns its text. This module builds those requests and
-turns the text back into session records of the shape the health API
-returns, so the normaliser treats both the same.
+is documented for FMC 7.3 and later and needs the VPN permission, but not
+every release serves it (a 7.6.5 FMC answers ``500 Cannot find file``).
+When it does not answer, each headend is asked directly through the FMC's
+device command relay (``devices/devicerecords/{id}/operational/commands``,
+Devices > Device Management permission, FTD 6.6 and later), which runs
+``show vpn-sessiondb`` on the device and returns its text. The relay takes
+the command as ``?command=show vpn-sessiondb`` (two words at most) and the
+rest of the line as ``&parameters=detail anyconnect``; it answers
+``items[].commandInput`` / ``commandOutput``. This module builds those
+requests and turns the text back into session records of the shape the
+health API returns, so the normaliser treats both the same.
 """
 
 from __future__ import annotations
@@ -76,16 +80,20 @@ _OS_NAMES = {
 
 
 def command_path(base: str, device_id: str, command: str, parameter: str) -> str:
-    """The relay request that runs ``command parameter`` on a device."""
+    """The relay request that runs ``command parameter`` on a device: the
+    ``show <cmd>`` part in ``command``, the rest of the line in
+    ``parameters`` (the FMC refuses a longer ``command`` and any other
+    parameter name)."""
     return (
         f"{base}/devices/devicerecords/{device_id}/operational/commands"
-        f"?filter={quote(f'command:{command}', safe=':')}&parameter={quote(parameter)}"
+        f"?command={quote(command)}&parameters={quote(parameter)}"
     )
 
 
 def command_output(body: Any) -> str:
-    """The text a relay answer carries: ``items[].response`` (the documented
-    shape), or the object's own ``response`` / ``output``, or a bare string."""
+    """The text a relay answer carries: ``items[].commandOutput`` (what the
+    FMC sends), or the object's own ``response`` / ``output``, or a bare
+    string."""
     if isinstance(body, str):
         return body
     if not isinstance(body, dict):
@@ -93,7 +101,7 @@ def command_output(body: Any) -> str:
     items = body.get("items")
     if isinstance(items, list):
         return "\n".join(command_output(item) for item in items if item)
-    for key in ("response", "output", "result", "commandOutput", "text"):
+    for key in ("commandOutput", "response", "output", "result", "text"):
         value = body.get(key)
         if isinstance(value, str):
             return value

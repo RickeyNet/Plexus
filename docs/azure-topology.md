@@ -27,7 +27,9 @@ projects join the map the same way; see [gcp-topology.md](gcp-topology.md).
 2. **Install the Azure SDK** on the Plexus server, once:
    `pip install -r requirements-cloud.txt`.
 3. **Add the subscription.** Open **Cloud Visibility → Accounts → Add Azure
-   subscription**, enter the **Subscription ID** and pick how Plexus
+   subscription** (or **Sources → Add Source → Azure Subscription** on the
+   Topology page, which opens the same dialog), enter the **Subscription
+   ID** and pick how Plexus
    signs in: a service principal (tenant ID, client ID, client secret) or
    the managed identity / environment credentials of the Plexus server.
 4. **Discover** (it checks the sign-in first). When discovery finishes the

@@ -24,7 +24,7 @@ import {
   type TopologyNode,
   type UtilizationStreamEdge,
 } from '@/api/topology';
-import { topologyExportUrl, useMerakiSubnets, useTopologyDeepSearch } from '@/api/meraki';
+import { topologyExportUrl, useMerakiSubnets, useTopologyDeepSearch, type TopologyExportPath } from '@/api/meraki';
 import { Menu, MenuCheckboxItem, MenuItem, MenuSeparator } from '@/components/Menu';
 import { PageHelp } from '@/components/PageHelp';
 import { AddToInventoryModal } from './AddToInventoryModal';
@@ -1291,6 +1291,11 @@ export function Topology() {
   const trafficFilter = useMemo(() => parseTraffic(pathTraffic), [pathTraffic]);
   // Legs between two subnets or addresses, which the server traces hop by hop.
   const pathHasTraceLeg = pathResult.legs.some((leg) => pathTraceQuery(leg.from, leg.to, { protocol: '' }) !== null);
+  // The HTML export carries the open path and the traces Plexus runs for it.
+  const exportPath = useMemo<TopologyExportPath | null>(
+    () => (pathMode && pathPicks.length > 0 ? { picks: pathPicks, traffic: trafficFilter ?? { protocol: '' } } : null),
+    [pathMode, pathPicks, trafficFilter],
+  );
   const setLegHighlight = useCallback((key: string, highlight: TraceHighlight | null) => {
     setTraceHighlights((prev) => ((prev[key] ?? null) === highlight ? prev : { ...prev, [key]: highlight }));
   }, []);
@@ -2059,8 +2064,9 @@ export function Topology() {
           onPNG={handleExportPNG}
           onSVG={handleExportSVG}
           onJSON={handleExportJSON}
-          htmlDownloadUrl={topologyExportUrl(groupId, true)}
-          htmlOpenUrl={topologyExportUrl(groupId)}
+          htmlDownloadUrl={topologyExportUrl(groupId, true, exportPath)}
+          htmlOpenUrl={topologyExportUrl(groupId, false, exportPath)}
+          withPath={exportPath !== null}
         />
       </div>
 
