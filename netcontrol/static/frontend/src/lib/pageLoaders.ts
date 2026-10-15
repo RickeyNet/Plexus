@@ -27,7 +27,7 @@ export const pageLoaders = {
   reports: () => import('@/pages/Reports/Reports'),
   settings: () => import('@/pages/Settings/Settings'),
   software: () => import('@/pages/Software/Software'),
-  topology: () => import('@/pages/Topology/Topology'),
+  topology: () => import('@/pages/Topology/TopologyPage'),
 } satisfies Record<string, Loader>;
 
 type PageKey = keyof typeof pageLoaders;

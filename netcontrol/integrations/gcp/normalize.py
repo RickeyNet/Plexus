@@ -32,7 +32,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from netcontrol.integrations.gcp.collect import WARNING_TYPE
 from netcontrol.integrations.meraki.normalize import (
     SCHEMA_VERSION,
     InventoryIndex,
@@ -45,6 +44,10 @@ from netcontrol.integrations.meraki.normalize import (
 )
 
 PROVIDER = "gcp"
+# The record type of a section discovery could not read.
+WARNING_TYPE = "collection_warning"
+# The route GCP creates in every VPC network for its internet access.
+DEFAULT_INTERNET_GATEWAY = "default-internet-gateway"
 TRANSIT_SITE_ID = "__gcp_transit__"
 TRANSIT_SITE_NAME = "GCP VPN and Interconnect"
 

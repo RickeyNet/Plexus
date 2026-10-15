@@ -65,7 +65,7 @@ from netcontrol.integrations.aws.reachability import (
     _show,
     _traffic_cover,
 )
-from netcontrol.integrations.azure.normalize import _meta, _rid, _short, _text, next_hop_name
+from netcontrol.integrations.azure.normalize import _meta, _rid, _short, _text, _value, next_hop_name
 from netcontrol.integrations.pathtrace import ports as port_sets
 
 _Network = ipaddress.IPv4Network | ipaddress.IPv6Network
@@ -75,7 +75,20 @@ _ORIGIN_RANK = {"user": 0, "gateway": 1, "system": 2}
 
 
 def _hop_kind(route: dict) -> str:
-    return re.sub(r"[^a-z]", "", _text(route.get("next_hop_type")).lower())
+    return re.sub(r"[^a-z]", "", _value(route.get("next_hop_type")).lower())
+
+
+def _rule_protocol(rule: dict) -> str:
+    protocol = _value(rule.get("protocol")).lower()
+    return "all" if protocol in ("*", "any") else protocol
+
+
+def _rule_direction(rule: dict) -> str:
+    return _value(rule.get("direction")).lower()
+
+
+def _rule_action(rule: dict) -> str:
+    return _value(rule.get("action")).lower()
 
 
 def _ports_of(expression: Any) -> list[tuple[int | None, int | None]]:
@@ -179,7 +192,7 @@ class Reachability:
                     {
                         "name": _text(meta.get("name")),
                         "remote": remote,
-                        "state": _text(row.get("state")).lower(),
+                        "state": _value(row.get("state")).lower(),
                         "prefixes": [p for p in prefixes if p is not None] or self.vnets.get(remote, []),
                         "forwarded": bool(meta.get("allow_forwarded_traffic")),
                         "transit": bool(meta.get("allow_gateway_transit")),
@@ -201,7 +214,7 @@ class Reachability:
                     {
                         "name": _text(meta.get("name")) or kind,
                         "type": kind,
-                        "status": _text(meta.get("connection_status")).lower(),
+                        "status": _value(meta.get("connection_status")).lower(),
                         "target": target,
                         "far": far,
                         "to_vnet": _text(remote_gateway["meta"].get("vnet_id")) if remote_gateway else "",
@@ -531,26 +544,59 @@ class Reachability:
                     return gateway, conn
         return None
 
-    def _vnet_tag(self, vnet_id: str, place: dict) -> int:
+    def _vnet_tag(self, vnet_id: str, place: dict, local: dict | None) -> int:
+        return self._vnet_tag_reason(vnet_id, place, local)[0]
+
+    def _vnet_tag_reason(self, vnet_id: str, place: dict, local: dict | None) -> tuple[int, str]:
         """How much of the address at ``place`` the ``VirtualNetwork`` service
-        tag of a group in ``vnet_id`` covers: the VNet, its peered VNets and
-        the ranges behind the gateways it uses."""
+        tag of a group in ``vnet_id`` covers, and why: the VNet itself (no
+        reason given), its peered VNets, the ranges behind the gateways it
+        uses, and the prefixes of the user routes of the route table of
+        ``local``, the subnet the group is checked at (Azure counts the
+        prefixes of user-defined routes in the tag, a default route included)."""
         if place["subnet"] is not None:
             if place["vnet_id"] == vnet_id:
-                return _FULL
-            peered = {p["remote"] for p in self._peerings.get(vnet_id, []) if p["state"] == "connected"}
-            return _FULL if place["vnet_id"] in peered else _NONE
+                return _FULL, ""
+            for peering in self._peerings.get(vnet_id, []):
+                if peering["state"] == "connected" and peering["remote"] == place["vnet_id"]:
+                    name = peering["name"] or "a peering"
+                    return _FULL, f"it is in {self._vnet_name(place['vnet_id'])}, peered over {name}"
+            return _NONE, ""
         net = place["net"]
         bgp = False
-        for gateway, _how in self._serving_gateways(vnet_id):
+        for gateway, how in self._serving_gateways(vnet_id):
             for conn in self._connections_of_gateway.get(gateway["rid"], []):
                 if conn["status"] not in ("connected", ""):
                     continue
                 if any(p.version == net.version and p.supernet_of(net) for p in conn["prefixes"]):
-                    return _FULL
+                    through = f" {how}" if how else ""
+                    return _FULL, f"it is behind connection {conn['name']} of {self._gateway_name(gateway)}{through}"
                 bgp = bgp or conn["bgp"]
-        # Ranges learned over BGP or ExpressRoute are part of it too, but not collected.
-        return _PART if bgp and not net.is_global else _NONE
+        table = self._table_of_subnet.get(local["rid"]) if local else None
+        for route in (table["meta"].get("routes") or []) if table else []:
+            prefix = _net(route.get("prefix")) if isinstance(route, dict) else None
+            if prefix is not None and prefix.version == net.version and prefix.supernet_of(net):
+                return _FULL, self._user_route_reason(route, prefix, table, local, vnet_id)
+        if bgp and not net.is_global:
+            # Ranges learned over BGP or ExpressRoute are part of it too, but not collected.
+            return _PART, "the ranges the gateway learns over BGP or ExpressRoute are in it, but are not collected"
+        return _NONE, ""
+
+    def _user_route_reason(self, route: dict, prefix: _Network, table: dict, local: dict | None, vnet_id: str) -> str:
+        """Why a user route puts an address in ``VirtualNetwork``: the route,
+        its table, the subnet it applies to and what it sends the traffic to."""
+        hop = next_hop_name(route)
+        next_hop_ip = _text(route.get("next_hop_ip"))
+        owner = self._find_owner(next_hop_ip, vnet_id) if next_hop_ip else None
+        if owner is not None:
+            hop = f"{hop} ({self._owner_name(owner)})"
+        table_name = _text(table.get("name")) or _short(table["rid"])
+        route_name = _text(route.get("name")) or _show(prefix)
+        at = f" on {self._subnet_name(local)}" if local else ""
+        return (
+            f"Azure counts the prefixes of user routes in VirtualNetwork, and route {route_name} ({_show(prefix)}) "
+            f"of route table {table_name}{at} sends it to {hop}"
+        )
 
     def _find_owner(self, address: str, vnet_id: str) -> dict | None:
         """The virtual machine or firewall at ``address``: in the VNet, else in
@@ -681,15 +727,15 @@ class Reachability:
 
     # ── Network security groups ────────────────────────────────────────────
 
-    def _tag_cover(self, selector: str, place: dict, vnet_id: str) -> int:
+    def _tag_cover(self, selector: str, place: dict, vnet_id: str, local: dict | None) -> int:
         """How much of the address at ``place`` one selector item of a group
-        in ``vnet_id`` covers."""
+        in ``vnet_id``, checked at subnet ``local``, covers."""
         item = selector.strip()
         lowered = item.lower()
         if lowered in ("*", "any", ""):
             return _FULL
         if lowered == "virtualnetwork":
-            return self._vnet_tag(vnet_id, place)
+            return self._vnet_tag(vnet_id, place, local)
         if lowered == "internet":
             # The public address space outside the VNet.
             return _FULL if place["subnet"] is None and place["net"].is_global else _NONE
@@ -700,8 +746,8 @@ class Reachability:
         # A service tag (Storage, Sql...) or an application security group: entries not collected.
         return _PART
 
-    def _selector_cover(self, selector: Any, place: dict, vnet_id: str) -> int:
-        return max((self._tag_cover(item, place, vnet_id) for item in _text(selector).split(",")), default=_NONE)
+    def _selector_cover(self, selector: Any, place: dict, vnet_id: str, local: dict | None) -> int:
+        return max((self._tag_cover(item, place, vnet_id, local) for item in _text(selector).split(",")), default=_NONE)
 
     def _nsg_step(
         self,
@@ -715,20 +761,18 @@ class Reachability:
     ) -> dict:
         way = "outbound" if outbound else "inbound"
         where = f"Network security group {_text(nsg.get('name')) or _short(nsg['rid'])} on {level}, {way}"
-        rules = [
-            r for r in nsg["meta"].get("policy_rules") or [] if isinstance(r, dict) and _text(r.get("direction")) == way
-        ]
+        rules = [r for r in nsg["meta"].get("policy_rules") or [] if isinstance(r, dict) and _rule_direction(r) == way]
         rules.sort(key=lambda r: _int(r.get("priority")) if _int(r.get("priority")) is not None else 1 << 20)
         decided: dict | None = None
         partly: list[dict] = []
         for rule in rules:
             own, far = (place, peer) if outbound else (peer, place)
             cover = min(
-                self._selector_cover(rule.get("source_selector"), own, place["vnet_id"]),
-                self._selector_cover(rule.get("destination_selector"), far, place["vnet_id"]),
+                self._selector_cover(rule.get("source_selector"), own, place["vnet_id"], place["subnet"]),
+                self._selector_cover(rule.get("destination_selector"), far, place["vnet_id"], place["subnet"]),
                 max(
                     (
-                        _traffic_cover(_text(rule.get("protocol")), low, high, protocol, ports)
+                        _traffic_cover(_rule_protocol(rule), low, high, protocol, ports)
                         for low, high in _ports_of(rule.get("port_expression"))
                     ),
                     default=_NONE,
@@ -746,15 +790,30 @@ class Reachability:
             return f"rule {label} ({priority})" if priority is not None else f"rule {label}"
 
         own, far = (place, peer) if outbound else (peer, place)
+
+        def why(rule: dict) -> str:
+            """Why the rule's ``VirtualNetwork`` tag takes an end that is not
+            in this VNet: the peering, gateway connection or user route that
+            puts it in the tag, so the reader sees what Azure counted."""
+            notes: list[str] = []
+            for selector, at in ((rule.get("source_selector"), own), (rule.get("destination_selector"), far)):
+                if at["subnet"] is not None and at["vnet_id"] == place["vnet_id"]:
+                    continue
+                if any(item.strip().lower() == "virtualnetwork" for item in _text(selector).split(",")):
+                    cover, reason = self._vnet_tag_reason(place["vnet_id"], at, place["subnet"])
+                    if cover != _NONE and reason:
+                        notes.append(f" {at['label']} is in VirtualNetwork: {reason}.")
+            return "".join(notes)
+
         matches = [
             port_sets.Match(
                 cover=min(
-                    self._selector_cover(rule.get("source_selector"), own, place["vnet_id"]),
-                    self._selector_cover(rule.get("destination_selector"), far, place["vnet_id"]),
+                    self._selector_cover(rule.get("source_selector"), own, place["vnet_id"], place["subnet"]),
+                    self._selector_cover(rule.get("destination_selector"), far, place["vnet_id"], place["subnet"]),
                 ),
-                protocol=_text(rule.get("protocol")),
+                protocol=_rule_protocol(rule),
                 ports=_ports_of(rule.get("port_expression")),
-                action=_text(rule.get("action")),
+                action=_rule_action(rule),
             )
             for rule in rules
         ]
@@ -768,8 +827,8 @@ class Reachability:
         }
         if decided is None:
             return {**result, "status": UNKNOWN, "text": "No rule matches and the default rules were not collected."}
-        action = _text(decided.get("action"))
-        other = [r for r in partly if _text(r.get("action")) != action]
+        action = _rule_action(decided)
+        other = [r for r in partly if _rule_action(r) != action]
         if other:
             first = ", ".join(name(r) for r in other[:4])
             rest = "denied" if action == "deny" else "allowed"
@@ -777,11 +836,11 @@ class Reachability:
             return {
                 **result,
                 "status": PARTIAL,
-                "text": f"{first} {verb}(s) part of it; the rest is {rest} by {name(decided)}.",
+                "text": f"{first} {verb}(s) part of it; the rest is {rest} by {name(decided)}.{why(decided)}",
             }
         if action == "allow":
-            return {**result, "status": OK, "text": f"Allowed by {name(decided)}."}
-        return {**result, "status": BLOCKED, "text": f"Denied by {name(decided)}."}
+            return {**result, "status": OK, "text": f"Allowed by {name(decided)}.{why(decided)}"}
+        return {**result, "status": BLOCKED, "text": f"Denied by {name(decided)}.{why(decided)}"}
 
     def _security_groups(
         self, place: dict, peer: dict, outbound: bool, protocol: str, ports: tuple[int, int] | None

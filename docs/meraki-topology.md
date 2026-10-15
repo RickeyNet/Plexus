@@ -138,7 +138,8 @@ belong to no inventory group).
   addresses the route each device picks is traced as well; see the next
   point.
   The HTML export has the same tool under **Path**: click sites in the
-  list or on the map. It draws the path only and has no trace.
+  list or on the map. Between two subnets or addresses it traces the flow
+  itself, offline, when it carries the path tracer (see *HTML export*).
 - Path picks can also be **subnets**: choose one in **Add a subnet or IP
   address**, or type an address or network and press Enter (the most
   specific collected subnet containing it is used; if several sites have
@@ -168,6 +169,13 @@ belong to no inventory group).
   highlights the hops of the trace instead of the drawn path. A leg
   between a subnet and a device says which end to add as a subnet. See
   [path-trace.md](path-trace.md).
+- **Reachability** (the tab next to **Map**, `/topology/reachability`)
+  traces one destination and traffic from many source networks at once,
+  for example which user VLANs cannot reach a file server on `tcp/445`.
+  Filter the sources by kind, VLAN id, name, exclusions (voice, guest...),
+  site, address range and VPN participation; the results count each
+  verdict, group by site, open any row's full trace and download as CSV.
+  See [path-trace.md](path-trace.md#reachability-sweep).
 - VPN tunnels are purple dashed lines (dotted for non-Meraki IPsec peers),
   WAN uplinks are blue. A tunnel or uplink Meraki reports as down is red.
 - **Device tabs.** Clicking a Meraki device opens its details, one tab per
@@ -365,13 +373,20 @@ Plexus has collected.
 With **Path Mode** open, the export also carries the path: its picks, the
 traffic asked about, and the hop-by-hop trace in both directions of every
 leg between two subnets or addresses, which the file's **Path** panel shows
-as the page does and highlights on the map. Picks made inside the file are
-drawn over the links only, since the trace needs the server (see
-`docs/path-trace.md`, *Limits*).
+as the page does and highlights on the map.
+
+The export also carries the path tracer when the Pyodide runtime is
+installed (`scripts/fetch_pyodide.py`; the Docker image has it): two subnets
+or addresses picked inside the file are traced hop by hop by the file
+itself, offline, from the data collected at export time, for the traffic set
+next to the subnet box. Without it (`?engine=0`, or no runtime), picks made
+inside the file are drawn over the links only. See `docs/path-trace.md`,
+*Tracing inside the HTML export*.
 
 No internet access, Plexus login, or web server is needed to open the file,
 so it can be emailed or placed on a file share. It contains addressing and
-firewall rules, so treat it as sensitive network documentation. It never
+firewall rules (with the path tracer, the complete collected configuration
+of every source on the map), so treat it as sensitive network documentation. It never
 contains the API key, pre-shared keys, or VPN/RADIUS shared secrets.
 
 | Action in the exported file | How |
@@ -405,8 +420,9 @@ it shows. The selector appears only when the export includes an integration.
 |---|---|---|
 | `GET` | `/api/topology` | Topology graph; Meraki nodes carry `source: "meraki"` and a `meraki` reference |
 | `GET` | `/api/topology/search/deep?q=` | Search collected Meraki detail; returns node references and snippets |
-| `GET` | `/api/topology/export.html` | Interactive HTML map (`?group_id=`, `?download=1` to save, `?path=` the Path Mode picks and traffic as JSON, to embed the path and its traces) |
+| `GET` | `/api/topology/export.html` | Interactive HTML map (`?group_id=`, `?download=1` to save, `?path=` the Path Mode picks and traffic as JSON, to embed the path and its traces, `?engine=0` to leave out the offline path tracer) |
 | `GET` | `/api/topology/path?source=&destination=` | Trace a flow hop by hop across every device on the map, request and replies. Optional `source_node`, `destination_node` (map node ids of the ends), `protocol` (`tcp`, `udp`, `icmp`, empty for any traffic) and `port`; see [path-trace.md](path-trace.md#api-reference) |
+| `GET` | `/api/topology/reachability?destination=` | Reachability sweep: the same trace from every source network the filters keep (`kinds`, `vlans`, `name`, `exclude`, `sites`, `within`, `in_vpn`, `sources`, `providers`), as JSON or `format=csv`; see [path-trace.md](path-trace.md#reachability-sweep) |
 | `GET` | `/api/sources/nodes?org_ref=&node_id=` | Detail sections for one Meraki node |
 | `GET` | `/api/sources` | List organizations and default collection options |
 | `POST` | `/api/sources` | Add an organization (admin) |

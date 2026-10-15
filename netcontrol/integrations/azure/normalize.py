@@ -26,9 +26,9 @@ How Azure maps onto the map:
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
-from netcontrol.integrations.azure.collect import WARNING_TYPE
 from netcontrol.integrations.meraki.normalize import (
     SCHEMA_VERSION,
     InventoryIndex,
@@ -41,6 +41,8 @@ from netcontrol.integrations.meraki.normalize import (
 )
 
 PROVIDER = "azure"
+# The record type of a section discovery could not read.
+WARNING_TYPE = "collection_warning"
 TRANSIT_SITE_ID = "__azure_transit__"
 TRANSIT_SITE_NAME = "Azure VPN and ExpressRoute"
 
@@ -102,6 +104,25 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+_ENUM_NAME = re.compile(r"[A-Za-z][A-Za-z0-9]*\.([A-Za-z_*][A-Za-z0-9_*]*)")
+
+
+def _value(raw: Any) -> str:
+    """The text of a field Azure answers as an enum: a rule's direction,
+    access and protocol, a route's next hop type, a peering's state, a
+    connection's status. Discovery before October 2026 stored the SDK's enum
+    names (``RouteNextHopType.VIRTUAL_APPLIANCE``,
+    ``securityruledirection.inbound``) instead of Azure's values; the value
+    is taken out of such a name, so what is stored is read until the account
+    is discovered again."""
+    text = _text(raw)
+    match = _ENUM_NAME.fullmatch(text)
+    if match is None:
+        return text
+    name = match.group(1)
+    return "*" if name.lower() == "asterisk" else name.replace("_", "")
+
+
 def _meta(row: dict) -> dict:
     meta = row.get("metadata")
     if isinstance(meta, dict):
@@ -130,7 +151,7 @@ def _group(rid: str) -> str:
 
 
 def _status(state: Any) -> str:
-    state = _text(state).lower()
+    state = _value(state).lower()
     if state in _UP_STATES:
         return "online"
     if state in _UNKNOWN_STATES or state.startswith(_PENDING_PREFIXES):
@@ -144,8 +165,8 @@ def _link_status(state: Any) -> str:
 
 
 def next_hop_name(route: dict) -> str:
-    kind = _text(route.get("next_hop_type")).lower()
-    name = _NEXT_HOP_NAMES.get(kind, _text(route.get("next_hop_type")))
+    kind = _value(route.get("next_hop_type")).lower()
+    name = _NEXT_HOP_NAMES.get(kind, _value(route.get("next_hop_type")))
     ip = _text(route.get("next_hop_ip"))
     return f"{name} {ip}".strip() if ip else name
 
@@ -328,7 +349,7 @@ class _Builder:
                         [
                             conn["meta"].get("name"),
                             _text((self.resources.get(conn["dst"]) or {}).get("name")) or _short(_rid(conn["dst"])),
-                            conn.get("state"),
+                            _value(conn.get("state")),
                             bool(conn["meta"].get("allow_forwarded_traffic")),
                             bool(conn["meta"].get("allow_gateway_transit")),
                             bool(conn["meta"].get("use_remote_gateways")),
@@ -429,9 +450,9 @@ class _Builder:
                         [
                             group.get("name") or _short(group["rid"]),
                             "default" if (rule.get("metadata") or {}).get("is_default") else rule.get("priority"),
-                            rule.get("direction"),
-                            rule.get("action"),
-                            rule.get("protocol"),
+                            _value(rule.get("direction")).lower(),
+                            _value(rule.get("action")).lower(),
+                            _value(rule.get("protocol")).lower(),
                             rule.get("port_expression"),
                             rule.get("source_selector"),
                             rule.get("destination_selector"),
@@ -445,7 +466,7 @@ class _Builder:
                         for rule in sorted(
                             (r for r in group["meta"].get("policy_rules") or [] if isinstance(r, dict)),
                             key=lambda r: (
-                                _text(r.get("direction")),
+                                _value(r.get("direction")).lower(),
                                 r.get("priority") if isinstance(r.get("priority"), int) else 0,
                             ),
                         )
@@ -865,9 +886,7 @@ class _Builder:
             if not a or not b:
                 continue
             label = _LINK_LABELS.get(conn["type"], conn["type"].replace("_", " ").capitalize())
-            state = conn["meta"].get("connection_status") or conn.get("state")
-            if conn["type"] in _CIRCUIT_LINKS:
-                state = conn["meta"].get("connection_status") or state
+            state = _value(conn["meta"].get("connection_status")) or _value(conn.get("state"))
             self._edge(a, b, "attach", status=_link_status(state), label=label, detail=_text(conn["meta"].get("name")))
             for own, other in ((a, b), (b, a)):
                 attachments.setdefault(own, []).append(
@@ -900,7 +919,7 @@ class _Builder:
                 peer = self._node(
                     conn["dst"], f"vpn:{_rid(conn['dst'])}", "vpn_peer", name, TRANSIT_SITE_ID, "unknown"
                 )["id"]
-            connection_status = _text(meta.get("connection_status")).lower()
+            connection_status = _value(meta.get("connection_status")).lower()
             if connection_status == "connected":
                 status = "reachable"
             elif connection_status in ("notconnected",):
@@ -919,8 +938,8 @@ class _Builder:
             row = [
                 name,
                 meta.get("connection_type") or conn["type"],
-                meta.get("connection_status"),
-                conn.get("state"),
+                _value(meta.get("connection_status")),
+                _value(conn.get("state")),
                 "BGP" if meta.get("enable_bgp") else "Static",
                 meta.get("connection_protocol"),
                 meta.get("routing_weight"),

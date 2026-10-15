@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <!-- The saved file carries its own policy: nothing is ever loaded from or sent to the network. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="__META_CSP__">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="Plexus Meraki Topology">
 <title>__TITLE__</title>
@@ -67,6 +67,8 @@ canvas.dragging { cursor: grabbing; }
 .panel-head h2 { margin: 0 0 2px; font-size: 15px; word-break: break-word; }
 .panel-head .row { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
 .panel-head input { flex: 1; min-width: 120px; padding: 5px 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
+.panel-head #p-port { flex: 0 0 76px; min-width: 0; }
+.panel-head #p-port:disabled { opacity: .5; }
 .panel-body { overflow: auto; flex: 1; padding: 4px 14px 20px; }
 .group-title { margin: 14px 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 details { border-bottom: 1px solid var(--border); }
@@ -145,6 +147,10 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
       <div class="row" id="p-subnet-row" style="display:none">
         <input id="p-subnet" type="search" list="subnet-options" placeholder="Add a subnet or IP address..." autocomplete="off" spellcheck="false">
         <datalist id="subnet-options"></datalist>
+        <select class="btn" id="p-proto" title="Traffic the path tracer checks" style="display:none">
+          <option value="">any traffic</option><option value="tcp">tcp</option><option value="udp">udp</option><option value="icmp">icmp</option>
+        </select>
+        <input id="p-port" type="number" min="0" max="65535" placeholder="port" title="Destination port (tcp or udp)" style="display:none">
       </div>
       <div class="row">
         <input id="p-filter" type="search" placeholder="Filter this panel..." autocomplete="off" spellcheck="false">
@@ -156,6 +162,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   </aside>
 </main>
 <script type="application/json" id="topology-data">__TOPOLOGY_JSON__</script>
+<!--__TRACER__-->
 <script>/*__LAYOUT_JS__*/</script>
 <script>
 (function () {
@@ -725,6 +732,15 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
       ['Non-Meraki neighbors', String(s.external_neighbors || 0)], ['Matched to Plexus inventory', String(s.inventory_matches || 0)],
       ['Data sources', (c.sources || []).join('; ')], ['API requests', String((c.stats || {}).requests || 0)],
       ['Rate-limit retries', String((c.stats || {}).rate_limited || 0)]] });
+    var tracerRows = [['Path tracer', TRACER ? 'Included (Pyodide ' + (TRACER.pyodide || '?') + '): traces any two subnets or IP addresses offline, in this file' :
+      'Not included: this file shows only the traces Plexus ran for the picks open at export']];
+    if (TRACER) {
+      tracerRows.push(['Trace data collected', DATA.generated_at || 'not recorded']);
+      tracerRows.push(['Path tracer state', tracer.state === 'ready' ? 'started (' + (tracer.where === 'page' ? 'on the page' : 'in a ' + tracer.where + ' worker') + ') in ' +
+        (tracer.stats.total_ms / 1000).toFixed(1) + ' s: runtime ' + (tracer.stats.load_ms / 1000).toFixed(1) + ' s, tracer build ' + (tracer.stats.build_ms / 1000).toFixed(1) + ' s' :
+        tracer.state === 'failed' ? 'could not start: ' + tracer.error : tracer.state === 'loading' ? 'starting' : 'starts on the first trace']);
+    }
+    sections.push({ title: 'Path trace', kind: 'kv', rows: tracerRows });
     var kinds = s.devices_by_kind || {};
     sections.push({ title: 'Devices by type', kind: 'table', columns: ['Type', 'Count'],
       rows: Object.keys(kinds).sort().map(function (k) { return [(KIND[k] || OTHER).name + ' (' + k + ')', String(kinds[k])]; }) });
@@ -740,6 +756,8 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   // stands for the device that owns it. The file also carries the hop-by-hop
   // traces Plexus ran for the path open on the page when it was exported
   // (DATA.path): a leg between two of those picks shows its trace instead.
+  // A file exported with the path tracer (TRACER) traces any other leg
+  // between two subnets or addresses itself, offline.
   var MAX_PATH_PICKS = 6, pathMode = false, pathPicks = [], pathLegs = [], pathSiteIds = {}, pathPicked = {}, pathMessage = '';
   // Legs shown the other way round (Reverse), by leg key ("<from key>|<to key>").
   var pathReversed = {};
@@ -757,7 +775,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   allEdges.forEach(function (e) { edgeById[e.id] = e; });
   // The traces of a leg from `from` to `to` (forward: from → to), whichever
   // order the export listed the two picks in; null when the file has none.
-  function legTrace(from, to) {
+  function embeddedTrace(from, to) {
     var l = embeddedLegs[from.key + '|' + to.key];
     if (l) return { forward: l.forward || null, backward: l.backward || null };
     l = embeddedLegs[to.key + '|' + from.key];
@@ -766,6 +784,172 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   function trafficText(t) {
     if (!t || !t.protocol) return 'any traffic';
     return t.protocol + (t.port !== null && t.port !== undefined && t.port !== '' ? '/' + t.port : '');
+  }
+  // Only a TCP or UDP flow has a port.
+  function plainTraffic(t) {
+    var protocol = String((t && t.protocol) || '').toLowerCase(), port = t ? t.port : null;
+    var ported = (protocol === 'tcp' || protocol === 'udp') && typeof port === 'number' && port >= 0 && port <= 65535;
+    return { protocol: protocol, port: ported ? port : null };
+  }
+  function sameTraffic(a, b) { return a.protocol === b.protocol && a.port === b.port; }
+  var EMBEDDED_TRAFFIC = plainTraffic(EMBEDDED_PATH && EMBEDDED_PATH.traffic);
+  // The traffic legs are traced for: the exported traffic, until changed in
+  // the box next to the subnet picker (a file with the path tracer only).
+  var traffic = EMBEDDED_TRAFFIC;
+
+  // ── Path tracer carried by the file ──────────────────────────────────────
+  // Pyodide, the engine's Python modules and the trace inputs of the whole
+  // map, embedded by the export (gzip, base64). Started on the first leg it
+  // has to trace, in a worker made from a blob (else on the page); the
+  // traces it returns are this file's ids, as the embedded ones are.
+  var TRACER = (function () {
+    var meta = $('tracer-meta');
+    if (!meta || !$('tracer-runtime') || !$('tracer-inputs') || !$('tracer-modules')) return null;
+    try { return JSON.parse(meta.textContent); } catch (e) { return null; }
+  })();
+  var TRACER_START_LIMIT_MS = 300000;
+  var tracer = { state: 'idle', error: '', where: '', tried: [], worker: null, handle: null, timer: null, next: 1, pending: {},
+    waiting: [], stats: null };
+  // Legs traced here, by "<from key>|<to key>|<protocol>|<port>".
+  var tracedLegs = {};
+  function legCacheKey(from, to) { return from.key + '|' + to.key + '|' + traffic.protocol + '|' + (traffic.port === null ? '' : traffic.port); }
+  function errorText(err) { return String((err && err.message) || err || 'unknown error'); }
+  function tracerRuntime() { return $('tracer-runtime').textContent.trim().replace(/;$/, ''); }
+  function tracerInit() {
+    var files = {};
+    Array.prototype.forEach.call(document.querySelectorAll('script[data-tracer-file]'), function (s) {
+      var name = s.getAttribute('data-tracer-file');
+      files[name] = { type: TRACER.files[name] || 'application/octet-stream', data: s.textContent };
+    });
+    return { type: 'init', files: files, modules: $('tracer-modules').textContent, inputs: $('tracer-inputs').textContent };
+  }
+  function tracerSend(msg) {
+    if (tracer.worker) tracer.worker.postMessage(msg); else if (tracer.handle) tracer.handle(msg);
+  }
+  function tracerFailed(reason) {
+    if (tracer.state === 'failed') return;
+    clearTimeout(tracer.timer);
+    if (tracer.worker) { tracer.worker.terminate(); tracer.worker = null; }
+    tracer.state = 'failed'; tracer.error = reason;
+    tracer.waiting.forEach(function (w) { w.reject(new Error(reason)); }); tracer.waiting = [];
+    Object.keys(tracer.pending).forEach(function (id) { tracer.pending[id].reject(new Error(reason)); }); tracer.pending = {};
+    tracedLegs = {};
+    refreshPath();
+  }
+  function onTracerMessage(msg) {
+    if (!msg || tracer.state === 'failed') return;
+    if (msg.type === 'ready') {
+      clearTimeout(tracer.timer);
+      tracer.state = 'ready';
+      tracer.stats = { load_ms: msg.load_ms, build_ms: msg.build_ms, total_ms: Math.round(performance.now() - tracer.began) };
+      tracer.waiting.forEach(function (w) { w.resolve(); }); tracer.waiting = [];
+    } else if (msg.type === 'error') {
+      // A runtime that cannot start in a worker gets another try (the
+      // other kind of worker, then the page).
+      if (msg.stage === 'runtime' && tracer.where !== 'page') nextTracerHost(msg.message);
+      else tracerFailed(msg.message);
+    } else if (msg.type === 'result' || msg.type === 'failed') {
+      var p = tracer.pending[msg.id];
+      delete tracer.pending[msg.id];
+      if (!p) return;
+      if (msg.type === 'result') { tracer.lastTraceMs = msg.ms; p.resolve(JSON.parse(msg.result)); } else p.reject(new Error(msg.message));
+    }
+  }
+  // Where the runtime is tried, in order: a classic worker (what a file://
+  // page and the sandboxed served export both allow), a module worker, then
+  // the page itself (the map then waits while the tracer is built).
+  var TRACER_HOSTS = ['classic', 'module', 'page'];
+  function runOnPage() {
+    var url = URL.createObjectURL(new Blob(['export default ' + tracerRuntime() + ';\n'], { type: 'text/javascript' }));
+    import(url).then(function (mod) {
+      tracer.handle = mod.default(window, function (msg) { setTimeout(function () { onTracerMessage(msg); }, 0); });
+      tracer.handle(tracerInit());
+    }).catch(function (err) { tracerFailed(errorText(err)); });
+  }
+  function runInWorker(kind) {
+    var source = 'var handle = ' + tracerRuntime() + '(self, function (msg) { self.postMessage(msg); });\n' +
+      'self.onmessage = function (e) { handle(e.data); };\n';
+    var worker = new Worker(URL.createObjectURL(new Blob([source], { type: 'text/javascript' })), kind === 'module' ? { type: 'module' } : {});
+    tracer.worker = worker;
+    worker.onmessage = function (e) { onTracerMessage(e.data); };
+    worker.onerror = function (e) {
+      if (e && e.preventDefault) e.preventDefault();
+      if (tracer.worker === worker) nextTracerHost((e && e.message) || 'the ' + kind + ' worker did not start');
+    };
+    worker.postMessage(tracerInit());
+  }
+  function nextTracerHost(reason) {
+    if (tracer.state !== 'loading') return;
+    if (tracer.worker) { tracer.worker.terminate(); tracer.worker = null; }
+    if (reason) tracer.tried.push(tracer.where + ': ' + reason);
+    var at = TRACER_HOSTS.indexOf(tracer.where) + 1;
+    if (at >= TRACER_HOSTS.length) { tracerFailed(tracer.tried.join('; ')); return; }
+    tracer.where = TRACER_HOSTS[at];
+    try {
+      if (tracer.where === 'page') runOnPage(); else runInWorker(tracer.where);
+    } catch (err) {
+      nextTracerHost(errorText(err));
+    }
+  }
+  function startTracer() {
+    if (tracer.state !== 'idle') return;
+    tracer.state = 'loading'; tracer.began = performance.now(); tracer.where = ''; tracer.tried = [];
+    tracer.timer = setTimeout(function () { tracerFailed('it did not start within ' + TRACER_START_LIMIT_MS / 60000 + ' minutes'); }, TRACER_START_LIMIT_MS);
+    nextTracerHost('');
+  }
+  function tracerReady() {
+    if (tracer.state === 'ready') return Promise.resolve();
+    if (tracer.state === 'failed') return Promise.reject(new Error(tracer.error));
+    startTracer();
+    return new Promise(function (resolve, reject) { tracer.waiting.push({ resolve: resolve, reject: reject }); });
+  }
+  function askTracer(request) {
+    return new Promise(function (resolve, reject) {
+      var id = tracer.next++;
+      tracer.pending[id] = { resolve: resolve, reject: reject };
+      tracerSend({ type: 'trace', id: id, request: request });
+    });
+  }
+  function traceRequest(from, to, t) {
+    return { source: pickEnd(from), destination: pickEnd(to), source_node: from.n.id, destination_node: to.n.id,
+      protocol: t.protocol, port: t.port };
+  }
+  // Traces a leg both ways (once per traffic) and redraws the path with it.
+  function requestLeg(from, to) {
+    var key = legCacheKey(from, to);
+    if (tracedLegs[key] || tracedLegs[legCacheKey(to, from)]) return;
+    var entry = tracedLegs[key] = { result: null }, t = traffic;
+    tracerReady().then(function () {
+      return Promise.all([askTracer(traceRequest(from, to, t)), askTracer(traceRequest(to, from, t))]);
+    }).then(function (both) {
+      entry.result = { forward: both[0], backward: both[1] };
+      refreshPath();
+    }, function (err) {
+      if (tracer.state === 'failed') return;
+      var failed = { applies: false, traffic: '', verdict: 'unknown', summary: 'the path tracer in this file failed: ' + errorText(err) };
+      entry.result = { forward: failed, backward: failed };
+      refreshPath();
+    });
+  }
+  function refreshPath() {
+    if (!pathMode) return;
+    var body = $('p-body'), top = body.scrollTop;
+    computePath(); showPath();
+    body.scrollTop = top;
+  }
+  // The traces of a leg: the file's own for the traffic exported, else the
+  // path tracer's; null while it has none (computePath asks for them).
+  function legTrace(from, to) {
+    var embedded = embeddedTrace(from, to);
+    if (embedded && sameTraffic(traffic, EMBEDDED_TRAFFIC)) return embedded;
+    if (!TRACER) return null;
+    var mine = tracedLegs[legCacheKey(from, to)], back = tracedLegs[legCacheKey(to, from)];
+    if (mine && mine.result) return mine.result;
+    return back && back.result ? { forward: back.result.backward, backward: back.result.forward } : null;
+  }
+  function tracerNote() {
+    if (tracer.state === 'ready') return 'Tracing ' + trafficText(traffic) + ' both ways...';
+    return 'Starting the path tracer... first use takes a moment.';
   }
   var MARKS = { ok: ['✓', 'c-ok'], blocked: ['✕', 'c-bad'], partial: ['◐', 'c-warn'], unknown: ['?', 'c-warn'], info: ['i', 'c-muted'] };
   function statusMark(status) { return MARKS[status] || MARKS.unknown; }
@@ -949,6 +1133,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
         // A traced leg lights up the hops of the direction shown, else the
         // path over the links.
         var traced = from.subnet && to.subnet ? legTrace(from, to) : null;
+        if (from.subnet && to.subnet && !traced && TRACER && tracer.state !== 'failed') requestLeg(from, to);
         var lit = traced ? markTrace(pathReversed[key] ? traced.backward : traced.forward) : false;
         if (from.n === to.n) { pathLegs.push({ key: key, from: from, to: to, hops: null, same: true, notes: [], traced: traced, lit: lit }); continue; }
         var reach = reachFrom[from.n.id] || (reachFrom[from.n.id] = shortestFrom(from.n));
@@ -976,8 +1161,11 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
         ends: [pickEnd(leg.from), pickEnd(leg.to)], forward: leg.traced.forward, backward: leg.traced.backward };
     }
     var note = null;
-    if (leg.from.subnet && leg.to.subnet) {
-      note = 'Not traced: this file carries the traces Plexus ran for the picks open when it was exported. Open Path Mode on the Topology page to trace other ends.';
+    if (leg.from.subnet && leg.to.subnet && TRACER && tracer.state !== 'failed') {
+      return { title: name + ' · tracing', kind: 'trace', note: tracerNote() };
+    } else if (leg.from.subnet && leg.to.subnet) {
+      note = (TRACER ? 'The path tracer in this file could not start: ' + tracer.error + '. ' : '') +
+        'Not traced: this file carries the traces Plexus ran for the picks open when it was exported. Open Path Mode on the Topology page to trace other ends.';
     } else if (!leg.same && (leg.from.subnet || leg.to.subnet)) {
       var device = leg.from.subnet ? leg.to : leg.from;
       note = 'Routes, policies and NAT are checked only between two subnets or IP addresses: add ' + (device.label || device.n.label) +
@@ -992,7 +1180,10 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
       sections.push({ title: 'How to use', kind: 'text', text: 'Click two or more sites in the list, or sites and devices on the map, to see how they reach one another.' +
         (subnets.length ? ' Or pick subnets in the box above: choose one from its list, or type an IP address or network and press Enter.' : '') +
         ' Click a pick again to remove it. Up to ' + MAX_PATH_PICKS + ' picks.' +
-        (hasTraces ? ' This file carries the hop-by-hop traces Plexus ran for the picks that were open when it was exported (' + trafficText(EMBEDDED_PATH.traffic) +
+        (TRACER ? ' This file traces any two subnets or IP addresses itself, offline, from the data collected when it was exported (' + (DATA.generated_at || 'date not recorded') +
+          '): pick them in the box above and set the traffic next to it to see, at every device, the policies, ACLs, security groups, NAT rules and routes the flow hits.' +
+          (hasTraces ? ' For the traffic exported (' + trafficText(EMBEDDED_PATH.traffic) + ') the traces Plexus ran for the picks open at export are shown as they are.' : '') :
+        hasTraces ? ' This file carries the hop-by-hop traces Plexus ran for the picks that were open when it was exported (' + trafficText(EMBEDDED_PATH.traffic) +
           '): pick two of them again to see, at every device, the policies, ACLs, security groups, NAT rules and routes the flow hits. Other picks show the path over the links only.' : '') });
     }
     if (pathPicks.length) {
@@ -1024,7 +1215,9 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
       sections.push({ title: 'About this path', kind: 'text', text: 'The path drawn is the shortest way over the cables, uplinks and VPN tunnels on the map that are up: it shows how the ends are joined, not the route each device picks.' +
         (anyTraced ? ' A traced leg lists the hops of its trace instead.' : '') +
         ' A subnet is placed on the device that owns it (appliance, L3 switch, VPC or VPN peer).' +
-        (hasTraces ? ' This file carries the hop-by-hop traces Plexus ran for the picks that were open when it was exported (' + trafficText(EMBEDDED_PATH.traffic) +
+        (TRACER ? ' Between two subnets or IP addresses this file traces the flow itself, offline, from the data collected when it was exported (' + (DATA.generated_at || 'date not recorded') +
+          '): it lists, at every device, the policies, ACLs, security groups, NAT rules and routes the flow hits, for the request and for the replies, and says whether routing is asymmetric. Reverse swaps the ends. Anything a source does not collect is reported as unknown, never as allowed. What changed after the export is not in this file; Path Mode on the Plexus Topology page traces the current data.' :
+        hasTraces ? ' This file carries the hop-by-hop traces Plexus ran for the picks that were open when it was exported (' + trafficText(EMBEDDED_PATH.traffic) +
           '): between two of them it lists, at every device, the policies, ACLs, security groups, NAT rules and routes the flow hits, for the request and for the replies, and says whether routing is asymmetric. Reverse swaps the ends. Anything a source does not collect is reported as unknown, never as allowed. Other ends are not traced here; Path Mode on the Plexus Topology page traces them.' :
           (inCloud ? ' This file does not check AWS, Azure or GCP route tables and filtering rules; Path Mode on the Plexus Topology page does, between two subnets or IP addresses.' : '')) });
     }
@@ -1124,6 +1317,24 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     pathMessage = found.length ? text + ' exists at ' + found.length + ' sites - pick the one you mean from the list.' : 'No collected subnet contains ' + text + '.';
     showPath();
   });
+  // The traffic the path tracer checks, next to the subnet picker.
+  function showTraffic() {
+    $('p-proto').value = traffic.protocol;
+    $('p-port').value = traffic.port === null ? '' : String(traffic.port);
+    $('p-port').disabled = traffic.protocol !== 'tcp' && traffic.protocol !== 'udp';
+  }
+  function setTraffic() {
+    var text = $('p-port').value.trim(), port = /^\d{1,5}$/.test(text) && +text <= 65535 ? +text : null;
+    pathMessage = text && port === null ? 'A port is a number from 0 to 65535.' : '';
+    traffic = plainTraffic({ protocol: $('p-proto').value, port: port });
+    showTraffic(); refreshPath();
+  }
+  if (TRACER) {
+    $('p-proto').style.display = ''; $('p-port').style.display = '';
+    $('p-proto').addEventListener('change', setTraffic);
+    $('p-port').addEventListener('change', setTraffic);
+    showTraffic();
+  }
 
   // ── Left list ────────────────────────────────────────────────────────────
   var tab = 'sites';
