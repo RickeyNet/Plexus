@@ -14,6 +14,8 @@ Covers the pipeline with no Azure access:
 from __future__ import annotations
 
 import json
+import re
+from enum import Enum
 from types import SimpleNamespace as NS
 
 import netcontrol.app as app_module
@@ -140,6 +142,57 @@ def test_nsg_rules_name_direction_ports_and_defaults():
     assert [r["metadata"]["is_default"] for r in rules] == [False, True]
 
 
+def test_sdk_enums_are_stored_by_their_azure_value():
+    """The SDK answers direction, access, protocol and next hop type as
+    str-mixin enums; str() of those is ``RouteNextHopType.VIRTUAL_APPLIANCE``,
+    which nothing downstream recognises. The value is what is stored. The
+    classes mirror the SDK's (str, Enum), not StrEnum, whose str() is the value."""
+
+    class _Direction(str, Enum):  # noqa: UP042
+        INBOUND = "Inbound"
+
+    class _Access(str, Enum):  # noqa: UP042
+        ALLOW = "Allow"
+
+    class _Protocol(str, Enum):  # noqa: UP042
+        TCP = "Tcp"
+
+    class _Hop(str, Enum):  # noqa: UP042
+        VIRTUAL_APPLIANCE = "VirtualAppliance"
+
+    rule = NS(
+        id="r1",
+        name="AllowHttps",
+        direction=_Direction.INBOUND,
+        access=_Access.ALLOW,
+        protocol=_Protocol.TCP,
+        source_address_prefix="*",
+        destination_address_prefix="*",
+        destination_port_range="443",
+        priority=100,
+    )
+    [stored] = collect.nsg_rules(NS(security_rules=[rule], default_security_rules=[]))
+    assert (stored["direction"], stored["action"], stored["protocol"]) == ("inbound", "allow", "tcp")
+    table = NS(
+        id=_rid("rg-a", "routeTables", "rt"),
+        name="rt",
+        location="eastus",
+        provisioning_state="Succeeded",
+        disable_bgp_route_propagation=False,
+        routes=[
+            NS(
+                name="to-nva",
+                address_prefix="10.0.0.0/8",
+                next_hop_type=_Hop.VIRTUAL_APPLIANCE,
+                next_hop_ip_address="10.0.0.4",
+            )
+        ],
+        subnets=[],
+    )
+    resource = collect.route_table_resource(table, SUB)
+    assert resource["metadata"]["routes"][0]["next_hop_type"] == "VirtualAppliance"
+
+
 def test_vms_are_read_from_their_network_interfaces():
     vm_id = f"/subscriptions/{SUB}/resourceGroups/rg-a/providers/Microsoft.Compute/virtualMachines/vmx1"
     pip = _rid("rg-a", "publicIPAddresses", "vmx1-pip")
@@ -204,16 +257,31 @@ class _Denied(Exception):
 
 
 class _Ops:
-    def __init__(self, items=None, *, deny: bool = False, by_vnet=None):
+    """A stand-in for one operations group of the SDK client: ``list_all``
+    for the subscription-wide lists, ``list(group)`` for the sections the
+    Network API only lists per resource group (gateways, connections), and
+    ``list(group, name)`` for the peerings of one VNet."""
+
+    def __init__(self, items=None, *, deny: bool = False, by_vnet=None, by_group=None):
         self._items, self._deny, self._by_vnet = items or [], deny, by_vnet or {}
+        # Resource group names are case-insensitive in Azure.
+        self._by_group = None if by_group is None else {k.lower(): v for k, v in by_group.items()}
+        self.groups_asked: list[str] = []
 
     def list_all(self):
         if self._deny:
             raise _Denied()
         return list(self._items)
 
-    def list(self, _group, name):
-        return list(self._by_vnet.get(name, []))
+    def list(self, group, name=None):
+        if name is not None:
+            return list(self._by_vnet.get(name, []))
+        if self._deny:
+            raise _Denied()
+        self.groups_asked.append(group)
+        if self._by_group is not None:
+            return list(self._by_group.get(group.lower(), []))
+        return list(self._items)
 
 
 def _client():
@@ -245,11 +313,12 @@ def _client():
         virtual_networks=_Ops([vnet]),
         virtual_network_peerings=_Ops(by_vnet={"hub": [peering]}),
         express_route_circuits=_Ops(),
-        virtual_network_gateways=_Ops([gateway]),
-        local_network_gateways=_Ops(),
+        # The gateway lives in rg-a, which only the VNet and its public IP name.
+        virtual_network_gateways=_Ops(by_group={"rg-a": [gateway]}),
+        local_network_gateways=_Ops(by_group={}),
         route_tables=_Ops(),
         network_security_groups=_Ops(),
-        virtual_network_gateway_connections=_Ops(),
+        virtual_network_gateway_connections=_Ops(by_group={}),
         nat_gateways=_Ops(),
         network_interfaces=_Ops(deny=True),
         azure_firewalls=_Ops(),
@@ -257,7 +326,8 @@ def _client():
 
 
 def test_live_collector_reads_the_network_and_skips_a_denied_section():
-    resources, connections = collectors_module._collect_azure_network(_client(), SUB)
+    client = _client()
+    resources, connections = collectors_module._collect_azure_network(client, SUB)
     by_type = {}
     for r in resources:
         by_type.setdefault(r["resource_type"], []).append(r)
@@ -270,12 +340,51 @@ def test_live_collector_reads_the_network_and_skips_a_denied_section():
     kinds = {(c["connection_type"], c["target_resource_uid"]) for c in connections}
     assert ("vnet_peering", f"azure:vnet:{SUB}:rg-b:spoke") in kinds
     assert ("virtual_network_gateway_attachment", f"azure:virtual_network_gateway:{SUB}:rg-a:vgw") in kinds
+    # Without azure-mgmt-resource the gateways are read from the groups of
+    # the resources already listed (the VNet's), never with a list_all.
+    assert client.virtual_network_gateways.groups_asked == ["rg-a"]
+    assert client.local_network_gateways.groups_asked == ["rg-a"]
+    assert client.virtual_network_gateway_connections.groups_asked == ["rg-a"]
+
+
+def test_live_collector_reads_gateways_in_every_resource_group_the_subscription_lists():
+    client = _client()
+    hq = NS(
+        id=_rid("rg-gw", "localNetworkGateways", "hq"),
+        name="hq",
+        location="eastus",
+        provisioning_state="Succeeded",
+        gateway_ip_address="203.0.113.9",
+        local_network_address_space=NS(address_prefixes=["192.168.0.0/16"]),
+        bgp_settings=None,
+    )
+    client.local_network_gateways = _Ops(by_group={"rg-gw": [hq]})
+    resources, _ = collectors_module._collect_azure_network(client, SUB, lambda: ["RG-A", "rg-gw", "rg-empty"])
+    names = {(r["resource_type"], r["name"]) for r in resources}
+    assert ("local_network_gateway", "hq") in names and ("virtual_network_gateway", "vgw") in names
+    # The Resource Manager's spelling comes first; the VNet's own group is not asked twice.
+    assert client.local_network_gateways.groups_asked == ["RG-A", "rg-gw", "rg-empty"]
+
+
+def test_live_collector_falls_back_to_the_groups_read_when_resource_groups_cannot_be_listed():
+    client = _client()
+
+    def denied():
+        raise _Denied()
+
+    resources, _ = collectors_module._collect_azure_network(client, SUB, denied)
+    assert [r["name"] for r in resources if r["resource_type"] == "virtual_network_gateway"] == ["vgw"]
+    assert client.virtual_network_gateways.groups_asked == ["rg-a"]
 
 
 def test_live_collector_fails_when_a_base_section_cannot_be_read():
     client = _client()
     client.route_tables = _Ops(deny=True)
     with pytest.raises(collectors_module.CloudCollectorExecutionError, match="route_tables"):
+        collectors_module._collect_azure_network(client, SUB)
+    client = _client()
+    client.virtual_network_gateway_connections = _Ops(deny=True)
+    with pytest.raises(collectors_module.CloudCollectorExecutionError, match="gateway_connections"):
         collectors_module._collect_azure_network(client, SUB)
 
 
@@ -343,9 +452,17 @@ def test_snapshot_subnets_name_their_default_route(snapshot):
 
 
 def test_subnet_index_places_subnets_on_the_vnet_router(snapshot):
-    owners = {row["cidr"]: row["node_id"] for row in subnet_index(snapshot)}
-    assert owners["10.231.20.0/24"] == f"vnet:{PROD}"
-    assert owners["10.230.3.0/24"] == f"vnet:{HUB}"
+    index = {row["cidr"]: row for row in subnet_index(snapshot)}
+    assert index["10.231.20.0/24"]["node_id"] == f"vnet:{PROD}"
+    assert index["10.230.3.0/24"]["node_id"] == f"vnet:{HUB}"
+    # A virtual machine's private address is an entry of its own, so typing it
+    # picks the VNet even when another site declares the same range.
+    host = index["10.231.20.31/32"]
+    assert host["node_id"] == f"vnet:{PROD}" and host["kind"] == "host" and host["name"] == "Virtual machine db-vm-1"
+    assert host["in_vpn"] is None
+    # The forwarding VM that is a node is an entry too, still owned by the router.
+    assert index["10.230.3.10/32"]["node_id"] == f"vnet:{HUB}"
+    assert "203.0.113.61/32" not in index
 
 
 def test_search_finds_a_vm_that_is_not_a_node(snapshot):
@@ -437,6 +554,86 @@ def test_reachability_reaches_on_premises_through_the_hubs_gateway(reach):
     assert any("hq-s2s" in s["text"] for s in out["steps"])
     inbound = _check(reach, "10.10.5.5", "10.231.10.21", port=443)
     assert inbound["verdict"] == "allowed"
+
+
+def test_virtual_network_tag_counts_the_prefixes_of_the_subnets_user_routes(reach):
+    """Azure counts the prefixes of user-defined routes in the VirtualNetwork
+    tag. The app subnet's table has a default route, so a source behind no
+    gateway is covered by the tag there: nsg-app's own VirtualNetwork rule
+    (200) decides, not the default DenyAllInBound (65500)."""
+    steps = _check(reach, "192.168.77.5", "10.231.10.21", port=443)["steps"]
+    inbound = next(s for s in steps if s["where"].startswith("Network security group nsg-app on subnet app"))
+    assert inbound["status"] == "blocked" and "DenyVnetInBound (200)" in inbound["text"]
+    # The item says what put the source in the tag: the route, its table,
+    # the subnet it applies to and what it sends the traffic to.
+    assert (
+        "192.168.77.5 is in VirtualNetwork: Azure counts the prefixes of user routes in VirtualNetwork, and route "
+        "to-internet-via-firewall (0.0.0.0/0) of route table rt-prod on subnet app (10.231.10.0/24) sends it to "
+        "Virtual appliance 10.230.1.4 (Azure Firewall azfw-hub)." in inbound["text"]
+    )
+    # The hub's mgmt subnet has no route table: there the tag does not cover
+    # the source (the hub's gateway learns routes over BGP, so it is in part).
+    steps = _check(reach, "192.168.77.5", "10.230.2.5", port=443)["steps"]
+    inbound = next(s for s in steps if s["where"].startswith("Network security group nsg-mgmt on subnet"))
+    assert inbound["status"] == "partial" and "DenyAllInBound" in inbound["text"]
+    # An end in a peered VNet is in the tag through the peering, and the item says so.
+    steps = _check(reach, "10.230.2.5", "10.231.20.31", port=5432)["steps"]
+    inbound = next(s for s in steps if s["where"].startswith("Network security group nsg-db on subnet db"))
+    assert inbound["status"] == "blocked" and "DenyVnetInBound (200)" in inbound["text"]
+    assert (
+        "virtual machine mgmt-jump (10.230.2.5) is in VirtualNetwork: it is in VNet hub-vnet, peered over prod-to-hub."
+        in inbound["text"]
+    )
+
+
+_SDK_ENUMS = {
+    "direction": "SecurityRuleDirection",
+    "action": "SecurityRuleAccess",
+    "protocol": "SecurityRuleProtocol",
+    "next_hop_type": "RouteNextHopType",
+    "state": "VirtualNetworkPeeringState",
+    "connection_status": "VirtualNetworkGatewayConnectionStatus",
+}
+
+
+def _as_sdk_names(value, key=None):
+    """The rows as a discovery before October 2026 stored them: str() of the
+    SDK's enums (``RouteNextHopType.VIRTUAL_APPLIANCE``) where Azure's values
+    belong."""
+    if isinstance(value, dict):
+        return {k: _as_sdk_names(v, k) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_as_sdk_names(v, key) for v in value]
+    if key in _SDK_ENUMS and isinstance(value, str) and value:
+        member = "ASTERISK" if value in ("*", "all") else re.sub(r"(?<=[a-z])(?=[A-Z])", "_", value).upper()
+        return f"{_SDK_ENUMS[key]}.{member}"
+    return value
+
+
+def test_enum_names_stored_by_an_earlier_discovery_are_still_read():
+    resources, connections = build_sample()
+    resources, connections = _as_sdk_names(resources), _as_sdk_names(connections)
+    assert (resources, connections) != build_sample()
+    old = Reachability(resources, connections)
+    # Rules match on their direction, action and protocol again...
+    assert _check(old, "10.231.10.21", "10.231.20.31", port=5432)["verdict"] == "allowed"
+    assert _check(old, "10.231.10.21", "10.231.20.31", port=22)["verdict"] == "blocked"
+    # ...a route to a virtual appliance is followed, and a peering's state is read.
+    out = _check(old, "10.231.10.21", "198.51.100.99", port=443)
+    assert out["verdict"] == "unknown" and "firewall policy" in out["summary"]
+    assert _check(old, "10.231.10.21", "10.232.1.11", port=443)["verdict"] == "allowed"
+    # The details show the values too.
+    snapshot = build_snapshot([ACCOUNT], resources, connections)
+    prod = next(s for s in snapshot["sites"] if s["id"] == PROD)
+    rows = {row[1]: row for row in next(sec for sec in prod["sections"] if sec["title"] == "Subnets")["rows"]}
+    assert rows["app"][3] == "Virtual appliance 10.230.1.4"
+    rules = next(sec for sec in prod["sections"] if sec["title"] == "Network security group rules")
+    assert {row[2] for row in rules["rows"]} == {"inbound", "outbound"}
+    assert {row[3] for row in rules["rows"]} == {"allow", "deny"}
+    sections = prod["sections"] + _node(snapshot, f"vnet:{PROD}")["sections"]
+    peerings = next(sec for sec in sections if sec["title"] == "VNet peerings")
+    # The name's case is the SDK's; the readers lowercase it.
+    assert {str(row[2]).lower() for row in peerings["rows"]} == {"connected"}
 
 
 def test_reachability_reports_a_vpn_that_is_down(reach):

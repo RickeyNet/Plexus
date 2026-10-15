@@ -15,10 +15,12 @@ several accounts share one map.
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any
 
+from netcontrol.integrations.azure.normalize import WARNING_TYPE
+
 PROVIDER = "azure"
-WARNING_TYPE = "collection_warning"
 
 # Azure resource type (lower case) -> record type of its uid.
 _UID_KINDS = {
@@ -36,6 +38,11 @@ _UID_KINDS = {
 
 
 def _t(value: Any) -> str:
+    # The SDK answers many fields as str-mixin enums (SecurityRuleDirection,
+    # RouteNextHopType...): str() of those is "RouteNextHopType.VIRTUAL_APPLIANCE",
+    # the value "VirtualAppliance" is what Azure says and what the map reads.
+    if isinstance(value, Enum):
+        value = value.value
     return str(value or "").strip()
 
 

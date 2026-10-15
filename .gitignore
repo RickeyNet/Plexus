@@ -266,3 +266,6 @@ coverage.json
 _pytest_one.txt
 .pytest_after.txt
 *.migrate.lock
+
+# Pyodide runtime the Topology HTML export embeds (scripts/fetch_pyodide.py)
+netcontrol/static/vendor/

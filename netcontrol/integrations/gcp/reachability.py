@@ -96,8 +96,7 @@ from netcontrol.integrations.aws.reachability import (
     _show,
     _traffic_cover,
 )
-from netcontrol.integrations.gcp.collect import DEFAULT_INTERNET_GATEWAY
-from netcontrol.integrations.gcp.normalize import _meta, _rid, _short, _text
+from netcontrol.integrations.gcp.normalize import DEFAULT_INTERNET_GATEWAY, _meta, _rid, _short, _text
 from netcontrol.integrations.pathtrace import ports as port_sets
 
 _Network = ipaddress.IPv4Network | ipaddress.IPv6Network

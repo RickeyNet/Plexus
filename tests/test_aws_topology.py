@@ -402,8 +402,13 @@ def test_snapshot_lists_network_acls_and_transit_gateway_routes(snapshot):
 
 def test_subnet_index_places_subnets_on_the_vpc_router(snapshot):
     index = {s["cidr"]: s for s in subnet_index(snapshot)}
-    assert len(index) == 7
+    assert len([s for s in index.values() if s["kind"] != "host"]) == 7
     inside = index["10.210.1.0/24"]
+    # An instance's private address is an entry of its own, on the VPC's router.
+    host = index["10.210.2.11/32"]
+    assert (
+        host["node_id"] == "vpc:vpc-0ed9e00002" and host["kind"] == "host" and host["name"] == "Instance ftdv-ravpn-1"
+    )
     # The VPC's router owns the subnet even though the VPC holds firewalls.
     assert inside["node_id"] == "vpc:vpc-0ed9e00002" and inside["kind"] == "subnet"
     assert inside["name"] == "edge-inside-a (us-east-1a)" and inside["site_name"] == "edge-security-vpc (us-east-1)"

@@ -47,11 +47,19 @@ enough; so is **Network Reader**-style access to `Microsoft.Network/*/read`.
 | Needed | Azure resources read |
 |---|---|
 | Always (discovery fails without them) | Virtual networks with their subnets and peerings, ExpressRoute circuits, virtual network gateways, local network gateways, route tables, network security groups, gateway connections |
-| For the map (skipped when denied) | Public IP addresses, NAT gateways, network interfaces, Azure Firewalls |
+| For the map (skipped when denied) | Public IP addresses, NAT gateways, network interfaces, Azure Firewalls, resource groups |
 
 A section that is denied is skipped, not fatal. It is listed with the Azure
 error code under **Report** in the HTML map and as a `collection_warning`
 row among the account's resources.
+
+Azure lists virtual network gateways, local network gateways and gateway
+connections per resource group only. Plexus reads them in every resource
+group of the subscription when `azure-mgmt-resource` is installed (it is in
+`requirements-cloud.txt`); otherwise, or when the resource groups cannot be
+listed, in every group that holds a virtual network, route table, security
+group, NAT gateway or public IP address it has read. A gateway in a group
+of its own, with nothing else in it, is then not seen.
 
 Gateway connections carry a shared key. Plexus does not read or store it.
 
@@ -72,8 +80,10 @@ Gateway connections carry a shared key. Plexus does not read or store it.
 Virtual machines are read from their network interfaces. A machine is drawn
 when one of its interfaces forwards traffic or when it is a Plexus inventory
 host. Every other machine is listed in its VNet's details and found by the
-search box. The Network API does not report the power state, so virtual
-machines carry no status.
+search box, and its private address is in the subnet picker of Path Mode:
+typing the address picks the VNet, even when a Meraki vMX site or a Cato
+site declares the same range. The Network API does not report the power
+state, so virtual machines carry no status.
 
 Azure joins the rest of the map the way AWS does: a local network gateway
 becomes the device that answers on its public address, a virtual machine on
@@ -121,8 +131,18 @@ own.
 - **Network security groups.** They are stateful. The request must pass the
   group of the source subnet and interface outbound, then the group of the
   destination subnet and interface inbound, rule by rule in priority order,
-  default rules included. `VirtualNetwork` covers the VNet, its peered VNets
-  and the ranges behind its gateways; `Internet` covers public addresses.
+  default rules included. `VirtualNetwork` covers the VNet, its peered VNets,
+  the ranges behind its gateways and, as in Azure, the prefixes of the user
+  routes of the subnet's route table, so a branch that reaches the subnet
+  through a route to a virtual appliance is let in by `AllowVnetInBound`
+  (and a default route to an appliance makes the tag cover every address);
+  `Internet` covers public addresses. When a `VirtualNetwork` rule decides
+  for an end that is not in the VNet, the item says what put it in the tag:
+  *10.9.0.0/22 is in VirtualNetwork: Azure counts the prefixes of user
+  routes in VirtualNetwork, and route to-branch (10.9.0.0/22) of route
+  table rt-hub on subnet files (10.1.2.0/24) sends it to Virtual appliance
+  10.1.0.6 (virtual machine vmx-hub-1)*, or the peering or gateway
+  connection it is behind.
   The interface's group is checked when an end is typed as the **IP address
   of a virtual machine**.
 

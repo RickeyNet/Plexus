@@ -26,6 +26,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from netcontrol.integrations.meraki.client import MerakiApiError, MerakiClient
+from netcontrol.integrations.meraki.normalize import _device_kind
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.meraki")
@@ -180,28 +181,6 @@ class _Collection:
                 target[key] = result
 
         await asyncio.gather(*(_one(target, key, aw) for target, key, aw in jobs))
-
-
-def _device_kind(device: dict) -> str:
-    product = str(device.get("productType") or "").strip()
-    if product:
-        return product
-    model = str(device.get("model") or "").upper()
-    for prefix, kind in (
-        ("MX", "appliance"),
-        ("VMX", "appliance"),
-        ("Z", "appliance"),
-        ("MS", "switch"),
-        ("C9", "switch"),
-        ("MR", "wireless"),
-        ("CW", "wireless"),
-        ("MV", "camera"),
-        ("MT", "sensor"),
-        ("MG", "cellularGateway"),
-    ):
-        if model.startswith(prefix):
-            return kind
-    return "other"
 
 
 async def collect_organization(

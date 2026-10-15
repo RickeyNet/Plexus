@@ -135,7 +135,9 @@ tunnel addresses, status, routes and inside CIDRs are kept.
 Not every instance is a node: a VPC with hundreds of servers would bury the
 map. An instance is drawn when it forwards traffic or when it is a Plexus
 inventory host. Every other instance is listed in its VPC's details (name,
-ID, private and public IP, type, state, subnet) and found by the search box.
+ID, private and public IP, type, state, subnet) and found by the search box,
+and its private address is in the subnet picker of Path Mode: typing the
+address picks the VPC, even when another site declares the same range.
 An instance that becomes an inventory host later - a host added to the
 inventory, or given its instance ID, after the last discovery - is drawn as
 soon as the map is next loaded; no new discovery is needed.
@@ -317,8 +319,10 @@ incomplete* means one of:
 
 Limits: only IPv4 can be typed in Path Mode. ICMP types are not told apart.
 The ACLs of subnets the traffic only passes through (transit gateway
-attachment and NAT gateway subnets) are not matched. The HTML export does
-not include the check.
+attachment and NAT gateway subnets) are not matched. The HTML export runs
+the check itself when it carries the path tracer (`docs/path-trace.md`,
+*Tracing inside the HTML export*); without it, it does not include the
+check.
 
 ## What is collected
 

@@ -32,10 +32,32 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
-from netcontrol.integrations.meraki.collector import _device_kind
 from netcontrol.integrations.meraki.forwarding import appliance_block, canonical, peer_block, share, switch_block
 
 SCHEMA_VERSION = 1
+
+
+def _device_kind(device: dict) -> str:
+    product = str(device.get("productType") or "").strip()
+    if product:
+        return product
+    model = str(device.get("model") or "").upper()
+    for prefix, kind in (
+        ("MX", "appliance"),
+        ("VMX", "appliance"),
+        ("Z", "appliance"),
+        ("MS", "switch"),
+        ("C9", "switch"),
+        ("MR", "wireless"),
+        ("CW", "wireless"),
+        ("MV", "camera"),
+        ("MT", "sensor"),
+        ("MG", "cellularGateway"),
+    ):
+        if model.startswith(prefix):
+            return kind
+    return "other"
+
 
 # Layout grid (world units == CSS pixels at zoom 1).
 CELL_W = 170

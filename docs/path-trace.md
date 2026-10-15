@@ -18,6 +18,8 @@ it.
 
 - Permission: the `topology` feature
 - API: `GET /api/topology/path`, see [API reference](#api-reference)
+- To check many source networks against one destination at once, see the
+  [Reachability sweep](#reachability-sweep)
 
 ## Picking the ends
 
@@ -29,7 +31,10 @@ picks is a leg of the path.
   specific collected subnet that holds it is used; when several sites have
   it, pick the one you mean from the list. A typed address is kept as the
   end, so rules and security groups are matched against that address
-  rather than the whole subnet.
+  rather than the whole subnet. The private address of a virtual machine in
+  an AWS VPC, an Azure VNet or a GCP network counts as a network of its own,
+  so typing it picks that network even when a Meraki vMX site or a Cato
+  site declares the same range.
 - **Devices and sites draw the path only.** A device clicked on the map or a
   site typed into **Add a site** has no address to trace. A leg between a
   subnet and a device says which end to add with the subnet box instead.
@@ -279,9 +284,11 @@ It changes the verdict only when the flow depends on it:
 ### Ends, clouds and the internet
 
 An end is placed by the node the page passes. Without one, the most specific
-collected subnet that holds the address is used, then a device that has the
-address on an interface, then a device whose 1:1 or static NAT publishes it.
-An address in several places at the same length is not traced. An address
+collected subnet that holds the address is used (the private address of a
+cloud virtual machine is one, as is the address of a remote user), then a
+device that has the address on an interface, then a device whose 1:1 or
+static NAT publishes it. An address in several places at the same length is
+not traced. An address
 that is in no collected subnet but is public starts or ends at the Internet:
 a flow from the internet reaches the destination's device on its uplink,
 where its NAT and inbound rules decide. Documentation ranges such as
@@ -342,16 +349,142 @@ interface).
 **Reverse** is a different question: it traces a new connection opened
 from the destination to the source, with its own request and replies.
 
+## Tracing inside the HTML export
+
+The HTML export (`GET /api/topology/export.html`) carries the traces of the
+path open in Path Mode when the export is made: both directions of every leg
+between two subnets or addresses, for the traffic asked about.
+
+It also carries the path tracer itself, so the file traces any other two
+subnets or addresses, offline, with no server and no network access: the
+Pyodide runtime (CPython 3.14 compiled to WebAssembly), the source of the
+engine's Python modules (`MODULES` in
+`netcontrol/integrations/pathtrace/offline.py`) and the trace inputs Plexus
+gathered over the whole map (every group) at export time: the merged graph,
+the latest snapshot of every source, the discovered AWS, Azure and GCP
+resources and connections, the subnets and the forwarding block of every
+inventory host. Each is gzip-compressed and base64-encoded in a
+non-executing block of the file. In Path Mode the file shows a traffic box
+(protocol and port) next to the subnet box; a leg between two subnets or
+addresses is traced both ways the first time it is shown, by the same engine
+and with the same result as the server would give for that data. The
+embedded traces are used as they are while the traffic matches the
+exported one. The runtime starts on the first trace, not when the file
+opens: a few seconds, then each trace takes milliseconds. It runs in a web
+worker made from the file's own blocks (a classic worker, else a module
+worker, else on the page itself), and every file Pyodide asks for is
+answered from the file, so nothing is fetched. The Report panel says
+whether the file carries the tracer, its Pyodide version and when the data
+was collected.
+
+The file traces the data collected at export time; what changed later is
+not in it. The runtime adds about 8.5 MB to the file, the engine's source
+0.2 MB and the compressed inputs a few MB on a large map (inputs of about
+30 MB compress to about 4 MB). `engine=0` exports without it, and an
+export made when the runtime is not available (see
+[Pyodide runtime](../deploy/DEPLOYMENT.md#pyodide-runtime-for-the-topology-html-export))
+behaves as one without it: legs other than the exported ones show the path
+over the links only.
+
+The trace inputs are the complete collected configuration of every source
+on the map (rule sets, NAT, routes, cloud security rules), most of which the
+export's detail panels already show. Handle an export like the collected
+data itself.
+
+When Plexus serves the export, its Content-Security-Policy keeps `sandbox`
+(no `allow-same-origin`) and a closed `connect-src`; with the tracer it adds
+`blob:` and `'wasm-unsafe-eval'` to `script-src` and `worker-src blob:`
+(`child-src blob:` for older engines). The saved file carries the same
+additions in its own meta policy.
+
+## Reachability sweep
+
+Path Mode answers one question at a time. The **Reachability** tab of the
+Topology page (**Network → Topology → Reachability**, `/topology/reachability`)
+asks the same question of many networks at once: *which networks cannot
+reach this destination with this traffic?* For example, which user VLANs
+of every branch cannot reach a file server on `tcp/445`.
+
+Enter a **Destination** (an IP address or network; the suggestions are the
+collected subnets, and a picked suggestion stands for its whole subnet at its
+owner) and the **Traffic** (the [Traffic box](#the-traffic-box) syntax:
+`tcp/445`, `udp 53`, `icmp`, or empty for any traffic), narrow the source
+networks with the filters below, and press **Run**. Plexus traces the flow
+from every network the filters keep to the destination, exactly as a Path
+Mode trace from that network would, and lists each one's verdict. The sweep
+adds nothing of its own: every verdict, summary and deciding item is the
+trace's.
+
+### Source networks and filters
+
+The source networks are the collected subnets of the whole map (every group),
+the same list Path Mode picks subnets from. The filters combine: a network is
+swept only when it passes all of them. In the list filters, terms are
+comma-separated and any one matching is enough; a term wrapped in slashes,
+such as `/^VLAN 1\d\d /`, is a regular expression; names and sites match
+without regard to case.
+
+| Filter | Query parameter | Keeps |
+|---|---|---|
+| Sources | `sources` | Networks of these sources (organizations, accounts, FMCs...), by id. Empty: every source. |
+| Providers | `providers` | Networks of these providers: `meraki`, `cato`, `fmc`, `panorama`, `appgate`, `aws`, `azure`, `gcp`. Empty: every provider. |
+| Kinds of network | `kinds` | Networks of these kinds. Default: `vlan,lan,svi,range,subnet,connected` (Meraki VLANs, single LANs, switch SVIs, Cato site ranges, cloud subnets and firewall interfaces: the networks endpoints live in). Also selectable: `static` (static routes), `vpn` (VPN local networks), `peer` (behind a non-Meraki VPN peer), `pool` (remote access VPN pools), `host` (cloud VM addresses), `user` (remote users). `all` selects every kind. |
+| VLANs | `vlans` | Networks whose VLAN id is listed: ids and ranges, `100, 110-120` (0 to 4095). The id is read from the network name: `VLAN <id> ...` for a Meraki VLAN or an SVI, `... (VLAN <id>)` for a Cato range. A network with no VLAN id is left out when this filter is set. |
+| Name contains | `name` | Networks whose name matches a term: `user, data, corp` or `/^VLAN 1\d\d /`. |
+| Exclude | `exclude` | Drops networks whose name matches a term: `voice, guest, printer`. |
+| Sites | `sites` | Networks whose site name matches a term. |
+| Within | `within` | Networks inside one of these CIDRs: `10.0.0.0/8, 172.16.0.0/12`. |
+| In VPN | `in_vpn` | `1`: networks the site advertises into the VPN; `0`: networks it does not. A network whose source does not say is kept only when this filter is not set. |
+
+Always left out: the destination's own network (any network that overlaps the
+destination), networks of the other IP version, and a repeat of the same
+network on the same device.
+
+At most **5,000** networks are swept at once. When the filters keep more, the
+sweep is refused with how many matched; narrow the filters and run again. The
+networks are traced one after another, a few tens of milliseconds each on a
+large map: a few hundred answer within seconds, a few thousand within about a
+minute.
+
+### Reading the results
+
+The verdicts are counted at the top, as chips: **Allowed**, **Blocked**,
+**No path**, **Allowed in part** and **Check incomplete** (see [Reading a
+trace](#reading-a-trace)). Click a chip to show only those networks; click it
+again to show every network. **Group by site** replaces the table with one
+line per site: the networks checked and how many got each verdict.
+
+Each row of the table shows the network (site, name, VLAN, CIDR), its
+verdict, **Decided at** (the device whose item decided the verdict) and
+**Decided by** (that item: the rule set or table and what it found, for
+example *Layer 3 firewall rules: Rule 2 (deny ...) denies it*), and the
+trace's summary. An allowed network has no deciding item. **Trace** opens the
+full hop-by-hop trace of that network in place, with its replies and the
+Reverse button, as in Path Mode.
+
+A **Check incomplete** row means the trace could not decide: something the
+flow depends on was not collected (the deciding item names it, for example a
+rule set that a source does not collect, or everything behind a non-Meraki
+VPN peer), a device on the way has no forwarding data, or the destination is
+in several places (pick the subnet you mean in **Destination is at**).
+Collecting the named source again, or the missing data, turns it into a
+verdict; the row does not say whether the flow would pass.
+
+### CSV
+
+**Download CSV** saves every network of the sweep, whatever chip is
+selected, with the same filters (`format=csv`). **Download shown rows** saves
+only the rows on screen. Both have the columns: Source, Provider, Site,
+Network, Kind, VLAN, CIDR, In VPN, Verdict, Decided at, Decided by, Summary.
+
 ## Limits
 
 - Only IPv4 addresses and networks can be typed in Path Mode.
 - ICMP types are not told apart.
-- The HTML export carries the traces of the path open in Path Mode when the
-  export is made: both directions of every leg between two subnets or
-  addresses, for the traffic asked about. The file cannot trace anything
-  else offline (the trace needs the server), so a leg picked inside the
-  file, or one with a device at either end, shows the path over the links
-  only.
+- An HTML export without the path tracer (`engine=0`, or no runtime when it
+  was made) cannot trace anything other than the legs it carries: a leg
+  picked inside the file shows the path over the links only. A leg with a
+  device at either end is never traced, in Plexus or in a file.
 - A snapshot collected before this release has no routing or policy data
   for the trace: its devices are passed over with an unknown item and the
   trace says to collect the source again.
@@ -367,3 +500,5 @@ from the destination to the source, with its own request and replies.
 | Method | Path | Notes |
 |---|---|---|
 | `GET` | `/api/topology/path` | Traces a flow hop by hop. `source`, `destination`: an IP address or network, 1 to 64 characters. Optional `source_node`, `destination_node`: the map node ids of the devices that own the ends. Optional `protocol`: `tcp`, `udp`, `icmp`, `any` or empty for any traffic. Optional `port`: 0 to 65535. Returns `applies`, `traffic`, `source`, `destination`, `verdict` (`allowed`, `blocked`, `partial`, `unknown`), `summary`, `ports`, `asymmetric` (`status` `no`, `yes` or `unknown`, and `text`), `request` and `reply` (each `verdict`, `summary`, `ports` and `hops`) and `notes`. Each hop has `node`, `edge`, `label`, `site`, `provider`, `in`, `out`, `status` and `items`; each item `stage`, `status`, `where`, `text`, `rule` and, on the item that states a rule set's decision, `ports`. A `ports` value is `{"allowed": {"tcp": "80, 443", "icmp": "any"}, "partial": {"tcp": "8000-8080"}, "unknown": {}, "text": "allowed tcp 80, 443 · icmp; in part tcp 8000-8080"}`, with only the protocols asked about and only those that have ports in each list, or `null` for a direction that was not traced and for a trace that does not apply. A bad parameter returns HTTP 400 |
+| `GET` | `/api/topology/reachability` | The [reachability sweep](#reachability-sweep): traces one flow to `destination` (an IP address or network) from every source network the filters keep. Optional `destination_node` (map node id of the device that owns the destination) or `destination_org_ref` + `destination_node_id` (the source and snapshot node of a picked subnet); `protocol` and `port` as for `/api/topology/path`; filters `sources`, `providers`, `kinds`, `vlans`, `name`, `exclude`, `sites`, `within`, `in_vpn`; `format` `json` (default) or `csv`. JSON returns `destination` (`address`, `node`, `label`, `site`), `traffic`, `generated_at`, `filters` (the effective filters, with the default kinds), `candidates`, `limit`, `counts` (per verdict) and `rows`, each with `org_ref`, `org_name`, `provider`, `site_id`, `site_name`, `node_id`, `source_node`, `node_label`, `kind`, `vlan`, `cidr`, `name`, `in_vpn`, `verdict`, `summary`, `traffic`, `decided_at`, `decided_by` and `ports`, sorted by site, then VLAN, then network. CSV is an attachment with the columns listed in [CSV](#csv). A bad parameter returns HTTP 400; more than 5,000 matching networks returns HTTP 400 with `count` and `limit` |
+| `GET` | `/api/topology/export.html` | The self-contained HTML map. Optional `group_id`, `download=1`, `path` (the Path Mode state: JSON with `traffic` and `picks`, whose legs are traced and embedded) and `engine` (default on; `engine=0` leaves out the path tracer) |

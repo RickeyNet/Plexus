@@ -26,9 +26,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from netcontrol.integrations.gcp.normalize import DEFAULT_INTERNET_GATEWAY, WARNING_TYPE
+
 PROVIDER = "gcp"
-WARNING_TYPE = "collection_warning"
-DEFAULT_INTERNET_GATEWAY = "default-internet-gateway"
 
 # Compute Engine collection of a self link -> record type of its uid.
 _COLLECTIONS = {

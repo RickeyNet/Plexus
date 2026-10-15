@@ -239,7 +239,7 @@ export interface MerakiSubnet {
   provider?: CloudProvider | CloudAccountProvider;
   cidr: string;
   name: string;
-  /** vlan / lan / static / vpn (behind the appliance), svi (L3 switch), peer (non-Meraki VPN peer), range (Cato site), user (a remote user's own address). */
+  /** vlan / lan / static / vpn (behind the appliance), svi (L3 switch), peer (non-Meraki VPN peer), range (Cato site), user (a remote user's own address), host (a cloud virtual machine's private address). */
   kind: string;
   site_id: string;
   site_name: string;
@@ -264,11 +264,19 @@ export interface TopologyExportPath {
 /**
  * URL of the self-contained HTML map. With a `path` of at least one pick the
  * file also carries that path and the hop-by-hop traces Plexus runs for it.
+ * `engine` false leaves out the path tracer (the file is then much smaller
+ * and shows only those traces).
  */
-export function topologyExportUrl(groupId: number | null, download = false, path?: TopologyExportPath | null): string {
+export function topologyExportUrl(
+  groupId: number | null,
+  download = false,
+  path?: TopologyExportPath | null,
+  engine = true,
+): string {
   const params = new URLSearchParams();
   if (groupId != null) params.set('group_id', String(groupId));
   if (download) params.set('download', '1');
+  if (!engine) params.set('engine', '0');
   if (path && path.picks.length) {
     const picks = path.picks.map(({ key, node, label, subnet, address }) => ({ key, node, label, subnet, address }));
     params.set('path', JSON.stringify({ traffic: path.traffic, picks }));
@@ -428,6 +436,104 @@ export function usePathTrace(query: PathTraceQuery | null) {
     queryFn: () => apiRequest<PathTrace>(`/topology/path?${search}`),
     enabled: query != null,
     staleTime: 60_000,
+  });
+}
+
+/**
+ * A reachability sweep (`GET /api/topology/reachability`): one destination
+ * traced from every source network the filters keep. List filters are
+ * comma-separated; empty means no restriction (kinds: the server's default).
+ */
+export interface ReachabilityQuery {
+  destination: string;
+  /** Graph node id of the device that owns the destination, when known. */
+  destination_node?: number | string;
+  /** The snapshot node of a picked destination subnet, resolved by the server. */
+  destination_org_ref?: number;
+  destination_node_id?: string;
+  /** tcp / udp / icmp; empty asks about any traffic. */
+  protocol: string;
+  port?: number;
+  /** Source ids (org_ref), comma-separated. */
+  sources?: string;
+  providers?: string;
+  kinds?: string;
+  /** VLAN ids and ranges: `100, 110-120`. */
+  vlans?: string;
+  /** Terms matched on the network name; `/.../` is a regular expression. */
+  name?: string;
+  exclude?: string;
+  sites?: string;
+  /** CIDRs the source network must be inside. */
+  within?: string;
+  /** `1` advertised into the VPN, `0` not; empty for either. */
+  in_vpn?: string;
+}
+
+/** One source network of a sweep and the verdict of its trace. */
+export interface ReachabilityRow {
+  org_ref: number;
+  org_name: string;
+  provider: string;
+  site_id: string;
+  site_name: string;
+  node_id: string;
+  /** Graph node the trace started at, to trace the row again. */
+  source_node: number | string | null;
+  node_label: string;
+  kind: string;
+  vlan: number | null;
+  cidr: string;
+  name: string;
+  in_vpn: boolean | null;
+  verdict: PathVerdict;
+  summary: string;
+  traffic: string;
+  /** Label of the hop whose item decided the verdict; empty when allowed. */
+  decided_at: string;
+  /** `<where>: <text>` of the deciding item. */
+  decided_by: string;
+  ports?: PathPorts | null;
+}
+
+export interface ReachabilityReport {
+  destination: Partial<PathEnd> & { address: string };
+  traffic: string;
+  generated_at: string;
+  filters: Record<string, unknown>;
+  /** Source networks the filters kept. */
+  candidates: number;
+  limit: number;
+  rows: ReachabilityRow[];
+  counts: Record<PathVerdict, number>;
+}
+
+/** The query string of `GET /api/topology/reachability`. */
+export function reachabilitySearch(query: ReachabilityQuery): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined || value === null) continue;
+    const text = String(value).trim();
+    if (text !== '') params.set(key, text);
+  }
+  return params.toString();
+}
+
+/** URL of the CSV download of a sweep with the same filters. */
+export function reachabilityCsvUrl(query: ReachabilityQuery): string {
+  const search = reachabilitySearch(query);
+  return `/api/topology/reachability?${search}${search ? '&' : ''}format=csv`;
+}
+
+export function useReachability(query: ReachabilityQuery | null) {
+  const search = query ? reachabilitySearch(query) : '';
+  return useQuery({
+    queryKey: ['topology', 'reachability', search],
+    queryFn: () => apiRequest<ReachabilityReport>(`/topology/reachability?${search}`),
+    enabled: query != null,
+    staleTime: 60_000,
+    // A refused sweep (too many networks, a bad filter) will not pass on a retry.
+    retry: false,
   });
 }
 

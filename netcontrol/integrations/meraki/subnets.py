@@ -6,10 +6,11 @@ static routes, the local networks advertised into AutoVPN, switch SVIs, VPN
 participation, non-Meraki VPN peers, the
 network ranges of a Cato site, the subnets of an AWS VPC, the remote access
 VPN address pools of an FTD, the "Connected subnets" and node-level
-"Static routes" tables of an appliance such as a Cisco FMC's FTDs, and the
-address of every user connected with a remote access client), so it
-works on snapshots collected before the index existed and on the merged
-snapshot of the HTML export alike.
+"Static routes" tables of an appliance such as a Cisco FMC's FTDs, the
+address of every user connected with a remote access client, and the
+private address of every virtual machine of an AWS VPC, an Azure VNet or a
+GCP network), so it works on snapshots collected before the index existed
+and on the merged snapshot of the HTML export alike.
 
 The appliance tables are read by column name rather than position, so any
 integration can adopt the titles without matching another's layout.
@@ -23,6 +24,12 @@ from typing import Any
 # A VPC's own router owns its subnets even when the VPC holds an appliance.
 _GATEWAY_ORDER = ("vpc", "appliance", "switch", "wireless")
 _NOT_A_GATEWAY = ("wan", "external", "vpn_peer", "cloud", "users", "user")
+# The virtual machines a cloud network lists: (table title, entry label, address column).
+_HOST_TABLES = (
+    ("Virtual machines", "Virtual machine", "Private IP"),
+    ("Instances", "Instance", "Private IP"),
+    ("VM instances", "VM instance", "Internal IP"),
+)
 
 
 def _cidr(raw: Any) -> str:
@@ -123,6 +130,18 @@ def subnet_index(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
         for row in _rows(sections, "Subnets"):
             zone = f" ({_cell(row, 2)})" if _cell(row, 2) else ""
             add(_cidr(_cell(row, 0)), gateway, site["id"], "subnet", f"{_cell(row, 1)}{zone}", None)
+        # The virtual machines of a cloud network, each private address as a
+        # network of its own: the most specific entry wins, so a typed address
+        # starts or ends at the network that holds the machine even when the
+        # same range is declared elsewhere too (the VLAN of a vMX site, the
+        # routed range of a Cato site).
+        for title, label, column in _HOST_TABLES:
+            columns, rows = _table(sections, title)
+            if column not in columns:
+                continue
+            for row in rows:
+                name = f"{label} {_named(row, columns, 'Name')}".strip()
+                add(_cidr(_named(row, columns, column)), gateway, site["id"], "host", name, None)
         for row in _rows(sections, "Single LAN"):
             if _cell(row, 0) == "Subnet":
                 cidr = _cidr(_cell(row, 1))

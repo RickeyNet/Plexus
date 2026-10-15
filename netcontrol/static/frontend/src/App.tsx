@@ -39,7 +39,7 @@ const Monitoring = lazy(() => pageLoaders.monitoring().then(m => ({ default: m.M
 const NetworkTools = lazy(() => pageLoaders.networkTools().then(m => ({ default: m.NetworkTools })));
 const Reports = lazy(() => pageLoaders.reports().then(m => ({ default: m.Reports })));
 const Settings = lazy(() => pageLoaders.settings().then(m => ({ default: m.Settings })));
-const Topology = lazy(() => pageLoaders.topology().then(m => ({ default: m.Topology })));
+const Topology = lazy(() => pageLoaders.topology().then(m => ({ default: m.TopologyPage })));
 
 const BREADCRUMBS: Record<string, string> = {
   '/': 'Dashboard',
@@ -75,6 +75,7 @@ const BREADCRUMBS: Record<string, string> = {
   '/cloud-visibility/traffic': 'Cloud · Traffic Metrics',
   '/cloud-visibility/policy': 'Cloud · Policy',
   '/topology': 'Topology',
+  '/topology/reachability': 'Topology · Reachability',
   '/settings': 'Settings',
   '/network-tools': 'Network Tools · MAC Tracking',
   '/network-tools/traffic': 'Network Tools · Traffic Analysis',
@@ -244,7 +245,8 @@ export function App() {
           <Route path="/monitoring/suppressions" element={<Navigate to="/monitoring/configure/suppressions" replace />} />
           <Route path="/monitoring/oid-profiles" element={<Navigate to="/monitoring/configure/oid-profiles" replace />} />
           <Route path="/cloud-visibility/:tab?" element={<CloudVisibility />} />
-          <Route path="/topology" element={<Topology />} />
+          {/* Topology: the map (/topology) and the reachability sweep (/topology/reachability). */}
+          <Route path="/topology/:tab?" element={<Topology />} />
           <Route path="/settings/:tab?" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -449,9 +449,11 @@ def test_snapshot_subnets_name_their_default_route(snapshot):
 
 
 def test_subnet_index_places_subnets_on_the_network_router(snapshot):
-    owners = {row["cidr"]: row["node_id"] for row in subnet_index(snapshot)}
-    assert owners["10.241.20.0/24"] == f"vpc:{PROD}"
-    assert owners["10.240.3.0/24"] == f"vpc:{HUB}"
+    index = {row["cidr"]: row for row in subnet_index(snapshot)}
+    assert index["10.241.20.0/24"]["node_id"] == f"vpc:{PROD}"
+    assert index["10.240.3.0/24"]["node_id"] == f"vpc:{HUB}"
+    host = index["10.241.20.31/32"]
+    assert host["node_id"] == f"vpc:{PROD}" and host["kind"] == "host" and host["name"] == "VM instance db-1"
 
 
 def test_search_finds_an_instance_that_is_not_a_node(snapshot):

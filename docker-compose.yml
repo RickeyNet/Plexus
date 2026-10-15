@@ -20,6 +20,9 @@ services:
         # topology layer collect live data. Set INSTALL_CLOUD_SDKS=false in
         # .env for a smaller image if you never attach cloud accounts.
         INSTALL_CLOUD_SDKS: ${INSTALL_CLOUD_SDKS:-true}
+        # Vendor the Pyodide runtime so Topology HTML exports trace paths
+        # offline. Set INCLUDE_PYODIDE=false in .env to leave it out.
+        INCLUDE_PYODIDE: ${INCLUDE_PYODIDE:-true}
     container_name: plexus-app
     restart: unless-stopped
     logging: *default-logging

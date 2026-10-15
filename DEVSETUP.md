@@ -91,6 +91,14 @@ python -m pip install -r requirements-dev.txt -r requirements-cloud.txt
 The lock is compiled with `--universal`, so it installs on Windows as is
 (`python-ldap` and `uvloop` carry Linux-only markers and are skipped).
 
+To have Topology HTML exports carry the offline path tracer, vendor the
+Pyodide runtime once (`netcontrol/static/vendor/`, not committed; see
+`deploy/DEPLOYMENT.md`, "Pyodide runtime for the Topology HTML export"):
+
+```powershell
+python scripts/fetch_pyodide.py
+```
+
 ### Loop (Postgres in Docker, app from source)
 
 1. Run `deploy/setup.sh` once to create `.env` (it holds `POSTGRES_PASSWORD`)

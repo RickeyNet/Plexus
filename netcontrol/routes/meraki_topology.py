@@ -25,6 +25,8 @@ what feeds and surrounds that merge:
   - Per-node Meraki detail sections and whole-map deep search
   - Path Mode's trace of a flow hop by hop across every device on the map
     (``/api/topology/path``, ``netcontrol.integrations.pathtrace``)
+  - The reachability sweep: one destination traced from every source
+    network the filters keep, as JSON or CSV (``/api/topology/reachability``)
   - The list of everything that feeds the map (``/api/topology/sources``):
     neighbor discovery, organizations and accounts, with their last collection
   - Self-contained interactive HTML export of the whole topology
@@ -42,7 +44,10 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import csv
+import io
 import json
+import re
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -50,7 +55,7 @@ from typing import Any
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from netcontrol.integrations.appgate.client import (
@@ -109,7 +114,13 @@ from netcontrol.integrations.meraki.client import (
 from netcontrol.integrations.meraki.clients import client_records
 from netcontrol.integrations.meraki.collector import DEFAULT_OPTIONS, collect_organization, sanitize_options
 from netcontrol.integrations.meraki.enrich import collected_sections, enrich_snapshot, load_inventory_index
-from netcontrol.integrations.meraki.html_export import EXPORT_CSP, export_filename, render_topology_html
+from netcontrol.integrations.meraki.html_export import (
+    export_csp,
+    export_filename,
+    pyodide_runtime,
+    render_topology_html,
+    tracer_payload,
+)
 from netcontrol.integrations.meraki.normalize import build_snapshot
 from netcontrol.integrations.meraki.sample import build_sample_raw
 from netcontrol.integrations.meraki.subnets import subnet_index, subnets_containing
@@ -135,8 +146,16 @@ from netcontrol.integrations.panorama.collector import (
 )
 from netcontrol.integrations.panorama.normalize import build_snapshot as build_panorama_snapshot
 from netcontrol.integrations.panorama.sample import build_sample_raw as build_panorama_sample_raw
+from netcontrol.integrations.pathtrace import sweep as reach_sweep
 from netcontrol.integrations.pathtrace.engine import PROTOCOLS as PATH_PROTOCOLS, Tracer
 from netcontrol.integrations.pathtrace.inventory import forwarding_for_host
+from netcontrol.integrations.pathtrace.offline import (
+    dumps as offline_dumps,
+    export_ids,
+    graph_node_id as _graph_node_id,
+    inputs as offline_inputs,
+    trace as offline_trace,
+)
 from netcontrol.routes import background_jobs
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, supervise_task
 from netcontrol.telemetry import configure_logging, redact_value
@@ -276,24 +295,32 @@ _CLOUD_BY_PROVIDER = {cloud.provider: cloud for cloud in CLOUDS}
 _CLOUD_ORG_REFS = {cloud.org_ref for cloud in CLOUDS}
 
 
-async def _cloud_entry(cloud: _Cloud) -> dict[str, Any] | None:
-    """The snapshot of every enabled account of ``cloud`` that has been
-    discovered, rebuilt when a discovery, or the set of accounts, changes."""
-    accounts = [
+async def _discovered_accounts(cloud: _Cloud) -> list[dict[str, Any]]:
+    """The enabled accounts of ``cloud`` that discovery has found resources in."""
+    return [
         {key: account.get(key) for key in (*_AWS_ACCOUNT_FIELDS, "resource_count", "connection_count")}
         for account in await db.list_cloud_accounts(provider=cloud.provider, enabled_only=True)
         if account.get("resource_count")
     ]
+
+
+async def _cloud_rows(cloud: _Cloud, wanted: set[Any]) -> tuple[list[dict], list[dict]]:
+    """The discovered resources and connections of the accounts in ``wanted``."""
+    resources = [r for r in await db.get_cloud_resources(provider=cloud.provider) if r.get("account_id") in wanted]
+    connections = [c for c in await db.get_cloud_connections(provider=cloud.provider) if c.get("account_id") in wanted]
+    return resources, connections
+
+
+async def _cloud_entry(cloud: _Cloud) -> dict[str, Any] | None:
+    """The snapshot of every enabled account of ``cloud`` that has been
+    discovered, rebuilt when a discovery, or the set of accounts, changes."""
+    accounts = await _discovered_accounts(cloud)
     if not accounts:
         return None
     signature = tuple(tuple(account.values()) for account in accounts)
     entry = _SNAPSHOT_CACHE.get(cloud.org_ref)
     if entry is None or entry.get("signature") != signature:
-        wanted = {account["id"] for account in accounts}
-        resources = [r for r in await db.get_cloud_resources(provider=cloud.provider) if r.get("account_id") in wanted]
-        connections = [
-            c for c in await db.get_cloud_connections(provider=cloud.provider) if c.get("account_id") in wanted
-        ]
+        resources, connections = await _cloud_rows(cloud, {account["id"] for account in accounts})
         inventory = await load_inventory_index()
         # Layout of a large account is CPU-bound; keep it off the event loop.
         snapshot = await asyncio.to_thread(cloud.build, accounts, resources, connections, inventory)
@@ -377,7 +404,7 @@ async def ipam_subnets() -> list[dict[str, Any]]:
         rows.extend(
             {"org_ref": org_ref, "org_name": org_name, "provider": provider, **subnet}
             for subnet in await _subnets_of(entry)
-            if subnet.get("kind") != "user"
+            if subnet.get("kind") not in ("user", "host")
         )
     return rows
 
@@ -1572,30 +1599,53 @@ async def _inventory_forwarding(nodes: list[dict]) -> dict[int, dict[str, Any]]:
     return {host_id: _HOST_FORWARDING[key] for host_id, key in keys.items() if key in _HOST_FORWARDING}
 
 
-def _graph_node_id(raw: str | None) -> Any:
-    """A graph node id from the query string: an inventory host's id is an int."""
-    if raw is None or not raw.strip():
-        return None
-    text = raw.strip()
-    return int(text) if text.lstrip("-").isdigit() else text
+async def _trace_sources() -> dict[str, Any]:
+    """What a path trace reads over the whole map (every group): the graph,
+    the latest snapshot and cloud engine of every source, their subnets and
+    the forwarding block of every inventory host."""
+    from netcontrol.routes.topology import get_topology
+
+    graph = await get_topology(None)
+    entries = await _latest_entries()
+    subnets: list[dict] = []
+    for org_ref, entry in entries:
+        provider = str(entry["snapshot"].get("provider") or PROVIDER_MERAKI)
+        subnets.extend({"org_ref": org_ref, "provider": provider, **subnet} for subnet in await _subnets_of(entry))
+    return {
+        "graph": graph,
+        "snapshots": {org_ref: entry["snapshot"] for org_ref, entry in entries},
+        "clouds": {
+            org_ref: entry["reachability"] for org_ref, entry in entries if entry.get("reachability") is not None
+        },
+        "host_forwarding": await _inventory_forwarding(graph.get("nodes") or []),
+        "subnets": subnets,
+    }
+
+
+def _tracer_of(sources: dict[str, Any]) -> Callable[[], Tracer]:
+    return lambda: Tracer(
+        sources["graph"], sources["snapshots"], sources["clouds"], sources["host_forwarding"], sources["subnets"]
+    )
 
 
 async def _path_tracer() -> Callable[[], Tracer]:
     """Gather what a path trace needs over the whole map (every group) and
     return a builder of the ``Tracer``. Building it indexes the whole map, so
     callers run the builder off the event loop."""
-    from netcontrol.routes.topology import get_topology
+    return _tracer_of(await _trace_sources())
 
-    graph = await get_topology(None)
-    entries = await _latest_entries()
-    snapshots = {org_ref: entry["snapshot"] for org_ref, entry in entries}
-    clouds = {org_ref: entry["reachability"] for org_ref, entry in entries if entry.get("reachability") is not None}
-    subnets: list[dict] = []
-    for org_ref, entry in entries:
-        provider = str(entry["snapshot"].get("provider") or PROVIDER_MERAKI)
-        subnets.extend({"org_ref": org_ref, "provider": provider, **subnet} for subnet in await _subnets_of(entry))
-    host_forwarding = await _inventory_forwarding(graph.get("nodes") or [])
-    return lambda: Tracer(graph, snapshots, clouds, host_forwarding, subnets)
+
+async def _offline_clouds(clouds: dict[int, Any]) -> dict[int, dict[str, Any]]:
+    """The discovered rows behind each cloud engine in ``clouds``, which an
+    export carries to rebuild the engine (``pathtrace.offline.build``)."""
+    rows: dict[int, dict[str, Any]] = {}
+    for cloud in CLOUDS:
+        if cloud.org_ref not in clouds:
+            continue
+        wanted = {account["id"] for account in await _discovered_accounts(cloud)}
+        resources, connections = await _cloud_rows(cloud, wanted)
+        rows[cloud.org_ref] = {"provider": cloud.provider, "resources": resources, "connections": connections}
+    return rows
 
 
 @router.get("/api/topology/path")
@@ -1634,6 +1684,131 @@ async def topology_path_api(
         return await asyncio.to_thread(run)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _reachability_csv(report: dict[str, Any]) -> Response:
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(reach_sweep.CSV_COLUMNS)
+    writer.writerows(reach_sweep.csv_row(row) for row in report["rows"])
+    payload = output.getvalue().encode("utf-8")
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", f"reachability-{report['destination']['address']}-{report['traffic']}")
+    return Response(
+        content=payload,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{stem.strip("_")}.csv"',
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+@router.get("/api/topology/reachability")
+async def topology_reachability_api(
+    request: Request,
+    destination: str = Query(min_length=1, max_length=64),
+    destination_node: str | None = Query(default=None, max_length=300),
+    destination_org_ref: int | None = Query(default=None),
+    destination_node_id: str | None = Query(default=None, max_length=300),
+    protocol: str = Query(default="", max_length=8),
+    port: int | None = Query(default=None, ge=0, le=65535),
+    sources: str | None = Query(default=None, max_length=2000),
+    providers: str | None = Query(default=None, max_length=200),
+    kinds: str | None = Query(default=None, max_length=200),
+    vlans: str | None = Query(default=None, max_length=1000),
+    name: str | None = Query(default=None, max_length=1000),
+    exclude: str | None = Query(default=None, max_length=1000),
+    sites: str | None = Query(default=None, max_length=1000),
+    within: str | None = Query(default=None, max_length=2000),
+    in_vpn: str | None = Query(default=None, max_length=8),
+    format: str = Query(default="json", pattern="^(json|csv)$"),
+):
+    """Trace one flow to ``destination`` from every source network of the
+    whole map the filters keep (``netcontrol.integrations.pathtrace.sweep``),
+    and report each one's verdict and what decided it, as JSON or, with
+    ``format=csv``, as a CSV attachment.
+
+    ``destination_node`` is the graph node that owns the destination, as for
+    ``/api/topology/path``; ``destination_org_ref`` + ``destination_node_id``
+    name it by the snapshot node of a picked subnet instead. More than
+    ``MAX_ROWS`` source networks is refused with their ``count``: narrow the
+    filters."""
+    if protocol.strip().lower() not in ("", "any", "all", *PATH_PROTOCOLS):
+        raise HTTPException(status_code=400, detail=f"protocol must be one of {', '.join(PATH_PROTOCOLS)}")
+    try:
+        filters = reach_sweep.parse_filters(
+            sources=sources,
+            providers=providers,
+            kinds=kinds,
+            vlans=vlans,
+            name=name,
+            exclude=exclude,
+            sites=sites,
+            within=within,
+            in_vpn=in_vpn,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    found = await _trace_sources()
+    org_names = {
+        org_ref: str((snapshot.get("org") or {}).get("name") or "") for org_ref, snapshot in found["snapshots"].items()
+    }
+    rows = [{**row, "org_name": org_names.get(row["org_ref"], "")} for row in found["subnets"]]
+    try:
+        selected = reach_sweep.select_rows(rows, filters, destination)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if len(selected) > reach_sweep.MAX_ROWS:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "error": {
+                    "code": "too_many_sources",
+                    "message": (
+                        f"{len(selected)} source networks match; at most {reach_sweep.MAX_ROWS} are swept at once. "
+                        "Narrow the filters."
+                    ),
+                },
+                "count": len(selected),
+                "limit": reach_sweep.MAX_ROWS,
+            },
+        )
+    make_tracer = _tracer_of(found)
+
+    def run() -> dict[str, Any]:
+        tracer = make_tracer()
+        node = _graph_node_id(destination_node)
+        if node is None and destination_org_ref is not None and destination_node_id:
+            node = tracer.graph_of.get((destination_org_ref, destination_node_id.strip()))
+        return reach_sweep.run(tracer, selected, destination, destination_node=node, protocol=protocol, port=port)
+
+    try:
+        # Building the indexes and walking the map once per source is CPU-bound.
+        report = await asyncio.to_thread(run)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    report["destination"] = report["destination"] or {"address": destination}
+    if format == "csv":
+        await _audit(
+            "topology",
+            "export_reachability_csv",
+            user=_session_user(request),
+            detail=f"destination={destination} traffic={report['traffic']} rows={len(report['rows'])}",
+            correlation_id=_corr_id(request),
+        )
+        return _reachability_csv(report)
+    return {
+        "destination": report["destination"],
+        "traffic": report["traffic"],
+        "generated_at": datetime.now(UTC).isoformat(),
+        "filters": filters.to_json(),
+        "candidates": len(selected),
+        "limit": reach_sweep.MAX_ROWS,
+        "rows": report["rows"],
+        "counts": report["counts"],
+    }
 
 
 @router.get("/api/topology/search/deep")
@@ -1769,25 +1944,6 @@ def _export_path_picks(path: dict[str, Any], node_ids: set[str]) -> list[dict[st
     return picks
 
 
-def _export_trace(trace: dict[str, Any], node_ids: set[str], edge_ids: dict[str, str]) -> dict[str, Any]:
-    """A trace with its graph node and edge ids replaced by the export's
-    (``None`` for one not on the exported map); the original is untouched."""
-    out = copy.deepcopy(trace)
-
-    def node(gid: Any) -> str | None:
-        return str(gid) if gid is not None and str(gid) in node_ids else None
-
-    for end in ("source", "destination"):
-        if isinstance(out.get(end), dict):
-            out[end]["node"] = node(out[end].get("node"))
-    for direction in ("request", "reply"):
-        for each in (out.get(direction) or {}).get("hops") or []:
-            each["node"] = node(each.get("node"))
-            gid = each.get("edge")
-            each["edge"] = edge_ids.get(str(gid)) if gid is not None else None
-    return out
-
-
 def _export_path_data(
     path: dict[str, Any],
     picks: list[dict[str, Any]],
@@ -1796,11 +1952,7 @@ def _export_path_data(
 ) -> dict[str, Any]:
     """The ``path`` block the export embeds: traffic, picks and, for every
     pair of picks that are both subnets or addresses, the trace each way."""
-    node_ids = {str(n["id"]) for n in snapshot.get("nodes") or []}
-    edge_ids: dict[str, str] = {}
-    for edge in snapshot.get("edges") or []:
-        if edge.get("gid"):
-            edge_ids.setdefault(str(edge["gid"]), str(edge["id"]))
+    node_ids, edge_ids = export_ids(snapshot)
     legs: list[dict[str, Any]] = []
     tracer = make_tracer() if make_tracer is not None else None
     if tracer is not None:
@@ -1808,20 +1960,20 @@ def _export_path_data(
             for second in picks[i + 1 :]:
                 if not first["subnet"] or not second["subnet"]:
                     continue
-                directions = []
-                for a, b in ((first, second), (second, first)):
-                    try:
-                        trace = tracer.trace(
-                            a["address"] or str(a["subnet"]["cidr"]).strip(),
-                            b["address"] or str(b["subnet"]["cidr"]).strip(),
-                            source_node=a["node"],
-                            destination_node=b["node"],
-                            protocol=path["protocol"],
-                            port=path["port"],
-                        )
-                        directions.append(_export_trace(trace, node_ids, edge_ids))
-                    except ValueError as exc:
-                        directions.append({"applies": False, "traffic": "", "verdict": "unknown", "summary": str(exc)})
+                directions = [
+                    offline_trace(
+                        tracer,
+                        a["address"] or str(a["subnet"]["cidr"]).strip(),
+                        b["address"] or str(b["subnet"]["cidr"]).strip(),
+                        source_node=a["node"],
+                        destination_node=b["node"],
+                        protocol=path["protocol"],
+                        port=path["port"],
+                        node_ids=node_ids,
+                        edge_ids=edge_ids,
+                    )
+                    for a, b in ((first, second), (second, first))
+                ]
                 legs.append(
                     {"from": first["key"], "to": second["key"], "forward": directions[0], "backward": directions[1]}
                 )
@@ -1862,6 +2014,7 @@ async def export_topology_html_api(
     group_id: int | None = Query(default=None),
     download: bool = Query(default=False),
     path: str | None = Query(default=None, max_length=16000),
+    engine: bool = Query(default=True),
 ):
     """Self-contained interactive HTML map of the topology.
 
@@ -1874,17 +2027,26 @@ async def export_topology_html_api(
     ``picks``). The export then carries the picks and, since a file cannot
     ask the server, the trace each way of every leg between two subnets or
     addresses, run over the whole map whatever ``group_id`` is.
+
+    ``engine`` (on by default) also embeds the path tracer when the Pyodide
+    runtime is vendored: the runtime, the engine's source and the trace
+    inputs of the whole map, so the file traces any two subnets or addresses
+    itself, offline. ``engine=0``, or no runtime, gives the smaller file
+    without it.
     """
     from netcontrol.routes.topology import get_topology
 
     asked_path = _parse_export_path(path)
     graph = await get_topology(group_id)
     picks: list[dict[str, Any]] = []
-    make_tracer: Callable[[], Tracer] | None = None
     if asked_path is not None:
         picks = _export_path_picks(asked_path, {str(n["id"]) for n in graph.get("nodes") or []})
-        if sum(1 for pick in picks if pick["subnet"]) >= 2:
-            make_tracer = await _path_tracer()
+    # Packing the runtime the first time reads and compresses megabytes.
+    with_engine = engine and await asyncio.to_thread(pyodide_runtime) is not None
+    traced_legs = sum(1 for pick in picks if pick["subnet"]) >= 2
+    sources = await _trace_sources() if with_engine or traced_legs else None
+    make_tracer = _tracer_of(sources) if sources is not None and traced_legs else None
+    cloud_rows = await _offline_clouds(sources["clouds"]) if with_engine and sources is not None else {}
     snapshots = dict(await latest_snapshots())
     host_sections = {
         node["id"]: await collected_sections(node["id"])
@@ -1896,19 +2058,30 @@ async def export_topology_html_api(
         group = next((g for g in await db.get_all_groups() if g["id"] == group_id), None)
         title = f"Plexus - {group['name']}" if group else title
 
-    def build() -> tuple[dict[str, Any], dict[str, Any] | None, str]:
+    def build() -> tuple[dict[str, Any], dict[str, Any] | None, bool, str]:
         snapshot = graph_to_snapshot(graph, snapshots, host_sections, title=title)
         embedded = _export_path_data(asked_path, picks, snapshot, make_tracer) if asked_path and picks else None
-        return snapshot, embedded, render_topology_html(snapshot, path=embedded)
+        tracer = None
+        if with_engine and sources is not None:
+            inputs = offline_inputs(
+                sources["graph"],
+                sources["snapshots"],
+                cloud_rows,
+                sources["host_forwarding"],
+                sources["subnets"],
+                snapshot,
+            )
+            tracer = tracer_payload(offline_dumps(inputs))
+        return snapshot, embedded, tracer is not None, render_topology_html(snapshot, path=embedded, tracer=tracer)
 
-    # Layout of a large topology and the traces are CPU-bound; keep them off
-    # the event loop.
-    snapshot, embedded_path, html = await asyncio.to_thread(build)
+    # Layout of a large topology, the traces and packing the tracer are
+    # CPU-bound; keep them off the event loop.
+    snapshot, embedded_path, traces_itself, html = await asyncio.to_thread(build)
 
     # The export has its own CSP (the middleware only fills in a default): the
     # viewer needs an inline script, and ``sandbox`` isolates it from the
     # Plexus origin so it can never use the session it was served under.
-    headers = {"Content-Security-Policy": EXPORT_CSP, "Cache-Control": "private, no-store"}
+    headers = {"Content-Security-Policy": export_csp(traces_itself), "Cache-Control": "private, no-store"}
     if download:
         headers["Content-Disposition"] = f'attachment; filename="{export_filename(snapshot)}"'
         await _audit(
@@ -1916,7 +2089,8 @@ async def export_topology_html_api(
             "export_html",
             user=_session_user(request),
             detail=f"group_id={group_id} nodes={len(snapshot['nodes'])}"
-            + (f" path_legs={len(embedded_path['legs'])}" if embedded_path else ""),
+            + (f" path_legs={len(embedded_path['legs'])}" if embedded_path else "")
+            + f" engine={int(traces_itself)}",
             correlation_id=_corr_id(request),
         )
     return HTMLResponse(html, headers=headers)

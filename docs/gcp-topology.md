@@ -88,7 +88,8 @@ hash.
 
 A VM instance is drawn when it forwards traffic or when one of its
 addresses is a Plexus inventory host. Every other instance is listed in its
-network's details and found by the search box.
+network's details and found by the search box, and its internal address is
+in the subnet picker of Path Mode: typing the address picks the network.
 
 GCP joins the rest of the map the way AWS does: an external VPN gateway
 interface becomes the device that answers on its public address, an
