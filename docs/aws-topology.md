@@ -32,7 +32,8 @@ see [azure-topology.md](azure-topology.md) and [gcp-topology.md](gcp-topology.md
    the base install). Without it discovery reports that its dependencies are
    not installed.
 3. **Add the account.** Open **Cloud Visibility → Accounts → Add AWS
-   account** and fill in:
+   account** (or **Sources → Add Source → AWS Account** on the Topology
+   page, which opens the same dialog) and fill in:
    - *Regions*: the regions to read, comma-separated
      (`us-east-1,us-west-2`). **Left empty, only `us-east-1` is read.**
      Tick **All regions** to read every region enabled for the account

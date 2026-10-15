@@ -327,13 +327,13 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
             >
               Appgate SDP
             </button>
-            <Link className="btn btn-secondary btn-sm" to={CLOUD_ACCOUNTS_PATH} onClick={onClose}>
+            <Link className="btn btn-secondary btn-sm" to={`${CLOUD_ACCOUNTS_PATH}?add=aws`} onClick={onClose}>
               AWS Account
             </Link>
-            <Link className="btn btn-secondary btn-sm" to={CLOUD_ACCOUNTS_PATH} onClick={onClose}>
+            <Link className="btn btn-secondary btn-sm" to={`${CLOUD_ACCOUNTS_PATH}?add=azure`} onClick={onClose}>
               Azure Subscription
             </Link>
-            <Link className="btn btn-secondary btn-sm" to={CLOUD_ACCOUNTS_PATH} onClick={onClose}>
+            <Link className="btn btn-secondary btn-sm" to={`${CLOUD_ACCOUNTS_PATH}?add=gcp`} onClick={onClose}>
               GCP Project
             </Link>
           </div>

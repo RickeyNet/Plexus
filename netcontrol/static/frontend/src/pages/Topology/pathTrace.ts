@@ -128,6 +128,7 @@ export function statusMark(status: ReachabilityStatus | string): { mark: string;
 const VERDICTS: Record<PathVerdict, { label: string; color: string }> = {
   allowed: { label: 'Allowed', color: SUCCESS },
   blocked: { label: 'Blocked', color: DANGER },
+  unreachable: { label: 'No path', color: DANGER },
   partial: { label: 'Allowed in part', color: WARNING },
   unknown: { label: 'Check incomplete', color: WARNING },
 };
@@ -153,7 +154,7 @@ export function hopTitle(hop: PathHop, index: number): string {
 
 /**
  * The hops of a traced direction on one line, each not ok with its mark:
- * `Branch 01 MX → Hub 01 MX → Corp East Backup ✕ (3 hops)`. The count is the
+ * `Branch 01 MX → Hub 01 MX → Hub 02 MX ✕ (3 hops)`. The count is the
  * number of devices listed (the numbered hops below it), not the links between
  * them. Null when there are no hops.
  */

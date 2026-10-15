@@ -41,7 +41,10 @@ above; nothing here is named after Meraki.
 from __future__ import annotations
 
 import asyncio
+import copy
+import json
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -1577,6 +1580,24 @@ def _graph_node_id(raw: str | None) -> Any:
     return int(text) if text.lstrip("-").isdigit() else text
 
 
+async def _path_tracer() -> Callable[[], Tracer]:
+    """Gather what a path trace needs over the whole map (every group) and
+    return a builder of the ``Tracer``. Building it indexes the whole map, so
+    callers run the builder off the event loop."""
+    from netcontrol.routes.topology import get_topology
+
+    graph = await get_topology(None)
+    entries = await _latest_entries()
+    snapshots = {org_ref: entry["snapshot"] for org_ref, entry in entries}
+    clouds = {org_ref: entry["reachability"] for org_ref, entry in entries if entry.get("reachability") is not None}
+    subnets: list[dict] = []
+    for org_ref, entry in entries:
+        provider = str(entry["snapshot"].get("provider") or PROVIDER_MERAKI)
+        subnets.extend({"org_ref": org_ref, "provider": provider, **subnet} for subnet in await _subnets_of(entry))
+    host_forwarding = await _inventory_forwarding(graph.get("nodes") or [])
+    return lambda: Tracer(graph, snapshots, clouds, host_forwarding, subnets)
+
+
 @router.get("/api/topology/path")
 async def topology_path_api(
     source: str = Query(min_length=1, max_length=64),
@@ -1593,22 +1614,12 @@ async def topology_path_api(
     ``source_node`` / ``destination_node`` name the graph nodes that own the
     ends when the page knows them. ``protocol`` is ``tcp``, ``udp``, ``icmp``
     or empty (any traffic)."""
-    from netcontrol.routes.topology import get_topology
-
     if protocol.strip().lower() not in ("", "any", "all", *PATH_PROTOCOLS):
         raise HTTPException(status_code=400, detail=f"protocol must be one of {', '.join(PATH_PROTOCOLS)}")
-    graph = await get_topology(None)
-    entries = await _latest_entries()
-    snapshots = {org_ref: entry["snapshot"] for org_ref, entry in entries}
-    clouds = {org_ref: entry["reachability"] for org_ref, entry in entries if entry.get("reachability") is not None}
-    subnets: list[dict] = []
-    for org_ref, entry in entries:
-        provider = str(entry["snapshot"].get("provider") or PROVIDER_MERAKI)
-        subnets.extend({"org_ref": org_ref, "provider": provider, **subnet} for subnet in await _subnets_of(entry))
-    host_forwarding = await _inventory_forwarding(graph.get("nodes") or [])
+    make_tracer = await _path_tracer()
 
     def run() -> dict:
-        tracer = Tracer(graph, snapshots, clouds, host_forwarding, subnets)
+        tracer = make_tracer()
         return tracer.trace(
             source,
             destination,
@@ -1670,12 +1681,187 @@ async def topology_deep_search_api(
 
 # ── Whole-topology HTML export ───────────────────────────────────────────────
 
+_EXPORT_PATH_MAX_PICKS = 6
+
+
+def _bad_path(detail: str) -> HTTPException:
+    return HTTPException(status_code=400, detail=f"path: {detail}")
+
+
+def _parse_export_path(raw: str | None) -> dict[str, Any] | None:
+    """The Path Mode state the page sends with an export (``?path=``): the
+    traffic asked about and the picks, validated. ``None`` when absent."""
+    if raw is None or not raw.strip():
+        return None
+    try:
+        body = json.loads(raw)
+    except ValueError as exc:
+        raise _bad_path("not valid JSON") from exc
+    if not isinstance(body, dict):
+        raise _bad_path("must be a JSON object")
+
+    traffic = body.get("traffic")
+    if traffic is None:
+        traffic = {}
+    if not isinstance(traffic, dict):
+        raise _bad_path("traffic must be an object")
+    protocol = traffic.get("protocol")
+    if protocol is None:
+        protocol = ""
+    if not isinstance(protocol, str):
+        raise _bad_path("traffic.protocol must be a string")
+    protocol = protocol.strip().lower()
+    protocol = "" if protocol in ("any", "all") else protocol
+    if protocol and protocol not in PATH_PROTOCOLS:
+        raise _bad_path(f"traffic.protocol must be one of {', '.join(PATH_PROTOCOLS)}")
+    port = traffic.get("port")
+    if port is not None and (isinstance(port, bool) or not isinstance(port, int) or not 0 <= port <= 65535):
+        raise _bad_path("traffic.port must be an integer from 0 to 65535")
+    if protocol not in ("tcp", "udp"):
+        port = None  # only a TCP or UDP flow has ports
+
+    picks = body.get("picks")
+    if not isinstance(picks, list) or not 1 <= len(picks) <= _EXPORT_PATH_MAX_PICKS:
+        raise _bad_path(f"picks must be a list of 1 to {_EXPORT_PATH_MAX_PICKS} entries")
+    parsed: list[dict[str, Any]] = []
+    for number, pick in enumerate(picks, start=1):
+        if not isinstance(pick, dict):
+            raise _bad_path(f"pick {number} must be an object")
+        node = pick.get("node")
+        if isinstance(node, bool) or not (isinstance(node, int) or (isinstance(node, str) and node.strip())):
+            raise _bad_path(f"pick {number} has no node")
+        label = pick.get("label")
+        if not isinstance(label, str) or not label.strip():
+            raise _bad_path(f"pick {number} has no label")
+        subnet = pick.get("subnet")
+        if subnet is not None and (not isinstance(subnet, dict) or not isinstance(subnet.get("cidr"), str)):
+            raise _bad_path(f"pick {number} has a subnet without a cidr")
+        address = pick.get("address")
+        if address is not None and not isinstance(address, str):
+            raise _bad_path(f"pick {number} has an address that is not a string")
+        parsed.append(
+            {
+                "node": _graph_node_id(str(node)),
+                "label": label.strip(),
+                "subnet": subnet if subnet and str(subnet["cidr"]).strip() else None,
+                "address": (address or "").strip() or None,
+            }
+        )
+    return {"protocol": protocol, "port": port, "picks": parsed}
+
+
+def _export_path_picks(path: dict[str, Any], node_ids: set[str]) -> list[dict[str, Any]]:
+    """The picks on the exported map, in order, keyed the way the viewer
+    keys its own picks; a pick whose key repeats an earlier one is dropped."""
+    picks: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for pick in path["picks"]:
+        node = str(pick["node"])
+        if node not in node_ids:
+            continue
+        subnet = pick["subnet"]
+        address = pick["address"] if subnet else None
+        key = f"s:{address or str(subnet['cidr']).strip()}:{node}" if subnet else f"n:{node}"
+        if key in seen:
+            continue
+        seen.add(key)
+        picks.append({**pick, "key": key, "export_node": node, "address": address})
+    return picks
+
+
+def _export_trace(trace: dict[str, Any], node_ids: set[str], edge_ids: dict[str, str]) -> dict[str, Any]:
+    """A trace with its graph node and edge ids replaced by the export's
+    (``None`` for one not on the exported map); the original is untouched."""
+    out = copy.deepcopy(trace)
+
+    def node(gid: Any) -> str | None:
+        return str(gid) if gid is not None and str(gid) in node_ids else None
+
+    for end in ("source", "destination"):
+        if isinstance(out.get(end), dict):
+            out[end]["node"] = node(out[end].get("node"))
+    for direction in ("request", "reply"):
+        for each in (out.get(direction) or {}).get("hops") or []:
+            each["node"] = node(each.get("node"))
+            gid = each.get("edge")
+            each["edge"] = edge_ids.get(str(gid)) if gid is not None else None
+    return out
+
+
+def _export_path_data(
+    path: dict[str, Any],
+    picks: list[dict[str, Any]],
+    snapshot: dict[str, Any],
+    make_tracer: Callable[[], Tracer] | None,
+) -> dict[str, Any]:
+    """The ``path`` block the export embeds: traffic, picks and, for every
+    pair of picks that are both subnets or addresses, the trace each way."""
+    node_ids = {str(n["id"]) for n in snapshot.get("nodes") or []}
+    edge_ids: dict[str, str] = {}
+    for edge in snapshot.get("edges") or []:
+        if edge.get("gid"):
+            edge_ids.setdefault(str(edge["gid"]), str(edge["id"]))
+    legs: list[dict[str, Any]] = []
+    tracer = make_tracer() if make_tracer is not None else None
+    if tracer is not None:
+        for i, first in enumerate(picks):
+            for second in picks[i + 1 :]:
+                if not first["subnet"] or not second["subnet"]:
+                    continue
+                directions = []
+                for a, b in ((first, second), (second, first)):
+                    try:
+                        trace = tracer.trace(
+                            a["address"] or str(a["subnet"]["cidr"]).strip(),
+                            b["address"] or str(b["subnet"]["cidr"]).strip(),
+                            source_node=a["node"],
+                            destination_node=b["node"],
+                            protocol=path["protocol"],
+                            port=path["port"],
+                        )
+                        directions.append(_export_trace(trace, node_ids, edge_ids))
+                    except ValueError as exc:
+                        directions.append({"applies": False, "traffic": "", "verdict": "unknown", "summary": str(exc)})
+                legs.append(
+                    {"from": first["key"], "to": second["key"], "forward": directions[0], "backward": directions[1]}
+                )
+
+    def subnet_of(pick: dict[str, Any]) -> dict[str, Any] | None:
+        subnet = pick["subnet"]
+        if not subnet:
+            return None
+        in_vpn = subnet.get("in_vpn")
+        return {
+            "cidr": str(subnet["cidr"]).strip(),
+            "name": str(subnet.get("name") or ""),
+            "kind": str(subnet.get("kind") or ""),
+            "site_name": str(subnet.get("site_name") or ""),
+            "node_id": pick["export_node"],
+            "in_vpn": in_vpn if isinstance(in_vpn, bool) else None,
+        }
+
+    return {
+        "traffic": {"protocol": path["protocol"], "port": path["port"]},
+        "picks": [
+            {
+                "key": pick["key"],
+                "node": pick["export_node"],
+                "label": pick["label"],
+                "subnet": subnet_of(pick),
+                "address": pick["address"],
+            }
+            for pick in picks
+        ],
+        "legs": legs,
+    }
+
 
 @router.get("/api/topology/export.html")
 async def export_topology_html_api(
     request: Request,
     group_id: int | None = Query(default=None),
     download: bool = Query(default=False),
+    path: str | None = Query(default=None, max_length=16000),
 ):
     """Self-contained interactive HTML map of the topology.
 
@@ -1683,10 +1869,22 @@ async def export_topology_html_api(
     discovered links plus (for the all-groups view) every Meraki organization
     - with each device's collected detail embedded. ``download=1`` sends it as
     an attachment; otherwise it renders inline for a new browser tab.
+
+    ``path`` is the Path Mode state open on the page (JSON: ``traffic`` and
+    ``picks``). The export then carries the picks and, since a file cannot
+    ask the server, the trace each way of every leg between two subnets or
+    addresses, run over the whole map whatever ``group_id`` is.
     """
     from netcontrol.routes.topology import get_topology
 
+    asked_path = _parse_export_path(path)
     graph = await get_topology(group_id)
+    picks: list[dict[str, Any]] = []
+    make_tracer: Callable[[], Tracer] | None = None
+    if asked_path is not None:
+        picks = _export_path_picks(asked_path, {str(n["id"]) for n in graph.get("nodes") or []})
+        if sum(1 for pick in picks if pick["subnet"]) >= 2:
+            make_tracer = await _path_tracer()
     snapshots = dict(await latest_snapshots())
     host_sections = {
         node["id"]: await collected_sections(node["id"])
@@ -1697,9 +1895,15 @@ async def export_topology_html_api(
     if group_id is not None:
         group = next((g for g in await db.get_all_groups() if g["id"] == group_id), None)
         title = f"Plexus - {group['name']}" if group else title
-    # Layout of a large topology is CPU-bound; keep it off the event loop.
-    snapshot = await asyncio.to_thread(graph_to_snapshot, graph, snapshots, host_sections, title=title)
-    html = await asyncio.to_thread(render_topology_html, snapshot)
+
+    def build() -> tuple[dict[str, Any], dict[str, Any] | None, str]:
+        snapshot = graph_to_snapshot(graph, snapshots, host_sections, title=title)
+        embedded = _export_path_data(asked_path, picks, snapshot, make_tracer) if asked_path and picks else None
+        return snapshot, embedded, render_topology_html(snapshot, path=embedded)
+
+    # Layout of a large topology and the traces are CPU-bound; keep them off
+    # the event loop.
+    snapshot, embedded_path, html = await asyncio.to_thread(build)
 
     # The export has its own CSP (the middleware only fills in a default): the
     # viewer needs an inline script, and ``sandbox`` isolates it from the
@@ -1711,7 +1915,8 @@ async def export_topology_html_api(
             "topology",
             "export_html",
             user=_session_user(request),
-            detail=f"group_id={group_id} nodes={len(snapshot['nodes'])}",
+            detail=f"group_id={group_id} nodes={len(snapshot['nodes'])}"
+            + (f" path_legs={len(embedded_path['legs'])}" if embedded_path else ""),
             correlation_id=_corr_id(request),
         )
     return HTMLResponse(html, headers=headers)

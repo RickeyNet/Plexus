@@ -5,6 +5,15 @@ export function providerLabel(provider?: string | null): string {
   return cloudProviderTerms(provider).label;
 }
 
+/**
+ * The provider an `?add=<provider>` link (the Topology page's **Add Source**
+ * buttons) asks to add, when it is one of the offered providers; null otherwise.
+ */
+export function addProviderFromSearch(search: string, offered: readonly string[]): string | null {
+  const wanted = (new URLSearchParams(search).get('add') ?? '').trim().toLowerCase();
+  return wanted && offered.includes(wanted) ? wanted : null;
+}
+
 export interface PullOutcome {
   kind: 'success' | 'error';
   text: string;

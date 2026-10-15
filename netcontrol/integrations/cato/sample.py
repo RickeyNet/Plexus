@@ -168,8 +168,8 @@ def _user(ident: str, name: str, pop: str, vpn_ip: str, public_ip: str, os_type:
             "ip": public_ip,
             "countryCode": "US",
             "countryName": "United States",
-            "city": "Columbus",
-            "state": "Ohio",
+            "city": "Helena",
+            "state": "Montana",
             "provider": "Example ISP",
         },
         "info": {
@@ -190,8 +190,8 @@ def _user(ident: str, name: str, pop: str, vpn_ip: str, public_ip: str, os_type:
                 "remoteIP": public_ip,
                 "remoteIPInfo": {
                     "countryName": "United States",
-                    "city": "Columbus",
-                    "state": "Ohio",
+                    "city": "Helena",
+                    "state": "Montana",
                     "provider": "Example ISP",
                 },
             }
@@ -262,7 +262,7 @@ def _firewalls() -> tuple[dict, dict]:
             "Sites to HQ servers",
             "ALLOW",
             direction="TO",
-            source=_endpoint(site=[_ref("1002", "Branch-Cleveland"), _ref("1004", "AWS-us-east-1")]),
+            source=_endpoint(site=[_ref("1002", "Branch-Madison"), _ref("1004", "AWS-us-east-1")]),
             destination=_endpoint(siteNetworkSubnet=[_ref("r-HQ-DataCenter-10.50.10.0/24", "Servers")]),
             custom=[{"port": ["443"], "portRange": None, "protocol": "TCP"}],
         ),
@@ -360,14 +360,14 @@ def build_sample_raw() -> dict[str, Any]:
         ),
         _site(
             "1002",
-            "Branch-Cleveland",
+            "Branch-Madison",
             pop="New York",
-            city="Cleveland",
+            city="Madison",
             hosts=38,
             devices=[
                 _socket(
                     "5003",
-                    "Branch-Cleveland",
+                    "Branch-Madison",
                     "X1500-0003-CCCC",
                     "X1500",
                     pop="New York",
@@ -411,9 +411,9 @@ def build_sample_raw() -> dict[str, Any]:
     ranges = [
         _range("HQ-DataCenter", "LAN 01", "Servers", "10.50.10.0/24", "10"),
         _range("HQ-DataCenter", "LAN 01", "Users", "10.50.20.0/24", "20"),
-        _range("Branch-Cleveland", "LAN 01", "Users", "10.60.20.0/24", "20"),
+        _range("Branch-Madison", "LAN 01", "Users", "10.60.20.0/24", "20"),
         _range("Branch-Denver", "LAN 01", "Users", "10.61.20.0/24", "20"),
-        _range("AWS-us-east-1", "IPsec", "VPC", "172.31.0.0/16"),
+        _range("AWS-us-east-1", "IPsec", "VPC", "172.21.0.0/16"),
     ]
     interfaces = [
         {
@@ -428,15 +428,15 @@ def build_sample_raw() -> dict[str, Any]:
         },
         {
             # Already listed as a range: must not be counted twice.
-            "entity": {"id": "i-1002-5", "name": "Branch-Cleveland \\ LAN 01", "type": "networkInterface"},
+            "entity": {"id": "i-1002-5", "name": "Branch-Madison \\ LAN 01", "type": "networkInterface"},
             "description": "",
             "helperFields": {"interfaceName": "LAN 01", "siteId": "1002", "subnet": "10.60.20.0/24"},
         },
     ]
     users = [
-        _user("9001", "Dana Reyes", "New York", "10.41.0.11", "198.51.100.201", "OS_WINDOWS"),
-        _user("9002", "Sam Okafor", "Ashburn", "10.41.0.12", "198.51.100.202", "OS_MAC"),
-        _user("9003", "Priya Nair", "Ashburn", "10.41.0.13", "198.51.100.10", "OS_WINDOWS", office=True),
+        _user("9001", "Dana Reyes", "New York", "10.88.0.11", "198.51.100.201", "OS_WINDOWS"),
+        _user("9002", "Sam Okafor", "Ashburn", "10.88.0.12", "198.51.100.202", "OS_MAC"),
+        _user("9003", "Priya Nair", "Ashburn", "10.88.0.13", "198.51.100.10", "OS_WINDOWS", office=True),
     ]
     wan_firewall, internet_firewall = _firewalls()
     return {
@@ -455,10 +455,10 @@ def build_sample_raw() -> dict[str, Any]:
         "global_ip_ranges": [
             {
                 "id": "gr-1",
-                "name": "VDI-Azure",
-                "description": "Azure VDI pool",
-                "ipRange": "10.12.128.0-10.12.131.255",
-                "subnet": "10.12.128.0/22",
+                "name": "Lab-Pool",
+                "description": "Lab desktop pool",
+                "ipRange": "10.77.128.0-10.77.131.255",
+                "subnet": "10.77.128.0/22",
             },
             {
                 "id": "gr-2",

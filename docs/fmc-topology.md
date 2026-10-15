@@ -218,15 +218,15 @@ Each **Data to collect** toggle of the entry turns one part on or off.
 | Clusters | `deviceclusters/ftddevicecluster` | always |
 | Which devices each policy targets (a pair or cluster target stands for its members) | `assignment/policyassignments` | always |
 | Network objects, hosts, ranges, FQDNs, groups, security zones, interface groups | `object/networks`, `object/hosts`, `object/ranges`, `object/fqdns`, `object/networkgroups`, `object/securityzones`, `object/interfacegroups` | always |
-| Remote access VPN policies, connection profiles, address assignment, access interfaces | `policies/ravpns`, `.../{id}/connectionprofiles`, `.../addressassignmentsettings`, `.../accessinterfacesettings` | always |
+| Remote access VPN policies, connection profiles, address assignment, access interfaces | `policy/ravpns`, `.../{id}/connectionprofiles`, `.../addressassignmentsettings`, `.../accessinterfacesettings` (not requested when the policy carries its `accessInterfaceSettings` itself, as on FMC 7.6, which does not serve the resource) | always |
 | IPv4 address pools | `object/ipv4addresspools` | always |
 | Interfaces of each device on the map | `devices/devicerecords/{id}/physicalinterfaces`, `subinterfaces`, `etherchannelinterfaces`, `redundantinterfaces`, `vlaninterfaces`, `virtualtunnelinterfaces`, `loopbackinterfaces`, `bridgegroupinterfaces`, `inlinesets` | Device interfaces |
 | Routing of each device on the map | `devices/devicerecords/{id}/routing/virtualrouters`; per virtual router `.../virtualrouters/{vr}/ipv4staticroutes`, `ipv6staticroutes`, `bgp`, `ospfv2routes`, `eigrproutes`, `ecmpzones`; the global table at `.../routing/ipv4staticroutes`, `ipv6staticroutes`, `bgp`, `ospfv2routes`, `eigrproutes`; `.../routing/policybasedroutes` | Routing |
-| NAT policies and the rules of the ones in use | `policies/ftdnatpolicies`, `.../{id}/natrules` | NAT |
-| Access control policies, the rules of the ones in use, prefilter policies | `policies/accesspolicies`, `.../{id}/accessrules`, `policies/prefilterpolicies` | Access control policies |
-| Site-to-site VPN topologies, their endpoints, IKE and IPsec settings, tunnel status | `policies/ftds2svpns`, `.../{id}/endpoints`, `.../ikesettings`, `.../ipsecsettings`, `health/tunnelstatuses` | Site-to-site VPN |
+| NAT policies and the rules of the ones in use | `policy/ftdnatpolicies`, `.../{id}/natrules` | NAT |
+| Access control policies, the rules of the ones in use, prefilter policies | `policy/accesspolicies`, `.../{id}/accessrules`, `policy/prefilterpolicies` | Access control policies |
+| Site-to-site VPN topologies, their endpoints, IKE and IPsec settings, tunnel status | `policy/ftds2svpns`, `.../{id}/endpoints`, `.../ikesettings`, `.../ipsecsettings`, `health/tunnelstatuses` | Site-to-site VPN |
 | Health alerts and devices with a pending deployment | `health/alerts`, `deployment/deployabledevices` | Health |
-| Connected remote access users | `health/ravpnsessions`; when it does not answer, `show vpn-sessiondb detail anyconnect` and `show vpn-sessiondb detail ra-ikev2-ipsec` run on each headend through `devices/devicerecords/{id}/operational/commands` | Connected users |
+| Connected remote access users | `health/ravpnsessions`; when it does not answer, `show vpn-sessiondb detail anyconnect` and `show vpn-sessiondb detail ra-ikev2-ipsec` run on each headend through `devices/devicerecords/{id}/operational/commands?command=show vpn-sessiondb&parameters=detail anyconnect` | Connected users |
 
 All configuration resources are under `/api/fmc_config/v1/domain/{uuid}/`;
 every list is read with `expanded=true`. Requests are sent one at a time and
@@ -260,12 +260,15 @@ simply absent, the collection is not marked partial, and the path is counted
 under **Unsupported resources** on the FMC node (and listed in the
 snapshot's `collection.unsupported`). Without virtual routers the routing is
 read at the device level. Connected users come from the health API for
-remote access VPN sessions, which exists on FMC 7.3 and later and needs the
-**Devices > VPN** permission. When that request fails, each remote access
+remote access VPN sessions, documented for FMC 7.3 and later with the
+**Devices > VPN** permission; not every release serves it (an FMC 7.6.5
+answers `500 Cannot find file`). When that request fails, each remote access
 headend (every device on the map when the policy assignments could not be
 read) is asked itself: the FMC's command relay runs `show vpn-sessiondb
 detail anyconnect` and `show vpn-sessiondb detail ra-ikev2-ipsec` on the
-FTD (**Devices > Device Management** permission, FTD 6.6 and later) and the
+FTD (**Devices > Device Management** permission, FTD 6.6 and later; the
+command goes in the `command` query parameter, the rest of the line in
+`parameters`) and the
 users, their assigned and public addresses, connection profile, group
 policy, client, OS, protocol, login time, duration and byte counts are read
 from its answer. The health API's failure is then counted under
