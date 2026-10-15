@@ -30,7 +30,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from netcontrol.integrations.aws.collect import WARNING_TYPE
 from netcontrol.integrations.meraki.normalize import (
     SCHEMA_VERSION,
     InventoryIndex,
@@ -43,6 +42,8 @@ from netcontrol.integrations.meraki.normalize import (
 )
 
 PROVIDER = "aws"
+# The record type of a section discovery could not read.
+WARNING_TYPE = "collection_warning"
 TRANSIT_SITE_ID = "__aws_transit__"
 TRANSIT_SITE_NAME = "AWS transit and VPN"
 

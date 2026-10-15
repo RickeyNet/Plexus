@@ -672,6 +672,14 @@ def _aws_rows() -> list[dict]:
 
 
 def _vmx_tracer(vmx: dict | None = None, rows: list[dict] | None = None, backup: dict | None = None) -> Tracer:
+    graph, snapshots, aws_rows = _vmx_map(vmx, rows, backup)
+    return Tracer(graph, snapshots, {-1: Reachability(aws_rows, [])}, {}, [])
+
+
+def _vmx_map(
+    vmx: dict | None = None, rows: list[dict] | None = None, backup: dict | None = None
+) -> tuple[dict, dict, list[dict]]:
+    """The graph, snapshots and AWS rows of a branch reaching a VPC through a vMX."""
     branch = _mx(
         {"VLAN 10": ("10.1.10.1", "10.1.10.0/24")},
         routes=[route("10.50.0.0/16", "autovpn", peer={"site": "CLOUD"}, source="AutoVPN from Cloud vMX")],
@@ -755,7 +763,7 @@ def _vmx_tracer(vmx: dict | None = None, rows: list[dict] | None = None, backup:
             }
         )
     graph = {"nodes": nodes, "edges": edges}
-    return Tracer(graph, {1: meraki, -1: aws}, {-1: Reachability(rows or _aws_rows(), [])}, {}, [])
+    return graph, {1: meraki, -1: aws}, rows or _aws_rows()
 
 
 def test_branch_to_a_vpc_subnet_through_a_vmx_uses_the_aws_engine_and_comes_back_through_the_vmx():
@@ -1787,3 +1795,410 @@ def test_graph_to_snapshot_edges_carry_the_graph_edge_id():
     }
     [edge] = graph_to_snapshot(graph, {}, {})["edges"]
     assert edge["id"] == "e1" and edge["gid"] == "lldp:1:x"
+
+
+# ── The export's own path tracer (pathtrace.offline) ─────────────────────────
+
+
+def _offline_map() -> tuple[dict, dict, list[dict], dict]:
+    """The vMX map plus an inventory host on the branch LAN, with discovery
+    rows holding a datetime as database rows do."""
+    import datetime
+
+    graph, snapshots, rows = _vmx_map()
+    rows = [{**row, "last_seen_at": datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.UTC)} for row in rows]
+    graph["nodes"].append({"id": 7, "label": "lab-core-sw", "ip": "10.1.10.2", "in_inventory": True})
+    graph["edges"].append({"id": "lldp:7:br", "from": 7, "to": "meraki:1:d:BR", "protocol": "lldp", "status": "up"})
+    hosts = {7: forwarding_for_host({"ip_address": "10.1.10.2", "device_type": "cisco_ios"}, [], None, [])}
+    return graph, snapshots, rows, hosts
+
+
+_OFFLINE_CASES = (
+    ("10.1.10.5", "10.50.2.20", "meraki:1:d:BR", "meraki:-1:vpc:vpc-1", "tcp", 443),
+    ("10.50.2.20", "10.1.10.5", "meraki:-1:vpc:vpc-1", "meraki:1:d:BR", "", None),
+    ("10.1.10.2", "10.50.2.20", "7", None, "udp", 53),
+    ("10.1.10.5", "10.50.2.20", None, None, "icmp", None),
+    ("not-an-address", "10.50.2.20", None, None, "", None),
+)
+
+
+def test_offline_build_and_trace_give_what_the_server_tracer_gives():
+    import json
+
+    from netcontrol.integrations.pathtrace import offline
+
+    graph, snapshots, rows, hosts = _offline_map()
+    server = Tracer(graph, snapshots, {-1: Reachability(rows, [])}, hosts, [])
+    snapshot = graph_to_snapshot(graph, {}, {})
+    clouds = {-1: {"provider": "aws", "resources": rows, "connections": []}}
+    text = offline.dumps(offline.inputs(graph, snapshots, clouds, hosts, [], snapshot))
+    rebuilt = offline.build(json.loads(text))
+    node_ids, edge_ids = offline.export_ids(snapshot)
+
+    for source, destination, source_node, destination_node, protocol, port in _OFFLINE_CASES:
+        try:
+            raw = server.trace(
+                source,
+                destination,
+                source_node=int(source_node) if source_node == "7" else source_node,
+                destination_node=destination_node,
+                protocol=protocol,
+                port=port,
+            )
+            expected = offline.export_trace(raw, node_ids, edge_ids)
+        except ValueError as exc:
+            expected = {"applies": False, "traffic": "", "verdict": "unknown", "summary": str(exc)}
+        # The file passes its own (text) node ids, as the viewer does.
+        got = offline.trace(
+            rebuilt,
+            source,
+            destination,
+            source_node=source_node,
+            destination_node=destination_node,
+            protocol=protocol,
+            port=port,
+            node_ids=node_ids,
+            edge_ids=edge_ids,
+        )
+        assert json.loads(json.dumps(got)) == json.loads(json.dumps(expected)), (source, destination)
+
+    first = offline.trace(
+        rebuilt, *_OFFLINE_CASES[0][:2], source_node="meraki:1:d:BR", node_ids=node_ids, edge_ids=edge_ids
+    )
+    assert first["applies"] and first["request"]["hops"]
+    assert all(h["node"] is None or h["node"] in node_ids for h in first["request"]["hops"])
+    assert any(h["edge"] in {e["id"] for e in snapshot["edges"]} for h in first["request"]["hops"])
+    assert "2026-01-02T03:04:05+00:00" in text
+
+
+def test_offline_session_answers_trace_requests_as_json(tmp_path):
+    import json
+
+    from netcontrol.integrations.pathtrace import offline
+
+    graph, snapshots, rows, hosts = _offline_map()
+    snapshot = graph_to_snapshot(graph, {}, {})
+    clouds = {-1: {"provider": "aws", "resources": rows, "connections": []}}
+    path = tmp_path / "inputs.json"
+    path.write_text(offline.dumps(offline.inputs(graph, snapshots, clouds, hosts, [], snapshot)), encoding="utf-8")
+    run = offline.open_session(str(path))
+
+    request = {"source": "10.1.10.5", "destination": "10.50.2.20", "source_node": "meraki:1:d:BR"}
+    answer = json.loads(run(json.dumps({**request, "protocol": "tcp", "port": 443})))
+    assert answer["applies"] is True and answer["traffic"] == "tcp/443" and answer["verdict"] == "allowed"
+    assert json.loads(run(json.dumps({**request, "protocol": "gre"})))["applies"] is False
+
+
+def test_offline_modules_import_with_the_standard_library_only(tmp_path):
+    """The modules an export carries import alone: a server-only import
+    among them would fail in the browser too."""
+    import json
+    import shutil
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from netcontrol.integrations.pathtrace.offline import MODULES
+
+    repo = Path(__file__).resolve().parents[1]
+    for name in MODULES:
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(repo / name, tmp_path / name)
+    script = (
+        "import json, sys; sys.path.insert(0, '.'); import netcontrol.integrations.pathtrace.offline; "
+        "print(json.dumps(sorted(m.__file__ for n, m in sys.modules.items() if n.startswith('netcontrol'))))"
+    )
+    done = subprocess.run(
+        [sys.executable, "-I", "-c", script], cwd=tmp_path, capture_output=True, text=True, timeout=60
+    )
+    assert done.returncode == 0, done.stderr
+    loaded = {Path(f).resolve().relative_to(tmp_path.resolve()).as_posix() for f in json.loads(done.stdout)}
+    assert loaded == set(MODULES)
+
+
+def _fake_pyodide(tmp_path, monkeypatch) -> None:
+    from netcontrol.integrations.meraki import html_export
+
+    vendor = tmp_path / "pyodide"
+    vendor.mkdir()
+    for name in html_export.PYODIDE_FILES:
+        (vendor / name).write_bytes(f"stand-in for {name}".encode())
+    (vendor / "VERSION").write_text("0.0-test\n", encoding="utf-8")
+    monkeypatch.setenv("PLEXUS_PYODIDE_DIR", str(vendor))
+
+
+def _unpack(html: str, block: str) -> bytes:
+    import base64
+    import gzip
+    import re
+
+    found = re.search(rf'<script type="text/plain" id="{block}">(.*?)</script>', html, re.S)
+    assert found is not None, block
+    return gzip.decompress(base64.b64decode(found.group(1)))
+
+
+def test_api_html_export_carries_the_path_tracer(api, tmp_path, monkeypatch):
+    import json
+    import re
+
+    from netcontrol.integrations.meraki.html_export import EXPORT_TRACER_CSP, PYODIDE_FILES
+    from netcontrol.integrations.pathtrace import offline
+
+    _fake_pyodide(tmp_path, monkeypatch)
+    assert api.post("/api/sources/sample").status_code == 201
+    response = api.get("/api/topology/export.html")
+    exported = _export_data(response)
+    html = response.text
+    assert response.headers["Content-Security-Policy"] == EXPORT_TRACER_CSP
+    assert "worker-src blob:" in EXPORT_TRACER_CSP and "'wasm-unsafe-eval'" in EXPORT_TRACER_CSP
+    assert "sandbox allow-scripts allow-downloads" in EXPORT_TRACER_CSP and "allow-same-origin" not in EXPORT_TRACER_CSP
+    assert "connect-src" not in EXPORT_TRACER_CSP
+    assert (
+        """http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:""" in html
+    )
+
+    meta = json.loads(
+        re.search(r'<script type="application/json" id="tracer-meta">(.*?)</script>', html, re.S).group(1)
+    )
+    assert meta == {"pyodide": "0.0-test", "files": PYODIDE_FILES}
+    assert 'id="tracer-runtime">(function (scope, post)' in html
+    for name in PYODIDE_FILES:
+        assert f'data-tracer-file="{name}">' in html
+
+    modules = json.loads(_unpack(html, "tracer-modules"))
+    assert modules == offline.module_sources()
+
+    inputs = json.loads(_unpack(html, "tracer-inputs"))
+    assert set(inputs["export"]["nodes"]) == {n["id"] for n in exported["nodes"]}
+    assert set(inputs["export"]["edges"].values()) <= {e["id"] for e in exported["edges"]}
+    tracer = offline.build(inputs)
+    node_ids, edge_ids = set(inputs["export"]["nodes"]), inputs["export"]["edges"]
+    query = "source=10.2.10.5&destination=10.0.10.20&protocol=tcp&port=443"
+    server = api.get(f"/api/topology/path?{query}").json()
+    mine = offline.trace(
+        tracer, "10.2.10.5", "10.0.10.20", protocol="tcp", port=443, node_ids=node_ids, edge_ids=edge_ids
+    )
+    assert mine["verdict"] == "allowed"
+    assert json.loads(json.dumps(mine)) == offline.export_trace(server, node_ids, edge_ids)
+
+
+def test_api_html_export_without_the_path_tracer(api, tmp_path, monkeypatch):
+    from netcontrol.integrations.meraki.html_export import EXPORT_CSP
+
+    assert api.post("/api/sources/sample").status_code == 201
+    _fake_pyodide(tmp_path, monkeypatch)
+    small = api.get("/api/topology/export.html?engine=0")
+    monkeypatch.setenv("PLEXUS_PYODIDE_DIR", str(tmp_path / "not-fetched"))
+    missing = api.get("/api/topology/export.html")
+    for response in (small, missing):
+        assert response.headers["Content-Security-Policy"] == EXPORT_CSP
+        assert 'id="tracer-meta"' not in response.text and "data-tracer-file=" not in response.text
+        assert """content="default-src 'none'; script-src 'unsafe-inline'; style-src""" in response.text
+        assert _export_data(response)["nodes"]
+
+
+# ── Reachability sweep ───────────────────────────────────────────────────────
+
+
+def _row(cidr: str, name: str, kind: str = "vlan", **fields) -> dict:
+    return {
+        "org_ref": 1,
+        "provider": "meraki",
+        "cidr": cidr,
+        "name": name,
+        "kind": kind,
+        "site_id": "BR",
+        "site_name": "Branch 01",
+        "node_id": "d:BR",
+        "in_vpn": True,
+        **fields,
+    }
+
+
+_SWEEP_ROWS = [
+    _row("10.1.10.0/24", "VLAN 10 Data"),
+    _row("10.1.20.0/24", "VLAN 20 Voice"),
+    _row("10.1.30.0/24", "VLAN 30 Guest", in_vpn=False),
+    _row("10.1.110.0/24", "VLAN 110 Users", kind="svi", node_id="d:SW"),
+    _row("10.3.15.0/24", "Office (VLAN 115)", kind="range", org_ref=2, provider="cato", site_name="Branch C"),
+    _row("10.3.99.0/24", "Static route Lab", kind="static", in_vpn=None),
+    _row("172.21.0.0/16", "Behind Partner", kind="peer", site_name="", in_vpn=None),
+    _row("10.0.10.0/24", "VLAN 10 Data", site_id="HUB", site_name="Hub 01", node_id="d:HUB"),
+    _row("10.1.10.0/24", "VLAN 10 Data"),  # the same network of the same device again
+    _row("2001:db8:10::/64", "VLAN 10 Data v6"),
+]
+
+
+def _picked(filters, destination: str = "10.0.10.20") -> list[str]:
+    from netcontrol.integrations.pathtrace.sweep import select_rows
+
+    return [r["cidr"] for r in select_rows(_SWEEP_ROWS, filters, destination)]
+
+
+def test_sweep_filters_default_kinds_and_drop_the_destinations_own_network():
+    from netcontrol.integrations.pathtrace.sweep import DEFAULT_KINDS, parse_filters, select_rows
+
+    filters = parse_filters()
+    assert filters.to_json()["kinds"] == list(DEFAULT_KINDS)
+    # Static routes and peers are not default kinds; the hub's own network
+    # holds the destination; the repeat and the IPv6 network are left out.
+    assert _picked(filters) == ["10.1.10.0/24", "10.1.20.0/24", "10.1.30.0/24", "10.1.110.0/24", "10.3.15.0/24"]
+    assert "10.0.10.0/24" in _picked(filters, "10.9.9.9")
+    assert _picked(parse_filters(kinds="static,peer")) == ["10.3.99.0/24", "172.21.0.0/16"]
+    assert len(_picked(parse_filters(kinds="all"))) == 7
+    vlans = {r["cidr"]: r["vlan"] for r in select_rows(_SWEEP_ROWS, filters, "10.0.10.20")}
+    assert vlans == {
+        "10.1.10.0/24": 10,
+        "10.1.20.0/24": 20,
+        "10.1.30.0/24": 30,
+        "10.1.110.0/24": 110,
+        "10.3.15.0/24": 115,
+    }
+
+
+def test_sweep_filters_compose():
+    from netcontrol.integrations.pathtrace.sweep import parse_filters
+
+    assert _picked(parse_filters(vlans="10, 100-120")) == ["10.1.10.0/24", "10.1.110.0/24", "10.3.15.0/24"]
+    assert _picked(parse_filters(name="data,USERS")) == ["10.1.10.0/24", "10.1.110.0/24"]
+    assert _picked(parse_filters(name=r"/^VLAN \d{2} /")) == ["10.1.10.0/24", "10.1.20.0/24", "10.1.30.0/24"]
+    assert _picked(parse_filters(name=r"/^VLAN (1|11)0 /,office")) == ["10.1.10.0/24", "10.1.110.0/24", "10.3.15.0/24"]
+    assert _picked(parse_filters(exclude="voice,guest")) == ["10.1.10.0/24", "10.1.110.0/24", "10.3.15.0/24"]
+    assert _picked(parse_filters(sites="branch c")) == ["10.3.15.0/24"]
+    assert _picked(parse_filters(sources="2")) == ["10.3.15.0/24"]
+    assert _picked(parse_filters(providers="Meraki", vlans="20-30")) == ["10.1.20.0/24", "10.1.30.0/24"]
+    assert _picked(parse_filters(within="10.1.0.0/19,10.3.0.0/16")) == [
+        "10.1.10.0/24",
+        "10.1.20.0/24",
+        "10.1.30.0/24",
+        "10.3.15.0/24",
+    ]
+    assert _picked(parse_filters(in_vpn="0")) == ["10.1.30.0/24"]
+    assert "10.1.30.0/24" not in _picked(parse_filters(in_vpn="1"))
+    assert _picked(parse_filters(kinds="static,peer", in_vpn="1")) == []
+    echoed = parse_filters(vlans="100-120,5", name="/a,b/, user").to_json()
+    assert echoed["vlans"] == "100-120,5" and echoed["name"] == ["/a,b/", "user"]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"vlans": "ten"},
+        {"vlans": "120-110"},
+        {"vlans": "5000"},
+        {"name": "/(/"},
+        {"exclude": "/[a/"},
+        {"kinds": "vlan,tunnel"},
+        {"within": "10.0.0.0/33"},
+        {"in_vpn": "maybe"},
+        {"sources": "one"},
+    ],
+)
+def test_sweep_filters_that_are_not_valid_are_refused(bad):
+    from netcontrol.integrations.pathtrace.sweep import parse_filters
+
+    with pytest.raises(ValueError):
+        parse_filters(**bad)
+
+
+def test_sweep_reports_each_networks_verdict_and_what_decided_it():
+    from netcontrol.integrations.pathtrace.sweep import parse_filters, run, select_rows, sweep
+
+    deny = rule(1, "deny", src=["10.1.30.0/24"], dst=["10.0.0.0/8"], comment="Block guest over the VPN")
+    tracer = _tracer(_branch_and_hub([deny]), subnets=_SUBNETS)
+    rows = select_rows(
+        [_row("10.1.30.0/24", "VLAN 30 Guest"), _row("10.1.10.0/24", "VLAN 10 Data")], parse_filters(), "10.0.10.20"
+    )
+    report = run(tracer, rows, "10.0.10.20", protocol="tcp", port=445)
+
+    assert report["traffic"] == "tcp/445" and report["destination"]["label"] == "Hub 01 MX"
+    assert report["counts"] == {"allowed": 1, "blocked": 1, "unreachable": 0, "partial": 0, "unknown": 0}
+    data, guest = report["rows"]  # sorted by site, then VLAN
+    assert (data["vlan"], data["verdict"], data["decided_at"], data["decided_by"]) == (10, "allowed", "", "")
+    assert data["source_node"] == "meraki:1:d:BR" and data["node_label"] == "Branch 01 MX"
+    assert data["traffic"] == "tcp/445" and data["site_name"] == "Branch 01"
+    assert guest["verdict"] == "blocked" and guest["decided_at"] == "Branch 01 MX"
+    assert guest["decided_by"].startswith("Site-to-site VPN firewall rules: Rule 1 (deny any")
+    assert guest["summary"].startswith("Blocked at Branch 01 MX")
+    assert "hops" not in guest and "request" not in guest
+    assert sweep(tracer, rows, "10.0.10.20", protocol="tcp", port=445) == report["rows"]
+
+    # A peer behind a tunnel that is down: no path, decided by the link.
+    down = _tracer(_with_partner("unreachable"), subnets=_SUBNETS)
+    [peer] = sweep(down, rows[1:], "172.21.4.4", destination_node="meraki:1:p:Partner")
+    assert peer["verdict"] == "unreachable" and peer["decided_at"] == "Branch 01 MX"
+    assert peer["decided_by"].startswith("Link to Partner: The IPsec tunnel between Branch 01 MX and Partner is down")
+
+    # A trace the tracer refuses is reported, not raised.
+    [refused] = sweep(tracer, [_row("10.1.10.0/24", "VLAN 10 Data")], "2001:db8::1")
+    assert refused["verdict"] == "unknown" and "both be IPv4 or both be IPv6" in refused["summary"]
+
+
+def test_api_reachability_sweep_as_json_and_csv(api):
+    import csv
+    import io
+
+    assert api.post("/api/sources/sample").status_code == 201
+    graph = api.get("/api/topology").json()["nodes"]
+    label = {(n.get("meraki") or {}).get("node_id"): n["label"] for n in graph}
+    branch_mx = label["d:Q2MX-0002-0001"]
+
+    query = "destination=10.0.10.20&protocol=tcp&port=443&within=10.2.0.0/16"
+    response = api.get(f"/api/topology/reachability?{query}")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["traffic"] == "tcp/443" and body["destination"]["address"] == "10.0.10.20"
+    assert body["filters"]["within"] == ["10.2.0.0/16"] and body["filters"]["kinds"][0] == "vlan"
+    assert body["candidates"] == len(body["rows"]) > 0 and body["limit"] == 5000
+    assert sum(body["counts"].values()) == len(body["rows"])
+    assert all(r["cidr"].startswith("10.2.") for r in body["rows"])
+    by_cidr = {r["cidr"]: r for r in body["rows"]}
+    assert by_cidr["10.2.10.0/24"]["verdict"] == "allowed", by_cidr["10.2.10.0/24"]["summary"]
+    guest = by_cidr["10.2.30.0/24"]
+    assert guest["verdict"] == "blocked" and guest["decided_at"] == branch_mx
+    assert guest["decided_by"].startswith("Layer 3 firewall rules: ")
+    assert body["generated_at"].endswith("+00:00")
+
+    csv_response = api.get(f"/api/topology/reachability?{query}&format=csv")
+    assert csv_response.status_code == 200
+    assert csv_response.headers["content-type"] == "text/csv; charset=utf-8"
+    assert csv_response.headers["content-disposition"] == ('attachment; filename="reachability-10.0.10.20-tcp_443.csv"')
+    table = list(csv.reader(io.StringIO(csv_response.text)))
+    assert table[0] == [
+        "Source",
+        "Provider",
+        "Site",
+        "Network",
+        "Kind",
+        "VLAN",
+        "CIDR",
+        "In VPN",
+        "Verdict",
+        "Decided at",
+        "Decided by",
+        "Summary",
+    ]
+    assert len(table) == len(body["rows"]) + 1
+    guest_line = next(line for line in table if line[6] == "10.2.30.0/24")
+    assert guest_line[8] == "Blocked" and guest_line[9] == branch_mx
+
+    # Narrowing to a VLAN name keeps only that network.
+    named = api.get(f"/api/topology/reachability?{query}&name=/guest/").json()
+    assert [r["cidr"] for r in named["rows"]] == ["10.2.30.0/24"]
+
+    for bad in ("protocol=gre", "name=/(/", "vlans=x", "kinds=tunnel", "format=xml"):
+        response = api.get(f"/api/topology/reachability?destination=10.0.10.20&{bad}")
+        assert response.status_code in (400, 422), bad
+    assert api.get("/api/topology/reachability?destination=nope").status_code == 400
+
+
+def test_api_reachability_sweep_refuses_too_many_sources(api, monkeypatch):
+    from netcontrol.integrations.pathtrace import sweep as sweep_module
+
+    assert api.post("/api/sources/sample").status_code == 201
+    monkeypatch.setattr(sweep_module, "MAX_ROWS", 1)
+    response = api.get("/api/topology/reachability?destination=10.0.10.20")
+    assert response.status_code == 400
+    body = response.json()
+    assert body["limit"] == 1 and body["count"] > 1
+    assert "Narrow the filters" in body["error"]["message"]

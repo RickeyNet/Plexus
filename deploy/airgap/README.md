@@ -68,6 +68,7 @@ You can override any of these via env vars before running `bundle.sh`:
 | `APT_BASE_IMAGE`     | `ubuntu:$UBUNTU_CODENAME` | Base image used to download `.deb`s. Override only if `ubuntu:resolute` isn't on Docker Hub yet - fall back to `ubuntu:noble` and accept the libc-version mismatch risk. |
 | `PLEXUS_IMAGE_TAG`   | `plexus:airgap`      | Image tag for the built app                        |
 | `INSTALL_CLOUD_SDKS` | `true`               | Bake boto3/azure/google SDKs into the image (needed for cloud accounts and the AWS topology layer; the target can't pip install later). `false` for a smaller bundle. |
+| `INCLUDE_PYODIDE`    | `true`               | Vendor the Pyodide runtime (`scripts/fetch_pyodide.py`, MPL-2.0) so Topology HTML exports trace paths offline; the target can't download it later. `false` leaves it out. |
 
 ## Step 2 - Transfer to the VM
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-WARNING_TYPE = "collection_warning"
+from netcontrol.integrations.aws.normalize import WARNING_TYPE
 
 # Instance states that are gone; they are not part of the network any more.
 _GONE_STATES = ("terminated", "shutting-down")

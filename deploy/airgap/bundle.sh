@@ -23,6 +23,9 @@ PLEXUS_IMAGE_TAG="${PLEXUS_IMAGE_TAG:-plexus:airgap}"
 # Bake the cloud SDKs in: the target has no PyPI access, so this is the only
 # chance to install them. Set to false for a smaller bundle.
 INSTALL_CLOUD_SDKS="${INSTALL_CLOUD_SDKS:-true}"
+# Vendor the Pyodide runtime the Topology HTML export embeds: the target
+# cannot download it. Set to false to leave it out.
+INCLUDE_PYODIDE="${INCLUDE_PYODIDE:-true}"
 POSTGRES_IMAGE="${POSTGRES_IMAGE:-postgres:16-alpine}"
 NGINX_IMAGE="${NGINX_IMAGE:-nginx:alpine}"
 
@@ -41,7 +44,8 @@ echo ""
 echo "[1/6] Building Plexus image ($PLEXUS_IMAGE_TAG) for $PLATFORM..."
 # --load requires a single-platform build with the docker driver.
 docker buildx build --platform "$PLATFORM" --load -t "$PLEXUS_IMAGE_TAG" \
-    --build-arg "INSTALL_CLOUD_SDKS=$INSTALL_CLOUD_SDKS" .
+    --build-arg "INSTALL_CLOUD_SDKS=$INSTALL_CLOUD_SDKS" \
+    --build-arg "INCLUDE_PYODIDE=$INCLUDE_PYODIDE" .
 
 # ── 2. Pull supporting images for the target platform ────────────────
 echo ""

@@ -1014,11 +1014,66 @@ def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
     except Exception as exc:
         raise CloudCollectorAuthError("Failed to initialize Azure credentials") from exc
 
-    return _collect_azure_network(network_client, subscription_id)
+    # The Network API lists gateways and connections per resource group only.
+    # azure-mgmt-resource (optional) names every group of the subscription;
+    # without it the groups of the resources already read are used.
+    list_resource_groups = None
+    try:
+        from azure.mgmt.resource import ResourceManagementClient
+    except Exception:  # noqa: BLE001 - optional SDK
+        LOGGER.info("azure collector: azure-mgmt-resource not installed; resource groups come from the resources read")
+    else:
+
+        def list_resource_groups() -> list[str]:
+            resource_client = ResourceManagementClient(credential, subscription_id)
+            return [str(group.name) for group in resource_client.resource_groups.list() if getattr(group, "name", "")]
+
+    return _collect_azure_network(network_client, subscription_id, list_resource_groups)
 
 
-def _collect_azure_network(network_client, subscription_id: str) -> tuple[list[dict], list[dict]]:
-    """The discovery itself, on an initialised ``NetworkManagementClient``."""
+def _azure_resource_groups(list_resource_groups, resources: list[dict], public_ips: dict[str, str]) -> list[str]:
+    """The resource groups whose gateways and connections are read: those the
+    Resource Manager API lists (when ``list_resource_groups`` is given and
+    answers) and the group of every resource read so far, including the
+    route tables, security groups, NAT gateways and public IPs the VNets and
+    subnets refer to. Names are case-insensitive in Azure; the first spelling
+    seen is kept."""
+    groups: dict[str, str] = {}
+
+    def add(name: Any) -> None:
+        text = str(name or "").strip()
+        if text and text.lower() not in groups:
+            groups[text.lower()] = text
+
+    if list_resource_groups is not None:
+        try:
+            for name in list_resource_groups():
+                add(name)
+        except Exception:  # noqa: BLE001 - fall back to the groups of the resources read
+            LOGGER.warning("azure collector: failed to list resource groups", exc_info=True)
+    for resource in resources:
+        meta = resource.get("metadata") or {}
+        add(meta.get("resource_group"))
+        for key in ("route_table", "network_security_group", "nat_gateway"):
+            uid = str(meta.get(key) or "")
+            parts = uid.split(":")
+            if len(parts) == 5 and parts[0] == "azure":
+                add(parts[3])
+    for public_ip_id in public_ips:
+        add(azure_detail.resource_parts(public_ip_id).get("resourcegroups"))
+    return list(groups.values())
+
+
+def _collect_azure_network(
+    network_client, subscription_id: str, list_resource_groups=None
+) -> tuple[list[dict], list[dict]]:
+    """The discovery itself, on an initialised ``NetworkManagementClient``.
+
+    ``list_resource_groups`` names the resource groups of the subscription
+    (``None`` when azure-mgmt-resource is not installed); the virtual network
+    gateways, local network gateways and gateway connections are listed per
+    group, as the Network API offers no subscription-wide call for them.
+    """
     resources: list[dict] = []
     connections: list[dict] = []
     section_errors: list[str] = []
@@ -1069,28 +1124,6 @@ def _collect_azure_network(network_client, subscription_id: str) -> tuple[list[d
         section_errors.append("expressroute_circuits")
 
     try:
-        for gateway in network_client.virtual_network_gateways.list_all():
-            resource = azure_detail.virtual_network_gateway_resource(gateway, subscription_id, public_ips)
-            if not resource:
-                continue
-            resources.append(resource)
-            attachment = azure_detail.gateway_attachment(resource)
-            if attachment:
-                connections.append(attachment)
-    except Exception:
-        LOGGER.warning("azure collector: failed to list virtual network gateways", exc_info=True)
-        section_errors.append("virtual_network_gateways")
-
-    try:
-        for gateway in network_client.local_network_gateways.list_all():
-            resource = azure_detail.local_network_gateway_resource(gateway, subscription_id)
-            if resource:
-                resources.append(resource)
-    except Exception:
-        LOGGER.warning("azure collector: failed to list local network gateways", exc_info=True)
-        section_errors.append("local_network_gateways")
-
-    try:
         for route_table in network_client.route_tables.list_all():
             resource = azure_detail.route_table_resource(route_table, subscription_id)
             if not resource:
@@ -1110,10 +1143,37 @@ def _collect_azure_network(network_client, subscription_id: str) -> tuple[list[d
         LOGGER.warning("azure collector: failed to list nsgs", exc_info=True)
         section_errors.append("network_security_groups")
 
+    # Gateways and connections are listed per resource group; the Network API
+    # has no list_all for them.
+    groups = _azure_resource_groups(list_resource_groups, resources, public_ips)
+
     try:
-        gateway_connections = getattr(network_client, "virtual_network_gateway_connections", None)
-        if gateway_connections is not None:
-            for conn in gateway_connections.list_all():
+        for group in groups:
+            for gateway in network_client.virtual_network_gateways.list(group):
+                resource = azure_detail.virtual_network_gateway_resource(gateway, subscription_id, public_ips)
+                if not resource:
+                    continue
+                resources.append(resource)
+                attachment = azure_detail.gateway_attachment(resource)
+                if attachment:
+                    connections.append(attachment)
+    except Exception:
+        LOGGER.warning("azure collector: failed to list virtual network gateways", exc_info=True)
+        section_errors.append("virtual_network_gateways")
+
+    try:
+        for group in groups:
+            for gateway in network_client.local_network_gateways.list(group):
+                resource = azure_detail.local_network_gateway_resource(gateway, subscription_id)
+                if resource:
+                    resources.append(resource)
+    except Exception:
+        LOGGER.warning("azure collector: failed to list local network gateways", exc_info=True)
+        section_errors.append("local_network_gateways")
+
+    try:
+        for group in groups:
+            for conn in network_client.virtual_network_gateway_connections.list(group):
                 record = azure_detail.gateway_connection(conn, subscription_id)
                 if record:
                     connections.append(record)

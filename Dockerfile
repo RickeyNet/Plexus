@@ -46,6 +46,14 @@ RUN if [ "$INSTALL_CLOUD_SDKS" = "true" ]; then \
 
 COPY . .
 
+# The Pyodide runtime (MPL-2.0) the Topology HTML export embeds so the file
+# traces paths itself, offline. On by default; --build-arg
+# INCLUDE_PYODIDE=false leaves it out (exports then carry only the traces run
+# on the server). A vendor directory already in the build context with the
+# pinned version is kept as is.
+ARG INCLUDE_PYODIDE=true
+RUN if [ "$INCLUDE_PYODIDE" = "true" ]; then python scripts/fetch_pyodide.py; fi
+
 # Pull in the pre-built React bundle from the frontend stage. Source files
 # under netcontrol/static/frontend/ (TS, package.json, etc) are not needed at
 # runtime - only the dist/ directory.
