@@ -50,6 +50,8 @@ SCANNER_DEVICE = "0d4a0000-0004-4a00-8000-0000000005ca"
 
 PEER_VERSION = 22
 APPLIANCE_VERSION = "6.4.2-37201-release"
+# Default route / any-source address in the demo appliance data.
+ANY_ADDRESS = "0.0.0.0"  # nosec B104 - default-route / any-source literal in sample data, not a socket bind
 
 
 def _nic(name: str, address: str = "", netmask: int = 24, *, dhcp: bool = False, snat: bool = False) -> dict:
@@ -96,7 +98,7 @@ def _appliance(
             "httpsPort": 443,
             "dtlsPort": 443,
             "proxyProtocol": False,
-            "allowSources": [{"address": "0.0.0.0", "netmask": 0}],
+            "allowSources": [{"address": ANY_ADDRESS, "netmask": 0}],
         },
         "adminInterface": {"hostname": hostname, "httpsPort": 8443} if "controller" in roles else None,
         "networking": {
@@ -263,7 +265,7 @@ def build_sample_raw() -> dict[str, Any]:
             [_nic("eth0", "10.160.1.10")],
             roles=("controller", "logServer"),
             hostname="ctrl.acme.example",
-            routes=[{"address": "0.0.0.0", "netmask": 0, "gateway": "10.160.1.1", "nic": "eth0"}],
+            routes=[{"address": ANY_ADDRESS, "netmask": 0, "gateway": "10.160.1.1", "nic": "eth0"}],
         ),
         _appliance(
             CTRL_2,
@@ -273,7 +275,7 @@ def build_sample_raw() -> dict[str, Any]:
             [_nic("eth0", "10.160.1.11")],
             roles=("controller",),
             hostname="ctrl2.acme.example",
-            routes=[{"address": "0.0.0.0", "netmask": 0, "gateway": "10.160.1.1", "nic": "eth0"}],
+            routes=[{"address": ANY_ADDRESS, "netmask": 0, "gateway": "10.160.1.1", "nic": "eth0"}],
         ),
         _appliance(
             GW_HQ_1,
@@ -284,7 +286,7 @@ def build_sample_raw() -> dict[str, Any]:
             roles=("gateway",),
             hostname="gw-hq-1.acme.example",
             routes=[
-                {"address": "0.0.0.0", "netmask": 0, "gateway": "10.160.1.1", "nic": "eth0"},
+                {"address": ANY_ADDRESS, "netmask": 0, "gateway": "10.160.1.1", "nic": "eth0"},
                 {"address": "10.160.20.0", "netmask": 24, "gateway": "10.160.1.1", "nic": "eth0"},
             ],
         ),
@@ -296,7 +298,7 @@ def build_sample_raw() -> dict[str, Any]:
             [_nic("eth0", "10.160.1.22")],
             roles=("gateway",),
             hostname="gw-hq-2.acme.example",
-            routes=[{"address": "0.0.0.0", "netmask": 0, "gateway": "10.160.1.1", "nic": "eth0"}],
+            routes=[{"address": ANY_ADDRESS, "netmask": 0, "gateway": "10.160.1.1", "nic": "eth0"}],
         ),
         _appliance(
             GW_AWS_1,
@@ -306,7 +308,7 @@ def build_sample_raw() -> dict[str, Any]:
             [_nic("eth0", "10.161.0.21")],
             roles=("gateway",),
             hostname="gw-aws-1.acme.example",
-            routes=[{"address": "0.0.0.0", "netmask": 0, "gateway": "10.161.0.1", "nic": "eth0"}],
+            routes=[{"address": ANY_ADDRESS, "netmask": 0, "gateway": "10.161.0.1", "nic": "eth0"}],
         ),
         _appliance(
             PORTAL_1,

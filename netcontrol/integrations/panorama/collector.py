@@ -291,8 +291,10 @@ def stack_templates(stack: dict) -> list[str]:
 
 def ha_peer(device: dict) -> str:
     """The serial of a firewall's HA peer, when it has one."""
-    ha = device.get("ha") if isinstance(device.get("ha"), dict) else {}
-    peer = ha.get("peer") if isinstance(ha.get("peer"), dict) else {}
+    found_ha = device.get("ha")
+    ha = found_ha if isinstance(found_ha, dict) else {}
+    found_peer = ha.get("peer")
+    peer = found_peer if isinstance(found_peer, dict) else {}
     return _text(peer.get("serial"))
 
 
@@ -423,10 +425,10 @@ async def collect_panorama(
     # Shared, then the device group of each firewall on the map and its ancestors.
     scopes: list[str] = [SHARED]
     for serial in on_map:
-        group = membership.get(serial, "")
-        for name in [group, *ancestors(group, parents)] if group else []:
-            if _safe(name) and name not in scopes:
-                scopes.append(name)
+        member_of = membership.get(serial, "")
+        for scope in [member_of, *ancestors(member_of, parents)] if member_of else []:
+            if _safe(scope) and scope not in scopes:
+                scopes.append(scope)
 
     total += len(scopes) * len(OBJECT_KINDS)
     total += len(scopes) * (len(RULEBASES) + 1) if opts["include_security_policies"] else 0

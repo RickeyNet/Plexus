@@ -43,6 +43,8 @@ PARTNER_PEER = "203.0.113.9"
 WEB_PUBLIC = "203.0.113.132"
 MAIL_PUBLIC = "203.0.113.133"
 GP_POOL = "10.252.0.0/22"
+# The next hop a firewall reports for a connected or tunnel route.
+NO_NEXTHOP = "0.0.0.0"  # nosec B104 - route next-hop literal in sample data, not a socket bind
 
 _FLAGS = (
     "A:active, ?:loose, C:connect, H:host, S:static, ~:internal, R:rip, O:ospf, B:bgp, "
@@ -621,13 +623,13 @@ def _hq_state(*, active: bool) -> dict[str, Any]:
             "flags": _FLAGS,
             "entry": [
                 _route("0.0.0.0/0", "203.0.113.129", "ethernet1/1", "A S"),
-                _route("10.130.0.1/32", "0.0.0.0", "loopback.1", "A C", "0"),
+                _route("10.130.0.1/32", NO_NEXTHOP, "loopback.1", "A C", "0"),
                 _route("10.130.10.0/24", "10.130.10.1", "ethernet1/2", "A C", "0"),
-                _route("10.130.10.1/32", "0.0.0.0", "ethernet1/2", "A H", "0"),
+                _route("10.130.10.1/32", NO_NEXTHOP, "ethernet1/2", "A H", "0"),
                 _route("10.130.50.0/24", "10.130.50.1", "ethernet1/3", "A C", "0"),
-                _route("10.131.0.0/16", "0.0.0.0", "tunnel.1", "A S"),
+                _route("10.131.0.0/16", NO_NEXTHOP, "tunnel.1", "A S"),
                 _route("169.254.10.0/30", "169.254.10.1", "tunnel.1", "A C", "0"),
-                _route("172.16.40.0/24", "0.0.0.0", "tunnel.2", "A S"),
+                _route("172.16.40.0/24", NO_NEXTHOP, "tunnel.2", "A S"),
                 _route("203.0.113.128/28", HQ_PUBLIC, "ethernet1/1", "A C", "0"),
             ],
         },
@@ -738,10 +740,10 @@ def _branch_state() -> dict[str, Any]:
             "flags": _FLAGS,
             "entry": [
                 _route("0.0.0.0/0", "198.51.100.133", "ethernet1/1", "A S"),
-                _route("10.130.0.0/16", "0.0.0.0", "tunnel.1", "A S"),
+                _route("10.130.0.0/16", NO_NEXTHOP, "tunnel.1", "A S"),
                 _route("10.131.10.0/24", "10.131.10.1", "ethernet1/2", "A C", "0"),
                 _route("10.131.30.0/24", "10.131.30.1", "ethernet1/2.30", "A C", "0"),
-                _route(GP_POOL, "0.0.0.0", "tunnel.1", "A S"),
+                _route(GP_POOL, NO_NEXTHOP, "tunnel.1", "A S"),
                 _route("198.51.100.132/30", BRANCH_PUBLIC, "ethernet1/1", "A C", "0"),
             ],
         },
@@ -804,7 +806,7 @@ def build_sample_raw() -> dict[str, Any]:
         _device(BRANCH, "branch-fw-01", "PA-440", "10.131.254.11", "11.1.2-h3"),
         _device(AWS_VM, "aws-vm-fw-01", "PA-VM", "10.210.2.13", "11.1.4-h7", policy="Out of Sync"),
     ]
-    stack_config = [
+    stack_config: list[dict[str, Any]] = [
         {
             "@name": "HQ-Stack",
             "templates": ["HQ-Network", "Global-Base"],

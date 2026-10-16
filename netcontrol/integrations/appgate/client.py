@@ -312,11 +312,15 @@ class AppgateClient:
             return self.peer_version
         found = await self._request("GET", "/version", auth=False)
         info = found if isinstance(found, dict) else {}
+        missing = "Appgate /admin/version did not name a peer version"
+        peer_version = info.get("peerVersion")
+        if peer_version is None:
+            raise AppgateApiError(missing)
         try:
-            peer = int(info.get("peerVersion"))
+            peer = int(peer_version)
             lowest = int(info.get("lowestPeerVersionSupported") or peer)
         except TypeError, ValueError:
-            raise AppgateApiError("Appgate /admin/version did not name a peer version") from None
+            raise AppgateApiError(missing) from None
         version = min(peer, MAX_PEER_VERSION)
         if version < max(lowest, MIN_PEER_VERSION):
             raise AppgateApiError(f"Appgate SDP peer version {version} is not supported")
@@ -347,7 +351,8 @@ class AppgateClient:
             renew=False,
         )
         answer = answer if isinstance(answer, dict) else {}
-        user = answer.get("user") if isinstance(answer.get("user"), dict) else {}
+        found_user = answer.get("user")
+        user = found_user if isinstance(found_user, dict) else {}
         if user.get("needTwoFactorAuth"):
             raise AppgateApiError(
                 "Appgate asks this admin user for a second factor: the API user must be exempt from admin MFA"

@@ -289,7 +289,9 @@ def instance_resource(instance: dict, region: str) -> dict | None:
                 _t(g.get("GroupName")) for g in instance.get("SecurityGroups") or [] if _t(g.get("GroupName"))
             ],
             "security_group_ids": _group_ids(instance.get("SecurityGroups")),
-            "launched": launched.isoformat() if hasattr(launched, "isoformat") else _t(launched),
+            "launched": launched.isoformat()
+            if launched is not None and hasattr(launched, "isoformat")
+            else _t(launched),
             "interfaces": interfaces,
         },
     )

@@ -177,7 +177,7 @@ def _parse(body: bytes) -> ElementTree.Element:
     if b"<!doctype" in prolog or b"<!entity" in prolog:
         raise PanoramaApiError("Panorama answered with a document type declaration, which is refused")
     try:
-        return ElementTree.fromstring(body)
+        return ElementTree.fromstring(body)  # nosec B314 - HTTPS answer from the operator-set Panorama, DTDs refused above; expat expands no external entities
     except ElementTree.ParseError:
         raise PanoramaApiError("Panorama answered with a body that is not XML") from None
 
@@ -297,7 +297,8 @@ class PanoramaClient:
                 detail=_error_detail(resp),
             )
         root = _parse(resp.content)
-        key = _member_text(root.find("result/key")) if root.find("result/key") is not None else ""
+        key_node = root.find("result/key")
+        key = _member_text(key_node) if key_node is not None else ""
         if root.get("status") != "success" or not key:
             raise PanoramaApiError(
                 "Panorama rejected the credentials", status_code=403, detail=_message(root), code=root.get("code") or ""

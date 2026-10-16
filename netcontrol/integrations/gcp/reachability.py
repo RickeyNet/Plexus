@@ -180,10 +180,10 @@ class Reachability:
         # Network -> peerings (``name``, ``peer``, ``state``), from the network
         # records and, for a network whose own record is missing, its connections.
         self._peerings: dict[str, list[dict]] = {}
-        for network in self.networks.values():
-            for peering in network["meta"].get("peerings") or []:
+        for network_record in self.networks.values():
+            for peering in network_record["meta"].get("peerings") or []:
                 if isinstance(peering, dict) and _text(peering.get("network_id")):
-                    self._peerings.setdefault(network["rid"], []).append(
+                    self._peerings.setdefault(network_record["rid"], []).append(
                         {
                             "name": _text(peering.get("name")),
                             "peer": _text(peering.get("network_id")),
@@ -206,10 +206,10 @@ class Reachability:
 
         # Network -> network firewall policies associated with it (not evaluated).
         self._policies: dict[str, list[str]] = {}
-        for network in self.networks.values():
-            name = _text(network["meta"].get("firewall_policy")).rsplit("/", 1)[-1]
+        for network_record in self.networks.values():
+            name = _text(network_record["meta"].get("firewall_policy")).rsplit("/", 1)[-1]
             if name:
-                self._policies.setdefault(network["rid"], []).append(name)
+                self._policies.setdefault(network_record["rid"], []).append(name)
         for policy in by_type.get("network_firewall_policy", {}).values():
             for network_id in policy["meta"].get("network_ids") or []:
                 name = _text(policy.get("name")) or _short(policy["rid"])
@@ -258,7 +258,7 @@ class Reachability:
             (subnet_net.prefixlen, subnet, range_name)
             for subnet_net, subnet, range_name in self.subnets
             if subnet_net.version == net.version
-            and subnet_net.supernet_of(net)
+            and subnet_net.supernet_of(net)  # type: ignore[arg-type]
             and (not network_id or _text(subnet["meta"].get("network_id")) == network_id)
         ]
         longest = max((length for length, _s, _r in found), default=-1)
@@ -288,7 +288,7 @@ class Reachability:
                         (
                             (instance, interface)
                             for alias, network, instance, interface in self._aliases
-                            if network == place["vpc_id"] and alias.version == net.version and alias.supernet_of(net)
+                            if network == place["vpc_id"] and alias.version == net.version and alias.supernet_of(net)  # type: ignore[arg-type]
                         ),
                         None,
                     )
@@ -343,8 +343,8 @@ class Reachability:
         skipped = 0
         for route in self._routes.get(network, []):
             meta = route["meta"]
-            net = _net(route.get("cidr"))
-            if net is None:
+            route_net = _net(route.get("cidr"))
+            if route_net is None:
                 continue
             route_tags = set(meta.get("tags") or [])
             if route_tags:
@@ -356,7 +356,7 @@ class Reachability:
             kind = _text(meta.get("next_hop_type"))
             routes.append(
                 {
-                    "net": net,
+                    "net": route_net,
                     "kind": "network" if kind == "network" else "static",
                     "hop": kind,
                     "priority": _priority(meta.get("priority")),
@@ -374,12 +374,12 @@ class Reachability:
             if not global_routing and _text(router["meta"].get("region")) != region:
                 continue
             for learned in router["meta"].get("learned_routes") or []:
-                net = _net((learned or {}).get("prefix"))
-                if net is None:
+                learned_net = _net((learned or {}).get("prefix"))
+                if learned_net is None:
                     continue
                 routes.append(
                     {
-                        "net": net,
+                        "net": learned_net,
                         "kind": "dynamic",
                         "priority": _priority(learned.get("priority")),
                         "router": router,
@@ -1152,14 +1152,11 @@ class Reachability:
         first = {
             status: next((s for s in steps if s["status"] == status), None) for status in (BLOCKED, UNKNOWN, PARTIAL)
         }
-        if first[BLOCKED]:
-            lead = first[BLOCKED]
+        if lead := first[BLOCKED]:
             verdict, summary = BLOCKED, f"Blocked at {lead['where']}: {lead['text']}"
-        elif first[UNKNOWN]:
-            lead = first[UNKNOWN]
+        elif lead := first[UNKNOWN]:
             verdict, summary = UNKNOWN, f"Could not be decided at {lead['where']}: {lead['text']}"
-        elif first[PARTIAL]:
-            lead = first[PARTIAL]
+        elif lead := first[PARTIAL]:
             verdict, summary = PARTIAL, f"Allowed in part. {lead['where']}: {lead['text']}"
         else:
             verdict = "allowed"

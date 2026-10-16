@@ -136,9 +136,9 @@ class Reachability:
             for subnet_id in table["meta"].get("subnet_ids") or []:
                 self._table_of_subnet[_text(subnet_id)] = table
         for subnet in by_type.get("subnet", {}).values():
-            table = self._tables.get(_rid(_text(subnet["meta"].get("route_table"))))
-            if table is not None:
-                self._table_of_subnet.setdefault(subnet["rid"], table)
+            subnet_table = self._tables.get(_rid(_text(subnet["meta"].get("route_table"))))
+            if subnet_table is not None:
+                self._table_of_subnet.setdefault(subnet["rid"], subnet_table)
 
         self._nsgs = by_type.get("network_security_group", {})
         self._nsg_of_subnet: dict[str, dict] = {}
@@ -149,9 +149,9 @@ class Reachability:
             for nic_id in nsg["meta"].get("nic_ids") or []:
                 self._nsg_of_nic[_text(nic_id)] = nsg
         for subnet in by_type.get("subnet", {}).values():
-            nsg = self._nsgs.get(_rid(_text(subnet["meta"].get("network_security_group"))))
-            if nsg is not None:
-                self._nsg_of_subnet.setdefault(subnet["rid"], nsg)
+            subnet_nsg = self._nsgs.get(_rid(_text(subnet["meta"].get("network_security_group"))))
+            if subnet_nsg is not None:
+                self._nsg_of_subnet.setdefault(subnet["rid"], subnet_nsg)
 
         # (VNet, private address) -> (virtual machine or firewall, the interface holding the address).
         self._address_owner: dict[tuple[str, str], tuple[dict, dict | None]] = {}
@@ -160,9 +160,9 @@ class Reachability:
             for interface in meta.get("interfaces") or []:
                 if not isinstance(interface, dict):
                     continue
-                nsg = self._nsgs.get(_text(interface.get("network_security_group")))
-                if nsg is not None:
-                    self._nsg_of_nic.setdefault(_text(interface.get("id")), nsg)
+                nic_nsg = self._nsgs.get(_text(interface.get("network_security_group")))
+                if nic_nsg is not None:
+                    self._nsg_of_nic.setdefault(_text(interface.get("id")), nic_nsg)
                 vnet_id = _text(interface.get("vnet_id")) or _text(meta.get("vnet_id"))
                 for address in interface.get("private_ips") or []:
                     self._address_owner.setdefault((vnet_id, _text(address)), (vm, interface))
@@ -200,10 +200,10 @@ class Reachability:
                     }
                 )
             elif kind == "virtual_network_gateway_attachment":
-                gateway = self._gateways.get(_rid(target))
-                if gateway is not None and not _text(gateway["meta"].get("vnet_id")):
-                    gateway["meta"]["vnet_id"] = _rid(source)
-                    self._gateways_of_vnet.setdefault(_rid(source), []).append(gateway)
+                attached = self._gateways.get(_rid(target))
+                if attached is not None and not _text(attached["meta"].get("vnet_id")):
+                    attached["meta"]["vnet_id"] = _rid(source)
+                    self._gateways_of_vnet.setdefault(_rid(source), []).append(attached)
             elif source in {f"azure:virtual_network_gateway:{g}" for g in self._gateways}:
                 far = by_type.get("local_network_gateway", {}).get(_rid(target))
                 remote_gateway = self._gateways.get(_rid(target)) if kind == "vnet2vnet" else None
@@ -255,7 +255,7 @@ class Reachability:
             (subnet_net.prefixlen, subnet)
             for subnet_net, subnet in self.subnets
             if subnet_net.version == net.version
-            and subnet_net.supernet_of(net)
+            and subnet_net.supernet_of(net)  # type: ignore[arg-type]
             and (not vnet_id or _text(subnet["meta"].get("vnet_id")) == vnet_id)
         ]
         longest = max((length for length, _subnet in found), default=-1)
@@ -320,7 +320,7 @@ class Reachability:
         )
         table = self._table_of_subnet.get(subnet["rid"])
         no_bgp = bool(table and table["meta"].get("disable_bgp_route_propagation"))
-        unknown = {"bgp": [], "table": table}
+        unknown: dict[str, Any] = {"bgp": [], "table": table}
         for gateway, how in self._serving_gateways(vnet_id):
             for conn in self._connections_of_gateway.get(gateway["rid"], []):
                 if conn["status"] not in ("connected", ""):
@@ -573,10 +573,11 @@ class Reachability:
                     return _FULL, f"it is behind connection {conn['name']} of {self._gateway_name(gateway)}{through}"
                 bgp = bgp or conn["bgp"]
         table = self._table_of_subnet.get(local["rid"]) if local else None
-        for route in (table["meta"].get("routes") or []) if table else []:
-            prefix = _net(route.get("prefix")) if isinstance(route, dict) else None
-            if prefix is not None and prefix.version == net.version and prefix.supernet_of(net):
-                return _FULL, self._user_route_reason(route, prefix, table, local, vnet_id)
+        if table:
+            for route in table["meta"].get("routes") or []:
+                prefix = _net(route.get("prefix")) if isinstance(route, dict) else None
+                if prefix is not None and prefix.version == net.version and prefix.supernet_of(net):
+                    return _FULL, self._user_route_reason(route, prefix, table, local, vnet_id)
         if bgp and not net.is_global:
             # Ranges learned over BGP or ExpressRoute are part of it too, but not collected.
             return _PART, "the ranges the gateway learns over BGP or ExpressRoute are in it, but are not collected"
@@ -762,7 +763,7 @@ class Reachability:
         way = "outbound" if outbound else "inbound"
         where = f"Network security group {_text(nsg.get('name')) or _short(nsg['rid'])} on {level}, {way}"
         rules = [r for r in nsg["meta"].get("policy_rules") or [] if isinstance(r, dict) and _rule_direction(r) == way]
-        rules.sort(key=lambda r: _int(r.get("priority")) if _int(r.get("priority")) is not None else 1 << 20)
+        rules.sort(key=lambda r: priority if (priority := _int(r.get("priority"))) is not None else 1 << 20)
         decided: dict | None = None
         partly: list[dict] = []
         for rule in rules:
@@ -989,14 +990,11 @@ class Reachability:
         first = {
             status: next((s for s in steps if s["status"] == status), None) for status in (BLOCKED, UNKNOWN, PARTIAL)
         }
-        if first[BLOCKED]:
-            lead = first[BLOCKED]
+        if lead := first[BLOCKED]:
             verdict, summary = BLOCKED, f"Blocked at {lead['where']}: {lead['text']}"
-        elif first[UNKNOWN]:
-            lead = first[UNKNOWN]
+        elif lead := first[UNKNOWN]:
             verdict, summary = UNKNOWN, f"Could not be decided at {lead['where']}: {lead['text']}"
-        elif first[PARTIAL]:
-            lead = first[PARTIAL]
+        elif lead := first[PARTIAL]:
             verdict, summary = PARTIAL, f"Allowed in part. {lead['where']}: {lead['text']}"
         else:
             verdict = "allowed"

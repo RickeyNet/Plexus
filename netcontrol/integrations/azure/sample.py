@@ -84,7 +84,7 @@ def _vm(
 ) -> dict:
     """``interfaces`` are ``(subnet name, private IP, public IP)`` with the primary first."""
     name = rid.rsplit(":", 1)[-1]
-    nics = [
+    nics: list[dict[str, Any]] = [
         {
             "id": f"{rid}-nic{index}",
             "name": f"{name}-nic{index}",

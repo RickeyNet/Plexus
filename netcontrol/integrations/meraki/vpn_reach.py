@@ -83,7 +83,7 @@ class VpnCarrier:
         longest = -1
         for entry in self._subnets:
             net = ipaddress.ip_network(entry["cidr"])
-            if net.version != outside.version or not net.supernet_of(outside) or net.prefixlen < longest:
+            if net.version != outside.version or not net.supernet_of(outside) or net.prefixlen < longest:  # type: ignore[arg-type]
                 continue
             if net.prefixlen > longest:
                 owners, longest = [], net.prefixlen
@@ -143,7 +143,7 @@ class VpnCarrier:
             if not cidr:
                 continue
             net = ipaddress.ip_network(cidr)
-            if net.version == inside.version and net.supernet_of(inside) and net.prefixlen > longest:
+            if net.version == inside.version and net.supernet_of(inside) and net.prefixlen > longest:  # type: ignore[arg-type]
                 advertised, longest = _cell(row, 1) == "Yes", net.prefixlen
         if not rows:
             return UNKNOWN, where, "The VPN settings of the appliance's network were not collected."

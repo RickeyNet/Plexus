@@ -788,7 +788,7 @@ def _panorama_client(org: dict, secret: str, options: dict, **kwargs: Any) -> Pa
     generated for each collection and never stored); without one it is the
     API key itself."""
     username = str(options.get("username") or "").strip()
-    credentials = {"username": username, "password": secret} if username else {"api_key": secret}
+    credentials: dict[str, Any] = {"username": username, "password": secret} if username else {"api_key": secret}
     return PanoramaClient(
         org.get("base_url") or "",
         verify_tls=bool(options.get("verify_tls", True)),
@@ -863,10 +863,9 @@ async def _validate_appgate(org: dict, password: str) -> dict:
 
     def count(body: Any) -> int:
         if isinstance(body, dict):
+            total = body.get("totalCount")
             try:
-                return int(
-                    body.get("totalCount") if body.get("totalCount") is not None else len(body.get("data") or [])
-                )
+                return int(total if total is not None else len(body.get("data") or []))
             except TypeError, ValueError:
                 return 0
         return len(body) if isinstance(body, list) else 0
@@ -1309,7 +1308,7 @@ async def delete_meraki_snapshot_api(snapshot_id: int, request: Request):
 SOURCE_NEIGHBORS = "neighbors"
 
 
-def _count_text(count: object, noun: str) -> str:
+def _count_text(count: int | str | None, noun: str) -> str:
     number = int(count or 0)
     return f"{number} {noun}" if number == 1 else f"{number} {noun}s"
 
