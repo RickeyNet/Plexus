@@ -99,6 +99,22 @@ Pyodide runtime once (`netcontrol/static/vendor/`, not committed; see
 python scripts/fetch_pyodide.py
 ```
 
+### One command: `scripts\dev-up.ps1`
+
+Once `.env`, `.venv` and Docker Desktop exist (steps below), the whole loop is:
+
+```powershell
+.\scripts\dev-up.ps1              # add -Port 8081 if 8080 is taken
+```
+
+It starts the dev Postgres and waits for its healthcheck, dot-sources
+`scripts\dev-env.ps1`, runs `npm ci` if `node_modules` is missing, then opens
+two windows: `python templates/run.py --reload` (backend hot-reloads on save)
+and `npm run dev` (Vite HMR at `http://localhost:5173/`). No image build is
+involved; rebuild the container only to re-verify the full stack before
+shipping. `-NoFrontend` / `-NoBackend` skip a window. Before pushing, run
+`.\scripts\check.ps1` (see "Tests and checks"). The manual steps it wraps:
+
 ### Loop (Postgres in Docker, app from source)
 
 1. Run `deploy/setup.sh` once to create `.env` (it holds `POSTGRES_PASSWORD`)
@@ -278,7 +294,24 @@ The Docker image and the SBOM are built from this lock, so a changed
 
 ## Tests and checks
 
-These mirror `.github/workflows/ci.yml`.
+These mirror `.github/workflows/ci.yml`. On Windows, one script runs them all
+and prints a pass/fail table (every check runs even if an earlier one fails;
+exit code 1 on any failure):
+
+```powershell
+.\scripts\check.ps1                                   # ruff, mypy, eslint, tsc, vitest
+.\scripts\check.ps1 -Tests tests\test_foo.py          # ...plus targeted pytest files
+.\scripts\check.ps1 -SkipFrontend                     # Python side only
+.\scripts\check.ps1 -Build                            # also npm run build (what the image build runs)
+```
+
+With `-Tests` it needs the dev Postgres running (`scripts\dev-up.ps1` starts
+it), derives `PLEXUS_TEST_PG_URL` from `.env` and creates the `plexus_test`
+database on first use. Pass specific files; the full suite belongs in CI.
+Local mypy may report Azure SDK typing errors that CI does not: CI installs
+only `requirements-dev.txt`, so the cloud SDK stubs are absent there.
+
+The individual commands, for other shells:
 
 Python (repo root, venv active):
 

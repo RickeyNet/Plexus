@@ -382,6 +382,56 @@ bash deploy/upgrade.sh --rollback
 `postgres`: migrate a legacy SQLite install first (see
 [docs/database-backends.md](../docs/database-backends.md)).
 
+### Update from the web UI
+
+**Settings → System** checks the configured channel and, when a newer
+version exists, offers **Install <version>**. The click runs the same
+`upgrade.sh` as above (DB snapshot, health gate, rollback record) on the
+host; the app container never gets the Docker socket.
+
+How it works:
+
+1. The app writes `state/updates/request.json` (bind-mounted into the
+   container at `/app/state/updates`). It only accepts the exact version
+   the last check reported, and refuses while another request is queued or
+   running.
+2. `plexus-updater.path` (systemd, `PathExists=`) starts
+   `plexus-updater.service`, which runs `deploy/plexus-updater.sh` as root.
+3. The updater moves the request to `request.inprogress.json`, validates
+   it, and runs `deploy/upgrade.sh` as the owner of the install directory
+   (the account `bootstrap.sh` set up, in the `docker` group). Output goes
+   to `state/updates/upgrade.log`, the outcome to `result.json`, and the
+   rollback target from `state/.upgrade-previous` is mirrored into
+   `rollback.json`, which enables **Roll back to previous** in the UI.
+
+| Channel | Check | Install runs |
+|---|---|---|
+| `release` | latest GitHub release | `upgrade.sh --image <image repo>:<tag>` |
+| `edge` | head of the tracked branch vs. the running build's SHA | `upgrade.sh --image <image repo>:edge` (built by CI on every green push to `main`) |
+| `git` | `git fetch` of the tracked branch | `upgrade.sh --ref <branch>` (local `docker compose build`) |
+| `disabled` | nothing | nothing (manual `upgrade.sh` only) |
+
+`bootstrap.sh` installs the units, creates `state/updates/`, touches
+`state/updates/.agent-installed` (the UI disables **Install** without it)
+and adds `PLEXUS_UPDATE_IMAGE_REPO=ghcr.io/rickeynet/plexus` to `.env`.
+The updater only pulls images under that repository: change it there (and
+the **Image repository** field in the UI) to use a mirror. Existing installs
+get all of this by re-running `sudo bash deploy/bootstrap.sh`, then
+`docker compose up -d` so the container picks up the new bind mount.
+
+```bash
+systemctl status plexus-updater.path          # watcher active?
+journalctl -u plexus-updater.service -n 50    # last runs
+cat state/updates/result.json                 # last outcome
+```
+
+To turn in-app installs off, set the channel to **Disabled**, or on the
+host run `sudo systemctl disable --now plexus-updater.path` and
+`rm state/updates/.agent-installed`. If the host rebooted mid-upgrade and
+the UI is stuck on *running*, run `sudo systemctl start
+plexus-updater.service`: it marks the interrupted request failed and
+unblocks the UI.
+
 ### View Logs
 
 See **Status & Monitoring** above. Quick reference:
@@ -495,7 +545,10 @@ sudo apt-get autoremove -y --purge
 sudo rm -rf /var/lib/docker /var/lib/containerd /etc/docker
 sudo rm -f /etc/apt/sources.list.d/docker.list /etc/apt/keyrings/docker.asc
 
-# 5. Remove the cloned repo
+# 5. Remove the update agent units and the cloned repo
+sudo systemctl disable --now plexus-updater.path 2>/dev/null || true
+sudo rm -f /etc/systemd/system/plexus-updater.path /etc/systemd/system/plexus-updater.service
+sudo systemctl daemon-reload
 sudo rm -rf /opt/plexus
 
 # 6. Drop user from docker group (group itself stays - harmless)
@@ -601,6 +654,8 @@ The compose file mounts:
   credential is unrecoverable.
 - `./software_images` (bind mount) at `/app/state/software_images` - uploaded
   software images.
+- `./state/updates` (bind mount) at `/app/state/updates` - handoff directory
+  for in-app updates (see *Update from the web UI*).
 - `./certs` (bind mount, read-only) at `/app/certs` - TLS certificates.
 - `plexus-postgres` volume - the PostgreSQL data directory (the database
   itself).

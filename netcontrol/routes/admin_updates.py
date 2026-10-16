@@ -1,31 +1,55 @@
 """Admin self-update routes.
 
-Layer 3, v1 (read-only). Exposes:
+Exposes:
 
   GET  /api/admin/updates/status   - current version + channel config
   POST /api/admin/updates/check    - poll the configured channel for a newer
                                      release; returns availability + notes
   GET  /api/admin/updates/config   - channel + repo settings
   PUT  /api/admin/updates/config   - update channel + repo settings
+  POST /api/admin/updates/apply    - queue an upgrade to the version the last
+                                     successful check reported
+  POST /api/admin/updates/rollback - queue a rollback to the previous version
+  GET  /api/admin/updates/progress - host updater state (polled by the UI)
 
 Channels:
-  release   - GitHub Releases API (api.github.com/repos/<owner>/<repo>/releases/latest)
-  git       - git ls-remote on the configured remote; reports HEAD of the
-              tracked branch and how many commits ahead it is. Useful for
-              edge deploys following main.
+  release   - GitHub Releases API (api.github.com/repos/<owner>/<repo>/releases/latest).
+              Apply pulls the image ``<image_repo>:<tag>``.
+  edge      - GitHub commits API for the tracked branch; compares its HEAD
+              to the running build's git SHA. Apply pulls ``<image_repo>:edge``,
+              which CI publishes on every green push to main.
+  git       - git fetch on the configured remote/branch; reports how many
+              commits HEAD is behind. Apply runs upgrade.sh in git mode
+              (fetch + local image build on the host).
   disabled  - check is a no-op; status returns the local version only.
               Use this for air-gapped deploys that upgrade via manual
               `bash deploy/upgrade.sh --image ...`.
 
-Apply + rollback are NOT in this PR. The watcher/sentinel design from the
-Layer 3 doc lands separately once the read-side is proven.
+Apply never shells out from the app. The app (unprivileged, no Docker
+socket) only writes a JSON request into the handoff directory
+(PLEXUS_UPDATES_DIR, bind-mounted from <install>/state/updates on the
+host). A systemd path unit on the host (deploy/systemd/plexus-updater.*)
+picks it up and runs deploy/plexus-updater.sh, which validates the request
+and runs deploy/upgrade.sh (DB snapshot, health gate, rollback record).
+Files in the handoff directory:
+
+  request.json             - written by the app, consumed by the updater
+  request.inprogress.json  - the request while the updater runs it
+  result.json              - last run's status (running/success/failed)
+  upgrade.log              - upgrade.sh output of the last run
+  rollback.json            - rollback target mirrored from state/.upgrade-previous
+  .agent-installed         - created by deploy/bootstrap.sh with the units
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import re
 import subprocess
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -50,15 +74,21 @@ LOGGER = configure_logging("plexus.admin_updates")
 _SETTING_KEY = "updates"
 
 _DEFAULT_CONFIG: dict[str, Any] = {
-    "channel": "release",  # release | git | disabled
-    "repo": "RickeyNet/Plexus",  # owner/name for release channel
+    "channel": "release",  # release | edge | git | disabled
+    "repo": "RickeyNet/Plexus",  # owner/name for release + edge channels
     "git_remote": "origin",  # remote name for git channel
-    "git_branch": "main",  # branch tracked by git channel
+    "git_branch": "main",  # branch tracked by edge + git channels
+    "image_repo": "ghcr.io/rickeynet/plexus",  # registry image for release + edge
 }
 
-_VALID_CHANNELS = {"release", "git", "disabled"}
+_VALID_CHANNELS = {"release", "edge", "git", "disabled"}
 _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 _REF_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+_IMAGE_REPO_RE = re.compile(r"^[a-z0-9.-]+(/[a-z0-9._-]+)+$")
+# A tag / short SHA accepted by /apply. deploy/plexus-updater.sh re-validates
+# the resulting image ref against the same character set on the host.
+_TARGET_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+_SHA_RE = re.compile(r"^[0-9a-f]{7,64}$")
 
 # How long to cache the last check result. Channel API calls are cheap but
 # the GH API has a 60/hr unauth rate limit, so we don't want the UI to
@@ -105,6 +135,15 @@ def _sanitize_config(body: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="git_branch contains invalid characters")
     out["git_branch"] = branch
 
+    # Registry refs are lowercase; normalize a pasted "ghcr.io/Owner/Name".
+    image_repo = str(body.get("image_repo", out["image_repo"])).strip().lower()
+    if len(image_repo) > 255 or not _IMAGE_REPO_RE.match(image_repo):
+        raise HTTPException(
+            status_code=400,
+            detail="image_repo must look like 'registry/owner/name' (lowercase, no tag)",
+        )
+    out["image_repo"] = image_repo
+
     return out
 
 
@@ -142,11 +181,20 @@ def _is_newer(remote: str, local: str) -> bool:
     return rt > lt
 
 
+def _sha_matches(remote_sha: str, local_sha: str) -> bool:
+    """True when two git SHAs name the same commit (either may be abbreviated)."""
+    r = remote_sha.strip().lower()
+    loc = local_sha.strip().lower()
+    if not r or not loc:
+        return False
+    return r.startswith(loc) or loc.startswith(r)
+
+
 # ── Channel implementations ───────────────────────────────────────────────
 
 
-async def _check_release_channel(cfg: dict[str, Any]) -> dict[str, Any]:
-    url = f"https://api.github.com/repos/{cfg['repo']}/releases/latest"
+async def _github_get(url: str, not_found: str) -> tuple[Any, dict[str, Any] | None]:
+    """GET a GitHub API URL. Returns (json, None) or (None, error result)."""
     headers = {
         "Accept": "application/vnd.github+json",
         "User-Agent": "plexus-update-check",
@@ -155,19 +203,32 @@ async def _check_release_channel(cfg: dict[str, Any]) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
             resp = await client.get(url, headers=headers)
     except httpx.TimeoutException:
-        return {"ok": False, "error": "timeout contacting api.github.com"}
+        return None, {"ok": False, "error": "timeout contacting api.github.com"}
     except httpx.HTTPError as exc:
-        return {"ok": False, "error": f"network error: {exc}"}
+        return None, {"ok": False, "error": f"network error: {exc}"}
 
-    if resp.status_code == 404:
-        return {"ok": False, "error": f"repo {cfg['repo']!r} has no releases or is private"}
+    if resp.status_code in (404, 422):
+        return None, {"ok": False, "error": not_found}
     if resp.status_code == 403:
         # GH rate-limits unauthenticated callers to 60/hr per IP.
-        return {"ok": False, "error": "github API rate-limited; try again later"}
+        return None, {"ok": False, "error": "github API rate-limited; try again later"}
     if resp.status_code != 200:
-        return {"ok": False, "error": f"github API returned {resp.status_code}"}
+        return None, {"ok": False, "error": f"github API returned {resp.status_code}"}
+    try:
+        data = resp.json()
+    except ValueError:
+        return None, {"ok": False, "error": "github API returned invalid JSON"}
+    if not isinstance(data, dict):
+        return None, {"ok": False, "error": "unexpected github API response"}
+    return data, None
 
-    data = resp.json()
+
+async def _check_release_channel(cfg: dict[str, Any]) -> dict[str, Any]:
+    url = f"https://api.github.com/repos/{cfg['repo']}/releases/latest"
+    data, err = await _github_get(url, f"repo {cfg['repo']!r} has no releases or is private")
+    if err is not None:
+        return err
+
     tag = str(data.get("tag_name", "")).strip()
     if not tag:
         return {"ok": False, "error": "release has no tag_name"}
@@ -180,6 +241,35 @@ async def _check_release_channel(cfg: dict[str, Any]) -> dict[str, Any]:
         "published_at": data.get("published_at"),
         "html_url": data.get("html_url"),
         "is_newer": _is_newer(tag, APP_VERSION),
+    }
+
+
+async def _check_edge_channel(cfg: dict[str, Any]) -> dict[str, Any]:
+    branch = cfg["git_branch"]
+    url = f"https://api.github.com/repos/{cfg['repo']}/commits/{branch}"
+    data, err = await _github_get(url, f"branch {branch!r} not found in {cfg['repo']!r}")
+    if err is not None:
+        return err
+
+    sha = str(data.get("sha") or "").strip().lower()
+    if not _SHA_RE.match(sha):
+        return {"ok": False, "error": "commit response has no valid sha"}
+    commit = data.get("commit")
+    commit = commit if isinstance(commit, dict) else {}
+    committer = commit.get("committer")
+    committer = committer if isinstance(committer, dict) else {}
+    short = sha[:12]
+    # An unknown local SHA (dev checkout without git) cannot be compared;
+    # report newer so the operator can still move onto a known edge build.
+    newer = not _sha_matches(sha, APP_GIT_SHA)
+    return {
+        "ok": True,
+        "latest_version": short,
+        "latest_name": f"{branch} ({short})",
+        "release_notes": str(commit.get("message") or ""),
+        "published_at": committer.get("date"),
+        "html_url": data.get("html_url"),
+        "is_newer": newer,
     }
 
 
@@ -281,7 +371,7 @@ async def update_config(body: dict[str, Any], request: Request) -> dict[str, Any
         "admin_updates",
         "config.updated",
         user=session["user"] if session else "",
-        detail=f"channel={new_cfg['channel']} repo={new_cfg['repo']}",
+        detail=f"channel={new_cfg['channel']} repo={new_cfg['repo']} image_repo={new_cfg['image_repo']}",
         correlation_id=_corr_id(request),
     )
     return new_cfg
@@ -301,6 +391,8 @@ async def check_for_updates(request: Request) -> dict[str, Any]:
         }
     elif channel == "release":
         result = await _check_release_channel(cfg)
+    elif channel == "edge":
+        result = await _check_edge_channel(cfg)
     elif channel == "git":
         result = await _check_git_channel(cfg)
     else:
@@ -324,3 +416,217 @@ async def check_for_updates(request: Request) -> dict[str, Any]:
         correlation_id=_corr_id(request),
     )
     return result
+
+
+# ── Apply / rollback / progress ───────────────────────────────────────────
+
+_REQUEST_FILE = "request.json"
+_INPROGRESS_FILE = "request.inprogress.json"
+_RESULT_FILE = "result.json"
+_LOG_FILE = "upgrade.log"
+_ROLLBACK_FILE = "rollback.json"
+_AGENT_MARKER = ".agent-installed"
+
+_LOG_TAIL_LINES = 200
+_LOG_TAIL_BYTES = 64 * 1024
+
+# Serializes the busy check + write so two concurrent clicks cannot both
+# queue a request (the host updater handles one at a time).
+_apply_lock = asyncio.Lock()
+
+
+def _updates_dir() -> Path:
+    return Path(os.environ.get("PLEXUS_UPDATES_DIR", "/app/state/updates"))
+
+
+def _read_json(path: Path) -> dict[str, Any] | None:
+    """Read a JSON object; None when missing, unreadable, or not an object."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except OSError, ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _read_log_tail(path: Path) -> str:
+    try:
+        with path.open("rb") as fh:
+            size = fh.seek(0, os.SEEK_END)
+            start = max(0, size - _LOG_TAIL_BYTES)
+            fh.seek(start)
+            raw = fh.read(_LOG_TAIL_BYTES)
+    except OSError:
+        return ""
+    lines = raw.decode("utf-8", errors="replace").splitlines()
+    if start > 0 and lines:
+        # The byte cap cut into the first line; drop the partial line.
+        lines = lines[1:]
+    return "\n".join(lines[-_LOG_TAIL_LINES:])
+
+
+def _empty_progress() -> dict[str, Any]:
+    return {
+        "agent_installed": False,
+        "pending": None,
+        "in_progress": None,
+        "result": None,
+        "log_tail": "",
+        "rollback_available": False,
+        "rollback": None,
+    }
+
+
+def _read_progress(d: Path) -> dict[str, Any]:
+    rollback = _read_json(d / _ROLLBACK_FILE)
+    return {
+        "agent_installed": (d / _AGENT_MARKER).is_file(),
+        "pending": _read_json(d / _REQUEST_FILE),
+        "in_progress": _read_json(d / _INPROGRESS_FILE),
+        "result": _read_json(d / _RESULT_FILE),
+        "log_tail": _read_log_tail(d / _LOG_FILE),
+        "rollback_available": bool(rollback and rollback.get("available") is True),
+        "rollback": rollback,
+    }
+
+
+def _busy_reason(d: Path) -> str | None:
+    if (d / _REQUEST_FILE).exists():
+        return "An update request is already queued"
+    if (d / _INPROGRESS_FILE).exists():
+        return "An update is already in progress"
+    result = _read_json(d / _RESULT_FILE)
+    if result and result.get("status") == "running":
+        return "An update is already in progress"
+    return None
+
+
+def _write_request(d: Path, req: dict[str, Any]) -> None:
+    # Write-then-rename so the host's PathExists watcher never sees a
+    # half-written request.json.
+    tmp = d / f".{_REQUEST_FILE}.{req['id']}.tmp"
+    tmp.write_text(json.dumps(req, indent=2), encoding="utf-8")
+    os.replace(tmp, d / _REQUEST_FILE)
+
+
+def _plan_for(cfg: dict[str, Any], channel: str, target: str) -> dict[str, Any]:
+    """Map a channel + checked version to an upgrade.sh mode."""
+    if channel == "release":
+        return {"mode": "image", "image": f"{cfg['image_repo']}:{target}"}
+    if channel == "edge":
+        return {"mode": "image", "image": f"{cfg['image_repo']}:edge"}
+    if channel == "git":
+        return {"mode": "git", "ref": cfg["git_branch"]}
+    raise HTTPException(status_code=409, detail=f"channel {channel!r} cannot apply updates")
+
+
+async def _preflight(cfg: dict[str, Any]) -> Path:
+    """Guards shared by apply + rollback. Returns the handoff directory."""
+    if cfg["channel"] == "disabled":
+        raise HTTPException(
+            status_code=409,
+            detail="Updates are disabled for this instance; choose a channel first",
+        )
+    d = _updates_dir()
+    installed = await asyncio.to_thread((d / _AGENT_MARKER).is_file)
+    if not installed:
+        raise HTTPException(
+            status_code=409,
+            detail="Host updater not installed - run deploy/bootstrap.sh on the server",
+        )
+    return d
+
+
+async def _queue_request(d: Path, req: dict[str, Any], request: Request, action: str, detail: str) -> dict[str, Any]:
+    async with _apply_lock:
+        reason = await asyncio.to_thread(_busy_reason, d)
+        if reason:
+            raise HTTPException(status_code=409, detail=reason)
+        try:
+            await asyncio.to_thread(_write_request, d, req)
+        except OSError as exc:
+            LOGGER.error("admin_updates: cannot write update request: %s", type(exc).__name__)
+            raise HTTPException(status_code=500, detail="Could not write the update request") from None
+    await _audit(
+        "admin_updates",
+        action,
+        user=req["requested_by"],
+        detail=detail,
+        correlation_id=_corr_id(request),
+    )
+    return req
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _session_user(request: Request) -> str:
+    session = _get_session(request)
+    return str(session.get("user", "")) if session else ""
+
+
+@router.post("/api/admin/updates/apply", status_code=202)
+async def apply_update(body: dict[str, Any], request: Request) -> dict[str, Any]:
+    target = str(body.get("target", "")).strip()
+    if not _TARGET_RE.match(target):
+        raise HTTPException(status_code=400, detail="target must be a tag or commit SHA")
+
+    cfg = await _load_config()
+    d = await _preflight(cfg)
+    channel = cfg["channel"]
+
+    # Only the version the last check reported can be installed, so a
+    # crafted request cannot point the host at an arbitrary ref.
+    last = _last_check_cache.get(channel)
+    if not last or not last.get("ok"):
+        raise HTTPException(status_code=409, detail="Run a successful update check first")
+    if not last.get("is_newer"):
+        raise HTTPException(status_code=409, detail="The last check found no newer version")
+    if str(last.get("latest_version", "")) != target:
+        raise HTTPException(
+            status_code=409,
+            detail="target does not match the version from the last check; check again",
+        )
+
+    req: dict[str, Any] = {
+        "id": str(uuid.uuid4()),
+        "action": "upgrade",
+        **_plan_for(cfg, channel, target),
+        "channel": channel,
+        "target_version": target,
+        "requested_by": _session_user(request),
+        "requested_at": _now_iso(),
+    }
+    where = req.get("image") or f"ref={req.get('ref')}"
+    return await _queue_request(d, req, request, "apply.requested", f"channel={channel} target={target} {where}")
+
+
+@router.post("/api/admin/updates/rollback", status_code=202)
+async def rollback_update(request: Request) -> dict[str, Any]:
+    cfg = await _load_config()
+    d = await _preflight(cfg)
+    rollback = await asyncio.to_thread(_read_json, d / _ROLLBACK_FILE)
+    if not rollback or rollback.get("available") is not True:
+        raise HTTPException(status_code=409, detail="No rollback target recorded on the host")
+
+    mode = rollback.get("mode")
+    req: dict[str, Any] = {
+        "id": str(uuid.uuid4()),
+        "action": "rollback",
+        "mode": mode if mode in ("image", "git") else "",
+        "channel": cfg["channel"],
+        "target_version": str(rollback.get("target") or ""),
+        "requested_by": _session_user(request),
+        "requested_at": _now_iso(),
+    }
+    return await _queue_request(d, req, request, "rollback.requested", f"target={req['target_version']}")
+
+
+@router.get("/api/admin/updates/progress")
+async def get_progress() -> dict[str, Any]:
+    try:
+        snap = await asyncio.to_thread(_read_progress, _updates_dir())
+    except OSError:
+        snap = _empty_progress()
+    snap["current"] = _local_version_payload()
+    return snap

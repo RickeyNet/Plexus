@@ -98,6 +98,10 @@ else
     echo "[2/3] TLS certificates already exist - skipping."
 fi
 
+# Host side of the in-app update handoff, bind-mounted into the container by
+# docker-compose.yml (deploy/plexus-updater.sh reads requests from it).
+mkdir -p state/updates
+
 # ── 3. Verify Docker is available ─────────────────────────────────────
 echo ""
 echo "[3/3] Checking Docker..."

@@ -40,6 +40,7 @@ services:
       APP_SESSION_KEY_FILE: /app/state/session.key
       APP_ENCRYPTION_KEY_FILE: /app/state/netcontrol.key
       PLEXUS_SOFTWARE_IMAGES_DIR: /app/state/software_images
+      PLEXUS_UPDATES_DIR: /app/state/updates
       # Keep uploaded floor-plan images on the persistent state volume;
       # the code default (<app>/floor_plans) is on the ephemeral layer and
       # is lost on every container recreate.
@@ -65,6 +66,10 @@ services:
       - plexus-db:/app/state
       - ./certs:/app/certs:ro
       - ./software_images:/app/state/software_images
+      # In-app update handoff: the app only writes request.json here; the
+      # host's plexus-updater systemd unit runs deploy/upgrade.sh. The app
+      # never gets the Docker socket (see deploy/DEPLOYMENT.md).
+      - ./state/updates:/app/state/updates
     depends_on:
       postgres:
         condition: service_healthy
