@@ -27,6 +27,14 @@ and IOS-XE upgrades via SNMP, Netmiko, and Ansible.
 - Consolidate duplicated code you touch when it is small and safe; otherwise flag it in the summary
 - Delegated worker prompts carry this rule and name the shared modules in scope
 
+## CI Compliance
+- `.github/workflows/ci.yml` is the contract: read the jobs covering the files in scope before changing them, and run those steps locally with the same commands and flags CI uses (the `pytest` console script, `ruff check`, `mypy netcontrol templates`, `bandit`, `pip-audit`, the frontend lint/typecheck/test/build)
+- A change is not done until the CI steps that cover it pass locally; if a step cannot be reproduced, say so explicitly
+- A new feature that adds a dependency, test requirement (service, env var, system package, SDK), tool, or new code area updates `ci.yml` and the requirements/lock/coverage-gate files in the same change
+- Tests must not depend on anything CI does not install: `importorskip` the optional package or add it to the CI install
+- On a CI failure, find the exact failing step (jobs API or annotations), reproduce it, and fix the root cause; never loosen a gate or skip a check to go green without being asked
+- Delegated worker prompts name the CI steps covering their scope and the commands to run before reporting
+
 ## Security Rules
 - Never put `str(exc)` in HTTP error responses - use generic messages, log details server-side
 - Never use `dangerouslySetInnerHTML` with user/API data; let JSX escape it
