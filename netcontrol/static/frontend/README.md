@@ -13,7 +13,7 @@ frontend.
 | Framework      | React 19 (StrictMode)                                   |
 | Language       | TypeScript (strict)                                     |
 | Build          | Vite                                                    |
-| Routing        | react-router-dom v7 (`basename="/frontend"`)            |
+| Routing        | react-router-dom v7 (mounted at the site root)            |
 | Server state   | TanStack Query v5                                       |
 | Styling        | Legacy stylesheet `/static/css/style.css` (no PatternFly) |
 | Charts         | ECharts (`src/lib/echart.tsx`)                          |
@@ -35,7 +35,7 @@ python templates/run.py --host 127.0.0.1 --port 8080
 # Terminal 2 - Vite dev server (HMR)
 cd netcontrol/static/frontend
 npm install   # one-time
-npm run dev   # http://localhost:5173/frontend/
+npm run dev   # http://localhost:5173/
 ```
 
 Vite proxies `/api` and `/static` to `127.0.0.1:8080`, so cookie-based session
@@ -52,8 +52,8 @@ npm install
 npm run build
 ```
 
-Outputs `dist/` which FastAPI serves at `/frontend/` (configured in
-`netcontrol/app.py`). Browse to `http://127.0.0.1:8080/frontend/`.
+Outputs `dist/` which FastAPI serves from the site root (configured in
+`netcontrol/app.py`). Browse to `http://127.0.0.1:8080/`.
 
 ## Layout
 

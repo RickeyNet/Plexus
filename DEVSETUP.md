@@ -147,7 +147,7 @@ python scripts/fetch_pyodide.py
    npm ci
    npm run dev
    ```
-   Open `http://localhost:5173/frontend/` and log in as `admin` /
+   Open `http://localhost:5173/` and log in as `admin` /
    `netcontrol` (no forced password change under `APP_ENV=dev`). Vite proxies
    `/api`, `/static` and `/ws` to `PLEXUS_BACKEND_URL` (default
    `http://127.0.0.1:8080`).
@@ -238,9 +238,9 @@ Notes:
    ```bash
    cd netcontrol/static/frontend && npm ci && npm run dev
    ```
-   Open `http://localhost:5173/frontend/`; `/api`, `/static` and `/ws` are
+   Open `http://localhost:5173/`; `/api`, `/static` and `/ws` are
    proxied to the backend on 8080. Without Vite, run `npm run build` and open
-   `http://127.0.0.1:8080/frontend/`.
+   `http://127.0.0.1:8080/`.
 
 Why it looks like this:
 
