@@ -41,6 +41,35 @@
   facade, migrations, conftest). Run a full suite at most once per task, and
   never twice in one command.
 
+## CI compliance
+
+- **Read the workflow before you change code.** `.github/workflows/ci.yml`
+  is the contract every change must pass. Before starting a task, read the
+  jobs that cover the files in scope (secret-scan, build-test, frontend) and
+  note the exact commands and flags they run: the `pytest` console script
+  (not `python -m pytest`), `ruff check`, `mypy netcontrol templates`,
+  `pip-audit`, `bandit`, the coverage gates, `npm audit`, `npm run lint`,
+  `npm run typecheck`, `npm test`, `npm run build`.
+- **Verify the way CI verifies.** Run the CI commands that cover the change
+  with the same flags and invocation CI uses, not a local variant that
+  happens to pass. A change is not done until those steps pass locally.
+  When a job cannot be reproduced (no Postgres, no gh auth), say so and use
+  the unauthenticated GitHub REST API for run, job, step, and annotation data.
+- **New features update CI.** When a change adds a dependency, a test
+  requirement (service, env var, system package, cloud SDK), a new package or
+  directory that lint/type/coverage steps should cover, or a new tool, update
+  `ci.yml` (and `requirements*.txt`, `tools/coverage_gate.py`, lock files)
+  in the same change. Tests that need something CI does not install must
+  `importorskip` it or the dependency must be added to CI; never leave a
+  test that can only pass on the dev box.
+- **Fix CI failures at the root.** On a reported Actions failure, identify
+  the exact failing step first (jobs API or annotations), reproduce it
+  locally, and assume several steps may be broken at once since the job
+  stops at the first failure. Do not loosen a gate, ignore a rule, or skip a
+  check to make a job green unless the user asks for that.
+- **Workers inherit this rule.** Every delegated worker prompt names the CI
+  steps that cover its scope and the exact commands to run before reporting.
+
 ## Code reuse
 
 - **Search before you write.** Before adding a helper, parser, validator,
