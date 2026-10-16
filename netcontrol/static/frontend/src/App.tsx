@@ -123,7 +123,7 @@ export function App() {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
 
   // Wire the api-client 401 handler so any expired session bumps the user
-  // back to the login screen without a hard navigation away from /frontend/.
+  // back to the login screen without a hard navigation away from the SPA.
   useEffect(() => {
     setSessionExpiredHandler(() => {
       qc.invalidateQueries({ queryKey: ['auth', 'status'] });

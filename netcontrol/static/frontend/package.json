@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Plexus React frontend. Builds to dist/ which FastAPI serves at /frontend/.",
+  "description": "Plexus React frontend. Builds to dist/ which FastAPI serves from the site root.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build && vite build -c vite.viewer.config.ts",

@@ -11,7 +11,7 @@ this file when you change a pattern, and mention the change in the
 decision log in `docs/FRONTEND_MIGRATION.md` (archived migration plan).
 
 > Project layout: `netcontrol/static/frontend/` is the React app
-> (Vite + TS). Builds to `dist/`, served by FastAPI at `/frontend/`.
+> (Vite + TS). Builds to `dist/`, served by FastAPI from the site root.
 > Source root is `src/`. The legacy vanilla SPA (`netcontrol/static/js/`)
 > has been fully migrated and deleted; React is the only frontend.
 
@@ -24,7 +24,7 @@ decision log in `docs/FRONTEND_MIGRATION.md` (archived migration plan).
 | Framework | React 19 |
 | Language | TypeScript (strict) |
 | Build | Vite 8 |
-| Routing | react-router-dom v7, mounted under `basename="/frontend"` |
+| Routing | react-router-dom v7, mounted at the site root (no basename) |
 | Server state | TanStack Query v5 |
 | Charts | ECharts (wrapped in `src/lib/echart.tsx`) |
 | Styling | Legacy stylesheet `netcontrol/static/css/style.css` - no PatternFly, no Tailwind, no CSS-in-JS framework |

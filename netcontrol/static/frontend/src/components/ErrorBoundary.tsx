@@ -85,7 +85,7 @@ export class ErrorBoundary extends Component<Props, State> {
               <button
                 className="btn"
                 onClick={() => {
-                  window.location.href = '/frontend/';
+                  window.location.href = '/';
                 }}
               >
                 Go to dashboard
