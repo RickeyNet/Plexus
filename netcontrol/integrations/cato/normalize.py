@@ -537,7 +537,8 @@ class _Builder:
                 if not isinstance(item, dict):
                     continue
                 entity = item.get("entity") or {}
-                helper = item.get("helperFields") if isinstance(item.get("helperFields"), dict) else {}
+                helper_fields = item.get("helperFields")
+                helper = helper_fields if isinstance(helper_fields, dict) else {}
                 # Entity names read "Site \ Interface \ Range".
                 parts = [p.strip() for p in _text(entity.get("name")).split("\\") if p.strip()]
                 site_id = _text(helper.get("siteId") or helper.get("siteID"))

@@ -54,6 +54,8 @@ from netcontrol.integrations.panorama.collector import members
 from netcontrol.integrations.panorama.normalize import _bare, _Builder, _dict, _name, _text, _yes, value_cidr
 
 _DEFAULT_ROUTES = ("0.0.0.0/0", "::/0")
+# The next hop of a connected route: no gateway.
+_NO_NEXTHOP = ("0.0.0.0", "::")  # nosec B104 - next-hop comparison in route parsing, not a socket bind
 _ACTIONS = {
     "allow": "allow",
     "deny": "deny",
@@ -225,13 +227,13 @@ class _FirewallForwarding:
                 kind = "blackhole"
             label = protocol or ("RIP" if "R" in flags else ("Connected" if "C" in flags else "Static"))
             source = f"{label} route {prefix}"
-            if is_address(hop) and hop not in ("0.0.0.0", "::"):
+            if is_address(hop) and hop not in _NO_NEXTHOP:
                 source += f" via {hop}"
             self.block["routes"].append(
                 route(
                     prefix,
                     kind,
-                    next_hop=hop if hop not in ("0.0.0.0", "::") else "",
+                    next_hop=hop if hop not in _NO_NEXTHOP else "",
                     interface=entry["interface"],
                     peer=self._peer(entry["interface"]),
                     vrf=vrf,

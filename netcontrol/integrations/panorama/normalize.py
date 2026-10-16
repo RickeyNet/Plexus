@@ -405,7 +405,7 @@ class Objects:
             for proto in ("tcp", "udp"):
                 if proto in protocol:
                     port = _text(_dict(protocol[proto]).get("port")).replace(" ", "") or "any"
-                    unresolved = []
+                    unresolved: list[str] = []
                     if _text(_dict(protocol[proto]).get("source-port")):
                         unresolved.append(f"source port {_text(_dict(protocol[proto]).get('source-port'))}")
                     return [(proto, port)], unresolved
@@ -415,7 +415,7 @@ class Objects:
         group, _scope = self.find("service-group", text, device_group)
         if group is not None and depth < _MAX_GROUP_DEPTH:
             found: list[tuple[str, str]] = []
-            unresolved: list[str] = []
+            unresolved = []
             for member in members(group.get("members")):
                 entries_found, bad = self.services(member, device_group, depth + 1)
                 found += entries_found
@@ -695,10 +695,12 @@ class _Builder:
         rows = self._config_rows(serial)
         zone_of, vsys_of, vr_of = self._zone_maps(serial)
         multi = len(self.vsys_names(serial)) > 1
-        for row in rows:
-            row["zone"] = zone_of.get(row["name"], "")
-            row["vsys"] = vsys_of.get(row["name"], "") or ("vsys1" if not multi and (row["ip"] or row["zone"]) else "")
-            row["vr"] = vr_of.get(row["name"], "")
+        for config_row in rows:
+            config_row["zone"] = zone_of.get(config_row["name"], "")
+            config_row["vsys"] = vsys_of.get(config_row["name"], "") or (
+                "vsys1" if not multi and (config_row["ip"] or config_row["zone"]) else ""
+            )
+            config_row["vr"] = vr_of.get(config_row["name"], "")
         state = _dict(self.state_of(serial).get("interfaces"))
         if state:
             by_name = {r["name"]: r for r in rows}
@@ -1880,7 +1882,7 @@ class _Builder:
                     if edge["a"] == tunnel["far"]:
                         edge["a_port"] = edge["a_port"] or tunnel["iface"]
                     continue
-                edge = self._edge(
+                new_edge = self._edge(
                     here,
                     tunnel["far"],
                     "vpn" if tunnel["far_kind"] == "device" else "vpn3p",
@@ -1889,8 +1891,8 @@ class _Builder:
                     label="Site-to-site VPN" if tunnel["far_kind"] == "device" else "IPsec",
                     detail=tunnel["name"],
                 )
-                if edge is not None:
-                    seen[key] = edge
+                if new_edge is not None:
+                    seen[key] = new_edge
         # The far end's tunnel interface of a tunnel between two firewalls.
         for edge in seen.values():
             if edge["kind"] != "vpn":

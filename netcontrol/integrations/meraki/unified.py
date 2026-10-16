@@ -194,7 +194,7 @@ def virtual_appliance_pairs(snapshots: list[tuple[int, dict]]) -> dict[tuple[int
         for edge in snapshot.get("edges") or []:
             for wan_id, device_id in ((edge["a"], edge["b"]), (edge["b"], edge["a"])):
                 wan, device = nodes.get(wan_id), nodes.get(device_id)
-                if wan is None or wan["kind"] != "wan" or not is_device(device):
+                if wan is None or device is None or wan["kind"] != "wan" or not is_device(device):
                     continue
                 known_by = _global_ips(wan.get("ip"))
                 for address in known_by:
@@ -211,8 +211,8 @@ def virtual_appliance_pairs(snapshots: list[tuple[int, dict]]) -> dict[tuple[int
 
     pairs: dict[tuple[int, str], tuple[int, str]] = {}
     for org_ref, snapshot in snapshots:
-        nodes = [n for n in snapshot.get("nodes") or [] if isinstance(n, dict)]
-        instances = [n for n in nodes if "alias_ips" in n]
+        snap_nodes = [n for n in snapshot.get("nodes") or [] if isinstance(n, dict)]
+        instances = [n for n in snap_nodes if "alias_ips" in n]
         if not instances:
             continue
 
@@ -227,7 +227,7 @@ def virtual_appliance_pairs(snapshots: list[tuple[int, dict]]) -> dict[tuple[int
                     holders[address] = holders.get(address, 0) + 1
         # Public addresses of the gateways (NAT) of each VPC.
         gateways: dict[str, set[str]] = {}
-        for node in nodes:
+        for node in snap_nodes:
             if node["kind"] == "cloud":
                 gateways.setdefault(node.get("site") or "", set()).update(_global_ips(node.get("ip")))
 
@@ -439,7 +439,7 @@ def merge_meraki_into_graph(
     for plan in plans:
         for node, ref, x, y in plan["peers"]:
             address = str(node.get("ip") or "").strip()
-            target: dict | None = None
+            target = None
             if address:
                 existing = resolve_external("", address)
                 target = nodes_by_id.get(existing) if existing is not None else None

@@ -97,7 +97,7 @@ def client_records(raw: dict[str, Any], collected_at: datetime | None = None) ->
             if not mac:
                 continue
             serial = _text(client.get("recentDeviceSerial"))
-            record = {
+            record: dict[str, Any] = {
                 "network_id": _text(net_id),
                 "network_name": _text(network_names.get(net_id)),
                 "mac_address": mac,

@@ -2,3 +2,19 @@
 # minified vis-network library (legacy SPA asset, since removed from HEAD).
 # Finding exists only in git history at commit 0881bda.
 0881bda3820b2470430459f4acc7c925037fbc8e:netcontrol/static/js/vis-network.min.js:generic-api-key:33
+
+# False positives flagged by gitleaks generic-api-key (all exist only in git
+# history at the listed commits; none is a real credential):
+# - tests/test_panorama_topology.py: placeholder Panorama API keys used by
+#   the mocked client in tests ("LUFRPT1-test-key==" style fixtures).
+785de38d2f5ec94fb3a76820291d6817cb074036:tests/test_panorama_topology.py:generic-api-key:69
+785de38d2f5ec94fb3a76820291d6817cb074036:tests/test_panorama_topology.py:generic-api-key:70
+# - netcontrol/integrations/meraki/compliance.py: compliance-check
+#   description strings mentioning "authentication" followed by a quoted
+#   ios_equivalent value on the next line.
+f8820e895babee0144035220895c72f140b0e762:netcontrol/integrations/meraki/compliance.py:generic-api-key:880
+f8820e895babee0144035220895c72f140b0e762:netcontrol/integrations/meraki/compliance.py:generic-api-key:1077
+53e4e423dc7a2bd1a49265bcd095a2e960add8e5:netcontrol/integrations/meraki/compliance.py:generic-api-key:1053
+# - netcontrol/integrations/meraki/sample.py: the SSID auth-mode value
+#   (802.1X/RADIUS) in the built-in sample dataset.
+16928e6a77b44b316e60b59c7acbf15dc48542bc:netcontrol/integrations/meraki/sample.py:generic-api-key:210
