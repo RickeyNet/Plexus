@@ -4,6 +4,15 @@ import { parseBackendDate } from '@/lib/datetime';
 // Re-exported for existing importers; canonical impl lives in @/lib/datetime.
 export { parseBackendDate };
 
+// Anchor ids the CriticalIssuesBanner chips scroll to. The Dashboard wraps
+// each target panel in a div carrying the matching id. Kept out of the
+// component file so it stays component-only for Vite fast refresh.
+export const ISSUE_ANCHORS = {
+  devices: 'dashboard-devices',
+  backups: 'dashboard-backups',
+  alerts: 'dashboard-alerts',
+} as const;
+
 export type HealthStatus = 'healthy' | 'warning' | 'critical' | 'down' | 'unknown';
 
 export function classifyDeviceHealth(poll: DeviceHealth | undefined | null): HealthStatus {

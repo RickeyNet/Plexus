@@ -27,7 +27,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
+from starlette.routing import Match
 
 # Ensure project root is on path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -2346,6 +2348,27 @@ class _ImmutableStaticFiles(StaticFiles):
 _NON_SPA_PREFIXES = ("api/", "ws/", "static/", "docs", "redoc", "openapi.json")
 
 
+class _SpaFallbackRoute(APIRoute):
+    """The SPA catch-all, declining every backend-owned path outright.
+
+    A plain GET ``/{path:path}`` route *partially* matches every path, so a
+    POST to an unknown ``/api/...`` path answered 405 (method not allowed on
+    the catch-all) instead of 404, and any route registered after it was
+    shadowed. Returning no match at all for those prefixes lets the request
+    fall through to the router's own 404 regardless of method.
+    """
+
+    def matches(self, scope):
+        if scope["type"] == "http":
+            path = scope.get("path", "")
+            root_path = scope.get("root_path", "")
+            if root_path and path.startswith(root_path):
+                path = path[len(root_path) :]
+            if path.lstrip("/").startswith(_NON_SPA_PREFIXES):
+                return Match.NONE, {}
+        return super().matches(scope)
+
+
 @app.get("/frontend", include_in_schema=False)
 @app.get("/frontend/{path:path}", include_in_schema=False)
 async def redirect_legacy_frontend_prefix(request: Request, path: str = ""):
@@ -2373,16 +2396,13 @@ async def favicon():
     return {"detail": "No favicon"}
 
 
-@app.get("/", include_in_schema=False)
-@app.get("/{path:path}", include_in_schema=False)
 async def serve_react_frontend(path: str = ""):
     """Serve the React SPA. Returns the requested file when it exists on
     disk (e.g. manifest, viewer-layout.js); otherwise falls back to
     index.html so deep links handled by react-router resolve correctly.
     The root falls back to /docs only when no bundle is deployed.
+    Backend-owned prefixes never reach here (see _SpaFallbackRoute).
     """
-    if path.startswith(_NON_SPA_PREFIXES):
-        raise HTTPException(status_code=404, detail="Not found")
     if path:
         candidate = os.path.realpath(os.path.join(FRONTEND_DIST, path))
         # Guard against path traversal: candidate must stay inside dist/.
@@ -2396,3 +2416,9 @@ async def serve_react_frontend(path: str = ""):
     if not path:
         return RedirectResponse(url="/docs")
     raise HTTPException(status_code=404, detail="React frontend not built")
+
+
+for _spa_path in ("/", "/{path:path}"):
+    app.router.add_api_route(
+        _spa_path, serve_react_frontend, include_in_schema=False, route_class_override=_SpaFallbackRoute
+    )
