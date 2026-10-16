@@ -21,6 +21,12 @@ and IOS-XE upgrades via SNMP, Netmiko, and Ansible.
 - `{{secret.NAME}}` syntax in config templates resolves encrypted variables at job execution time
 - Secret values are redacted from job logs via `redact_values()` in `routes/secret_resolver.py`
 
+## Code Reuse
+- Search for an existing helper before writing a new one; reuse or extend it instead of adding a duplicate
+- Logic needed in more than one module goes in one shared place (utility module, base class, shared hook/component) and is imported from both
+- Consolidate duplicated code you touch when it is small and safe; otherwise flag it in the summary
+- Delegated worker prompts carry this rule and name the shared modules in scope
+
 ## Security Rules
 - Never put `str(exc)` in HTTP error responses - use generic messages, log details server-side
 - Never use `dangerouslySetInnerHTML` with user/API data; let JSX escape it
