@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import netcontrol.routes.cloud_collectors as collectors_mod
+import pytest
 
 
 class _FakePaginator:
@@ -124,6 +125,8 @@ def _client_error(code: str):
 
 
 def test_aws_credential_message_names_expired_tokens_and_missing_credentials():
+    # botocore ships with requirements-cloud.txt only (CI installs the base set).
+    pytest.importorskip("botocore")
     from botocore.exceptions import NoCredentialsError, SSOTokenLoadError
 
     for code in ("ExpiredToken", "ExpiredTokenException", "RequestExpired"):
@@ -162,8 +165,7 @@ class _ExpiredSession:
 
 
 def test_collect_aws_passes_the_session_token_and_reports_its_expiry(monkeypatch):
-    import boto3
-    import pytest
+    boto3 = pytest.importorskip("boto3")
 
     _ExpiredSession.seen = []
     monkeypatch.setattr(boto3, "Session", _ExpiredSession)
