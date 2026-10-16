@@ -150,3 +150,55 @@ jobs:
 
       - name: Build (vite)
         run: npm run build
+
+  # Publishes the `edge` image that the in-app "edge" update channel pulls.
+  # Runs only after every check on a push to main has passed. amd64 only to
+  # keep it fast; tagged releases (release.yml) build multi-arch and run the
+  # trivy gate.
+  publish-edge:
+    needs: [secret-scan, build-test, frontend]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Resolve image name and version
+        id: meta
+        run: |
+          short="${GITHUB_SHA::12}"
+          base="$(sed -n 's/^_FALLBACK_VERSION = "\(.*\)"$/\1/p' netcontrol/version.py)"
+          [ -n "${base}" ] || { echo "cannot read _FALLBACK_VERSION" >&2; exit 1; }
+          echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "short=${short}" >> "$GITHUB_OUTPUT"
+          # SemVer build metadata: _parse_semver drops the "+..." suffix, so
+          # release-channel comparisons still see the base version.
+          echo "version=${base}+edge.${short}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish edge image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ steps.meta.outputs.name }}:edge
+            ${{ steps.meta.outputs.name }}:sha-${{ steps.meta.outputs.short }}
+          build-args: |
+            PLEXUS_VERSION=${{ steps.meta.outputs.version }}
+            PLEXUS_GIT_SHA=${{ github.sha }}

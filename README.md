@@ -57,6 +57,14 @@ the Secure session cookie. Use `https://localhost`, or set
 
 Compose always runs on PostgreSQL, the only supported database backend.
 
+To update, use **Settings → System**: *Check now* polls the configured
+channel (GitHub releases, the CI-built `edge` image of `main`, or a git
+branch) and *Install* hands the upgrade to the host updater that
+`deploy/bootstrap.sh` installs, which snapshots the database, runs
+`deploy/upgrade.sh`, waits for the health check and keeps a rollback
+target. On the host, `bash deploy/upgrade.sh` does the same by hand. See
+`deploy/DEPLOYMENT.md`, *Update from the web UI*.
+
 ## Other ways to run
 
 ### Run from source (Postgres in Docker, Windows or WSL2)

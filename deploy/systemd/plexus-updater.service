@@ -1,0 +1,15 @@
+# Plexus in-app update agent. Installed by deploy/bootstrap.sh, which
+# replaces @INSTALL_DIR@ with the install directory (default /opt/plexus).
+# Started by plexus-updater.path when the app queues state/updates/request.json.
+[Unit]
+Description=Plexus update agent (applies upgrades requested from the web UI)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=@INSTALL_DIR@
+Environment=PLEXUS_INSTALL_DIR=@INSTALL_DIR@
+ExecStart=/bin/bash @INSTALL_DIR@/deploy/plexus-updater.sh
+# A git-mode upgrade rebuilds the image on the host; give it room.
+TimeoutStartSec=3600

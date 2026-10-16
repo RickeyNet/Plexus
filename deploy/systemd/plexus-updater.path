@@ -1,0 +1,11 @@
+# Watches for update requests written by the Plexus app. Installed by
+# deploy/bootstrap.sh, which replaces @INSTALL_DIR@ with the install directory.
+[Unit]
+Description=Watch for Plexus update requests from the web UI
+
+[Path]
+PathExists=@INSTALL_DIR@/state/updates/request.json
+Unit=plexus-updater.service
+
+[Install]
+WantedBy=multi-user.target
