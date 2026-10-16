@@ -4,15 +4,7 @@ import { useLatestConfigBackupsPerHost } from '@/api/configuration';
 import type { DashboardAlert, DeviceHealth } from '@/api/dashboard';
 
 import { rollUpBackups } from './backupRollup';
-import { classifyDeviceHealth } from './helpers';
-
-// Anchor ids the chips scroll to. The Dashboard wraps each target panel in a
-// div carrying the matching id (see Dashboard.tsx).
-export const ISSUE_ANCHORS = {
-  devices: 'dashboard-devices',
-  backups: 'dashboard-backups',
-  alerts: 'dashboard-alerts',
-} as const;
+import { ISSUE_ANCHORS, classifyDeviceHealth } from './helpers';
 
 type IssueSeverity = 'critical' | 'warning';
 

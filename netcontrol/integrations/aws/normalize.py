@@ -570,7 +570,7 @@ class _Builder:
                     subnet.get("name") or subnet["rid"],
                     subnet["meta"].get("availability_zone"),
                     subnet["rid"],
-                    (table.get("name") or table["rid"]) if table else "",
+                    (subnet_table.get("name") or subnet_table["rid"]) if subnet_table else "",
                     default,
                     subnet["meta"].get("available_ips"),
                     acl_names.get(subnet["rid"], ""),

@@ -4,7 +4,8 @@ import { useDashboard } from '@/api/dashboard';
 
 import { PageHelp } from '@/components/PageHelp';
 import { AlertsSection } from './AlertsSection';
-import { CriticalIssuesBanner, ISSUE_ANCHORS } from './CriticalIssuesBanner';
+import { CriticalIssuesBanner } from './CriticalIssuesBanner';
+import { ISSUE_ANCHORS } from './helpers';
 import { DevicesGridPanel } from './DevicesGridPanel';
 import { GroupHealthPanel } from './GroupHealthPanel';
 import { HealthSection } from './HealthSection';
