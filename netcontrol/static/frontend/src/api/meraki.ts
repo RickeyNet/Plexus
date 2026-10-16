@@ -468,6 +468,8 @@ export interface ReachabilityQuery {
   within?: string;
   /** `1` advertised into the VPN, `0` not; empty for either. */
   in_vpn?: string;
+  /** File downloads only: keep the rows of this verdict. */
+  verdict?: PathVerdict;
 }
 
 /** One source network of a sweep and the verdict of its trace. */
@@ -519,10 +521,20 @@ export function reachabilitySearch(query: ReachabilityQuery): string {
   return params.toString();
 }
 
-/** URL of the CSV download of a sweep with the same filters. */
-export function reachabilityCsvUrl(query: ReachabilityQuery): string {
-  const search = reachabilitySearch(query);
-  return `/api/topology/reachability?${search}${search ? '&' : ''}format=csv`;
+export type ReachabilityFileFormat = 'xlsx' | 'csv';
+
+/**
+ * URL of the file download of a sweep with the same filters: a spreadsheet
+ * whose columns fit their text, or CSV. With `verdict`, only that verdict's
+ * rows.
+ */
+export function reachabilityFileUrl(
+  query: ReachabilityQuery,
+  format: ReachabilityFileFormat = 'xlsx',
+  verdict?: PathVerdict | null,
+): string {
+  const search = reachabilitySearch({ ...query, verdict: verdict ?? undefined });
+  return `/api/topology/reachability?${search}${search ? '&' : ''}format=${format}`;
 }
 
 export function useReachability(query: ReachabilityQuery | null) {
