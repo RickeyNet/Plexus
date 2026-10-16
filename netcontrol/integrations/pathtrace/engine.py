@@ -39,7 +39,7 @@ from collections import deque
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from netcontrol.integrations.meraki.subnets import _GATEWAY_ORDER, _NOT_A_GATEWAY
+from netcontrol.integrations.meraki.subnets import site_gateways
 from netcontrol.integrations.pathtrace import ports as port_sets
 from netcontrol.integrations.pathtrace.cloud import CloudAdapter
 from netcontrol.integrations.pathtrace.model import (
@@ -478,18 +478,12 @@ class Tracer:
         self.gateways: dict[tuple[int, str], str] = {}
         self.site_names: dict[tuple[int, str], str] = {}
         for org_ref, snapshot in snapshots.items():
-            ranks: dict[str, tuple[int, str]] = {}
             for node in snapshot.get("nodes") or []:
-                if not isinstance(node, dict):
-                    continue
-                self.snap_nodes[(org_ref, node["id"])] = node
-                kind, site = node.get("kind") or "", node.get("site") or ""
-                if kind in _NOT_A_GATEWAY or not site:
-                    continue
-                rank = _GATEWAY_ORDER.index(kind) if kind in _GATEWAY_ORDER else len(_GATEWAY_ORDER)
-                if site not in ranks or rank < ranks[site][0]:
-                    ranks[site] = (rank, node["id"])
-            for site, (_rank, node_id) in ranks.items():
+                if isinstance(node, dict):
+                    self.snap_nodes[(org_ref, node["id"])] = node
+            # The device each site's subnets enter and leave by: the primary of
+            # a warm-spare pair, which holds the site's AutoVPN tunnels.
+            for site, node_id in site_gateways(snapshot.get("nodes") or []).items():
                 self.gateways[(org_ref, site)] = node_id
             for site in snapshot.get("sites") or []:
                 self.site_names[(org_ref, site["id"])] = site.get("name") or site["id"]

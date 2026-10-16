@@ -144,7 +144,8 @@ belong to no inventory group).
   address**, or type an address or network and press Enter (the most
   specific collected subnet containing it is used; if several sites have
   it, pick from the list). A subnet stands for the device that owns it -
-  the site's appliance (VLANs, single LAN, static routes, and the local
+  the site's appliance, the primary of a warm-spare pair (VLANs, single
+  LAN, static routes, and the local
   networks it advertises into AutoVPN that are none of these, such as
   those an MX in VPN concentrator mode is given on its Site-to-site VPN
   page), the L3 switch holding its SVI, or the non-Meraki VPN peer it
@@ -422,7 +423,7 @@ it shows. The selector appears only when the export includes an integration.
 | `GET` | `/api/topology/search/deep?q=` | Search collected Meraki detail; returns node references and snippets |
 | `GET` | `/api/topology/export.html` | Interactive HTML map (`?group_id=`, `?download=1` to save, `?path=` the Path Mode picks and traffic as JSON, to embed the path and its traces, `?engine=0` to leave out the offline path tracer) |
 | `GET` | `/api/topology/path?source=&destination=` | Trace a flow hop by hop across every device on the map, request and replies. Optional `source_node`, `destination_node` (map node ids of the ends), `protocol` (`tcp`, `udp`, `icmp`, empty for any traffic) and `port`; see [path-trace.md](path-trace.md#api-reference) |
-| `GET` | `/api/topology/reachability?destination=` | Reachability sweep: the same trace from every source network the filters keep (`kinds`, `vlans`, `name`, `exclude`, `sites`, `within`, `in_vpn`, `sources`, `providers`), as JSON or `format=csv`; see [path-trace.md](path-trace.md#reachability-sweep) |
+| `GET` | `/api/topology/reachability?destination=` | Reachability sweep: the same trace from every source network the filters keep (`kinds`, `vlans`, `name`, `exclude`, `sites`, `within`, `in_vpn`, `sources`, `providers`), as JSON, a spreadsheet with fitted columns, a Summary tab of the counts by verdict and a tab per verdict (`format=xlsx`) or `format=csv` (the counts after the rows), a file download narrowed to one `verdict`; see [path-trace.md](path-trace.md#reachability-sweep) |
 | `GET` | `/api/sources/nodes?org_ref=&node_id=` | Detail sections for one Meraki node |
 | `GET` | `/api/sources` | List organizations and default collection options |
 | `POST` | `/api/sources` | Add an organization (admin) |

@@ -4,11 +4,8 @@ import type { ReachabilityReport, ReachabilityRow } from '@/api/meraki';
 
 import {
   buildReachabilityQuery,
-  csvFileName,
-  CSV_COLUMNS,
   DEFAULT_SWEEP_KINDS,
   emptyForm,
-  rowsToCsv,
   rowsWithVerdict,
   rowTraceQuery,
   siteRollup,
@@ -134,23 +131,6 @@ describe('rows', () => {
       { site: 'Branch A', checked: 2, counts: { allowed: 1, blocked: 1, unreachable: 0, partial: 0, unknown: 0 } },
       { site: 'Branch B', checked: 1, counts: { allowed: 0, blocked: 0, unreachable: 0, partial: 0, unknown: 1 } },
     ]);
-  });
-
-  it('writes CSV with the server columns and quotes what needs it', () => {
-    const lines = rowsToCsv(ROWS).split('\r\n');
-    expect(lines[0]).toBe(CSV_COLUMNS.join(','));
-    expect(lines[1]).toBe(
-      'Acme,meraki,Branch A,VLAN 10 Data,vlan,10,10.10.10.0/24,Yes,Allowed,,,Every hop allows it: Branch A MX → Hub MX.',
-    );
-    expect(lines[2]).toContain(',No,Blocked,Branch A MX,"Layer 3 firewall rules: Rule 1 (deny any, ""guest"") denies it",');
-    expect(lines[3]).toContain(',,10.20.10.0/24,,Check incomplete,');
-    expect(lines[4]).toBe('');
-  });
-
-  it('names the CSV file after the destination and traffic', () => {
-    const report = { destination: { address: '10.0.10.20' }, traffic: 'tcp/445' };
-    expect(csvFileName(report)).toBe('reachability-10.0.10.20-tcp_445.csv');
-    expect(csvFileName(report, '-blocked')).toBe('reachability-10.0.10.20-tcp_445-blocked.csv');
   });
 
   it('traces a row again from its graph node to the destination', () => {

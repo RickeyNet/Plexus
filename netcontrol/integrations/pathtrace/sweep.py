@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -393,6 +394,44 @@ VERDICT_WORDS = {
     PARTIAL: "Allowed in part",
     UNKNOWN: "Check incomplete",
 }
+SUMMARY_COLUMNS = ("Verdict", "Networks", "Share")
+
+
+def summary_rows(counts: Mapping[str, int]) -> list[list[Any]]:
+    """The summary of a sweep as the rows of ``SUMMARY_COLUMNS``: how many
+    networks got each verdict, in ``VERDICTS`` order (a verdict with none has
+    its row too), each one's share of the total as ``42%``, then a **Total**
+    row. ``counts`` is the sweep's ``counts`` (see ``run``)."""
+    total = sum(int(counts.get(verdict) or 0) for verdict in VERDICTS)
+
+    def share(count: int) -> str:
+        return f"{count / total:.0%}" if total else ""
+
+    rows: list[list[Any]] = [
+        [VERDICT_WORDS[verdict], int(counts.get(verdict) or 0), share(int(counts.get(verdict) or 0))]
+        for verdict in VERDICTS
+    ]
+    rows.append(["Total", total, share(total)])
+    return rows
+
+
+def sheet_row(row: dict[str, Any]) -> list[Any]:
+    """``csv_row`` with the VLAN id as a number, for a spreadsheet."""
+    cells: list[Any] = csv_row(row)
+    if row.get("vlan") is not None:
+        cells[CSV_COLUMNS.index("VLAN")] = int(row["vlan"])
+    return cells
+
+
+def sheet_groups(rows: list[dict[str, Any]], verdict: str | None = None) -> list[tuple[str, list[dict[str, Any]]]]:
+    """The tabs of a spreadsheet of result ``rows``: **All**, then one per
+    verdict in ``VERDICTS`` order (present even when empty, so the tabs are
+    always the same). With ``verdict``, the one tab of that verdict's rows."""
+    if verdict:
+        return [(VERDICT_WORDS.get(verdict, verdict), [row for row in rows if row.get("verdict") == verdict])]
+    groups: list[tuple[str, list[dict[str, Any]]]] = [("All", list(rows))]
+    groups.extend((VERDICT_WORDS[each], [row for row in rows if row.get("verdict") == each]) for each in VERDICTS)
+    return groups
 
 
 def csv_row(row: dict[str, Any]) -> list[str]:

@@ -2,7 +2,7 @@ import { Fragment, useMemo, useState } from 'react';
 
 import { ApiError } from '@/api/client';
 import {
-  reachabilityCsvUrl,
+  reachabilityFileUrl,
   useMerakiSubnets,
   useReachability,
   useTopologySources,
@@ -20,9 +20,7 @@ import { findSubnets, subnetOptionLabel } from './paths';
 import { reverseTraceQuery, verdictLabel } from './pathTrace';
 import {
   buildReachabilityQuery,
-  csvFileName,
   emptyForm,
-  rowsToCsv,
   rowsWithVerdict,
   rowTraceQuery,
   siteRollup,
@@ -46,15 +44,6 @@ function subnetKey(subnet: MerakiSubnet): string {
   return `${subnet.org_ref}|${subnet.node_id}|${subnet.cidr}`;
 }
 
-function downloadText(text: string, fileName: string): void {
-  const blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
-  const link = document.createElement('a');
-  link.download = fileName;
-  link.href = URL.createObjectURL(blob);
-  link.click();
-  URL.revokeObjectURL(link.href);
-}
-
 function toggle<T>(list: T[], value: T): T[] {
   return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
 }
@@ -62,8 +51,8 @@ function toggle<T>(list: T[], value: T): T[] {
 /**
  * The Reachability view of the Topology page: one destination and traffic,
  * traced by the server from every source network the filters keep. The
- * results come as verdict chips, a table (or a per-site rollup) and CSV; a
- * row opens its full hop-by-hop trace in place.
+ * results come as verdict chips, a table (or a per-site rollup) and a
+ * spreadsheet or CSV download; a row opens its full hop-by-hop trace in place.
  */
 export function Reachability() {
   const [form, setForm] = useState<ReachabilityForm>(emptyForm);
@@ -404,21 +393,30 @@ function Results({ report, query, rows, rollup, verdict, onVerdict, bySite, onBy
         <span style={{ flex: 1 }} />
         <a
           className="btn btn-sm btn-secondary"
-          href={reachabilityCsvUrl(query)}
+          href={reachabilityFileUrl(query)}
           download
-          title="Every network of this sweep, whatever verdict is shown"
+          title="Every network of this sweep as a spreadsheet, whatever verdict is shown: a summary of the counts, a tab of all rows and one per verdict"
         >
-          Download CSV
+          Download Excel
         </a>
-        <button
-          type="button"
+        <a
           className="btn btn-sm btn-secondary"
-          disabled={!rows.length}
-          onClick={() => downloadText(rowsToCsv(rows), csvFileName(report, verdict ? `-${verdict}` : '-shown'))}
-          title="Only the rows shown below"
+          href={reachabilityFileUrl(query, 'xlsx', verdict)}
+          download
+          aria-disabled={!rows.length}
+          style={rows.length ? undefined : { pointerEvents: 'none', opacity: 0.6 }}
+          title="Only the rows shown below, as a spreadsheet, with the summary of the whole sweep"
         >
           Download shown rows
-        </button>
+        </a>
+        <a
+          className="btn btn-sm btn-secondary"
+          href={reachabilityFileUrl(query, 'csv')}
+          download
+          title="Every network of this sweep as CSV, with the counts by verdict after the rows"
+        >
+          CSV
+        </a>
       </div>
 
       {!report.rows.length ? (
