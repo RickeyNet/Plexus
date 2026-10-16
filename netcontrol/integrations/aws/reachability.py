@@ -80,7 +80,7 @@ def _cidr_cover(rule_cidr: Any, net: _Network) -> int:
     rule = _net(rule_cidr)
     if rule is None or rule.version != net.version:
         return _NONE
-    if rule.supernet_of(net):
+    if rule.supernet_of(net):  # type: ignore[arg-type]
         return _FULL
     return _PART if rule.overlaps(net) else _NONE
 
@@ -143,12 +143,12 @@ def _longest(routes: list[dict], net: _Network) -> tuple[dict | None, list[dict]
         route_net = _net(destination)
         if route_net is None or route_net.version != net.version:
             continue
-        if route_net.supernet_of(net):
+        if route_net.supernet_of(net):  # type: ignore[arg-type]
             # Of two routes for one prefix AWS prefers the static one.
             propagated = "propagat" in (_text(route.get("origin")) + _text(route.get("type"))).lower()
             if route_net.prefixlen > best_len or (route_net.prefixlen == best_len and not propagated):
                 best, best_len = route, route_net.prefixlen
-        elif route_net.subnet_of(net):
+        elif route_net.subnet_of(net):  # type: ignore[arg-type]
             narrower.append(route)
     return best, narrower, prefix_lists
 
@@ -259,7 +259,7 @@ class Reachability:
             (subnet_net.prefixlen, subnet)
             for subnet_net, subnet in self.subnets
             if subnet_net.version == net.version
-            and subnet_net.supernet_of(net)
+            and subnet_net.supernet_of(net)  # type: ignore[arg-type]
             and (not vpc_id or _text(subnet["meta"].get("vpc_id")) == vpc_id)
         ]
         longest = max((length for length, _subnet in found), default=-1)
@@ -403,7 +403,7 @@ class Reachability:
             appliance = self._interface_owner.get(hop) or self._by_type.get("instance", {}).get(hop)
             name = self._instance_name(appliance) if appliance else hop
             carrier = (carriers or {}).get(appliance["rid"]) if appliance else None
-            if carrier is not None and not in_aws:
+            if carrier is not None and appliance is not None and not in_aws:
                 step(OK, "route", where, f"{via} hands it to {name}, which is {carrier.name}.")
                 carried = True
                 for status, at, text in carrier.carry(origin["net"], net):
@@ -414,8 +414,8 @@ class Reachability:
                 interfaces = [i for i in appliance["meta"].get("interfaces") or [] if isinstance(i, dict)]
                 held = next((i.get("private_ips") or [] for i in interfaces if _text(i.get("id")) == hop), [])
                 address = _text(held[0]) if held else _text(appliance["meta"].get("private_ip"))
-                gateway = {"kind": "appliance", "instance": appliance, "address": address, "name": carrier.name}
-                return {"kind": "exit", "exit": gateway}
+                appliance_exit = {"kind": "appliance", "instance": appliance, "address": address, "name": carrier.name}
+                return {"kind": "exit", "exit": appliance_exit}
             step(
                 UNKNOWN,
                 "route",
@@ -886,14 +886,14 @@ class Reachability:
         first = {
             status: next((s for s in steps if s["status"] == status), None) for status in (BLOCKED, UNKNOWN, PARTIAL)
         }
-        if first[BLOCKED]:
-            verdict, lead = BLOCKED, first[BLOCKED]
+        if lead := first[BLOCKED]:
+            verdict = BLOCKED
             summary = f"Blocked at {lead['where']}: {lead['text']}"
-        elif first[UNKNOWN]:
-            verdict, lead = UNKNOWN, first[UNKNOWN]
+        elif lead := first[UNKNOWN]:
+            verdict = UNKNOWN
             summary = f"Could not be decided at {lead['where']}: {lead['text']}"
-        elif first[PARTIAL]:
-            verdict, lead = PARTIAL, first[PARTIAL]
+        elif lead := first[PARTIAL]:
+            verdict = PARTIAL
             summary = f"Allowed in part. {lead['where']}: {lead['text']}"
         else:
             verdict = "allowed"

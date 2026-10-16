@@ -146,7 +146,9 @@ ENDPOINTS: dict[str, tuple[str, str, bool, tuple[str, ...]]] = {
     "port_statuses": (SCOPE_DEVICE, "devices/{serial}/switch/ports/statuses", False, ("switch",)),
 }
 
-Evaluator = Callable[[dict[str, Any], dict[str, Any], dict[str, Any]], tuple[bool, str, list[str]]]
+# ``passed`` is ``None`` when the check does not concern the target (skipped).
+CheckResult = tuple[bool | None, str, list[str]]
+Evaluator = Callable[[dict[str, Any], dict[str, Any], dict[str, Any]], CheckResult]
 
 
 @dataclass(frozen=True)
@@ -362,8 +364,8 @@ def _eval_root_pinned(data: dict, params: dict, _ctx: dict) -> tuple[bool, str, 
         if not isinstance(entry, dict):
             continue
         try:
-            priority = int(entry.get("stpPriority"))
-        except TypeError, ValueError:
+            priority = int(entry["stpPriority"])
+        except KeyError, TypeError, ValueError:
             continue
         if priority <= limit:
             members = (
@@ -477,8 +479,8 @@ def _eval_port_mac_limit(data: dict, params: dict, _ctx: dict) -> tuple[bool, st
     bad: list[str] = []
     for p in sticky:
         try:
-            current = int(p.get("stickyMacAllowListLimit"))
-        except TypeError, ValueError:
+            current = int(p["stickyMacAllowListLimit"])
+        except KeyError, TypeError, ValueError:
             current = 0
         if current > limit or current <= 0:
             bad.append(f"{_port_label(p)}: limit {current or 'unset'}")
@@ -1354,8 +1356,8 @@ def _idle_timeout(ls: dict, p: dict) -> tuple[bool, str, list[str]]:
     if not ls.get("enforceIdleTimeout"):
         return False, "Idle timeout is not enforced", []
     try:
-        minutes = int(ls.get("idleTimeoutMinutes"))
-    except TypeError, ValueError:
+        minutes = int(ls["idleTimeoutMinutes"])
+    except KeyError, TypeError, ValueError:
         return False, "Idle timeout enforced but no value reported", []
     if minutes > limit:
         return False, f"Idle timeout is {minutes} minutes (maximum {limit})", []
@@ -1377,8 +1379,8 @@ def _lockout(ls: dict, p: dict) -> tuple[bool, str, list[str]]:
     if not ls.get("enforceAccountLockout"):
         return False, "Account lockout is not enforced", []
     try:
-        attempts = int(ls.get("accountLockoutAttempts"))
-    except TypeError, ValueError:
+        attempts = int(ls["accountLockoutAttempts"])
+    except KeyError, TypeError, ValueError:
         return False, "Account lockout enforced but no attempt count reported", []
     if attempts > limit:
         return False, f"Lockout after {attempts} attempts (maximum {limit})", []
@@ -1400,8 +1402,8 @@ def _password_expiration(ls: dict, p: dict) -> tuple[bool, str, list[str]]:
     if not ls.get("enforcePasswordExpiration"):
         return False, "Password expiration is not enforced", []
     try:
-        days = int(ls.get("passwordExpirationDays"))
-    except TypeError, ValueError:
+        days = int(ls["passwordExpirationDays"])
+    except KeyError, TypeError, ValueError:
         return False, "Password expiration enforced but no period reported", []
     if days > limit:
         return False, f"Passwords expire after {days} days (maximum {limit})", []
@@ -1764,7 +1766,8 @@ def _evaluate_target(
                 continue  # not applicable here
             findings.append(_finding(rule, check, passed=False, unreadable=True, detail=f"Could not read {problem}"))
             continue
-        params = {**copy.deepcopy(check.params), **(rule.get("params") if isinstance(rule.get("params"), dict) else {})}
+        rule_params = rule.get("params")
+        params = {**copy.deepcopy(check.params), **(rule_params if isinstance(rule_params, dict) else {})}
         try:
             passed, detail, evidence = check.evaluate(data, params, context)
         except Exception as exc:  # noqa: BLE001 - one broken check must not sink the scan
@@ -1855,7 +1858,7 @@ def evaluate_profile(rules: Any, raw: dict[str, Any]) -> list[dict[str, Any]]:
         applicable = [(r, c) for r, c in by_scope[SCOPE_NETWORK] if not c.products or products_here & set(c.products)]
         if not applicable:
             continue
-        sources = dict(networks_detail.get(net["id"]) or {})
+        sources: dict[str, Any] = dict(networks_detail.get(net["id"]) or {})
         findings = _evaluate_target(applicable, sources, {"network": net, "organization": org})
         summary = _summarise(
             {
@@ -1885,7 +1888,7 @@ def evaluate_profile(rules: Any, raw: dict[str, Any]) -> list[dict[str, Any]]:
             applicable = [(r, c) for r, c in by_scope[SCOPE_DEVICE] if not c.products or kind in c.products]
             if not applicable:
                 continue
-            sources: dict[str, Any] = dict(devices_detail.get(dev["serial"]) or {})
+            sources = dict(devices_detail.get(dev["serial"]) or {})
             sources["device"] = dev
             if isinstance(ports_by_serial, Unreadable):
                 sources["ports"] = ports_by_serial
@@ -1943,7 +1946,7 @@ def evaluate_profile(rules: Any, raw: dict[str, Any]) -> list[dict[str, Any]]:
                 key=lambda x: int(x["number"]) if str(x["number"]).isdigit() else 99,
             ):
                 number = str(ssid["number"])
-                sources: dict[str, Any] = dict(per_net.get(number) or {})
+                sources = dict(per_net.get(number) or {})
                 sources["ssid"] = ssid
                 sources["network"] = net
                 findings = _evaluate_target(

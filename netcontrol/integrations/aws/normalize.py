@@ -559,9 +559,9 @@ class _Builder:
                 explicit[_text(subnet_id)] = table
         rows = []
         for subnet in subnets:
-            table = explicit.get(subnet["rid"]) or main
+            subnet_table = explicit.get(subnet["rid"]) or main
             default = ""
-            for route in (table["meta"].get("routes") if table else None) or []:
+            for route in (subnet_table["meta"].get("routes") if subnet_table else None) or []:
                 if isinstance(route, dict) and _text(route.get("destination")) == "0.0.0.0/0":
                     default = _default_route_via(_text(route.get("target")))
             rows.append(
