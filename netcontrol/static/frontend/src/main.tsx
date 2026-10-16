@@ -30,7 +30,7 @@ createRoot(rootEl).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <TimeRangeProvider>
-        <BrowserRouter basename="/frontend">
+        <BrowserRouter>
           <DialogProvider>
             <App />
           </DialogProvider>

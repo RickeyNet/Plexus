@@ -1889,7 +1889,7 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     # CSP: restrict resource origins while allowing the SPA to function.
     # script-src is 'self' only: the React bundle ships as external hashed
-    # modules from /frontend/assets, so no inline <script> or CDN is needed
+    # modules from /assets, so no inline <script> or CDN is needed
     # (the legacy index.html onclick= handlers were removed in the React
     # migration). 'unsafe-inline' is kept for style-src alone (dynamic style=
     # attrs from the React app and ECharts).
@@ -2326,8 +2326,11 @@ if os.path.isdir(STATIC_DIR):
 
 
 # React frontend - the only UI (migration history: docs/FRONTEND_MIGRATION.md).
-# Built from netcontrol/static/frontend via `npm run build`. Mounted at
-# /frontend with SPA-style fallback so client-side routes resolve to index.html.
+# Built from netcontrol/static/frontend via `npm run build`. Served from the
+# site root with SPA-style fallback so client-side routes resolve to
+# index.html. The catch-all is registered last so every API router, the
+# /static mount and the docs routes always win; it only sees paths nothing
+# else claimed.
 class _ImmutableStaticFiles(StaticFiles):
     """Vite content-hashes every filename under dist/assets, so any change
     produces a new URL — the old one can be cached forever."""
@@ -2338,46 +2341,58 @@ class _ImmutableStaticFiles(StaticFiles):
         return response
 
 
+# Prefixes owned by the backend. A miss under one of these is a real 404,
+# not a client-side route, so the SPA fallback must not answer with index.html.
+_NON_SPA_PREFIXES = ("api/", "ws/", "static/", "docs", "redoc", "openapi.json")
+
+
+@app.get("/frontend", include_in_schema=False)
+@app.get("/frontend/{path:path}", include_in_schema=False)
+async def redirect_legacy_frontend_prefix(request: Request, path: str = ""):
+    """The SPA used to live under /frontend/. Bounce old bookmarks and links
+    to the same route at the site root."""
+    target = "/" + path
+    if request.url.query:
+        target += "?" + request.url.query
+    return RedirectResponse(url=target, status_code=301)
+
+
 if os.path.isdir(FRONTEND_DIST):
     _frontend_assets = os.path.join(FRONTEND_DIST, "assets")
     if os.path.isdir(_frontend_assets):
         app.mount(
-            "/frontend/assets",
+            "/assets",
             _ImmutableStaticFiles(directory=_frontend_assets),
             name="frontend_assets",
         )
-
-    @app.get("/frontend", include_in_schema=False)
-    @app.get("/frontend/{path:path}", include_in_schema=False)
-    async def serve_react_frontend(path: str = ""):
-        """Serve the React SPA. Returns the requested file when it exists on
-        disk (e.g. favicon, manifest); otherwise falls back to index.html so
-        deep links handled by react-router resolve correctly.
-        """
-        if path:
-            candidate = os.path.realpath(os.path.join(FRONTEND_DIST, path))
-            # Guard against path traversal: candidate must stay inside dist/.
-            # Compare against realpath + separator so a sibling directory with
-            # the same prefix (e.g. dist-evil/) can't satisfy a bare startswith.
-            dist_root = os.path.realpath(FRONTEND_DIST)
-            if (candidate == dist_root or candidate.startswith(dist_root + os.sep)) and os.path.isfile(candidate):
-                return FileResponse(candidate)
-        if os.path.isfile(FRONTEND_INDEX):
-            return FileResponse(FRONTEND_INDEX)
-        raise HTTPException(status_code=404, detail="React frontend not built")
-
-
-@app.get("/")
-async def serve_frontend():
-    """Serve the React UI. The legacy vanilla-JS SPA was retired after the
-    migration completed (docs/FRONTEND_MIGRATION.md); React is now the
-    only frontend. Falls back to /docs only when no bundle is deployed."""
-    if os.path.isfile(FRONTEND_INDEX):
-        return RedirectResponse(url="/frontend/")
-    return RedirectResponse(url="/docs")
 
 
 @app.get("/favicon.ico")
 async def favicon():
     """Handle favicon requests gracefully."""
     return {"detail": "No favicon"}
+
+
+@app.get("/", include_in_schema=False)
+@app.get("/{path:path}", include_in_schema=False)
+async def serve_react_frontend(path: str = ""):
+    """Serve the React SPA. Returns the requested file when it exists on
+    disk (e.g. manifest, viewer-layout.js); otherwise falls back to
+    index.html so deep links handled by react-router resolve correctly.
+    The root falls back to /docs only when no bundle is deployed.
+    """
+    if path.startswith(_NON_SPA_PREFIXES):
+        raise HTTPException(status_code=404, detail="Not found")
+    if path:
+        candidate = os.path.realpath(os.path.join(FRONTEND_DIST, path))
+        # Guard against path traversal: candidate must stay inside dist/.
+        # Compare against realpath + separator so a sibling directory with
+        # the same prefix (e.g. dist-evil/) can't satisfy a bare startswith.
+        dist_root = os.path.realpath(FRONTEND_DIST)
+        if (candidate == dist_root or candidate.startswith(dist_root + os.sep)) and os.path.isfile(candidate):
+            return FileResponse(candidate)
+    if os.path.isfile(FRONTEND_INDEX):
+        return FileResponse(FRONTEND_INDEX)
+    if not path:
+        return RedirectResponse(url="/docs")
+    raise HTTPException(status_code=404, detail="React frontend not built")
