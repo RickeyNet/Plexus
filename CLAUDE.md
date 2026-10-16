@@ -40,3 +40,24 @@
   change, not the full suite, unless the change is cross-cutting (the database
   facade, migrations, conftest). Run a full suite at most once per task, and
   never twice in one command.
+
+## Code reuse
+
+- **Search before you write.** Before adding a helper, parser, validator,
+  formatter, or client wrapper, grep the codebase for an existing one that
+  does the same job (`netcontrol/`, `routes/`, `templates/`, and the
+  frontend `src/`). If one exists, import and reuse it, or extend it with a
+  parameter; do not write a second copy. Prefer reusing an existing helper
+  over duplication, even when the new copy would be shorter.
+- **Share, don't copy.** When the same logic is needed in two or more
+  modules, put it in one shared place (an existing utility module, a common
+  base class, or a new small module under the nearest shared package) and
+  import it from both. The same applies to the frontend: shared hooks,
+  components, and utilities live in one place and are imported, not pasted.
+- **Fix duplication you touch.** When a change lands in code that already
+  duplicates logic found elsewhere, consolidate the copies as part of the
+  change if it is small and safe. If consolidation is too large for the
+  task, leave the code as is and call out the duplication in the summary.
+- **Workers inherit this rule.** Every delegated worker prompt must include
+  the reuse rule and name the shared modules relevant to its scope, and the
+  reviewer checks worker output for duplicated code before accepting it.
