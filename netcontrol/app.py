@@ -2181,7 +2181,8 @@ app.include_router(
     monitoring_admin_router,
     dependencies=[Depends(require_admin)],
 )
-# Admin self-update routes (Layer 3, v1: read-only check + channel config).
+# Admin self-update routes (check, channel config, apply/rollback via the
+# host updater handoff directory, progress).
 app.include_router(
     admin_updates_router,
     dependencies=[Depends(require_admin)],

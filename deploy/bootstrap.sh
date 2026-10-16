@@ -120,6 +120,40 @@ cd "${INSTALL_DIR}"
 log "Running setup.sh (generates .env and self-signed TLS cert)"
 sudo -u "${TARGET_USER}" bash deploy/setup.sh
 
+# ── 6b. Install the host updater (in-app "Install update") ────────────
+# The app writes state/updates/request.json; a systemd path unit runs
+# deploy/plexus-updater.sh (as root, which runs upgrade.sh as TARGET_USER).
+# The container never gets the Docker socket.
+log "Installing plexus-updater systemd units"
+mkdir -p state/updates
+chown "${TARGET_USER}:${TARGET_USER}" state
+# Earlier `sudo bash deploy/upgrade.sh` runs may have left root-owned backups.
+if [[ -d state/backups ]]; then chown -R "${TARGET_USER}:${TARGET_USER}" state/backups; fi
+if [[ -f state/.upgrade-previous ]]; then chown "${TARGET_USER}:${TARGET_USER}" state/.upgrade-previous; fi
+# uid 1000 is the in-container `plexus` user (Dockerfile); it writes
+# request.json here. The entrypoint re-applies this on every start.
+chown 1000:1000 state/updates
+
+# Image repo the updater accepts for --image upgrades (same env_set idiom
+# as upgrade.sh: only add the key when it is missing).
+if ! grep -qE '^PLEXUS_UPDATE_IMAGE_REPO=' .env 2>/dev/null; then
+    printf '%s=%s\n' PLEXUS_UPDATE_IMAGE_REPO ghcr.io/rickeynet/plexus >> .env
+fi
+
+if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+    for unit in plexus-updater.service plexus-updater.path; do
+        sed "s|@INSTALL_DIR@|${INSTALL_DIR}|g" "deploy/systemd/${unit}" > "/etc/systemd/system/${unit}.tmp"
+        chmod 0644 "/etc/systemd/system/${unit}.tmp"
+        mv -f "/etc/systemd/system/${unit}.tmp" "/etc/systemd/system/${unit}"
+    done
+    systemctl daemon-reload
+    systemctl enable --now plexus-updater.path
+    bash deploy/plexus-updater.sh --sync-rollback
+    touch state/updates/.agent-installed
+else
+    log "systemd not available - skipping plexus-updater (in-app Install stays disabled)"
+fi
+
 # ── 7. Start the stack ────────────────────────────────────────────────
 # If the app container dies, compose only says "dependency failed to start".
 # Dump the evidence (exit code, OOM flag, app log) so the operator does not
