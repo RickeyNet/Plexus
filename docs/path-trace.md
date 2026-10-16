@@ -40,9 +40,11 @@ picks is a leg of the path.
   subnet and a device says which end to add with the subnet box instead.
   The exception is a remote user (a person icon): it has one address, so a
   click picks it with that address and its legs are traced.
-- A subnet stands for the device that owns it: the site's appliance, the L3
-  switch holding its SVI, the FTD it is connected to, the VPC or VNet
-  router, the Cato Socket or the VPN peer it sits behind. A device that two
+- A subnet stands for the device that owns it: the site's appliance (the
+  primary of a Meraki warm-spare pair, which holds the site's AutoVPN
+  tunnels), the L3 switch holding its SVI, the FTD it is connected to, the
+  VPC or VNet router, the Cato Socket or the VPN peer it sits behind. A
+  device that two
   sources know, such as an FTDv that is also an AWS instance, is one node on
   the map, and the subnets of both can be picked.
 - A remote user connected with the Cato Client or the Appgate Client owns
@@ -470,12 +472,23 @@ in several places (pick the subnet you mean in **Destination is at**).
 Collecting the named source again, or the missing data, turns it into a
 verdict; the row does not say whether the flow would pass.
 
-### CSV
+### Downloads
 
-**Download CSV** saves every network of the sweep, whatever chip is
-selected, with the same filters (`format=csv`). **Download shown rows** saves
-only the rows on screen. Both have the columns: Source, Provider, Site,
-Network, Kind, VLAN, CIDR, In VPN, Verdict, Decided at, Decided by, Summary.
+**Download Excel** saves every network of the sweep, whatever chip is
+selected, with the same filters, as a spreadsheet (`format=xlsx`). Its
+first tab, **Summary**, counts the networks of each verdict (Verdict,
+Networks, Share of the total) with a Total row; then come **All** and a
+tab for every verdict: **Allowed**, **Blocked**, **No path**, **Allowed in
+part** and **Check incomplete**, each present even when it has no rows so
+the tabs are always in the same place. Every tab's columns are sized to fit
+their text, with a bold header row that stays put when scrolling and a
+filter on every column. **Download shown rows** saves the Summary and one
+tab with only the rows on screen (the selected chip's verdict,
+`verdict=blocked` and so on); the Summary still counts the whole sweep.
+**CSV** saves every network as plain CSV (`format=csv`), which has no
+column widths, with the same counts by verdict after the rows, under an
+empty line. All have the columns: Source, Provider, Site, Network, Kind,
+VLAN, CIDR, In VPN, Verdict, Decided at, Decided by, Summary.
 
 ## Limits
 

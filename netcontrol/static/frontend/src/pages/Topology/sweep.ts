@@ -7,12 +7,12 @@ import type {
 } from '@/api/meraki';
 
 import { parseTraffic } from './paths';
-import { verdictLabel } from './pathTrace';
 
 // Reachability sweep: one destination traced from every source network the
 // filters keep (`GET /api/topology/reachability`). These helpers turn the
-// form into the query and the rows into chips, a per-site rollup and CSV;
-// Reachability.tsx draws them.
+// form into the query and the rows into chips and a per-site rollup;
+// Reachability.tsx draws them. The downloads (spreadsheet, CSV) come from
+// the server with the same query (`reachabilityFileUrl`).
 
 /** Subnet kinds a sweep can start from, with their names, in display order. */
 export const SWEEP_KINDS: { key: string; label: string }[] = [
@@ -151,54 +151,6 @@ export function siteRollup(rows: ReachabilityRow[]): SiteRollup[] {
     entry.counts[row.verdict] = (entry.counts[row.verdict] ?? 0) + 1;
   }
   return [...sites.values()];
-}
-
-export const CSV_COLUMNS = [
-  'Source',
-  'Provider',
-  'Site',
-  'Network',
-  'Kind',
-  'VLAN',
-  'CIDR',
-  'In VPN',
-  'Verdict',
-  'Decided at',
-  'Decided by',
-  'Summary',
-];
-
-function csvCell(value: string): string {
-  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
-}
-
-/** Rows as CSV, with the server's columns (for downloading the rows shown). */
-export function rowsToCsv(rows: ReachabilityRow[]): string {
-  const lines = [CSV_COLUMNS.join(',')];
-  for (const row of rows) {
-    const cells = [
-      row.org_name || String(row.org_ref ?? ''),
-      row.provider,
-      row.site_name,
-      row.name,
-      row.kind,
-      row.vlan === null || row.vlan === undefined ? '' : String(row.vlan),
-      row.cidr,
-      row.in_vpn === null || row.in_vpn === undefined ? '' : row.in_vpn ? 'Yes' : 'No',
-      verdictLabel(row.verdict).label,
-      row.decided_at,
-      row.decided_by,
-      row.summary,
-    ];
-    lines.push(cells.map((cell) => csvCell(cell ?? '')).join(','));
-  }
-  return `${lines.join('\r\n')}\r\n`;
-}
-
-/** File name of a CSV of `report`: `reachability-10.0.10.20-tcp_445.csv`. */
-export function csvFileName(report: Pick<ReachabilityReport, 'destination' | 'traffic'>, suffix = ''): string {
-  const stem = `reachability-${report.destination.address}-${report.traffic}${suffix}`;
-  return `${stem.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '')}.csv`;
 }
 
 /** The Path Mode trace of one row: its network to the sweep's destination. */

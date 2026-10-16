@@ -28,7 +28,7 @@ from netcontrol.integrations.meraki.forwarding import UPLINK_NAT_MODE, appliance
 from netcontrol.integrations.meraki.html_export import export_filename, render_topology_html
 from netcontrol.integrations.meraki.normalize import VPN_PEER_SITE_ID, InventoryIndex, build_snapshot
 from netcontrol.integrations.meraki.sample import build_sample_raw
-from netcontrol.integrations.meraki.subnets import subnet_index, subnets_containing
+from netcontrol.integrations.meraki.subnets import site_gateways, subnet_index, subnets_containing
 from netcontrol.integrations.meraki.unified import (
     build_search_index,
     external_key,
@@ -463,6 +463,39 @@ def test_subnet_index_ignores_text_that_is_not_a_network():
         ("192.168.9.0/24", "sw", None),
     ]
     assert subnet_index({}) == []
+
+
+def test_subnet_index_places_a_vlan_on_the_primary_of_a_warm_spare_pair():
+    # The spare is listed first; the primary is the appliance the snapshot
+    # marks as the site's own (it holds the AutoVPN tunnels), so the VLAN
+    # starts and ends there.
+    snapshot = {
+        "sites": [
+            {
+                "id": "N1",
+                "name": "HQ",
+                "sections": [
+                    {
+                        "title": "VLANs",
+                        "kind": "table",
+                        "columns": ["VLAN", "Name", "Subnet"],
+                        "rows": [["1", "Data", "10.175.14.0/24"]],
+                    }
+                ],
+            }
+        ],
+        "nodes": [
+            {"id": "d:spare", "kind": "appliance", "site": "N1", "label": "HQ Backup MX450"},
+            {"id": "d:primary", "kind": "appliance", "site": "N1", "label": "HQ Primary MX450", "site_sections": True},
+            {"id": "sw", "kind": "switch", "site": "N1", "label": "sw", "site_sections": True},
+        ],
+    }
+    assert [(e["cidr"], e["node_id"]) for e in subnet_index(snapshot)] == [("10.175.14.0/24", "d:primary")]
+    assert site_gateways(snapshot["nodes"]) == {"N1": "d:primary"}
+    # Without the mark, the first appliance listed stands for the site, as before.
+    for node in snapshot["nodes"]:
+        node.pop("site_sections", None)
+    assert site_gateways(snapshot["nodes"]) == {"N1": "d:spare"}
 
 
 def test_subnet_index_lists_the_local_networks_a_site_advertises_into_the_vpn():

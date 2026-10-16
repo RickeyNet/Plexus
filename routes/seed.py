@@ -29,6 +29,7 @@ from routes.database import (
     create_template,
     get_db,
     init_db,
+    seed_builtin_templates,
 )
 from routes.runner import list_registered_playbooks
 
@@ -204,6 +205,12 @@ async def seed():
                 print(f"  ~ Template '{name}' already exists, skipping")
             else:
                 raise
+
+    # Templates that ship with the app (SNMPv3 for Cisco and Aruba).  The
+    # app lifespan seeds these on every start as well; calling it here
+    # keeps a standalone `python routes/seed.py` complete.
+    builtin_count = await seed_builtin_templates()
+    print(f"  + {builtin_count} built-in template(s)")
 
     # ── Compliance Profiles (Preloaded Security Standards) ─────────────
     from routes.builtin_compliance_profiles import BUILTIN_PROFILES

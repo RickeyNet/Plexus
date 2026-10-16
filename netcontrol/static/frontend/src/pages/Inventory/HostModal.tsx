@@ -16,6 +16,8 @@ const DEVICE_TYPES = [
   { value: 'cisco_nxos', label: 'Cisco NX-OS' },
   { value: 'cisco_asa', label: 'Cisco ASA' },
   { value: 'cisco_ftd', label: 'Cisco FTD / Firepower' },
+  { value: 'aruba_aoscx', label: 'Aruba AOS-CX' },
+  { value: 'aruba_osswitch', label: 'Aruba AOS-Switch / HP ProCurve' },
   { value: 'icmp_only', label: 'ICMP-only (ping liveness, no SNMP/SSH)' },
 ];
 

@@ -19,6 +19,8 @@ const TEMPLATE_DEVICE_TYPES: { value: string; label: string }[] = [
   { value: 'cisco_xe', label: 'Cisco IOS-XE' },
   { value: 'cisco_nxos', label: 'Cisco NX-OS' },
   { value: 'cisco_xr', label: 'Cisco IOS-XR' },
+  { value: 'aruba_aoscx', label: 'Aruba AOS-CX' },
+  { value: 'aruba_osswitch', label: 'Aruba AOS-Switch / HP ProCurve' },
   { value: 'arista_eos', label: 'Arista EOS' },
   { value: 'juniper_junos', label: 'Juniper Junos' },
   { value: 'paloalto_panos', label: 'Palo Alto PAN-OS' },

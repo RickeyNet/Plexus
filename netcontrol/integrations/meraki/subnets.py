@@ -19,6 +19,7 @@ integration can adopt the titles without matching another's layout.
 from __future__ import annotations
 
 import ipaddress
+from collections.abc import Iterable
 from typing import Any
 
 # A VPC's own router owns its subnets even when the VPC holds an appliance.
@@ -64,6 +65,27 @@ def _named(row: list[str], columns: dict[str, int], name: str) -> str:
     return _cell(row, columns[name]) if name in columns else ""
 
 
+def site_gateways(nodes: Iterable[dict]) -> dict[str, str]:
+    """The node that stands for each site, by site id: the device the site's
+    subnets enter and leave by. A VPC's router comes before an appliance, an
+    appliance before a switch, a switch before an access point. Among devices
+    of one kind, the one the snapshot marks as the site's own (``site_sections``:
+    the primary of a warm-spare pair, which holds the site's VPN tunnels)
+    comes before the others, and the first listed decides the rest."""
+    best: dict[str, tuple[int, int, str]] = {}
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        kind, site = str(node.get("kind") or ""), str(node.get("site") or "")
+        if kind in _NOT_A_GATEWAY or not site:
+            continue
+        rank = _GATEWAY_ORDER.index(kind) if kind in _GATEWAY_ORDER else len(_GATEWAY_ORDER)
+        own = 0 if node.get("site_sections") else 1
+        if site not in best or (rank, own) < best[site][:2]:
+            best[site] = (rank, own, str(node["id"]))
+    return {site: node_id for site, (_rank, _own, node_id) in best.items()}
+
+
 def subnet_index(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     """Every subnet the snapshot knows an owner for, sorted by address.
 
@@ -74,17 +96,11 @@ def subnet_index(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     subnet into the VPN (``None`` when the snapshot does not say).
     """
     nodes = [n for n in snapshot.get("nodes") or [] if isinstance(n, dict)]
-    gateways: dict[str, tuple[int, str]] = {}
+    gateways = site_gateways(nodes)
     peers: dict[str, dict] = {}
     for node in nodes:
-        kind = node.get("kind") or ""
-        if kind == "vpn_peer":
+        if node.get("kind") == "vpn_peer":
             peers.setdefault(str(node.get("label") or ""), node)
-        if kind in _NOT_A_GATEWAY or not node.get("site"):
-            continue
-        rank = _GATEWAY_ORDER.index(kind) if kind in _GATEWAY_ORDER else len(_GATEWAY_ORDER)
-        if node["site"] not in gateways or rank < gateways[node["site"]][0]:
-            gateways[node["site"]] = (rank, node["id"])
 
     site_names = {s["id"]: s.get("name") or s["id"] for s in snapshot.get("sites") or []}
     entries: dict[tuple[str, str], dict[str, Any]] = {}
@@ -111,7 +127,7 @@ def subnet_index(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
         in_vpn = {_cidr(_cell(r, 0)): _cell(r, 1) == "Yes" for r in _rows(sections, "VPN local subnets")}
         in_vpn.pop("", None)
         vpn_by_site[site["id"]] = in_vpn
-        gateway = gateways.get(site["id"], (0, ""))[1]
+        gateway = gateways.get(site["id"], "")
 
         def advertised(cidr: str, known: dict[str, bool] = in_vpn) -> bool | None:
             return known.get(cidr) if known else None

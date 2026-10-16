@@ -1442,6 +1442,9 @@ async def lifespan(app: FastAPI):
         await seed()
     await db.seed_built_in_graph_templates()
     await db.seed_built_in_cdefs()
+    # Config templates (Delegator > Instructions) that ship with the app.
+    # Each is inserted once per install; user edits and deletions stick.
+    await db.seed_builtin_templates()
     await db.get_or_create_builtin_ipam_source()
     await _cleanup_expired_jobs()
     # Reconcile the job queue after a possible crash: fail jobs orphaned in

@@ -38,6 +38,7 @@ __all__ = [
     "resolve_template_for_device_type",
     "resolve_variant_in_memory",
     "delete_template",
+    "seed_builtin_templates",
 ]
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -317,3 +318,43 @@ async def delete_template(template_id: int):
         await db.commit()
     finally:
         await db.close()
+
+
+# auth_settings key holding {"keys": [builtin_template_key, ...]} - every
+# built-in template this install has already seeded.
+BUILTIN_TEMPLATES_SETTING = "templates.builtin_seeded"
+
+
+async def seed_builtin_templates() -> int:
+    """Insert the config templates that ship with Plexus, once each.
+
+    Called at startup.  Each built-in (see ``routes.builtin_templates``)
+    is created the first time it is seen and its key is then recorded in
+    ``auth_settings``, so the rows become ordinary user-owned templates:
+    an edit, rename or delete by the user is never undone on restart.
+    Built-ins added by a later release are still seeded, because only
+    keys absent from the recorded list are considered.  A user-created
+    row that already occupies a built-in's ``(name, device_type)`` is
+    left untouched and recorded as seeded.  Returns the number created.
+    """
+    from routes.builtin_templates import BUILTIN_TEMPLATES, builtin_template_key
+
+    recorded = await _dbcore.get_auth_setting(BUILTIN_TEMPLATES_SETTING) or {}
+    seeded: set[str] = set(recorded.get("keys", []))
+    created = 0
+    changed = False
+    for tpl in BUILTIN_TEMPLATES:
+        key = builtin_template_key(tpl["name"], tpl["device_type"])
+        if key in seeded:
+            continue
+        try:
+            await create_template(tpl["name"], tpl["content"], tpl["description"], tpl["device_type"])
+            created += 1
+        except Exception as exc:
+            if not _is_unique_violation(exc):
+                raise
+        seeded.add(key)
+        changed = True
+    if changed:
+        await _dbcore.set_auth_setting(BUILTIN_TEMPLATES_SETTING, {"keys": sorted(seeded)})
+    return created

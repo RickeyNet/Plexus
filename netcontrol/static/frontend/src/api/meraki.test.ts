@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { PathPick } from '@/pages/Topology/paths';
 
-import { reachabilityCsvUrl, reachabilitySearch, topologyExportUrl, type MerakiSubnet } from './meraki';
+import { reachabilityFileUrl, reachabilitySearch, topologyExportUrl, type MerakiSubnet } from './meraki';
 
 const subnet: MerakiSubnet = {
   org_ref: 1,
@@ -72,12 +72,19 @@ describe('reachabilitySearch', () => {
     expect(params.get('exclude')).toBe('voice,guest');
   });
 
-  it('builds the CSV download URL with the same filters', () => {
-    const url = reachabilityCsvUrl({ destination: '10.0.10.20', protocol: '', name: '/^VLAN 1\\d\\d /' });
+  it('builds the file download URL with the same filters', () => {
+    const sweep = { destination: '10.0.10.20', protocol: '', name: '/^VLAN 1\\d\\d /' };
+    const url = reachabilityFileUrl(sweep);
     expect(url.startsWith('/api/topology/reachability?')).toBe(true);
     const params = query(url);
-    expect(params.get('format')).toBe('csv');
+    expect(params.get('format')).toBe('xlsx');
     expect(params.get('name')).toBe('/^VLAN 1\\d\\d /');
     expect(params.has('protocol')).toBe(false);
+    expect(params.has('verdict')).toBe(false);
+
+    const shown = query(reachabilityFileUrl(sweep, 'csv', 'blocked'));
+    expect(shown.get('format')).toBe('csv');
+    expect(shown.get('verdict')).toBe('blocked');
+    expect(query(reachabilityFileUrl(sweep, 'xlsx', null)).has('verdict')).toBe(false);
   });
 });

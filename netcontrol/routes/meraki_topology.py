@@ -58,6 +58,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
+from netcontrol import xlsx
 from netcontrol.integrations.appgate.client import (
     AppgateApiError,
     AppgateClient,
@@ -1685,18 +1686,38 @@ async def topology_path_api(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _reachability_csv(report: dict[str, Any]) -> Response:
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(reach_sweep.CSV_COLUMNS)
-    writer.writerows(reach_sweep.csv_row(row) for row in report["rows"])
-    payload = output.getvalue().encode("utf-8")
-    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", f"reachability-{report['destination']['address']}-{report['traffic']}")
+def _reachability_file(report: dict[str, Any], fmt: str, verdict: str | None) -> Response:
+    """The rows of a sweep report as a CSV or, for ``xlsx``, a workbook whose
+    columns fit their text, with a **Summary** tab of the counts by verdict, a
+    tab of every row and one per verdict; the CSV has the same summary after
+    its rows, under an empty line. ``verdict`` names the file after the rows
+    kept (and makes them one tab); the summary still counts the whole sweep."""
+    summary = reach_sweep.summary_rows(report["counts"])
+    if fmt == "xlsx":
+        sheets = [xlsx.Sheet("Summary", reach_sweep.SUMMARY_COLUMNS, summary)]
+        sheets.extend(
+            xlsx.Sheet(title, reach_sweep.CSV_COLUMNS, [reach_sweep.sheet_row(row) for row in rows])
+            for title, rows in reach_sweep.sheet_groups(report["rows"], verdict)
+        )
+        payload = xlsx.workbook_of(sheets)
+        media_type = xlsx.XLSX_MEDIA_TYPE
+    else:
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(reach_sweep.CSV_COLUMNS)
+        writer.writerows(reach_sweep.csv_row(row) for row in report["rows"])
+        writer.writerow([])
+        writer.writerow(reach_sweep.SUMMARY_COLUMNS)
+        writer.writerows(summary)
+        payload = output.getvalue().encode("utf-8")
+        media_type = "text/csv; charset=utf-8"
+    name = f"reachability-{report['destination']['address']}-{report['traffic']}" + (f"-{verdict}" if verdict else "")
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("_")
     return Response(
         content=payload,
-        media_type="text/csv; charset=utf-8",
+        media_type=media_type,
         headers={
-            "Content-Disposition": f'attachment; filename="{stem.strip("_")}.csv"',
+            "Content-Disposition": f'attachment; filename="{stem}.{fmt}"',
             "Cache-Control": "private, no-store",
         },
     )
@@ -1720,12 +1741,15 @@ async def topology_reachability_api(
     sites: str | None = Query(default=None, max_length=1000),
     within: str | None = Query(default=None, max_length=2000),
     in_vpn: str | None = Query(default=None, max_length=8),
-    format: str = Query(default="json", pattern="^(json|csv)$"),
+    format: str = Query(default="json", pattern="^(json|csv|xlsx)$"),
+    verdict: str | None = Query(default=None, max_length=16),
 ):
     """Trace one flow to ``destination`` from every source network of the
     whole map the filters keep (``netcontrol.integrations.pathtrace.sweep``),
     and report each one's verdict and what decided it, as JSON or, with
-    ``format=csv``, as a CSV attachment.
+    ``format=csv`` or ``format=xlsx``, as a CSV or spreadsheet attachment
+    (the spreadsheet's columns fit their text). A file download with
+    ``verdict`` keeps only the rows of that verdict, as the page shows them.
 
     ``destination_node`` is the graph node that owns the destination, as for
     ``/api/topology/path``; ``destination_org_ref`` + ``destination_node_id``
@@ -1734,6 +1758,9 @@ async def topology_reachability_api(
     filters."""
     if protocol.strip().lower() not in ("", "any", "all", *PATH_PROTOCOLS):
         raise HTTPException(status_code=400, detail=f"protocol must be one of {', '.join(PATH_PROTOCOLS)}")
+    verdict = (verdict or "").strip().lower() or None
+    if verdict is not None and verdict not in reach_sweep.VERDICTS:
+        raise HTTPException(status_code=400, detail=f"verdict must be one of {', '.join(reach_sweep.VERDICTS)}")
     try:
         filters = reach_sweep.parse_filters(
             sources=sources,
@@ -1789,15 +1816,18 @@ async def topology_reachability_api(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     report["destination"] = report["destination"] or {"address": destination}
-    if format == "csv":
+    if format in ("csv", "xlsx"):
+        if verdict:
+            report["rows"] = [row for row in report["rows"] if row["verdict"] == verdict]
         await _audit(
             "topology",
-            "export_reachability_csv",
+            f"export_reachability_{format}",
             user=_session_user(request),
-            detail=f"destination={destination} traffic={report['traffic']} rows={len(report['rows'])}",
+            detail=f"destination={destination} traffic={report['traffic']} rows={len(report['rows'])}"
+            + (f" verdict={verdict}" if verdict else ""),
             correlation_id=_corr_id(request),
         )
-        return _reachability_csv(report)
+        return _reachability_file(report, format, verdict)
     return {
         "destination": report["destination"],
         "traffic": report["traffic"],

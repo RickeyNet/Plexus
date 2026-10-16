@@ -208,6 +208,26 @@ def test_branch_vlan_to_hub_vlan_over_autovpn_is_allowed_and_the_replies_are_sta
     assert result["asymmetric"] == {"status": "no", "text": "Replies take the same hops back."}
 
 
+def test_an_autovpn_route_to_a_site_with_a_warm_spare_lands_on_the_primary():
+    # Meraki reports a network's AutoVPN tunnels under its primary appliance,
+    # so the map draws them from the primary only. The spare is listed first
+    # and forwards like the primary, but the trace must not pick it: it has
+    # no tunnel, and the path would end with "No AutoVPN tunnel that is up".
+    snapshots = _branch_and_hub()
+    snap = snapshots[1]
+    primary = snap["nodes"][1]
+    primary["site_sections"] = True
+    spare = _node("d:HUB2", "appliance", "HUB", "Hub 01 MX spare", primary["forwarding"])
+    snap["nodes"].insert(1, spare)
+    snap["edges"].append(_edge("e2", "d:HUB2", "d:HUB", kind="lan", status="active"))
+    result = _tracer(snapshots, subnets=_SUBNETS).trace("10.1.10.5", "10.0.10.20", protocol="tcp", port=443)
+
+    assert result["verdict"] == "allowed"
+    assert _labels(result["request"]) == ["Branch 01 MX", "Hub 01 MX"]
+    assert _labels(result["reply"]) == ["Hub 01 MX", "Branch 01 MX"]
+    assert _items(result["request"]["hops"][0])[-1] == ("link", "ok", "Link to Hub 01 MX")
+
+
 def test_a_vpn_firewall_rule_that_denies_blocks_at_the_branch():
     deny = rule(1, "deny", src=["10.1.30.0/24"], dst=["10.0.0.0/8"], comment="Block guest over the VPN")
     result = _tracer(_branch_and_hub([deny]), subnets=_SUBNETS).trace("10.1.30.7", "10.0.10.20")
@@ -2102,7 +2122,7 @@ def test_sweep_filters_that_are_not_valid_are_refused(bad):
 
 
 def test_sweep_reports_each_networks_verdict_and_what_decided_it():
-    from netcontrol.integrations.pathtrace.sweep import parse_filters, run, select_rows, sweep
+    from netcontrol.integrations.pathtrace.sweep import parse_filters, run, select_rows, summary_rows, sweep
 
     deny = rule(1, "deny", src=["10.1.30.0/24"], dst=["10.0.0.0/8"], comment="Block guest over the VPN")
     tracer = _tracer(_branch_and_hub([deny]), subnets=_SUBNETS)
@@ -2113,6 +2133,20 @@ def test_sweep_reports_each_networks_verdict_and_what_decided_it():
 
     assert report["traffic"] == "tcp/445" and report["destination"]["label"] == "Hub 01 MX"
     assert report["counts"] == {"allowed": 1, "blocked": 1, "unreachable": 0, "partial": 0, "unknown": 0}
+    # The summary of a download: every verdict in order, its share, a total.
+    assert summary_rows(report["counts"]) == [
+        ["Allowed", 1, "50%"],
+        ["Blocked", 1, "50%"],
+        ["No path", 0, "0%"],
+        ["Allowed in part", 0, "0%"],
+        ["Check incomplete", 0, "0%"],
+        ["Total", 2, "100%"],
+    ]
+    assert summary_rows({})[-1] == ["Total", 0, ""] and summary_rows({"blocked": 2, "allowed": 1})[1] == [
+        "Blocked",
+        2,
+        "67%",
+    ]
     data, guest = report["rows"]  # sorted by site, then VLAN
     assert (data["vlan"], data["verdict"], data["decided_at"], data["decided_by"]) == (10, "allowed", "", "")
     assert data["source_node"] == "meraki:1:d:BR" and data["node_label"] == "Branch 01 MX"
@@ -2137,6 +2171,8 @@ def test_sweep_reports_each_networks_verdict_and_what_decided_it():
 def test_api_reachability_sweep_as_json_and_csv(api):
     import csv
     import io
+
+    from netcontrol.xlsx import XLSX_MEDIA_TYPE
 
     assert api.post("/api/sources/sample").status_code == 201
     graph = api.get("/api/topology").json()["nodes"]
@@ -2178,9 +2214,75 @@ def test_api_reachability_sweep_as_json_and_csv(api):
         "Decided by",
         "Summary",
     ]
-    assert len(table) == len(body["rows"]) + 1
-    guest_line = next(line for line in table if line[6] == "10.2.30.0/24")
+    # The rows, then an empty line and the counts by verdict with a total.
+    blocked = [r for r in body["rows"] if r["verdict"] == "blocked"]
+    allowed = [r for r in body["rows"] if r["verdict"] == "allowed"]
+    assert blocked and allowed and len(blocked) + len(allowed) <= len(body["rows"])
+    lines, summary = table[: len(body["rows"]) + 1], table[len(body["rows"]) + 1 :]
+    assert all(len(line) == len(table[0]) for line in lines)
+    guest_line = next(line for line in lines if line[6] == "10.2.30.0/24")
     assert guest_line[8] == "Blocked" and guest_line[9] == branch_mx
+    assert summary[:2] == [[], ["Verdict", "Networks", "Share"]]
+    assert [line[:2] for line in summary[2:]] == [
+        ["Allowed", str(len(allowed))],
+        ["Blocked", str(len(blocked))],
+        ["No path", str(body["counts"]["unreachable"])],
+        ["Allowed in part", str(body["counts"]["partial"])],
+        ["Check incomplete", str(body["counts"]["unknown"])],
+        ["Total", str(len(body["rows"]))],
+    ]
+    assert summary[-1][2] == "100%" and summary[2][2] == f"{len(allowed) / len(body['rows']):.0%}"
+
+    # A spreadsheet has the same rows, columns fitted to their text, a frozen
+    # bold header and a filter, on a tab of every row and one per verdict,
+    # after a Summary tab of the counts.
+    import re
+    import zipfile
+
+    book_response = api.get(f"/api/topology/reachability?{query}&format=xlsx")
+    assert book_response.status_code == 200
+    assert book_response.headers["content-type"] == XLSX_MEDIA_TYPE
+    assert book_response.headers["content-disposition"] == 'attachment; filename="reachability-10.0.10.20-tcp_443.xlsx"'
+    with zipfile.ZipFile(io.BytesIO(book_response.content)) as archive:
+        tabs = re.findall(r'<sheet name="([^"]+)"', archive.read("xl/workbook.xml").decode("utf-8"))
+        pages = [archive.read(f"xl/worksheets/sheet{n}.xml").decode("utf-8") for n in range(1, len(tabs) + 1)]
+    assert tabs == ["Summary", "All", "Allowed", "Blocked", "No path", "Allowed in part", "Check incomplete"]
+    summary_tab, every, allowed_tab, blocked_tab = pages[0], pages[1], pages[2], pages[3]
+    assert summary_tab.count("<row ") == 7  # the header, five verdicts and the total
+    assert '<c r="A1" t="inlineStr" s="1"><is><t xml:space="preserve">Verdict</t></is></c>' in summary_tab
+    assert f'<c r="B3"><v>{len(blocked)}</v></c>' in summary_tab  # counts are numbers
+    assert (
+        f'<c r="A7" t="inlineStr"><is><t xml:space="preserve">Total</t></is></c><c r="B7"><v>{len(body["rows"])}</v></c>'
+        in summary_tab
+    )
+    assert every.count("<row ") == len(body["rows"]) + 1
+    assert allowed_tab.count("<row ") == len(allowed) + 1 and "10.2.10.0/24" in allowed_tab
+    assert blocked_tab.count("<row ") == len(blocked) + 1
+    assert "10.2.30.0/24" in blocked_tab and "10.2.10.0/24" not in blocked_tab
+    assert pages[4].count("<row ") == 1  # an empty verdict still has its tab, with the header
+    for page in pages[1:]:
+        assert page.count('customWidth="1"') == len(table[0]) and 'state="frozen"' in page
+        assert '<c r="A1" t="inlineStr" s="1"><is><t xml:space="preserve">Source</t></is></c>' in page
+    assert f'<autoFilter ref="A1:L{len(blocked) + 1}"/>' in blocked_tab
+
+    # `verdict` keeps only the rows of one verdict: a single tab, named after
+    # it, after the summary of the whole sweep.
+    sheet_response = api.get(f"/api/topology/reachability?{query}&format=xlsx&verdict=blocked")
+    assert sheet_response.status_code == 200
+    assert sheet_response.headers["content-disposition"] == (
+        'attachment; filename="reachability-10.0.10.20-tcp_443-blocked.xlsx"'
+    )
+    with zipfile.ZipFile(io.BytesIO(sheet_response.content)) as archive:
+        book = archive.read("xl/workbook.xml").decode("utf-8")
+        assert re.findall(r'<sheet name="([^"]+)"', book) == ["Summary", "Blocked"]
+        assert archive.read("xl/worksheets/sheet1.xml").decode("utf-8") == summary_tab
+        assert archive.read("xl/worksheets/sheet2.xml").decode("utf-8") == blocked_tab
+    filtered_csv = api.get(f"/api/topology/reachability?{query}&format=csv&verdict=blocked")
+    assert filtered_csv.headers["content-disposition"].endswith('-blocked.csv"')
+    filtered_table = list(csv.reader(io.StringIO(filtered_csv.text)))
+    assert len(filtered_table) == len(blocked) + 1 + len(summary)
+    assert filtered_table[len(blocked) + 1 :] == summary  # the whole sweep's counts
+    assert api.get(f"/api/topology/reachability?{query}&format=csv&verdict=maybe").status_code == 400
 
     # Narrowing to a VLAN name keeps only that network.
     named = api.get(f"/api/topology/reachability?{query}&name=/guest/").json()
