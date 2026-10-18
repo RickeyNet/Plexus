@@ -37,6 +37,7 @@ __all__ = [
     "EPHEMERAL_PORTS",
     "FULL",
     "INFO",
+    "INVENTORY_ORG_REF",
     "LINK",
     "NAT",
     "NONE",
@@ -45,6 +46,7 @@ __all__ = [
     "PART",
     "PARTIAL",
     "POLICY",
+    "PROVIDER_INVENTORY",
     "ROUTE",
     "SECURITY_GROUP",
     "UNKNOWN",
@@ -74,6 +76,11 @@ POLICY, ACL, SECURITY_GROUP, NAT, ROUTE, LINK, NOTE = (
     "note",
 )
 ALLOWED = "allowed"
+# The subnets of Plexus inventory hosts are listed under this ``org_ref``
+# (no organization or cloud has it; AWS, Azure and GCP are -1 to -3) and this
+# provider, with the host id as their ``node_id``.
+INVENTORY_ORG_REF = -4
+PROVIDER_INVENTORY = "inventory"
 # A direction that fails on a route or a link rather than a rule: no route,
 # a blackhole, a routing loop, or every link or tunnel to the next device down.
 UNREACHABLE = "unreachable"

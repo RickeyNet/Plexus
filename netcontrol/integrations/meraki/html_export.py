@@ -184,19 +184,25 @@ def _tracer_blocks(tracer: dict[str, Any]) -> str:
 
 
 def render_topology_html(
-    snapshot: dict[str, Any], *, path: dict[str, Any] | None = None, tracer: dict[str, Any] | None = None
+    snapshot: dict[str, Any],
+    *,
+    path: dict[str, Any] | None = None,
+    tracer: dict[str, Any] | None = None,
+    subnets: list[dict[str, Any]] | None = None,
 ) -> str:
     """Return the complete standalone HTML document for ``snapshot``.
 
     ``path`` is the Path Mode state the export carries (picks, traffic and
     the traces of its legs), embedded as ``data.path`` when given. ``tracer``
     is a ``tracer_payload``: the file then traces any two subnets or
-    addresses itself."""
+    addresses itself. ``subnets`` are more subnet index rows for the
+    viewer's subnet picker (the networks of inventory hosts, whose
+    ``node_id`` is the host id, as the exported node's is)."""
     org_name = str((snapshot.get("org") or {}).get("name") or "Meraki")
     title = html.escape(f"{org_name} - Network Topology")
     # Title first: the JSON may itself contain the title placeholder text.
     # The viewer picks path endpoints by subnet from this index.
-    data = {**snapshot, "subnets": subnet_index(snapshot)}
+    data = {**snapshot, "subnets": [*subnet_index(snapshot), *(subnets or [])]}
     if path:
         data["path"] = path
     return (

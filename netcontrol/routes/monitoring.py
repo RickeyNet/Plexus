@@ -18,6 +18,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import netcontrol.routes.state as state
+from netcontrol.integrations.pathtrace.inventory import CAPTURE_LIMIT
 from netcontrol.routes.icmp import ICMP_AVAILABLE, ping_host
 from netcontrol.routes.metrics_engine import (
     emit_metric_samples_from_poll,
@@ -579,6 +580,15 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                             outputs["routes_full"] = net_connect.send_command(
                                 "show ip route", read_timeout=read_timeout
                             )
+                            # The VRF tables too, for the path trace (IOS / IOS-XE).
+                            # Best-effort: a device that rejects it keeps the global table.
+                            if str(host.get("device_type") or "cisco_ios").startswith(("cisco_ios", "cisco_xe")):
+                                try:
+                                    outputs["routes_vrf"] = net_connect.send_command(
+                                        "show ip route vrf *", read_timeout=read_timeout
+                                    )
+                                except Exception as exc:
+                                    LOGGER.debug("monitoring: VRF route table not read: %s", type(exc).__name__)
                             _ROUTE_POLL_STATE[host["id"]] = (now, summary_count)
                         else:
                             _ROUTE_POLL_STATE[host["id"]] = (last_full_ts, summary_count)
@@ -639,6 +649,10 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                 ]
                 result["route_count"] = summary_count if summary_count is not None else len(route_lines)
                 result["route_snapshot"] = routes_full.strip()
+                routes_vrf = str(ssh_outputs.get("routes_vrf") or "")
+                if "Routing Table:" in routes_vrf:
+                    # The VRF tables follow the global one; the count stays the global table's.
+                    result["route_snapshot"] += "\n\n" + routes_vrf.strip()
             elif summary_count is not None:
                 result["route_count"] = summary_count
 
@@ -1055,7 +1069,7 @@ async def _process_poll_result(
             await db.create_route_snapshot(
                 host_id=res["host_id"],
                 route_count=res["route_count"],
-                routes_text=res["route_snapshot"][:10000],
+                routes_text=res["route_snapshot"][:CAPTURE_LIMIT],
                 routes_hash=route_hash,
             )
             if prev_snap is not None:

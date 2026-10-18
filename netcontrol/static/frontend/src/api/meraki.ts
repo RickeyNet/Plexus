@@ -235,8 +235,8 @@ export interface MerakiNodeDetails {
 /** A subnet and the device that owns it, for picking path endpoints. */
 export interface MerakiSubnet {
   org_ref: number;
-  /** Integration whose snapshot holds the subnet. */
-  provider?: CloudProvider | CloudAccountProvider;
+  /** Integration whose snapshot holds the subnet; 'inventory' for an inventory host's networks (org_ref INVENTORY_ORG_REF). */
+  provider?: CloudProvider | CloudAccountProvider | 'inventory';
   cidr: string;
   name: string;
   /** vlan / lan / static / vpn (behind the appliance), svi (L3 switch), peer (non-Meraki VPN peer), range (Cato site), user (a remote user's own address), host (a cloud virtual machine's private address). */

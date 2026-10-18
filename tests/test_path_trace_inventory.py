@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from netcontrol.integrations.pathtrace.inventory import (
     ACCESS_LISTS,
+    CAPTURE_LIMIT,
     EMPTY_CAPTURE,
     NO_CAPTURE,
     NOT_RECOGNISED,
@@ -16,7 +17,11 @@ from netcontrol.integrations.pathtrace.inventory import (
     forwarding_for_host,
     interface_key,
     parse_route_table,
+    subnets_for_host,
 )
+from netcontrol.integrations.pathtrace.ios_config import IPV6_ACCESS_LISTS, parse_config
+from netcontrol.integrations.pathtrace.model import INVENTORY_ORG_REF
+from netcontrol.integrations.pathtrace.sweep import vlan_of
 
 IOS = """\
 Codes: L - local, C - connected, S - static, R - RIP, M - mobile, B - BGP
@@ -221,7 +226,7 @@ def test_unknown_empty_and_truncated_captures_say_so():
         [NOT_RECOGNISED],
     )
     assert parse_route_table("   \n", "cisco_ios") == ([], [EMPTY_CAPTURE])
-    long = IOS + "\n" * (10001 - len(IOS))
+    long = IOS + "\n" * (CAPTURE_LIMIT + 1 - len(IOS))
     routes, missing = parse_route_table(long, "cisco_ios")
     assert routes and missing == [TRUNCATED]
 
@@ -284,3 +289,322 @@ def test_forwarding_for_host_without_a_capture():
     assert block["not_collected"] == [ACCESS_LISTS, NO_CAPTURE]
     unknown = forwarding_for_host(host, [], {"id": 2, "routes_text": "% Invalid input detected"}, [])
     assert unknown["not_collected"] == [ACCESS_LISTS, NOT_RECOGNISED]
+
+
+# ── Running configurations (Config Backups) ──────────────────────────────────
+
+CAT9300 = """\
+Building configuration...
+
+Current configuration : 9876 bytes
+!
+version 17.9
+hostname core-sw1
+!
+vrf definition GUEST
+ address-family ipv4
+ exit-address-family
+!
+ip routing
+!
+object-group network SERVERS
+ host 10.20.0.10
+ 10.20.1.0 255.255.255.0
+ range 10.20.2.0 10.20.2.255
+!
+object-group service WEB
+ tcp eq www
+ tcp eq 443
+ udp eq domain
+!
+interface GigabitEthernet1/0/1
+ description Uplink to fw
+ no switchport
+ ip address 10.0.0.2 255.255.255.252
+ ip access-group UPLINK-IN in
+!
+interface GigabitEthernet1/0/2
+ description Guest uplink
+ no switchport
+ vrf forwarding GUEST
+ ip address 10.99.0.2 255.255.255.252
+!
+interface GigabitEthernet1/0/3
+ switchport access vlan 10
+ shutdown
+!
+interface Loopback0
+ ip address 10.255.0.1 255.255.255.255
+!
+interface Vlan10
+ description Users
+ ip address 10.1.10.2 255.255.255.0
+ ip address 10.1.11.2 255.255.255.0 secondary
+ ip helper-address 10.20.0.10
+ ip access-group USERS-IN in
+ standby version 2
+ standby 10 ip 10.1.10.1
+ standby 10 priority 110
+ standby 10 preempt
+!
+interface Vlan20
+ description Voice
+ ip address 10.1.20.2 255.255.255.0
+ ip access-group 10 out
+ ipv6 traffic-filter VOICE6 in
+ vrrp 20 address-family ipv4
+  address 10.1.20.1 primary
+!
+interface Vlan30
+ ip address 10.1.30.2 255.255.255.0
+ ip access-group MISSING in
+!
+router ospf 1
+ network 10.0.0.0 0.255.255.255 area 0
+!
+ip route 0.0.0.0 0.0.0.0 10.0.0.1 name DEFAULT
+ip route 10.30.0.0 255.255.0.0 Null0
+ip route 10.40.0.0 255.255.0.0 10.0.0.1 200 name FLOATING
+ip route vrf GUEST 0.0.0.0 0.0.0.0 10.99.0.1 name GUEST-DEFAULT
+ip route vrf GUEST 172.16.50.0 255.255.255.0 GigabitEthernet1/0/2 10.99.0.1
+!
+ip access-list extended USERS-IN
+ remark Web to the servers
+ 10 permit object-group WEB 10.1.10.0 0.0.0.255 object-group SERVERS
+ 20 permit tcp any any established
+ remark No telnet anywhere
+ 30 deny   tcp any any eq telnet log
+ 40 permit tcp 10.1.10.0 0.0.0.255 host 10.20.0.10 range 8000 8080
+ 50 permit udp any eq bootpc any eq bootps
+ 60 permit ip 10.1.10.0 0.0.0.255 10.0.0.0 0.255.0.255
+ 70 permit tcp any host 10.20.0.11 eq foo
+ 80 permit tcp any any gt 1023 time-range OFFICE
+ 90 permit icmp any any echo-reply
+ 100 deny   ip any any log
+ip access-list extended UPLINK-IN
+ 10 permit tcp any 10.1.10.0 0.0.0.255 established
+ 20 permit ospf any any
+ 25 evaluate RETURN-TRAFFIC
+ 30 deny ip any any
+!
+access-list 10 remark Phones only
+access-list 10 permit 10.1.20.0 0.0.0.255
+access-list 10 deny   any log
+!
+end
+"""
+
+NXOS_CONFIG = """\
+!Command: show running-config
+version 9.3(8) Bios:version 05.45
+hostname dc-leaf1
+feature hsrp
+feature interface-vlan
+object-group ip address APP-SERVERS
+  10 host 10.50.0.10
+  20 10.50.1.0/24
+object-group ip port APP-PORTS
+  10 eq 8443
+  20 range 9000 9100
+ip access-list APP-IN
+  statistics per-entry
+  10 remark Apps only
+  20 permit tcp 10.60.0.0/24 addrgroup APP-SERVERS portgroup APP-PORTS
+  30 permit tcp 10.60.0.0 0.0.0.255 any eq 22
+  40 deny ip any any
+vrf context TENANT-A
+  ip route 0.0.0.0/0 10.60.0.254
+interface Vlan60
+  no shutdown
+  vrf member TENANT-A
+  ip address 10.60.0.2/24
+  ip access-group APP-IN in
+  hsrp 60
+    ip 10.60.0.1
+interface Ethernet1/1
+  no switchport
+  ip address 10.0.1.1/31
+  no shutdown
+ip route 10.0.0.0/8 10.0.1.0
+"""
+
+
+def test_ios_config_reads_interfaces_access_lists_and_routes():
+    config = parse_config(CAT9300)
+    interfaces = {i.name: i for i in config.interfaces}
+    vlan10 = interfaces["Vlan10"]
+    assert vlan10.description == "Users" and vlan10.addresses == [
+        ("10.1.10.2", "10.1.10.0/24"),
+        ("10.1.11.2", "10.1.11.0/24"),
+    ]
+    assert vlan10.access_groups == {"in": "USERS-IN"}
+    assert [(v.protocol, v.group, v.address) for v in vlan10.virtual] == [("HSRP", "10", "10.1.10.1")]
+    assert [(v.protocol, v.address) for v in interfaces["Vlan20"].virtual] == [("VRRP", "10.1.20.1")]
+    assert interfaces["GigabitEthernet1/0/2"].vrf == "GUEST"
+    assert interfaces["GigabitEthernet1/0/3"].shutdown is True
+    assert config.routing == ["OSPF"] and config.notes == [IPV6_ACCESS_LISTS]
+
+    users = config.access_lists["USERS-IN"]
+    # The service object group gives one entry per service, with the remark before it.
+    web = [e for e in users if e.sequence == 10]
+    assert [(e.protocol, e.dst_ports) for e in web] == [("tcp", "80"), ("tcp", "443"), ("udp", "53")]
+    assert web[0].src == ["10.1.10.0/24"] and web[0].comment == "Web to the servers"
+    assert web[0].dst == ["10.20.0.10/32", "10.20.1.0/24", "10.20.2.0/24"]
+    by_sequence = {e.sequence: e for e in users}
+    assert by_sequence[20].established is True and by_sequence[20].protocol == "tcp"
+    assert by_sequence[30].action == "deny" and by_sequence[30].dst_ports == "23"
+    assert by_sequence[30].comment == "No telnet anywhere" and by_sequence[40].comment == ""
+    assert by_sequence[40].dst_ports == "8000-8080"
+    assert (by_sequence[50].src_ports, by_sequence[50].dst_ports) == ("68", "67")
+    # What cannot be evaluated is kept, never dropped.
+    assert by_sequence[60].unresolved == ["wildcard mask 10.0.0.0 0.255.0.255"]
+    assert by_sequence[70].unresolved == ["port foo"]
+    assert by_sequence[80].dst_ports == "1024-65535" and by_sequence[80].unresolved == ["time-range OFFICE"]
+    assert by_sequence[90].protocol == "icmp" and by_sequence[90].unresolved == []
+    uplink = {e.sequence: e for e in config.access_lists["UPLINK-IN"]}
+    assert uplink[20].protocol == "ospf" and uplink[25].unresolved == ["reflexive access list RETURN-TRAFFIC"]
+    standard = config.access_lists["10"]
+    assert [(e.action, e.src, e.comment) for e in standard] == [
+        ("allow", ["10.1.20.0/24"], "Phones only"),
+        ("deny", ["any"], ""),
+    ]
+
+    routes = {(r.vrf, r.prefix): r for r in config.static_routes}
+    assert routes[("", "0.0.0.0/0")].next_hop == "10.0.0.1" and routes[("", "0.0.0.0/0")].name == "DEFAULT"
+    assert routes[("", "10.30.0.0/16")].interface == "Null0"
+    assert routes[("", "10.40.0.0/16")].distance == 200
+    guest = routes[("GUEST", "172.16.50.0/24")]
+    assert (guest.interface, guest.next_hop) == ("GigabitEthernet1/0/2", "10.99.0.1")
+
+
+def test_nxos_config_reads_vrf_members_groups_and_vrf_context_routes():
+    config = parse_config(NXOS_CONFIG)
+    vlan = next(i for i in config.interfaces if i.name == "Vlan60")
+    assert vlan.vrf == "TENANT-A" and vlan.addresses == [("10.60.0.2", "10.60.0.0/24")]
+    assert [(v.protocol, v.address) for v in vlan.virtual] == [("HSRP", "10.60.0.1")]
+    entries = config.access_lists["APP-IN"]
+    assert [e.sequence for e in entries] == [20, 30, 40]
+    assert entries[0].dst == ["10.50.0.10/32", "10.50.1.0/24"] and entries[0].dst_ports == "8443,9000-9100"
+    assert entries[0].comment == "Apps only" and entries[1].src == ["10.60.0.0/24"]
+    routes = {(r.vrf, r.prefix): r.next_hop for r in config.static_routes}
+    assert routes == {("TENANT-A", "0.0.0.0/0"): "10.60.0.254", ("", "10.0.0.0/8"): "10.0.1.0"}
+
+
+_GLOBAL_CAPTURE = """\
+Codes: L - local, C - connected, S - static, O - OSPF
+Gateway of last resort is 10.0.0.1 to network 0.0.0.0
+
+S*    0.0.0.0/0 [1/0] via 10.0.0.1
+      10.0.0.0/8 is variably subnetted, 6 subnets, 3 masks
+C        10.0.0.0/30 is directly connected, GigabitEthernet1/0/1
+L        10.0.0.2/32 is directly connected, GigabitEthernet1/0/1
+C        10.1.10.0/24 is directly connected, Vlan10
+L        10.1.10.2/32 is directly connected, Vlan10
+O        10.20.0.0/16 [110/2] via 10.0.0.1, 00:01:02, GigabitEthernet1/0/1
+S        10.30.0.0/16 is directly connected, Null0
+"""
+
+
+def _backup(text: str = CAT9300) -> dict:
+    return {"id": 11, "host_id": 7, "config_text": text}
+
+
+def test_forwarding_for_host_with_a_configuration_backup():
+    host = {"ip_address": "10.0.0.2", "device_type": "cisco_xe"}
+    snmp = [{"name": "Vlan10", "admin_state": "up"}, {"name": "Vlan20", "admin_state": "down"}]
+    block = forwarding_for_host(host, [], {"id": 3, "routes_text": _GLOBAL_CAPTURE}, snmp, config_backup=_backup())
+    by_name = {i["name"]: i for i in block["interfaces"]}
+    assert by_name["Vlan10"] == {
+        "name": "Vlan10",
+        "kind": "svi",
+        "ip": "10.1.10.2",
+        "cidr": "10.1.10.0/24",
+        "zone": "Vlan10",
+        "vrf": "",
+        "enabled": True,
+        "description": "Users",
+    }
+    # The HSRP address is an address of the device, on Vlan10.
+    hsrp = by_name["Vlan10 (HSRP 10.1.10.1)"]
+    assert (hsrp["ip"], hsrp["cidr"], hsrp["zone"], hsrp["kind"]) == ("10.1.10.1", "10.1.10.0/24", "Vlan10", "svi")
+    assert by_name["Vlan10 (secondary 10.1.11.2)"]["cidr"] == "10.1.11.0/24"
+    assert by_name["Vlan20"]["enabled"] is False and by_name["Vlan20 (VRRP 10.1.20.1)"]["enabled"] is False
+    assert by_name["GigabitEthernet1/0/2"]["vrf"] == "GUEST"
+    assert by_name["GigabitEthernet1/0/3"]["enabled"] is False
+
+    routes = _by_prefix(block["routes"])
+    # The capture holds the global table; the GUEST VRF comes from the configuration.
+    assert [r["source"] for r in routes["|10.20.0.0/16"]] == ["OSPF"]
+    assert "|10.40.0.0/16" not in routes  # a floating static route the table does not hold
+    assert routes["GUEST|0.0.0.0/0"][0]["next_hop"] == "10.99.0.1"
+    assert routes["GUEST|0.0.0.0/0"][0]["source"] == "Static route GUEST-DEFAULT"
+    assert routes["GUEST|10.99.0.0/30"][0]["kind"] == "connected"
+    assert routes["GUEST|172.16.50.0/24"][0]["interface"] == "GigabitEthernet1/0/2"
+
+    policies = {p["name"]: p for p in block["policies"]}
+    assert list(policies) == [
+        "ACL UPLINK-IN in on GigabitEthernet1/0/1",
+        "ACL USERS-IN in on Vlan10",
+        "ACL 10 out on Vlan20",
+        "ACL MISSING in on Vlan30",
+    ]
+    users = policies["ACL USERS-IN in on Vlan10"]
+    assert (users["kind"], users["applies"], users["stateful"], users["default"]) == ("acl", "any", False, "deny")
+    assert (users["interface"], users["direction"]) == ("Vlan10", "in")
+    assert all(r["src_zones"] == ["Vlan10"] and r["dst_zones"] == [] for r in users["rules"])
+    established = next(r for r in users["rules"] if r["index"] == 20)
+    assert established["established"] is True and established["action"] == "allow"
+    voice = policies["ACL 10 out on Vlan20"]
+    assert voice["direction"] == "out" and voice["rules"][0]["dst_zones"] == ["Vlan20"]
+    assert [r["index"] for r in voice["rules"]] == [1, 2]
+    missing = policies["ACL MISSING in on Vlan30"]
+    assert missing["default"] == "unknown"
+    assert missing["rules"][0]["unresolved"] == ["access list MISSING (not in the configuration)"]
+    # The access lists were read: only what the configuration uses and is not read is noted.
+    assert block["not_collected"] == [IPV6_ACCESS_LISTS]
+
+
+def test_forwarding_for_host_from_a_configuration_alone():
+    host = {"ip_address": "10.0.0.2", "device_type": "cisco_ios"}
+    block = forwarding_for_host(host, [], None, [], config_backup=_backup())
+    routes = _by_prefix(block["routes"])
+    assert routes["|10.1.10.0/24"][0]["kind"] == "connected" and routes["|10.1.11.0/24"][0]["interface"] == "Vlan10"
+    assert routes["|0.0.0.0/0"][0]["kind"] == "default" and routes["|10.30.0.0/16"][0]["kind"] == "blackhole"
+    assert routes["|10.40.0.0/16"][0]["kind"] == "static"
+    # No capture: the routes OSPF learns are missing, and the table says so.
+    assert block["not_collected"] == [IPV6_ACCESS_LISTS, "Routes learned by OSPF"]
+
+    # A platform whose configuration is not read keeps today's behaviour.
+    asa_host = {"ip_address": "10.0.0.2", "device_type": "cisco_asa"}
+    asa = forwarding_for_host(asa_host, [], None, [], config_backup=_backup())
+    assert asa["policies"] == [] and asa["not_collected"] == [ACCESS_LISTS, NO_CAPTURE]
+
+
+def test_subnets_for_host_lists_vlans_connected_networks_and_static_routes():
+    node = {"id": 7, "label": "core-sw1", "group_id": 3, "group_name": "HQ"}
+    host = {"ip_address": "10.0.0.2", "device_type": "cisco_xe"}
+    rows = subnets_for_host(node, forwarding_for_host(host, [], None, [], config_backup=_backup()))
+    by_cidr = {r["cidr"]: r for r in rows}
+    assert by_cidr["10.1.10.0/24"] == {
+        "cidr": "10.1.10.0/24",
+        "name": "VLAN 10 Users",
+        "kind": "svi",
+        "site_id": "3",
+        "site_name": "HQ",
+        "node_id": "7",
+        "in_vpn": None,
+        "org_ref": INVENTORY_ORG_REF,
+        "provider": "inventory",
+        "org_name": "Inventory",
+    }
+    assert vlan_of(by_cidr["10.1.10.0/24"]) == 10
+    assert by_cidr["10.1.11.0/24"]["name"] == "VLAN 10 Users (secondary)"
+    assert (by_cidr["10.1.30.0/24"]["kind"], by_cidr["10.1.30.0/24"]["name"]) == ("svi", "VLAN 30")
+    assert by_cidr["10.0.0.0/30"]["kind"] == "connected"
+    assert by_cidr["10.0.0.0/30"]["name"] == "GigabitEthernet1/0/1 Uplink to fw"
+    assert (by_cidr["10.40.0.0/16"]["kind"], by_cidr["10.40.0.0/16"]["name"]) == (
+        "static",
+        "Static route via 10.0.0.1",
+    )
+    # No default route, no blackhole, no loopback or host address.
+    assert not {"0.0.0.0/0", "10.30.0.0/16", "10.255.0.1/32"} & set(by_cidr)

@@ -514,3 +514,94 @@ async def test_escalation_disabled_does_nothing(monkeypatch):
     )
     await _backdate_alert(alert_id, minutes=600)
     assert await _run_alert_escalation() == 0
+
+
+# ── SSH route table capture ──────────────────────────────────────────────────
+
+_GLOBAL_TABLE = """\
+Codes: L - local, C - connected, S - static
+Gateway of last resort is 10.0.0.1 to network 0.0.0.0
+
+S*    0.0.0.0/0 [1/0] via 10.0.0.1
+C        10.1.10.0/24 is directly connected, Vlan10
+"""
+
+_VRF_TABLES = """\
+
+Routing Table: GUEST
+Codes: L - local, C - connected, S - static
+Gateway of last resort is not set
+
+C        10.99.0.0/30 is directly connected, GigabitEthernet1/0/2
+"""
+
+
+class _FakeSsh:
+    """A netmiko connection that answers each command from ``outputs``."""
+
+    def __init__(self, outputs: dict[str, str]):
+        self.outputs = outputs
+        self.sent: list[str] = []
+
+    def enable(self) -> None:
+        pass
+
+    def send_command(self, command: str, read_timeout: float | None = None) -> str:
+        self.sent.append(command)
+        return self.outputs.get(command, "")
+
+    def disconnect(self) -> None:
+        pass
+
+
+async def _poll_routes(monkeypatch, host_id: int, device_type: str, outputs: dict[str, str]):
+    netmiko = pytest.importorskip("netmiko")
+    import netcontrol.routes.monitoring as monitoring
+    import routes.crypto
+
+    fake = _FakeSsh(outputs)
+    monkeypatch.setattr(netmiko, "ConnectHandler", lambda **_kw: fake)
+    monkeypatch.setattr(routes.crypto, "decrypt", lambda value: value)
+    monkeypatch.setitem(state.MONITORING_CONFIG, "icmp_enabled", False)
+    monkeypatch.setitem(state.MONITORING_CONFIG, "collect_vpn", False)
+    monkeypatch.setitem(state.MONITORING_CONFIG, "collect_routes", True)
+    monitoring._ROUTE_POLL_STATE.pop(host_id, None)
+    host = {"id": host_id, "ip_address": "192.0.2.10", "hostname": "sw1", "device_type": device_type}
+    cred = {"username": "admin", "password": "x", "secret": ""}
+    result = await monitoring._poll_host_monitoring(host, cred, {"enabled": False})
+    return fake.sent, result
+
+
+async def test_full_route_pull_adds_the_vrf_tables_on_ios(monkeypatch):
+    outputs = {"show ip route": _GLOBAL_TABLE, "show ip route vrf *": _VRF_TABLES}
+    sent, result = await _poll_routes(monkeypatch, 901, "cisco_xe", outputs)
+    assert sent == ["show ip route summary", "show ip route", "show ip route vrf *"]
+    assert result["route_snapshot"] == _GLOBAL_TABLE.strip() + "\n\n" + _VRF_TABLES.strip()
+    # The route count stays the global table's.
+    assert result["route_count"] == 2
+
+
+async def test_full_route_pull_keeps_only_the_global_table_elsewhere(monkeypatch):
+    sent, result = await _poll_routes(monkeypatch, 902, "cisco_nxos", {"show ip route": _GLOBAL_TABLE})
+    assert "show ip route vrf *" not in sent and result["route_snapshot"] == _GLOBAL_TABLE.strip()
+    # An IOS device that rejects the command keeps the global table alone.
+    outputs = {"show ip route": _GLOBAL_TABLE, "show ip route vrf *": "% Invalid input detected at '^' marker."}
+    _sent, rejected = await _poll_routes(monkeypatch, 903, "cisco_ios", outputs)
+    assert rejected["route_snapshot"] == _GLOBAL_TABLE.strip()
+
+
+async def test_stored_route_capture_keeps_the_path_trace_limit(monkeypatch):
+    from netcontrol.integrations.pathtrace.inventory import CAPTURE_LIMIT
+    from netcontrol.routes.monitoring import _process_poll_result
+
+    group_id, host_id = await _init_clean_db()
+    many = "".join(f"C        10.{i // 256}.{i % 256}.0/24 is directly connected, Vlan{i}\n" for i in range(6000))
+    outputs = {"show ip route": _GLOBAL_TABLE + many, "show ip route vrf *": _VRF_TABLES}
+    _sent, result = await _poll_routes(monkeypatch, host_id, "cisco_ios", outputs)
+    assert len(result["route_snapshot"]) > CAPTURE_LIMIT > 10000
+    await _process_poll_result({"id": host_id, "hostname": "sw1", "group_id": group_id}, result, [])
+    stored = await db_module.get_latest_route_snapshot(host_id)
+    assert len(stored["routes_text"]) == CAPTURE_LIMIT
+    # The poll row keeps its short preview.
+    polls = await db_module.get_monitoring_poll_history(host_id, include_details=True)
+    assert len(polls[0]["route_snapshot"]) == 5000

@@ -96,6 +96,7 @@ __all__ = [
     "get_latest_config_backup",
     "get_config_backups",
     "get_latest_config_backups_per_host",
+    "get_latest_config_texts_for_hosts",
     "get_config_backup",
     "get_previous_successful_config_backup",
     "search_config_backups",
@@ -2009,6 +2010,28 @@ async def get_latest_config_backups_per_host() -> list[dict]:
                ORDER BY h.hostname"""
         )
         return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_latest_config_texts_for_hosts(host_ids: list[int]) -> dict[int, dict]:
+    """``host_id -> newest successful backup`` (``id``, ``host_id``,
+    ``config_text``, ``captured_at``) for many hosts in one query. A host
+    with no successful backup is left out."""
+    wanted = sorted({int(h) for h in host_ids})
+    if not wanted:
+        return {}
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        placeholders = ",".join("?" * len(wanted))
+        cursor = await db.execute(
+            f"""SELECT b.id, b.host_id, b.config_text, b.captured_at FROM config_backups b
+                JOIN (SELECT host_id, MAX(id) AS id FROM config_backups
+                      WHERE status = 'success' AND host_id IN ({placeholders}) GROUP BY host_id) newest
+                  ON newest.id = b.id""",
+            tuple(wanted),
+        )
+        return {int(row["host_id"]): row for row in rows_to_list(await cursor.fetchall())}
     finally:
         await db.close()
 

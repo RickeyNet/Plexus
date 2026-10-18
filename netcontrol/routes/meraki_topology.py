@@ -115,6 +115,7 @@ from netcontrol.integrations.meraki.client import (
 from netcontrol.integrations.meraki.clients import client_records
 from netcontrol.integrations.meraki.collector import DEFAULT_OPTIONS, collect_organization, sanitize_options
 from netcontrol.integrations.meraki.enrich import collected_sections, enrich_snapshot, load_inventory_index
+from netcontrol.integrations.meraki.forwarding import canonical
 from netcontrol.integrations.meraki.html_export import (
     export_csp,
     export_filename,
@@ -149,7 +150,8 @@ from netcontrol.integrations.panorama.normalize import build_snapshot as build_p
 from netcontrol.integrations.panorama.sample import build_sample_raw as build_panorama_sample_raw
 from netcontrol.integrations.pathtrace import sweep as reach_sweep
 from netcontrol.integrations.pathtrace.engine import PROTOCOLS as PATH_PROTOCOLS, Tracer
-from netcontrol.integrations.pathtrace.inventory import forwarding_for_host
+from netcontrol.integrations.pathtrace.inventory import forwarding_for_host, subnets_for_host
+from netcontrol.integrations.pathtrace.model import INVENTORY_ORG_REF
 from netcontrol.integrations.pathtrace.offline import (
     dumps as offline_dumps,
     export_ids,
@@ -1450,12 +1452,15 @@ async def get_meraki_node_api(org_ref: int = Query(), node_id: str = Query(min_l
 @router.get("/api/sources/subnets")
 async def list_meraki_subnets_api():
     """Subnets of the latest snapshots with the device that owns each one, for
-    picking path endpoints by subnet. ``(org_ref, node_id)`` references are
-    resolved to nodes on the merged graph by the Topology page."""
+    picking path endpoints by subnet, then the networks of inventory hosts
+    (``org_ref`` ``INVENTORY_ORG_REF``, ``node_id`` the host id).
+    ``(org_ref, node_id)`` references are resolved to nodes on the merged
+    graph by the Topology page."""
     subnets: list[dict] = []
     for org_ref, entry in await _latest_entries():
         provider = str(entry["snapshot"].get("provider") or PROVIDER_MERAKI)
         subnets.extend({"org_ref": org_ref, "provider": provider, **subnet} for subnet in await _subnets_of(entry))
+    subnets.extend(await _inventory_subnets())
     return {"subnets": subnets}
 
 
@@ -1567,21 +1572,34 @@ async def gcp_reachability_api(
 
 # ── Path trace ───────────────────────────────────────────────────────────────
 
-# (host id, route snapshot id) -> forwarding block of an inventory host. A new
-# route capture gets a new id, so an entry never goes stale; the dict is
-# cleared when it grows past the limit.
-_HOST_FORWARDING: dict[tuple[int, int | None], dict[str, Any]] = {}
+# (host id, route snapshot id, config backup id, inventory group) ->
+# {"block": forwarding block, "subnets": its subnet index rows} of an
+# inventory host. A new route capture or backup gets a new id, so an entry
+# never goes stale; the dict is cleared when it grows past the limit.
+_HOST_FORWARDING: dict[tuple, dict[str, Any]] = {}
 _HOST_FORWARDING_LIMIT = 5000
 
 
 async def _inventory_forwarding(nodes: list[dict]) -> dict[int, dict[str, Any]]:
-    """The forwarding block of every inventory host on the graph, from its
-    interfaces, addresses and latest SSH route capture (bulk queries)."""
+    """``host id -> {"block", "subnets"}`` for every inventory host on the
+    graph: its forwarding block, from its interfaces, addresses, latest SSH
+    route capture and latest successful configuration backup (bulk
+    queries), and the subnet index rows of its networks."""
     hosts = {n["id"]: n for n in nodes if isinstance(n.get("id"), int) and n.get("in_inventory", True)}
     if not hosts:
         return {}
     captures = await db.get_latest_route_snapshots_for_hosts(list(hosts))
-    keys = {host_id: (host_id, (captures.get(host_id) or {}).get("id")) for host_id in hosts}
+    backups = await db.get_latest_config_texts_for_hosts(list(hosts))
+    keys = {
+        host_id: (
+            host_id,
+            (captures.get(host_id) or {}).get("id"),
+            (backups.get(host_id) or {}).get("id"),
+            node.get("group_id"),
+            str(node.get("group_name") or ""),
+        )
+        for host_id, node in hosts.items()
+    }
     missing = [host_id for host_id, key in keys.items() if key not in _HOST_FORWARDING]
     if missing:
         aliases: dict[int, list[str]] = {}
@@ -1593,10 +1611,26 @@ async def _inventory_forwarding(nodes: list[dict]) -> dict[int, dict[str, Any]]:
         for host_id in missing:
             node = hosts[host_id]
             host = {"ip_address": node.get("ip") or "", "device_type": node.get("device_type") or ""}
-            _HOST_FORWARDING[keys[host_id]] = forwarding_for_host(
-                host, aliases.get(host_id, []), captures.get(host_id), interfaces.get(host_id, [])
+            block = forwarding_for_host(
+                host,
+                aliases.get(host_id, []),
+                captures.get(host_id),
+                interfaces.get(host_id, []),
+                config_backup=backups.get(host_id),
             )
+            _HOST_FORWARDING[keys[host_id]] = {"block": block, "subnets": subnets_for_host(node, block)}
     return {host_id: _HOST_FORWARDING[key] for host_id, key in keys.items() if key in _HOST_FORWARDING}
+
+
+async def _inventory_subnets(nodes: list[dict] | None = None) -> list[dict[str, Any]]:
+    """The subnet index rows of every inventory host on ``nodes`` (the whole
+    map when not given): its VLAN interfaces, connected networks and static
+    routes, under ``INVENTORY_ORG_REF``."""
+    if nodes is None:
+        from netcontrol.routes.topology import get_topology
+
+        nodes = (await get_topology(None)).get("nodes") or []
+    return [row for entry in (await _inventory_forwarding(nodes)).values() for row in entry["subnets"]]
 
 
 async def _trace_sources() -> dict[str, Any]:
@@ -1611,13 +1645,16 @@ async def _trace_sources() -> dict[str, Any]:
     for org_ref, entry in entries:
         provider = str(entry["snapshot"].get("provider") or PROVIDER_MERAKI)
         subnets.extend({"org_ref": org_ref, "provider": provider, **subnet} for subnet in await _subnets_of(entry))
+    hosts = await _inventory_forwarding(graph.get("nodes") or [])
+    # The inventory hosts' networks, from the same blocks the tracer reads.
+    subnets.extend(row for entry in hosts.values() for row in entry["subnets"])
     return {
         "graph": graph,
         "snapshots": {org_ref: entry["snapshot"] for org_ref, entry in entries},
         "clouds": {
             org_ref: entry["reachability"] for org_ref, entry in entries if entry.get("reachability") is not None
         },
-        "host_forwarding": await _inventory_forwarding(graph.get("nodes") or []),
+        "host_forwarding": {host_id: entry["block"] for host_id, entry in hosts.items()},
         "subnets": subnets,
     }
 
@@ -1780,6 +1817,7 @@ async def topology_reachability_api(
     org_names = {
         org_ref: str((snapshot.get("org") or {}).get("name") or "") for org_ref, snapshot in found["snapshots"].items()
     }
+    org_names[INVENTORY_ORG_REF] = "Inventory"
     rows = [{**row, "org_name": org_names.get(row["org_ref"], "")} for row in found["subnets"]]
     try:
         selected = reach_sweep.select_rows(rows, filters, destination)
@@ -1856,6 +1894,25 @@ async def topology_deep_search_api(
     tokens = q.lower().split()[:8]
     results: list[dict] = []
     seen: set[tuple[int, str]] = set()
+    # An address or network also finds the inventory hosts whose networks hold it.
+    if canonical(q):
+        from netcontrol.routes.topology import get_topology
+
+        nodes = (await get_topology(None)).get("nodes") or []
+        labels = {n.get("id"): n.get("label") or "" for n in nodes}
+        for subnet in subnets_containing(await _inventory_subnets(nodes), q):
+            if (INVENTORY_ORG_REF, subnet["node_id"]) in seen or len(results) >= limit:
+                continue
+            seen.add((INVENTORY_ORG_REF, subnet["node_id"]))
+            where = f"{subnet['site_name'] or 'Inventory'} · Subnets: {subnet['cidr']} {subnet['name']}".strip()
+            results.append(
+                {
+                    "org_ref": INVENTORY_ORG_REF,
+                    "node_id": subnet["node_id"],
+                    "label": labels.get(int(subnet["node_id"]), ""),
+                    "snippet": where,
+                }
+            )
     for org_ref, entry in await _latest_entries():
         found = subnets_containing(await _subnets_of(entry), q)
         labels = {n.get("id"): n.get("label") or "" for n in entry["snapshot"].get("nodes") or []} if found else {}
@@ -2075,6 +2132,12 @@ async def export_topology_html_api(
     traced_legs = sum(1 for pick in picks if pick["subnet"]) >= 2
     sources = await _trace_sources() if with_engine or traced_legs else None
     make_tracer = _tracer_of(sources) if sources is not None and traced_legs else None
+    # The viewer picks the networks of inventory hosts too.
+    inventory_subnets = (
+        [row for row in sources["subnets"] if row.get("org_ref") == INVENTORY_ORG_REF]
+        if sources is not None
+        else await _inventory_subnets(graph.get("nodes") or [])
+    )
     cloud_rows = await _offline_clouds(sources["clouds"]) if with_engine and sources is not None else {}
     snapshots = dict(await latest_snapshots())
     host_sections = {
@@ -2101,7 +2164,8 @@ async def export_topology_html_api(
                 snapshot,
             )
             tracer = tracer_payload(offline_dumps(inputs))
-        return snapshot, embedded, tracer is not None, render_topology_html(snapshot, path=embedded, tracer=tracer)
+        page = render_topology_html(snapshot, path=embedded, tracer=tracer, subnets=inventory_subnets)
+        return snapshot, embedded, tracer is not None, page
 
     # Layout of a large topology, the traces and packing the tracer are
     # CPU-bound; keep them off the event loop.

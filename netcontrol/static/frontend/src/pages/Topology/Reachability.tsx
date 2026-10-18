@@ -25,7 +25,8 @@ import {
   rowTraceQuery,
   siteRollup,
   SWEEP_KINDS,
-  SWEEP_PROVIDERS,
+  sweepProviders,
+  sweepSources,
   VERDICT_ORDER,
   vlanTextError,
   type ReachabilityForm,
@@ -68,15 +69,8 @@ export function Reachability() {
   const sweep = useReachability(query);
 
   const subnets = useMemo(() => subnetsQuery.data?.subnets ?? [], [subnetsQuery.data]);
-  // Snapshot sources (an organization, account, FMC...) are filtered by id;
-  // the clouds by provider, since their accounts are not map sources.
-  const sources = useMemo(
-    () =>
-      (sourcesQuery.data?.sources ?? []).filter(
-        (s) => s.id !== null && ['meraki', 'cato', 'fmc', 'panorama', 'appgate'].includes(s.type),
-      ),
-    [sourcesQuery.data],
-  );
+  const sources = useMemo(() => sweepSources(sourcesQuery.data?.sources ?? [], subnets), [sourcesQuery.data, subnets]);
+  const providers = useMemo(() => sweepProviders(subnets), [subnets]);
   const owners = useMemo(() => findSubnets(form.destination, subnets), [form.destination, subnets]);
 
   function update(patch: Partial<ReachabilityForm>) {
@@ -194,7 +188,7 @@ export function Reachability() {
               title="None selected: all sources. Ctrl+click to pick several."
             >
               {sources.map((s) => (
-                <option key={s.key} value={s.id ?? ''}>{s.name} ({providerLabel(s.type)})</option>
+                <option key={s.key} value={s.id}>{s.label}</option>
               ))}
             </select>
             <span className="text-muted" style={{ fontSize: '0.8rem' }}>
@@ -204,7 +198,7 @@ export function Reachability() {
           <fieldset style={{ ...FIELD_STYLE, border: 'none', padding: 0, margin: 0 }}>
             <span className="form-label">Providers</span>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, auto)', gap: '0.1rem 0.75rem' }}>
-              {SWEEP_PROVIDERS.map((p) => (
+              {providers.map((p) => (
                 <label key={p} style={{ display: 'flex', gap: '0.3rem', alignItems: 'center' }}>
                   <input
                     type="checkbox"

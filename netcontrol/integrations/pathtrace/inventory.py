@@ -1,11 +1,17 @@
 """Forwarding data of a Plexus inventory host, built at trace time.
 
 An inventory host has no integration snapshot. What Plexus stores for it is
-enough for routing: its interfaces (SNMP), its address and aliases, and the
-route table the monitoring poll captures over SSH (``show ip route`` or
-``show route``). ``forwarding_for_host`` turns those into the ``forwarding``
-block every integration emits (``netcontrol.integrations.meraki.forwarding``).
-Access lists are not collected, so a trace reports them as unknown.
+its interfaces (SNMP), its address and aliases, the route table the
+monitoring poll captures over SSH (``show ip route``, with ``show ip route
+vrf *`` on IOS / IOS-XE, or ``show route``) and, from Config Backups, its
+latest running configuration. ``forwarding_for_host`` turns those into the
+``forwarding`` block every integration emits
+(``netcontrol.integrations.meraki.forwarding``). On a Cisco IOS / IOS-XE or
+NX-OS host with a configuration backup (read by ``ios_config``) that adds
+the interface access lists, the interface addresses, VRFs and HSRP / VRRP
+addresses, and the routes of VRFs the capture lacks. Without a backup the
+access lists are not collected, so a trace reports them as unknown.
+``subnets_for_host`` lists the host's networks for the subnet index.
 
 ``parse_route_table`` reads Cisco IOS / IOS-XE, NX-OS, ASA / FTD and Arista
 EOS captures. A capture in any other format gives no routes and says so.
@@ -19,14 +25,32 @@ import ipaddress
 import re
 from typing import Any
 
-from netcontrol.integrations.meraki.forwarding import canonical, interface, is_address, new_block, note
+from netcontrol.integrations.meraki.forwarding import (
+    ANY,
+    canonical,
+    interface,
+    is_address,
+    new_block,
+    note,
+    policy_set,
+    rule,
+)
+from netcontrol.integrations.pathtrace.ios_config import (
+    ConfigInterface,
+    RunningConfig,
+    mask_length,
+    parse_config,
+    supported,
+)
+from netcontrol.integrations.pathtrace.model import INVENTORY_ORG_REF, PROVIDER_INVENTORY
 
 ACCESS_LISTS = "Access lists"
 NOT_RECOGNISED = "Route table (format not recognised)"
 EMPTY_CAPTURE = "Route table (empty capture)"
 NO_CAPTURE = "Route table (no SSH capture)"
-# The monitoring poll stores the first 10000 characters of a capture.
-CAPTURE_LIMIT = 10000
+# The monitoring poll stores the first CAPTURE_LIMIT characters of a capture
+# (the global table, then the VRF tables); routes past it are not read.
+CAPTURE_LIMIT = 250_000
 TRUNCATED = f"Routes past the first {CAPTURE_LIMIT} characters of the capture"
 
 _IPV4 = r"\d{1,3}(?:\.\d{1,3}){3}"
@@ -180,10 +204,7 @@ def _length(prefix: str, length: str | None, mask: str | None, subnetted: dict[s
     if length:
         return int(length)
     if mask:
-        try:
-            return ipaddress.ip_network(f"0.0.0.0/{mask}").prefixlen
-        except ValueError:
-            return None
+        return mask_length(mask)
     major = _classful(prefix)
     return subnetted.get(major, int(major.rsplit("/", 1)[1]))
 
@@ -380,13 +401,114 @@ def _interface_kind(name: str, has_address: bool) -> str:
     return "routed" if has_address else ""
 
 
+def _config(host: dict, config_backup: dict | None) -> RunningConfig | None:
+    """The parsed configuration backup of a host whose platform is read."""
+    if config_backup is None or not supported(str(host.get("device_type") or "")):
+        return None
+    text = str(config_backup.get("config_text") or "")
+    return parse_config(text) if text.strip() else None
+
+
+def _acl_policies(config: RunningConfig, names: dict[str, str]) -> list[dict[str, Any]]:
+    """One stateless rule set per ``ip access-group`` binding, bound to its
+    interface and direction, ending in the implicit deny. A binding to an
+    access list the configuration does not define is unknown when a flow
+    meets it."""
+    policies: list[dict[str, Any]] = []
+    for conf in config.interfaces:
+        name = names.get(interface_key(conf.name), conf.name)
+        for direction in ("in", "out"):
+            acl = conf.access_groups.get(direction)
+            if not acl:
+                continue
+            src_zones = [name] if direction == "in" else None
+            dst_zones = [name] if direction == "out" else None
+            label = f"ACL {acl} {direction} on {name}"
+            entries = config.access_lists.get(acl) or []
+            if not entries:
+                missing = f"access list {acl} (not in the configuration)"
+                policies.append(
+                    policy_set(
+                        label,
+                        "acl",
+                        ANY,
+                        [rule(1, "allow", unresolved=[missing], src_zones=src_zones, dst_zones=dst_zones)],
+                        stateful=False,
+                        default="unknown",
+                        interface=name,
+                        direction=direction,
+                    )
+                )
+                continue
+            rules = [
+                rule(
+                    entry.sequence if entry.sequence is not None else position,
+                    entry.action,
+                    protocol=entry.protocol,
+                    src=entry.src,
+                    src_ports=entry.src_ports,
+                    dst=entry.dst,
+                    dst_ports=entry.dst_ports,
+                    comment=entry.comment,
+                    unresolved=entry.unresolved,
+                    established=entry.established,
+                    src_zones=src_zones,
+                    dst_zones=dst_zones,
+                )
+                for position, entry in enumerate(entries, start=1)
+            ]
+            policies.append(
+                policy_set(label, "acl", ANY, rules, stateful=False, default="deny", interface=name, direction=direction)
+            )
+    return policies
+
+
+def _configured_interfaces(name: str, conf: ConfigInterface, kind: str, vrf: str, up: bool) -> list[dict[str, Any]]:
+    """The secondary addresses and the HSRP / VRRP / GLBP addresses of a
+    configured interface, each an interface entry in the zone of the real
+    one, so the flows sent to them arrive on it."""
+    extra: list[dict[str, Any]] = []
+    for address, cidr in conf.addresses[1:]:
+        extra.append(
+            interface(f"{name} (secondary {address})", kind, ip=address, cidr=cidr, zone=name, vrf=vrf, enabled=up)
+        )
+    for virtual in conf.virtual:
+        parsed = ipaddress.ip_address(virtual.address)
+        holder = next((c for _a, c in conf.addresses if parsed in ipaddress.ip_network(c)), "")
+        extra.append(
+            interface(
+                f"{name} ({virtual.protocol} {virtual.address})",
+                kind,
+                ip=virtual.address,
+                cidr=holder,
+                zone=name,
+                vrf=vrf,
+                enabled=up,
+            )
+        )
+    if conf.description:
+        for entry in extra:
+            entry["description"] = conf.description
+    return extra
+
+
 def forwarding_for_host(
-    host: dict, aliases: list[str], route_capture: dict | None, interfaces: list[dict]
+    host: dict,
+    aliases: list[str],
+    route_capture: dict | None,
+    interfaces: list[dict],
+    *,
+    config_backup: dict | None = None,
 ) -> dict[str, Any]:
     """The forwarding block of an inventory host: its interfaces, the routes
-    of its latest SSH route capture, no policies (access lists are not
-    collected)."""
+    of its latest SSH route capture and, from its latest configuration
+    backup (``config_backup``, a ``config_backups`` row with
+    ``config_text``) on Cisco IOS / IOS-XE and NX-OS, its interface access
+    lists, addresses, VRFs, HSRP / VRRP addresses and the routes of the
+    VRFs the capture lacks. Without a backup the access lists are not
+    collected."""
     block = new_block()
+    config = _config(host, config_backup)
     if route_capture is None:
         routes: list[dict] = []
         missing = [NO_CAPTURE]
@@ -398,38 +520,80 @@ def forwarding_for_host(
     # What the connected and local routes say about each interface.
     cidr_of: dict[str, str] = {}
     ip_of: dict[str, str] = {}
+    vrf_of: dict[str, str] = {}
     spelled: dict[str, str] = {}
     for item in routes:
         if item["kind"] != "connected" or not item["interface"]:
             continue
         key = interface_key(item["interface"])
         spelled.setdefault(key, item["interface"])
+        vrf_of.setdefault(key, item["vrf"])
         network = ipaddress.ip_network(item["prefix"])
         if item["source"] == _LOCAL and network.num_addresses == 1:
             ip_of.setdefault(key, str(network.network_address))
         elif network.num_addresses > 1:
             cidr_of.setdefault(key, item["prefix"])
 
-    names: dict[str, str] = {}
+    # The configuration names interfaces first, then SNMP, then the route table.
+    configured = {interface_key(i.name): i for i in config.interfaces} if config else {}
+    names: dict[str, str] = {key: conf.name for key, conf in configured.items()}
     enabled: dict[str, bool] = {}
     for row in interfaces:
         name = str((row or {}).get("name") or "").strip()
-        if not name or interface_key(name) in names:
+        if not name or interface_key(name) in enabled:
             continue
-        names[interface_key(name)] = name
+        names.setdefault(interface_key(name), name)
         enabled[interface_key(name)] = str(row.get("admin_state") or "").strip().lower() != "down"
     for key, name in spelled.items():
         names.setdefault(key, name)
 
     for key, name in names.items():
-        ip, cidr = ip_of.get(key, ""), cidr_of.get(key, "")
-        block["interfaces"].append(
-            interface(name, _interface_kind(name, bool(ip or cidr)), ip=ip, cidr=cidr, enabled=enabled.get(key, True))
-        )
+        conf = configured.get(key)
+        up = enabled.get(key, True) and not (conf is not None and conf.shutdown)
+        if conf is not None and conf.addresses:
+            ip, cidr = conf.addresses[0]
+        else:
+            ip, cidr = ip_of.get(key, ""), cidr_of.get(key, "")
+        vrf = _vrf(conf.vrf) if conf is not None else vrf_of.get(key, "")
+        kind = _interface_kind(name, bool(ip or cidr))
+        # A configured interface is its own zone: its access lists match by it.
+        entry = interface(name, kind, ip=ip, cidr=cidr, zone=name if conf else "", vrf=vrf, enabled=up)
+        if conf is not None and conf.description:
+            entry["description"] = conf.description
+        block["interfaces"].append(entry)
+        if conf is not None:
+            block["interfaces"].extend(_configured_interfaces(name, conf, kind, vrf, up))
     # Routes name interfaces the way the block does.
     for item in routes:
         if item["interface"]:
             item["interface"] = names.get(interface_key(item["interface"]), item["interface"])
+
+    if config is not None:
+        # The connected and static routes of every VRF the capture has no
+        # table for (all of them without a capture). A VRF it has is taken
+        # as captured: a configured static route missing from it is not
+        # installed (a floating route, or its next hop is down).
+        captured = {item["vrf"] for item in routes}
+        for conf in config.interfaces:
+            vrf = _vrf(conf.vrf)
+            if vrf in captured or conf.shutdown:
+                continue
+            name = names.get(interface_key(conf.name), conf.name)
+            for _address, cidr in conf.addresses:
+                routes.append(_route(cidr, "connected", iface=name, vrf=vrf, source=f"Connected {name}"))
+        for static in config.static_routes:
+            vrf = _vrf(static.vrf)
+            if vrf in captured:
+                continue
+            iface = names.get(interface_key(static.interface), static.interface) if static.interface else ""
+            source = f"Static route {static.name}".strip()
+            routes.append(
+                _route(static.prefix, "static", next_hop=static.next_hop, iface=iface, vrf=vrf, source=source)
+            )
+        if route_capture is None:
+            # The configuration names the routing protocols whose routes are missing.
+            missing = [f"Routes learned by {protocol}" for protocol in config.routing]
+        block["policies"] = _acl_policies(config, names)
     block["routes"] = routes
 
     # The host's own addresses: on the interface whose network holds them
@@ -445,7 +609,66 @@ def forwarding_for_host(
         covering = holders[0]["cidr"] if holders else ""
         block["interfaces"].append(interface(address, "", ip=address, cidr=covering))
 
-    note(block, ACCESS_LISTS)
+    if config is None:
+        note(block, ACCESS_LISTS)
+    else:
+        for name in config.notes:
+            note(block, name)
     for name in missing:
         note(block, name)
     return block
+
+
+_VLAN_ID = re.compile(r"^vlan(\d+)$")
+
+
+def subnets_for_host(node: dict, block: dict) -> list[dict[str, Any]]:
+    """The networks of an inventory host as ``subnet_index`` rows, so they
+    can be picked as path ends and swept: each interface network (``svi``,
+    named ``VLAN <id> <description>``, for a VLAN interface; ``connected``,
+    named by the interface and its description, for any other) and each
+    static route (``static``). ``node`` is the host's graph node: its id is
+    the ``node_id``, its inventory group the site. Default routes, host
+    addresses, loopbacks and management interfaces are left out."""
+    host_id = str(node.get("id"))
+    group_id = node.get("group_id")
+    found: dict[str, dict[str, Any]] = {}
+
+    def add(cidr: str, kind: str, name: str) -> None:
+        network = ipaddress.ip_network(cidr)
+        if network.prefixlen == 0 or network.num_addresses == 1 or cidr in found:
+            return
+        found[cidr] = {
+            "cidr": cidr,
+            "name": name.strip(),
+            "kind": kind,
+            "site_id": "" if group_id is None else str(group_id),
+            "site_name": str(node.get("group_name") or ""),
+            "node_id": host_id,
+            "in_vpn": None,
+            "org_ref": INVENTORY_ORG_REF,
+            "provider": PROVIDER_INVENTORY,
+            "org_name": "Inventory",
+        }
+
+    for entry in block.get("interfaces") or []:
+        if not isinstance(entry, dict) or not entry.get("cidr") or entry.get("kind") in ("loopback", "management"):
+            continue
+        base = str(entry.get("zone") or entry.get("name") or "")
+        description = str(entry.get("description") or "")
+        vlan = _VLAN_ID.match(interface_key(base))
+        secondary = " (secondary)" if "(secondary " in str(entry.get("name") or "") else ""
+        if entry.get("kind") == "svi" and vlan:
+            add(entry["cidr"], "svi", f"VLAN {vlan.group(1)} {description}".strip() + secondary)
+        else:
+            add(entry["cidr"], "connected", f"{base} {description}".strip() + secondary)
+    for item in block.get("routes") or []:
+        if isinstance(item, dict) and item.get("kind") == "static" and canonical(item.get("prefix")):
+            via = item.get("next_hop") or item.get("interface") or ""
+            add(canonical(item["prefix"]), "static", f"Static route via {via}" if via else "Static route")
+
+    def order(row: dict[str, Any]) -> tuple:
+        network = ipaddress.ip_network(row["cidr"])
+        return (network.version, int(network.network_address), network.prefixlen)
+
+    return sorted(found.values(), key=order)

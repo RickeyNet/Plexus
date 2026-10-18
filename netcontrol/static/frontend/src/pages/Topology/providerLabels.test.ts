@@ -2,7 +2,15 @@ import { describe, expect, it } from 'vitest';
 
 import type { TopologyEdge, TopologyNode } from '@/api/topology';
 
-import { edgeProtocolLabel, providerLabel, providerScopeName, providerSourceName } from './helpers';
+import {
+  edgeProtocolLabel,
+  INVENTORY_ORG_REF,
+  merakiNodeIndex,
+  merakiNodeKey,
+  providerLabel,
+  providerScopeName,
+  providerSourceName,
+} from './helpers';
 
 function ftd(id: string, site: string, provider = 'fmc'): TopologyNode {
   return {
@@ -68,5 +76,35 @@ describe('edgeProtocolLabel', () => {
     expect(edgeProtocolLabel(link('vpn-ipsec', 'fmc'))).toBe('VPN-IPSEC');
     expect(edgeProtocolLabel(link('vpn-ipsec', 'panorama'))).toBe('VPN-IPSEC');
     expect(edgeProtocolLabel({ id: 'e', from: 'a', to: 'b' })).toBe('L2');
+  });
+});
+
+describe('inventory names', () => {
+  it('never labels an inventory hop or row as Meraki', () => {
+    expect(providerLabel('inventory')).toBe('Inventory');
+    expect(providerSourceName('inventory')).toBe('Inventory');
+    expect(providerScopeName('inventory')).toBe('Inventory group');
+  });
+});
+
+describe('the map node of a subnet owner', () => {
+  const host: TopologyNode = { id: 12, label: 'core-sw1', in_inventory: true };
+  const both: TopologyNode = {
+    id: 7,
+    label: 'branch-ms',
+    in_inventory: true,
+    source: 'meraki',
+    meraki: { org_ref: 1, node_id: 'd:Q2', site_id: 'BR', site_name: 'Branch', kind: 'switch', status: 'online' },
+    also_refs: [{ org_ref: 2, node_id: 'd:Q2' }],
+  };
+  const neighbor: TopologyNode = { id: 'ext:10.0.0.9', label: 'unknown', in_inventory: false };
+
+  it('registers inventory hosts under the inventory org_ref and host id', () => {
+    const index = merakiNodeIndex([host, both, neighbor]);
+    expect(index.get(merakiNodeKey(INVENTORY_ORG_REF, '12'))).toBe(host);
+    expect(index.get(merakiNodeKey(INVENTORY_ORG_REF, '7'))).toBe(both);
+    expect(index.get(merakiNodeKey(1, 'd:Q2'))).toBe(both);
+    expect(index.get(merakiNodeKey(2, 'd:Q2'))).toBe(both);
+    expect(index.size).toBe(4);
   });
 });
