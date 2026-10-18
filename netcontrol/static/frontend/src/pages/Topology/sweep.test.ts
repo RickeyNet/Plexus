@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ReachabilityReport, ReachabilityRow } from '@/api/meraki';
+import type { MerakiSubnet, ReachabilityReport, ReachabilityRow, TopologySource } from '@/api/meraki';
 
 import {
   buildReachabilityQuery,
@@ -9,6 +9,9 @@ import {
   rowsWithVerdict,
   rowTraceQuery,
   siteRollup,
+  SWEEP_PROVIDERS,
+  sweepProviders,
+  sweepSources,
   vlanTextError,
 } from './sweep';
 
@@ -146,5 +149,45 @@ describe('rows', () => {
       protocol: 'tcp',
       port: 445,
     });
+  });
+});
+
+describe('sweep filters with inventory networks', () => {
+  const merakiSubnet: MerakiSubnet = {
+    org_ref: 1, provider: 'meraki', cidr: '10.1.0.0/24', name: 'VLAN 1', kind: 'vlan',
+    site_id: 'BR', site_name: 'Branch A', node_id: 'd:BR', in_vpn: true,
+  };
+  const inventorySubnet: MerakiSubnet = {
+    org_ref: -4, provider: 'inventory', cidr: '10.50.0.0/24', name: 'VLAN 50 Users', kind: 'svi',
+    site_id: '3', site_name: 'Campus', node_id: '12', in_vpn: null,
+  };
+  function source(fields: Partial<TopologySource>): TopologySource {
+    return {
+      key: 'meraki:1', type: 'meraki', id: 1, name: 'Acme', status: 'success', last_collected_at: null,
+      message: '', detail: '', warning_count: 0, collecting: false, can_collect: true, enabled: true, demo: false,
+      ...fields,
+    };
+  }
+  const sources = [source({}), source({ key: 'neighbors', type: 'neighbors', id: null, name: 'Neighbor discovery' }), source({ key: 'aws:3', type: 'aws', id: 3, name: 'Prod' })];
+
+  it('offers the inventory provider only when the index has inventory networks', () => {
+    expect(sweepProviders([merakiSubnet])).toEqual(SWEEP_PROVIDERS);
+    expect(sweepProviders([merakiSubnet, inventorySubnet])).toEqual([...SWEEP_PROVIDERS, 'inventory']);
+  });
+
+  it('adds an Inventory source with the inventory org_ref', () => {
+    expect(sweepSources(sources, [merakiSubnet])).toEqual([{ key: 'meraki:1', id: 1, label: 'Acme (Meraki)' }]);
+    expect(sweepSources(sources, [inventorySubnet])).toEqual([
+      { key: 'meraki:1', id: 1, label: 'Acme (Meraki)' },
+      { key: 'inventory', id: -4, label: 'Inventory' },
+    ]);
+  });
+
+  it('groups inventory rows by their group, and a host with no group under Inventory', () => {
+    const rows = [
+      row({ org_ref: -4, org_name: 'Inventory', provider: 'inventory', site_name: 'Campus', node_id: '12' }),
+      row({ org_ref: -4, org_name: 'Inventory', provider: 'inventory', site_name: '', node_id: '13' }),
+    ];
+    expect(siteRollup(rows).map((r) => r.site)).toEqual(['Campus', 'Inventory']);
   });
 });

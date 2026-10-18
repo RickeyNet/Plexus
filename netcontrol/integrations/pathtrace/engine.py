@@ -49,6 +49,7 @@ from netcontrol.integrations.pathtrace.model import (
     EPHEMERAL_PORTS,
     FULL,
     INFO,
+    INVENTORY_ORG_REF,
     LINK,
     NAT,
     NONE,
@@ -57,6 +58,7 @@ from netcontrol.integrations.pathtrace.model import (
     PART,
     PARTIAL,
     POLICY,
+    PROVIDER_INVENTORY,
     ROUTE,
     UNKNOWN,
     UNREACHABLE,
@@ -99,13 +101,15 @@ _MISSING_SETS = {
     "Access control rules": ("any", POLICY),
     "Security rules": ("any", POLICY),
     "Switch ACL": ("any", ACL),
+    # The interface access lists of an inventory host without a configuration backup.
+    "Access lists": ("any", ACL),
     "WAN firewall rules": ("wan_traffic", POLICY),
     "Internet firewall rules": ("internet_traffic", POLICY),
     # An Appgate Gateway's entitlements, applied to every flow it forwards.
     "Entitlements": ("any", POLICY),
     "Allowed destinations": ("any", POLICY),
 }
-_STATELESS_MISSING = ("Switch ACL",)
+_STATELESS_MISSING = ("Switch ACL", "Access lists")
 # Destination NAT a flow from the WAN may meet.
 _MISSING_NAT = ("NAT rules", "1:1 NAT", "Port forwarding", "1:Many NAT")
 # Source NAT a flow leaving on the WAN may meet: an MX in routed mode hides
@@ -357,6 +361,8 @@ def _describe(rule: dict) -> str:
         src += f" port {rule['src_ports']}"
     parts.append(f"{src} → {dst}")
     parts.append(str(rule.get("dst_ports") or "any"))
+    if rule.get("established"):
+        parts.append("established")
     zones = []
     if rule.get("src_zones"):
         zones.append(f"from {', '.join(rule['src_zones'])}")
@@ -414,6 +420,14 @@ def _asked(flow: Flow, reply: bool) -> port_sets.Asked:
     return port_sets.Asked(flow.protocol, service, client)
 
 
+def _established(rule: dict, flow: Flow, reply: bool) -> int:
+    """How much of the flow an ``established`` rule can match: none of a
+    request (its first packet opens the connection), all of a TCP reply."""
+    if not rule.get("established"):
+        return FULL
+    return NONE if not reply or flow.protocol not in ("tcp", "") else FULL
+
+
 def _port_set(policy: dict, flow: Flow, in_zone: str, out_zone: str, reply: bool) -> port_sets.Ports:
     """The ports a rule set lets through, as ``Tracer._evaluate`` decides
     each one. A stateless rule set matches a reply on its source ports."""
@@ -425,6 +439,7 @@ def _port_set(policy: dict, flow: Flow, in_zone: str, out_zone: str, reply: bool
                 cover(rule.get("dst"), flow.dst),
                 _zones(rule.get("src_zones") or [], in_zone),
                 _zones(rule.get("dst_zones") or [], out_zone),
+                _established(rule, flow, reply),
             ),
             protocol=str(rule.get("protocol") or ""),
             ports=str(rule.get(service) or ""),
@@ -473,6 +488,9 @@ class Tracer:
                 key = (int(ref["org_ref"]), str(ref["node_id"]))
                 self.graph_of.setdefault(key, gid)
                 self.refs_of.setdefault(gid, []).append((*key, str(ref.get("provider") or "")))
+            # The subnets of an inventory host name it by its id.
+            if isinstance(gid, int) or node.get("in_inventory"):
+                self.graph_of.setdefault((INVENTORY_ORG_REF, str(gid)), gid)
 
         self.snap_nodes: dict[tuple[int, str], dict] = {}
         self.gateways: dict[tuple[int, str], str] = {}
@@ -645,7 +663,7 @@ class Tracer:
         if isinstance(ref, dict):
             return str(ref.get("provider") or "meraki")
         if isinstance(gid, int) or node.get("in_inventory"):
-            return "inventory"
+            return PROVIDER_INVENTORY
         return "unknown"
 
     def _new_hop(self, gid: Any, edge: Any, ingress: str = "") -> dict:
@@ -1513,6 +1531,11 @@ class Tracer:
             consulted = self._applies_here(str(policy.get("applies") or ""), classes, ctx)
             if consulted is False:
                 continue
+            bound = str(policy.get("interface") or "").lower()
+            zone = ctx.in_zone if policy.get("direction") == "in" else out_zone
+            if bound and zone and zone.lower() != bound:
+                # An access list applied to another interface.
+                continue
             name = str(policy.get("name") or "Rule set")
             stage = ACL if policy.get("kind") == "acl" else POLICY
             if ctx.fastpath and policy.get("kind") == "firewall":
@@ -1547,7 +1570,7 @@ class Tracer:
             if consulted is None:
                 items.append(self._undecided(name, walk, ctx))
                 continue
-            found, decided = self._evaluate(policy, walk.flow, ctx.in_zone, out_zone)
+            found, decided = self._evaluate(policy, walk.flow, ctx.in_zone, out_zone, walk.reply)
             found[-1]["ports"] = port_sets.to_json(_port_set(policy, walk.flow, ctx.in_zone, out_zone, walk.reply))
             items.extend(found)
             if decided == "fastpath":
@@ -1555,8 +1578,11 @@ class Tracer:
             if any(i["status"] == BLOCKED for i in found):
                 return
 
-    def _evaluate(self, policy: dict, flow: Flow, in_zone: str, out_zone: str) -> tuple[list[dict], str]:
-        """The items of one rule set and the action that decided."""
+    def _evaluate(
+        self, policy: dict, flow: Flow, in_zone: str, out_zone: str, reply: bool = False
+    ) -> tuple[list[dict], str]:
+        """The items of one rule set and the action that decided. An
+        ``established`` rule matches only in the replies."""
         name = str(policy.get("name") or "Rule set")
         stage = ACL if policy.get("kind") == "acl" else POLICY
         found: list[dict] = []
@@ -1575,6 +1601,7 @@ class Tracer:
                 FULL if icmp else ports_match(rule.get("dst_ports"), flow.dst_ports),
                 _zones(rule.get("src_zones") or [], in_zone),
                 _zones(rule.get("dst_zones") or [], out_zone),
+                _established(rule, flow, reply),
             )
             if match == NONE:
                 continue

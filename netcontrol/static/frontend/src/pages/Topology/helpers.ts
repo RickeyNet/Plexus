@@ -154,8 +154,17 @@ export function isManagedNode(node: TopologyNode): boolean {
   return node.in_inventory || node.source === 'meraki';
 }
 
+/**
+ * The subnet index (`/api/sources/subnets`), reachability rows and deep search
+ * hits name an inventory host's networks with this org_ref, the provider
+ * below and `node_id` = the host id (its map node id, as text).
+ */
+export const INVENTORY_ORG_REF = -4;
+export const PROVIDER_INVENTORY = 'inventory';
+
 /** Display name of the integration a snapshot node came from. */
 export function providerLabel(provider?: string | null): string {
+  if (provider === PROVIDER_INVENTORY) return 'Inventory';
   if (provider === 'aws') return 'AWS';
   if (provider === 'azure') return 'Azure';
   if (provider === 'gcp') return 'GCP';
@@ -195,6 +204,7 @@ export function draggedPanelWidth(startWidth: number, startX: number, clientX: n
 
 /** Where the integration's data is read from. */
 export function providerSourceName(provider?: string | null): string {
+  if (provider === PROVIDER_INVENTORY) return 'Inventory';
   if (provider === 'aws') return 'AWS API';
   if (provider === 'azure') return 'Azure API';
   if (provider === 'gcp') return 'GCP API';
@@ -222,6 +232,7 @@ export function edgeProtocolLabel(edge: TopologyEdge, a?: TopologyNode, b?: Topo
 
 /** What one entry of the integration is called. */
 export function providerScopeName(provider?: string | null): string {
+  if (provider === PROVIDER_INVENTORY) return 'Inventory group';
   if (provider === 'aws' || provider === 'azure' || provider === 'gcp') return cloudProviderTerms(provider).scopeTitle;
   if (provider === 'fmc') return 'Cisco FMC';
   if (provider === 'panorama') return 'Panorama';
@@ -558,4 +569,25 @@ export function nodeSearchText(node: TopologyNode): string {
 
 export function merakiNodeKey(orgRef: number, nodeId: string): string {
   return `${orgRef}|${nodeId}`;
+}
+
+/**
+ * Map node of every snapshot reference on the map, by `merakiNodeKey`: each
+ * integration node under its own reference, each inventory host under
+ * (INVENTORY_ORG_REF, host id), and the snapshot nodes collapsed into another
+ * node (`also_refs`) under that node; a node's own reference wins.
+ */
+export function merakiNodeIndex(nodes: TopologyNode[]): Map<string, TopologyNode> {
+  const index = new Map<string, TopologyNode>();
+  for (const n of nodes) {
+    if (n.meraki) index.set(merakiNodeKey(n.meraki.org_ref, n.meraki.node_id), n);
+    if (n.in_inventory && typeof n.id === 'number') index.set(merakiNodeKey(INVENTORY_ORG_REF, String(n.id)), n);
+  }
+  for (const n of nodes) {
+    for (const ref of n.also_refs ?? []) {
+      const key = merakiNodeKey(ref.org_ref, ref.node_id);
+      if (!index.has(key)) index.set(key, n);
+    }
+  }
+  return index;
 }

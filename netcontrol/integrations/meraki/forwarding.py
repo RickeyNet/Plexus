@@ -137,7 +137,12 @@ def policy_set(
     stateful: bool = True,
     default: str = "allow",
     complete: bool = True,
+    interface: str = "",
+    direction: str = "",
 ) -> dict[str, Any]:
+    """A rule set. ``interface`` and ``direction`` (``in`` or ``out``) bind
+    it to the traffic entering or leaving one interface, as an access list
+    applied with ``ip access-group``: a flow on another interface skips it."""
     return {
         "name": name,
         "kind": kind,
@@ -146,6 +151,8 @@ def policy_set(
         "default": default,
         "complete": complete,
         "rules": rules,
+        "interface": interface,
+        "direction": direction,
     }
 
 
@@ -164,7 +171,10 @@ def rule(
     dst_zones: list[str] | None = None,
     comment: str = "",
     unresolved: list[str] | None = None,
+    established: bool = False,
 ) -> dict[str, Any]:
+    """A rule. ``established`` (a TCP access list entry) matches only
+    packets of a connection already open: the replies, never a request."""
     return {
         "index": index,
         "name": name,
@@ -179,6 +189,7 @@ def rule(
         "dst_zones": list(dst_zones or []),
         "comment": comment,
         "unresolved": list(dict.fromkeys(unresolved or [])),
+        "established": bool(established),
     }
 
 
