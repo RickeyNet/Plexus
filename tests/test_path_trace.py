@@ -415,7 +415,20 @@ def _ftd_block() -> dict:
     return block
 
 
-def _ftd_tracer() -> Tracer:
+# The configuration backup of core-sw: its two SVIs, no access lists.
+_CORE_SW_CONFIG = """\
+hostname core-sw
+interface Vlan10
+ ip address 10.70.1.1 255.255.255.0
+!
+interface Vlan60
+ ip address 10.60.0.254 255.255.255.0
+!
+end
+"""
+
+
+def _ftd_tracer(config: str | None = _CORE_SW_CONFIG) -> Tracer:
     snapshot = _snapshot(
         "Corp FMC",
         [_node("d:FTD", "appliance", "dev:FTD", "ftd-branch", _ftd_block())],
@@ -436,6 +449,7 @@ def _ftd_tracer() -> Tracer:
         [],
         {"id": 1, "routes_text": _IOS_CAPTURE},
         [{"name": "Vlan10", "admin_state": "up"}, {"name": "Vlan60", "admin_state": "up"}],
+        config_backup={"id": 5, "config_text": config} if config is not None else None,
     )
     lldp = {"id": 42, "from": "meraki:2:d:FTD", "to": 7, "protocol": "lldp", "status": ""}
     subnets = [
@@ -457,9 +471,8 @@ def test_ftd_prefilter_fastpath_skips_the_access_policy_and_the_static_route_rea
     skipped = next(i for i in ftd["items"] if i["where"] == "Access control policy Corp")
     assert skipped["status"] == "info" and skipped["text"] == "Skipped: the prefilter fastpaths this flow."
     assert ("route", "ok", "Static route DC") in _items(ftd)
-    # The host's access lists are not collected: a note, named in the summary.
-    assert ("note", "info", "Access lists") in _items(host, info=True)
-    assert result["request"]["summary"].endswith("Not checked: Access lists.")
+    # The host's configuration backup binds no access list: nothing is left unchecked.
+    assert "Not checked" not in result["request"]["summary"]
     # The host is on the FTD's inside subnet: it answers the source directly.
     assert _labels(result["reply"]) == ["core-sw"]
     assert result["asymmetric"] == {
@@ -468,6 +481,19 @@ def test_ftd_prefilter_fastpath_skips_the_access_policy_and_the_static_route_rea
         "has a stateful firewall that sees the request but never the replies: its connection state never "
         "completes, so the rest of the connection can be dropped there.",
     }
+
+
+def test_inventory_host_without_a_configuration_backup_leaves_its_access_lists_unknown():
+    result = _ftd_tracer(config=None).trace("10.60.0.5", "10.70.1.5", destination_node="7", protocol="tcp", port=873)
+
+    assert result["verdict"] == "unknown", result["summary"]
+    host = result["request"]["hops"][-1]
+    decided = next(i for i in host["items"] if i["status"] == "unknown")
+    assert decided["stage"] == "acl" and decided["where"] == "Access lists"
+    assert decided["text"] == "Access lists are not collected: whether they allow this flow is not known."
+    # Stateless: the replies meet them again.
+    reply_host = result["reply"]["hops"][0]
+    assert ("acl", "unknown", "Access lists") in _items(reply_host)
 
 
 def test_ftd_access_policy_denies_by_zone():
@@ -2304,3 +2330,242 @@ def test_api_reachability_sweep_refuses_too_many_sources(api, monkeypatch):
     body = response.json()
     assert body["limit"] == 1 and body["count"] > 1
     assert "Narrow the filters" in body["error"]["message"]
+
+
+# ── Catalyst inventory hosts: configuration backups ──────────────────────────
+
+_CORE_CONFIG = """\
+hostname core-sw1
+!
+object-group network SERVERS
+ 10.20.0.0 255.255.255.0
+!
+object-group service WEB
+ tcp eq 443
+!
+interface GigabitEthernet1/0/1
+ description To dc-rtr1
+ no switchport
+ ip address 10.0.0.1 255.255.255.252
+ ip access-group UPLINK-IN in
+!
+interface Vlan10
+ description Users
+ ip address 10.1.10.2 255.255.255.0
+ ip access-group USERS-IN in
+ standby 10 ip 10.1.10.1
+!
+ip route 0.0.0.0 0.0.0.0 10.0.0.2
+!
+ip access-list extended USERS-IN
+ remark Web to the servers
+ 10 permit object-group WEB 10.1.10.0 0.0.0.255 object-group SERVERS
+ 20 deny   tcp any any eq telnet
+ 30 permit icmp any any
+ip access-list extended UPLINK-IN
+ 10 permit tcp any 10.1.10.0 0.0.0.255 established
+ 20 permit icmp any any
+ 30 deny   ip any any
+!
+end
+"""
+
+_ROUTER_CONFIG = """\
+hostname dc-rtr1
+!
+interface GigabitEthernet0/0
+ ip address 10.0.0.2 255.255.255.252
+!
+interface Vlan100
+ description Servers
+ ip address 10.20.0.1 255.255.255.0
+!
+ip route 10.1.0.0 255.255.0.0 10.0.0.1
+!
+end
+"""
+
+_ROUTER_CAPTURE = """\
+Codes: L - local, C - connected, S - static
+Gateway of last resort is not set
+
+      10.0.0.0/8 is variably subnetted, 5 subnets, 3 masks
+C        10.0.0.0/30 is directly connected, GigabitEthernet0/0
+L        10.0.0.2/32 is directly connected, GigabitEthernet0/0
+S        10.1.0.0/16 [1/0] via 10.0.0.1
+C        10.20.0.0/24 is directly connected, Vlan100
+L        10.20.0.1/32 is directly connected, Vlan100
+"""
+
+_CATALYST_NODES = [
+    {
+        "id": 7,
+        "label": "core-sw1",
+        "ip": "10.0.0.1",
+        "in_inventory": True,
+        "device_type": "cisco_xe",
+        "group_id": 3,
+        "group_name": "HQ",
+    },
+    {
+        "id": 8,
+        "label": "dc-rtr1",
+        "ip": "10.0.0.2",
+        "in_inventory": True,
+        "device_type": "cisco_ios",
+        "group_id": 3,
+        "group_name": "HQ",
+    },
+]
+
+
+def _catalyst_hosts(router_backup: bool = True) -> tuple[Tracer, list[dict]]:
+    """core-sw1 (VLAN 10 with HSRP and an inbound ACL, an uplink ACL that
+    lets only established TCP in) linked to dc-rtr1, which holds the server
+    VLAN. Every network of both is in the subnet index."""
+    from netcontrol.integrations.pathtrace.inventory import subnets_for_host
+
+    core = forwarding_for_host(
+        {"ip_address": "10.0.0.1", "device_type": "cisco_xe"}, [], None, [], config_backup={"config_text": _CORE_CONFIG}
+    )
+    router = forwarding_for_host(
+        {"ip_address": "10.0.0.2", "device_type": "cisco_ios"},
+        [],
+        {"id": 1, "routes_text": _ROUTER_CAPTURE},
+        [],
+        config_backup={"config_text": _ROUTER_CONFIG} if router_backup else None,
+    )
+    subnets = [*subnets_for_host(_CATALYST_NODES[0], core), *subnets_for_host(_CATALYST_NODES[1], router)]
+    lldp = {"id": "lldp:7:8", "from": 7, "to": 8, "protocol": "lldp", "status": "up"}
+    tracer = _tracer({}, hosts={7: core, 8: router}, extra_nodes=_CATALYST_NODES, extra_edges=[lldp], subnets=subnets)
+    return tracer, subnets
+
+
+def test_catalyst_vlan_acl_decides_and_the_uplink_acl_lets_established_replies_in():
+    from netcontrol.integrations.pathtrace.model import INVENTORY_ORG_REF
+
+    tracer, _subnets = _catalyst_hosts()
+    source_node = tracer.graph_of[(INVENTORY_ORG_REF, "7")]
+    assert source_node == 7 and tracer.ip_owner["10.1.10.1"] == [7]
+
+    blocked = tracer.trace("10.1.10.0/24", "10.20.0.10", source_node=source_node, protocol="tcp", port=23)
+    assert blocked["verdict"] == "blocked"
+    [core] = blocked["request"]["hops"]
+    assert core["provider"] == "inventory" and core["in"] == "Vlan10" and core["out"] == "GigabitEthernet1/0/1"
+    acl = next(i for i in core["items"] if i["status"] == "blocked")
+    assert acl["stage"] == "acl" and acl["where"] == "ACL USERS-IN in on Vlan10" and acl["rule"] == 20
+    assert acl["text"] == "Rule 20 (deny tcp any → any 23, zones from Vlan10): denies it."
+    # The uplink's ACL binds traffic coming in on the uplink, not this flow.
+    assert not any(i["where"].startswith("ACL UPLINK-IN") for i in core["items"])
+
+    allowed = tracer.trace("10.1.10.0/24", "10.20.0.10", source_node=source_node, protocol="tcp", port=443)
+    assert allowed["verdict"] == "allowed", allowed["summary"]
+    assert _labels(allowed["request"]) == ["core-sw1", "dc-rtr1"] and _labels(allowed["reply"]) == ["dc-rtr1", "core-sw1"]
+    permit = next(i for i in allowed["request"]["hops"][0]["items"] if i["where"] == "ACL USERS-IN in on Vlan10")
+    assert permit["status"] == "ok" and permit["rule"] == 10 and "Web to the servers" in permit["text"]
+    assert allowed["request"]["hops"][1]["in"] == "GigabitEthernet0/0"
+    # The replies come in on the uplink: the established entry lets them in.
+    back = allowed["reply"]["hops"][1]
+    assert back["in"] == "GigabitEthernet1/0/1" and back["out"] == "Vlan10"
+    uplink = next(i for i in back["items"] if i["where"] == "ACL UPLINK-IN in on GigabitEthernet1/0/1")
+    assert uplink["status"] == "ok" and uplink["rule"] == 10 and "established" in uplink["text"]
+    assert allowed["asymmetric"]["status"] == "no"
+
+    # A connection opened from the servers is no established reply: the uplink ACL denies it.
+    opened = tracer.trace("10.20.0.10", "10.1.10.5", protocol="tcp", port=22)
+    assert opened["verdict"] == "blocked"
+    denied = next(i for i in opened["request"]["hops"][1]["items"] if i["status"] == "blocked")
+    assert denied["where"] == "ACL UPLINK-IN in on GigabitEthernet1/0/1" and denied["rule"] == 30
+
+    # The HSRP address answers on core-sw1.
+    gateway = tracer.trace("10.20.0.10", "10.1.10.1", protocol="icmp")
+    route = next(i for i in gateway["request"]["hops"][-1]["items"] if i["stage"] == "route")
+    assert route["text"] == "10.1.10.1 is an address of this device (Vlan10 (HSRP 10.1.10.1))."
+
+
+def test_catalyst_host_without_a_backup_leaves_the_flow_unknown_at_its_access_lists():
+    tracer, _subnets = _catalyst_hosts(router_backup=False)
+    result = tracer.trace("10.1.10.0/24", "10.20.0.10", source_node=7, protocol="tcp", port=443)
+    assert result["verdict"] == "unknown"
+    router = result["request"]["hops"][1]
+    decided = next(i for i in router["items"] if i["status"] == "unknown")
+    assert decided["where"] == "Access lists" and "not collected" in decided["text"]
+
+
+def test_sweep_over_inventory_networks():
+    from netcontrol.integrations.pathtrace import sweep
+
+    tracer, subnets = _catalyst_hosts()
+    meraki = {"org_ref": 1, "provider": "meraki", "cidr": "10.9.0.0/24", "node_id": "d:X", "kind": "vlan", "name": "x"}
+    filters = sweep.parse_filters(providers="inventory")
+    rows = sweep.select_rows([*subnets, meraki], filters, "10.20.0.10")
+    assert {(r["cidr"], r["node_id"]) for r in rows} == {
+        ("10.0.0.0/30", "7"),
+        ("10.1.10.0/24", "7"),
+        ("10.0.0.0/30", "8"),
+    }
+    assert sweep.select_rows([*subnets, meraki], sweep.parse_filters(sources="-4"), "10.20.0.10") == rows
+    report = sweep.run(tracer, rows, "10.20.0.10", protocol="tcp", port=23)
+    assert report["counts"]["blocked"] == 2 and report["counts"]["allowed"] == 1
+    vlan = next(r for r in report["rows"] if r["cidr"] == "10.1.10.0/24")
+    assert (vlan["provider"], vlan["org_ref"], vlan["source_node"], vlan["vlan"]) == ("inventory", -4, 7, 10)
+    assert (vlan["site_name"], vlan["name"], vlan["node_label"]) == ("HQ", "VLAN 10 Users", "core-sw1")
+    assert vlan["verdict"] == "blocked" and vlan["decided_at"] == "core-sw1"
+    assert vlan["decided_by"].startswith("ACL USERS-IN in on Vlan10: Rule 20")
+
+
+def test_api_lists_and_sweeps_an_inventory_hosts_vlans(api):
+    import asyncio
+
+    import routes.database as db
+    from netcontrol.routes.topology import invalidate_topology_cache
+
+    assert api.post("/api/sources/sample").status_code == 201
+    capture = (
+        "Codes: L - local, C - connected, S - static\n"
+        "S*    0.0.0.0/0 [1/0] via 10.0.0.2\n"
+        "C        10.0.0.0/30 is directly connected, GigabitEthernet1/0/1\n"
+        "L        10.0.0.1/32 is directly connected, GigabitEthernet1/0/1\n"
+        "C        10.1.10.0/24 is directly connected, Vlan10\n"
+        "L        10.1.10.2/32 is directly connected, Vlan10\n"
+    )
+
+    async def seed() -> int:
+        group_id = await db.create_group("HQ-inventory")
+        host_id = await db.add_host(group_id, "core-sw1", "192.168.77.10", "cisco_xe")
+        # The whole map holds the inventory hosts that have discovered links.
+        await db.upsert_topology_link(
+            host_id, "192.168.77.10", "GigabitEthernet1/0/1", None, "192.168.77.99", "dc-rtr1", "Gi0/0", "lldp"
+        )
+        await db.create_route_snapshot(host_id, 3, capture, "hash-1")
+        await db.create_config_backup(None, host_id, _CORE_CONFIG)
+        return host_id
+
+    host_id = asyncio.run(seed())
+    invalidate_topology_cache()
+
+    subnets = api.get("/api/sources/subnets").json()["subnets"]
+    vlan = next(s for s in subnets if s["cidr"] == "10.1.10.0/24" and s["org_ref"] == -4)
+    assert vlan == {**vlan, "node_id": str(host_id), "provider": "inventory", "kind": "svi", "name": "VLAN 10 Users"}
+    assert vlan["site_name"] == "HQ-inventory"
+
+    query = "destination=10.20.0.10&protocol=tcp&port=23"
+    swept = api.get(f"/api/topology/reachability?{query}&providers=inventory")
+    assert swept.status_code == 200, swept.text
+    rows = swept.json()["rows"]
+    assert rows and all(r["provider"] == "inventory" and r["org_name"] == "Inventory" for r in rows)
+    row = next(r for r in rows if r["cidr"] == "10.1.10.0/24")
+    assert row["verdict"] == "blocked" and row["decided_by"].startswith("ACL USERS-IN in on Vlan10: Rule 20")
+    assert row["source_node"] == host_id
+    by_source = api.get(f"/api/topology/reachability?{query}&sources=-4").json()["rows"]
+    assert [r["cidr"] for r in by_source] == [r["cidr"] for r in rows]
+
+    found = api.get("/api/topology/search/deep?q=10.1.10.50").json()["results"]
+    # The HTML export's subnet picker lists it too, owned by the exported host node.
+    exported = _export_data(api.get("/api/topology/export.html?engine=0"))
+    assert str(host_id) in {n["id"] for n in exported["nodes"]}
+    assert any(s["cidr"] == "10.1.10.0/24" and s["node_id"] == str(host_id) for s in exported["subnets"])
+
+    hit = next(r for r in found if r["org_ref"] == -4)
+    assert hit["node_id"] == str(host_id) and hit["label"] == "core-sw1"
+    assert hit["snippet"] == "HQ-inventory · Subnets: 10.1.10.0/24 VLAN 10 Users"

@@ -9,6 +9,7 @@ import {
   findSubnets,
   isAddressText,
   parseTraffic,
+  pathModeHint,
   pathSites,
   subnetOptionLabel,
   userPick,
@@ -265,5 +266,28 @@ describe('the traffic of a path', () => {
     expect(parseTraffic('tcp/70000')).toBeNull();
     expect(parseTraffic('icmp/8')).toBeNull();
     expect(parseTraffic('https')).toBeNull();
+  });
+});
+
+describe('path mode with inventory subnets', () => {
+  const svi: MerakiSubnet = {
+    org_ref: -4, provider: 'inventory', cidr: '10.50.0.0/24', name: 'VLAN 50 Users',
+    kind: 'svi', site_id: '3', site_name: 'Campus', node_id: '12', in_vpn: null,
+  };
+
+  it('labels a subnet with its inventory group', () => {
+    expect(subnetOptionLabel(svi)).toBe('10.50.0.0/24 - Campus - VLAN 50 Users');
+  });
+
+  it('labels a host with no group as inventory, not a VPN peer', () => {
+    expect(subnetOptionLabel({ ...svi, site_id: '', site_name: '' })).toBe('10.50.0.0/24 - Inventory - VLAN 50 Users');
+    expect(subnetOptionLabel({ ...svi, provider: 'meraki', site_name: '' })).toBe('10.50.0.0/24 - VPN peer - VLAN 50 Users');
+  });
+
+  it('names only the inputs that are shown', () => {
+    expect(pathModeHint(true, true)).toBe('Click two or more devices on the map, or add sites and subnets, to see how they reach one another.');
+    expect(pathModeHint(false, true)).toBe('Click two or more devices on the map, or add subnets or IP addresses, to see how they reach one another.');
+    expect(pathModeHint(true, false)).toBe('Click two or more devices on the map, or add sites, to see how they reach one another.');
+    expect(pathModeHint(false, false)).toBe('Click two or more devices on the map to see how they reach one another.');
   });
 });

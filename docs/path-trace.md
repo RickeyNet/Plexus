@@ -10,8 +10,9 @@ asymmetric, and lets you reverse the source and the destination.
 
 The trace reads what the sources on the map collected: Meraki
 organizations, Cisco FMCs, Palo Alto Panoramas, Cato accounts, Appgate SDP
-collectives, AWS accounts, Azure subscriptions and the routes Plexus captured from inventory devices
-over SSH. It never
+collectives, AWS accounts, Azure subscriptions, the routes Plexus captured from inventory devices
+over SSH and, for Cisco IOS, IOS-XE and NX-OS inventory devices, the access lists, addresses and static
+routes of their latest configuration backup. It never
 reports as allowed what it could not look at: what a source does not
 collect is listed at that hop, and is *unknown* when the flow depends on
 it.
@@ -35,6 +36,13 @@ picks is a leg of the path.
   an AWS VPC, an Azure VNet or a GCP network counts as a network of its own,
   so typing it picks that network even when a Meraki vMX site or a Cato
   site declares the same range.
+- **Inventory devices are in the list.** The VLAN interfaces (SVIs, named
+  `VLAN <id> <description>`), connected networks and static routes of every
+  inventory device on the map are listed with the device's inventory group
+  as the site, from its latest route capture and configuration backup. A
+  network both an inventory device and another source hold (a transit
+  network between a switch and a firewall) is in the list twice; pick the
+  device you mean.
 - **Devices and sites draw the path only.** A device clicked on the map or a
   site typed into **Add a site** has no address to trace. A leg between a
   subnet and a device says which end to add with the subnet box instead.
@@ -213,7 +221,8 @@ router. The route then names the next device:
   node, over the link between them
 - a next-hop address goes to the device on the map that has that address on
   an interface: a Meraki VLAN or uplink, an FTD interface, an inventory
-  host's address, alias or SVI
+  host's address, alias, SVI or HSRP / VRRP / GLBP address (both members of
+  a pair hold the virtual address; the one linked to the sender is taken)
 - a next-hop address inside a collected VPC or VNet subnet, or a connected
   subnet that is one, goes to that VPC or VNet, where the cloud's own route
   tables take over. A device that is also an instance there (a Meraki vMX,
@@ -271,7 +280,8 @@ It changes the verdict only when the flow depends on it:
 - a rule set the device would consult for this flow is *unknown*: the Layer
   3 rules for traffic from the LAN, the inbound rules or the NAT rules for
   traffic from the WAN, FTD prefilter or access control rules, Palo Alto
-  security rules, a switch ACL,
+  security rules, a switch ACL, the access lists of an inventory device
+  without a configuration backup,
   Cato WAN firewall rules for a destination a site range or a user address
   covers and internet firewall rules for any other
 - routes that are not collected, such as routes learned over BGP or OSPF,
@@ -305,7 +315,7 @@ where its NAT and inbound rules decide. Documentation ranges such as
 | Palo Alto Panorama | Security rules in the order each firewall applies them (shared, device group and ancestors, pre then post, the intrazone and interzone default rules) with their zones, addresses and services, NAT rules, connected routes, the firewall's routing table (static, BGP, OSPF) or else its configured static routes, IPsec tunnels and their state | Rules configured on the firewall itself, App-ID (a rule with applications or `application-default` is unknown when it matches), users, URL categories, FQDNs and dynamic address groups, routes learned by BGP or OSPF when the routing table was not read; see [panorama-topology.md](panorama-topology.md#search-and-path-mode) |
 | Cato | The hops: Socket, PoP, Cato Cloud, PoP, Socket; the WAN firewall rules for a destination a site's range or a user's address covers (WAN traffic) and the internet firewall rules for any other destination, a private one included (internet traffic), applied once at the PoP the flow enters by | Routes learned by BGP; rule objects Plexus cannot turn into addresses (users groups, applications, categories, countries) make a rule that matches *unknown*; see [cato-topology.md](cato-topology.md#search-and-path-mode) |
 | Appgate SDP | The hops: user, Gateway. Each Gateway applies the **Entitlements** of its site (sources the tunnel addresses of the connected users that hold each one, default deny) and its **Allowed destinations**, routes each user's tunnel address back over the tunnel, and translates the client pool when the site uses SNAT; a user routes what its entitlements cover to the Gateway that grants them and has no other route (split tunnel) unless a site is its default gateway | Entitlement hosts that are names (`dns://`, `aws://`...), HTTP method rules and, without the per-user access details, which users hold an entitlement; see [appgate-topology.md](appgate-topology.md#search-and-path-mode) |
-| Inventory devices | The routes of the latest SSH route table capture: Cisco IOS and IOS-XE, NX-OS, ASA and FTD, Arista EOS | Access lists |
+| Inventory devices | The routes of the latest SSH route table capture (Cisco IOS and IOS-XE, with the VRF tables, NX-OS, ASA and FTD, Arista EOS). On Cisco IOS, IOS-XE and NX-OS, from the latest successful [configuration backup](#inventory-devices-and-configuration-backups): the access lists applied to each interface, in and out, the interface addresses, secondaries, VRFs and HSRP / VRRP / GLBP addresses, and the connected and static routes of the VRFs the capture lacks | Access lists of a device without a successful configuration backup, or of another platform; object groups and port names the configuration does not define, wildcard masks that are not a prefix, time ranges, DSCP and TCP flag matches (a rule that uses one is *unknown* when it matches); IPv6 access lists, port access lists, VLAN access maps, policy-based routes; without a route capture, the routes learned by the routing protocols the configuration runs |
 | AWS | Route tables, transit gateways, VPC peerings, network ACLs, security groups, as in [the AWS check of a path](aws-topology.md#the-aws-check-of-a-path) | See that section |
 | Azure | Effective routes and network security groups, as in [the Azure check of a path](azure-topology.md#the-azure-check-of-a-path) | See that section |
 | GCP | Subnet, peering, static and dynamic routes, VPN tunnels, Cloud NAT and VPC firewall rules, as in [the GCP check of a path](gcp-topology.md#the-gcp-check-of-a-path) | See that section |
@@ -315,6 +325,34 @@ explained under [What is not collected](#what-is-not-collected). A Cato
 trace between sites is decided by the WAN firewall at the PoP the flow
 enters by, and is *unknown* only where a rule that names something Plexus
 cannot evaluate (a users group, an application) matches.
+
+### Inventory devices and configuration backups
+
+The access lists of an inventory device come from **Config Backups**: Plexus
+reads the newest successful backup of the device's running configuration, so
+a device needs a backup policy that has run at least once. A new backup is
+read at the next trace. Each `ip access-group` binding is a rule set of its
+own, named after the list, direction and interface (*ACL USERS-IN in on
+Vlan10*). It applies only to traffic entering (`in`) or leaving (`out`) that
+interface, and is matched after the route lookup with the other rule sets a
+device applies to all traffic. Entries are matched in order and the first
+that matches decides; when none does, the implicit deny at the end of every
+access list denies the flow. A remark is shown with the entry after it.
+
+Access lists are stateless, so the replies are matched again on the
+interfaces they arrive on and leave by. An entry with `established` matches
+TCP replies only: it never lets in a request, which opens the connection.
+A binding to an access list the configuration does not define is *unknown*
+when a flow meets it. A device without a backup (or one Plexus does not read
+the configuration of, such as an ASA) reports *Access lists are not
+collected* as *unknown* where a flow crosses it.
+
+The interfaces, their VRFs and their addresses come from the configuration
+too, and its HSRP, VRRP and GLBP addresses are addresses of the device. The
+routes are those of the route capture; the connected and static routes of a
+VRF the capture holds no table for come from the configuration, and so do
+all of them when there is no capture, the routes the routing protocols
+learn then being *not collected*.
 
 A device with no routing data, such as an external neighbor, is passed over
 the shortest way on the map, each such hop with one unknown item, and the
@@ -420,7 +458,8 @@ trace's.
 ### Source networks and filters
 
 The source networks are the collected subnets of the whole map (every group),
-the same list Path Mode picks subnets from. The filters combine: a network is
+the same list Path Mode picks subnets from, the VLANs and connected networks of
+inventory devices included (their site is the device's inventory group). The filters combine: a network is
 swept only when it passes all of them. In the list filters, terms are
 comma-separated and any one matching is enough; a term wrapped in slashes,
 such as `/^VLAN 1\d\d /`, is a regular expression; names and sites match
@@ -428,8 +467,8 @@ without regard to case.
 
 | Filter | Query parameter | Keeps |
 |---|---|---|
-| Sources | `sources` | Networks of these sources (organizations, accounts, FMCs...), by id. Empty: every source. |
-| Providers | `providers` | Networks of these providers: `meraki`, `cato`, `fmc`, `panorama`, `appgate`, `aws`, `azure`, `gcp`. Empty: every provider. |
+| Sources | `sources` | Networks of these sources (organizations, accounts, FMCs...), by id; the inventory devices are `-4` (AWS, Azure and GCP are `-1` to `-3`). Empty: every source. |
+| Providers | `providers` | Networks of these providers: `meraki`, `cato`, `fmc`, `panorama`, `appgate`, `aws`, `azure`, `gcp`, `inventory` (inventory devices). Empty: every provider. |
 | Kinds of network | `kinds` | Networks of these kinds. Default: `vlan,lan,svi,range,subnet,connected` (Meraki VLANs, single LANs, switch SVIs, Cato site ranges, cloud subnets and firewall interfaces: the networks endpoints live in). Also selectable: `static` (static routes), `vpn` (VPN local networks), `peer` (behind a non-Meraki VPN peer), `pool` (remote access VPN pools), `host` (cloud VM addresses), `user` (remote users). `all` selects every kind. |
 | VLANs | `vlans` | Networks whose VLAN id is listed: ids and ranges, `100, 110-120` (0 to 4095). The id is read from the network name: `VLAN <id> ...` for a Meraki VLAN or an SVI, `... (VLAN <id>)` for a Cato range. A network with no VLAN id is left out when this filter is set. |
 | Name contains | `name` | Networks whose name matches a term: `user, data, corp` or `/^VLAN 1\d\d /`. |
@@ -503,7 +542,9 @@ VLAN, CIDR, In VPN, Verdict, Decided at, Decided by, Summary.
   trace says to collect the source again.
 - Routes a device learns over BGP, OSPF or EIGRP are not collected, and
   policy-based routes on an FTD only in part. Inventory devices are traced
-  from their latest SSH route capture only.
+  from their latest SSH route capture and configuration backup only. The
+  monitoring poll stores the first 250,000 characters of a capture (the
+  global table, then the VRF tables); routes past that are *not collected*.
 - The ingress interface of a flow that arrives over a link with no address
   on the map is not known; rule sets that match on zones then match only
   in part.
@@ -513,5 +554,5 @@ VLAN, CIDR, In VPN, Verdict, Decided at, Decided by, Summary.
 | Method | Path | Notes |
 |---|---|---|
 | `GET` | `/api/topology/path` | Traces a flow hop by hop. `source`, `destination`: an IP address or network, 1 to 64 characters. Optional `source_node`, `destination_node`: the map node ids of the devices that own the ends. Optional `protocol`: `tcp`, `udp`, `icmp`, `any` or empty for any traffic. Optional `port`: 0 to 65535. Returns `applies`, `traffic`, `source`, `destination`, `verdict` (`allowed`, `blocked`, `partial`, `unknown`), `summary`, `ports`, `asymmetric` (`status` `no`, `yes` or `unknown`, and `text`), `request` and `reply` (each `verdict`, `summary`, `ports` and `hops`) and `notes`. Each hop has `node`, `edge`, `label`, `site`, `provider`, `in`, `out`, `status` and `items`; each item `stage`, `status`, `where`, `text`, `rule` and, on the item that states a rule set's decision, `ports`. A `ports` value is `{"allowed": {"tcp": "80, 443", "icmp": "any"}, "partial": {"tcp": "8000-8080"}, "unknown": {}, "text": "allowed tcp 80, 443 · icmp; in part tcp 8000-8080"}`, with only the protocols asked about and only those that have ports in each list, or `null` for a direction that was not traced and for a trace that does not apply. A bad parameter returns HTTP 400 |
-| `GET` | `/api/topology/reachability` | The [reachability sweep](#reachability-sweep): traces one flow to `destination` (an IP address or network) from every source network the filters keep. Optional `destination_node` (map node id of the device that owns the destination) or `destination_org_ref` + `destination_node_id` (the source and snapshot node of a picked subnet); `protocol` and `port` as for `/api/topology/path`; filters `sources`, `providers`, `kinds`, `vlans`, `name`, `exclude`, `sites`, `within`, `in_vpn`; `format` `json` (default) or `csv`. JSON returns `destination` (`address`, `node`, `label`, `site`), `traffic`, `generated_at`, `filters` (the effective filters, with the default kinds), `candidates`, `limit`, `counts` (per verdict) and `rows`, each with `org_ref`, `org_name`, `provider`, `site_id`, `site_name`, `node_id`, `source_node`, `node_label`, `kind`, `vlan`, `cidr`, `name`, `in_vpn`, `verdict`, `summary`, `traffic`, `decided_at`, `decided_by` and `ports`, sorted by site, then VLAN, then network. CSV is an attachment with the columns listed in [CSV](#csv). A bad parameter returns HTTP 400; more than 5,000 matching networks returns HTTP 400 with `count` and `limit` |
+| `GET` | `/api/topology/reachability` | The [reachability sweep](#reachability-sweep): traces one flow to `destination` (an IP address or network) from every source network the filters keep. Optional `destination_node` (map node id of the device that owns the destination) or `destination_org_ref` + `destination_node_id` (the source and snapshot node of a picked subnet; `-4` and the host id for an inventory device); `protocol` and `port` as for `/api/topology/path`; filters `sources`, `providers`, `kinds`, `vlans`, `name`, `exclude`, `sites`, `within`, `in_vpn`; `format` `json` (default) or `csv`. JSON returns `destination` (`address`, `node`, `label`, `site`), `traffic`, `generated_at`, `filters` (the effective filters, with the default kinds), `candidates`, `limit`, `counts` (per verdict) and `rows`, each with `org_ref`, `org_name`, `provider`, `site_id`, `site_name`, `node_id`, `source_node`, `node_label`, `kind`, `vlan`, `cidr`, `name`, `in_vpn`, `verdict`, `summary`, `traffic`, `decided_at`, `decided_by` and `ports`, sorted by site, then VLAN, then network. CSV is an attachment with the columns listed in [CSV](#csv). A bad parameter returns HTTP 400; more than 5,000 matching networks returns HTTP 400 with `count` and `limit` |
 | `GET` | `/api/topology/export.html` | The self-contained HTML map. Optional `group_id`, `download=1`, `path` (the Path Mode state: JSON with `traffic` and `picks`, whose legs are traced and embedded) and `engine` (default on; `engine=0` leaves out the path tracer) |

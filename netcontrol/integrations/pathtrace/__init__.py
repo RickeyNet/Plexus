@@ -9,7 +9,8 @@ puts on the nodes that forward traffic (Meraki appliances, L3 switches and
 non-Meraki VPN peers, the FTDs of a Cisco FMC, the firewalls of a Palo
 Alto Panorama, Cato Sockets, PoPs and the Cato Cloud; see ``netcontrol.integrations.meraki.forwarding`` for the
 schema), and, for inventory hosts, from the block ``inventory`` builds out
-of what Plexus already stores (interfaces and the SSH route table capture).
+of what Plexus already stores (interfaces, the SSH route table capture and,
+read by ``ios_config``, the latest configuration backup).
 
 Anything a source does not collect is reported as unknown, never as allowed.
 """

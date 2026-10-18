@@ -1,11 +1,14 @@
 import type {
+  MerakiSubnet,
   PathTraceQuery,
   PathVerdict,
   ReachabilityQuery,
   ReachabilityReport,
   ReachabilityRow,
+  TopologySource,
 } from '@/api/meraki';
 
+import { INVENTORY_ORG_REF, providerLabel, PROVIDER_INVENTORY } from './helpers';
 import { parseTraffic } from './paths';
 
 // Reachability sweep: one destination traced from every source network the
@@ -34,6 +37,40 @@ export const SWEEP_KINDS: { key: string; label: string }[] = [
 export const DEFAULT_SWEEP_KINDS = ['vlan', 'lan', 'svi', 'range', 'subnet', 'connected'];
 
 export const SWEEP_PROVIDERS = ['meraki', 'cato', 'fmc', 'panorama', 'appgate', 'aws', 'azure', 'gcp'];
+
+// Snapshot sources are filtered by id (org_ref); the clouds by provider, since
+// their accounts are not map sources.
+const SNAPSHOT_SOURCE_TYPES = ['meraki', 'cato', 'fmc', 'panorama', 'appgate'];
+
+function hasInventorySubnets(subnets: MerakiSubnet[]): boolean {
+  return subnets.some((s) => s.provider === PROVIDER_INVENTORY);
+}
+
+/** The Providers checkboxes: inventory hosts too once the index has their networks. */
+export function sweepProviders(subnets: MerakiSubnet[]): string[] {
+  return hasInventorySubnets(subnets) ? [...SWEEP_PROVIDERS, PROVIDER_INVENTORY] : SWEEP_PROVIDERS;
+}
+
+export interface SweepSourceOption {
+  key: string;
+  /** The org_ref the `sources` filter names. */
+  id: number;
+  label: string;
+}
+
+/** The Sources options: the snapshot sources, and the inventory once the index has its networks. */
+export function sweepSources(sources: TopologySource[], subnets: MerakiSubnet[]): SweepSourceOption[] {
+  const options: SweepSourceOption[] = [];
+  for (const s of sources) {
+    if (s.id !== null && SNAPSHOT_SOURCE_TYPES.includes(s.type)) {
+      options.push({ key: s.key, id: s.id, label: `${s.name} (${providerLabel(s.type)})` });
+    }
+  }
+  if (hasInventorySubnets(subnets)) {
+    options.push({ key: PROVIDER_INVENTORY, id: INVENTORY_ORG_REF, label: providerLabel(PROVIDER_INVENTORY) });
+  }
+  return options;
+}
 
 /** Verdicts in the order the chips and the rollup show them. */
 export const VERDICT_ORDER: PathVerdict[] = ['allowed', 'blocked', 'unreachable', 'partial', 'unknown'];

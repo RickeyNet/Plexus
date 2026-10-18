@@ -43,6 +43,7 @@ import {
   isManagedNode,
   isMerakiEndpointNode,
   isRemoteUserNode,
+  merakiNodeIndex,
   merakiNodeKey,
   merakiNodeShape,
   nodeColor,
@@ -62,7 +63,7 @@ import {
 import { crowdedGroups, fitTitles, labelWidth, straighten, tidyLabel, tidyTree, type XY } from './layout';
 import { distanceToRoute, routeSourceLinks, traceRoute } from './routes';
 import { EdgeDetails } from './EdgeDetails';
-import { MAX_PATH_ENDPOINTS, connectPicks, findSubnets, isAddressText, parseTraffic, pathSites, subnetOptionLabel, userPick, type PathPick } from './paths';
+import { MAX_PATH_ENDPOINTS, connectPicks, findSubnets, isAddressText, parseTraffic, pathModeHint, pathSites, subnetOptionLabel, userPick, type PathPick } from './paths';
 import { PathTrace } from './PathTracePanel';
 import { legKey, mergeHighlights, pathTraceQuery, reverseTraceQuery, uncheckedTraceNote, type TraceHighlight } from './pathTrace';
 import { NodeDetails } from './NodeDetails';
@@ -243,6 +244,8 @@ export function Topology() {
 
   const rawData = topologyQuery.data;
   const hasMeraki = !!rawData?.nodes.some((n) => n.meraki);
+  // The deep search also finds the networks of inventory hosts (VLANs, routed ports).
+  const hasDeepSearch = hasMeraki || !!rawData?.nodes.some((n) => n.in_inventory);
   const providersOnMap = useMemo(() => mapProviders(rawData), [rawData]);
   // A provider that is no longer on the map (its source was deleted) shows everything again.
   const activeFilter: SourceFilter =
@@ -263,7 +266,7 @@ export function Topology() {
   const eventsBadge = badgeText(stpBadge + changeBadge);
   showAllTunnelsRef.current = showAllTunnels;
   const positions = positionsQuery.data;
-  const deepSearch = useTopologyDeepSearch(hasMeraki ? debouncedSearch : '');
+  const deepSearch = useTopologyDeepSearch(hasDeepSearch ? debouncedSearch : '');
 
   // Debounce the deep (server-side) search so typing doesn't fire a request
   // per keystroke; the local name/IP match stays instant.
@@ -1251,39 +1254,28 @@ export function Topology() {
   useEffect(() => { pathPicksRef.current = pathPicks; }, [pathPicks]);
 
   const pathSiteList = useMemo(() => pathSites(data?.nodes ?? []), [data]);
-  const subnetsQuery = useMerakiSubnets(pathMode && pathSiteList.length > 0);
-  // Map node of every Meraki snapshot node (a device that is also an
-  // inventory host resolves to the host's node). The snapshot nodes collapsed
-  // into another node (`also_refs`) resolve to it too, so their subnets can
-  // be picked; a node's own reference wins.
-  const merakiNodeIds = useMemo(() => {
-    const byMerakiKey = new Map<string, number | string>();
-    for (const n of data?.nodes ?? []) {
-      if (n.meraki) byMerakiKey.set(merakiNodeKey(n.meraki.org_ref, n.meraki.node_id), n.id);
-    }
-    for (const n of data?.nodes ?? []) {
-      for (const ref of n.also_refs ?? []) {
-        const key = merakiNodeKey(ref.org_ref, ref.node_id);
-        if (!byMerakiKey.has(key)) byMerakiKey.set(key, n.id);
-      }
-    }
-    return byMerakiKey;
-  }, [data]);
+  // Inventory hosts have subnets too (SVIs, routed ports), so the index is
+  // read even when the map has no integration sites.
+  const subnetsQuery = useMerakiSubnets(pathMode);
+  // Map node of every snapshot reference and inventory host (a Meraki device
+  // that is also an inventory host resolves to the host's node).
+  const merakiNodes = useMemo(() => merakiNodeIndex(data?.nodes ?? []), [data]);
   const resolveMerakiNode = useCallback(
-    (orgRef: number, nodeId: string) => merakiNodeIds.get(merakiNodeKey(orgRef, nodeId)),
-    [merakiNodeIds],
+    (orgRef: number, nodeId: string) => merakiNodes.get(merakiNodeKey(orgRef, nodeId))?.id,
+    [merakiNodes],
   );
   // Subnets whose owning device is on the map, with that device's node id.
   const pathSubnets = useMemo(() => {
     const owners = new Map<string, number | string>();
     const list = (subnetsQuery.data?.subnets ?? []).filter((s) => {
-      const node = merakiNodeIds.get(merakiNodeKey(s.org_ref, s.node_id));
+      const node = merakiNodes.get(merakiNodeKey(s.org_ref, s.node_id));
       if (node === undefined) return false;
-      owners.set(subnetOptionLabel(s), node);
+      owners.set(subnetOptionLabel(s), node.id);
       return true;
     });
     return { list, owners };
-  }, [subnetsQuery.data, merakiNodeIds]);
+  }, [subnetsQuery.data, merakiNodes]);
+  const showPathSubnets = pathSubnets.list.length > 0 || subnetsQuery.isPending;
   // Read by the map's click handler, which is bound once per network build.
   const pathSubnetsRef = useRef(pathSubnets);
   pathSubnetsRef.current = pathSubnets;
@@ -1797,7 +1789,8 @@ export function Topology() {
 
   // Search results: instant local matches on identity fields, followed by
   // server-side deep matches inside Meraki details (VLANs, subnets, routes,
-  // VPN peers, firewall rules, ports...), resolved back to nodes on the map.
+  // VPN peers, firewall rules, ports...) and the networks of inventory hosts,
+  // resolved back to nodes on the map.
   const searchResults = useMemo<SearchResult[]>(() => {
     const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
     if (!terms.length || !data?.nodes.length) return [];
@@ -1812,12 +1805,8 @@ export function Topology() {
     }
     // Deep hits belong to the debounced query; ignore them while it lags.
     if (deepSearch.data && debouncedSearch === search) {
-      const byMerakiKey = new Map<string, TopologyNode>();
-      for (const n of data.nodes) {
-        if (n.meraki) byMerakiKey.set(merakiNodeKey(n.meraki.org_ref, n.meraki.node_id), n);
-      }
       for (const hit of deepSearch.data.results) {
-        const node = byMerakiKey.get(merakiNodeKey(hit.org_ref, hit.node_id));
+        const node = merakiNodes.get(merakiNodeKey(hit.org_ref, hit.node_id));
         if (node && !seen.has(node.id)) {
           results.push({ node, snippet: hit.snippet });
           seen.add(node.id);
@@ -1825,7 +1814,7 @@ export function Topology() {
       }
     }
     return results;
-  }, [search, debouncedSearch, data, deepSearch.data]);
+  }, [search, debouncedSearch, data, deepSearch.data, merakiNodes]);
 
   function selectSearchResult(result: SearchResult) {
     setAppliedSearch(search);
@@ -2122,7 +2111,7 @@ export function Topology() {
           <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
             <strong>Path</strong>
             <span className="text-muted">
-              Click two or more devices on the map{pathSiteList.length ? ', or add sites and subnets,' : ''} to see how they reach one another.
+              {pathModeHint(pathSiteList.length > 0, showPathSubnets)}
             </span>
             {pathSiteList.length > 0 && (
               <>
@@ -2140,6 +2129,10 @@ export function Topology() {
                 <datalist id="topology-path-sites">
                   {pathSiteList.map((s) => <option key={s.key} value={s.name} />)}
                 </datalist>
+              </>
+            )}
+            {showPathSubnets && (
+              <>
                 <input
                   className="form-input"
                   list="topology-path-subnets"

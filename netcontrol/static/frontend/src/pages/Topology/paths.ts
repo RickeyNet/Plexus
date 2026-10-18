@@ -1,7 +1,7 @@
 import type { MerakiSubnet } from '@/api/meraki';
 import type { TopologyEdge, TopologyNode } from '@/api/topology';
 
-import { isEdgeDown, isRemoteUserNode } from './helpers';
+import { isEdgeDown, isRemoteUserNode, PROVIDER_INVENTORY } from './helpers';
 import { layoutGroupKey } from './layout';
 
 // Path mode: how a set of picked devices / sites reach one another over the
@@ -264,7 +264,15 @@ export function parseTraffic(text: string): TrafficFilter | null {
 
 /** Text of a subnet in the picker; unique per (subnet, owner). */
 export function subnetOptionLabel(subnet: MerakiSubnet): string {
-  return `${subnet.cidr} - ${subnet.site_name || 'VPN peer'} - ${subnet.name}`;
+  // A subnet with no site is behind a VPN peer, or on an inventory host with no group.
+  const site = subnet.site_name || (subnet.provider === PROVIDER_INVENTORY ? 'Inventory' : 'VPN peer');
+  return `${subnet.cidr} - ${site} - ${subnet.name}`;
+}
+
+/** The Path Mode prompt, naming the site and subnet inputs that are shown. */
+export function pathModeHint(hasSites: boolean, hasSubnets: boolean): string {
+  const extra = hasSites && hasSubnets ? 'sites and subnets' : hasSites ? 'sites' : hasSubnets ? 'subnets or IP addresses' : '';
+  return `Click two or more devices on the map${extra ? `, or add ${extra},` : ''} to see how they reach one another.`;
 }
 
 function parseV4(text: string): { addr: number; len: number } | null {
