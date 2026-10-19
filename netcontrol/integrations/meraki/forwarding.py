@@ -140,9 +140,10 @@ def policy_set(
     interface: str = "",
     direction: str = "",
 ) -> dict[str, Any]:
-    """A rule set. ``interface`` and ``direction`` (``in`` or ``out``) bind
-    it to the traffic entering or leaving one interface, as an access list
-    applied with ``ip access-group``: a flow on another interface skips it."""
+    """A rule set. ``interface`` (an interface's name or zone) and
+    ``direction`` (``in`` or ``out``) bind it to the traffic entering or
+    leaving one interface, as an access list applied with ``ip
+    access-group``: a flow on another interface skips it."""
     return {
         "name": name,
         "kind": kind,

@@ -20,7 +20,7 @@ Junos diverges from Cisco IOS / IOS-XE / NX-OS in nearly every capability:
 
 from __future__ import annotations
 
-from netcontrol.drivers.base import Driver, DriverCapabilityError, NetflowConfig, register_driver
+from netcontrol.drivers.base import Driver, DriverCapabilityError, NetflowConfig, RouteTableCommands, register_driver
 
 
 @register_driver
@@ -28,6 +28,10 @@ class JuniperJunosDriver(Driver):
     device_types = ("juniper_junos",)
     vendor = "juniper"
     display_name = "Juniper Junos"
+
+    def route_table_commands(self) -> RouteTableCommands:
+        # ``show route`` prints every routing instance's table already.
+        return RouteTableCommands("show route summary", "show route", None)
 
     def build_netflow_config(self, cfg: NetflowConfig) -> list[str]:
         # Junos "set" form for j-flow / IPFIX sampling.  Emits the
