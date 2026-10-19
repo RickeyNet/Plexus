@@ -48,7 +48,7 @@ does not drive those flows for firewalls.
 
 from __future__ import annotations
 
-from netcontrol.drivers.base import Driver, register_driver
+from netcontrol.drivers.base import Driver, RouteTableCommands, register_driver
 
 
 @register_driver
@@ -56,6 +56,11 @@ class FortinetFortiOSDriver(Driver):
     device_types = ("fortinet",)
     vendor = "fortinet"
     display_name = "Fortinet FortiOS"
+
+    def route_table_commands(self) -> RouteTableCommands:
+        # FortiOS has no cheap summary, so the poll reads the whole table
+        # every tick; the ``all`` form prints every VDOM's VRFs.
+        return RouteTableCommands(None, "get router info routing-table all", None)
 
     def serial_number_show_command(self) -> str:
         # ``get hardware status`` prints chassis identity (model,

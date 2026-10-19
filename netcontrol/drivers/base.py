@@ -61,6 +61,28 @@ class NetflowConfig:
     sampler_name: str = "PLEXUS-SAMPLER"
 
 
+@dataclass(frozen=True, slots=True)
+class RouteTableCommands:
+    """The show commands that read a device's route table.
+
+    ``summary`` is the cheap command the monitoring poll runs every tick to
+    see whether the table moved (``None``: the platform has none, so the
+    full table is read every tick); ``table`` prints the full table of the
+    global routing instance; ``all_vrfs`` prints every VRF's table
+    (``None``: ``table`` already does, or the platform has no VRFs). The
+    path trace reads the stored output (``netcontrol.integrations.pathtrace``).
+    """
+
+    summary: str | None
+    table: str
+    all_vrfs: str | None = None
+
+
+# What the monitoring poll sent to every device before the drivers knew the
+# commands: the fallback for a device_type without a driver.
+IOS_ROUTE_TABLE_COMMANDS = RouteTableCommands("show ip route summary", "show ip route", "show ip route vrf *")
+
+
 class Driver:
     """Vendor-neutral capability surface for a network device.
 
@@ -93,6 +115,17 @@ class Driver:
         ``show running-config``.
         """
         raise DriverCapabilityError(f"{type(self).__name__} does not implement capture_running_config_command()")
+
+    def route_table_commands(self) -> RouteTableCommands:
+        """Return the show commands that read the device's route table.
+
+        Consumed by the monitoring poll, which stores the output for the
+        path trace. Vendor-specific because an ASA or Junos prints its
+        table with ``show route`` and a FortiGate with ``get router info
+        routing-table all``, and because the all-VRFs form differs
+        (``vrf *`` on IOS, ``vrf all`` on NX-OS and EOS).
+        """
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement route_table_commands()")
 
     def save_config_commands(self) -> list[str]:
         """Return the command(s) that persist running-config to startup.

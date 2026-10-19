@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from netcontrol.drivers.base import Driver, DriverCapabilityError, NetflowConfig, register_driver
+from netcontrol.drivers.base import Driver, DriverCapabilityError, NetflowConfig, RouteTableCommands, register_driver
 
 
 @register_driver
@@ -12,6 +12,10 @@ class CiscoNXOSDriver(Driver):
     device_types = ("cisco_nxos", "cisco_nxos_ssh")
     vendor = "cisco"
     display_name = "Cisco NX-OS"
+
+    def route_table_commands(self) -> RouteTableCommands:
+        # NX-OS spells the all-VRFs form ``vrf all`` (IOS: ``vrf *``).
+        return RouteTableCommands("show ip route summary", "show ip route", "show ip route vrf all")
 
     def build_netflow_config(self, cfg: NetflowConfig) -> list[str]:
         cmds = [

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from netcontrol.drivers.base import Driver, NetflowConfig, register_driver
+from netcontrol.drivers.base import Driver, NetflowConfig, RouteTableCommands, register_driver
 
 
 @register_driver
@@ -10,6 +10,9 @@ class CiscoIOSDriver(Driver):
     device_types = ("cisco_ios",)
     vendor = "cisco"
     display_name = "Cisco IOS"
+
+    def route_table_commands(self) -> RouteTableCommands:
+        return RouteTableCommands("show ip route summary", "show ip route", "show ip route vrf *")
 
     def build_netflow_config(self, cfg: NetflowConfig) -> list[str]:
         # Classic IOS NetFlow v9 - global export destination + per-interface
