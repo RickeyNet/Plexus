@@ -35,20 +35,24 @@ from netcontrol.drivers import (  # noqa: F401
     paloalto_panos,
 )
 from netcontrol.drivers.base import (
+    IOS_ROUTE_TABLE_COMMANDS,
     Driver,
     DriverCapabilityError,
     GenericDriver,
     NetflowConfig,
+    RouteTableCommands,
     get_driver,
     register_driver,
     registered_device_types,
 )
 
 __all__ = [
+    "IOS_ROUTE_TABLE_COMMANDS",
     "Driver",
     "DriverCapabilityError",
     "GenericDriver",
     "NetflowConfig",
+    "RouteTableCommands",
     "get_driver",
     "register_driver",
     "registered_device_types",

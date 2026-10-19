@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from netcontrol.drivers.base import Driver, NetflowConfig, register_driver
+from netcontrol.drivers.base import Driver, NetflowConfig, RouteTableCommands, register_driver
 
 
 @register_driver
@@ -12,6 +12,9 @@ class CiscoXEDriver(Driver):
     device_types = ("cisco_xe",)
     vendor = "cisco"
     display_name = "Cisco IOS-XE"
+
+    def route_table_commands(self) -> RouteTableCommands:
+        return RouteTableCommands("show ip route summary", "show ip route", "show ip route vrf *")
 
     def build_netflow_config(self, cfg: NetflowConfig) -> list[str]:
         cmds = [

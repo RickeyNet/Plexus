@@ -18,6 +18,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import netcontrol.routes.state as state
+from netcontrol.drivers import IOS_ROUTE_TABLE_COMMANDS, DriverCapabilityError, RouteTableCommands, get_driver
 from netcontrol.integrations.pathtrace.inventory import CAPTURE_LIMIT
 from netcontrol.routes.icmp import ICMP_AVAILABLE, ping_host
 from netcontrol.routes.metrics_engine import (
@@ -128,6 +129,29 @@ def _poll_backoff_record(host_id: int, *, ok: bool) -> None:
     # 1st failure retries next cycle; from the 2nd on skip 1, 2, 4, ... cycles.
     skip = 0 if failures < 2 else min(2 ** (failures - 2), _POLL_BACKOFF_MAX_SKIP)
     _POLL_BACKOFF[host_id] = [failures, skip]
+
+
+def _route_table_commands(device_type: str) -> RouteTableCommands:
+    """The route table commands of a device type: its driver's, or the IOS
+    ones for a type without a driver (what every device was sent before)."""
+    try:
+        return get_driver(device_type).route_table_commands()
+    except DriverCapabilityError:
+        return IOS_ROUTE_TABLE_COMMANDS
+
+
+def _is_route_table(text: str) -> bool:
+    """Whether a route table command printed a table rather than the error a
+    platform that lacks the command gives."""
+    head = str(text or "").strip()
+    if not head:
+        return False
+    first = head.splitlines()[0].strip().lower()
+    return not (
+        first.startswith(("%", "^", "error", "syntax error", "unknown command", "command fail"))
+        or "invalid input" in first
+        or "incomplete command" in first
+    )
 
 
 def _parse_route_summary_count(summary_text: str) -> int | None:
@@ -563,8 +587,11 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                     # summary count moves or the slow cadence elapses. Unparseable
                     # summaries fall back to pulling the full table every tick.
                     if state.MONITORING_CONFIG.get("collect_routes", True):
-                        outputs["routes"] = net_connect.send_command("show ip route summary", read_timeout=read_timeout)
-                        summary_count = _parse_route_summary_count(outputs["routes"])
+                        commands = _route_table_commands(str(host.get("device_type") or "cisco_ios"))
+                        summary_count = None
+                        if commands.summary:
+                            outputs["routes"] = net_connect.send_command(commands.summary, read_timeout=read_timeout)
+                            summary_count = _parse_route_summary_count(outputs["routes"])
                         outputs["route_summary_count"] = summary_count
                         full_interval = float(state.MONITORING_CONFIG.get("route_full_interval_seconds", 900))
                         last_full_ts, last_count = _ROUTE_POLL_STATE.get(host["id"], (0.0, None))
@@ -577,15 +604,13 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                             or (now - last_full_ts) >= full_interval
                         )
                         if need_full:
-                            outputs["routes_full"] = net_connect.send_command(
-                                "show ip route", read_timeout=read_timeout
-                            )
-                            # The VRF tables too, for the path trace (IOS / IOS-XE).
-                            # Best-effort: a device that rejects it keeps the global table.
-                            if str(host.get("device_type") or "cisco_ios").startswith(("cisco_ios", "cisco_xe")):
+                            outputs["routes_full"] = net_connect.send_command(commands.table, read_timeout=read_timeout)
+                            # The VRF tables too, for the path trace. Best-effort:
+                            # a device that rejects the command keeps the global table.
+                            if commands.all_vrfs:
                                 try:
                                     outputs["routes_vrf"] = net_connect.send_command(
-                                        "show ip route vrf *", read_timeout=read_timeout
+                                        commands.all_vrfs, read_timeout=read_timeout
                                     )
                                 except Exception as exc:
                                     LOGGER.debug("monitoring: VRF route table not read: %s", type(exc).__name__)
@@ -650,7 +675,7 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                 result["route_count"] = summary_count if summary_count is not None else len(route_lines)
                 result["route_snapshot"] = routes_full.strip()
                 routes_vrf = str(ssh_outputs.get("routes_vrf") or "")
-                if "Routing Table:" in routes_vrf:
+                if _is_route_table(routes_vrf):
                     # The VRF tables follow the global one; the count stays the global table's.
                     result["route_snapshot"] += "\n\n" + routes_vrf.strip()
             elif summary_count is not None:

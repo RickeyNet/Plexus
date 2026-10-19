@@ -37,7 +37,7 @@ Cisco-only route at a PAN-OS host.
 
 from __future__ import annotations
 
-from netcontrol.drivers.base import Driver, register_driver
+from netcontrol.drivers.base import Driver, RouteTableCommands, register_driver
 
 
 @register_driver
@@ -45,6 +45,10 @@ class PaloAltoPANOSDriver(Driver):
     device_types = ("paloalto_panos",)
     vendor = "paloalto"
     display_name = "Palo Alto PAN-OS"
+
+    def route_table_commands(self) -> RouteTableCommands:
+        # PAN-OS prints every virtual router's routes in one table.
+        return RouteTableCommands(None, "show routing route", None)
 
     def serial_number_show_command(self) -> str:
         # ``show system info`` prints ~40 lines of chassis / software

@@ -141,6 +141,12 @@ _NAT_KINDS = {
     "manual_after": "Manual NAT after auto NAT",
     "pre_rule": "NAT pre-rule",
     "post_rule": "NAT post-rule",
+    "static_nat": "Static NAT",
+    "destination_nat": "Destination NAT",
+    "source_nat": "Source NAT",
+    "vip": "Virtual IP",
+    "policy_nat": "Policy NAT",
+    "central_snat": "Central SNAT",
 }
 _MERAKI_DNAT = ("one_to_one", "port_forward", "one_to_many")
 _LINK_WORDS = {
@@ -1016,7 +1022,7 @@ class Tracer:
 
         # 2. What the device applies to traffic coming in on that kind of interface.
         self._missing_sets(walk, ctx, {f"{ctx.kind}_in", "traffic"})
-        self._sets(gid, block, walk, ctx, {f"{ctx.kind}_in", "traffic"}, "")
+        self._sets(gid, block, walk, ctx, {f"{ctx.kind}_in", "traffic"}, None)
         if _blocked(items):
             return self._stop(walk, ctx)
 
@@ -1088,7 +1094,7 @@ class Tracer:
             self._route_info(route_notes, walk, ctx)
             current["out"] = name
             self._missing_sets(walk, ctx, {"lan_out", "any"})
-            self._sets(gid, block, walk, ctx, {"lan_out", "any"}, str((egress or {}).get("zone") or ""))
+            self._sets(gid, block, walk, ctx, {"lan_out", "any"}, egress)
             for note_name in ctx.missing:
                 if note_name in _DELIVERY_NOTES:
                     ctx.used.add(note_name)
@@ -1234,7 +1240,7 @@ class Tracer:
         # 4. On the way out, and what applies to all traffic: the real
         # addresses, the zone of the interface the route chose.
         self._missing_sets(walk, ctx, {f"{out_kind}_out", "any"})
-        self._sets(gid, block, walk, ctx, {f"{out_kind}_out", "any"}, str((egress or {}).get("zone") or ""))
+        self._sets(gid, block, walk, ctx, {f"{out_kind}_out", "any"}, egress)
         if _blocked(items):
             return self._stop(walk, ctx)
 
@@ -1523,18 +1529,20 @@ class Tracer:
                 text = f"{name} {verb} not collected: whether {they} this flow is not known."
                 ctx.items.append(item(stage, UNKNOWN, name, text))
 
-    def _sets(self, gid: Any, block: dict, walk: _Walk, ctx: _Hop, classes: set, out_zone: str) -> None:
+    def _sets(self, gid: Any, block: dict, walk: _Walk, ctx: _Hop, classes: set, egress: dict | None) -> None:
         items = ctx.items
+        out_zone = str((egress or {}).get("zone") or "")
         for policy in block.get("policies") or []:
             if not isinstance(policy, dict):
                 continue
             consulted = self._applies_here(str(policy.get("applies") or ""), classes, ctx)
             if consulted is False:
                 continue
-            bound = str(policy.get("interface") or "").lower()
-            zone = ctx.in_zone if policy.get("direction") == "in" else out_zone
-            if bound and zone and zone.lower() != bound:
-                # An access list applied to another interface.
+            bound = str(policy.get("interface") or "")
+            at = ctx.ingress if policy.get("direction") == "in" else egress
+            if bound and at is not None and not self._iface_match(bound, at):
+                # An access list applied to another interface (bound by the
+                # interface's name or by its zone).
                 continue
             name = str(policy.get("name") or "Rule set")
             stage = ACL if policy.get("kind") == "acl" else POLICY

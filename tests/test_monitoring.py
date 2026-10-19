@@ -581,10 +581,27 @@ async def test_full_route_pull_adds_the_vrf_tables_on_ios(monkeypatch):
     assert result["route_count"] == 2
 
 
-async def test_full_route_pull_keeps_only_the_global_table_elsewhere(monkeypatch):
-    sent, result = await _poll_routes(monkeypatch, 902, "cisco_nxos", {"show ip route": _GLOBAL_TABLE})
-    assert "show ip route vrf *" not in sent and result["route_snapshot"] == _GLOBAL_TABLE.strip()
-    # An IOS device that rejects the command keeps the global table alone.
+async def test_full_route_pull_sends_each_platform_its_own_commands(monkeypatch):
+    nxos_vrfs = (
+        'IP Route Table for VRF "blue"\n10.1.0.0/24, ubest/mbest: 1/0\n    *via 10.0.0.1, Vlan10, [1/0], 1d, static'
+    )
+    sent, result = await _poll_routes(
+        monkeypatch, 902, "cisco_nxos", {"show ip route": _GLOBAL_TABLE, "show ip route vrf all": nxos_vrfs}
+    )
+    assert sent == ["show ip route summary", "show ip route", "show ip route vrf all"]
+    assert result["route_snapshot"] == _GLOBAL_TABLE.strip() + "\n\n" + nxos_vrfs
+    # An ASA prints its table with ``show route`` and has no VRFs to list.
+    sent, result = await _poll_routes(monkeypatch, 904, "cisco_asa", {"show route": _GLOBAL_TABLE})
+    assert sent == ["show route summary", "show route"] and result["route_snapshot"] == _GLOBAL_TABLE.strip()
+    # A FortiGate has no summary command: the whole table is read every tick.
+    sent, result = await _poll_routes(
+        monkeypatch, 905, "fortinet", {"get router info routing-table all": _GLOBAL_TABLE}
+    )
+    assert sent == ["get router info routing-table all"] and result["route_count"] == 2
+    # A type without a driver is sent the IOS commands, as before.
+    sent, _result = await _poll_routes(monkeypatch, 906, "aruba_aoscx", {"show ip route": _GLOBAL_TABLE})
+    assert sent == ["show ip route summary", "show ip route", "show ip route vrf *"]
+    # A device that rejects the all-VRFs command keeps the global table alone.
     outputs = {"show ip route": _GLOBAL_TABLE, "show ip route vrf *": "% Invalid input detected at '^' marker."}
     _sent, rejected = await _poll_routes(monkeypatch, 903, "cisco_ios", outputs)
     assert rejected["route_snapshot"] == _GLOBAL_TABLE.strip()

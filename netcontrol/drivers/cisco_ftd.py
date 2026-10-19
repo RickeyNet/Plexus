@@ -48,7 +48,7 @@ right behaviour.
 
 from __future__ import annotations
 
-from netcontrol.drivers.base import Driver, register_driver
+from netcontrol.drivers.base import Driver, RouteTableCommands, register_driver
 
 
 @register_driver
@@ -56,6 +56,10 @@ class CiscoFTDDriver(Driver):
     device_types = ("cisco_ftd", "cisco_asa")
     vendor = "cisco"
     display_name = "Cisco FTD / ASA"
+
+    def route_table_commands(self) -> RouteTableCommands:
+        # The LINA CLI of an ASA or FTD: ``show route``; no VRFs to list.
+        return RouteTableCommands("show route summary", "show route", None)
 
     def serial_number_show_command(self) -> str:
         # LINA CLI accepts ``| include`` (same filter as IOS).  Both

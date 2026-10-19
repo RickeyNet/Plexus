@@ -1452,7 +1452,7 @@ async def get_audit_override(override_id: int):
 async def create_audit_override(payload: dict = Body(...)):
     rule_id = str(payload.get("rule_id") or "").strip()
     host_id_raw = payload.get("host_id")
-    host_id = int(host_id_raw) if host_id_raw not in (None, "") else None
+    host_id = int(host_id_raw) if host_id_raw is not None and host_id_raw != "" else None
     mode = str(payload.get("mode") or "mute").strip()
     reason = str(payload.get("reason") or "").strip()[:1000]
     created_by = str(payload.get("created_by") or "").strip()[:200]

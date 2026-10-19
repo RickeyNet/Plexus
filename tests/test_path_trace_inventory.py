@@ -575,9 +575,9 @@ def test_forwarding_for_host_from_a_configuration_alone():
     assert block["not_collected"] == [IPV6_ACCESS_LISTS, "Routes learned by OSPF"]
 
     # A platform whose configuration is not read keeps today's behaviour.
-    asa_host = {"ip_address": "10.0.0.2", "device_type": "cisco_asa"}
-    asa = forwarding_for_host(asa_host, [], None, [], config_backup=_backup())
-    assert asa["policies"] == [] and asa["not_collected"] == [ACCESS_LISTS, NO_CAPTURE]
+    panos_host = {"ip_address": "10.0.0.2", "device_type": "paloalto_panos"}
+    panos = forwarding_for_host(panos_host, [], None, [], config_backup=_backup())
+    assert panos["policies"] == [] and panos["not_collected"] == [ACCESS_LISTS, NO_CAPTURE]
 
 
 def test_subnets_for_host_lists_vlans_connected_networks_and_static_routes():

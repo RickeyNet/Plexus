@@ -36,7 +36,7 @@ The differences that motivate a dedicated driver instead of reusing
 
 from __future__ import annotations
 
-from netcontrol.drivers.base import Driver, DriverCapabilityError, NetflowConfig, register_driver
+from netcontrol.drivers.base import Driver, DriverCapabilityError, NetflowConfig, RouteTableCommands, register_driver
 
 
 @register_driver
@@ -44,6 +44,10 @@ class CiscoXRDriver(Driver):
     device_types = ("cisco_xr",)
     vendor = "cisco"
     display_name = "Cisco IOS-XR"
+
+    def route_table_commands(self) -> RouteTableCommands:
+        # XR has no ``ip`` word: ``show route``, and ``vrf all`` for every VRF.
+        return RouteTableCommands("show route summary", "show route", "show route vrf all")
 
     def build_netflow_config(self, cfg: NetflowConfig) -> list[str]:
         # XR NetFlow has its own noun set: ``flow exporter-map`` (not

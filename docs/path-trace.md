@@ -11,8 +11,9 @@ asymmetric, and lets you reverse the source and the destination.
 The trace reads what the sources on the map collected: Meraki
 organizations, Cisco FMCs, Palo Alto Panoramas, Cato accounts, Appgate SDP
 collectives, AWS accounts, Azure subscriptions, the routes Plexus captured from inventory devices
-over SSH and, for Cisco IOS, IOS-XE and NX-OS inventory devices, the access lists, addresses and static
-routes of their latest configuration backup. It never
+over SSH and, for inventory devices whose platform Plexus reads (Cisco IOS, IOS-XE, NX-OS, IOS-XR,
+ASA and FTD, Arista EOS, Juniper Junos, Fortinet FortiOS, Aruba AOS-CX and AOS-Switch), the access
+lists, policies, NAT rules, addresses and static routes of their latest configuration backup. It never
 reports as allowed what it could not look at: what a source does not
 collect is listed at that hop, and is *unknown* when the flow depends on
 it.
@@ -315,7 +316,7 @@ where its NAT and inbound rules decide. Documentation ranges such as
 | Palo Alto Panorama | Security rules in the order each firewall applies them (shared, device group and ancestors, pre then post, the intrazone and interzone default rules) with their zones, addresses and services, NAT rules, connected routes, the firewall's routing table (static, BGP, OSPF) or else its configured static routes, IPsec tunnels and their state | Rules configured on the firewall itself, App-ID (a rule with applications or `application-default` is unknown when it matches), users, URL categories, FQDNs and dynamic address groups, routes learned by BGP or OSPF when the routing table was not read; see [panorama-topology.md](panorama-topology.md#search-and-path-mode) |
 | Cato | The hops: Socket, PoP, Cato Cloud, PoP, Socket; the WAN firewall rules for a destination a site's range or a user's address covers (WAN traffic) and the internet firewall rules for any other destination, a private one included (internet traffic), applied once at the PoP the flow enters by | Routes learned by BGP; rule objects Plexus cannot turn into addresses (users groups, applications, categories, countries) make a rule that matches *unknown*; see [cato-topology.md](cato-topology.md#search-and-path-mode) |
 | Appgate SDP | The hops: user, Gateway. Each Gateway applies the **Entitlements** of its site (sources the tunnel addresses of the connected users that hold each one, default deny) and its **Allowed destinations**, routes each user's tunnel address back over the tunnel, and translates the client pool when the site uses SNAT; a user routes what its entitlements cover to the Gateway that grants them and has no other route (split tunnel) unless a site is its default gateway | Entitlement hosts that are names (`dns://`, `aws://`...), HTTP method rules and, without the per-user access details, which users hold an entitlement; see [appgate-topology.md](appgate-topology.md#search-and-path-mode) |
-| Inventory devices | The routes of the latest SSH route table capture (Cisco IOS and IOS-XE, with the VRF tables, NX-OS, ASA and FTD, Arista EOS). On Cisco IOS, IOS-XE and NX-OS, from the latest successful [configuration backup](#inventory-devices-and-configuration-backups): the access lists applied to each interface, in and out, the interface addresses, secondaries, VRFs and HSRP / VRRP / GLBP addresses, and the connected and static routes of the VRFs the capture lacks | Access lists of a device without a successful configuration backup, or of another platform; object groups and port names the configuration does not define, wildcard masks that are not a prefix, time ranges, DSCP and TCP flag matches (a rule that uses one is *unknown* when it matches); IPv6 access lists, port access lists, VLAN access maps, policy-based routes; without a route capture, the routes learned by the routing protocols the configuration runs |
+| Inventory devices | The routes of the latest SSH route table capture, with every VRF's table where the platform lists them (Cisco IOS, IOS-XE, NX-OS, IOS-XR, ASA and FTD, Arista EOS, Juniper Junos, Fortinet FortiOS, Aruba AOS-CX and AOS-Switch). From the latest successful [configuration backup](#inventory-devices-and-configuration-backups) of those platforms: the access lists applied to each interface, in and out (switches and routers, Junos filters), the stateful rule sets of a firewall (ASA / FTD access groups and security levels, SRX security policies, FortiGate firewall policies), their NAT rules, the interface addresses, secondaries, zones, VRFs and HSRP / VRRP / GLBP / VARP / active-gateway addresses, and the connected and static routes of the VRFs the capture lacks | Access lists of a device without a successful configuration backup, or of a platform Plexus does not read (PAN-OS: trace it through a Panorama); objects, object groups, address books, applications, services and port names the configuration does not define, FQDN, geography and wildcard objects, wildcard masks that are not a prefix, time ranges and schedules, DSCP, TCP flag and ICMP type matches, users, identities and security groups, negated matches (a rule that uses one is *unknown* when it matches); IPv6 access lists and policies, port and MAC access lists, VLAN access maps, classifier and traffic policies, policy-based routes, zone-based firewall policies, inspection and application services, VPN tunnels, other VDOMs and contexts; without a route capture, the routes learned by the routing protocols the configuration runs |
 | AWS | Route tables, transit gateways, VPC peerings, network ACLs, security groups, as in [the AWS check of a path](aws-topology.md#the-aws-check-of-a-path) | See that section |
 | Azure | Effective routes and network security groups, as in [the Azure check of a path](azure-topology.md#the-azure-check-of-a-path) | See that section |
 | GCP | Subnet, peering, static and dynamic routes, VPN tunnels, Cloud NAT and VPC firewall rules, as in [the GCP check of a path](gcp-topology.md#the-gcp-check-of-a-path) | See that section |
@@ -328,31 +329,105 @@ cannot evaluate (a users group, an application) matches.
 
 ### Inventory devices and configuration backups
 
-The access lists of an inventory device come from **Config Backups**: Plexus
-reads the newest successful backup of the device's running configuration, so
-a device needs a backup policy that has run at least once. A new backup is
-read at the next trace. Each `ip access-group` binding is a rule set of its
-own, named after the list, direction and interface (*ACL USERS-IN in on
-Vlan10*). It applies only to traffic entering (`in`) or leaving (`out`) that
-interface, and is matched after the route lookup with the other rule sets a
-device applies to all traffic. Entries are matched in order and the first
-that matches decides; when none does, the implicit deny at the end of every
-access list denies the flow. A remark is shown with the entry after it.
+The access lists, policies and NAT rules of an inventory device come from
+**Config Backups**: Plexus reads the newest successful backup of the device's
+running configuration, so a device needs a backup policy that has run at
+least once. A new backup is read at the next trace. The device's type
+(Inventory, *Device type*) picks the reader: Cisco IOS and IOS-XE, NX-OS,
+IOS-XR, ASA and FTD, Arista EOS, Juniper Junos (a `display set` backup),
+Fortinet FortiOS, Aruba AOS-CX and AOS-Switch (HP ProCurve). A device of
+another type (Palo Alto PAN-OS, which Plexus traces through a
+[Panorama](panorama-topology.md) instead) or without a backup reports
+*Access lists are not collected* as *unknown* where a flow crosses it.
 
-Access lists are stateless, so the replies are matched again on the
-interfaces they arrive on and leave by. An entry with `established` matches
-TCP replies only: it never lets in a request, which opens the connection.
-A binding to an access list the configuration does not define is *unknown*
-when a flow meets it. A device without a backup (or one Plexus does not read
-the configuration of, such as an ASA) reports *Access lists are not
-collected* as *unknown* where a flow crosses it.
+Every reader gives the interfaces with their addresses, secondaries, VRFs,
+state and virtual addresses (HSRP, VRRP, GLBP, VARP, an AOS-CX active
+gateway), which are addresses of the device. The routes are those of the
+route capture; the connected and static routes of a VRF the capture holds no
+table for come from the configuration, and so do all of them when there is
+no capture, the routes the routing protocols learn then being *not
+collected*. What the configuration uses and Plexus does not read (IPv6, MAC
+and port access lists, VLAN access maps, classifier and traffic policies,
+policy-based routes, zone-based firewall policies, inspection, VPN tunnels,
+other VDOMs and contexts...) is listed as not collected. An entry Plexus
+cannot turn into addresses, protocols and ports (an object, group, address
+book, application or port name the configuration does not define, an FQDN,
+geography or wildcard object, a wildcard mask that is not a prefix, a time
+range or schedule, a DSCP, TCP flag or ICMP type match, a user, identity or
+security group, a negated match) makes a flow it matches *unknown*, never
+allowed.
 
-The interfaces, their VRFs and their addresses come from the configuration
-too, and its HSRP, VRRP and GLBP addresses are addresses of the device. The
-routes are those of the route capture; the connected and static routes of a
-VRF the capture holds no table for come from the configuration, and so do
-all of them when there is no capture, the routes the routing protocols
-learn then being *not collected*.
+**Switches and routers** (IOS, IOS-XE, NX-OS, IOS-XR, EOS, AOS-CX,
+AOS-Switch, and the firewall filters of a Junos device). Each access list
+binding (`ip access-group`, IOS-XR `ipv4 access-group ... ingress|egress`,
+AOS-CX `apply access-list ip`, Junos `filter input|output`, a filter list
+read as the one filter its filters make) is a rule set of its own, named
+after the list, direction and interface (*ACL USERS-IN in on Vlan10*). It
+applies only to traffic entering (`in`) or leaving (`out`) that interface,
+and is matched after the route lookup with the other rule sets a device
+applies to all traffic. Entries are matched in order and the first that
+matches decides; when none does, the implicit deny at the end of every
+access list denies the flow. A remark or comment is shown with its entry.
+These rule sets are stateless, so the replies are matched again on the
+interfaces they arrive on and leave by: an entry with `established` (Junos
+`tcp-established`) matches TCP replies only and never lets in a request,
+which opens the connection. A binding to an access list the configuration
+does not define is *unknown* when a flow meets it; so is an IOS-XR entry
+that sets a next hop, and a Junos term with an `except` address or
+filter-based forwarding.
+
+**Cisco ASA and FTD.** Interfaces are known by their `nameif`, in the rules,
+the NAT rules and the route table alike. An access list bound with
+`access-group ... in|out interface` decides for its interface, a global
+access group is checked after the interface's own inbound list and before
+the implicit deny, and an interface without an inbound list follows the
+security levels: traffic may leave by an interface of a lower level, needs
+`same-security-traffic permit` to reach the same level or go back out of the
+interface it arrived on, and never passes through a management-only
+interface. All these rule sets are stateful, so the replies of an allowed
+request pass. Objects and object groups are resolved to addresses and ports;
+a network group that holds an FQDN object matches any address, so a flow
+against it is *unknown* rather than missed. NAT is read in ASA order (twice
+NAT, object NAT, twice NAT after auto) and traced like FMC NAT; a rule whose
+networks or services are not all addresses or single ports is listed as not
+collected. On an FTD, the LINA access list is read with its `ifc` interfaces
+as zones; a permit entry of a rule LINA labels other than *L4 RULE* is
+*unknown*, since Snort may still decide it by application, URL or user. Not
+collected: site-to-site and remote access VPN, inspection policies, multiple
+context and transparent mode, policy-based routes, IPv6, EtherType and
+WebVPN access lists, and the pre-8.3 `nat` / `global` / `static` syntax.
+
+**Juniper SRX.** The security policies are one stateful rule set: the
+zone-pair policies in their order, then the global policies, then the
+default policy (deny unless `permit-all`), each entry matching the zones its
+interfaces are in. Addresses resolve through the global and zone address
+books (addresses, ranges, address sets), applications through the custom
+applications, application sets and the common `junos-*` defaults. Source,
+destination and static NAT are read in the order the SRX applies them.
+Interfaces are the logical units (`ge-0/0/0.0`, `irb.100`), named as SNMP
+and `show route` name them; a routing instance is a VRF. Not collected:
+application services (IDP, UTM, AppFW) and policy-based IPsec tunnels,
+security screens, IKE and IPsec VPNs, configuration groups, interface
+ranges, logical systems, IPv6 and other-family filters, NAT rules whose
+addresses or pools do not resolve. A backup in the hierarchical format gives
+only a note: back the device up with `show configuration | display set`.
+
+**Fortinet FortiGate.** The firewall policies, in order, are one stateful
+rule set that ends in the implicit deny, each entry matching its source and
+destination interfaces or zones (system zones and SD-WAN zones; `any` matches
+all); a zone with `intrazone allow` adds an allow entry after them. Address
+objects (subnets, ranges, interface subnets, groups) and services (custom
+port ranges, including `dst:src` forms, service groups, and the predefined
+services) are resolved; a VIP named as a destination matches its mapped
+address, as the FortiGate matches after destination NAT. NAT: the virtual
+IPs (with port forwarding), the policies with `nat enable` (to the egress
+interface or an IP pool) and the central SNAT map when central NAT is on.
+Only the root VDOM (or the first one) is read; the others are listed as not
+collected, as are IPv6, proxy, multicast, local-in and DoS policies, IPsec
+tunnels, policy routes, SD-WAN rules, load-balance and FQDN virtual IPs. In
+NGFW policy-based mode the security policies are not read, so every policy
+entry is *unknown*. An interface address learned by DHCP or PPPoE is not in
+the configuration; the route capture supplies its network.
 
 A device with no routing data, such as an external neighbor, is passed over
 the shortest way on the map, each such hop with one unknown item, and the
@@ -543,8 +618,16 @@ VLAN, CIDR, In VPN, Verdict, Decided at, Decided by, Summary.
 - Routes a device learns over BGP, OSPF or EIGRP are not collected, and
   policy-based routes on an FTD only in part. Inventory devices are traced
   from their latest SSH route capture and configuration backup only. The
-  monitoring poll stores the first 250,000 characters of a capture (the
-  global table, then the VRF tables); routes past that are *not collected*.
+  monitoring poll reads the table with the device type's commands (`show
+  ip route` and `show ip route vrf *` on IOS and IOS-XE, `vrf all` on
+  NX-OS and EOS, `show route` on ASA, FTD, IOS-XR and Junos, `get router
+  info routing-table all` on FortiOS, `show routing route` on PAN-OS; a
+  type without a driver, such as Aruba, gets the IOS commands) and stores
+  the first 250,000 characters of a capture (the global table, then the
+  VRF tables); routes past that are *not collected*.
+- A reply to an address a firewall translated the source to, when that
+  address is on a transit network the next device is connected to, is
+  delivered at that device and never walked back through the firewall.
 - The ingress interface of a flow that arrives over a link with no address
   on the map is not known; rule sets that match on zones then match only
   in part.
