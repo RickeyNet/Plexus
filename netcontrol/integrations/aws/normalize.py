@@ -38,6 +38,7 @@ from netcontrol.integrations.meraki.normalize import (
     _layout,
     _worst,
     kv_section,
+    subnet_label,
     table_section,
 )
 
@@ -438,7 +439,9 @@ class _Builder:
                     ],
                 ),
             )
-            subnet_names = {s["rid"]: _text(s.get("name")) for s in subnets}
+            # A subnet is named with its range wherever an instance, interface
+            # or gateway refers to it: "core-app-a (10.200.10.0/24)".
+            subnet_names = {s["rid"]: subnet_label(_text(s.get("name")) or s["rid"], s.get("cidr")) for s in subnets}
             acls = owned.get("network_acl", [])
             _add(
                 sections,
@@ -530,7 +533,7 @@ class _Builder:
             )
 
             members = [node, *self._instance_nodes(instances, node, site_id, subnet_names)]
-            members += self._vpc_gateways(uid, node, site_id)
+            members += self._vpc_gateways(uid, node, site_id, subnet_names)
             site_name = f"{name} ({region})" if region else name
             self.sites.append(
                 {
@@ -715,7 +718,7 @@ class _Builder:
             )
         return node
 
-    def _vpc_gateways(self, vpc_uid: str, vpc_node: dict, site_id: str) -> list[dict]:
+    def _vpc_gateways(self, vpc_uid: str, vpc_node: dict, site_id: str, subnet_names: dict[str, str]) -> list[dict]:
         """Internet, NAT and virtual private gateways of one VPC."""
         members: list[dict] = []
         for gateway in self._of_type("internet_gateway"):
@@ -765,7 +768,7 @@ class _Builder:
                         ("Connectivity", meta.get("connectivity_type")),
                         ("Public IPs", public),
                         ("Private IPs", meta.get("private_ips")),
-                        ("Subnet", meta.get("subnet_id")),
+                        ("Subnet", subnet_names.get(_text(meta.get("subnet_id"))) or meta.get("subnet_id")),
                         ("VPC", vpc_node["label"]),
                     ],
                 ),

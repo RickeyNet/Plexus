@@ -37,6 +37,7 @@ from netcontrol.integrations.meraki.normalize import (
     _layout,
     _worst,
     kv_section,
+    subnet_label,
     table_section,
 )
 
@@ -382,7 +383,11 @@ class _Builder:
                     ],
                 ),
             )
-            subnet_names = {s["rid"]: _text(s.get("name")) for s in subnets}
+            # A subnet is named with its range wherever a machine, interface,
+            # gateway or route table refers to it: "app (10.231.10.0/24)".
+            subnet_names = {
+                s["rid"]: subnet_label(_text(s.get("name")) or _short(s["rid"]), s.get("cidr")) for s in subnets
+            }
             _add(
                 sections,
                 table_section(
@@ -620,7 +625,7 @@ class _Builder:
         members: list[dict] = []
         for gateway in self._of_type("virtual_network_gateway"):
             if self._vnet_uid(gateway) == vnet_uid:
-                members.append(self._virtual_network_gateway_node(gateway, site_id, vnet_node))
+                members.append(self._virtual_network_gateway_node(gateway, site_id, vnet_node, subnet_names))
         for gateway in self._of_type("nat_gateway"):
             if self._vnet_uid(gateway) != vnet_uid:
                 continue
@@ -704,8 +709,11 @@ class _Builder:
             members.append(node)
         return members
 
-    def _virtual_network_gateway_node(self, gateway: dict, site_id: str, vnet_node: dict | None) -> dict:
+    def _virtual_network_gateway_node(
+        self, gateway: dict, site_id: str, vnet_node: dict | None, subnet_names: dict[str, str] | None = None
+    ) -> dict:
         meta = gateway["meta"]
+        subnet_id = _text(meta.get("subnet_id"))
         kind = _text(meta.get("gateway_type"))
         model = "ExpressRoute gateway" if kind.lower() == "expressroute" else "VPN gateway"
         public = [_text(ip) for ip in meta.get("public_ips") or []]
@@ -737,7 +745,7 @@ class _Builder:
                     ("BGP", f"ASN {_text(meta.get('bgp_asn'))}" if meta.get("enable_bgp") else ""),
                     ("BGP peering addresses", meta.get("bgp_peering_addresses")),
                     ("Virtual network", vnet_node["label"] if vnet_node else ""),
-                    ("Subnet", _short(_text(meta.get("subnet_id")))),
+                    ("Subnet", (subnet_names or {}).get(subnet_id) or _short(subnet_id)),
                     ("Region", gateway.get("region")),
                     ("Account", self._account(gateway)),
                 ],

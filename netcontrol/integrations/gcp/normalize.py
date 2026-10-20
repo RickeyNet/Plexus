@@ -40,6 +40,7 @@ from netcontrol.integrations.meraki.normalize import (
     _layout,
     _worst,
     kv_section,
+    subnet_label,
     table_section,
 )
 
@@ -416,7 +417,11 @@ class _Builder:
                 ),
             )
 
-            subnet_names = {s["rid"]: _text(s.get("name")) or _short(s["rid"]) for s in subnets}
+            # A subnet is named with its primary range wherever an instance,
+            # interface or Cloud NAT refers to it: "app (10.240.1.0/24)".
+            subnet_names = {
+                s["rid"]: subnet_label(_text(s.get("name")) or _short(s["rid"]), s.get("cidr")) for s in subnets
+            }
             sections: list[dict] = []
             _add(
                 sections,
@@ -838,7 +843,7 @@ class _Builder:
                 "primary": "Primary ranges of every subnet in the region",
             }
             subnets = [
-                f"{subnet_names.get(_text(s.get('subnet_id'))) or _short(_text(s.get('subnet_id')))} ({', '.join(s.get('ranges') or [])})"
+                f"{subnet_names.get(_text(s.get('subnet_id'))) or _short(_text(s.get('subnet_id')))}: {', '.join(s.get('ranges') or [])}"
                 for s in nat.get("subnets") or []
                 if isinstance(s, dict)
             ]

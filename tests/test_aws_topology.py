@@ -308,7 +308,7 @@ def test_snapshot_instance_in_inventory_becomes_a_node():
     snap = build_snapshot([ACCOUNT], resources, connections, inventory)
     fmc = _node(snap, "i:i-0f3c001")
     assert fmc["kind"] == "server" and fmc["inventory"]["host_id"] == 9
-    assert fmc["instance_id"] == "i-0f3c001" and fmc["subnet"] == "edge-mgmt-a"
+    assert fmc["instance_id"] == "i-0f3c001" and fmc["subnet"] == "edge-mgmt-a (10.210.2.0/24)"
     assert "i:i-0f3c001" not in {n["id"] for n in snap["latent"]["nodes"]}
 
 
@@ -333,9 +333,9 @@ def test_snapshot_instance_named_by_a_host_becomes_its_node():
     snap = build_snapshot([ACCOUNT], resources, connections, InventoryIndex([host]))
     app = _node(snap, "i:i-0a99001")
     assert app["kind"] == "server" and app["inventory"]["host_id"] == 4
-    assert app["instance_id"] == "i-0a99001" and app["subnet"] == "core-app-a"
+    assert app["instance_id"] == "i-0a99001" and app["subnet"] == "core-app-a (10.200.10.0/24)"
     overview = dict(_section(app, "Overview")["rows"])
-    assert overview["Instance ID"] == "i-0a99001" and overview["Subnet"] == "core-app-a"
+    assert overview["Instance ID"] == "i-0a99001" and overview["Subnet"] == "core-app-a (10.200.10.0/24)"
     assert snap["summary"]["inventory_matches"] == 1
 
 
@@ -344,8 +344,8 @@ def test_snapshot_keeps_the_instances_that_are_not_nodes_aside(snapshot):
     assert set(latent) == {"i:i-0f3c001", "i:i-0a99001", "i:i-0a99002"}
     fmc = latent["i:i-0f3c001"]
     assert fmc["kind"] == "server" and "inventory" not in fmc and fmc["ip"] == "10.210.2.20"
-    assert fmc["instance_id"] == "i-0f3c001" and fmc["subnet"] == "edge-mgmt-a"
-    assert dict(_section(fmc, "Overview")["rows"])["Subnet"] == "edge-mgmt-a"
+    assert fmc["instance_id"] == "i-0f3c001" and fmc["subnet"] == "edge-mgmt-a (10.210.2.0/24)"
+    assert dict(_section(fmc, "Overview")["rows"])["Subnet"] == "edge-mgmt-a (10.210.2.0/24)"
     # Placed at its VPC, so it has somewhere to start when it is put on the map.
     vpc = _node(snapshot, "vpc:vpc-0ed9e00002")
     assert fmc["x"] == vpc["x"] and fmc["y"] > vpc["y"]
@@ -358,8 +358,12 @@ def test_snapshot_keeps_the_instances_that_are_not_nodes_aside(snapshot):
     assert node_details(snapshot, "i:i-0f3c001")["provider"] == "aws"
     # Forwarding instances say which instance they are too.
     ftd = _node(snapshot, "i:i-0f7d001")
-    assert ftd["instance_id"] == "i-0f7d001" and ftd["subnet"] == "edge-mgmt-a"
-    assert dict(_section(ftd, "Overview")["rows"])["Subnet"] == "edge-mgmt-a"
+    assert ftd["instance_id"] == "i-0f7d001" and ftd["subnet"] == "edge-mgmt-a (10.210.2.0/24)"
+    assert dict(_section(ftd, "Overview")["rows"])["Subnet"] == "edge-mgmt-a (10.210.2.0/24)"
+    # Its interfaces and the VPC's NAT gateway name their subnets with the range too.
+    assert _section(ftd, "Network interfaces")["rows"][1][2] == "edge-outside-a (10.210.0.0/24)"
+    nat = dict(_section(_node(snapshot, "nat:nat-0c0re0a"), "NAT gateway")["rows"])
+    assert nat["Subnet"] == "core-app-a (10.200.10.0/24)"
 
 
 def test_snapshot_links_vpcs_gateways_and_vpn(snapshot):
@@ -1092,8 +1096,8 @@ def test_api_a_host_added_after_discovery_is_its_instance_on_the_map(api):
     nodes = {n["id"]: n for n in graph["nodes"]}
     vpcs = {"fmc-01": "vpc:vpc-0ed9e00002", "app1": "vpc:vpc-0c0re00001"}
     expected = {
-        "fmc-01": ("i-0f3c001", "edge-mgmt-a", "edge-security-vpc (us-east-1)"),
-        "app1": ("i-0a99001", "core-app-a", "prod-core-vpc (us-east-1)"),
+        "fmc-01": ("i-0f3c001", "edge-mgmt-a (10.210.2.0/24)", "edge-security-vpc (us-east-1)"),
+        "app1": ("i-0a99001", "core-app-a (10.200.10.0/24)", "prod-core-vpc (us-east-1)"),
     }
     for host_id, hostname in ((fmc.json()["id"], "fmc-01"), (app.json()["id"], "app1")):
         node = nodes[host_id]
@@ -1116,7 +1120,7 @@ def test_api_a_host_added_after_discovery_is_its_instance_on_the_map(api):
     assert details.status_code == 200, details.text
     assert details.json()["provider"] == "aws"
     overview = dict(next(s for s in details.json()["sections"] if s["title"] == "Overview")["rows"])
-    assert overview["Subnet"] == "edge-mgmt-a" and overview["Instance ID"] == "i-0f3c001"
+    assert overview["Subnet"] == "edge-mgmt-a (10.210.2.0/24)" and overview["Instance ID"] == "i-0f3c001"
     cached = routes_module._SNAPSHOT_CACHE[org_ref]["snapshot"]
     assert "i:i-0f3c001" not in {n["id"] for n in cached["nodes"]}
 
