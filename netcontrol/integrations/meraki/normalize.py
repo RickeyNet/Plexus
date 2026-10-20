@@ -129,6 +129,14 @@ def _is_ip(text: str) -> bool:
         return False
 
 
+def subnet_label(name: Any, cidr: Any) -> str:
+    """A subnet as the details name it, ``app (10.0.1.0/24)``: the range
+    beside the name, so nobody has to look it up in the provider's console.
+    Just the name when the range is not known."""
+    name_text, cidr_text = str(name or "").strip(), str(cidr or "").strip()
+    return f"{name_text} ({cidr_text})" if name_text and cidr_text else name_text or cidr_text
+
+
 def kv_section(title: str, rows: list[tuple[str, Any]]) -> dict | None:
     cleaned = [[k, _s(v)] for k, v in rows if _s(v) != ""]
     return {"title": title, "kind": "kv", "rows": cleaned} if cleaned else None
