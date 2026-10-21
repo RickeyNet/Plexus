@@ -1723,32 +1723,44 @@ async def topology_path_api(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _reachability_file(report: dict[str, Any], fmt: str, verdict: str | None) -> Response:
+def _reachability_file(report: dict[str, Any], fmt: str, verdict: str | None, source: str = "") -> Response:
     """The rows of a sweep report as a CSV or, for ``xlsx``, a workbook whose
     columns fit their text, with a **Summary** tab of the counts by verdict, a
     tab of every row and one per verdict; the CSV has the same summary after
     its rows, under an empty line. ``verdict`` names the file after the rows
-    kept (and makes them one tab); the summary still counts the whole sweep."""
-    summary = reach_sweep.summary_rows(report["counts"])
+    kept (and makes them one tab); the summary still counts the whole sweep.
+    A typed ``source`` names the file ``reachability-from-<source>-to-...``.
+
+    A list of networks (``mode`` ``list``) has the ``LIST_COLUMNS`` only, on
+    one **Networks** tab and with no summary, in ``networks-<count>``."""
+    listed = report.get("mode") == "list"
+    columns = reach_sweep.LIST_COLUMNS if listed else reach_sweep.CSV_COLUMNS
+    summary: list[list[Any]] = [] if listed else reach_sweep.summary_rows(report["counts"])
     if fmt == "xlsx":
-        sheets = [xlsx.Sheet("Summary", reach_sweep.SUMMARY_COLUMNS, summary)]
+        sheets: list[xlsx.Sheet] = [] if listed else [xlsx.Sheet("Summary", reach_sweep.SUMMARY_COLUMNS, summary)]
+        groups = [("Networks", report["rows"])] if listed else reach_sweep.sheet_groups(report["rows"], verdict)
         sheets.extend(
-            xlsx.Sheet(title, reach_sweep.CSV_COLUMNS, [reach_sweep.sheet_row(row) for row in rows])
-            for title, rows in reach_sweep.sheet_groups(report["rows"], verdict)
+            xlsx.Sheet(title, columns, [reach_sweep.sheet_row(row, columns) for row in rows]) for title, rows in groups
         )
         payload = xlsx.workbook_of(sheets)
         media_type = xlsx.XLSX_MEDIA_TYPE
     else:
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(reach_sweep.CSV_COLUMNS)
-        writer.writerows(reach_sweep.csv_row(row) for row in report["rows"])
-        writer.writerow([])
-        writer.writerow(reach_sweep.SUMMARY_COLUMNS)
-        writer.writerows(summary)
+        writer.writerow(columns)
+        writer.writerows(reach_sweep.csv_row(row, columns) for row in report["rows"])
+        if summary:
+            writer.writerow([])
+            writer.writerow(reach_sweep.SUMMARY_COLUMNS)
+            writer.writerows(summary)
         payload = output.getvalue().encode("utf-8")
         media_type = "text/csv; charset=utf-8"
-    name = f"reachability-{report['destination']['address']}-{report['traffic']}" + (f"-{verdict}" if verdict else "")
+    if listed:
+        name = f"networks-{len(report['rows'])}"
+    else:
+        target = "matrix" if report["destination"] is None else report["destination"]["address"]
+        route = f"from-{source}-to-{target}" if source else target
+        name = f"reachability-{route}-{report['traffic']}" + (f"-{verdict}" if verdict else "")
     stem = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("_")
     return Response(
         content=payload,
@@ -1763,10 +1775,15 @@ def _reachability_file(report: dict[str, Any], fmt: str, verdict: str | None) ->
 @router.get("/api/topology/reachability")
 async def topology_reachability_api(
     request: Request,
-    destination: str = Query(min_length=1, max_length=64),
+    destination: str = Query(default="", max_length=64),
     destination_node: str | None = Query(default=None, max_length=300),
     destination_org_ref: int | None = Query(default=None),
     destination_node_id: str | None = Query(default=None, max_length=300),
+    source: str = Query(default="", max_length=64),
+    source_node: str | None = Query(default=None, max_length=300),
+    source_org_ref: int | None = Query(default=None),
+    source_node_id: str | None = Query(default=None, max_length=300),
+    list_only: str = Query(default="", max_length=8, alias="list"),
     protocol: str = Query(default="", max_length=8),
     port: int | None = Query(default=None, ge=0, le=65535),
     sources: str | None = Query(default=None, max_length=2000),
@@ -1778,6 +1795,15 @@ async def topology_reachability_api(
     sites: str | None = Query(default=None, max_length=1000),
     within: str | None = Query(default=None, max_length=2000),
     in_vpn: str | None = Query(default=None, max_length=8),
+    to_sources: str | None = Query(default=None, max_length=2000),
+    to_providers: str | None = Query(default=None, max_length=200),
+    to_kinds: str | None = Query(default=None, max_length=200),
+    to_vlans: str | None = Query(default=None, max_length=1000),
+    to_name: str | None = Query(default=None, max_length=1000),
+    to_exclude: str | None = Query(default=None, max_length=1000),
+    to_sites: str | None = Query(default=None, max_length=1000),
+    to_within: str | None = Query(default=None, max_length=2000),
+    to_in_vpn: str | None = Query(default=None, max_length=8),
     format: str = Query(default="json", pattern="^(json|csv|xlsx)$"),
     verdict: str | None = Query(default=None, max_length=16),
 ):
@@ -1790,26 +1816,107 @@ async def topology_reachability_api(
 
     ``destination_node`` is the graph node that owns the destination, as for
     ``/api/topology/path``; ``destination_org_ref`` + ``destination_node_id``
-    name it by the snapshot node of a picked subnet instead. More than
-    ``MAX_ROWS`` source networks is refused with their ``count``: narrow the
-    filters."""
+    name it by the snapshot node of a picked subnet instead.
+
+    With ``destination`` empty the sweep is a matrix: the ``to_*`` filters
+    (the same as the source ones) pick the destination networks from the
+    same index, and every source network is traced to every destination
+    network of the same IP family that it does not overlap. More than
+    ``MAX_ROWS`` traces is refused with their ``count``: narrow the
+    filters.
+
+    A typed ``source`` (an IP address or network) replaces the source
+    filters: it is traced to ``destination``, or to every destination
+    network of a matrix. ``source_node`` / ``source_org_ref`` +
+    ``source_node_id`` name its owner, as the destination's do.
+
+    ``list=1`` lists the networks the source filters keep without tracing
+    them (``mode`` ``list``): ``source``, its owner, the ``to_*`` filters,
+    ``protocol``, ``port`` and ``verdict`` are ignored, and so is the limit."""
+    try:
+        listing = reach_sweep.parse_flag(list_only, "list") is True
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if listing:
+        # Nothing is traced: what picks a source or a destination is ignored.
+        source, source_node, source_org_ref, source_node_id, protocol, port, verdict = (
+            "",
+            None,
+            None,
+            None,
+            "",
+            None,
+            None,
+        )
+        destination_node, destination_org_ref, destination_node_id = None, None, None
+        to_sources = to_providers = to_kinds = to_vlans = to_name = to_exclude = None
+        to_sites = to_within = to_in_vpn = None
     if protocol.strip().lower() not in ("", "any", "all", *PATH_PROTOCOLS):
         raise HTTPException(status_code=400, detail=f"protocol must be one of {', '.join(PATH_PROTOCOLS)}")
     verdict = (verdict or "").strip().lower() or None
     if verdict is not None and verdict not in reach_sweep.VERDICTS:
         raise HTTPException(status_code=400, detail=f"verdict must be one of {', '.join(reach_sweep.VERDICTS)}")
-    try:
-        filters = reach_sweep.parse_filters(
-            sources=sources,
-            providers=providers,
-            kinds=kinds,
-            vlans=vlans,
-            name=name,
-            exclude=exclude,
-            sites=sites,
-            within=within,
-            in_vpn=in_vpn,
+    destination = destination.strip()
+    source = source.strip()
+    source_values = {
+        "sources": sources,
+        "providers": providers,
+        "kinds": kinds,
+        "vlans": vlans,
+        "name": name,
+        "exclude": exclude,
+        "sites": sites,
+        "within": within,
+        "in_vpn": in_vpn,
+    }
+    if source and any(str(value or "").strip() for value in source_values.values()):
+        raise HTTPException(
+            status_code=400,
+            detail="the source filters pick the source networks; leave source empty to trace one source",
         )
+    if not source and (
+        str(source_node or "").strip() or source_org_ref is not None or str(source_node_id or "").strip()
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "source_node, source_org_ref and source_node_id name the owner of one source; "
+                "leave them empty when the source filters pick the source networks"
+            ),
+        )
+    to_values = {
+        "sources": to_sources,
+        "providers": to_providers,
+        "kinds": to_kinds,
+        "vlans": to_vlans,
+        "name": to_name,
+        "exclude": to_exclude,
+        "sites": to_sites,
+        "within": to_within,
+        "in_vpn": to_in_vpn,
+    }
+    matrix = not destination and not listing
+    if not matrix and any(str(value or "").strip() for value in to_values.values()):
+        raise HTTPException(
+            status_code=400, detail="to_* filters pick the destination networks; leave destination empty to use them"
+        )
+    if matrix and (
+        str(destination_node or "").strip() or destination_org_ref is not None or str(destination_node_id or "").strip()
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "destination_node, destination_org_ref and destination_node_id name the owner of one destination; "
+                "leave them empty when the to_* filters pick the destination networks"
+            ),
+        )
+    try:
+        filters = reach_sweep.parse_filters(**source_values)
+        to_filters = reach_sweep.parse_filters(**to_values) if matrix else None
+        # A typed source, and the destination it is traced to, are addresses or networks.
+        typed = reach_sweep.typed_row(source) if source else None
+        if typed is not None and not matrix:
+            reach_sweep.address_of(destination)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1820,40 +1927,86 @@ async def topology_reachability_api(
     org_names[INVENTORY_ORG_REF] = "Inventory"
     rows = [{**row, "org_name": org_names.get(row["org_ref"], "")} for row in found["subnets"]]
     try:
-        selected = reach_sweep.select_rows(rows, filters, destination)
+        if typed is not None:
+            selected = [typed]
+        else:
+            selected = reach_sweep.select_rows(rows, filters, None if matrix else destination or None)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if len(selected) > reach_sweep.MAX_ROWS:
+    make_tracer = _tracer_of(found)
+    if listing:
+        listed = await asyncio.to_thread(lambda: reach_sweep.list_rows(make_tracer(), selected))
+        if format in ("csv", "xlsx"):
+            await _audit(
+                "topology",
+                f"export_networks_{format}",
+                user=_session_user(request),
+                detail=f"rows={len(listed)}",
+                correlation_id=_corr_id(request),
+            )
+            return _reachability_file({"mode": "list", "rows": listed}, format, None)
+        return {
+            "mode": "list",
+            "destination": None,
+            "source": None,
+            "traffic": "",
+            "generated_at": datetime.now(UTC).isoformat(),
+            "filters": filters.to_json(),
+            "to_filters": None,
+            "source_count": len(listed),
+            "destination_count": 0,
+            "candidates": len(listed),
+            "limit": reach_sweep.MAX_ROWS,
+            "rows": listed,
+            "counts": {each: 0 for each in reach_sweep.VERDICTS},
+        }
+    targets = reach_sweep.select_rows(rows, to_filters, None) if to_filters is not None else []
+    count = len(selected)
+    if matrix:
+        # Pairing thousands of networks with thousands is CPU-bound too.
+        count = await asyncio.to_thread(lambda: sum(1 for _ in reach_sweep.iter_pairs(selected, targets)))
+    if count > reach_sweep.MAX_ROWS:
+        message = (
+            f"{count} source→destination pairs match; at most {reach_sweep.MAX_ROWS} are traced at once. "
+            if matrix
+            else f"{count} source networks match; at most {reach_sweep.MAX_ROWS} are swept at once. "
+        )
         return JSONResponse(
             status_code=400,
             content={
                 "ok": False,
-                "error": {
-                    "code": "too_many_sources",
-                    "message": (
-                        f"{len(selected)} source networks match; at most {reach_sweep.MAX_ROWS} are swept at once. "
-                        "Narrow the filters."
-                    ),
-                },
-                "count": len(selected),
+                "error": {"code": "too_many_sources", "message": message + "Narrow the filters."},
+                "count": count,
                 "limit": reach_sweep.MAX_ROWS,
             },
         )
-    make_tracer = _tracer_of(found)
+
+    def owner(tracer: Tracer, node_text: str | None, org_ref: int | None, node_id: str | None) -> Any:
+        """The graph node a page named, or the one of a picked subnet's owner."""
+        node = _graph_node_id(node_text)
+        if node is None and org_ref is not None and node_id:
+            node = tracer.graph_of.get((org_ref, node_id.strip()))
+        return node
 
     def run() -> dict[str, Any]:
         tracer = make_tracer()
-        node = _graph_node_id(destination_node)
-        if node is None and destination_org_ref is not None and destination_node_id:
-            node = tracer.graph_of.get((destination_org_ref, destination_node_id.strip()))
-        return reach_sweep.run(tracer, selected, destination, destination_node=node, protocol=protocol, port=port)
+        chosen = selected
+        if typed is not None:
+            graph_node = owner(tracer, source_node, source_org_ref, source_node_id)
+            chosen = [reach_sweep.typed_row(source, graph_node=graph_node)]
+        if matrix:
+            return reach_sweep.run_matrix(tracer, reach_sweep.iter_pairs(chosen, targets), protocol=protocol, port=port)
+        node = owner(tracer, destination_node, destination_org_ref, destination_node_id)
+        return reach_sweep.run(tracer, chosen, destination, destination_node=node, protocol=protocol, port=port)
 
     try:
-        # Building the indexes and walking the map once per source is CPU-bound.
+        # Building the indexes and walking the map once per trace is CPU-bound.
         report = await asyncio.to_thread(run)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    report["destination"] = report["destination"] or {"address": destination}
+    if not matrix:
+        report["destination"] = report["destination"] or {"address": destination}
+    report["source"] = (report["source"] or {"address": source}) if typed is not None else None
     if format in ("csv", "xlsx"):
         if verdict:
             report["rows"] = [row for row in report["rows"] if row["verdict"] == verdict]
@@ -1861,17 +2014,23 @@ async def topology_reachability_api(
             "topology",
             f"export_reachability_{format}",
             user=_session_user(request),
-            detail=f"destination={destination} traffic={report['traffic']} rows={len(report['rows'])}"
+            detail=(f"source={source} " if typed is not None else "")
+            + f"destination={destination or 'matrix'} traffic={report['traffic']} rows={len(report['rows'])}"
             + (f" verdict={verdict}" if verdict else ""),
             correlation_id=_corr_id(request),
         )
-        return _reachability_file(report, format, verdict)
+        return _reachability_file(report, format, verdict, source)
     return {
+        "mode": "matrix" if matrix else "one",
+        "source": report["source"],
         "destination": report["destination"],
         "traffic": report["traffic"],
         "generated_at": datetime.now(UTC).isoformat(),
         "filters": filters.to_json(),
-        "candidates": len(selected),
+        "to_filters": to_filters.to_json() if to_filters is not None else None,
+        "source_count": len(selected),
+        "destination_count": len(targets) if matrix else 1,
+        "candidates": count,
         "limit": reach_sweep.MAX_ROWS,
         "rows": report["rows"],
         "counts": report["counts"],
@@ -1889,46 +2048,45 @@ async def topology_deep_search_api(
     Hits are returned as ``(org_ref, node_id)`` references, which the
     Topology page resolves to nodes on the merged graph. An IP address or a
     network finds the devices whose collected subnets hold it first, the
-    most specific first: an address inside a subnet is no substring of it.
+    most specific first over every source (an inventory host's VLAN, a cloud
+    VM's own address or its subnet, then a site range or a VPN local network
+    that covers it, then a firewall's summary route): an address inside a
+    subnet is no substring of it.
     """
     tokens = q.lower().split()[:8]
     results: list[dict] = []
     seen: set[tuple[int, str]] = set()
-    # An address or network also finds the inventory hosts whose networks hold it.
+    entries = await _latest_entries()
+    # An address or network finds the inventory hosts and the snapshot nodes
+    # whose networks hold it: the subnets of every source in one list, so the
+    # most specific wins whatever source collected it.
     if canonical(q):
         from netcontrol.routes.topology import get_topology
 
         nodes = (await get_topology(None)).get("nodes") or []
-        labels = {n.get("id"): n.get("label") or "" for n in nodes}
-        for subnet in subnets_containing(await _inventory_subnets(nodes), q):
-            if (INVENTORY_ORG_REF, subnet["node_id"]) in seen or len(results) >= limit:
-                continue
-            seen.add((INVENTORY_ORG_REF, subnet["node_id"]))
-            where = f"{subnet['site_name'] or 'Inventory'} · Subnets: {subnet['cidr']} {subnet['name']}".strip()
-            results.append(
-                {
-                    "org_ref": INVENTORY_ORG_REF,
-                    "node_id": subnet["node_id"],
-                    "label": labels.get(int(subnet["node_id"]), ""),
-                    "snippet": where,
-                }
-            )
-    for org_ref, entry in await _latest_entries():
-        found = subnets_containing(await _subnets_of(entry), q)
-        labels = {n.get("id"): n.get("label") or "" for n in entry["snapshot"].get("nodes") or []} if found else {}
-        for subnet in found:
+        labels: dict[int, dict[Any, str]] = {INVENTORY_ORG_REF: {n.get("id"): n.get("label") or "" for n in nodes}}
+        tagged = [{**subnet, "org_ref": INVENTORY_ORG_REF} for subnet in await _inventory_subnets(nodes)]
+        for org_ref, entry in entries:
+            tagged.extend({**subnet, "org_ref": org_ref} for subnet in await _subnets_of(entry))
+        for subnet in subnets_containing(tagged, q):
+            org_ref = int(subnet["org_ref"])
             if (org_ref, subnet["node_id"]) in seen or len(results) >= limit:
                 continue
             seen.add((org_ref, subnet["node_id"]))
-            where = f"{subnet['site_name'] or 'VPN peer'} · Subnets: {subnet['cidr']} {subnet['name']}".strip()
+            if org_ref not in labels:
+                snapshot = next(entry["snapshot"] for ref, entry in entries if ref == org_ref)
+                labels[org_ref] = {n.get("id"): n.get("label") or "" for n in snapshot.get("nodes") or []}
+            inventory = org_ref == INVENTORY_ORG_REF
+            place = subnet["site_name"] or ("Inventory" if inventory else "VPN peer")
             results.append(
                 {
                     "org_ref": org_ref,
                     "node_id": subnet["node_id"],
-                    "label": labels.get(subnet["node_id"], ""),
-                    "snippet": where,
+                    "label": labels[org_ref].get(int(subnet["node_id"]) if inventory else subnet["node_id"], ""),
+                    "snippet": f"{place} · Subnets: {subnet['cidr']} {subnet['name']}".strip(),
                 }
             )
+    for org_ref, entry in entries:
         if entry["index"] is None:
             entry["index"] = await asyncio.to_thread(build_search_index, entry["snapshot"])
         for hit in search_index(entry["index"], tokens, limit - len(results)):

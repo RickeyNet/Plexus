@@ -1,25 +1,29 @@
-"""Reachability sweep: one destination, traced from many source networks.
+"""Reachability sweep: one destination, or many, traced from many source networks.
 
 The path trace answers one question at a time: does this flow from this
 source reach this destination? A sweep asks it of every network the filters
 keep from the whole-map subnet index (``subnet_index`` rows with their
 ``org_ref`` and ``provider``), so a list such as *the user VLANs of every
 branch that cannot reach the file server on tcp/445* comes out in one go.
+A matrix sweep picks the destination networks from the same index with a
+second set of filters and traces every source network to every destination
+network (``pairs``, ``run_matrix``). One typed source (``typed_row``)
+takes the place of the source networks in either; ``list_rows`` lists the
+networks the filters keep without tracing them.
 
 ``parse_filters`` turns the query string into ``Filters``, ``select_rows``
-keeps the source networks they match and ``sweep`` traces each one with the
+keeps the networks they match and ``sweep`` traces each one with the
 ``Tracer`` and reports its verdict and what decided it. The sweep adds no
-finding of its own: every verdict, summary and deciding item is the
-tracer's.
+finding of its own: every verdict, summary, deciding item and port set is
+the tracer's.
 
 Pure (no I/O): the API handler loads the subnets and builds the tracer.
 """
 
 from __future__ import annotations
 
-import ipaddress
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -39,8 +43,8 @@ from netcontrol.integrations.pathtrace.model import (
 DEFAULT_KINDS = ("vlan", "lan", "svi", "range", "subnet", "connected")
 KINDS = (*DEFAULT_KINDS, "static", "vpn", "peer", "pool", "host", "user")
 VERDICTS = (ALLOWED, BLOCKED, UNREACHABLE, PARTIAL, UNKNOWN)
-# Most source networks one sweep traces.
-MAX_ROWS = 5000
+# Most traces one sweep runs: source networks, or source→destination pairs.
+MAX_ROWS = 20000
 
 # The item status that decides each verdict (``verdict_of`` in the model).
 _DECIDING = {BLOCKED: BLOCKED, UNREACHABLE: BLOCKED, UNKNOWN: UNKNOWN, PARTIAL: PARTIAL}
@@ -138,7 +142,9 @@ def _vlans(text: str | None) -> tuple[tuple[int, int], ...]:
     return tuple(ranges)
 
 
-def _in_vpn(text: str | None) -> bool | None:
+def parse_flag(text: str | None, what: str) -> bool | None:
+    """A yes/no query parameter: ``True`` / ``False``, or ``None`` when empty
+    (or ``any``); ``ValueError`` names ``what`` otherwise."""
     wanted = str(text or "").strip().lower()
     if wanted in ("", "any", "all"):
         return None
@@ -146,7 +152,7 @@ def _in_vpn(text: str | None) -> bool | None:
         return True
     if wanted in _FALSE:
         return False
-    raise ValueError("in_vpn must be 1 or 0")
+    raise ValueError(f"{what} must be 1 or 0")
 
 
 def parse_filters(
@@ -190,7 +196,7 @@ def parse_filters(
         exclude=_terms(exclude, "exclude"),
         sites=_terms(sites, "sites"),
         within=tuple(networks),
-        in_vpn=_in_vpn(in_vpn),
+        in_vpn=parse_flag(in_vpn, "in_vpn"),
     )
 
 
@@ -209,19 +215,39 @@ def _inside(network: Network, outer: tuple[Network, ...]) -> bool:
     return any(o.version == network.version and network.subnet_of(o) for o in outer)  # type: ignore[arg-type]
 
 
-def select_rows(rows: list[dict[str, Any]], filters: Filters, destination: str) -> list[dict[str, Any]]:
-    """The source networks of ``rows`` that ``filters`` keep, each once per
-    ``(cidr, node_id)``, each with its ``vlan``. Networks of the other IP
-    family than ``destination`` are left out, and so is the destination's
-    own network: any row whose network overlaps it."""
-    target = net(destination)
-    if target is None:
-        raise ValueError(f"{destination!r} is not an IP address or network")
+def address_of(text: str) -> Network:
+    """The network of a typed address or network; ``ValueError`` when it is
+    neither."""
+    found = net(text)
+    if found is None:
+        raise ValueError(f"{text!r} is not an IP address or network")
+    return found
+
+
+def typed_row(source: str, *, graph_node: Any = None) -> dict[str, Any]:
+    """The source row of one typed ``source`` (an IP address or network),
+    owned by ``graph_node`` when the page knows it, to trace in place of the
+    networks the filters keep. Its result row takes its site and node from
+    the trace's source end (see ``_result_row``)."""
+    address_of(source)
+    return {"cidr": source, "typed": True, "graph_node": graph_node}
+
+
+def select_rows(rows: list[dict[str, Any]], filters: Filters, destination: str | None) -> list[dict[str, Any]]:
+    """The networks of ``rows`` that ``filters`` keep, each once per
+    ``(cidr, node_id)``, each with its ``vlan``. With a ``destination``,
+    networks of the other IP family are left out, and so is the
+    destination's own network: any row whose network overlaps it. Without
+    one (the destination networks of a matrix, or its sources before
+    ``pairs``), only the filters apply."""
+    target = address_of(destination) if destination is not None else None
     kept: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for row in rows:
         network = net(row.get("cidr"))
-        if network is None or network.version != target.version or network.overlaps(target):
+        if network is None:
+            continue
+        if target is not None and (network.version != target.version or network.overlaps(target)):
             continue
         key = (str(network), str(row.get("node_id") or ""))
         if key in seen:
@@ -249,6 +275,30 @@ def select_rows(rows: list[dict[str, Any]], filters: Filters, destination: str) 
         seen.add(key)
         kept.append({**row, "vlan": vlan})
     return kept
+
+
+def iter_pairs(
+    sources: list[dict[str, Any]], destinations: list[dict[str, Any]]
+) -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
+    """Each ``(source row, destination row)`` of a matrix sweep, in order.
+    A pair is left out when the two networks are of different IP families or
+    overlap (which includes a network paired with itself)."""
+    targets = [(row, net(row.get("cidr"))) for row in destinations]
+    for source in sources:
+        network = net(source.get("cidr"))
+        if network is None:
+            continue
+        for destination, target in targets:
+            if target is None or target.version != network.version or network.overlaps(target):
+                continue
+            yield source, destination
+
+
+def pairs(
+    sources: list[dict[str, Any]], destinations: list[dict[str, Any]]
+) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """The pairs of ``iter_pairs`` as a list, for ``run_matrix``."""
+    return list(iter_pairs(sources, destinations))
 
 
 def traffic_text(protocol: str, port: int | None) -> str:
@@ -280,17 +330,138 @@ def _deciding(result: dict[str, Any]) -> tuple[str, str]:
     return "", ""
 
 
-def _sort_key(row: dict[str, Any]) -> tuple:
-    network = ipaddress.ip_network(row["cidr"], strict=False)
-    vlan = row.get("vlan")
+def _network_key(site: Any, vlan: Any, cidr: Any) -> tuple:
+    network = net(cidr)
     return (
-        str(row.get("site_name") or "").lower(),
+        str(site or "").lower(),
         vlan is None,
         vlan if vlan is not None else 0,
-        network.version,
-        int(network.network_address),
-        network.prefixlen,
+        network.version if network is not None else 0,
+        int(network.network_address) if network is not None else 0,
+        network.prefixlen if network is not None else 0,
     )
+
+
+def _sort_key(row: dict[str, Any]) -> tuple:
+    """By source site, VLAN and network, then by destination site, VLAN and network."""
+    return (
+        *_network_key(row.get("site_name"), row.get("vlan"), row["cidr"]),
+        *_network_key(row.get("dst_site_name"), row.get("dst_vlan"), row.get("dst_cidr")),
+    )
+
+
+def _protocol(protocol: str) -> str:
+    protocol = str(protocol or "").strip().lower()
+    if protocol not in ("", "any", "all", *PROTOCOLS):
+        raise ValueError(f"protocol must be one of {', '.join(PROTOCOLS)}")
+    return protocol
+
+
+def _node_of(tracer: Tracer, row: dict[str, Any]) -> Any:
+    """The graph node that owns a subnet index row's network, if any; a
+    typed row's (``typed_row``) is the node it was given."""
+    if "graph_node" in row:
+        return row["graph_node"]
+    return tracer.graph_of.get((int(row.get("org_ref") or 0), str(row.get("node_id") or "")))
+
+
+def _network_fields(tracer: Tracer, row: dict[str, Any], source_node: Any, start: dict[str, Any]) -> dict[str, Any]:
+    """The fields of a result row that name its source network ``row``,
+    owned by ``source_node``; ``start`` is the trace's source end (empty when
+    nothing was traced), which names the node and, of a typed row, the site."""
+    node = start["node"] if start.get("node") is not None else source_node
+    return {
+        "org_ref": row.get("org_ref"),
+        "org_name": str(row.get("org_name") or ""),
+        "provider": str(row.get("provider") or ""),
+        "site_id": str(row.get("site_id") or ""),
+        "site_name": str((start.get("site") if row.get("typed") else row.get("site_name")) or ""),
+        "node_id": str(row.get("node_id") or ""),
+        # The graph node the trace started at, for tracing the row again.
+        "source_node": node,
+        "node_label": str(start.get("label") or (tracer.label(node) if node else "")),
+        "kind": str(row.get("kind") or ""),
+        "vlan": row.get("vlan", vlan_of(row)),
+        "cidr": row["cidr"],
+        "name": str(row.get("name") or ""),
+        "in_vpn": row.get("in_vpn"),
+    }
+
+
+def list_rows(tracer: Tracer, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The networks of ``rows`` (as ``select_rows`` keeps them), untraced:
+    each one's network fields with the graph node of its owner, sorted by
+    site, then VLAN, then network."""
+    return sorted((_network_fields(tracer, row, _node_of(tracer, row), {}) for row in rows), key=_sort_key)
+
+
+def _result_row(
+    tracer: Tracer,
+    row: dict[str, Any],
+    destination: str,
+    destination_node: Any,
+    target: dict[str, Any] | None,
+    protocol: str,
+    port: int | None,
+    traffic: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Trace from the network of source ``row`` to ``destination`` (owned by
+    ``destination_node``; ``target`` is its subnet index row in a matrix):
+    the result row and the trace (whose ``source`` / ``destination`` ends
+    are missing when the tracer refused it). A typed row (``typed_row``)
+    takes its site from the trace's source end."""
+    source_node = _node_of(tracer, row)
+    try:
+        result = tracer.trace(
+            row["cidr"],
+            destination,
+            source_node=source_node,
+            destination_node=destination_node,
+            protocol=protocol,
+            port=port,
+        )
+    except ValueError as exc:
+        result = {"verdict": UNKNOWN, "summary": str(exc), "traffic": traffic}
+    decided_at, decided_by = _deciding(result)
+    end = result.get("destination") or {}
+    found = target or {}
+    return {
+        **_network_fields(tracer, row, source_node, result.get("source") or {}),
+        "dst_cidr": str(found.get("cidr") or destination),
+        "dst_name": str(found.get("name") or ""),
+        "dst_site_name": str((found.get("site_name") if target is not None else end.get("site")) or ""),
+        "dst_org_ref": found.get("org_ref"),
+        "dst_org_name": str(found.get("org_name") or ""),
+        "dst_provider": str(found.get("provider") or ""),
+        "dst_node_id": str(found.get("node_id") or ""),
+        "dst_node_label": str(end.get("label") or (tracer.label(destination_node) if destination_node else "")),
+        "dst_kind": str(found.get("kind") or ""),
+        "dst_vlan": found.get("vlan", vlan_of(found)) if target is not None else None,
+        "dst_in_vpn": found.get("in_vpn"),
+        # The graph node the trace ended at, for tracing the row again.
+        "destination_node": end["node"] if end.get("node") is not None else destination_node,
+        "verdict": result.get("verdict") or UNKNOWN,
+        "summary": str(result.get("summary") or ""),
+        "traffic": str(result.get("traffic") or traffic),
+        "decided_at": decided_at,
+        "decided_by": decided_by,
+        "ports": result.get("ports"),
+    }, result
+
+
+def _report(
+    results: list[dict[str, Any]], traffic: str, end: dict[str, Any] | None, start: dict[str, Any] | None
+) -> dict[str, Any]:
+    results.sort(key=_sort_key)
+    counts = {verdict: 0 for verdict in VERDICTS}
+    for each in results:
+        counts[each["verdict"]] = counts.get(each["verdict"], 0) + 1
+    return {"source": start, "destination": end, "traffic": traffic, "rows": results, "counts": counts}
+
+
+def _typed_start(start: dict[str, Any] | None, row: dict[str, Any], result: dict[str, Any]) -> dict[str, Any] | None:
+    """The source end a report names: the first trace's, of a typed row."""
+    return start or (result.get("source") if row.get("typed") else None)
 
 
 def run(
@@ -303,60 +474,45 @@ def run(
     port: int | None = None,
 ) -> dict[str, Any]:
     """Trace ``protocol``/``port`` from each of ``rows`` (as ``select_rows``
-    keeps them) to ``destination``: the result rows, the counts by verdict,
-    the traffic and the destination end of the first trace."""
-    protocol = str(protocol or "").strip().lower()
-    if protocol not in ("", "any", "all", *PROTOCOLS):
-        raise ValueError(f"protocol must be one of {', '.join(PROTOCOLS)}")
+    keeps them, or the one ``typed_row``) to ``destination``: the result
+    rows, the counts by verdict, the traffic, the destination end of the
+    first trace and, of a typed row, its source end (``None`` otherwise)."""
+    protocol = _protocol(protocol)
     traffic = traffic_text(protocol, port)
+    start: dict[str, Any] | None = None
     end: dict[str, Any] | None = None
     results: list[dict[str, Any]] = []
     for row in rows:
-        source_node = tracer.graph_of.get((int(row.get("org_ref") or 0), str(row.get("node_id") or "")))
-        try:
-            result = tracer.trace(
-                row["cidr"],
-                destination,
-                source_node=source_node,
-                destination_node=destination_node,
-                protocol=protocol,
-                port=port,
-            )
-        except ValueError as exc:
-            result = {"verdict": UNKNOWN, "summary": str(exc), "traffic": traffic}
-        if end is None and result.get("destination"):
-            end = result["destination"]
-        decided_at, decided_by = _deciding(result)
-        source = result.get("source") or {}
-        results.append(
-            {
-                "org_ref": row.get("org_ref"),
-                "org_name": str(row.get("org_name") or ""),
-                "provider": str(row.get("provider") or ""),
-                "site_id": str(row.get("site_id") or ""),
-                "site_name": str(row.get("site_name") or ""),
-                "node_id": str(row.get("node_id") or ""),
-                # The graph node the trace started at, for tracing the row again.
-                "source_node": source.get("node", source_node),
-                "node_label": str(source.get("label") or (tracer.label(source_node) if source_node else "")),
-                "kind": str(row.get("kind") or ""),
-                "vlan": row.get("vlan", vlan_of(row)),
-                "cidr": row["cidr"],
-                "name": str(row.get("name") or ""),
-                "in_vpn": row.get("in_vpn"),
-                "verdict": result.get("verdict") or UNKNOWN,
-                "summary": str(result.get("summary") or ""),
-                "traffic": str(result.get("traffic") or traffic),
-                "decided_at": decided_at,
-                "decided_by": decided_by,
-                "ports": result.get("ports"),
-            }
+        result, trace = _result_row(tracer, row, destination, destination_node, None, protocol, port, traffic)
+        start = _typed_start(start, row, trace)
+        end = end or trace.get("destination")
+        results.append(result)
+    return _report(results, traffic, end, start)
+
+
+def run_matrix(
+    tracer: Tracer,
+    matrix: Iterable[tuple[dict[str, Any], dict[str, Any]]],
+    *,
+    protocol: str = "",
+    port: int | None = None,
+) -> dict[str, Any]:
+    """Trace ``protocol``/``port`` for each ``(source row, destination row)``
+    of ``matrix`` (as ``pairs`` builds it), from the source network to the
+    whole destination network at its owner: the result rows, the counts by
+    verdict and the traffic (``destination`` is ``None``; ``source`` is the
+    first trace's source end when the source rows are one ``typed_row``)."""
+    protocol = _protocol(protocol)
+    traffic = traffic_text(protocol, port)
+    start: dict[str, Any] | None = None
+    results: list[dict[str, Any]] = []
+    for row, target in matrix:
+        result, trace = _result_row(
+            tracer, row, target["cidr"], _node_of(tracer, target), target, protocol, port, traffic
         )
-    results.sort(key=_sort_key)
-    counts = {verdict: 0 for verdict in VERDICTS}
-    for each in results:
-        counts[each["verdict"]] = counts.get(each["verdict"], 0) + 1
-    return {"destination": end, "traffic": traffic, "rows": results, "counts": counts}
+        start = _typed_start(start, row, trace)
+        results.append(result)
+    return _report(results, traffic, None, start)
 
 
 def sweep(
@@ -369,7 +525,8 @@ def sweep(
     port: int | None = None,
 ) -> list[dict[str, Any]]:
     """The result row of each source network in ``rows``, sorted by site,
-    then VLAN, then network (see ``run``)."""
+    then VLAN, then network (see ``run``; ``run_matrix`` for many
+    destinations)."""
     return run(tracer, rows, destination, destination_node=destination_node, protocol=protocol, port=port)["rows"]
 
 
@@ -382,11 +539,17 @@ CSV_COLUMNS = (
     "VLAN",
     "CIDR",
     "In VPN",
+    "Destination site",
+    "Destination network",
+    "Destination CIDR",
     "Verdict",
     "Decided at",
     "Decided by",
+    "Ports",
     "Summary",
 )
+# The columns of a list of networks (``list_rows``): the source network's.
+LIST_COLUMNS = CSV_COLUMNS[:8]
 VERDICT_WORDS = {
     ALLOWED: "Allowed",
     BLOCKED: "Blocked",
@@ -415,11 +578,11 @@ def summary_rows(counts: Mapping[str, int]) -> list[list[Any]]:
     return rows
 
 
-def sheet_row(row: dict[str, Any]) -> list[Any]:
+def sheet_row(row: dict[str, Any], columns: tuple[str, ...] = CSV_COLUMNS) -> list[Any]:
     """``csv_row`` with the VLAN id as a number, for a spreadsheet."""
-    cells: list[Any] = csv_row(row)
-    if row.get("vlan") is not None:
-        cells[CSV_COLUMNS.index("VLAN")] = int(row["vlan"])
+    cells: list[Any] = csv_row(row, columns)
+    if row.get("vlan") is not None and "VLAN" in columns:
+        cells[columns.index("VLAN")] = int(row["vlan"])
     return cells
 
 
@@ -434,10 +597,13 @@ def sheet_groups(rows: list[dict[str, Any]], verdict: str | None = None) -> list
     return groups
 
 
-def csv_row(row: dict[str, Any]) -> list[str]:
-    """A result row as the cells of ``CSV_COLUMNS``."""
+def csv_row(row: dict[str, Any], columns: tuple[str, ...] = CSV_COLUMNS) -> list[str]:
+    """A result row as the cells of ``columns`` (of ``CSV_COLUMNS``, such
+    as ``LIST_COLUMNS`` for a ``list_rows`` row). **Ports** is the tracer's
+    text of the ports allowed end to end (any traffic asked)."""
     in_vpn = row.get("in_vpn")
-    return [
+    ports = row.get("ports") or {}
+    cells = [
         str(row.get("org_name") or row.get("org_ref") or ""),
         str(row.get("provider") or ""),
         str(row.get("site_name") or ""),
@@ -446,8 +612,13 @@ def csv_row(row: dict[str, Any]) -> list[str]:
         "" if row.get("vlan") is None else str(row["vlan"]),
         str(row.get("cidr") or ""),
         "" if in_vpn is None else ("Yes" if in_vpn else "No"),
+        str(row.get("dst_site_name") or ""),
+        str(row.get("dst_name") or ""),
+        str(row.get("dst_cidr") or ""),
         VERDICT_WORDS.get(str(row.get("verdict")), str(row.get("verdict") or "")),
         str(row.get("decided_at") or ""),
         str(row.get("decided_by") or ""),
+        str(ports.get("text") or ""),
         str(row.get("summary") or ""),
     ]
+    return cells if columns is CSV_COLUMNS else [cells[CSV_COLUMNS.index(column)] for column in columns]

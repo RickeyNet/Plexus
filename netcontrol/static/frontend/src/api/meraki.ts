@@ -441,12 +441,26 @@ export function usePathTrace(query: PathTraceQuery | null) {
 
 /**
  * A reachability sweep (`GET /api/topology/reachability`): one destination
- * traced from every source network the filters keep. List filters are
- * comma-separated; empty means no restriction (kinds: the server's default).
+ * traced from every source network the filters keep ("one" mode), or, with no
+ * destination, every kept source traced to every destination network the
+ * `to_*` filters keep ("matrix" mode). List filters are comma-separated;
+ * empty means no restriction (kinds: the server's default).
  */
 export interface ReachabilityQuery {
-  destination: string;
-  /** Graph node id of the device that owns the destination, when known. */
+  /**
+   * One typed source (an IP address or network) in place of the source
+   * filters, which must then be absent; empty or absent: the filters pick the
+   * sources.
+   */
+  source?: string;
+  /** Graph node id of the device that owns the typed source, when known. */
+  source_node?: number | string;
+  /** The snapshot node of a picked source subnet, resolved by the server. */
+  source_org_ref?: number;
+  source_node_id?: string;
+  /** Empty or absent: matrix mode, the `to_*` filters pick the destinations. */
+  destination?: string;
+  /** Graph node id of the device that owns the destination, when known (one mode only). */
   destination_node?: number | string;
   /** The snapshot node of a picked destination subnet, resolved by the server. */
   destination_org_ref?: number;
@@ -468,13 +482,33 @@ export interface ReachabilityQuery {
   within?: string;
   /** `1` advertised into the VPN, `0` not; empty for either. */
   in_vpn?: string;
+  /** Matrix mode: the destination networks, with the same syntax as the source filters. */
+  to_sources?: string;
+  to_providers?: string;
+  to_kinds?: string;
+  to_vlans?: string;
+  to_name?: string;
+  to_exclude?: string;
+  to_sites?: string;
+  to_within?: string;
+  to_in_vpn?: string;
   /** File downloads only: keep the rows of this verdict. */
   verdict?: PathVerdict;
+  /**
+   * `1`: list the networks the source filters keep without tracing them
+   * ("list" mode); only the source filters are read then.
+   */
+  list?: string;
 }
 
-/** One source network of a sweep and the verdict of its trace. */
-export interface ReachabilityRow {
-  org_ref: number;
+/**
+ * One network a sweep starts from: a row of "list" mode, and the network
+ * fields of every traced row. A typed source's row has no snapshot network:
+ * `org_ref` null, empty names, `cidr` as typed, and `site_name` /
+ * `node_label` of the node the trace started at.
+ */
+export interface NetworkRow {
+  org_ref: number | null;
   org_name: string;
   provider: string;
   site_id: string;
@@ -488,6 +522,10 @@ export interface ReachabilityRow {
   cidr: string;
   name: string;
   in_vpn: boolean | null;
+}
+
+/** One source network of a sweep and the verdict of its trace. */
+export interface ReachabilityRow extends NetworkRow {
   verdict: PathVerdict;
   summary: string;
   traffic: string;
@@ -496,19 +534,54 @@ export interface ReachabilityRow {
   /** `<where>: <text>` of the deciding item. */
   decided_by: string;
   ports?: PathPorts | null;
+  /** The destination network (matrix mode); in one mode the destination as typed. */
+  dst_cidr: string;
+  dst_name: string;
+  dst_site_name: string;
+  dst_org_ref: number | null;
+  dst_org_name: string;
+  dst_provider: string;
+  dst_node_id: string;
+  dst_node_label: string;
+  dst_kind: string;
+  dst_vlan: number | null;
+  dst_in_vpn: boolean | null;
+  /** Graph node the trace ended at, to trace the row again. */
+  destination_node: number | string | null;
 }
 
-export interface ReachabilityReport {
-  destination: Partial<PathEnd> & { address: string };
+interface ReachabilityReportBase {
+  /** The typed source, placed on the map; null when the filters picked the sources. */
+  source: (Partial<PathEnd> & { address: string }) | null;
+  /** The destination of a one-mode sweep; null in matrix mode. */
+  destination: (Partial<PathEnd> & { address: string }) | null;
   traffic: string;
   generated_at: string;
   filters: Record<string, unknown>;
-  /** Source networks the filters kept. */
+  /** The destination filters of a matrix sweep; null in one mode. */
+  to_filters: Record<string, unknown> | null;
+  source_count: number;
+  destination_count: number;
+  /** Traces run: source networks in one mode, source→destination pairs in matrix mode; rows in list mode. */
   candidates: number;
   limit: number;
-  rows: ReachabilityRow[];
+  /** Rows per verdict; all zero in list mode. */
   counts: Record<PathVerdict, number>;
 }
+
+/** A sweep that traced its networks: one destination, or many (matrix). */
+export interface ReachabilityTraceReport extends ReachabilityReportBase {
+  mode: 'one' | 'matrix';
+  rows: ReachabilityRow[];
+}
+
+/** The networks the source filters keep, not traced (`list=1`). */
+export interface NetworkListReport extends ReachabilityReportBase {
+  mode: 'list';
+  rows: NetworkRow[];
+}
+
+export type ReachabilityReport = ReachabilityTraceReport | NetworkListReport;
 
 /** The query string of `GET /api/topology/reachability`. */
 export function reachabilitySearch(query: ReachabilityQuery): string {

@@ -2181,6 +2181,9 @@ def test_sweep_reports_each_networks_verdict_and_what_decided_it():
     assert guest["decided_by"].startswith("Site-to-site VPN firewall rules: Rule 1 (deny any")
     assert guest["summary"].startswith("Blocked at Branch 01 MX")
     assert "hops" not in guest and "request" not in guest
+    # Each row names its destination: the address typed, and the trace's end.
+    assert (data["dst_cidr"], data["dst_node_label"], data["dst_site_name"]) == ("10.0.10.20", "Hub 01 MX", "Hub 01")
+    assert data["destination_node"] == "meraki:1:d:HUB" and data["dst_name"] == "" and data["dst_vlan"] is None
     assert sweep(tracer, rows, "10.0.10.20", protocol="tcp", port=445) == report["rows"]
 
     # A peer behind a tunnel that is down: no path, decided by the link.
@@ -2211,8 +2214,15 @@ def test_api_reachability_sweep_as_json_and_csv(api):
     body = response.json()
     assert body["traffic"] == "tcp/443" and body["destination"]["address"] == "10.0.10.20"
     assert body["filters"]["within"] == ["10.2.0.0/16"] and body["filters"]["kinds"][0] == "vlan"
-    assert body["candidates"] == len(body["rows"]) > 0 and body["limit"] == 5000
+    assert body["candidates"] == len(body["rows"]) > 0 and body["limit"] == 20000
+    assert body["mode"] == "one" and body["to_filters"] is None
+    assert body["source_count"] == len(body["rows"]) and body["destination_count"] == 1
     assert sum(body["counts"].values()) == len(body["rows"])
+    # Each row names its destination: the address typed, and the trace's end.
+    assert {r["dst_cidr"] for r in body["rows"]} == {"10.0.10.20"}
+    assert all(r["dst_node_label"] == body["destination"]["label"] for r in body["rows"])
+    assert all(r["destination_node"] == body["destination"]["node"] for r in body["rows"])
+    assert all(r["dst_org_ref"] is None and r["dst_vlan"] is None and r["dst_name"] == "" for r in body["rows"])
     assert all(r["cidr"].startswith("10.2.") for r in body["rows"])
     by_cidr = {r["cidr"]: r for r in body["rows"]}
     assert by_cidr["10.2.10.0/24"]["verdict"] == "allowed", by_cidr["10.2.10.0/24"]["summary"]
@@ -2235,9 +2245,13 @@ def test_api_reachability_sweep_as_json_and_csv(api):
         "VLAN",
         "CIDR",
         "In VPN",
+        "Destination site",
+        "Destination network",
+        "Destination CIDR",
         "Verdict",
         "Decided at",
         "Decided by",
+        "Ports",
         "Summary",
     ]
     # The rows, then an empty line and the counts by verdict with a total.
@@ -2247,7 +2261,10 @@ def test_api_reachability_sweep_as_json_and_csv(api):
     lines, summary = table[: len(body["rows"]) + 1], table[len(body["rows"]) + 1 :]
     assert all(len(line) == len(table[0]) for line in lines)
     guest_line = next(line for line in lines if line[6] == "10.2.30.0/24")
-    assert guest_line[8] == "Blocked" and guest_line[9] == branch_mx
+    assert guest_line[11] == "Blocked" and guest_line[12] == branch_mx
+    assert guest_line[10] == "10.0.10.20" and guest_line[9] == ""
+    assert guest_line[8] == body["destination"]["site"]
+    assert guest_line[14] == ((guest["ports"] or {}).get("text") or "")
     assert summary[:2] == [[], ["Verdict", "Networks", "Share"]]
     assert [line[:2] for line in summary[2:]] == [
         ["Allowed", str(len(allowed))],
@@ -2289,7 +2306,7 @@ def test_api_reachability_sweep_as_json_and_csv(api):
     for page in pages[1:]:
         assert page.count('customWidth="1"') == len(table[0]) and 'state="frozen"' in page
         assert '<c r="A1" t="inlineStr" s="1"><is><t xml:space="preserve">Source</t></is></c>' in page
-    assert f'<autoFilter ref="A1:L{len(blocked) + 1}"/>' in blocked_tab
+    assert f'<autoFilter ref="A1:P{len(blocked) + 1}"/>' in blocked_tab
 
     # `verdict` keeps only the rows of one verdict: a single tab, named after
     # it, after the summary of the whole sweep.
@@ -2330,6 +2347,379 @@ def test_api_reachability_sweep_refuses_too_many_sources(api, monkeypatch):
     body = response.json()
     assert body["limit"] == 1 and body["count"] > 1
     assert "Narrow the filters" in body["error"]["message"]
+    assert body["error"]["code"] == "too_many_sources" and "source networks match" in body["error"]["message"]
+
+    # A matrix counts its source→destination pairs against the limit.
+    monkeypatch.setattr(sweep_module, "MAX_ROWS", 3)
+    matrix = api.get("/api/topology/reachability?within=10.2.0.0/16&to_within=10.0.0.0/16")
+    assert matrix.status_code == 400
+    refused = matrix.json()
+    assert refused["ok"] is False and refused["error"]["code"] == "too_many_sources"
+    assert refused["limit"] == 3 and refused["count"] > 3
+    assert refused["error"]["message"] == (
+        f"{refused['count']} source→destination pairs match; at most 3 are traced at once. Narrow the filters."
+    )
+
+
+def test_sweep_matrix_traces_every_source_network_to_every_destination_network():
+    from netcontrol.integrations.pathtrace.sweep import (
+        CSV_COLUMNS,
+        csv_row,
+        pairs,
+        parse_filters,
+        run_matrix,
+        select_rows,
+    )
+
+    deny = rule(1, "deny", src=["10.1.30.0/24"], dst=["10.0.0.0/8"], comment="Block guest over the VPN")
+    tracer = _tracer(_branch_and_hub([deny]), subnets=_SUBNETS)
+    data, guest = _row("10.1.10.0/24", "VLAN 10 Data"), _row("10.1.30.0/24", "VLAN 30 Guest")
+    hub = _row("10.0.10.0/24", "VLAN 10 Data", site_id="HUB", site_name="Hub 01", node_id="d:HUB", org_name="Acme")
+    sources = select_rows([guest, data], parse_filters(), None)
+    targets = select_rows([hub, data, _row("2001:db8:10::/64", "VLAN 10 Data v6")], parse_filters(), None)
+    assert [r["cidr"] for r in targets] == ["10.0.10.0/24", "10.1.10.0/24", "2001:db8:10::/64"]
+
+    # A network is never paired with itself, nor with another IP version.
+    matrix = pairs(sources, targets)
+    assert [(s["cidr"], d["cidr"]) for s, d in matrix] == [
+        ("10.1.30.0/24", "10.0.10.0/24"),
+        ("10.1.30.0/24", "10.1.10.0/24"),
+        ("10.1.10.0/24", "10.0.10.0/24"),
+    ]
+    assert pairs(sources, [_row("10.1.0.0/16", "Supernet")]) == []  # overlaps both sources
+
+    report = run_matrix(tracer, matrix)
+    assert report["destination"] is None and report["traffic"] == "any traffic"
+    assert sum(report["counts"].values()) == 3
+    # Sorted by source site, VLAN and network, then destination site, VLAN and network.
+    assert [(r["cidr"], r["dst_cidr"]) for r in report["rows"]] == [
+        ("10.1.10.0/24", "10.0.10.0/24"),
+        ("10.1.30.0/24", "10.1.10.0/24"),
+        ("10.1.30.0/24", "10.0.10.0/24"),
+    ]
+    to_hub, guest_to_data, guest_to_hub = report["rows"]
+    assert to_hub["verdict"] == "allowed" and to_hub["source_node"] == "meraki:1:d:BR"
+    assert (to_hub["dst_name"], to_hub["dst_site_name"], to_hub["dst_vlan"]) == ("VLAN 10 Data", "Hub 01", 10)
+    assert (to_hub["dst_org_ref"], to_hub["dst_org_name"], to_hub["dst_provider"]) == (1, "Acme", "meraki")
+    assert (to_hub["dst_node_id"], to_hub["dst_kind"], to_hub["dst_in_vpn"]) == ("d:HUB", "vlan", True)
+    assert to_hub["dst_node_label"] == "Hub 01 MX" and to_hub["destination_node"] == "meraki:1:d:HUB"
+    assert guest_to_data["destination_node"] == "meraki:1:d:BR" and guest_to_data["dst_site_name"] == "Branch 01"
+    assert guest_to_hub["verdict"] == "blocked" and guest_to_hub["decided_at"] == "Branch 01 MX"
+    # Any traffic asked: the ports allowed end to end are the tracer's, and the Ports column.
+    assert to_hub["ports"] and to_hub["ports"]["text"]
+    cells = csv_row(to_hub)
+    assert len(cells) == len(CSV_COLUMNS)
+    assert cells[CSV_COLUMNS.index("Ports")] == to_hub["ports"]["text"]
+    assert cells[CSV_COLUMNS.index("Destination CIDR")] == "10.0.10.0/24"
+    assert cells[CSV_COLUMNS.index("Destination network")] == "VLAN 10 Data"
+    assert cells[CSV_COLUMNS.index("Destination site")] == "Hub 01"
+    assert run_matrix(tracer, matrix, protocol="tcp", port=445)["traffic"] == "tcp/445"
+    with pytest.raises(ValueError):
+        run_matrix(tracer, matrix, protocol="gre")
+
+
+def test_api_reachability_matrix_of_cloud_and_cato_networks_to_meraki_vlans(api):
+    import csv
+    import io
+    import ipaddress
+    import re
+    import zipfile
+
+    from netcontrol.integrations.pathtrace.sweep import DEFAULT_KINDS
+
+    for provider in ("meraki", "aws", "azure", "gcp", "cato"):
+        assert api.post(f"/api/sources/sample?provider={provider}").status_code == 201, provider
+    subnets = api.get("/api/sources/subnets").json()["subnets"]
+
+    def kept(providers: tuple[str, ...], kinds: tuple[str, ...]) -> list[tuple[str, str]]:
+        found: dict[tuple[str, str], None] = {}
+        for s in subnets:
+            if s.get("provider") in providers and s.get("kind") in kinds:
+                found[(str(ipaddress.ip_network(s["cidr"], strict=False)), str(s.get("node_id") or ""))] = None
+        return list(found)
+
+    sources, targets = kept(("aws", "azure", "gcp", "cato"), DEFAULT_KINDS), kept(("meraki",), ("vlan",))
+    assert sources and targets
+    expected = [
+        (s, d)
+        for s, _ in sources
+        for d, _ in targets
+        if ipaddress.ip_network(s).version == ipaddress.ip_network(d).version
+        and not ipaddress.ip_network(s).overlaps(ipaddress.ip_network(d))  # type: ignore[arg-type]
+    ]
+
+    query = "providers=aws,azure,gcp,cato&to_providers=meraki&to_kinds=vlan"
+    response = api.get(f"/api/topology/reachability?{query}")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["mode"] == "matrix" and body["destination"] is None and body["traffic"] == "any traffic"
+    assert body["source_count"] == len(sources) and body["destination_count"] == len(targets)
+    assert body["candidates"] == len(expected) == len(body["rows"]) and body["limit"] == 20000
+    assert body["to_filters"]["providers"] == ["meraki"] and body["to_filters"]["kinds"] == ["vlan"]
+    assert sum(body["counts"].values()) == len(body["rows"])
+    meraki_vlans = {cidr for cidr, _ in targets}
+    assert {r["dst_cidr"] for r in body["rows"]} <= meraki_vlans
+    assert all(r["dst_provider"] == "meraki" and r["dst_kind"] == "vlan" for r in body["rows"])
+    assert {r["provider"] for r in body["rows"]} <= {"aws", "azure", "gcp", "cato"}
+    with_ports = [r for r in body["rows"] if r["ports"]]
+    assert with_ports and all(r["ports"]["text"] for r in with_ports)
+
+    csv_response = api.get(f"/api/topology/reachability?{query}&format=csv")
+    assert csv_response.status_code == 200
+    assert csv_response.headers["content-disposition"] == 'attachment; filename="reachability-matrix-any_traffic.csv"'
+    table = list(csv.reader(io.StringIO(csv_response.text)))
+    header = table[0]
+    assert header == [
+        "Source",
+        "Provider",
+        "Site",
+        "Network",
+        "Kind",
+        "VLAN",
+        "CIDR",
+        "In VPN",
+        "Destination site",
+        "Destination network",
+        "Destination CIDR",
+        "Verdict",
+        "Decided at",
+        "Decided by",
+        "Ports",
+        "Summary",
+    ]
+    lines = table[1 : len(body["rows"]) + 1]
+    assert [line[header.index("Ports")] for line in lines] == [
+        (r["ports"] or {}).get("text") or "" for r in body["rows"]
+    ]
+    assert [line[header.index("Destination CIDR")] for line in lines] == [r["dst_cidr"] for r in body["rows"]]
+    assert any(line[header.index("Ports")] for line in lines)
+
+    book = api.get(f"/api/topology/reachability?{query}&format=xlsx&verdict=allowed")
+    assert book.status_code == 200
+    assert book.headers["content-disposition"] == 'attachment; filename="reachability-matrix-any_traffic-allowed.xlsx"'
+    full = api.get(f"/api/topology/reachability?{query}&format=xlsx")
+    with zipfile.ZipFile(io.BytesIO(full.content)) as archive:
+        tabs = re.findall(r'<sheet name="([^"]+)"', archive.read("xl/workbook.xml").decode("utf-8"))
+    assert tabs == ["Summary", "All", "Allowed", "Blocked", "No path", "Allowed in part", "Check incomplete"]
+
+
+def test_api_deep_search_ranks_the_most_specific_subnet_first_over_every_source(api):
+    import re
+
+    # The Panorama snapshot (a 10.0.0.0/8 summary route) is collected before
+    # the Azure account (a VM at 10.231.10.21/32 in a /24), as a Cato site
+    # range or a vMX VPN local network covering a VDI VNet would be.
+    for provider in ("panorama", "azure"):
+        assert api.post(f"/api/sources/sample?provider={provider}").status_code == 201, provider
+    hits = api.get("/api/topology/search/deep?q=10.231.10.21").json()["results"]
+    held = [re.search(r"Subnets: (\S+)", h["snippet"] or "") for h in hits]
+    cidrs = [m.group(1) for m in held if m]
+    assert cidrs and cidrs[0] == "10.231.10.21/32" and "10.0.0.0/8" in cidrs
+    assert hits[0]["org_ref"] == -2 and "Virtual machine" in hits[0]["snippet"] and hits[0]["label"]
+    lengths = [int(c.rsplit("/", 1)[1]) for c in cidrs]
+    assert lengths == sorted(lengths, reverse=True)
+
+
+def test_api_reachability_refuses_mixing_one_destination_and_many(api):
+    assert api.post("/api/sources/sample").status_code == 201
+    mixed = api.get("/api/topology/reachability?destination=10.0.10.20&to_providers=meraki")
+    assert mixed.status_code == 400
+    assert mixed.json()["error"]["message"] == (
+        "to_* filters pick the destination networks; leave destination empty to use them"
+    )
+    for owner in ("destination_node=meraki:1:d:HUB", "destination_org_ref=1&destination_node_id=d:HUB"):
+        response = api.get(f"/api/topology/reachability?to_providers=meraki&{owner}")
+        assert response.status_code == 400, owner
+        assert "destination_node" in response.json()["error"]["message"]
+    assert api.get("/api/topology/reachability?to_vlans=x").status_code == 400
+
+
+def test_sweep_traces_one_typed_source_to_one_destination_or_many():
+    from netcontrol.integrations.pathtrace.sweep import (
+        iter_pairs,
+        parse_filters,
+        run,
+        run_matrix,
+        select_rows,
+        typed_row,
+    )
+
+    tracer = _tracer(_branch_and_hub(), subnets=_SUBNETS)
+    typed = typed_row("10.1.10.50")
+    assert typed == {"cidr": "10.1.10.50", "typed": True, "graph_node": None}
+    with pytest.raises(ValueError, match="is not an IP address or network"):
+        typed_row("nope")
+
+    # A typed source to one destination: one Path Mode trace.
+    report = run(tracer, [typed], "10.0.10.20", protocol="tcp", port=443)
+    [row] = report["rows"]
+    assert row["verdict"] == "allowed" and row["traffic"] == "tcp/443"
+    assert (row["org_ref"], row["org_name"], row["provider"], row["site_id"]) == (None, "", "", "")
+    assert (row["node_id"], row["kind"], row["vlan"], row["name"], row["in_vpn"]) == ("", "", None, "", None)
+    assert row["cidr"] == "10.1.10.50" and row["site_name"] == "Branch 01"
+    assert row["node_label"] == "Branch 01 MX" and row["source_node"] == "meraki:1:d:BR"
+    assert row["dst_cidr"] == "10.0.10.20" and row["dst_node_label"] == "Hub 01 MX"
+    assert report["source"]["node"] == "meraki:1:d:BR" and report["source"]["label"] == "Branch 01 MX"
+    assert report["source"]["site"] == "Branch 01" and report["destination"]["label"] == "Hub 01 MX"
+    # The owner the page picked is the node the trace starts at.
+    owned = run(tracer, [typed_row("10.1.10.50", graph_node="meraki:1:d:BR")], "10.0.10.20")
+    assert owned["rows"][0]["source_node"] == "meraki:1:d:BR"
+    # Rows of the subnet index name no source end.
+    indexed = select_rows([_row("10.1.10.0/24", "VLAN 10 Data")], parse_filters(), None)
+    assert run(tracer, indexed, "10.0.10.20")["source"] is None
+
+    # A typed source to many: its own network is skipped.
+    hub = _row("10.0.10.0/24", "VLAN 10 Data", site_id="HUB", site_name="Hub 01", node_id="d:HUB")
+    targets = select_rows([hub, _row("10.1.10.0/24", "VLAN 10 Data")], parse_filters(), None)
+    matrix = run_matrix(tracer, iter_pairs([typed], targets))
+    [to_hub] = matrix["rows"]
+    assert (to_hub["cidr"], to_hub["dst_cidr"], to_hub["dst_site_name"]) == ("10.1.10.50", "10.0.10.0/24", "Hub 01")
+    assert to_hub["org_ref"] is None and to_hub["site_name"] == "Branch 01" and to_hub["verdict"] == "allowed"
+    assert to_hub["source_node"] == "meraki:1:d:BR" and to_hub["node_label"] == "Branch 01 MX"
+    assert matrix["destination"] is None and matrix["source"]["node"] == "meraki:1:d:BR"
+
+
+def test_sweep_list_rows_lists_the_networks_without_tracing_them():
+    from netcontrol.integrations.pathtrace.sweep import LIST_COLUMNS, csv_row, list_rows, parse_filters, select_rows
+
+    tracer = _tracer(_branch_and_hub(), subnets=_SUBNETS)
+    hub = _row("10.0.10.0/24", "VLAN 10 Data", site_id="HUB", site_name="Hub 01", node_id="d:HUB")
+    rows = select_rows([hub, *_SWEEP_ROWS[:3]], parse_filters(), None)
+    listed = list_rows(tracer, rows)
+    # Sorted by site, then VLAN, then network.
+    assert [(r["site_name"], r["cidr"]) for r in listed] == [
+        ("Branch 01", "10.1.10.0/24"),
+        ("Branch 01", "10.1.20.0/24"),
+        ("Branch 01", "10.1.30.0/24"),
+        ("Hub 01", "10.0.10.0/24"),
+    ]
+    first = listed[0]
+    assert set(first) == {
+        "org_ref",
+        "org_name",
+        "provider",
+        "site_id",
+        "site_name",
+        "node_id",
+        "source_node",
+        "node_label",
+        "kind",
+        "vlan",
+        "cidr",
+        "name",
+        "in_vpn",
+    }
+    assert "verdict" not in first and "dst_cidr" not in first
+    assert (first["source_node"], first["node_label"], first["vlan"]) == ("meraki:1:d:BR", "Branch 01 MX", 10)
+    assert listed[-1]["source_node"] == "meraki:1:d:HUB" and listed[-1]["node_label"] == "Hub 01 MX"
+    assert LIST_COLUMNS == ("Source", "Provider", "Site", "Network", "Kind", "VLAN", "CIDR", "In VPN")
+    cells = csv_row(first, LIST_COLUMNS)
+    assert cells == ["1", "meraki", "Branch 01", "VLAN 10 Data", "vlan", "10", "10.1.10.0/24", "Yes"]
+
+
+def test_api_reachability_traces_one_typed_source(api):
+    import ipaddress
+
+    assert api.post("/api/sources/sample?provider=meraki").status_code == 201
+    subnets = api.get("/api/sources/subnets").json()["subnets"]
+
+    query = "source=10.2.10.25&destination=10.0.10.20&protocol=tcp&port=443"
+    response = api.get(f"/api/topology/reachability?{query}")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["mode"] == "one" and body["candidates"] == 1 and body["source_count"] == 1
+    assert body["source"]["address"] == "10.2.10.25" and body["source"]["label"]
+    [row] = body["rows"]
+    assert row["cidr"] == "10.2.10.25" and row["org_ref"] is None and row["provider"] == ""
+    assert row["site_name"] and row["site_name"] == body["source"]["site"]
+    assert row["node_label"] == body["source"]["label"] and row["source_node"] == body["source"]["node"]
+    assert row["dst_cidr"] == "10.0.10.20" and row["traffic"] == "tcp/443"
+    assert body["filters"]["kinds"][0] == "vlan"  # the default source filters, echoed
+
+    # A typed source to every Meraki VLAN it does not sit in.
+    host = ipaddress.ip_network("10.2.10.25")
+    vlans = {
+        (str(ipaddress.ip_network(s["cidr"], strict=False)), str(s.get("node_id") or ""))
+        for s in subnets
+        if s.get("provider") == "meraki" and s.get("kind") == "vlan"
+    }
+    overlapping = [cidr for cidr, _ in vlans if ipaddress.ip_network(cidr).overlaps(host)]
+    assert overlapping
+    matrix = api.get("/api/topology/reachability?source=10.2.10.25&to_providers=meraki&to_kinds=vlan")
+    assert matrix.status_code == 200, matrix.text
+    found = matrix.json()
+    assert found["mode"] == "matrix" and found["source_count"] == 1 and found["destination"] is None
+    assert found["destination_count"] == len(vlans)
+    assert found["candidates"] == len(vlans) - len(overlapping) == len(found["rows"])
+    assert all(r["cidr"] == "10.2.10.25" for r in found["rows"])
+    assert found["source"]["address"] == "10.2.10.25"
+
+    csv_response = api.get("/api/topology/reachability?source=10.2.10.25&to_providers=meraki&to_kinds=vlan&format=csv")
+    assert csv_response.status_code == 200
+    assert csv_response.headers["content-disposition"] == (
+        'attachment; filename="reachability-from-10.2.10.25-to-matrix-any_traffic.csv"'
+    )
+    one_csv = api.get(f"/api/topology/reachability?{query}&format=csv")
+    assert one_csv.headers["content-disposition"] == (
+        'attachment; filename="reachability-from-10.2.10.25-to-10.0.10.20-tcp_443.csv"'
+    )
+
+    mixed = api.get("/api/topology/reachability?source=10.2.10.25&destination=10.0.10.20&providers=meraki")
+    assert mixed.status_code == 400
+    assert mixed.json()["error"]["message"] == (
+        "the source filters pick the source networks; leave source empty to trace one source"
+    )
+    for owner in ("source_node=meraki:1:d:BR", "source_org_ref=1&source_node_id=d:BR"):
+        response = api.get(f"/api/topology/reachability?destination=10.0.10.20&{owner}")
+        assert response.status_code == 400, owner
+        assert response.json()["error"]["message"].startswith("source_node, source_org_ref and source_node_id")
+    bad = api.get("/api/topology/reachability?source=nope&destination=10.0.10.20")
+    assert bad.status_code == 400 and "is not an IP address or network" in bad.json()["error"]["message"]
+
+
+def test_api_reachability_lists_the_networks_the_filters_keep(api):
+    import csv
+    import io
+    import re
+    import zipfile
+
+    assert api.post("/api/sources/sample?provider=meraki").status_code == 201
+    subnets = api.get("/api/sources/subnets").json()["subnets"]
+    expected = {
+        (s["cidr"], str(s.get("node_id") or ""))
+        for s in subnets
+        if s.get("provider") == "meraki" and s.get("kind") == "vlan" and "data" in str(s.get("name") or "").lower()
+    }
+    assert expected
+
+    # The source, the to_* filters and the traffic are ignored: nothing is traced.
+    query = "list=1&providers=meraki&kinds=vlan&name=data"
+    response = api.get(f"/api/topology/reachability?{query}&source=10.9.9.9&to_providers=aws&protocol=tcp&port=1")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["mode"] == "list" and body["destination"] is None and body["source"] is None
+    assert body["traffic"] == "" and body["to_filters"] is None and body["destination_count"] == 0
+    assert body["candidates"] == body["source_count"] == len(body["rows"]) == len(expected)
+    assert set(body["counts"].values()) == {0}
+    assert {(r["cidr"], r["node_id"]) for r in body["rows"]} == expected
+    assert all(r["provider"] == "meraki" and r["kind"] == "vlan" and "verdict" not in r for r in body["rows"])
+    assert all(r["source_node"] and r["node_label"] for r in body["rows"])
+
+    csv_response = api.get(f"/api/topology/reachability?{query}&format=csv&verdict=blocked")
+    assert csv_response.status_code == 200
+    n = len(body["rows"])
+    assert csv_response.headers["content-disposition"] == f'attachment; filename="networks-{n}.csv"'
+    table = list(csv.reader(io.StringIO(csv_response.text)))
+    assert table[0] == ["Source", "Provider", "Site", "Network", "Kind", "VLAN", "CIDR", "In VPN"]
+    assert len(table) == n + 1 and all(len(line) == 8 for line in table)
+
+    book = api.get(f"/api/topology/reachability?{query}&format=xlsx")
+    assert book.status_code == 200
+    assert book.headers["content-disposition"] == f'attachment; filename="networks-{n}.xlsx"'
+    with zipfile.ZipFile(io.BytesIO(book.content)) as archive:
+        tabs = re.findall(r'<sheet name="([^"]+)"', archive.read("xl/workbook.xml").decode("utf-8"))
+    assert tabs == ["Networks"]
+    assert api.get("/api/topology/reachability?list=maybe").status_code == 400
 
 
 # ── Catalyst inventory hosts: configuration backups ──────────────────────────
