@@ -301,12 +301,17 @@ CREATE TABLE IF NOT EXISTS auth_settings (
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- parent_id: NULL for a top-level group. Its foreign key, its index and the
+-- unique index on (COALESCE(parent_id, 0), name) (names unique among
+-- siblings) come from migration 0072, which runs on fresh databases too:
+-- SCHEMA runs before migrations, when an older database lacks the column.
 CREATE TABLE IF NOT EXISTS inventory_groups (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT    NOT NULL UNIQUE,
+    name        TEXT    NOT NULL,
     description TEXT    DEFAULT '',
     environment TEXT    DEFAULT NULL,
-    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    parent_id   INTEGER DEFAULT NULL
 );
 
 CREATE TABLE IF NOT EXISTS hosts (

@@ -29,8 +29,27 @@ export interface InventoryGroupFull {
   id: number;
   name: string;
   description?: string | null;
+  /** The parent group; null for a top-level group. */
+  parent_id?: number | null;
+  /** The names from the top group down, joined with " / ". */
+  path?: string | null;
+  /** 0 for a top-level group, 1 for its sub-groups, and so on. */
+  depth?: number | null;
+  /** The group's direct hosts (sub-groups' hosts are not counted). */
   host_count?: number | null;
   hosts?: InventoryHost[];
+}
+
+/** Joins the names of a group path (mirrors the backend's GROUP_PATH_SEPARATOR). */
+export const GROUP_PATH_SEPARATOR = ' / ';
+
+/**
+ * The text a group select or list shows for a group: its path from the top
+ * (`Meraki / 1000 - HQ`), or its name when the listing has no path. The
+ * `/api/inventory` listing is tree ordered, so paths read as a hierarchy.
+ */
+export function groupLabel(group: { name: string; path?: string | null }): string {
+  return group.path || group.name;
 }
 
 export interface SnmpProfileV3 {
@@ -190,7 +209,7 @@ export function useReorderInventoryGroups() {
 export function useCreateInventoryGroup() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { name: string; description?: string }) =>
+    mutationFn: (input: { name: string; description?: string; parent_id?: number | null }) =>
       apiRequest<{ id: number; name: string }>('/inventory', {
         method: 'POST',
         body: input,
@@ -206,14 +225,17 @@ export function useUpdateInventoryGroup() {
       id,
       name,
       description,
+      parent_id,
     }: {
       id: number;
       name: string;
       description?: string;
+      /** The new parent (null: top level); omitted leaves it unchanged. */
+      parent_id?: number | null;
     }) =>
       apiRequest(`/inventory/${id}`, {
         method: 'PUT',
-        body: { name, description },
+        body: { name, description, ...(parent_id !== undefined ? { parent_id } : {}) },
       }),
     onSuccess: () => invalidateInventory(qc),
   });
@@ -255,6 +277,74 @@ export function useAddHost() {
         },
       }),
     onSuccess: () => invalidateInventory(qc),
+  });
+}
+
+/**
+ * One host of a bulk add (the body of a single add), with its group: by id,
+ * by its path from the top (`['Meraki', 'HQ']`; each missing level is
+ * created), or by the name of a top-level group (created when missing). At
+ * most one; none uses the body's `group_id`.
+ */
+export interface BulkHostInput {
+  hostname: string;
+  ip_address: string;
+  device_type: string;
+  group_id?: number;
+  group_path?: string[];
+  group_name?: string;
+}
+
+/** Body of POST `/api/inventory/hosts/bulk`. */
+export interface BulkAddHostsRequest {
+  hosts: BulkHostInput[];
+  /** The group of hosts that name none. */
+  group_id?: number;
+}
+
+/** Response of POST `/api/inventory/hosts/bulk`. */
+export interface BulkAddHostsResult {
+  added: {
+    id: number;
+    hostname: string;
+    ip_address: string;
+    group_id: number;
+    /** The group's own name (the leaf). */
+    group_name: string;
+    /** The group's path from the top, joined with " / ". */
+    group_path: string;
+  }[];
+  /** IPs already in inventory: the host (and its group) that has the address. */
+  skipped: {
+    hostname: string;
+    ip_address: string;
+    reason: string;
+    host_id: number | null;
+    group_id: number | null;
+  }[];
+  errors: { hostname: string; ip_address: string; error: string }[];
+  /** Every group (each level of a path) the request created, parents first. */
+  groups_created: { id: number; name: string; parent_id: number | null; path: string }[];
+}
+
+/** The most hosts one bulk add takes (mirrors the backend's BULK_ADD_MAX_HOSTS). */
+export const BULK_ADD_MAX_HOSTS = 500;
+
+/** Add many hosts, each to the group its entry (or the body) names. */
+export function useBulkAddHosts() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: BulkAddHostsRequest) =>
+      apiRequest<BulkAddHostsResult>('/inventory/hosts/bulk', {
+        method: 'POST',
+        body,
+      }),
+    onSuccess: () => {
+      // Hosts and possibly new groups (both group lists).
+      invalidateInventory(qc);
+      // Added hosts become inventory nodes on the map.
+      qc.invalidateQueries({ queryKey: ['topology'] });
+    },
   });
 }
 

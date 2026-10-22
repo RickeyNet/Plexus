@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 
+import { groupLabel } from '@/api/inventory';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { ExportMenu } from '@/components/ExportMenu';
 import { useInventoryGroups } from '@/api/compliance';
@@ -70,7 +71,7 @@ export function GenerateReportTab() {
           <select className="form-select" value={groupId} onChange={(e) => setGroupId(e.target.value)}>
             <option value="">All Groups</option>
             {(groupsQuery.data ?? []).map((g) => (
-              <option key={g.id} value={g.id}>{g.name}</option>
+              <option key={g.id} value={g.id}>{groupLabel(g)}</option>
             ))}
           </select>
         </div>

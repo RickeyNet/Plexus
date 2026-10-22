@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { groupLabel } from '@/api/inventory';
 import { useAuthStatus } from '@/api/auth';
 import { useCredentials, useInventoryGroups } from '@/api/compliance';
 import {
@@ -172,7 +173,7 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
             >
               {(groups.data || []).map((g) => (
                 <option key={g.id} value={g.id}>
-                  {g.name}
+                  {groupLabel(g)}
                 </option>
               ))}
             </select>

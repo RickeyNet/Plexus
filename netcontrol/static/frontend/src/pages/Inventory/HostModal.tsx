@@ -7,25 +7,11 @@ import {
   type InventoryHost,
   useAddHost,
   useUpdateHost,
+  groupLabel,
 } from '@/api/inventory';
+import { DEFAULT_DEVICE_TYPE, DEVICE_TYPES } from '@/lib/deviceTypes';
 
 import { isAwsInstanceId } from './helpers';
-
-const DEVICE_TYPES = [
-  { value: 'cisco_ios', label: 'Cisco IOS' },
-  { value: 'cisco_xe', label: 'Cisco IOS-XE' },
-  { value: 'cisco_nxos', label: 'Cisco NX-OS' },
-  { value: 'cisco_xr', label: 'Cisco IOS-XR' },
-  { value: 'cisco_asa', label: 'Cisco ASA' },
-  { value: 'cisco_ftd', label: 'Cisco FTD / Firepower' },
-  { value: 'arista_eos', label: 'Arista EOS' },
-  { value: 'juniper_junos', label: 'Juniper Junos' },
-  { value: 'fortinet', label: 'Fortinet FortiOS' },
-  { value: 'paloalto_panos', label: 'Palo Alto PAN-OS' },
-  { value: 'aruba_aoscx', label: 'Aruba AOS-CX' },
-  { value: 'aruba_osswitch', label: 'Aruba AOS-Switch / HP ProCurve' },
-  { value: 'icmp_only', label: 'ICMP-only (ping liveness, no SNMP/SSH)' },
-];
 
 interface Props {
   /** When set, edit mode. When null, create mode (groupId required). */
@@ -44,7 +30,7 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
   const [hostname, setHostname] = useState(host?.hostname ?? '');
   const [ipAddress, setIpAddress] = useState(host?.ip_address ?? '');
   const [deviceType, setDeviceType] = useState(
-    host?.device_type ?? 'cisco_ios',
+    host?.device_type ?? DEFAULT_DEVICE_TYPE,
   );
   const [selectedGroupId, setSelectedGroupId] = useState<number>(
     host?.group_id ?? groupId ?? groups[0]?.id ?? 0,
@@ -123,7 +109,7 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
           <label className="form-label">Device Type</label>
           <select
             className="form-select"
-            value={deviceType ?? 'cisco_ios'}
+            value={deviceType ?? DEFAULT_DEVICE_TYPE}
             onChange={(e) => setDeviceType(e.target.value)}
           >
             {DEVICE_TYPES.map((t) => (
@@ -161,7 +147,7 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
             >
               {groups.map((g) => (
                 <option key={g.id} value={g.id}>
-                  {g.name}
+                  {groupLabel(g)}
                 </option>
               ))}
             </select>

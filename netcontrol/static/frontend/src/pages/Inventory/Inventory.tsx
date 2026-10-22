@@ -6,6 +6,7 @@ import { useDialogs } from '@/components/DialogProvider-context';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
 
 import {
+  groupLabel,
   type InventoryGroupFull,
   type InventoryHost,
   inventoryCsvExportUrl,
@@ -26,7 +27,9 @@ import { HostModal } from './HostModal';
 import { SerialModal, type SerialTarget } from './SerialModal';
 import { SnmpProfilesModal } from './SnmpProfilesModal';
 import {
+  applyGroupOrder,
   filterGroups,
+  hiddenByCollapsedAncestor,
   hostMatchesQuery,
   loadCollapsedSet,
   loadCompactMode,
@@ -39,7 +42,7 @@ import {
 
 type ModalState =
   | { kind: 'none' }
-  | { kind: 'create-group' }
+  | { kind: 'create-group'; parentId: number | null }
   | { kind: 'edit-group'; group: InventoryGroupFull }
   | { kind: 'add-host'; groupId: number }
   | {
@@ -83,20 +86,28 @@ export function Inventory() {
   useEffect(() => saveCompactMode(compact), [compact]);
   useEffect(() => saveCollapsedSet(collapsed), [collapsed]);
 
-  // Apply user drag order before filter/sort.
-  const orderedGroups = useMemo(() => {
-    if (!orderOverride) return groups;
-    const byId = new Map(groups.map((g) => [g.id, g]));
-    const ordered = orderOverride.map((id) => byId.get(id)).filter(Boolean) as InventoryGroupFull[];
-    const seen = new Set(orderOverride);
-    const tail = groups.filter((g) => !seen.has(g.id));
-    return [...ordered, ...tail];
-  }, [groups, orderOverride]);
+  // Apply user drag order before filter/sort. The order applies among
+  // siblings; the listing stays a tree (sub-groups under their parent).
+  const orderedGroups = useMemo(
+    () => (orderOverride ? applyGroupOrder(groups, orderOverride) : groups),
+    [groups, orderOverride],
+  );
 
   const filtered = useMemo(
     () => sortGroups(filterGroups(orderedGroups, query), sort),
     [orderedGroups, query, sort],
   );
+  // A collapsed group hides its sub-groups as well as its hosts.
+  const hiddenIds = useMemo(() => hiddenByCollapsedAncestor(filtered, collapsed), [filtered, collapsed]);
+  const visible = useMemo(() => filtered.filter((g) => !hiddenIds.has(g.id)), [filtered, hiddenIds]);
+  const parentOf = useMemo(() => new Map(groups.map((g) => [g.id, g.parent_id ?? null])), [groups]);
+  const subGroupCounts = useMemo(() => {
+    const counts = new Map<number, number>();
+    for (const g of filtered) {
+      if (g.parent_id != null) counts.set(g.parent_id, (counts.get(g.parent_id) ?? 0) + 1);
+    }
+    return counts;
+  }, [filtered]);
 
   const isCustomOrder = sort === 'custom' && !query.trim();
 
@@ -126,16 +137,20 @@ export function Inventory() {
   const onDragStart = (id: number) => {
     dragIdRef.current = id;
   };
+  // Groups reorder among their siblings only; a move to another parent is
+  // made in the group's Edit dialog.
+  const areSiblings = (a: number, b: number) => parentOf.get(a) === parentOf.get(b);
   const onDragOver = (e: React.DragEvent, overId: number) => {
     if (!isCustomOrder) return;
     if (dragIdRef.current == null || dragIdRef.current === overId) return;
+    if (!areSiblings(dragIdRef.current, overId)) return;
     e.preventDefault();
   };
   const onDrop = (overId: number) => {
     if (!isCustomOrder) return;
     const dragId = dragIdRef.current;
     dragIdRef.current = null;
-    if (dragId == null || dragId === overId) return;
+    if (dragId == null || dragId === overId || !areSiblings(dragId, overId)) return;
     const current = orderOverride ?? orderedGroups.map((g) => g.id);
     const without = current.filter((id) => id !== dragId);
     const overIdx = without.indexOf(overId);
@@ -158,7 +173,7 @@ export function Inventory() {
   const handleDeleteGroup = async (g: InventoryGroupFull) => {
     if (
       !(await confirm(
-        `Delete group "${g.name}"? This will remove the group and all its hosts. This cannot be undone.`,
+        `Delete group "${groupLabel(g)}"? This will remove the group and all its hosts. This cannot be undone.`,
       ))
     )
       return;
@@ -243,7 +258,7 @@ export function Inventory() {
           <button
             type="button"
             className="btn btn-sm btn-primary"
-            onClick={() => setModal({ kind: 'create-group' })}
+            onClick={() => setModal({ kind: 'create-group', parentId: null })}
           >
             + New Group
           </button>
@@ -319,10 +334,11 @@ export function Inventory() {
         </div>
       )}
 
-      {filtered.map((group) => (
+      {visible.map((group) => (
         <GroupCard
           key={group.id}
           group={group}
+          subGroupCount={subGroupCounts.get(group.id) ?? 0}
           query={query}
           compact={compact}
           collapsed={collapsed.has(group.id)}
@@ -353,6 +369,7 @@ export function Inventory() {
             })
           }
           onEditGroup={() => setModal({ kind: 'edit-group', group })}
+          onAddSubGroup={() => setModal({ kind: 'create-group', parentId: group.id })}
           onDeleteGroup={() => handleDeleteGroup(group)}
           onSyncDiscovery={() =>
             setModal({ kind: 'discovery', mode: 'sync', group })
@@ -360,7 +377,7 @@ export function Inventory() {
           onBulkSerial={() =>
             setModal({
               kind: 'serial',
-              target: { mode: 'bulk', groupId: group.id, groupName: group.name },
+              target: { mode: 'bulk', groupId: group.id, groupName: groupLabel(group) },
             })
           }
           onAddHost={() => setModal({ kind: 'add-host', groupId: group.id })}
@@ -391,10 +408,10 @@ export function Inventory() {
       ))}
 
       {modal.kind === 'create-group' && (
-        <GroupModal group={null} isCreate onClose={closeModal} />
+        <GroupModal group={null} isCreate groups={groups} defaultParentId={modal.parentId} onClose={closeModal} />
       )}
       {modal.kind === 'edit-group' && (
-        <GroupModal group={modal.group} isCreate={false} onClose={closeModal} />
+        <GroupModal group={modal.group} isCreate={false} groups={groups} onClose={closeModal} />
       )}
       {modal.kind === 'add-host' && (
         <HostModal
@@ -447,6 +464,8 @@ export function Inventory() {
 
 interface GroupCardProps {
   group: InventoryGroupFull;
+  /** Sub-groups shown under this group (hidden with it when collapsed). */
+  subGroupCount: number;
   query: string;
   compact: boolean;
   collapsed: boolean;
@@ -461,6 +480,7 @@ interface GroupCardProps {
   onDrop: () => void;
   onSelectionChange: (next: Set<number>) => void;
   onEditGroup: () => void;
+  onAddSubGroup: () => void;
   onDeleteGroup: () => void;
   onSyncDiscovery: () => void;
   onBulkSerial: () => void;
@@ -472,8 +492,12 @@ interface GroupCardProps {
   onBulkDelete: () => void;
 }
 
+/** How far each level of sub-groups is indented. */
+const GROUP_INDENT_REM = 1.5;
+
 function GroupCard({
   group,
+  subGroupCount,
   query,
   compact,
   collapsed,
@@ -488,6 +512,7 @@ function GroupCard({
   onDrop,
   onSelectionChange,
   onEditGroup,
+  onAddSubGroup,
   onDeleteGroup,
   onSyncDiscovery,
   onBulkSerial,
@@ -545,6 +570,7 @@ function GroupCard({
       }}
       style={{
         marginBottom: '0.75rem',
+        marginLeft: `${(group.depth ?? 0) * GROUP_INDENT_REM}rem`,
         padding: compact ? '0.5rem 0.75rem' : '0.75rem 1rem',
         opacity: collapsed ? 0.95 : 1,
       }}
@@ -583,10 +609,13 @@ function GroupCard({
             {collapsed ? '▶' : '▼'}
           </span>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontWeight: 600 }}>
+            <div style={{ fontWeight: 600 }} title={groupLabel(group)}>
               {group.name}{' '}
               <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>
-                ({hosts.length})
+                ({hosts.length}
+                {subGroupCount > 0 &&
+                  `, ${subGroupCount} sub-group${subGroupCount === 1 ? '' : 's'}`}
+                )
               </span>
             </div>
             {group.description && (
@@ -638,9 +667,10 @@ function GroupCard({
           >
             Sync
           </button>
-          <KebabMenu label={`Actions for ${group.name}`}>
+          <KebabMenu label={`Actions for ${groupLabel(group)}`}>
             <MenuItem onSelect={onBulkSerial}>Fetch Serials</MenuItem>
             <MenuItem onSelect={onEditGroup}>Edit</MenuItem>
+            <MenuItem onSelect={onAddSubGroup}>New Sub-group</MenuItem>
             <MenuSeparator />
             <MenuItem danger onSelect={onDeleteGroup}>
               Delete

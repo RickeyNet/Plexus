@@ -31,42 +31,127 @@ export function isAwsInstanceId(value: string): boolean {
   return AWS_INSTANCE_ID_RE.test(value);
 }
 
+/**
+ * Groups that match the query (name, path, description or a host), plus the
+ * ancestors of each match so a matching sub-group still shows under its
+ * parent.
+ */
 export function filterGroups(
   groups: InventoryGroupFull[],
   query: string,
 ): InventoryGroupFull[] {
   const q = query.trim().toLowerCase();
   if (!q) return groups;
-  return groups.filter((group) => {
-    if (
-      lower(group.name).includes(q) ||
-      lower(group.description).includes(q)
-    ) {
-      return true;
+  const matches = (group: InventoryGroupFull) =>
+    lower(group.name).includes(q) ||
+    lower(group.path).includes(q) ||
+    lower(group.description).includes(q) ||
+    (group.hosts || []).some((host) => hostMatchesQuery(host, q));
+  const parentOf = new Map(groups.map((g) => [g.id, g.parent_id ?? null]));
+  const keep = new Set<number>();
+  for (const group of groups) {
+    if (!matches(group)) continue;
+    for (let id: number | null = group.id; id != null && !keep.has(id); id = parentOf.get(id) ?? null) {
+      keep.add(id);
     }
-    return (group.hosts || []).some((host) => hostMatchesQuery(host, q));
-  });
+  }
+  return groups.filter((g) => keep.has(g.id));
 }
 
+/**
+ * The groups in tree order (each parent followed by its sub-groups), with
+ * the sub-groups of each parent sorted by `compare` (stable: ties keep the
+ * input order). A group whose parent is not in the list is placed at the
+ * top level.
+ */
+export function treeSort(
+  groups: InventoryGroupFull[],
+  compare: (a: InventoryGroupFull, b: InventoryGroupFull) => number = () => 0,
+): InventoryGroupFull[] {
+  const ids = new Set(groups.map((g) => g.id));
+  const children = new Map<number | null, InventoryGroupFull[]>();
+  for (const g of groups) {
+    const parent = g.parent_id != null && ids.has(g.parent_id) ? g.parent_id : null;
+    const list = children.get(parent) ?? [];
+    list.push(g);
+    children.set(parent, list);
+  }
+  const out: InventoryGroupFull[] = [];
+  const seen = new Set<number>();
+  const walk = (parent: number | null) => {
+    for (const g of (children.get(parent) ?? []).slice().sort(compare)) {
+      if (seen.has(g.id)) continue;
+      seen.add(g.id);
+      out.push(g);
+      walk(g.id);
+    }
+  };
+  walk(null);
+  // Only a parent cycle leaves groups unvisited; list them rather than drop them.
+  return out.concat(groups.filter((g) => !seen.has(g.id)));
+}
+
+/** The groups in tree order, siblings by the user's saved order (`orderedIds`). */
+export function applyGroupOrder(groups: InventoryGroupFull[], orderedIds: number[]): InventoryGroupFull[] {
+  const position = new Map(orderedIds.map((id, i) => [id, i]));
+  const rank = (g: InventoryGroupFull) => position.get(g.id) ?? Number.MAX_SAFE_INTEGER;
+  return treeSort(groups, (a, b) => rank(a) - rank(b));
+}
+
+/** The ids of a group's sub-groups at any depth (not the group itself). */
+export function descendantIds(groups: InventoryGroupFull[], groupId: number): Set<number> {
+  const children = new Map<number, number[]>();
+  for (const g of groups) {
+    if (g.parent_id == null) continue;
+    children.set(g.parent_id, [...(children.get(g.parent_id) ?? []), g.id]);
+  }
+  const out = new Set<number>();
+  const stack = [...(children.get(groupId) ?? [])];
+  while (stack.length) {
+    const id = stack.pop() as number;
+    if (id === groupId || out.has(id)) continue;
+    out.add(id);
+    stack.push(...(children.get(id) ?? []));
+  }
+  return out;
+}
+
+/** Groups below a collapsed ancestor, which the page hides. */
+export function hiddenByCollapsedAncestor(groups: InventoryGroupFull[], collapsed: Set<number>): Set<number> {
+  const parentOf = new Map(groups.map((g) => [g.id, g.parent_id ?? null]));
+  const hidden = new Set<number>();
+  for (const g of groups) {
+    const seen = new Set<number>([g.id]);
+    for (let id = parentOf.get(g.id) ?? null; id != null && !seen.has(id); id = parentOf.get(id) ?? null) {
+      seen.add(id);
+      if (collapsed.has(id)) {
+        hidden.add(g.id);
+        break;
+      }
+    }
+  }
+  return hidden;
+}
+
+/** The groups sorted among siblings, keeping the tree (see `treeSort`). */
 export function sortGroups(
   groups: InventoryGroupFull[],
   sort: InventorySort,
 ): InventoryGroupFull[] {
-  const copy = groups.slice();
   const hostCount = (g: InventoryGroupFull) =>
     g.host_count ?? (g.hosts || []).length;
   switch (sort) {
     case 'name_asc':
-      return copy.sort((a, b) => a.name.localeCompare(b.name));
+      return treeSort(groups, (a, b) => a.name.localeCompare(b.name));
     case 'name_desc':
-      return copy.sort((a, b) => b.name.localeCompare(a.name));
+      return treeSort(groups, (a, b) => b.name.localeCompare(a.name));
     case 'hosts_asc':
-      return copy.sort((a, b) => hostCount(a) - hostCount(b));
+      return treeSort(groups, (a, b) => hostCount(a) - hostCount(b));
     case 'hosts_desc':
-      return copy.sort((a, b) => hostCount(b) - hostCount(a));
+      return treeSort(groups, (a, b) => hostCount(b) - hostCount(a));
     case 'custom':
     default:
-      return copy;
+      return treeSort(groups);
   }
 }
 

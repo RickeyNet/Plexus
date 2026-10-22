@@ -31,7 +31,9 @@ picks is a leg of the path.
 - **Subnets and addresses are traced.** Choose a subnet in **Add a subnet or
   IP address**, or type an IP address or a network and press Enter. The most
   specific collected subnet that holds it is used; when several sites have
-  it, pick the one you mean from the list. A typed address is kept as the
+  it, an **is at** list appears next to the box with those sites: pick the
+  one you mean (the suggestion list only matches the text typed, so it
+  cannot offer them). A typed address is kept as the
   end, so rules and security groups are matched against that address
   rather than the whole subnet. The private address of a virtual machine in
   an AWS VPC, an Azure VNet or a GCP network counts as a network of its own,
@@ -550,6 +552,7 @@ without regard to case.
 | Exclude | `exclude` | Drops networks whose name matches a term: `voice, guest, printer`. |
 | Sites | `sites` | Networks whose site name matches a term. |
 | Within | `within` | Networks inside one of these CIDRs: `10.0.0.0/8, 172.16.0.0/12`. |
+| Overlapping | `overlaps` | Networks that share any address with one of these CIDRs: inside one, equal to it, or wider than it. `10.64.0.0/16` keeps `10.64.10.0/24` and also a static route `10.0.0.0/8`, which Within leaves out. Use it to see what a new route would also catch. |
 | In VPN | `in_vpn` | `1`: networks the site advertises into the VPN; `0`: networks it does not. A network whose source does not say is kept only when this filter is not set. |
 
 Always left out: the destination's own network (any network that overlaps the
@@ -569,7 +572,7 @@ a few hundred answer within seconds, a few thousand within about a minute,
 Leave **Destination** empty and the sweep is a matrix: a second set of
 filters, the same as the source filters in the table above with their query
 parameters prefixed `to_` (`to_sources`, `to_providers`, `to_kinds`,
-`to_vlans`, `to_name`, `to_exclude`, `to_sites`, `to_within`, `to_in_vpn`),
+`to_vlans`, `to_name`, `to_exclude`, `to_sites`, `to_within`, `to_overlaps`, `to_in_vpn`),
 picks the destination networks from the same collected subnets, and every
 kept source network is traced to every kept destination network. For
 example, every AWS, Azure and GCP subnet and every Cato site range
@@ -670,6 +673,50 @@ download of [many destinations](#many-destinations) is named
 `reachability-from-<source>-to-<destination or matrix>-<traffic>`, and a
 [list](#list-only) `networks-<count>`.
 
+## Summarize addresses
+
+The **Summarize** tab of the Topology page (`/topology/summarize`) finds the
+fewest routes that cover a list of addresses, and checks each route against
+the networks collected from every source. For example, the hosts of Meraki
+networks that an Azure route table must reach: a handful of aggregate routes
+is easier to keep than one per host, as long as no aggregate also catches a
+network that lives somewhere else.
+
+Paste the **Addresses** (IP addresses or networks, one per line or separated
+by commas, semicolons or spaces; at most 5,000; an address is a /32 or /128;
+repeats are counted once), and press **Summarize**:
+
+- With nothing else set, the addresses are collapsed exactly: neighbours that
+  fill a larger network are joined (`10.1.2.0/24` and `10.1.3.0/24` make
+  `10.1.2.0/23`) and nothing more is added.
+- **Roll up to /** widens every address to that prefix length first (`24`:
+  each address becomes its /24), then collapses them. A network already
+  shorter than that stays as it is. IPv4 takes 0 to 32, IPv6 0 to 128.
+- **At most N routes** then merges routes until no more than N of each IP
+  version are left (a route never mixes IPv4 and IPv6). Each step merges the
+  two neighbouring routes, in address order, whose smallest common network
+  has the longest prefix, which adds the fewest addresses; a tie goes to the
+  lower pair. The merged network replaces both and swallows any other route
+  inside it. The result is the same every time for the same input.
+
+**Check overlaps against** is the [source network filters](#source-networks-and-filters)
+of the Reachability sweep, which pick the collected networks each route is
+checked against (default kinds as in the sweep). **Not Meraki** ticks every
+provider but Meraki and every kind of network, the usual check before adding
+routes to reach Meraki hosts: any overlap it finds is a network of another
+source (Cato, FMC, Panorama, Appgate, AWS, Azure, GCP or an inventory device)
+the route would also send traffic for.
+
+The results start with *N routes cover M addresses (U unique)* and a box with
+the routes, one per line, and a **Copy** button. The table lists each
+**Route**, what it **Covers** (the inputs it covers; hover for the list),
+its **Addresses** (the route's size, and the addresses the inputs hold) and
+its **Overlaps**: each collected network the route shares an address with,
+as *provider · site · name (CIDR)* and how it lies against the route:
+**inside the route**, **equal** to it, or **contains the route** (a wider
+network, such as a `10.0.0.0/8` static route). *none* means no collected
+network the filters keep overlaps it.
+
 ## Limits
 
 - Only IPv4 addresses and networks can be typed in Path Mode.
@@ -703,5 +750,6 @@ download of [many destinations](#many-destinations) is named
 | Method | Path | Notes |
 |---|---|---|
 | `GET` | `/api/topology/path` | Traces a flow hop by hop. `source`, `destination`: an IP address or network, 1 to 64 characters. Optional `source_node`, `destination_node`: the map node ids of the devices that own the ends. Optional `protocol`: `tcp`, `udp`, `icmp`, `any` or empty for any traffic. Optional `port`: 0 to 65535. Returns `applies`, `traffic`, `source`, `destination`, `verdict` (`allowed`, `blocked`, `partial`, `unknown`), `summary`, `ports`, `asymmetric` (`status` `no`, `yes` or `unknown`, and `text`), `request` and `reply` (each `verdict`, `summary`, `ports` and `hops`) and `notes`. Each hop has `node`, `edge`, `label`, `site`, `provider`, `in`, `out`, `status` and `items`; each item `stage`, `status`, `where`, `text`, `rule` and, on the item that states a rule set's decision, `ports`. A `ports` value is `{"allowed": {"tcp": "80, 443", "icmp": "any"}, "partial": {"tcp": "8000-8080"}, "unknown": {}, "text": "allowed tcp 80, 443 · icmp; in part tcp 8000-8080"}`, with only the protocols asked about and only those that have ports in each list, or `null` for a direction that was not traced and for a trace that does not apply. A bad parameter returns HTTP 400 |
-| `GET` | `/api/topology/reachability` | The [reachability sweep](#reachability-sweep): traces one flow to `destination` (an IP address or network, optional) from every source network the filters keep. Optional `destination_node` (map node id of the device that owns the destination) or `destination_org_ref` + `destination_node_id` (the source and snapshot node of a picked subnet; `-4` and the host id for an inventory device); `protocol` and `port` as for `/api/topology/path`; filters `sources`, `providers`, `kinds`, `vlans`, `name`, `exclude`, `sites`, `within`, `in_vpn`; `format` `json` (default), `csv` or `xlsx`, with optional `verdict` for a download of one verdict's rows. With `destination` empty the sweep is a [matrix](#many-destinations): the destination filters `to_sources`, `to_providers`, `to_kinds`, `to_vlans`, `to_name`, `to_exclude`, `to_sites`, `to_within`, `to_in_vpn` pick the destination networks and every source network is traced to every destination network; `to_*` with a `destination`, or `destination_node` / `destination_org_ref` / `destination_node_id` without one, returns HTTP 400. Optional `source` (an IP address or network, up to 64 characters) traces [one source](#one-source) in place of the filtered source networks, to `destination` or to every `to_*` destination network it does not overlap, with optional `source_node` or `source_org_ref` + `source_node_id` for its owner; `source` with any source filter, `source_node` / `source_org_ref` / `source_node_id` without `source`, or a `source` that is not an IP address or network returns HTTP 400. Optional `list=1` [lists](#list-only) the networks the source filters keep without tracing them: `source`, its owner, the `to_*` filters, `protocol`, `port`, `verdict` and the limit are ignored; JSON returns `mode` `list`, `destination` and `source` `null`, `traffic` `""`, `to_filters` `null`, `source_count` and `candidates` the networks listed, `destination_count` 0, `counts` all 0 and `rows` with the network fields only (`org_ref` to `in_vpn` below); CSV and xlsx have the columns Source to In VPN, the xlsx one **Networks** tab, the CSV no summary, named `networks-<count>`. JSON returns `mode` (`one`, `matrix` or `list`), `source` (`address`, `node`, `label`, `site` of a typed source; `null` otherwise), `destination` (`address`, `node`, `label`, `site`; `null` in a matrix), `traffic`, `generated_at`, `filters` (the effective filters, with the default kinds), `to_filters` (the effective destination filters, `null` with one destination), `source_count`, `destination_count` (1 with one destination), `candidates` (the traces run), `limit`, `counts` (per verdict) and `rows`, each with `org_ref`, `org_name`, `provider`, `site_id`, `site_name`, `node_id`, `source_node`, `node_label`, `kind`, `vlan`, `cidr`, `name`, `in_vpn`, `dst_cidr`, `dst_name`, `dst_site_name`, `dst_org_ref`, `dst_org_name`, `dst_provider`, `dst_node_id`, `dst_node_label`, `dst_kind`, `dst_vlan`, `dst_in_vpn`, `destination_node`, `verdict`, `summary`, `traffic`, `decided_at`, `decided_by` and `ports`, sorted by site, then VLAN, then network, then the same for the destination. With one destination, `dst_cidr` is `destination` and `dst_node_label` / `dst_site_name` come from the trace's destination end; the other `dst_*` are empty. The row of a typed source has `cidr` the source as typed, `site_name`, `source_node` and `node_label` from the trace's source end, `org_ref`, `vlan` and `in_vpn` `null` and the other source fields empty; `source_count` is 1. CSV and xlsx are attachments with the columns listed in [Downloads](#downloads). A bad parameter returns HTTP 400; more than 20,000 traces (matching networks, or source→destination pairs in a matrix) returns HTTP 400 with `count` and `limit` |
+| `POST` | `/api/topology/summarize` | [Summarize addresses](#summarize-addresses). JSON body: `addresses` (required, up to 200,000 characters: IP addresses and networks split on newlines, commas, semicolons and spaces; at most 5,000 entries), `prefix` (optional roll-up prefix length; IPv4 0 to 32, IPv6 0 to 128), `max_routes` (optional, at least 1, per IP version) and the source filters of the reachability sweep as strings (`sources`, `providers`, `kinds`, `vlans`, `name`, `exclude`, `sites`, `within`, `overlaps`, `in_vpn`), which pick the collected networks each route is checked against. Returns `generated_at`, `input_count`, `unique_count`, `prefix`, `max_routes`, `filters` (the effective filters), `route_count`, `routes` (each with `cidr`, `version`, `prefixlen`, `addresses`, `inputs` (the distinct inputs it covers, sorted), `input_count`, `input_addresses` (the addresses the inputs hold) and `overlaps`: the collected networks it overlaps, with the network fields of a [listed](#list-only) row and `relation` `equal`, `inside`, `contains` or `overlaps`), `text` (the routes, one per line) and `uncovered` (always empty: every input is covered). A bad address, prefix, `max_routes` or filter, or more than 5,000 entries, returns HTTP 400 |
+| `GET` | `/api/topology/reachability` | The [reachability sweep](#reachability-sweep): traces one flow to `destination` (an IP address or network, optional) from every source network the filters keep. Optional `destination_node` (map node id of the device that owns the destination) or `destination_org_ref` + `destination_node_id` (the source and snapshot node of a picked subnet; `-4` and the host id for an inventory device); `protocol` and `port` as for `/api/topology/path`; filters `sources`, `providers`, `kinds`, `vlans`, `name`, `exclude`, `sites`, `within`, `overlaps`, `in_vpn`; `format` `json` (default), `csv` or `xlsx`, with optional `verdict` for a download of one verdict's rows. With `destination` empty the sweep is a [matrix](#many-destinations): the destination filters `to_sources`, `to_providers`, `to_kinds`, `to_vlans`, `to_name`, `to_exclude`, `to_sites`, `to_within`, `to_overlaps`, `to_in_vpn` pick the destination networks and every source network is traced to every destination network; `to_*` with a `destination`, or `destination_node` / `destination_org_ref` / `destination_node_id` without one, returns HTTP 400. Optional `source` (an IP address or network, up to 64 characters) traces [one source](#one-source) in place of the filtered source networks, to `destination` or to every `to_*` destination network it does not overlap, with optional `source_node` or `source_org_ref` + `source_node_id` for its owner; `source` with any source filter, `source_node` / `source_org_ref` / `source_node_id` without `source`, or a `source` that is not an IP address or network returns HTTP 400. Optional `list=1` [lists](#list-only) the networks the source filters keep without tracing them: `source`, its owner, the `to_*` filters, `protocol`, `port`, `verdict` and the limit are ignored; JSON returns `mode` `list`, `destination` and `source` `null`, `traffic` `""`, `to_filters` `null`, `source_count` and `candidates` the networks listed, `destination_count` 0, `counts` all 0 and `rows` with the network fields only (`org_ref` to `in_vpn` below); CSV and xlsx have the columns Source to In VPN, the xlsx one **Networks** tab, the CSV no summary, named `networks-<count>`. JSON returns `mode` (`one`, `matrix` or `list`), `source` (`address`, `node`, `label`, `site` of a typed source; `null` otherwise), `destination` (`address`, `node`, `label`, `site`; `null` in a matrix), `traffic`, `generated_at`, `filters` (the effective filters, with the default kinds), `to_filters` (the effective destination filters, `null` with one destination), `source_count`, `destination_count` (1 with one destination), `candidates` (the traces run), `limit`, `counts` (per verdict) and `rows`, each with `org_ref`, `org_name`, `provider`, `site_id`, `site_name`, `node_id`, `source_node`, `node_label`, `kind`, `vlan`, `cidr`, `name`, `in_vpn`, `dst_cidr`, `dst_name`, `dst_site_name`, `dst_org_ref`, `dst_org_name`, `dst_provider`, `dst_node_id`, `dst_node_label`, `dst_kind`, `dst_vlan`, `dst_in_vpn`, `destination_node`, `verdict`, `summary`, `traffic`, `decided_at`, `decided_by` and `ports`, sorted by site, then VLAN, then network, then the same for the destination. With one destination, `dst_cidr` is `destination` and `dst_node_label` / `dst_site_name` come from the trace's destination end; the other `dst_*` are empty. The row of a typed source has `cidr` the source as typed, `site_name`, `source_node` and `node_label` from the trace's source end, `org_ref`, `vlan` and `in_vpn` `null` and the other source fields empty; `source_count` is 1. CSV and xlsx are attachments with the columns listed in [Downloads](#downloads). A bad parameter returns HTTP 400; more than 20,000 traces (matching networks, or source→destination pairs in a matrix) returns HTTP 400 with `count` and `limit` |
 | `GET` | `/api/topology/export.html` | The self-contained HTML map. Optional `group_id`, `download=1`, `path` (the Path Mode state: JSON with `traffic` and `picks`, whose legs are traced and embedded) and `engine` (default on; `engine=0` leaves out the path tracer) |

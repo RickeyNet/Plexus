@@ -480,6 +480,8 @@ export interface ReachabilityQuery {
   sites?: string;
   /** CIDRs the source network must be inside. */
   within?: string;
+  /** CIDRs the source network must overlap (inside, equal or wider). */
+  overlaps?: string;
   /** `1` advertised into the VPN, `0` not; empty for either. */
   in_vpn?: string;
   /** Matrix mode: the destination networks, with the same syntax as the source filters. */
@@ -491,6 +493,7 @@ export interface ReachabilityQuery {
   to_exclude?: string;
   to_sites?: string;
   to_within?: string;
+  to_overlaps?: string;
   to_in_vpn?: string;
   /** File downloads only: keep the rows of this verdict. */
   verdict?: PathVerdict;
@@ -619,6 +622,74 @@ export function useReachability(query: ReachabilityQuery | null) {
     staleTime: 60_000,
     // A refused sweep (too many networks, a bad filter) will not pass on a retry.
     retry: false,
+  });
+}
+
+/**
+ * An address summary (`POST /api/topology/summarize`): the fewest routes that
+ * cover `addresses`, each checked against the collected networks the source
+ * filters keep (the sweep's filters, same syntax).
+ */
+export interface SummarizeRequest {
+  /** IP addresses and networks, one per line or comma-, semicolon- or space-separated. */
+  addresses: string;
+  /** Roll every address up to this prefix length first; null: exact. */
+  prefix: number | null;
+  /** At most this many routes of each IP version; null: no limit. */
+  max_routes: number | null;
+  sources?: string;
+  providers?: string;
+  kinds?: string;
+  vlans?: string;
+  name?: string;
+  exclude?: string;
+  sites?: string;
+  within?: string;
+  overlaps?: string;
+  in_vpn?: string;
+}
+
+/** How a collected network that overlaps a route lies against it. */
+export type SummarizeRelation = 'equal' | 'inside' | 'contains' | 'overlaps';
+
+/** A collected network a route overlaps: its network fields and its relation to the route. */
+export interface SummarizeOverlap extends NetworkRow {
+  relation: SummarizeRelation;
+}
+
+export interface SummarizeRoute {
+  cidr: string;
+  version: 4 | 6;
+  prefixlen: number;
+  /** The size of the route. */
+  addresses: number;
+  /** The distinct inputs the route covers, sorted. */
+  inputs: string[];
+  input_count: number;
+  /** The addresses the inputs hold. */
+  input_addresses: number;
+  overlaps: SummarizeOverlap[];
+}
+
+export interface SummarizeReport {
+  generated_at: string;
+  input_count: number;
+  unique_count: number;
+  prefix: number | null;
+  max_routes: number | null;
+  filters: Record<string, unknown>;
+  route_count: number;
+  routes: SummarizeRoute[];
+  /** The routes, one per line, ready to copy. */
+  text: string;
+  /** Inputs no route covers: always empty, every input is covered. */
+  uncovered: string[];
+}
+
+export function useSummarize() {
+  return useMutation({
+    mutationFn: (body: SummarizeRequest) =>
+      apiRequest<SummarizeReport>('/topology/summarize', { method: 'POST', body }),
   });
 }
 

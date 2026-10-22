@@ -83,6 +83,7 @@ class Filters:
     exclude: Terms = field(default_factory=Terms)
     sites: Terms = field(default_factory=Terms)
     within: tuple[Network, ...] = ()
+    overlaps: tuple[Network, ...] = ()
     in_vpn: bool | None = None
 
     def to_json(self) -> dict[str, Any]:
@@ -96,6 +97,7 @@ class Filters:
             "exclude": list(self.exclude.raw),
             "sites": list(self.sites.raw),
             "within": [str(n) for n in self.within],
+            "overlaps": [str(n) for n in self.overlaps],
             "in_vpn": self.in_vpn,
         }
 
@@ -127,6 +129,18 @@ def _terms(text: str | None, what: str) -> Terms:
         else:
             patterns.append(re.compile(re.escape(term), re.IGNORECASE))
     return Terms(tuple(raw), tuple(patterns))
+
+
+def _networks(text: str | None, what: str) -> tuple[Network, ...]:
+    """The comma-separated IP networks of ``text``; ``ValueError`` names
+    ``what`` and the first part that is not one."""
+    networks: list[Network] = []
+    for part in _parts(text):
+        found = net(part)
+        if found is None:
+            raise ValueError(f"{what}: {part!r} is not an IP network")
+        networks.append(found)
+    return tuple(networks)
 
 
 def _vlans(text: str | None) -> tuple[tuple[int, int], ...]:
@@ -165,6 +179,7 @@ def parse_filters(
     exclude: str | None = None,
     sites: str | None = None,
     within: str | None = None,
+    overlaps: str | None = None,
     in_vpn: str | None = None,
 ) -> Filters:
     """The ``Filters`` of the sweep's query string; ``ValueError`` names the
@@ -181,12 +196,6 @@ def parse_filters(
     unknown_kinds = sorted(wanted_kinds - set(KINDS))
     if unknown_kinds:
         raise ValueError(f"kinds: {', '.join(unknown_kinds)} is not one of {', '.join(KINDS)}")
-    networks: list[Network] = []
-    for part in _parts(within):
-        found = net(part)
-        if found is None:
-            raise ValueError(f"within: {part!r} is not an IP network")
-        networks.append(found)
     return Filters(
         sources=frozenset(refs),
         providers=frozenset(p.lower() for p in _parts(providers)),
@@ -195,7 +204,8 @@ def parse_filters(
         name=_terms(name, "name"),
         exclude=_terms(exclude, "exclude"),
         sites=_terms(sites, "sites"),
-        within=tuple(networks),
+        within=_networks(within, "within"),
+        overlaps=_networks(overlaps, "overlaps"),
         in_vpn=parse_flag(in_vpn, "in_vpn"),
     )
 
@@ -213,6 +223,12 @@ def vlan_of(row: dict[str, Any]) -> int | None:
 
 def _inside(network: Network, outer: tuple[Network, ...]) -> bool:
     return any(o.version == network.version and network.subnet_of(o) for o in outer)  # type: ignore[arg-type]
+
+
+def overlapping(network: Network, others: Iterable[Network]) -> bool:
+    """Whether ``network`` shares any address with one of ``others`` (of
+    its IP version): inside one, containing one, or partly over one."""
+    return any(o.version == network.version and network.overlaps(o) for o in others)
 
 
 def address_of(text: str) -> Network:
@@ -269,6 +285,8 @@ def select_rows(rows: list[dict[str, Any]], filters: Filters, destination: str |
         if filters.sites and not filters.sites.match(str(row.get("site_name") or "")):
             continue
         if filters.within and not _inside(network, filters.within):
+            continue
+        if filters.overlaps and not overlapping(network, filters.overlaps):
             continue
         if filters.in_vpn is not None and row.get("in_vpn") is not filters.in_vpn:
             continue

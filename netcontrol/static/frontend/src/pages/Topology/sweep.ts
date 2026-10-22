@@ -89,6 +89,8 @@ export interface SweepFilters {
   exclude: string;
   sites: string;
   within: string;
+  /** Networks that overlap one of these ranges, wider ones included. */
+  overlaps: string;
   /** '' either, '1' advertised into the VPN, '0' not. */
   inVpn: '' | '1' | '0';
 }
@@ -120,6 +122,7 @@ export function emptyFilters(): SweepFilters {
     exclude: '',
     sites: '',
     within: '',
+    overlaps: '',
     inVpn: '',
   };
 }
@@ -189,11 +192,22 @@ export function vlanTextError(text: string): string | null {
   return null;
 }
 
-const FILTER_KEYS = ['sources', 'providers', 'kinds', 'vlans', 'name', 'exclude', 'sites', 'within', 'in_vpn'] as const;
+const FILTER_KEYS = [
+  'sources',
+  'providers',
+  'kinds',
+  'vlans',
+  'name',
+  'exclude',
+  'sites',
+  'within',
+  'overlaps',
+  'in_vpn',
+] as const;
 type FilterKey = (typeof FILTER_KEYS)[number];
 
 /** Why a filter block cannot be sent, null when it can. */
-function filtersError(filters: SweepFilters): string | null {
+export function filtersError(filters: SweepFilters): string | null {
   const vlanError = vlanTextError(filters.vlans);
   if (vlanError) return vlanError;
   if (!filters.kinds.length) return 'Pick at least one kind of network.';
@@ -201,7 +215,7 @@ function filtersError(filters: SweepFilters): string | null {
 }
 
 /** The query params of a filter block; the default kinds are left out. */
-function filterParams(filters: SweepFilters): Record<FilterKey, string | undefined> {
+export function filterParams(filters: SweepFilters): Record<FilterKey, string | undefined> {
   return {
     sources: filters.sources.length ? filters.sources.join(',') : undefined,
     providers: filters.providers.length ? filters.providers.join(',') : undefined,
@@ -211,6 +225,7 @@ function filterParams(filters: SweepFilters): Record<FilterKey, string | undefin
     exclude: filters.exclude.trim() || undefined,
     sites: filters.sites.trim() || undefined,
     within: filters.within.trim() || undefined,
+    overlaps: filters.overlaps.trim() || undefined,
     in_vpn: filters.inVpn || undefined,
   };
 }
@@ -232,12 +247,13 @@ function filtersNarrow(filters: SweepFilters): boolean {
       filters.name.trim() ||
       filters.sites.trim() ||
       filters.within.trim() ||
+      filters.overlaps.trim() ||
       filters.vlans.trim(),
   );
 }
 
 export const MATRIX_NARROW_ERROR =
-  'Enter a source or a destination, or narrow the destination networks (a provider, source, site, name, VLAN or Within filter) to trace many destinations.';
+  'Enter a source or a destination, or narrow the destination networks (a provider, source, site, name, VLAN, Within or Overlapping filter) to trace many destinations.';
 
 /** Whether the form names one source, so the source filters are not used. */
 export function isTypedSource(form: Pick<ReachabilityForm, 'source'>): boolean {

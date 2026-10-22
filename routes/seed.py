@@ -1,7 +1,9 @@
 """
 seed.py - Populate the database with starter data for demo/development.
 
-Run once after init_db(). Idempotent - skips if data already exists.
+Run once after init_db(). Idempotent: it runs only on a database that has
+never been seeded (``database_is_fresh``), and records that it ran, so
+deleting the demo groups later does not bring them back on the next start.
 
 WARNING: Seed credentials are for local development only.  Never use in
 production environments.
@@ -11,6 +13,7 @@ import asyncio
 import os
 import secrets
 import sys
+from datetime import UTC, datetime
 
 # Ensure project root is on path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -21,30 +24,51 @@ from templates import playbooks as _pb_module  # noqa: F401 - triggers @register
 
 from routes.crypto import encrypt
 from routes.database import (
+    _is_unique_violation,
     add_host,
     create_compliance_profile,
     create_credential,
     create_group,
     create_playbook,
     create_template,
+    find_top_level_group,
+    get_all_playbooks,
+    get_auth_setting,
     get_db,
     init_db,
     seed_builtin_templates,
+    set_auth_setting,
 )
 from routes.runner import list_registered_playbooks
+
+# The auth setting that records a seed run, so a database whose demo groups
+# were deleted is not taken for a fresh one and seeded again.
+SEED_MARKER = "demo_seed"
+
+
+async def database_is_fresh() -> bool:
+    """Whether the database has never been seeded: no seed marker, no
+    inventory group and no playbook. The marker decides for a database this
+    version seeded; the groups and the playbooks (both created by every seed)
+    decide for one seeded before the marker existed."""
+    if await get_auth_setting(SEED_MARKER):
+        return False
+    db = await get_db()
+    try:
+        groups = (await (await db.execute("SELECT COUNT(*) FROM inventory_groups")).fetchone())[0]
+    finally:
+        await db.close()
+    if groups > 0:
+        return False
+    return not await get_all_playbooks()
 
 
 async def seed():
     await init_db()
 
-    db = await get_db()
-    try:
-        count = (await (await db.execute("SELECT COUNT(*) FROM inventory_groups")).fetchone())[0]
-        if count > 0:
-            print("[seed] Database already has data - skipping.")
-            return
-    finally:
-        await db.close()
+    if not await database_is_fresh():
+        print("[seed] Database already has data - skipping.")
+        return
 
     print("[seed] Populating database ...")
 
@@ -103,23 +127,13 @@ async def seed():
             gid = await create_group(group_name, desc)
         except Exception as e:
             # Seed can be entered concurrently in test/app startup paths.
-            # If the group already exists, re-use it instead of failing.
-            if "UNIQUE constraint" in str(e) or "UNIQUE" in str(e):
-                db2 = await get_db()
-                try:
-                    row = await (
-                        await db2.execute(
-                            "SELECT id FROM inventory_groups WHERE name = ?",
-                            (group_name,),
-                        )
-                    ).fetchone()
-                    if not row:
-                        raise
-                    gid = row[0]
-                finally:
-                    await db2.close()
-            else:
+            # If the (top-level) group already exists, re-use it instead of failing.
+            if not _is_unique_violation(e):
                 raise
+            existing = await find_top_level_group(group_name)
+            if not existing:
+                raise
+            gid = existing["id"]
 
         seeded_hosts = 0
         for hostname, ip in hosts:
@@ -147,7 +161,7 @@ async def seed():
             print(f"  + Playbook '{pb['name']}'")
         except Exception as e:
             # Playbook might already exist - sync the filename in case it changed
-            if "UNIQUE constraint" in str(e) or "UNIQUE" in str(e):
+            if _is_unique_violation(e):
                 try:
                     await sync_playbook_filename(pb["name"], pb["filename"])
                     print(f"  ~ Playbook '{pb['name']}' already exists, synced filename")
@@ -191,10 +205,6 @@ async def seed():
             "^",
         ),
     ]
-
-    def _is_unique_violation(exc: Exception) -> bool:
-        msg = str(exc).lower()
-        return "unique constraint" in msg or "duplicate key value" in msg
 
     for name, desc, content in templates:
         try:
@@ -264,6 +274,7 @@ async def seed():
         )
         _os.write(2, _msg.encode())  # fd 2 = stderr
 
+    await set_auth_setting(SEED_MARKER, {"seeded_at": datetime.now(UTC).isoformat()})
     print("[seed] Done.")
 
 

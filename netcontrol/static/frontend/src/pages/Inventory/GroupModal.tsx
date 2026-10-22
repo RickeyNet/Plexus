@@ -1,25 +1,43 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useMemo, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
+  groupLabel,
   type InventoryGroupFull,
   useCreateInventoryGroup,
   useUpdateInventoryGroup,
 } from '@/api/inventory';
 
+import { descendantIds } from './helpers';
+
 interface Props {
   group: InventoryGroupFull | null;
   isCreate: boolean;
+  /** Every inventory group (tree ordered), for the Parent group select. */
+  groups: InventoryGroupFull[];
+  /** The parent a new group starts under (New Sub-group); null for top level. */
+  defaultParentId?: number | null;
   onClose: () => void;
 }
 
-export function GroupModal({ group, isCreate, onClose }: Props) {
+export function GroupModal({ group, isCreate, groups, defaultParentId = null, onClose }: Props) {
   const { alert } = useDialogs();
   const create = useCreateInventoryGroup();
   const update = useUpdateInventoryGroup();
   const [name, setName] = useState(group?.name ?? '');
   const [description, setDescription] = useState(group?.description ?? '');
+  const [parentId, setParentId] = useState<number | null>(
+    group ? (group.parent_id ?? null) : defaultParentId,
+  );
+
+  // A group cannot be its own parent or move under one of its sub-groups.
+  const parentChoices = useMemo(() => {
+    if (!group) return groups;
+    const excluded = descendantIds(groups, group.id);
+    excluded.add(group.id);
+    return groups.filter((g) => !excluded.has(g.id));
+  }, [groups, group]);
 
   const isPending = create.isPending || update.isPending;
 
@@ -32,12 +50,13 @@ export function GroupModal({ group, isCreate, onClose }: Props) {
     }
     try {
       if (isCreate) {
-        await create.mutateAsync({ name: trimmedName, description });
+        await create.mutateAsync({ name: trimmedName, description, parent_id: parentId });
       } else if (group) {
         await update.mutateAsync({
           id: group.id,
           name: trimmedName,
           description,
+          parent_id: parentId,
         });
       }
       onClose();
@@ -62,6 +81,22 @@ export function GroupModal({ group, isCreate, onClose }: Props) {
             required
             autoFocus
           />
+        </div>
+        <div className="form-group">
+          <label className="form-label" htmlFor="inventory-group-parent">Parent group</label>
+          <select
+            id="inventory-group-parent"
+            className="form-select"
+            value={parentId ?? ''}
+            onChange={(e) => setParentId(e.target.value ? Number(e.target.value) : null)}
+          >
+            <option value="">None (top level)</option>
+            {parentChoices.map((g) => (
+              <option key={g.id} value={g.id}>
+                {groupLabel(g)}
+              </option>
+            ))}
+          </select>
         </div>
         <div className="form-group">
           <label className="form-label">Description</label>

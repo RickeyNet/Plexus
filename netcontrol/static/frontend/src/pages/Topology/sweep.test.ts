@@ -117,6 +117,7 @@ describe('buildReachabilityQuery', () => {
         exclude: 'voice,guest',
         sites: undefined,
         within: undefined,
+        overlaps: undefined,
         in_vpn: '1',
       },
     });
@@ -186,6 +187,13 @@ describe('buildReachabilityQuery', () => {
     expect(built.query).not.toHaveProperty('destination_node_id');
     expect(built.query.to_kinds).toBeUndefined();
     expect(isMatrixQuery(built.query)).toBe(true);
+  });
+
+  it('narrows the destinations with Overlapping alone, sent as to_overlaps', () => {
+    const built = buildReachabilityQuery({ ...emptyForm(), overlaps: '10.0.0.0/8', to: { ...emptyFilters(), overlaps: '10.64.0.0/16' } });
+    expect(built).toEqual({
+      query: { protocol: 'tcp', port: 445, overlaps: '10.0.0.0/8', to_overlaps: '10.64.0.0/16' },
+    });
   });
 
   it('names destination kinds that are not the default set', () => {
@@ -335,7 +343,18 @@ describe('sweep filters with inventory networks', () => {
   });
 });
 
-const SOURCE_FILTER_KEYS = ['sources', 'providers', 'kinds', 'vlans', 'name', 'exclude', 'sites', 'within', 'in_vpn'];
+const SOURCE_FILTER_KEYS = [
+  'sources',
+  'providers',
+  'kinds',
+  'vlans',
+  'name',
+  'exclude',
+  'sites',
+  'within',
+  'overlaps',
+  'in_vpn',
+];
 
 /** A typed source's row: no snapshot network, the trace's source node and site. */
 function typedRow(fields: Partial<ReachabilityRow>): ReachabilityRow {
@@ -502,6 +521,7 @@ describe('list networks', () => {
         exclude: undefined,
         sites: undefined,
         within: undefined,
+        overlaps: undefined,
         in_vpn: undefined,
       },
     });
@@ -509,6 +529,12 @@ describe('list networks', () => {
     expect(isListQuery(built.query)).toBe(true);
     expect(isMatrixQuery(built.query)).toBe(false);
     expect(buildListQuery({ ...emptyForm(), kinds: ['vlan'] })).toMatchObject({ query: { kinds: 'vlan' } });
+  });
+
+  it('sends the Overlapping ranges, trimmed', () => {
+    const built = buildListQuery({ ...emptyForm(), providers: ['cato', 'azure'], overlaps: ' 10.64.0.0/16, 172.17.0.0/16 ' });
+    expect(built).toMatchObject({ query: { list: '1', providers: 'cato,azure', overlaps: '10.64.0.0/16, 172.17.0.0/16' } });
+    expect(buildListQuery({ ...emptyForm(), overlaps: '  ' })).toMatchObject({ query: { overlaps: undefined } });
   });
 
   it('refuses a typed source and bad source filters', () => {

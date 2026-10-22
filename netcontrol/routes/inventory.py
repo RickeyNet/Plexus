@@ -120,11 +120,15 @@ def _invalidate_topology_cache() -> None:
 class GroupCreate(BaseModel):
     name: str
     description: str = ""
+    # The parent group; None (or omitted) for a top-level group.
+    parent_id: int | None = None
 
 
 class GroupUpdate(BaseModel):
     name: str
     description: str = ""
+    # Omitted leaves the parent as it is; null moves the group to the top level.
+    parent_id: int | None = None
 
 
 class HostCreate(BaseModel):
@@ -135,6 +139,35 @@ class HostCreate(BaseModel):
     vlan_id: str = ""
     # The EC2 instance this host is, matched before its addresses on the AWS map.
     aws_instance_id: str = ""
+
+
+# The most hosts one bulk add takes (the Topology page's "Add to inventory").
+BULK_ADD_MAX_HOSTS = 500
+
+
+class HostBulkCreate(BaseModel):
+    hosts: list[HostCreate] = Field(default_factory=list)
+
+
+class HostBulkEntry(HostCreate):
+    """One host of a grouped bulk add: the group by id, by the names of its
+    path from the top (``["Meraki", "HQ"]``; each missing level is created),
+    or by the name of a top-level group (created when missing). At most one
+    of the three; none uses the body's default ``group_id``."""
+
+    group_id: int | None = None
+    group_name: str | None = None
+    group_path: list[str] | None = None
+
+
+class HostBulkCreateGrouped(BaseModel):
+    hosts: list[HostBulkEntry] = Field(default_factory=list)
+    # The group of entries that name no group_id, group_name or group_path.
+    group_id: int | None = None
+
+
+# Description of the groups a grouped bulk add creates.
+BULK_ADD_GROUP_DESCRIPTION = "Added from the Topology map"
 
 
 class HostUpdate(BaseModel):
@@ -993,10 +1026,20 @@ async def export_inventory_csv():
     )
 
 
+_SIBLING_NAME_TAKEN = "A group with that name already exists at this level"
+
+
 @router.post("/api/inventory", status_code=201)
 async def create_group(body: GroupCreate):
-    gid = await db.create_group(body.name, body.description)
-    return {"id": gid, "name": body.name}
+    try:
+        gid = await db.create_group(body.name, body.description, parent_id=body.parent_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:
+        if db._is_unique_violation(exc):
+            raise HTTPException(409, _SIBLING_NAME_TAKEN)
+        raise
+    return {"id": gid, "name": body.name, "parent_id": body.parent_id}
 
 
 @router.put("/api/inventory/{group_id}")
@@ -1004,7 +1047,15 @@ async def update_group(group_id: int, body: GroupUpdate):
     group = await db.get_group(group_id)
     if not group:
         raise HTTPException(404, "Group not found")
-    await db.update_group(group_id, body.name, body.description)
+    move = {"parent_id": body.parent_id} if "parent_id" in body.model_fields_set else {}
+    try:
+        await db.update_group(group_id, body.name, body.description, **move)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:
+        if db._is_unique_violation(exc):
+            raise HTTPException(409, _SIBLING_NAME_TAKEN)
+        raise
     return {"ok": True}
 
 
@@ -1019,7 +1070,10 @@ async def get_group(group_id: int):
 
 @router.delete("/api/inventory/{group_id}")
 async def delete_group(group_id: int):
-    await db.delete_group(group_id)
+    try:
+        await db.delete_group(group_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
     return {"ok": True}
 
 
@@ -1031,25 +1085,24 @@ async def list_hosts(group_id: int):
     return await db.get_hosts_for_group(group_id)
 
 
-@router.post("/api/inventory/{group_id}/hosts", status_code=201)
-async def add_host(group_id: int, body: HostCreate):
+async def _insert_host(group_id: int, body: HostCreate) -> int:
+    """Validate and insert one host, then run the per-host follow-ups.
+
+    Shared by the single and bulk add routes. Raises ``HTTPException`` for an
+    invalid address or instance ID and ``ValueError`` when the group already
+    has a host with that IP. The caller invalidates the topology cache.
+    """
     _validate_host_ip(body.ip_address)
     aws_instance_id = _validate_aws_instance_id(body.aws_instance_id) or ""
-    try:
-        hid = await db.add_host(
-            group_id,
-            body.hostname,
-            body.ip_address,
-            body.device_type,
-            vrf_name=body.vrf_name or "",
-            vlan_id=str(body.vlan_id or ""),
-            aws_instance_id=aws_instance_id,
-        )
-    except ValueError:
-        raise HTTPException(409, "A host with that IP address already exists in this group")
-    # The map may have a place for the host already (an AWS instance with
-    # its address or ID): show it on the next load, not after the cache TTL.
-    _invalidate_topology_cache()
+    hid = await db.add_host(
+        group_id,
+        body.hostname,
+        body.ip_address,
+        body.device_type,
+        vrf_name=body.vrf_name or "",
+        vlan_id=str(body.vlan_id or ""),
+        aws_instance_id=aws_instance_id,
+    )
     # Auto-apply graph templates to manually added host
     try:
         await db.apply_graph_templates_to_host(hid)
@@ -1061,7 +1114,150 @@ async def add_host(group_id: int, body: HostCreate):
         source_hint="inventory-add",
     )
     await _notify_flow_collector_host_changed(new_ip=body.ip_address, host_id=hid)
+    return hid
+
+
+@router.post("/api/inventory/{group_id}/hosts", status_code=201)
+async def add_host(group_id: int, body: HostCreate):
+    try:
+        hid = await _insert_host(group_id, body)
+    except ValueError:
+        raise HTTPException(409, "A host with that IP address already exists in this group")
+    # The map may have a place for the host already (an AWS instance with
+    # its address or ID): show it on the next load, not after the cache TTL.
+    _invalidate_topology_cache()
     return {"id": hid}
+
+
+async def _bulk_add(entries: list[HostBulkEntry], default_group_id: int | None, request: Request) -> dict:
+    """Add many hosts, each to its own group (the Topology page's "Add to inventory").
+
+    An entry names its group by ``group_id``, ``group_path`` (the names from
+    the top, e.g. ``["Meraki", "HQ"]``) or ``group_name`` (a top-level group),
+    at most one of them, or none to use ``default_group_id``. A level of a
+    path (or a named group) that does not exist is created once, and only
+    when a host is about to go into it; ``groups_created`` lists every level
+    created. Each entry is validated like a single add. An entry whose IP is
+    already a host in any group is skipped, naming that host; the rest are
+    added. One bad entry never fails the batch: it is listed under ``errors``.
+    """
+    if len(entries) > BULK_ADD_MAX_HOSTS:
+        raise HTTPException(400, f"At most {BULK_ADD_MAX_HOSTS} hosts can be added at once")
+    groups = await db.get_all_groups()
+    name_by_id: dict[int, str] = {g["id"]: g["name"] for g in groups}
+    path_by_id: dict[int, str] = {g["id"]: g["path"] for g in groups}
+    if default_group_id is not None and default_group_id not in name_by_id:
+        raise HTTPException(404, "Group not found")
+    added: list[dict] = []
+    skipped: list[dict] = []
+    errors: list[dict] = []
+    groups_created: list[dict] = []
+    id_by_path: dict[tuple[str, ...], int] = {}
+
+    async def group_for(path: tuple[str, ...]) -> int:
+        if path in id_by_path:
+            return id_by_path[path]
+        levels = await db.get_or_create_group_path(list(path), description=BULK_ADD_GROUP_DESCRIPTION)
+        for level in levels:
+            name_by_id[level["id"]] = level["name"]
+            path_by_id[level["id"]] = level["path"]
+            if level["created"]:
+                groups_created.append({k: level[k] for k in ("id", "name", "parent_id", "path")})
+        id_by_path[path] = levels[-1]["id"]
+        return id_by_path[path]
+
+    for entry in entries:
+        entry.ip_address = entry.ip_address.strip()
+        entry.hostname = entry.hostname.strip() or entry.ip_address
+        names = {"hostname": entry.hostname, "ip_address": entry.ip_address}
+        group_name = (entry.group_name or "").strip()
+        group_path = tuple(n.strip() for n in entry.group_path or ())
+        if sum((entry.group_id is not None, bool(group_name), bool(group_path))) > 1:
+            errors.append({**names, "error": "Give one of group_id, group_name or group_path, not several"})
+            continue
+        if any(not n for n in group_path):
+            errors.append({**names, "error": "A group path cannot have an empty name"})
+            continue
+        if group_name:
+            group_path = (group_name,)
+        group_id = entry.group_id if entry.group_id is not None else default_group_id
+        if group_path:
+            group_id = None
+        if group_id is None and not group_path:
+            errors.append({**names, "error": "No group given"})
+            continue
+        if group_id is not None and group_id not in name_by_id:
+            errors.append({**names, "error": "Group not found"})
+            continue
+        existing = await db.find_host_by_ip(entry.ip_address) if entry.ip_address else None
+        if existing:
+            skipped.append(
+                {
+                    **names,
+                    "reason": "IP address is already in inventory",
+                    "host_id": existing.get("id"),
+                    "group_id": existing.get("group_id"),
+                }
+            )
+            continue
+        try:
+            # Validate before creating a group, so a bad entry leaves none behind.
+            _validate_host_ip(entry.ip_address)
+            _validate_aws_instance_id(entry.aws_instance_id)
+            if group_id is None:
+                label = db.GROUP_PATH_SEPARATOR.join(group_path)
+                try:
+                    group_id = await group_for(group_path)
+                except Exception as exc:
+                    LOGGER.warning("inventory: bulk add could not create group %r: %s", label, exc)
+                    errors.append({**names, "error": f"Could not create group {label!r}"})
+                    continue
+            hid = await _insert_host(group_id, entry)
+        except HTTPException as exc:
+            errors.append({**names, "error": str(exc.detail)})
+            continue
+        except ValueError:
+            errors.append({**names, "error": "A host with that IP address already exists in this group"})
+            continue
+        added.append(
+            {
+                "id": hid,
+                **names,
+                "group_id": group_id,
+                "group_name": name_by_id[group_id],
+                "group_path": path_by_id[group_id],
+            }
+        )
+    if added or groups_created:
+        _invalidate_topology_cache()
+    session = _get_session(request)
+    scope = f"group_id={default_group_id} " if default_group_id is not None else ""
+    await _audit(
+        "inventory",
+        "host.bulk_added",
+        user=session["user"] if session else "",
+        detail=(
+            f"{scope}added={len(added)} skipped={len(skipped)} errors={len(errors)} "
+            f"groups_created={len(groups_created)}"
+        ),
+        correlation_id=_corr_id(request),
+    )
+    return {"added": added, "skipped": skipped, "errors": errors, "groups_created": groups_created}
+
+
+@router.post("/api/inventory/hosts/bulk")
+async def bulk_add_hosts_grouped(body: HostBulkCreateGrouped, request: Request):
+    """Add many hosts, each to the group it names (created when missing)."""
+    return await _bulk_add(body.hosts, body.group_id, request)
+
+
+@router.post("/api/inventory/{group_id}/hosts/bulk")
+async def bulk_add_hosts(group_id: int, body: HostBulkCreate, request: Request):
+    """Add many hosts to one group (see ``_bulk_add``)."""
+    entries = [HostBulkEntry(**h.model_dump()) for h in body.hosts]
+    result = await _bulk_add(entries, group_id, request)
+    result.pop("groups_created")
+    return result
 
 
 @router.put("/api/hosts/{host_id}")

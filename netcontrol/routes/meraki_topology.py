@@ -148,7 +148,7 @@ from netcontrol.integrations.panorama.collector import (
 )
 from netcontrol.integrations.panorama.normalize import build_snapshot as build_panorama_snapshot
 from netcontrol.integrations.panorama.sample import build_sample_raw as build_panorama_sample_raw
-from netcontrol.integrations.pathtrace import sweep as reach_sweep
+from netcontrol.integrations.pathtrace import summarize as reach_summarize, sweep as reach_sweep
 from netcontrol.integrations.pathtrace.engine import PROTOCOLS as PATH_PROTOCOLS, Tracer
 from netcontrol.integrations.pathtrace.inventory import forwarding_for_host, subnets_for_host
 from netcontrol.integrations.pathtrace.model import INVENTORY_ORG_REF
@@ -452,6 +452,26 @@ class MerakiOrgCreate(BaseModel):
     base_url: str = Field(default="", max_length=200)
     api_key: str = Field(default="", max_length=400)
     options: dict = Field(default_factory=dict)
+
+
+class SummarizeRequest(BaseModel):
+    # One IP address or network per entry, split on newlines, commas, semicolons or spaces.
+    addresses: str = Field(min_length=1, max_length=200000)
+    # Roll every address up to this prefix length first (none: exact).
+    prefix: int | None = None
+    # Merge neighbours until at most this many routes of each IP version are left.
+    max_routes: int | None = None
+    # The sweep's source filters: which collected networks each route is checked against.
+    sources: str | None = Field(default=None, max_length=2000)
+    providers: str | None = Field(default=None, max_length=200)
+    kinds: str | None = Field(default=None, max_length=200)
+    vlans: str | None = Field(default=None, max_length=1000)
+    name: str | None = Field(default=None, max_length=1000)
+    exclude: str | None = Field(default=None, max_length=1000)
+    sites: str | None = Field(default=None, max_length=1000)
+    within: str | None = Field(default=None, max_length=2000)
+    overlaps: str | None = Field(default=None, max_length=2000)
+    in_vpn: str | None = Field(default=None, max_length=8)
 
 
 class MerakiOrgUpdate(BaseModel):
@@ -1772,6 +1792,16 @@ def _reachability_file(report: dict[str, Any], fmt: str, verdict: str | None, so
     )
 
 
+def _named_subnets(found: dict[str, Any]) -> list[dict[str, Any]]:
+    """The subnet index rows of ``_trace_sources`` with their source's name
+    (``org_name``; the inventory's is **Inventory**)."""
+    org_names = {
+        org_ref: str((snapshot.get("org") or {}).get("name") or "") for org_ref, snapshot in found["snapshots"].items()
+    }
+    org_names[INVENTORY_ORG_REF] = "Inventory"
+    return [{**row, "org_name": org_names.get(row["org_ref"], "")} for row in found["subnets"]]
+
+
 @router.get("/api/topology/reachability")
 async def topology_reachability_api(
     request: Request,
@@ -1794,6 +1824,7 @@ async def topology_reachability_api(
     exclude: str | None = Query(default=None, max_length=1000),
     sites: str | None = Query(default=None, max_length=1000),
     within: str | None = Query(default=None, max_length=2000),
+    overlaps: str | None = Query(default=None, max_length=2000),
     in_vpn: str | None = Query(default=None, max_length=8),
     to_sources: str | None = Query(default=None, max_length=2000),
     to_providers: str | None = Query(default=None, max_length=200),
@@ -1803,6 +1834,7 @@ async def topology_reachability_api(
     to_exclude: str | None = Query(default=None, max_length=1000),
     to_sites: str | None = Query(default=None, max_length=1000),
     to_within: str | None = Query(default=None, max_length=2000),
+    to_overlaps: str | None = Query(default=None, max_length=2000),
     to_in_vpn: str | None = Query(default=None, max_length=8),
     format: str = Query(default="json", pattern="^(json|csv|xlsx)$"),
     verdict: str | None = Query(default=None, max_length=16),
@@ -1850,7 +1882,7 @@ async def topology_reachability_api(
         )
         destination_node, destination_org_ref, destination_node_id = None, None, None
         to_sources = to_providers = to_kinds = to_vlans = to_name = to_exclude = None
-        to_sites = to_within = to_in_vpn = None
+        to_sites = to_within = to_overlaps = to_in_vpn = None
     if protocol.strip().lower() not in ("", "any", "all", *PATH_PROTOCOLS):
         raise HTTPException(status_code=400, detail=f"protocol must be one of {', '.join(PATH_PROTOCOLS)}")
     verdict = (verdict or "").strip().lower() or None
@@ -1867,6 +1899,7 @@ async def topology_reachability_api(
         "exclude": exclude,
         "sites": sites,
         "within": within,
+        "overlaps": overlaps,
         "in_vpn": in_vpn,
     }
     if source and any(str(value or "").strip() for value in source_values.values()):
@@ -1893,6 +1926,7 @@ async def topology_reachability_api(
         "exclude": to_exclude,
         "sites": to_sites,
         "within": to_within,
+        "overlaps": to_overlaps,
         "in_vpn": to_in_vpn,
     }
     matrix = not destination and not listing
@@ -1921,11 +1955,7 @@ async def topology_reachability_api(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     found = await _trace_sources()
-    org_names = {
-        org_ref: str((snapshot.get("org") or {}).get("name") or "") for org_ref, snapshot in found["snapshots"].items()
-    }
-    org_names[INVENTORY_ORG_REF] = "Inventory"
-    rows = [{**row, "org_name": org_names.get(row["org_ref"], "")} for row in found["subnets"]]
+    rows = _named_subnets(found)
     try:
         if typed is not None:
             selected = [typed]
@@ -2034,6 +2064,63 @@ async def topology_reachability_api(
         "limit": reach_sweep.MAX_ROWS,
         "rows": report["rows"],
         "counts": report["counts"],
+    }
+
+
+@router.post("/api/topology/summarize")
+async def topology_summarize_api(body: SummarizeRequest):
+    """The fewest routes that cover ``addresses`` (``prefix`` rolls each up
+    first, ``max_routes`` caps the routes of each IP version), each with the
+    inputs it covers and the collected networks of the whole map it overlaps
+    (``netcontrol.integrations.pathtrace.summarize``). The source filters
+    (as the reachability sweep's) pick the networks checked; ``kinds``
+    defaults to the sweep's. A JSON body, since an address list can be
+    long; at most ``MAX_ADDRESSES`` entries."""
+    try:
+        networks = reach_summarize.parse_addresses(body.addresses)
+        if len(networks) > reach_summarize.MAX_ADDRESSES:
+            raise ValueError(
+                f"{len(networks)} addresses given; at most {reach_summarize.MAX_ADDRESSES} are summarized at once"
+            )
+        filters = reach_sweep.parse_filters(
+            sources=body.sources,
+            providers=body.providers,
+            kinds=body.kinds,
+            vlans=body.vlans,
+            name=body.name,
+            exclude=body.exclude,
+            sites=body.sites,
+            within=body.within,
+            overlaps=body.overlaps,
+            in_vpn=body.in_vpn,
+        )
+        summary = reach_summarize.summarize(networks, prefix=body.prefix, max_routes=body.max_routes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    found = await _trace_sources()
+    selected = reach_sweep.select_rows(_named_subnets(found), filters, None)
+    make_tracer = _tracer_of(found)
+
+    def run() -> list[dict[str, Any]]:
+        # Only the routes' overlaps need listing: the tracer names their owners.
+        hits = reach_summarize.overlapping_rows(summary, selected)
+        listed = reach_sweep.list_rows(make_tracer(), hits) if hits else []
+        return reach_summarize.routes(networks, summary, listed)
+
+    entries = await asyncio.to_thread(run)
+    return {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "input_count": len(networks),
+        "unique_count": len(set(networks)),
+        "prefix": body.prefix,
+        "max_routes": body.max_routes,
+        "filters": filters.to_json(),
+        "route_count": len(entries),
+        "routes": entries,
+        "text": reach_summarize.routes_text(entries),
+        # Every input is covered by construction; kept so the page can rely on it.
+        "uncovered": [],
     }
 
 

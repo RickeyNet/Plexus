@@ -24,10 +24,13 @@ import {
   type TopologyNode,
   type UtilizationStreamEdge,
 } from '@/api/topology';
-import { topologyExportUrl, useMerakiSubnets, useTopologyDeepSearch, type TopologyExportPath } from '@/api/meraki';
+import { groupLabel } from '@/api/inventory';
+import { topologyExportUrl, useMerakiSubnets, useTopologyDeepSearch, type MerakiSubnet, type TopologyExportPath } from '@/api/meraki';
 import { Menu, MenuCheckboxItem, MenuItem, MenuSeparator } from '@/components/Menu';
 import { PageHelp } from '@/components/PageHelp';
 import { AddToInventoryModal } from './AddToInventoryModal';
+import { BulkAddToInventoryModal } from './BulkAddToInventoryModal';
+import { buildInventoryAddRows } from './inventoryAdd';
 import { ChangesModal } from './ChangesModal';
 import { DiscoveryProgressModal } from './DiscoveryProgressModal';
 import { ExportMenu } from './ExportMenu';
@@ -63,7 +66,7 @@ import {
 import { crowdedGroups, fitTitles, labelWidth, straighten, tidyLabel, tidyTree, type XY } from './layout';
 import { distanceToRoute, routeSourceLinks, traceRoute } from './routes';
 import { EdgeDetails } from './EdgeDetails';
-import { MAX_PATH_ENDPOINTS, connectPicks, findSubnets, isAddressText, parseTraffic, pathModeHint, pathSites, subnetOptionLabel, userPick, type PathPick } from './paths';
+import { MAX_PATH_ENDPOINTS, connectPicks, findSubnets, isAddressText, parseTraffic, pathModeHint, pathSites, subnetOptionLabel, subnetPick, userPick, type PathPick } from './paths';
 import { PathTrace } from './PathTracePanel';
 import { legKey, mergeHighlights, pathTraceQuery, reverseTraceQuery, uncheckedTraceNote, type TraceHighlight } from './pathTrace';
 import { NodeDetails } from './NodeDetails';
@@ -150,6 +153,9 @@ export function Topology() {
   // Map highlight of each traced leg (by legKey): the request hops shown.
   const [traceHighlights, setTraceHighlights] = useState<Record<string, TraceHighlight | null>>({});
   const [pathSubnetInput, setPathSubnetInput] = useState('');
+  // The subnets that hold a typed address when several sites have it: an
+  // "is at" picker, since the suggestion list only matches the typed text.
+  const [pathSubnetChoices, setPathSubnetChoices] = useState<MerakiSubnet[]>([]);
   const [pathSiteInput, setPathSiteInput] = useState('');
   const [pathNote, setPathNote] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -162,6 +168,7 @@ export function Topology() {
   const [detailsNode, setDetailsNode] = useState<TopologyNode | null>(null);
   const [detailsEdge, setDetailsEdge] = useState<TopologyEdge | null>(null);
   const [addInvTarget, setAddInvTarget] = useState<TopologyNode | null>(null);
+  const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [discoveryOpen, setDiscoveryOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
   const [stpEventsOpen, setStpEventsOpen] = useState(false);
@@ -264,6 +271,8 @@ export function Topology() {
   const showAllTunnelsRef = useRef(showAllTunnels);
   const overlayCount = enabledOverlayCount({ util: utilOverlay, stp: stpOverlay, status: statusOverlay });
   const eventsBadge = badgeText(stpBadge + changeBadge);
+  const addableCount = useMemo(() => buildInventoryAddRows(data?.nodes ?? []).length, [data]);
+  const addableBadge = badgeText(addableCount);
   showAllTunnelsRef.current = showAllTunnels;
   const positions = positionsQuery.data;
   const deepSearch = useTopologyDeepSearch(hasDeepSearch ? debouncedSearch : '');
@@ -1548,11 +1557,13 @@ export function Topology() {
     const found = node !== undefined || typed ? findSubnets(value, pathSubnets.list) : [];
     if (found.length !== 1) {
       setPathSubnetInput(value);
+      // The choices stand until the text changes or one is picked.
+      setPathSubnetChoices(typed && found.length > 1 ? found : []);
       if (typed && value.trim()) {
         const sites = [...new Set(found.map((s) => s.site_name || s.name))];
         setPathNote(
           found.length
-            ? `${value.trim()} is in ${found[0].cidr}, which exists at ${found.length} places (${sites.slice(0, 4).join(', ')}${sites.length > 4 ? ', ...' : ''}) - pick the one you mean from the subnet list.`
+            ? `${value.trim()} is in ${found[0].cidr}, which exists at ${found.length} places (${sites.slice(0, 4).join(', ')}${sites.length > 4 ? ', ...' : ''}) - pick the one you mean in "is at".`
             : subnetsQuery.isPending
               ? 'Subnets are still loading - try again in a moment.'
               : `No collected subnet contains ${value.trim()}.`,
@@ -1560,21 +1571,25 @@ export function Topology() {
       }
       return false;
     }
-    const subnet = found[0];
+    return addPathSubnet(found[0], value);
+  }
+
+  // Add `subnet`, found for the typed `value`, at its owner on the map.
+  function addPathSubnet(subnet: MerakiSubnet, value: string): boolean {
     const owner = pathSubnets.owners.get(subnetOptionLabel(subnet));
     if (owner === undefined) return false;
     setPathSubnetInput('');
+    setPathSubnetChoices([]);
     // A typed address inside the subnet is kept: the trace matches rules against
     // it, and the security groups of the instance that has it.
-    const typedAddress = isAddressText(value) && value.trim() !== subnet.cidr ? value.trim() : undefined;
-    addPathPick({
-      key: `s:${subnet.org_ref}:${typedAddress ?? subnet.cidr}:${subnet.node_id}`,
-      node: owner,
-      label: `${typedAddress ?? subnet.cidr} · ${subnet.site_name || subnet.name}`,
-      subnet,
-      address: typedAddress,
-    });
+    addPathPick(subnetPick(subnet, owner, value));
     return true;
+  }
+
+  // One of the "is at" choices picked for the typed address.
+  function pickPathSubnetChoice(key: string) {
+    const subnet = pathSubnetChoices.find((s) => `${s.org_ref}|${s.node_id}|${s.cidr}` === key);
+    if (subnet) addPathSubnet(subnet, pathSubnetInput);
   }
 
   function pathLabel(nodeId: number | string): string {
@@ -1881,7 +1896,7 @@ export function Topology() {
         <select className="form-select" style={{ minWidth: 160 }} value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)}>
           <option value="">All Groups</option>
           {groupsQuery.data?.map((g) => (
-            <option key={g.id} value={g.id}>{g.name}</option>
+            <option key={g.id} value={g.id}>{groupLabel(g)}</option>
           ))}
         </select>
         {hasMeraki && (
@@ -1969,6 +1984,15 @@ export function Topology() {
         <button className="btn btn-secondary btn-sm" onClick={handleRefresh}>Refresh</button>
         <button className={`btn btn-sm ${pathMode ? 'btn-primary' : 'btn-secondary'}`} onClick={togglePathMode} title="Pick devices or sites and see how they reach one another">{pathMode ? 'Exit Path' : 'Path Mode'}</button>
         <button className={`btn btn-sm ${searchPanelOpen ? 'btn-primary' : 'btn-secondary'}`} onClick={toggleSearchPanel}>{searchPanelOpen ? 'Close Search' : 'Find MAC/IP/VLAN'}</button>
+        <button
+          type="button"
+          className="btn btn-sm btn-secondary"
+          onClick={() => setBulkAddOpen(true)}
+          disabled={addableCount === 0}
+          title="Add devices on the map that are not inventory hosts (CDP/LLDP neighbors, cloud instances) to an inventory group"
+        >
+          Add to inventory…{addableBadge && <span className="badge badge-info topo-toolbar-badge">{addableBadge}</span>}
+        </button>
         <Menu
           label="View"
           align="start"
@@ -2152,6 +2176,21 @@ export function Topology() {
                     return <option key={`${s.org_ref}|${s.node_id}|${s.cidr}`} value={text} />;
                   })}
                 </datalist>
+                {pathSubnetChoices.length > 1 && (
+                  <select
+                    className="form-select"
+                    aria-label={`${pathSubnetInput.trim()} is at`}
+                    title="The typed address is in a subnet that several sites have: pick the one you mean"
+                    value=""
+                    onChange={(e) => pickPathSubnetChoice(e.target.value)}
+                    style={{ minWidth: 260 }}
+                  >
+                    <option value="">{pathSubnetInput.trim()} is at…</option>
+                    {pathSubnetChoices.map((s) => (
+                      <option key={`${s.org_ref}|${s.node_id}|${s.cidr}`} value={`${s.org_ref}|${s.node_id}|${s.cidr}`}>{subnetOptionLabel(s)}</option>
+                    ))}
+                  </select>
+                )}
               </>
             )}
             {pathHasTraceLeg && (
@@ -2166,7 +2205,7 @@ export function Topology() {
                 style={{ width: 190, borderColor: trafficFilter === null ? 'var(--danger)' : undefined }}
               />
             )}
-            <button type="button" className="btn btn-sm btn-secondary" onClick={() => { setPathPicks([]); setPathNote(''); }} disabled={!pathPicks.length}>Clear</button>
+            <button type="button" className="btn btn-sm btn-secondary" onClick={() => { setPathPicks([]); setPathNote(''); setPathSubnetChoices([]); }} disabled={!pathPicks.length}>Clear</button>
           </div>
           {pathNote && (
             <div role="status" style={{ marginTop: '0.45rem', color: 'var(--warning, #f59f00)' }}>{pathNote}</div>
@@ -2379,6 +2418,22 @@ export function Topology() {
             qc.invalidateQueries({ queryKey: ['inventory-groups'] });
             setDetailsNode(null);
             flash(`Added ${addInvTarget.label} (${addInvTarget.ip}) to ${groupName}`);
+          }}
+        />
+      )}
+
+      {bulkAddOpen && (
+        <BulkAddToInventoryModal
+          isOpen={bulkAddOpen}
+          nodes={data?.nodes ?? []}
+          edges={data?.edges ?? []}
+          onClose={() => setBulkAddOpen(false)}
+          onAdded={(result) => {
+            // useBulkAddHosts refreshes the topology query; the added nodes
+            // come back as inventory hosts.
+            const groupCount = new Set(result.added.map((h) => h.group_id)).size;
+            const where = groupCount === 1 ? result.added[0].group_name : `${groupCount} groups`;
+            flash(`Added ${result.added.length} device${result.added.length === 1 ? '' : 's'} to ${where}`);
           }}
         />
       )}

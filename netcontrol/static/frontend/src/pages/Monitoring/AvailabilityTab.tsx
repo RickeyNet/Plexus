@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { groupLabel } from '@/api/inventory';
 import { useInventoryGroups } from '@/api/compliance';
 import { TabBar } from '@/components/TabBar';
 import {
@@ -47,7 +48,7 @@ export function AvailabilityTab() {
         >
           <option value="">All Groups</option>
           {(groups.data ?? []).map((g) => (
-            <option key={g.id} value={g.id}>{g.name}</option>
+            <option key={g.id} value={g.id}>{groupLabel(g)}</option>
           ))}
         </select>
         <label className="text-muted">Period:</label>

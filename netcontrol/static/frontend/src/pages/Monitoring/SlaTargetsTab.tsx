@@ -2,7 +2,7 @@ import { useMemo, useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
-import { useInventoryGroupsFull } from '@/api/inventory';
+import { groupLabel, useInventoryGroupsFull } from '@/api/inventory';
 import {
   useCreateSlaTarget,
   useDeleteSlaTarget,
@@ -85,7 +85,7 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
   const updateMut = useUpdateSlaTarget();
   const groups = useInventoryGroupsFull(true);
   const allHosts = useMemo(
-    () => (groups.data ?? []).flatMap((g) => (g.hosts ?? []).map((h) => ({ ...h, group_name: g.name }))),
+    () => (groups.data ?? []).flatMap((g) => (g.hosts ?? []).map((h) => ({ ...h, group_name: groupLabel(g) }))),
     [groups.data],
   );
 
@@ -182,7 +182,7 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
             <select className="form-select" value={groupId} onChange={(e) => setGroupId(e.target.value)}>
               <option value="">Select group…</option>
               {(groups.data ?? []).map((g) => (
-                <option key={g.id} value={g.id}>{g.name}</option>
+                <option key={g.id} value={g.id}>{groupLabel(g)}</option>
               ))}
             </select>
           </div>

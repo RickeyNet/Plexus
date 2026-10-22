@@ -12,6 +12,7 @@ import {
   pathModeHint,
   pathSites,
   subnetOptionLabel,
+  subnetPick,
   userPick,
   type PathPick,
 } from './paths';
@@ -82,6 +83,23 @@ describe('path mode', () => {
   function pick(s: MerakiSubnet): PathPick {
     return { key: `s:${s.cidr}:${s.node_id}`, node: s.node_id, label: s.cidr, subnet: s };
   }
+
+  it('picks a subnet at its owner, keeping a typed address narrower than the subnet', () => {
+    const vlan = subnet('10.74.0.0/16', 'mx-hq', 'HQ', { name: 'Static route 10.74_Summary', kind: 'static' });
+    expect(subnetPick(vlan, 'node-hq', ' 10.74.76.10 ')).toEqual({
+      key: 's:1:10.74.76.10:mx-hq',
+      node: 'node-hq',
+      label: '10.74.76.10 · Site HQ',
+      subnet: vlan,
+      address: '10.74.76.10',
+    });
+    // The subnet itself, or its picker text, picks the whole subnet.
+    for (const typed of ['10.74.0.0/16', subnetOptionLabel(vlan)]) {
+      const whole = subnetPick(vlan, 'node-hq', typed);
+      expect([whole.key, whole.label, whole.address]).toEqual(['s:1:10.74.0.0/16:mx-hq', '10.74.0.0/16 · Site HQ', undefined]);
+    }
+    expect(subnetPick({ ...vlan, site_name: '' }, 'node-hq', '10.74.76.10').label).toBe('10.74.76.10 · Static route 10.74_Summary');
+  });
 
   it('finds a subnet by picker text, address or network, most specific first', () => {
     const subnets = [
