@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 
+import { groupLabel } from '@/api/inventory';
 import { useCredentials, useInventoryGroups } from '@/api/compliance';
 import {
   useStartCaptureGroupJob,
@@ -88,7 +89,7 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
             <option value="">- Or select entire group -</option>
             {(groups.data || []).map((g) => (
               <option key={g.id} value={g.id}>
-                {g.name} ({(g.hosts || []).length} hosts)
+                {groupLabel(g)} ({(g.hosts || []).length} hosts)
               </option>
             ))}
           </select>

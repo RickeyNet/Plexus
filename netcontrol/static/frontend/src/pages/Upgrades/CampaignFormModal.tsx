@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
+import { groupLabel } from '@/api/inventory';
 import { apiRequest } from '@/api/client';
 import { useCredentials } from '@/api/compliance';
 import {
@@ -418,7 +419,7 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
                         }}
                         onChange={(e) => toggleGroup(g, e.target.checked)}
                       />
-                      {g.name} ({(g.hosts || []).length} hosts)
+                      {groupLabel(g)} ({(g.hosts || []).length} hosts)
                     </label>
                     <div style={{ marginLeft: '1.5rem' }}>
                       {(g.hosts || []).map((h) => {

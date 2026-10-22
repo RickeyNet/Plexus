@@ -1434,11 +1434,11 @@ async def lifespan(app: FastAPI):
             LOGGER.info("Re-encrypted %s legacy cloud account credential row(s)", reencrypted)
     except Exception as exc:
         LOGGER.warning("cloud auth_config re-encryption pass failed: %s", type(exc).__name__)
-    # Auto-seed if empty
-    check = await db.get_all_groups()
-    if not check:
-        from routes.seed import seed
+    # Auto-seed a database that has never been seeded. Deleting the demo
+    # groups later must not bring them back: the seed leaves a marker.
+    from routes.seed import database_is_fresh, seed
 
+    if await database_is_fresh():
         await seed()
     await db.seed_built_in_graph_templates()
     await db.seed_built_in_cdefs()

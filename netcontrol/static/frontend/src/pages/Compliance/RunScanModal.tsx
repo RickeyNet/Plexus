@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 
+import { groupLabel } from '@/api/inventory';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -41,7 +42,7 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
 
   const allHosts = useMemo(() => {
     const list = (groups.data || []).flatMap((g) =>
-      (g.hosts || []).map((h) => ({ ...h, group_name: g.name })),
+      (g.hosts || []).map((h) => ({ ...h, group_name: groupLabel(g) })),
     );
     return list.sort((a, b) => (a.hostname || '').localeCompare(b.hostname || ''));
   }, [groups.data]);
@@ -272,7 +273,7 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
           >
             {groupList.map((g) => (
               <option key={g.id} value={g.id}>
-                {g.name} ({(g.hosts || []).length} hosts)
+                {groupLabel(g)} ({(g.hosts || []).length} hosts)
               </option>
             ))}
           </select>

@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
+import { groupLabel } from '@/api/inventory';
 import { PageHelp } from '@/components/PageHelp';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
@@ -157,7 +158,7 @@ export function Ipam() {
               <option value="">All Groups</option>
               {(groups.data ?? []).map((g) => (
                 <option key={g.id} value={g.id}>
-                  {g.name || `Group ${g.id}`}
+                  {groupLabel(g) || `Group ${g.id}`}
                 </option>
               ))}
             </select>

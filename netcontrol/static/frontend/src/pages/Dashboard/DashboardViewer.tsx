@@ -11,6 +11,7 @@ import {
   useDeletePanel,
   useInventoryGroupsForDashboard,
 } from '@/api/dashboard';
+import { groupLabel } from '@/api/inventory';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { invalidateMetricQueries } from '@/lib/invalidateMetricQueries';
 import { useTimeRange } from '@/lib/timeRange-context';
@@ -246,7 +247,7 @@ function VariablesBar({ variables, values, onChange, groups }: VariablesBarProps
               <option value="*">All Groups</option>
               {groups.map((g) => (
                 <option key={g.id} value={String(g.id)}>
-                  {g.name}
+                  {groupLabel(g)}
                 </option>
               ))}
             </select>
@@ -264,7 +265,7 @@ function VariablesBar({ variables, values, onChange, groups }: VariablesBarProps
               {groups.flatMap((g) =>
                 (g.hosts ?? []).map((h) => (
                   <option key={`${g.id}-${h.id}`} value={String(h.id)}>
-                    {h.hostname} ({g.name})
+                    {h.hostname} ({groupLabel(g)})
                   </option>
                 )),
               )}

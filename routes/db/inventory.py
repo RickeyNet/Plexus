@@ -13,6 +13,7 @@ import json
 import os
 import re
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import routes.database as _dbcore
 from routes.database import (
@@ -34,6 +35,9 @@ __all__ = [
     "create_group",
     "update_group",
     "delete_group",
+    "get_or_create_group_path",
+    "find_top_level_group",
+    "GROUP_PATH_SEPARATOR",
     "get_host",
     "get_hosts_for_group",
     "get_hosts_by_ids",
@@ -60,7 +64,53 @@ __all__ = [
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+# Joins a group's path: the names from the top group down.
+GROUP_PATH_SEPARATOR = " / "
+
+# Deepest group chain followed when walking parents (a guard, not a limit
+# anyone reaches: the bulk add nests two levels).
+_MAX_GROUP_DEPTH = 64
+
+
+def _tree_ordered(groups: list[dict]) -> list[dict]:
+    """Order ``groups`` depth first (each parent before its sub-groups) and
+    set each one's ``path`` and ``depth``.
+
+    ``groups`` arrive in sibling order (the per-user order, then the name);
+    that order is kept among the sub-groups of each parent. A group whose
+    parent is not in the list is placed at the top level.
+    """
+    by_id = {g["id"]: g for g in groups}
+    children: dict[int | None, list[dict]] = {}
+    for g in groups:
+        parent = g.get("parent_id")
+        children.setdefault(parent if parent in by_id else None, []).append(g)
+
+    ordered: list[dict] = []
+    seen: set[int] = set()
+
+    def walk(roots: list[dict]) -> None:
+        stack: list[tuple[dict, str, int]] = [(g, "", 0) for g in reversed(roots)]
+        while stack:
+            group, prefix, depth = stack.pop()
+            if group["id"] in seen:
+                continue
+            seen.add(group["id"])
+            group["path"] = f"{prefix}{GROUP_PATH_SEPARATOR}{group['name']}" if prefix else group["name"]
+            group["depth"] = depth
+            ordered.append(group)
+            for child in reversed(children.get(group["id"], [])):
+                stack.append((child, group["path"], depth + 1))
+
+    walk(children.get(None, []))
+    # Only a parent cycle (rejected on write) leaves groups unvisited.
+    walk([g for g in groups if g["id"] not in seen])
+    return ordered
+
+
 async def get_all_groups() -> list[dict]:
+    """Every group with its ``host_count`` (direct hosts), ``parent_id``,
+    ``path`` and ``depth``, ordered as a tree (siblings by name)."""
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("""
@@ -69,40 +119,35 @@ async def get_all_groups() -> list[dict]:
             LEFT JOIN hosts h ON h.group_id = g.id
             GROUP BY g.id ORDER BY g.name
         """)
-        return rows_to_list(await cursor.fetchall())
+        return _tree_ordered(rows_to_list(await cursor.fetchall()))
     finally:
         await db.close()
 
 
-async def get_all_groups_with_hosts() -> list[dict]:
-    """Return all groups with embedded host arrays using a single query."""
-    db = await _dbcore.get_db(read_only=True)
-    try:
-        cursor = await db.execute("""
-            SELECT
-                g.id AS group_id,
-                g.name AS group_name,
-                g.description AS group_description,
-                h.id AS host_id,
-                h.group_id AS host_group_id,
-                h.hostname AS host_hostname,
-                h.ip_address AS host_ip_address,
-                h.device_type AS host_device_type,
-                h.status AS host_status,
-                h.last_seen AS host_last_seen,
-                h.model AS host_model,
-                h.software_version AS host_software_version,
-                h.device_category AS host_device_category,
-                h.serial_number AS host_serial_number,
-                h.aws_instance_id AS host_aws_instance_id
-            FROM inventory_groups g
-            LEFT JOIN hosts h ON h.group_id = g.id
-            ORDER BY g.name, h.ip_address
-        """)
-        rows = await cursor.fetchall()
-    finally:
-        await db.close()
+# Host columns of the ``include_hosts`` listing, selected as ``host_<column>``.
+_GROUP_LISTING_HOST_COLUMNS = (
+    "id",
+    "group_id",
+    "hostname",
+    "ip_address",
+    "device_type",
+    "status",
+    "last_seen",
+    "model",
+    "software_version",
+    "device_category",
+    "serial_number",
+    "aws_instance_id",
+)
+# Host columns read back as '' when NULL.
+_GROUP_LISTING_TEXT_COLUMNS = ("model", "software_version", "device_category", "serial_number", "aws_instance_id")
+_GROUP_LISTING_HOST_SELECT = ",\n                ".join(f"h.{c} AS host_{c}" for c in _GROUP_LISTING_HOST_COLUMNS)
 
+
+def _groups_with_hosts_from_rows(rows) -> list[dict]:
+    """Fold the group-by-host rows of the ``include_hosts`` listing into
+    groups with embedded host arrays, tree ordered (rows arrive in sibling
+    order, then by host address)."""
     groups: list[dict] = []
     by_group_id: dict[int, dict] = {}
     for row in rows:
@@ -113,41 +158,52 @@ async def get_all_groups_with_hosts() -> list[dict]:
                 "id": gid,
                 "name": row["group_name"],
                 "description": row["group_description"] or "",
+                "parent_id": row["group_parent_id"],
                 "host_count": 0,
                 "hosts": [],
             }
             by_group_id[gid] = group
             groups.append(group)
 
-        host_id = row["host_id"]
-        if host_id is None:
+        if row["host_id"] is None:
             continue
-        group["hosts"].append(
-            {
-                "id": host_id,
-                "group_id": row["host_group_id"],
-                "hostname": row["host_hostname"],
-                "ip_address": row["host_ip_address"],
-                "device_type": row["host_device_type"],
-                "status": row["host_status"],
-                "last_seen": row["host_last_seen"],
-                "model": row["host_model"] or "",
-                "software_version": row["host_software_version"] or "",
-                "device_category": row["host_device_category"] or "",
-                "serial_number": row["host_serial_number"] or "",
-                "aws_instance_id": row["host_aws_instance_id"] or "",
-            }
-        )
+        host = {c: row[f"host_{c}"] for c in _GROUP_LISTING_HOST_COLUMNS}
+        for c in _GROUP_LISTING_TEXT_COLUMNS:
+            host[c] = host[c] or ""
+        group["hosts"].append(host)
         group["host_count"] += 1
 
-    return groups
+    return _tree_ordered(groups)
+
+
+async def get_all_groups_with_hosts() -> list[dict]:
+    """Return all groups with embedded host arrays using a single query
+    (tree ordered, like ``get_all_groups``)."""
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(f"""
+            SELECT
+                g.id AS group_id,
+                g.name AS group_name,
+                g.description AS group_description,
+                g.parent_id AS group_parent_id,
+                {_GROUP_LISTING_HOST_SELECT}
+            FROM inventory_groups g
+            LEFT JOIN hosts h ON h.group_id = g.id
+            ORDER BY g.name, h.ip_address
+        """)  # noqa: S608 - fixed column names
+        rows = await cursor.fetchall()
+    finally:
+        await db.close()
+    return _groups_with_hosts_from_rows(rows)
 
 
 async def get_all_groups_for_user(user_id: int) -> list[dict]:
     """Like get_all_groups but ordered by the user's saved drag order.
 
     Groups the user has not explicitly positioned fall to the bottom
-    alphabetically (COALESCE(position, large sentinel)).
+    alphabetically (COALESCE(position, large sentinel)). The order applies
+    among siblings: the result is still a tree (parents before sub-groups).
     """
     db = await _dbcore.get_db(read_only=True)
     try:
@@ -168,7 +224,7 @@ async def get_all_groups_for_user(user_id: int) -> list[dict]:
         await db.close()
     for row in rows:
         row.pop("_position", None)
-    return rows
+    return _tree_ordered(rows)
 
 
 async def get_all_groups_with_hosts_for_user(user_id: int) -> list[dict]:
@@ -176,74 +232,25 @@ async def get_all_groups_with_hosts_for_user(user_id: int) -> list[dict]:
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
-            """
+            f"""
             SELECT
                 g.id AS group_id,
                 g.name AS group_name,
                 g.description AS group_description,
-                o.position AS _position,
-                h.id AS host_id,
-                h.group_id AS host_group_id,
-                h.hostname AS host_hostname,
-                h.ip_address AS host_ip_address,
-                h.device_type AS host_device_type,
-                h.status AS host_status,
-                h.last_seen AS host_last_seen,
-                h.model AS host_model,
-                h.software_version AS host_software_version,
-                h.device_category AS host_device_category,
-                h.serial_number AS host_serial_number,
-                h.aws_instance_id AS host_aws_instance_id
+                g.parent_id AS group_parent_id,
+                {_GROUP_LISTING_HOST_SELECT}
             FROM inventory_groups g
             LEFT JOIN hosts h ON h.group_id = g.id
             LEFT JOIN user_inventory_group_order o
                    ON o.group_id = g.id AND o.user_id = ?
             ORDER BY COALESCE(o.position, 2147483647), g.name, h.ip_address
-            """,
+            """,  # noqa: S608 - fixed column names
             (user_id,),
         )
         rows = await cursor.fetchall()
     finally:
         await db.close()
-
-    groups: list[dict] = []
-    by_group_id: dict[int, dict] = {}
-    for row in rows:
-        gid = int(row["group_id"])
-        group = by_group_id.get(gid)
-        if group is None:
-            group = {
-                "id": gid,
-                "name": row["group_name"],
-                "description": row["group_description"] or "",
-                "host_count": 0,
-                "hosts": [],
-            }
-            by_group_id[gid] = group
-            groups.append(group)
-
-        host_id = row["host_id"]
-        if host_id is None:
-            continue
-        group["hosts"].append(
-            {
-                "id": host_id,
-                "group_id": row["host_group_id"],
-                "hostname": row["host_hostname"],
-                "ip_address": row["host_ip_address"],
-                "device_type": row["host_device_type"],
-                "status": row["host_status"],
-                "last_seen": row["host_last_seen"],
-                "model": row["host_model"] or "",
-                "software_version": row["host_software_version"] or "",
-                "device_category": row["host_device_category"] or "",
-                "serial_number": row["host_serial_number"] or "",
-                "aws_instance_id": row["host_aws_instance_id"] or "",
-            }
-        )
-        group["host_count"] += 1
-
-    return groups
+    return _groups_with_hosts_from_rows(rows)
 
 
 async def set_user_group_order(user_id: int, ordered_group_ids: list[int]) -> None:
@@ -264,21 +271,66 @@ async def set_user_group_order(user_id: int, ordered_group_ids: list[int]) -> No
         await db.close()
 
 
+async def _group_chain(db, group_id: int) -> list[dict]:
+    """The group and its ancestors, from the top group down (``[]`` when the
+    group does not exist)."""
+    cursor = await db.execute(
+        f"""
+        WITH RECURSIVE chain (id, name, parent_id, lvl) AS (
+            SELECT id, name, parent_id, 0 FROM inventory_groups WHERE id = ?
+            UNION ALL
+            SELECT g.id, g.name, g.parent_id, c.lvl + 1
+            FROM inventory_groups g JOIN chain c ON g.id = c.parent_id
+            WHERE c.lvl < {_MAX_GROUP_DEPTH}
+        )
+        SELECT id, name, parent_id FROM chain ORDER BY lvl DESC
+        """,  # noqa: S608 - a fixed integer
+        (group_id,),
+    )
+    return rows_to_list(await cursor.fetchall())
+
+
+async def _check_parent(db, group_id: int | None, parent_id: int | None) -> None:
+    """Raise ``ValueError`` when ``parent_id`` is not a group, or is
+    ``group_id`` itself or one of its sub-groups (a cycle)."""
+    if parent_id is None:
+        return
+    chain = await _group_chain(db, parent_id)
+    if not chain:
+        raise ValueError("Parent group not found")
+    if group_id is not None and any(g["id"] == group_id for g in chain):
+        raise ValueError("A group cannot be moved under itself or one of its sub-groups")
+
+
 async def get_group(group_id: int) -> dict | None:
+    """One group with its ``parent_id``, ``path`` (the names from the top,
+    joined with " / ") and ``depth`` (0 for a top-level group)."""
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM inventory_groups WHERE id = ?", (group_id,))
-        return row_to_dict(await cursor.fetchone())
+        group = row_to_dict(await cursor.fetchone())
+        if group is None:
+            return None
+        chain = await _group_chain(db, group_id)
     finally:
         await db.close()
+    group["path"] = GROUP_PATH_SEPARATOR.join(g["name"] for g in chain) or group["name"]
+    group["depth"] = max(len(chain) - 1, 0)
+    return group
 
 
-async def create_group(name: str, description: str = "") -> int:
+async def create_group(name: str, description: str = "", parent_id: int | None = None) -> int:
+    """Create a group, at the top level or under ``parent_id``.
+
+    Raises ``ValueError`` when the parent does not exist. A sibling with the
+    same name fails the unique index (``_is_unique_violation``).
+    """
     db = await _dbcore.get_db()
     try:
+        await _check_parent(db, None, parent_id)
         cursor = await db.execute(
-            "INSERT INTO inventory_groups (name, description) VALUES (?, ?)",
-            (name, description),
+            "INSERT INTO inventory_groups (name, description, parent_id) VALUES (?, ?, ?)",
+            (name, description, parent_id),
         )
         await db.commit()
         return cursor.lastrowid
@@ -286,21 +338,111 @@ async def create_group(name: str, description: str = "") -> int:
         await db.close()
 
 
-async def update_group(group_id: int, name: str, description: str = ""):
+# ``update_group``'s default for ``parent_id``: leave the parent as it is.
+_UNCHANGED: Any = object()
+
+
+async def update_group(group_id: int, name: str, description: str = "", parent_id: int | None = _UNCHANGED):
+    """Rename a group and, when ``parent_id`` is given, move it (``None``
+    moves it to the top level). Raises ``ValueError`` when the parent does
+    not exist or is the group itself or one of its sub-groups."""
     db = await _dbcore.get_db()
     try:
-        await db.execute(
-            "UPDATE inventory_groups SET name = ?, description = ? WHERE id = ?",
-            (name, description, group_id),
-        )
+        if parent_id is _UNCHANGED:
+            await db.execute(
+                "UPDATE inventory_groups SET name = ?, description = ? WHERE id = ?",
+                (name, description, group_id),
+            )
+        else:
+            await _check_parent(db, group_id, parent_id)
+            await db.execute(
+                "UPDATE inventory_groups SET name = ?, description = ?, parent_id = ? WHERE id = ?",
+                (name, description, parent_id, group_id),
+            )
         await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
+
+
+async def get_or_create_group_path(names: list[str], description: str = "") -> list[dict]:
+    """The groups along ``names`` (from the top), creating each missing one
+    under the previous one with ``description``.
+
+    A level matches a sibling by exact name. Returns one dict per level from
+    the top: ``id``, ``name``, ``parent_id``, ``path`` and ``created`` (True
+    for a group this call made). A level created concurrently by someone else
+    is looked up again and reused.
+    """
+    cleaned = [n.strip() for n in names]
+    if not cleaned or any(not n for n in cleaned):
+        raise ValueError("A group path needs at least one name and no empty names")
+    levels: list[dict] = []
+    parent_id: int | None = None
+    db = await _dbcore.get_db()
+    try:
+        for name in cleaned:
+            path = GROUP_PATH_SEPARATOR.join([*(lv["name"] for lv in levels), name])
+            row = await _find_child_group(db, parent_id, name)
+            created = False
+            if row is None:
+                try:
+                    cursor = await db.execute(
+                        "INSERT INTO inventory_groups (name, description, parent_id) VALUES (?, ?, ?)",
+                        (name, description, parent_id),
+                    )
+                    await db.commit()
+                    gid = cursor.lastrowid
+                    created = True
+                except Exception as exc:
+                    await db.rollback()
+                    if not _is_unique_violation(exc):
+                        raise
+                    row = await _find_child_group(db, parent_id, name)
+                    if row is None:
+                        raise
+                    gid = row["id"]
+            else:
+                gid = row["id"]
+            levels.append({"id": gid, "name": name, "parent_id": parent_id, "path": path, "created": created})
+            parent_id = gid
+    finally:
+        await db.close()
+    return levels
+
+
+async def _find_child_group(db, parent_id: int | None, name: str) -> dict | None:
+    """The sub-group of ``parent_id`` (a top-level group for ``None``) named ``name``."""
+    if parent_id is None:
+        cursor = await db.execute(
+            "SELECT id, name, parent_id FROM inventory_groups WHERE parent_id IS NULL AND name = ?", (name,)
+        )
+    else:
+        cursor = await db.execute(
+            "SELECT id, name, parent_id FROM inventory_groups WHERE parent_id = ? AND name = ?", (parent_id, name)
+        )
+    return row_to_dict(await cursor.fetchone())
+
+
+async def find_top_level_group(name: str) -> dict | None:
+    """The top-level group named ``name`` (sub-groups of that name are not matched)."""
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        return await _find_child_group(db, None, name)
     finally:
         await db.close()
 
 
 async def delete_group(group_id: int):
+    """Delete a group, its hosts and the jobs that targeted it. Raises
+    ``ValueError`` when the group has sub-groups (delete or move them first)."""
     db = await _dbcore.get_db()
     try:
+        cursor = await db.execute("SELECT COUNT(*) FROM inventory_groups WHERE parent_id = ?", (group_id,))
+        if (await cursor.fetchone())[0]:
+            raise ValueError("The group has sub-groups: delete them or move them to another parent first")
         # Delete jobs referencing this group (job_events cascade automatically)
         await db.execute("DELETE FROM jobs WHERE inventory_group_id = ?", (group_id,))
         await db.execute("DELETE FROM inventory_groups WHERE id = ?", (group_id,))
