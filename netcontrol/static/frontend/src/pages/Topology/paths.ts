@@ -70,6 +70,23 @@ export function userPick(node: TopologyNode, subnets: MerakiSubnet[]): PathPick 
   };
 }
 
+/**
+ * The pick of `subnet` at its owner `node` for the text typed to find it: the
+ * typed address is kept when it is narrower than the subnet, so the trace
+ * matches rules against that address rather than the whole subnet.
+ */
+export function subnetPick(subnet: MerakiSubnet, node: NodeId, typed: string): PathPick {
+  const text = typed.trim();
+  const address = isAddressText(text) && text !== subnet.cidr ? text : undefined;
+  return {
+    key: `s:${subnet.org_ref}:${address ?? subnet.cidr}:${subnet.node_id}`,
+    node,
+    label: `${address ?? subnet.cidr} · ${subnet.site_name || subnet.name}`,
+    subnet,
+    address,
+  };
+}
+
 export interface PickLeg {
   from: PathPick;
   to: PathPick;

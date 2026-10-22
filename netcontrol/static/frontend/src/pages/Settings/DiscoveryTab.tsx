@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { groupLabel } from '@/api/inventory';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
   StpDiscoveryConfig,
@@ -364,7 +365,7 @@ function StpRootPoliciesSection() {
             >
               {(groups.data || []).map((g) => (
                 <option key={g.id} value={g.id}>
-                  {g.name}
+                  {groupLabel(g)}
                 </option>
               ))}
             </select>

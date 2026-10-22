@@ -340,6 +340,50 @@ Catalyst core, or a cloud-monitored Catalyst that Plexus manages directly.
   same one background monitoring uses - and is skipped, with a collection
   warning, if none is configured.
 
+**Add to inventory.** A neighbor that is not yet a Plexus host can be made
+one from the map: the Topology toolbar's **Add to inventory…** lists every
+device on the current map that is not in inventory and has an IP address
+(CDP/LLDP neighbors reported by Meraki devices, external neighbors from SNMP
+discovery, cloud instances), one row per address. Each row suggests a device
+type from the model or platform the map reported (`cisco C9410R` is IOS-XE,
+NX-OS is NX-OS, an unknown device is ICMP-only) that can be changed before
+adding. Tick the devices (the search box filters them; **Select all shown**
+ticks every row shown) and choose where they go:
+
+- **Automatic by source and site** (the default) puts each device in a
+  sub-group per site under a group per source (see *Group hierarchy* in
+  `docs/core-concepts.md`): a device or neighbor of a snapshot site goes to
+  `<Provider> / <site>` (`Meraki / HQ` for a Meraki network and the CDP/LLDP
+  neighbors its devices report, `Cato / <site>`, `FMC / <site>`,
+  `Panorama / <site>`, `Appgate / <site>`, `AWS / <VPC>`, `Azure / <VNet>`,
+  `GCP / <network>`); an external SNMP neighbor goes to
+  `Discovered neighbors / <group>`, after the inventory group of the host
+  that reported it; anything else goes to the top-level `Topology devices`.
+  The table's **Group** column shows each device's group path, and the list
+  above it names every path the ticked devices will use, with a count, with
+  the sub-group's name in an editable box: rename one there and every device
+  suggested for it follows (the parent group stays). Each level that does
+  not exist yet is created (description "Added from the Topology map"), so
+  `Meraki` is created once with a sub-group per site; one that does is
+  reused. Hosts go into the sub-group only; the parent group has no hosts of
+  its own.
+- **One group** puts every ticked device in one group you pick or create.
+
+An address that is already a host in any group is skipped and reported with
+that host's group; the summary lists the groups created (by path) and how
+many devices went into each group. The added devices turn into inventory
+nodes on the map, so route captures, config backups, path tracing and the
+SSH data above can use them. The dialog calls `POST /api/inventory/hosts/bulk`
+with `{"hosts": [...]}` (up to 500), where each entry names its group by
+`group_id`, by `group_path` (the names from the top, `["Meraki", "HQ"]`; each
+missing level is created) or by `group_name` (a top-level group, created when
+missing) - at most one; a body-level `group_id` is the default for entries
+that name none. The answer lists `added` (with each host's `group_id`,
+`group_name` and `group_path`), `skipped`, `errors` and `groups_created`
+(every level created, parents first, with `id`, `name`, `parent_id` and
+`path`). `POST /api/inventory/{group_id}/hosts/bulk` still adds every entry
+to one group.
+
 ### Scope and speed
 
 Meraki limits the Dashboard API to 10 requests per second per organization.

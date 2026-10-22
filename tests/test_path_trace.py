@@ -2126,6 +2126,34 @@ def test_sweep_filters_compose():
     assert echoed["vlans"] == "100-120,5" and echoed["name"] == ["/a,b/", "user"]
 
 
+def test_sweep_overlaps_filter_keeps_every_network_that_shares_an_address():
+    from netcontrol.integrations.pathtrace.sweep import parse_filters, select_rows
+
+    rows = [
+        _row("10.0.0.0/8", "Static route Everything", kind="static"),  # contains the range
+        _row("10.64.10.0/24", "VLAN 10 Data"),  # inside it
+        _row("10.64.0.0/16", "Azure hub", kind="subnet", provider="azure"),  # the range itself
+        _row("10.65.0.0/24", "VLAN 65 Disjoint"),
+        _row("2001:db8::/32", "VLAN 10 Data v6"),
+    ]
+
+    def kept(**values) -> list[str]:
+        return [r["cidr"] for r in select_rows(rows, parse_filters(kinds="all", **values), None)]
+
+    assert kept(overlaps="10.64.0.0/16") == ["10.0.0.0/8", "10.64.10.0/24", "10.64.0.0/16"]
+    # Within keeps only the networks inside the range; the wider route is left out.
+    assert kept(within="10.64.0.0/16") == ["10.64.10.0/24", "10.64.0.0/16"]
+    # Each range of a list is tried; one of either IP version matches its own.
+    assert kept(overlaps="10.64.10.128/25, 2001:db8:1::/48") == [
+        "10.0.0.0/8",
+        "10.64.10.0/24",
+        "10.64.0.0/16",
+        "2001:db8::/32",
+    ]
+    assert kept(overlaps="192.168.0.0/16") == []
+    assert parse_filters(overlaps="10.64.0.0/16").to_json()["overlaps"] == ["10.64.0.0/16"]
+
+
 @pytest.mark.parametrize(
     "bad",
     [
@@ -2136,6 +2164,7 @@ def test_sweep_filters_compose():
         {"exclude": "/[a/"},
         {"kinds": "vlan,tunnel"},
         {"within": "10.0.0.0/33"},
+        {"overlaps": "ten.0.0.0/8"},
         {"in_vpn": "maybe"},
         {"sources": "one"},
     ],
@@ -2720,6 +2749,64 @@ def test_api_reachability_lists_the_networks_the_filters_keep(api):
         tabs = re.findall(r'<sheet name="([^"]+)"', archive.read("xl/workbook.xml").decode("utf-8"))
     assert tabs == ["Networks"]
     assert api.get("/api/topology/reachability?list=maybe").status_code == 400
+
+
+def test_api_reachability_overlaps_filter_keeps_networks_over_the_range(api):
+    assert api.post("/api/sources/sample?provider=meraki").status_code == 201
+    subnets = api.get("/api/sources/subnets").json()["subnets"]
+    vlan = next(s for s in subnets if s.get("provider") == "meraki" and s.get("kind") == "vlan")
+    inside = vlan["cidr"].split("/")[0]  # an address of the VLAN: the VLAN contains it
+    response = api.get(f"/api/topology/reachability?list=1&kinds=all&overlaps={inside}/32&within={inside}/32")
+    assert response.status_code == 200, response.text
+    # Within keeps networks inside the /32 only; the VLAN is wider, so nothing.
+    assert response.json()["rows"] == []
+    response = api.get(f"/api/topology/reachability?list=1&kinds=all&overlaps={inside}/32")
+    body = response.json()
+    assert body["filters"]["overlaps"] == [f"{inside}/32"]
+    assert vlan["cidr"] in {r["cidr"] for r in body["rows"]}
+    bad = api.get("/api/topology/reachability?list=1&overlaps=nope")
+    assert bad.status_code == 400 and "overlaps: 'nope' is not an IP network" in bad.json()["error"]["message"]
+
+
+def test_api_summarize_reports_routes_and_their_overlaps(api):
+    import ipaddress
+
+    assert api.post("/api/sources/sample?provider=meraki").status_code == 201
+    subnets = api.get("/api/sources/subnets").json()["subnets"]
+    vlan = next(s for s in subnets if s.get("provider") == "meraki" and s.get("kind") == "vlan")
+    hosts = [str(h) for h in list(ipaddress.ip_network(vlan["cidr"]).hosts())[:3]]
+    addresses = "\n".join([*hosts, hosts[0], "192.0.2.10"])
+
+    response = api.post("/api/topology/summarize", json={"addresses": addresses, "prefix": 16, "kinds": "all"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["input_count"] == 5 and body["unique_count"] == 4 and body["uncovered"] == []
+    assert body["prefix"] == 16 and body["max_routes"] is None and body["filters"]["kinds"][0] == "vlan"
+    assert body["route_count"] == len(body["routes"]) == 2
+    route = next(r for r in body["routes"] if r["input_count"] == 3)
+    assert route["cidr"] == str(ipaddress.ip_network(f"{hosts[0]}/16", strict=False))
+    assert route["inputs"] == sorted((f"{h}/32" for h in hosts), key=lambda c: ipaddress.ip_network(c))
+    hit = next(o for o in route["overlaps"] if o["cidr"] == vlan["cidr"])
+    assert hit["relation"] in ("inside", "equal") and hit["provider"] == "meraki" and hit["node_label"]
+    assert body["text"].splitlines() == [r["cidr"] for r in body["routes"]]
+
+    # The filters pick what is checked: no other source is loaded, so nothing overlaps.
+    others = api.post(
+        "/api/topology/summarize",
+        json={"addresses": addresses, "max_routes": 1, "providers": "aws,azure,cato", "kinds": "all"},
+    ).json()
+    assert others["route_count"] == 1 and all(r["overlaps"] == [] for r in others["routes"])
+
+    for payload, message in (
+        ({"addresses": "10.0.0.1, nope"}, "'nope' is not an IP address or network"),
+        ({"addresses": "10.0.0.1", "prefix": 33}, "prefix must be from 0 to 32"),
+        ({"addresses": "10.0.0.1", "max_routes": 0}, "max_routes must be at least 1"),
+        ({"addresses": "10.0.0.1", "kinds": "tunnel"}, "kinds: tunnel is not one of"),
+        ({"addresses": " ".join(f"10.0.{i // 256}.{i % 256}" for i in range(5001))}, "at most 5000"),
+    ):
+        bad = api.post("/api/topology/summarize", json=payload)
+        assert bad.status_code == 400, payload
+        assert message in bad.json()["error"]["message"], payload
 
 
 # ── Catalyst inventory hosts: configuration backups ──────────────────────────

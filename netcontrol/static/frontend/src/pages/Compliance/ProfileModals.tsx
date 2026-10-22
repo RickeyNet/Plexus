@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 
+import { groupLabel } from '@/api/inventory';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -263,7 +264,7 @@ export function AssignProfileModal({
                       setSelectedGroups(next);
                     }}
                   />
-                  <span>{g.name}</span>
+                  <span>{groupLabel(g)}</span>
                   {already && (
                     <span style={{ fontSize: '0.8em', color: 'var(--text-muted)' }}>
                       (already assigned)

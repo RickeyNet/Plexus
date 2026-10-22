@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-import { type InventoryGroupFull } from '@/api/inventory';
+import { groupLabel, type InventoryGroupFull } from '@/api/inventory';
 import {
   type MaintenanceWindowPayload,
   type WindowPolicy,
@@ -289,7 +289,7 @@ export function MaintenanceWindowModal({ isOpen, onClose, editingId, groups }: P
                   className={`btn btn-sm ${on ? 'btn-primary' : 'btn-ghost'}`}
                   onClick={() => toggleGroup(g.id)}
                 >
-                  {g.name}
+                  {groupLabel(g)}
                 </button>
               );
             })}

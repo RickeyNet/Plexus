@@ -184,6 +184,16 @@ export const DETAIL_CELL_STYLE = {
   verticalAlign: 'top',
 } as const;
 
+/** A labelled form field: its label above its input. */
+export const FIELD_STYLE = { display: 'flex', flexDirection: 'column', gap: '0.2rem', minWidth: 160 } as const;
+/** A small note under or beside a field. */
+export const NOTE_STYLE = { fontSize: '0.8rem' } as const;
+
+/** A table header cell: left-aligned, on one line. */
+export const HEAD_STYLE = { ...DETAIL_CELL_STYLE, textAlign: 'left', whiteSpace: 'nowrap' } as const;
+/** Long names and sentences wrap anywhere, so the table never widens the page. */
+export const TEXT_CELL_STYLE = { ...DETAIL_CELL_STYLE, overflowWrap: 'anywhere' } as const;
+
 /** A table wider than the panel scrolls sideways; the scrollbar stays visible so the cut-off is obviously scrollable (overlay scrollbars hide it). */
 export const SCROLL_X_STYLE = {
   overflowX: 'auto',

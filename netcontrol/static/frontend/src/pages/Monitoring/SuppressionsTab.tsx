@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
-import { useInventoryGroupsFull } from '@/api/inventory';
+import { groupLabel, useInventoryGroupsFull } from '@/api/inventory';
 import {
   useAlertSuppressions,
   useCreateSuppression,
@@ -81,7 +81,7 @@ function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
   const { alert } = useDialogs();
   const createMut = useCreateSuppression();
   const groups = useInventoryGroupsFull(true);
-  const allHosts = (groups.data ?? []).flatMap((g) => (g.hosts ?? []).map((h) => ({ ...h, group_name: g.name })));
+  const allHosts = (groups.data ?? []).flatMap((g) => (g.hosts ?? []).map((h) => ({ ...h, group_name: groupLabel(g) })));
 
   const now = new Date();
   const [name, setName] = useState('');
@@ -149,7 +149,7 @@ function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
           <select className="form-select" value={groupId} onChange={(e) => setGroupId(e.target.value)}>
             <option value="">All Groups</option>
             {(groups.data ?? []).map((g) => (
-              <option key={g.id} value={g.id}>{g.name}</option>
+              <option key={g.id} value={g.id}>{groupLabel(g)}</option>
             ))}
           </select>
         </div>

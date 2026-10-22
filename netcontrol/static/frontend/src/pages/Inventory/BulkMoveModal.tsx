@@ -2,7 +2,7 @@ import { FormEvent, useState } from 'react';
 
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
-import { type InventoryGroupFull, useMoveHosts } from '@/api/inventory';
+import { groupLabel, type InventoryGroupFull, useMoveHosts } from '@/api/inventory';
 
 interface Props {
   hostIds: number[];
@@ -65,7 +65,7 @@ export function BulkMoveModal({ hostIds, sourceGroupId, groups, onClose }: Props
             >
               {candidates.map((g) => (
                 <option key={g.id} value={g.id}>
-                  {g.name}
+                  {groupLabel(g)}
                 </option>
               ))}
             </select>

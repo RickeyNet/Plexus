@@ -10,6 +10,7 @@ import {
   streamSyncInventoryGroup,
   useOnboardDiscoveredHosts,
   useTestGroupSnmpProfile,
+  groupLabel,
 } from '@/api/inventory';
 
 export type DiscoveryMode = 'sync' | 'scan' | 'global';
@@ -301,7 +302,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
     : isGlobal
       ? 'Discover Devices'
       : 'Discovery Scan';
-  const title = group ? `${titlePrefix}: ${group.name}` : titlePrefix;
+  const title = group ? `${titlePrefix}: ${groupLabel(group)}` : titlePrefix;
 
   if (phase === 'sync-result' && syncResult) {
     return (
@@ -682,7 +683,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
             >
               {groups.map((g) => (
                 <option key={g.id} value={g.id}>
-                  {g.name}
+                  {groupLabel(g)}
                 </option>
               ))}
             </select>

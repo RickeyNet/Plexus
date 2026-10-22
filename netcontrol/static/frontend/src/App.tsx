@@ -76,6 +76,7 @@ const BREADCRUMBS: Record<string, string> = {
   '/cloud-visibility/policy': 'Cloud · Policy',
   '/topology': 'Topology',
   '/topology/reachability': 'Topology · Reachability',
+  '/topology/summarize': 'Topology · Summarize',
   '/settings': 'Settings',
   '/network-tools': 'Network Tools · MAC Tracking',
   '/network-tools/traffic': 'Network Tools · Traffic Analysis',
@@ -245,7 +246,7 @@ export function App() {
           <Route path="/monitoring/suppressions" element={<Navigate to="/monitoring/configure/suppressions" replace />} />
           <Route path="/monitoring/oid-profiles" element={<Navigate to="/monitoring/configure/oid-profiles" replace />} />
           <Route path="/cloud-visibility/:tab?" element={<CloudVisibility />} />
-          {/* Topology: the map (/topology) and the reachability sweep (/topology/reachability). */}
+          {/* Topology: the map (/topology), the reachability sweep (/topology/reachability) and address summaries (/topology/summarize). */}
           <Route path="/topology/:tab?" element={<Topology />} />
           <Route path="/settings/:tab?" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />

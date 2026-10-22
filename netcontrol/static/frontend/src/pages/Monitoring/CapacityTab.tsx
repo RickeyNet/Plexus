@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { groupLabel } from '@/api/inventory';
 import { useInventoryGroups } from '@/api/compliance';
 import { useCapacityPlanning, type CapacityPlanningPoint } from '@/api/monitoring';
 
@@ -53,7 +54,7 @@ export function CapacityTab() {
         >
           <option value="">All Groups</option>
           {(groups.data ?? []).map((g) => (
-            <option key={g.id} value={g.id}>{g.name}</option>
+            <option key={g.id} value={g.id}>{groupLabel(g)}</option>
           ))}
         </select>
       </div>
