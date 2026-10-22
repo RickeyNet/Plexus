@@ -2110,9 +2110,11 @@ export function Topology() {
         <div className="card" style={{ padding: '0.5rem 0.85rem', marginBottom: '0.6rem', borderLeft: '3px solid var(--primary)', fontSize: '0.85rem' }}>
           <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
             <strong>Path</strong>
-            <span className="text-muted">
-              {pathModeHint(pathSiteList.length > 0, showPathSubnets)}
-            </span>
+            {!pathSiteInput && !pathSubnetInput && (
+              <span className="text-muted">
+                {pathModeHint(pathSiteList.length > 0, showPathSubnets)}
+              </span>
+            )}
             {pathSiteList.length > 0 && (
               <>
                 <input
