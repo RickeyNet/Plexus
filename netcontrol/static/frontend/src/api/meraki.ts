@@ -1,8 +1,8 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import type { PathPick, TrafficFilter } from '@/pages/Topology/paths';
+import type { PathPick, TrafficFilter } from "@/pages/Topology/paths";
 
-import { apiRequest } from './client';
+import { apiRequest } from "./client";
 
 export interface MerakiBuildOptions {
   network_tags: string[];
@@ -21,13 +21,15 @@ export interface MerakiBuildOptions {
 }
 
 /** Integrations that feed the map through the same organization pipeline. */
-export type CloudProvider = 'meraki' | 'cato' | 'fmc' | 'panorama' | 'appgate';
+export type CloudProvider = "meraki" | "cato" | "fmc" | "panorama" | "appgate";
 
 /** Clouds whose accounts are Cloud Visibility accounts that also feed the map. */
-export type CloudAccountProvider = 'aws' | 'azure' | 'gcp';
+export type CloudAccountProvider = "aws" | "azure" | "gcp";
 
-export function isCloudAccountProvider(type: string | null | undefined): type is CloudAccountProvider {
-  return type === 'aws' || type === 'azure' || type === 'gcp';
+export function isCloudAccountProvider(
+  type: string | null | undefined,
+): type is CloudAccountProvider {
+  return type === "aws" || type === "azure" || type === "gcp";
 }
 
 export interface CatoBuildOptions {
@@ -138,7 +140,7 @@ export interface MerakiOrg {
   building: boolean;
   snapshot_count?: number;
   last_build_at?: string | null;
-  last_build_status?: 'never' | 'success' | 'partial' | 'failed' | string;
+  last_build_status?: "never" | "success" | "partial" | "failed" | string;
   last_build_message?: string | null;
 }
 
@@ -185,9 +187,49 @@ export interface MerakiBuildResult {
   duration_seconds: number;
 }
 
+/** An inventory host an inventory collection could not read. */
+export interface InventoryCollectionError {
+  host_id: number;
+  hostname: string;
+  ip_address: string;
+  message: string;
+}
+
+/** What an inventory collection (route tables, configurations, VLANs, ports, neighbors and MAC tables over SSH) read. */
+export interface InventoryCollectionResult {
+  /** Hosts the collection tried. */
+  hosts: number;
+  /** Hosts it read something from. */
+  collected: number;
+  /** Route tables stored. */
+  routes: number;
+  /** Running configurations stored. */
+  configs: number;
+  /** Hosts whose VLAN table was read (absent from a run before these were collected). */
+  vlans?: number;
+  /** Hosts whose port table (status, access and trunk VLANs) was read. */
+  interfaces?: number;
+  /** Hosts whose CDP / LLDP neighbors were read. */
+  neighbors?: number;
+  /** Hosts whose MAC address table was read. */
+  macs?: number;
+  /** Hosts left out (no driver for the platform, no address...). */
+  skipped: number;
+  errors: InventoryCollectionError[];
+  warning_count: number;
+  duration_seconds: number;
+}
+
+/** True for the result of an inventory collection rather than an organization build. */
+export function isInventoryCollectionResult(
+  result: MerakiBuildResult | InventoryCollectionResult | null | undefined,
+): result is InventoryCollectionResult {
+  return result != null && "routes" in result && "configs" in result;
+}
+
 export interface MerakiBuildJob {
   job_id: string;
-  status: 'running' | 'completed' | 'partial' | 'failed';
+  status: "running" | "completed" | "partial" | "failed";
   progress: {
     phase?: string;
     calls_done?: number;
@@ -196,8 +238,10 @@ export interface MerakiBuildJob {
     devices?: number;
     hosts_done?: number;
     hosts_total?: number;
+    /** Inventory collection: the hostname just finished. */
+    host?: string;
   };
-  result: MerakiBuildResult | null;
+  result: MerakiBuildResult | InventoryCollectionResult | null;
   error: string | null;
 }
 
@@ -209,7 +253,7 @@ export interface MerakiValidateResult {
 
 export interface DetailSection {
   title: string;
-  kind: 'kv' | 'table' | 'text';
+  kind: "kv" | "table" | "text";
   columns?: string[];
   rows?: string[][];
   text?: string;
@@ -236,7 +280,7 @@ export interface MerakiNodeDetails {
 export interface MerakiSubnet {
   org_ref: number;
   /** Integration whose snapshot holds the subnet; 'inventory' for an inventory host's networks (org_ref INVENTORY_ORG_REF). */
-  provider?: CloudProvider | CloudAccountProvider | 'inventory';
+  provider?: CloudProvider | CloudAccountProvider | "inventory";
   cidr: string;
   name: string;
   /** vlan / lan / static / vpn (behind the appliance), svi (L3 switch), peer (non-Meraki VPN peer), range (Cato site), user (a remote user's own address), host (a cloud virtual machine's private address). */
@@ -274,23 +318,32 @@ export function topologyExportUrl(
   engine = true,
 ): string {
   const params = new URLSearchParams();
-  if (groupId != null) params.set('group_id', String(groupId));
-  if (download) params.set('download', '1');
-  if (!engine) params.set('engine', '0');
+  if (groupId != null) params.set("group_id", String(groupId));
+  if (download) params.set("download", "1");
+  if (!engine) params.set("engine", "0");
   if (path && path.picks.length) {
-    const picks = path.picks.map(({ key, node, label, subnet, address }) => ({ key, node, label, subnet, address }));
-    params.set('path', JSON.stringify({ traffic: path.traffic, picks }));
+    const picks = path.picks.map(({ key, node, label, subnet, address }) => ({
+      key,
+      node,
+      label,
+      subnet,
+      address,
+    }));
+    params.set("path", JSON.stringify({ traffic: path.traffic, picks }));
   }
   const query = params.toString();
-  return `/api/topology/export.html${query ? `?${query}` : ''}`;
+  return `/api/topology/export.html${query ? `?${query}` : ""}`;
 }
 
-export function useMerakiNodeDetails(orgRef: number | null, nodeId: string | null) {
+export function useMerakiNodeDetails(
+  orgRef: number | null,
+  nodeId: string | null,
+) {
   return useQuery({
-    queryKey: ['meraki', 'node', orgRef, nodeId],
+    queryKey: ["meraki", "node", orgRef, nodeId],
     queryFn: () =>
       apiRequest<MerakiNodeDetails>(
-        `/sources/nodes?org_ref=${orgRef}&node_id=${encodeURIComponent(nodeId ?? '')}`,
+        `/sources/nodes?org_ref=${orgRef}&node_id=${encodeURIComponent(nodeId ?? "")}`,
       ),
     enabled: orgRef != null && nodeId != null,
   });
@@ -298,13 +351,14 @@ export function useMerakiNodeDetails(orgRef: number | null, nodeId: string | nul
 
 export function useMerakiSubnets(enabled: boolean) {
   return useQuery({
-    queryKey: ['meraki', 'subnets'],
-    queryFn: () => apiRequest<{ subnets: MerakiSubnet[] }>('/sources/subnets'),
+    queryKey: ["meraki", "subnets"],
+    queryFn: () => apiRequest<{ subnets: MerakiSubnet[] }>("/sources/subnets"),
     enabled,
   });
 }
 
-export type ReachabilityStatus = 'ok' | 'blocked' | 'partial' | 'unknown' | 'info';
+export type ReachabilityStatus =
+  "ok" | "blocked" | "partial" | "unknown" | "info";
 
 /** What Path Mode traces: two subnets or addresses and the traffic between them. */
 export interface PathTraceQuery {
@@ -319,10 +373,12 @@ export interface PathTraceQuery {
 }
 
 /** `unreachable`: no route carries the flow or the link it needs is down, rather than a rule denying it. */
-export type PathVerdict = 'allowed' | 'blocked' | 'unreachable' | 'partial' | 'unknown';
+export type PathVerdict =
+  "allowed" | "blocked" | "unreachable" | "partial" | "unknown";
 
 /** What a step of a hop looked at. */
-export type PathItemStage = 'policy' | 'acl' | 'security_group' | 'nat' | 'route' | 'link' | 'note';
+export type PathItemStage =
+  "policy" | "acl" | "security_group" | "nat" | "route" | "link" | "note";
 
 /**
  * Which ports of the traffic asked about a rule set, a direction or the whole
@@ -383,7 +439,7 @@ export interface PathDirection {
 }
 
 export interface PathAsymmetry {
-  status: 'no' | 'yes' | 'unknown';
+  status: "no" | "yes" | "unknown";
   text: string;
 }
 
@@ -424,15 +480,15 @@ export function pathTraceSearch(query: PathTraceQuery): string {
   };
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(values)) {
-    if (value !== undefined && value !== '') params.set(key, String(value));
+    if (value !== undefined && value !== "") params.set(key, String(value));
   }
   return params.toString();
 }
 
 export function usePathTrace(query: PathTraceQuery | null) {
-  const search = query ? pathTraceSearch(query) : '';
+  const search = query ? pathTraceSearch(query) : "";
   return useQuery({
-    queryKey: ['topology', 'path', search],
+    queryKey: ["topology", "path", search],
     queryFn: () => apiRequest<PathTrace>(`/topology/path?${search}`),
     enabled: query != null,
     staleTime: 60_000,
@@ -574,13 +630,13 @@ interface ReachabilityReportBase {
 
 /** A sweep that traced its networks: one destination, or many (matrix). */
 export interface ReachabilityTraceReport extends ReachabilityReportBase {
-  mode: 'one' | 'matrix';
+  mode: "one" | "matrix";
   rows: ReachabilityRow[];
 }
 
 /** The networks the source filters keep, not traced (`list=1`). */
 export interface NetworkListReport extends ReachabilityReportBase {
-  mode: 'list';
+  mode: "list";
   rows: NetworkRow[];
 }
 
@@ -592,12 +648,12 @@ export function reachabilitySearch(query: ReachabilityQuery): string {
   for (const [key, value] of Object.entries(query)) {
     if (value === undefined || value === null) continue;
     const text = String(value).trim();
-    if (text !== '') params.set(key, text);
+    if (text !== "") params.set(key, text);
   }
   return params.toString();
 }
 
-export type ReachabilityFileFormat = 'xlsx' | 'csv';
+export type ReachabilityFileFormat = "xlsx" | "csv";
 
 /**
  * URL of the file download of a sweep with the same filters: a spreadsheet
@@ -606,18 +662,22 @@ export type ReachabilityFileFormat = 'xlsx' | 'csv';
  */
 export function reachabilityFileUrl(
   query: ReachabilityQuery,
-  format: ReachabilityFileFormat = 'xlsx',
+  format: ReachabilityFileFormat = "xlsx",
   verdict?: PathVerdict | null,
 ): string {
-  const search = reachabilitySearch({ ...query, verdict: verdict ?? undefined });
-  return `/api/topology/reachability?${search}${search ? '&' : ''}format=${format}`;
+  const search = reachabilitySearch({
+    ...query,
+    verdict: verdict ?? undefined,
+  });
+  return `/api/topology/reachability?${search}${search ? "&" : ""}format=${format}`;
 }
 
 export function useReachability(query: ReachabilityQuery | null) {
-  const search = query ? reachabilitySearch(query) : '';
+  const search = query ? reachabilitySearch(query) : "";
   return useQuery({
-    queryKey: ['topology', 'reachability', search],
-    queryFn: () => apiRequest<ReachabilityReport>(`/topology/reachability?${search}`),
+    queryKey: ["topology", "reachability", search],
+    queryFn: () =>
+      apiRequest<ReachabilityReport>(`/topology/reachability?${search}`),
     enabled: query != null,
     staleTime: 60_000,
     // A refused sweep (too many networks, a bad filter) will not pass on a retry.
@@ -650,7 +710,7 @@ export interface SummarizeRequest {
 }
 
 /** How a collected network that overlaps a route lies against it. */
-export type SummarizeRelation = 'equal' | 'inside' | 'contains' | 'overlaps';
+export type SummarizeRelation = "equal" | "inside" | "contains" | "overlaps";
 
 /** A collected network a route overlaps: its network fields and its relation to the route. */
 export interface SummarizeOverlap extends NetworkRow {
@@ -689,14 +749,17 @@ export interface SummarizeReport {
 export function useSummarize() {
   return useMutation({
     mutationFn: (body: SummarizeRequest) =>
-      apiRequest<SummarizeReport>('/topology/summarize', { method: 'POST', body }),
+      apiRequest<SummarizeReport>("/topology/summarize", {
+        method: "POST",
+        body,
+      }),
   });
 }
 
 export function useTopologyDeepSearch(query: string) {
   const q = query.trim();
   return useQuery({
-    queryKey: ['topology', 'deep-search', q],
+    queryKey: ["topology", "deep-search", q],
     queryFn: () =>
       apiRequest<{ results: TopologyDeepSearchHit[]; truncated: boolean }>(
         `/topology/search/deep?q=${encodeURIComponent(q)}`,
@@ -707,7 +770,7 @@ export function useTopologyDeepSearch(query: string) {
 
 export function useMerakiOrgs() {
   return useQuery({
-    queryKey: ['meraki', 'orgs'],
+    queryKey: ["meraki", "orgs"],
     queryFn: () =>
       apiRequest<{
         orgs: MerakiOrg[];
@@ -716,15 +779,21 @@ export function useMerakiOrgs() {
         fmc_default_options: FmcBuildOptions;
         panorama_default_options: PanoramaBuildOptions;
         appgate_default_options: AppgateBuildOptions;
-      }>('/sources'),
+      }>("/sources"),
     // Keeps the "Building" badge honest for builds this tab isn't tracking
     // (started in another tab, or before a page reload).
-    refetchInterval: (query) => (query.state.data?.orgs.some((o) => o.building) ? 4000 : false),
+    refetchInterval: (query) =>
+      query.state.data?.orgs.some((o) => o.building) ? 4000 : false,
   });
 }
 
-/** 'neighbors' is CDP / LLDP discovery of the inventory; the rest are integrations. */
-export type TopologySourceType = 'neighbors' | CloudProvider | CloudAccountProvider;
+/**
+ * 'neighbors' is CDP / LLDP discovery of the inventory over SNMP; 'inventory'
+ * reads inventory devices over SSH (route table, running configuration, VLANs,
+ * ports, neighbors, MAC table); the rest are integrations.
+ */
+export type TopologySourceType =
+  "neighbors" | "inventory" | CloudProvider | CloudAccountProvider;
 
 /** One thing that feeds the topology map, with its last collection. */
 export interface TopologySource {
@@ -733,7 +802,7 @@ export interface TopologySource {
   /** Organization id (Meraki, Cato) or Cloud Visibility account id (AWS, Azure, GCP). */
   id: number | null;
   name: string;
-  status: 'never' | 'success' | 'partial' | 'failed' | string;
+  status: "never" | "success" | "partial" | "failed" | string;
   last_collected_at: string | null;
   message: string;
   /** What the last collection found, e.g. "12 sites, 80 devices". */
@@ -746,22 +815,29 @@ export interface TopologySource {
   /** False for an AWS, Azure or GCP account switched off in Cloud Visibility. */
   enabled: boolean;
   demo: boolean;
+  /** Inventory source only: a Plexus service credential is configured. */
+  service_credential?: boolean;
+  /** Inventory source only: the service credential Settings names, the collection's default. */
+  service_credential_id?: number | null;
 }
 
 export function useTopologySources(enabled = true) {
   return useQuery({
-    queryKey: ['meraki', 'sources'],
-    queryFn: () => apiRequest<{ sources: TopologySource[] }>('/topology/sources'),
+    queryKey: ["meraki", "sources"],
+    queryFn: () =>
+      apiRequest<{ sources: TopologySource[] }>("/topology/sources"),
     enabled,
     // Collections are background jobs with no push channel.
-    refetchInterval: (query) => (query.state.data?.sources.some((s) => s.collecting) ? 4000 : false),
+    refetchInterval: (query) =>
+      query.state.data?.sources.some((s) => s.collecting) ? 4000 : false,
   });
 }
 
 export function useMerakiSnapshots() {
   return useQuery({
-    queryKey: ['meraki', 'snapshots'],
-    queryFn: () => apiRequest<{ snapshots: MerakiSnapshot[] }>('/sources/snapshots'),
+    queryKey: ["meraki", "snapshots"],
+    queryFn: () =>
+      apiRequest<{ snapshots: MerakiSnapshot[] }>("/sources/snapshots"),
   });
 }
 
@@ -776,23 +852,27 @@ export interface CollectionWarning {
 
 export function useSnapshotWarnings(snapshotId: number | null) {
   return useQuery({
-    queryKey: ['meraki', 'snapshot-warnings', snapshotId],
+    queryKey: ["meraki", "snapshot-warnings", snapshotId],
     queryFn: () =>
-      apiRequest<{ snapshot_id: number; warnings: CollectionWarning[] }>(`/sources/snapshots/${snapshotId}/warnings`),
+      apiRequest<{ snapshot_id: number; warnings: CollectionWarning[] }>(
+        `/sources/snapshots/${snapshotId}/warnings`,
+      ),
     enabled: snapshotId != null,
   });
 }
 
 export function useMerakiBuildJob(jobId: string | null) {
   return useQuery({
-    queryKey: ['meraki', 'build', jobId],
+    queryKey: ["meraki", "build", jobId],
     queryFn: () => apiRequest<MerakiBuildJob>(`/sources/builds/${jobId}`),
     enabled: jobId != null,
     // A build is a background job with no push channel; poll until it settles
     // (or the job record is gone, which surfaces as an error).
     refetchInterval: (query) => {
-      if (query.state.status === 'error') return false;
-      return !query.state.data || query.state.data.status === 'running' ? 1500 : false;
+      if (query.state.status === "error") return false;
+      return !query.state.data || query.state.data.status === "running"
+        ? 1500
+        : false;
     },
     retry: false,
   });
@@ -801,17 +881,17 @@ export function useMerakiBuildJob(jobId: string | null) {
 // Meraki data is merged into the topology graph server-side, so anything
 // that changes it also invalidates the graph (and its deep-search results).
 function invalidateMeraki(qc: ReturnType<typeof useQueryClient>) {
-  qc.invalidateQueries({ queryKey: ['meraki'] });
-  qc.invalidateQueries({ queryKey: ['topology'] });
+  qc.invalidateQueries({ queryKey: ["meraki"] });
+  qc.invalidateQueries({ queryKey: ["topology"] });
   // Meraki clients are part of the MAC tracking search.
-  qc.invalidateQueries({ queryKey: ['mac-tracking'] });
+  qc.invalidateQueries({ queryKey: ["mac-tracking"] });
 }
 
 export function useCreateMerakiOrg() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: MerakiOrgInput) =>
-      apiRequest<{ org: MerakiOrg }>('/sources', { method: 'POST', body }),
+      apiRequest<{ org: MerakiOrg }>("/sources", { method: "POST", body }),
     onSuccess: () => invalidateMeraki(qc),
   });
 }
@@ -820,7 +900,7 @@ export function useUpdateMerakiOrg() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, body }: { id: number; body: Partial<MerakiOrgInput> }) =>
-      apiRequest<{ org: MerakiOrg }>(`/sources/${id}`, { method: 'PUT', body }),
+      apiRequest<{ org: MerakiOrg }>(`/sources/${id}`, { method: "PUT", body }),
     onSuccess: () => invalidateMeraki(qc),
   });
 }
@@ -828,7 +908,8 @@ export function useUpdateMerakiOrg() {
 export function useDeleteMerakiOrg() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: number) => apiRequest<void>(`/sources/${id}`, { method: 'DELETE' }),
+    mutationFn: (id: number) =>
+      apiRequest<void>(`/sources/${id}`, { method: "DELETE" }),
     onSuccess: () => invalidateMeraki(qc),
   });
 }
@@ -836,19 +917,48 @@ export function useDeleteMerakiOrg() {
 export function useValidateMerakiOrg() {
   return useMutation({
     mutationFn: (id: number) =>
-      apiRequest<MerakiValidateResult>(`/sources/${id}/validate`, { method: 'POST' }),
+      apiRequest<MerakiValidateResult>(`/sources/${id}/validate`, {
+        method: "POST",
+      }),
   });
+}
+
+// A started collection flips its source to "collecting".
+function invalidateCollecting(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: ["meraki", "orgs"] });
+  qc.invalidateQueries({ queryKey: ["meraki", "sources"] });
 }
 
 export function useStartMerakiBuild() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: number) =>
-      apiRequest<{ job_id: string }>(`/sources/${id}/build`, { method: 'POST' }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['meraki', 'orgs'] });
-      qc.invalidateQueries({ queryKey: ['meraki', 'sources'] });
-    },
+      apiRequest<{ job_id: string }>(`/sources/${id}/build`, {
+        method: "POST",
+      }),
+    onSuccess: () => invalidateCollecting(qc),
+  });
+}
+
+/** What `POST /api/topology/inventory/collect` reads; every field is optional. */
+export interface InventoryCollectRequest {
+  /** One inventory group's direct hosts; null or absent: every host. */
+  group_id?: number | null;
+  host_ids?: number[];
+  /** A saved credential; null or absent: the Plexus service credential. */
+  credential_id?: number | null;
+}
+
+/** Starts an inventory collection (inventory devices read over SSH), tracked as a build job. */
+export function useStartInventoryCollection() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: InventoryCollectRequest) =>
+      apiRequest<{ job_id: string; status: string }>(
+        "/topology/inventory/collect",
+        { method: "POST", body },
+      ),
+    onSuccess: () => invalidateCollecting(qc),
   });
 }
 
@@ -858,13 +968,13 @@ export function useBuildMerakiSample() {
     // 'aws' / 'azure' / 'gcp' load a demo account, which lives under Cloud Visibility.
     mutationFn: (provider: CloudProvider | CloudAccountProvider) =>
       apiRequest<MerakiBuildResult & { org_ref: number }>(
-        `/sources/sample${provider === 'meraki' ? '' : `?provider=${provider}`}`,
-        { method: 'POST' },
+        `/sources/sample${provider === "meraki" ? "" : `?provider=${provider}`}`,
+        { method: "POST" },
       ),
     onSuccess: () => {
       invalidateMeraki(qc);
-      qc.invalidateQueries({ queryKey: ['cloud-accounts'] });
-      qc.invalidateQueries({ queryKey: ['cloud-topology'] });
+      qc.invalidateQueries({ queryKey: ["cloud-accounts"] });
+      qc.invalidateQueries({ queryKey: ["cloud-topology"] });
     },
   });
 }
@@ -872,7 +982,8 @@ export function useBuildMerakiSample() {
 export function useDeleteMerakiSnapshot() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: number) => apiRequest<void>(`/sources/snapshots/${id}`, { method: 'DELETE' }),
+    mutationFn: (id: number) =>
+      apiRequest<void>(`/sources/snapshots/${id}`, { method: "DELETE" }),
     onSuccess: () => invalidateMeraki(qc),
   });
 }

@@ -42,6 +42,7 @@ from netcontrol.drivers.base import (
     NetflowConfig,
     RouteTableCommands,
     get_driver,
+    parse_vlan_ranges,
     register_driver,
     registered_device_types,
 )
@@ -54,6 +55,7 @@ __all__ = [
     "NetflowConfig",
     "RouteTableCommands",
     "get_driver",
+    "parse_vlan_ranges",
     "register_driver",
     "registered_device_types",
 ]

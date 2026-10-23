@@ -291,10 +291,65 @@ def _firewalls() -> tuple[dict, dict]:
     )
 
 
+def _split_rule(index: int, name: str, action: str, *, users: list[dict] | None = None, **fields: Any) -> dict:
+    """A Split Tunnel rule as ``policy { splitTunnel { policy { rules { rule } } } }``
+    returns it: every field the query asks for, empty unless given."""
+    destination = {"application": [], "globalIpRange": [], "domain": [], "fqdn": [], **fields.pop("destination", {})}
+    groups = fields.pop("groups", [])
+    return {
+        "id": f"st-{index}",
+        "name": name,
+        "description": "",
+        "index": index,
+        "enabled": True,
+        "section": _ref("sts-1", "Demo split tunnel"),
+        "source": {"user": users or [], "usersGroup": groups},
+        "platform": [],
+        "country": [],
+        "action": action,
+        "destination": destination,
+        "sourceNetwork": {"sourceNetworkType": "ANY"},
+        "coverage": "ALL",
+        "dnsExclusion": {"domain": []},
+        "routingPriority": "TUNNEL",
+        **fields,
+    }
+
+
+def _split_tunnel() -> dict:
+    """The Split Tunnel policy: one user with exceptions, one routing only a
+    range to Cato, and a group rule for a platform no sample user runs."""
+    rules = [
+        _split_rule(
+            1,
+            "Sam direct to the lab",
+            "ROUTE_ALL_TO_CATO_EXCEPT",
+            users=[_ref("9002", "Sam Okafor")],
+            destination={"globalIpRange": [_ref("gr-1", "Lab-Pool")], "domain": ["updates.example.com"]},
+        ),
+        _split_rule(
+            2,
+            "Lee corporate only",
+            "ROUTE_ONLY_SELECTED",
+            users=[_ref("9004", "Lee Park")],
+            destination={"globalIpRange": [_ref("gr-3", "Corp-Networks")]},
+        ),
+        _split_rule(
+            3,
+            "Contractors on Linux",
+            "ROUTE_ALL_TO_CATO_EXCEPT",
+            groups=[_ref("g-2", "Contractors")],
+            platform=["LINUX"],
+            destination={"fqdn": ["repo.example.com"]},
+        ),
+    ]
+    return {"enabled": True, "rules": rules, "reduced": False}
+
+
 def build_sample_raw() -> dict[str, Any]:
     """A small account: an HA data center, two Socket branches (one down), an
     IPsec site and a few remote users, across two PoPs, and the account's
-    WAN and Internet firewall rules."""
+    WAN and Internet firewall rules and Split Tunnel policy."""
     sites = [
         _site(
             "1001",
@@ -437,6 +492,7 @@ def build_sample_raw() -> dict[str, Any]:
         _user("9001", "Dana Reyes", "New York", "10.88.0.11", "198.51.100.201", "OS_WINDOWS"),
         _user("9002", "Sam Okafor", "Ashburn", "10.88.0.12", "198.51.100.202", "OS_MAC"),
         _user("9003", "Priya Nair", "Ashburn", "10.88.0.13", "198.51.100.10", "OS_WINDOWS", office=True),
+        _user("9004", "Lee Park", "New York", "10.88.0.14", "198.51.100.204", "OS_WINDOWS"),
     ]
     wan_firewall, internet_firewall = _firewalls()
     return {
@@ -450,6 +506,7 @@ def build_sample_raw() -> dict[str, Any]:
         "bgp_peers": [],
         "wan_firewall": wan_firewall,
         "internet_firewall": internet_firewall,
+        "split_tunnel": _split_tunnel(),
         # The account's global IP range objects (Networking > IP Ranges), as
         # ``object.globalIpRangeList`` returns them.
         "global_ip_ranges": [
@@ -466,6 +523,13 @@ def build_sample_raw() -> dict[str, Any]:
                 "description": "",
                 "ipRange": "10.50.10.200-10.50.10.203",
                 "subnet": None,
+            },
+            {
+                "id": "gr-3",
+                "name": "Corp-Networks",
+                "description": "Every private network of the company",
+                "ipRange": "10.0.0.0-10.255.255.255",
+                "subnet": "10.0.0.0/8",
             },
         ],
         "errors": [],

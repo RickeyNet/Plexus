@@ -374,7 +374,7 @@ async def test_enrich_attaches_collected_inventory_data(monkeypatch):
 
     external = next(n for n in snap["nodes"] if n["kind"] == "external")
     assert external["inventory"]["host_id"] == host_id
-    assert _section(external, "VLANs (Plexus SNMP)")["rows"] == [["100", "Servers", "active"]]
+    assert _section(external, "VLANs (Plexus)")["rows"] == [["100", "Servers", "active"]]
     assert "Plexus inventory (SNMP/SSH-collected data)" in snap["collection"]["sources"]
     # Live SSH was requested but no service credential exists: skipped, and said so.
     assert any("service credential" in e["message"] for e in snap["collection"]["errors"])
@@ -646,6 +646,45 @@ def test_merge_keeps_unmatched_neighbor_as_external_and_is_stable(snapshot):
     assert set(again) == set(nodes)
 
 
+def test_merge_device_takes_the_links_discovery_gave_its_unknown_neighbor(snapshot):
+    """An inventory switch's CDP / LLDP saw the appliance before the Meraki
+    snapshot was merged: its ``ext_`` node leaves, the appliance keeps the links."""
+    appliance = next(n for n in snapshot["nodes"] if n["kind"] == "appliance")
+    by_name = external_key(appliance["label"], "")
+    by_mac = "ext_a8469d228c9e"  # CDP names a Meraki device by its MAC address
+    nodes_by_id: dict = {
+        7: _host_graph_node(7),
+        by_name: {"id": by_name, "label": appliance["label"], "ip": "", "in_inventory": False},
+        by_mac: {"id": by_mac, "label": "a8469d228c9e", "ip": "", "in_inventory": False},
+    }
+    edges = [
+        {"id": 1, "from": 7, "to": by_name, "protocol": "lldp", "source_interface": "Te1/1/1"},
+        {"id": 2, "from": by_mac, "to": 7, "protocol": "cdp", "source_interface": "Te1/1/2"},
+    ]
+    seen: list[str] = []
+
+    def discovered(node: dict) -> list:
+        seen.append(node["id"])
+        return [k for k in (external_key(node.get("label") or "", ""), by_mac) if k in nodes_by_id]
+
+    merge_meraki_into_graph(
+        nodes_by_id,
+        edges,
+        [(3, snapshot)],
+        host_node=lambda host_id: nodes_by_id.get(host_id),
+        resolve_external=lambda _name, _ip: None,
+        discovered=discovered,
+    )
+    graph_id = meraki_graph_id(3, appliance["id"])
+    assert graph_id in nodes_by_id and nodes_by_id[graph_id]["source"] == "meraki"
+    assert not any(str(k).startswith("ext_") for k in nodes_by_id)
+    assert [(e["from"], e["to"]) for e in edges if e["id"] in (1, 2)] == [(7, graph_id), (graph_id, 7)]
+    assert all(e["from"] in nodes_by_id and e["to"] in nodes_by_id for e in edges)
+    # Only devices are asked about, never a WAN stub or a neighbor.
+    kinds = {n["id"]: n["kind"] for n in snapshot["nodes"]}
+    assert seen and all(kinds[i] not in ("external", "wan", "vpn_peer") for i in seen)
+
+
 def test_merge_prefers_discovered_link_over_meraki_view(snapshot):
     external = next(n for n in snapshot["nodes"] if n["kind"] == "external")
     lan = next(e for e in snapshot["edges"] if e["kind"] == "lan" and external["id"] in (e["a"], e["b"]))
@@ -731,7 +770,7 @@ def test_graph_to_snapshot_covers_inventory_and_meraki(snapshot):
     nodes["ext_legacy"] = {"id": "ext_legacy", "label": "legacy", "ip": "10.9.9.9", "in_inventory": False}
     edges.append({"id": 99, "from": 7, "to": "ext_legacy", "protocol": "cdp", "source_interface": "Gi1/0/1"})
     graph = {"nodes": list(nodes.values()), "edges": edges}
-    host_sections = {7: [{"title": "VLANs (Plexus SNMP)", "kind": "table", "columns": ["ID"], "rows": [["100"]]}]}
+    host_sections = {7: [{"title": "VLANs (Plexus)", "kind": "table", "columns": ["ID"], "rows": [["100"]]}]}
 
     unified = graph_to_snapshot(graph, {3: snapshot}, host_sections, title="Plexus")
     ids = {n["id"] for n in unified["nodes"]}
@@ -741,7 +780,7 @@ def test_graph_to_snapshot_covers_inventory_and_meraki(snapshot):
 
     host = next(n for n in unified["nodes"] if n["id"] == "7")
     titles = [s["title"] for s in host["sections"]]
-    assert titles[0] == "Overview" and "VLANs (Plexus SNMP)" in titles
+    assert titles[0] == "Overview" and "VLANs (Plexus)" in titles
     assert host["inventory"] == {"host_id": 7}
     legacy = next(n for n in unified["nodes"] if n["id"] == "ext_legacy")
     assert legacy["kind"] == "external"

@@ -31,10 +31,16 @@ other hardening controls; see [meraki-compliance.md](meraki-compliance.md).
 ## Quick start
 
 1. Open **Network → Topology** and click **Sources** in the toolbar. The
-   dialog lists everything that feeds the map (neighbor discovery of the
-   inventory, Meraki organizations, Cato accounts, Cisco FMCs, Palo Alto
-   Panoramas, Appgate SDP collectives, AWS accounts) with its last collection; **Collect All** refreshes every source
-   in one click.
+   dialog lists everything that feeds the map (Meraki organizations, Cato
+   accounts, Cisco FMCs, Palo Alto Panoramas, Appgate SDP collectives, AWS
+   accounts, neighbor discovery of the inventory, and **All other devices
+   (SSH)**, which reads every inventory device the integrations do not
+   cover: its route table and running configuration for the
+   [path trace](path-trace.md#inventory-devices-and-configuration-backups)
+   and its VLAN, port, CDP/LLDP neighbor and MAC tables) with its last
+   collection; **Collect All** refreshes every source in one click. The
+   phones, servers and cameras a switch's CDP/LLDP finds on its access ports
+   stay off the map until **View → End Devices** is ticked.
 2. **Preview without a key.** Click **Load Sample**, then **Meraki**. A demo
    organization is added to the map so you can see the result before
    connecting anything. Delete it from the same dialog when you are done.

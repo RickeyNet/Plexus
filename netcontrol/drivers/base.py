@@ -14,6 +14,8 @@ share one driver, for example.
 
 from __future__ import annotations
 
+import ipaddress
+import re
 from dataclasses import dataclass
 from typing import ClassVar
 
@@ -40,6 +42,86 @@ def _normalise_mac(raw: str) -> str:
     if len(hex_only) != 12:
         return raw.strip().lower()
     return ":".join(hex_only[i : i + 2] for i in range(0, 12, 2))
+
+
+# Every VLAN a trunk can carry, stored literally instead of 4094 ids.
+ALL_VLANS = "1-4094"
+_VLAN_RANGE = re.compile(r"^(\d+)\s*-\s*(\d+)$")
+
+
+def parse_vlan_ranges(text: str) -> set[int]:
+    """The VLAN ids of a list such as ``"1-5,10,20-22"`` (``"ALL"``: every
+    VLAN, ``"NONE"`` or an unreadable item: none). Ids outside 1-4094 are dropped."""
+    out: set[int] = set()
+    for part in str(text or "").split(","):
+        part = part.strip()
+        if part.upper() == "ALL":
+            return set(range(1, 4095))
+        match = _VLAN_RANGE.match(part)
+        if match:
+            first, last = int(match.group(1)), int(match.group(2))
+            out.update(range(max(first, 1), min(last, 4094) + 1))
+        elif part.isdigit() and 1 <= int(part) <= 4094:
+            out.add(int(part))
+    return out
+
+
+def vlan_csv(text: str) -> str:
+    """The comma-separated sorted VLAN ids of a trunk's allowed list (the
+    ``interface_inventory.trunk_vlans`` form), or ``ALL_VLANS`` for every VLAN."""
+    vlans = parse_vlan_ranges(text)
+    if len(vlans) == 4094:
+        return ALL_VLANS
+    return ",".join(str(v) for v in sorted(vlans))
+
+
+def _row_value(row: dict, *keys: str) -> str:
+    """The first non-empty of ``keys`` in an ntc-templates row, as text (a
+    List value is joined with commas). The names differ between templates
+    and between ntc-templates versions, so callers name every candidate."""
+    for key in keys:
+        value = row.get(key)
+        if isinstance(value, list):
+            value = ",".join(str(v).strip() for v in value if str(v).strip())
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _ip_or_blank(text: str) -> str:
+    try:
+        return str(ipaddress.ip_address(text.strip()))
+    except ValueError:
+        return ""
+
+
+def _speed_mbps(text: str) -> int:
+    """Mbps of a status table's speed column (``a-1000``, ``10G``, ``2.5G``, ``100``; ``auto``: 0)."""
+    value = text.strip().lower().removeprefix("a-")
+    match = re.match(r"^(\d+(?:\.\d+)?)\s*([gm]?)", value)
+    if not match:
+        return 0
+    number = float(match.group(1))
+    return int(number * 1000) if match.group(2) == "g" else int(number)
+
+
+def _duplex_word(text: str) -> str:
+    value = text.strip().lower()
+    if not value:
+        return ""
+    if "full" in value:
+        return "full"
+    if "half" in value:
+        return "half"
+    return "unknown"
+
+
+# Status-table words of a port whose link is up, and of one shut down by its configuration.
+_OPER_UP = frozenset({"connected", "up", "monitoring"})
+_ADMIN_DOWN = frozenset({"disabled"})
+_CONFIG_VLAN = re.compile(r"^vlan\s+([\d,\s-]+)$", re.IGNORECASE)
+_CONFIG_NAME = re.compile(r"^\s+name\s+(.+?)\s*$", re.IGNORECASE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,14 +278,15 @@ class Driver:
             mac_raw = (row.get("destination_address") or row.get("mac") or row.get("mac_address") or "").strip()
             if not mac_raw:
                 continue
-            vlan_raw = str(row.get("vlan", "")).strip()
+            # ntc-templates 9 names the column vlan_id and prints the ports as a list.
+            vlan_raw = _row_value(row, "vlan_id", "vlan")
             try:
                 vlan = int(vlan_raw)
             except ValueError, TypeError:
                 # Cisco prints "All" for system / multicast entries — skip
                 # them, they're not learnt MACs.
                 continue
-            port = (row.get("destination_port") or row.get("ports") or row.get("port") or "").strip()
+            port = _row_value(row, "destination_port", "ports", "port").split(",")[0].strip()
             if not port or port.lower() in ("cpu", "router", "switch"):
                 continue
             type_raw = str(row.get("type", "dynamic")).strip().lower()
@@ -213,6 +296,167 @@ class Driver:
                     "vlan": vlan,
                     "port": port,
                     "type": type_raw if type_raw in ("dynamic", "static") else "dynamic",
+                }
+            )
+        return out
+
+    # ── VLAN, port and neighbor tables (CLI) ──────────────────────────────
+    #
+    # The topology inventory collection reads these over the SSH session it
+    # already holds, so a switch without SNMP still gets its VLANs, ports and
+    # CDP/LLDP neighbors. Each show command is parsed by ntc-templates
+    # (Netmiko ``use_textfsm=True``) and the driver turns those rows into the
+    # Plexus rows: ``parse_vlans`` -> ``{"vlan_id", "name", "state"}``,
+    # ``parse_interfaces`` -> the ``interface_inventory`` fields,
+    # ``parse_neighbors`` -> ``{"local_interface", "remote_device_name",
+    # "remote_ip", "remote_interface", "protocol", "remote_platform"}`` (the
+    # SNMP neighbor discovery's keys) plus ``"remote_capabilities"``. A
+    # firewall keeps the raising defaults.
+
+    def vlan_show_command(self) -> str:
+        """Return the show command that lists the VLANs defined on the device."""
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement vlan_show_command()")
+
+    def interface_status_show_command(self) -> str:
+        """Return the show command that prints one status line per port."""
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement interface_status_show_command()")
+
+    def interface_switchport_show_command(self) -> str:
+        """Return the show command that prints each port's access VLAN and trunk VLANs."""
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement interface_switchport_show_command()")
+
+    def neighbor_show_commands(self) -> list[tuple[str, str]]:
+        """Return ``(protocol, command)`` pairs that print the CDP / LLDP neighbors, CDP first."""
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement neighbor_show_commands()")
+
+    def parse_vlans(self, rows: list[dict]) -> list[dict]:
+        """Normalise the parsed ``vlan_show_command()`` rows into ``{"vlan_id", "name", "state"}``."""
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement parse_vlans()")
+
+    def parse_config_vlans(self, config_text: str) -> list[dict]:
+        """The VLANs a running configuration declares, for a device whose
+        VLAN command was rejected or not parsed (same row shape as ``parse_vlans``)."""
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement parse_config_vlans()")
+
+    def parse_interfaces(self, status_rows: list[dict], switchport_rows: list[dict]) -> list[dict]:
+        """Merge the parsed status and switchport rows into ``interface_inventory`` rows."""
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement parse_interfaces()")
+
+    def parse_neighbors(self, protocol: str, rows: list[dict]) -> list[dict]:
+        """Normalise the parsed rows of one ``neighbor_show_commands()`` command."""
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement parse_neighbors()")
+
+    @staticmethod
+    def _parse_cisco_style_vlan_rows(rows: list[dict]) -> list[dict]:
+        """Shared helper for the ``show vlan`` templates of IOS, NX-OS and EOS
+        (vlan_id / vlan_name / status)."""
+        out: dict[int, dict] = {}
+        for row in rows or []:
+            raw = _row_value(row, "vlan_id", "vlan", "tag")
+            if not raw.isdigit() or not 1 <= int(raw) <= 4094:
+                continue
+            state = _row_value(row, "status", "state").lower() or "active"
+            out[int(raw)] = {"vlan_id": int(raw), "name": _row_value(row, "vlan_name", "name"), "state": state}
+        return [out[vid] for vid in sorted(out)]
+
+    @staticmethod
+    def _parse_cisco_style_config_vlans(config_text: str) -> list[dict]:
+        """Shared helper: the ``vlan N`` / `` name X`` blocks of an IOS, NX-OS
+        or EOS configuration (``vlan 10,20-22`` declares several, unnamed)."""
+        found: dict[int, str] = {}
+        current: int | None = None
+        for line in str(config_text or "").splitlines():
+            match = _CONFIG_VLAN.match(line.rstrip())
+            if match:
+                ids = parse_vlan_ranges(match.group(1).replace(" ", ""))
+                for vid in ids:
+                    found.setdefault(vid, "")
+                current = next(iter(ids)) if len(ids) == 1 else None
+                continue
+            name = _CONFIG_NAME.match(line)
+            if current is not None and name:
+                found[current] = name.group(1)
+            elif line.strip() and not line.startswith((" ", "\t")):
+                current = None
+        return [{"vlan_id": vid, "name": found[vid], "state": "active"} for vid in sorted(found)]
+
+    @staticmethod
+    def _parse_cisco_style_interface_rows(status_rows: list[dict], switchport_rows: list[dict]) -> list[dict]:
+        """Shared helper for the ``show interface(s) status`` and ``show
+        interface(s) switchport`` templates of IOS, NX-OS and EOS. Rows are
+        matched by interface name across the abbreviations; the status
+        table's spelling is stored. Value conventions follow the SNMP
+        collector: up/down words, Mbps, access VLAN 0 when none, trunk VLANs
+        as ``vlan_csv``."""
+        from netcontrol.integrations.pathtrace.route_tables import interface_key
+
+        switchports = {
+            interface_key(_row_value(row, "interface", "name", "port")): row
+            for row in switchport_rows or []
+            if _row_value(row, "interface", "name", "port")
+        }
+        out: list[dict] = []
+        for row in status_rows or []:
+            port = _row_value(row, "port", "interface")
+            if not port:
+                continue
+            status = _row_value(row, "status").lower()
+            status_vlan = _row_value(row, "vlan_id", "vlan").lower()
+            switchport = switchports.get(interface_key(port), {})
+            mode = _row_value(switchport, "mode", "operational_mode").lower()
+            admin_mode = _row_value(switchport, "admin_mode", "administrative_mode").lower()
+            trunk = "trunk" in mode or ("trunk" in admin_mode and mode in ("", "down")) or status_vlan == "trunk"
+            access = _row_value(switchport, "access_vlan") or status_vlan.split(",")[0]
+            description = _row_value(row, "name", "description")
+            out.append(
+                {
+                    "name": port,
+                    # NX-OS prints "--" for a port without a description.
+                    "description": "" if description == "--" else description,
+                    "admin_state": "down" if status in _ADMIN_DOWN else ("up" if status else ""),
+                    "oper_state": "up" if status in _OPER_UP else ("down" if status else ""),
+                    "speed_mbps": _speed_mbps(_row_value(row, "speed")),
+                    "duplex": _duplex_word(_row_value(row, "duplex")),
+                    "access_vlan": 0 if trunk or not access.isdigit() else int(access),
+                    # A trunk whose allowed list was not printed (no switchport row) stays unknown.
+                    "trunk_vlans": vlan_csv(_row_value(switchport, "trunking_vlans", "trunk_vlans", "allowed_vlans"))
+                    if trunk
+                    else "",
+                }
+            )
+        return out
+
+    @staticmethod
+    def _parse_neighbor_rows(protocol: str, rows: list[dict]) -> list[dict]:
+        """Shared helper for every CDP / LLDP neighbor template (IOS, NX-OS,
+        EOS, Junos, IOS-XR name the same things differently)."""
+        out: list[dict] = []
+        for row in rows or []:
+            local = _row_value(row, "local_interface", "local_port")
+            name = _row_value(row, "neighbor_name", "neighbor", "destination_host", "system_name", "chassis_id")
+            if not local or not name:
+                continue
+            if protocol == "cdp":
+                # NX-OS prints "name(SERIAL)" as the Device ID; the SNMP discovery keeps the name.
+                name = name.split("(")[0].strip() or name
+                remote = _row_value(row, "neighbor_interface", "remote_port", "port_id")
+                platform = _row_value(row, "platform")
+            else:
+                remote = _row_value(row, "neighbor_port_id", "neighbor_interface", "neighbor_port_description")
+                platform = _row_value(row, "neighbor_description", "system_description", "platform")
+            out.append(
+                {
+                    "local_interface": local,
+                    "remote_device_name": name,
+                    "remote_ip": _ip_or_blank(
+                        _row_value(row, "mgmt_address", "management_ip", "management_address", "interface_ip")
+                    ),
+                    "remote_interface": remote,
+                    "protocol": protocol,
+                    "remote_platform": platform[:200],
+                    # As printed: CDP words ("Router Switch IGMP", "Host Phone"),
+                    # LLDP letters ("B,R", "B,T"). The map tells end devices by them.
+                    "remote_capabilities": _row_value(row, "capabilities")[:100],
                 }
             )
         return out
@@ -455,6 +699,24 @@ class Driver:
         string so the caller can short-circuit.
         """
         raise DriverCapabilityError(f"{type(self).__name__} does not implement upgrade_commit_command()")
+
+
+class CiscoStyleTables:
+    """Mixin: the ``parse_*`` methods of the VLAN, port and neighbor tables
+    for a platform whose ntc-templates follow the Cisco layout (IOS,
+    IOS-XE, NX-OS, EOS). The driver still names its own show commands."""
+
+    def parse_vlans(self, rows: list[dict]) -> list[dict]:
+        return Driver._parse_cisco_style_vlan_rows(rows)
+
+    def parse_config_vlans(self, config_text: str) -> list[dict]:
+        return Driver._parse_cisco_style_config_vlans(config_text)
+
+    def parse_interfaces(self, status_rows: list[dict], switchport_rows: list[dict]) -> list[dict]:
+        return Driver._parse_cisco_style_interface_rows(status_rows, switchport_rows)
+
+    def parse_neighbors(self, protocol: str, rows: list[dict]) -> list[dict]:
+        return Driver._parse_neighbor_rows(protocol, rows)
 
 
 class GenericDriver(Driver):

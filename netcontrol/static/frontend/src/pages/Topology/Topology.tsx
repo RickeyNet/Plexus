@@ -59,6 +59,7 @@ import {
   stpStyle,
   utilColor,
   utilShadow,
+  withoutEndDevices,
   type EdgeColor,
   type SourceFilter,
   type TopoThemeColors,
@@ -142,6 +143,9 @@ export function Topology() {
   const [groupFilter, setGroupFilter] = useState<string>('');
   const [layout, setLayout] = useState<LayoutMode>('tidy');
   const [labelsVisible, setLabelsVisible] = useState(false);
+  // The phones, servers and cameras CDP / LLDP found on access ports stay off
+  // the map until asked for: hundreds of leaves make a large map crawl.
+  const [showEndDevices, setShowEndDevices] = useState(false);
   const [utilOverlay, setUtilOverlay] = useState(false);
   const [stpOverlay, setStpOverlay] = useState(false);
   const [stpVlan, setStpVlan] = useState(1);
@@ -259,7 +263,11 @@ export function Topology() {
     sourceFilter.startsWith('provider:') && !providersOnMap.includes(sourceFilter.slice('provider:'.length))
       ? 'all'
       : sourceFilter;
-  const data = useMemo(() => filterBySource(rawData, activeFilter), [rawData, activeFilter]);
+  const endDeviceCount = useMemo(() => rawData?.nodes.filter((n) => n.end_device).length ?? 0, [rawData]);
+  const data = useMemo(
+    () => withoutEndDevices(filterBySource(rawData, activeFilter), showEndDevices),
+    [rawData, activeFilter, showEndDevices],
+  );
   const backbone = useMemo(() => catoBackbone(data), [data]);
   const backboneRef = useRef(backbone);
   backboneRef.current = backbone;
@@ -2017,6 +2025,19 @@ export function Topology() {
               VPN Tunnels
             </MenuCheckboxItem>
           )}
+          {endDeviceCount > 0 && (
+            <MenuCheckboxItem
+              checked={showEndDevices}
+              onChange={setShowEndDevices}
+              title={
+                showEndDevices
+                  ? `Showing the ${endDeviceCount} phones, servers and cameras CDP / LLDP found on access ports. Click to leave them off the map.`
+                  : `${endDeviceCount} phones, servers and cameras CDP / LLDP found on access ports are left off the map. Click to draw them.`
+              }
+            >
+              End Devices
+            </MenuCheckboxItem>
+          )}
           <MenuSeparator />
           <MenuCheckboxItem checked={utilOverlay} onChange={setUtilOverlay}>Util Overlay</MenuCheckboxItem>
           <MenuCheckboxItem checked={stpOverlay} onChange={setStpOverlay}>STP Overlay</MenuCheckboxItem>
@@ -2451,6 +2472,7 @@ export function Topology() {
         isOpen={sourcesOpen}
         onClose={() => setSourcesOpen(false)}
         onDiscoverNeighbors={() => setDiscoveryOpen(true)}
+        groupId={groupId}
       />
       <ChangesModal
         isOpen={changesOpen}

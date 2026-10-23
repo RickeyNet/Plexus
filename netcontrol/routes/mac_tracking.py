@@ -122,6 +122,52 @@ def _extract_mac_from_oid_suffix(suffix: str) -> str:
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+def mac_sightings_from_cli(rows: list[dict]) -> list[dict]:
+    """A driver's ``parse_mac_table`` rows as sightings, one per (mac, vlan)
+    (the first row wins); a CLI row has no bridge port index (0)."""
+    found: dict[tuple[str, int], dict] = {}
+    for row in rows:
+        if row.get("mac"):
+            found.setdefault(
+                (row["mac"], row["vlan"]),
+                {
+                    "mac": row["mac"],
+                    "vlan": row["vlan"],
+                    "port_name": row["port"],
+                    "port_index": 0,
+                    "entry_type": row["type"],
+                },
+            )
+    return list(found.values())
+
+
+async def store_mac_sightings(host_id: int, sightings: list[dict]) -> int:
+    """Write one host's deduplicated MAC sightings in one batch. Returns the MACs written.
+
+    A port carrying many distinct MACs is an uplink/trunk, not an access
+    location. Its MACs are still recorded (the FDB is real) but flagged so
+    record_mac_history skips move detection for them; otherwise every switch
+    between a host and its access edge would log a "move" each poll. One
+    batched transaction per host instead of two round-trips per MAC.
+    """
+    port_mac_counts: dict[str, int] = {}
+    for s in sightings:
+        port_mac_counts[s["port_name"]] = port_mac_counts.get(s["port_name"], 0) + 1
+    batch = [
+        {
+            "mac": s["mac"],
+            "vlan": s["vlan"],
+            "port_name": s["port_name"],
+            "port_index": s["port_index"],
+            "entry_type": s["entry_type"],
+            "is_uplink": port_mac_counts.get(s["port_name"], 0) > _UPLINK_MAC_THRESHOLD,
+        }
+        for s in sightings
+    ]
+    counts = await db.record_mac_sightings_batch(host_id, batch)
+    return int(counts["macs"])
+
+
 class _CollectDiag(TypedDict):
     """Per-host collection diagnostics returned under ``result["diag"]``."""
 
@@ -599,9 +645,8 @@ async def collect_mac_arp_tables(
         )
 
     # 1. CLI rows (authoritative when present).
-    if cli_macs:
-        for row in cli_macs:
-            _add_sighting(row["mac"], row["vlan"], row["port"], 0, row["type"])
+    for sighting in mac_sightings_from_cli(cli_macs or []):
+        sightings.setdefault((sighting["mac"], sighting["vlan"]), sighting)
 
     # Only parse the SNMP FDB when the CLI scrape didn't already give us the
     # full table. Running both would write each MAC twice under mismatched
@@ -659,37 +704,10 @@ async def collect_mac_arp_tables(
             "(likely a router / L3-only device, or FDB hidden behind a non-default SNMPv3 context)."
         )
 
-    # ── Identify uplink/trunk ports ──────────────────────────────────────
-    # A port carrying many distinct MACs is an uplink/trunk, not an access
-    # location. We still record those MACs (the FDB is real) but tell
-    # record_mac_history to skip move detection for them — otherwise every
-    # switch between a host and its access edge would log a "move" each poll.
-    port_mac_counts: dict[str, int] = {}
-    for s in sightings.values():
-        port_mac_counts[s["port_name"]] = port_mac_counts.get(s["port_name"], 0) + 1
-
-    # ── Write the deduplicated sightings ─────────────────────────────────
-    # One batched transaction per host instead of two awaited round-trips per
-    # MAC (upsert + history each opened and closed a connection - tens of
-    # thousands of connection cycles per fleet collection).
-    sighting_batch = [
-        {
-            "mac": s["mac"],
-            "vlan": s["vlan"],
-            "port_name": s["port_name"],
-            "port_index": s["port_index"],
-            "entry_type": s["entry_type"],
-            "is_uplink": port_mac_counts.get(s["port_name"], 0) > _UPLINK_MAC_THRESHOLD,
-        }
-        for s in sightings.values()
-    ]
     try:
-        counts = await db.record_mac_sightings_batch(host_id, sighting_batch)
-        result["macs_found"] += counts["macs"]
+        result["macs_found"] += await store_mac_sightings(host_id, list(sightings.values()))
     except Exception as exc:
-        LOGGER.warning(
-            "mac_tracking: host %s MAC batch write failed (%d sightings): %s", host_id, len(sighting_batch), exc
-        )
+        LOGGER.warning("mac_tracking: host %s MAC batch write failed (%d sightings): %s", host_id, len(sightings), exc)
         errors.append(f"MAC table write failed: {exc}")
 
     # ── ARP table (global, ipNetToMediaTable) ──

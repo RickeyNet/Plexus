@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import re
 
-from netcontrol.drivers.base import Driver, NetflowConfig, RouteTableCommands, register_driver
+from netcontrol.drivers.base import CiscoStyleTables, Driver, NetflowConfig, RouteTableCommands, register_driver
 
 
 @register_driver
-class CiscoXEDriver(Driver):
+class CiscoXEDriver(CiscoStyleTables, Driver):
     device_types = ("cisco_xe",)
     vendor = "cisco"
     display_name = "Cisco IOS-XE"
@@ -73,6 +73,18 @@ class CiscoXEDriver(Driver):
 
     def parse_mac_table(self, parsed_rows: list[dict]) -> list[dict]:
         return self._parse_cisco_style_mac_rows(parsed_rows)
+
+    def vlan_show_command(self) -> str:
+        return "show vlan brief"
+
+    def interface_status_show_command(self) -> str:
+        return "show interfaces status"
+
+    def interface_switchport_show_command(self) -> str:
+        return "show interfaces switchport"
+
+    def neighbor_show_commands(self) -> list[tuple[str, str]]:
+        return [("cdp", "show cdp neighbors detail"), ("lldp", "show lldp neighbors detail")]
 
     def snmpv3_show_existing_command(self) -> str:
         return "show running-config | include snmp-server"

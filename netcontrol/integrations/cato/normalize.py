@@ -48,6 +48,22 @@ connected users) are resolved; the rest (groups, applications, categories,
 countries...) is kept in the rule's ``unresolved`` list, so a flow such a
 rule may cover is reported as unknown. A policy that was not collected is a
 note on the PoPs and the Cloud instead.
+
+The Split Tunnel policy decides, per remote user, which traffic the Cato
+Client sends into the tunnel and which leaves the device directly (out of
+``DIRECT_INTERFACE``, the device's own network, which is not collected). The
+first enabled rule that matches the user applies: by user, OS, country and
+source network; no match is all traffic to Cato. A rule that only may match
+(it names users groups, managed networks, or an OS or country Cato did not
+report) ahead of any that does leaves the choice undetermined. "Route all
+to Cato except" keeps the default route into the PoP and sends the
+exceptions' global IP ranges out directly; "route only selected" sends
+those ranges to the PoP and the default route out directly. What routes
+cannot say (domain, FQDN and application destinations, web-only coverage, a
+user-defined file, an undetermined rule, the policy not collected) is a
+"Route table (...)" note, so a lookup only the default route answers is
+unknown. A user in Office Mode is behind its site: the policy does not
+apply, and a plain note says so.
 """
 
 from __future__ import annotations
@@ -399,6 +415,22 @@ def _rule_context(item: dict) -> list[str]:
     return unresolved
 
 
+def _ordered_rules(payload: dict) -> list[tuple[int, dict]]:
+    """``(index, rule)`` of a collected policy's rules, in Cato's order. A
+    stable sort: rules without an index keep their place, after the rest,
+    numbered by it."""
+    items = [r for r in payload.get("rules") or [] if isinstance(r, dict)]
+
+    def order(item: dict) -> tuple[int, int]:
+        index = _text(item.get("index"))
+        return (0, int(index)) if index.isdigit() else (1, 0)
+
+    return [
+        (int(_text(item.get("index"))) if _text(item.get("index")).isdigit() else position, item)
+        for position, item in enumerate(sorted(items, key=order), start=1)
+    ]
+
+
 def _firewall_rules(payload: dict, book: AddressBook, *, directional: bool) -> list[dict]:
     """A Cato firewall policy's rules as forwarding rules, in Cato's order.
 
@@ -406,16 +438,8 @@ def _firewall_rules(payload: dict, book: AddressBook, *, directional: bool) -> l
     destination (``TO``), the other way (``FROM``), or both ways (``BOTH``,
     a second rule with the ends swapped). A rule matching on more services
     than one protocol is one rule per protocol, with the same index."""
-    items = [r for r in payload.get("rules") or [] if isinstance(r, dict)]
-
-    def order(item: dict) -> tuple[int, int]:
-        index = _text(item.get("index"))
-        return (0, int(index)) if index.isdigit() else (1, 0)
-
     found: list[dict] = []
-    # A stable sort: rules without an index keep their place, after the rest.
-    for position, item in enumerate(sorted(items, key=order), start=1):
-        index = int(_text(item.get("index"))) if _text(item.get("index")).isdigit() else position
+    for index, item in _ordered_rules(payload):
         src, unresolved_src = _rule_addresses(item.get("source"), book)
         dst, unresolved_dst = _rule_addresses(item.get("destination"), book)
         services, unresolved_service = _rule_service(item.get("service"))
@@ -458,6 +482,194 @@ def _firewall_policy(name: str, applies: str, payload: dict, book: AddressBook, 
     return policy_set(name, "firewall", applies, rules, default=default)
 
 
+# ── Split Tunnel policy ────────────────────────────────────────────────────
+
+# The interface of a remote user's device that traffic the Split Tunnel
+# policy keeps out of the tunnel leaves by: the device's own network, whose
+# address and gateway are not collected. An interface with no address, like
+# the Cloud's "Internet".
+DIRECT_INTERFACE = "Local network (direct)"
+# What a user's routing rests on that was not collected. A "Route table ("
+# note makes a lookup only the default route answers unknown.
+SPLIT_TUNNEL_NOTE = "Route table (Split Tunnel policy)"
+_SPLIT_USER_DEFINED_NOTE = "Route table (Split Tunnel user-defined routing file)"
+_SPLIT_WEB_ONLY_NOTE = "Route table (Split Tunnel web-only coverage: non-web traffic leaves the device directly)"
+# Plain notes on the user's hop.
+SPLIT_OFFICE_NOTE = "Split Tunnel policy does not apply in Office Mode: the site's configuration steers the traffic"
+_SPLIT_LAN_NOTE = "Traffic to the device's local subnet stays on the LAN (the subnet is not collected)"
+
+# A rule's ``action`` as its connection mode. EXCLUDE and INCLUDE are the
+# spellings from before January 2026, which Cato still returns.
+_SPLIT_MODES = {
+    "ROUTE_ALL_TO_CATO_EXCEPT": "except",
+    "EXCLUDE": "except",
+    "ROUTE_ONLY_SELECTED": "only",
+    "INCLUDE": "only",
+    "OFF": "off",
+    "USER_DEFINED": "user",
+}
+_SPLIT_MODE_WORDS = {
+    "except": "Route all traffic to Cato except the exceptions",
+    "only": "Route only the selected destinations to Cato",
+    "off": "Off: all traffic to Cato",
+    "user": "User-defined (a routing file the user uploads)",
+}
+# What a mode's destinations are, in the details and the notes.
+_SPLIT_DESTINATIONS = {"except": "exceptions", "only": "selected destinations"}
+_SPLIT_COVERAGE = {"ALL": "All traffic", "WEB_ONLY": "Web traffic only"}
+_SPLIT_PRIORITY = {"LAN": "LAN", "TUNNEL": "Tunnel"}
+SPLIT_TUNNEL_COLUMNS = [
+    "#",
+    "Rule",
+    "Enabled",
+    "Users",
+    "Platforms",
+    "Countries",
+    "Source network",
+    "Mode",
+    "Destinations",
+    "Coverage",
+    "Routing priority",
+]
+# Cato's ``OperatingSystem`` enum, which a rule's ``platform`` lists. The
+# user snapshot's ``osType`` is free text (``OS_WINDOWS``, ``OS_MAC``); the
+# aliases are the spellings of it that name a value of the enum.
+_OPERATING_SYSTEMS = ("ANDROID", "CHROMEOS", "EMBEDDED", "IOS", "LINUX", "MACOS", "WINDOWS")
+_OS_ALIASES = {"MAC": "MACOS", "OSX": "MACOS", "MACOSX": "MACOS"}
+
+
+def _os_key(raw: Any) -> str:
+    """The ``OperatingSystem`` value an OS text names, or ``""``."""
+    letters = "".join(c for c in _text(raw).upper() if c.isalpha())
+    for key in (letters, letters.removeprefix("OS")):
+        key = _OS_ALIASES.get(key, key)
+        if key in _OPERATING_SYSTEMS:
+            return key
+    return ""
+
+
+def _split_mode(item: dict) -> str:
+    """A rule's connection mode (``except``, ``only``, ``off``, ``user``), or
+    ``""`` for an action Plexus does not know."""
+    return _SPLIT_MODES.get(_text(item.get("action")).upper(), "")
+
+
+def _split_match(item: dict, user: dict, *, reduced: bool) -> tuple[str, str]:
+    """Whether a Split Tunnel rule applies to a connected user, from what was
+    collected: ``("yes", "")``, ``("no", "")`` or ``("maybe", why)``. A
+    criterion that rests on data Plexus does not read (users group
+    membership, managed networks, an OS or country Cato did not report) is
+    never guessed. Every criterion must match; an empty one is any."""
+    why: list[str] = []
+    source = _obj(item.get("source"))
+    users = [u for u in _items_of(source.get("user")) if isinstance(u, dict)]
+    groups = _items_of(source.get("usersGroup"))
+    if users or groups:
+        ident, name = _text(user.get("id")), _text(_user_name(user)).lower()
+        named = any(
+            (ident and _text(u.get("id")) == ident) or (name and _text(u.get("name")).lower() == name) for u in users
+        )
+        if not named:
+            if not groups:
+                return "no", ""
+            why.append("users groups are not collected")
+    platforms = {_os_key(p) or _text(p).upper() for p in _items_of(item.get("platform"))}
+    if platforms:
+        os_key = _os_key(user.get("osType"))
+        if not os_key:
+            why.append("the device's OS is not known")
+        elif os_key not in platforms:
+            return "no", ""
+    countries = [c for c in _items_of(item.get("country")) if isinstance(c, dict)]
+    if reduced:
+        why.append(f"its countries are not collected ({_REDUCED})")
+    elif countries:
+        remote = _obj(user.get("remoteIPInfo"))
+        code, country = _text(remote.get("countryCode")).upper(), _text(remote.get("countryName")).lower()
+        if not code and not country:
+            why.append("the user's country is not known")
+        elif not any(
+            (code and _text(c.get("id")).upper() == code) or (country and _text(c.get("name")).lower() == country)
+            for c in countries
+        ):
+            return "no", ""
+    network = _text(_obj(item.get("sourceNetwork")).get("sourceNetworkType")).upper()
+    if network in ("ANY_MANAGED_NETWORK", "ANY_UNMANAGED_NETWORK"):
+        why.append("managed networks are not collected")
+    elif network not in ("", "ANY"):
+        why.append(f"source network {network.lower()} is not known")
+    return ("maybe", ", ".join(why)) if why else ("yes", "")
+
+
+def _split_choice(policy: dict, user: dict) -> tuple[str, int, dict | None, str]:
+    """The Split Tunnel rule that applies to a user: ``(state, index, rule,
+    why)``. Cato checks the enabled rules top to bottom and the first that
+    matches applies; no match is full tunnel. ``state`` is ``match``
+    (``rule`` applies), ``none`` (no rule does), ``off`` (the policy is
+    disabled) or ``maybe`` (``rule`` may apply, for ``why``, ahead of any
+    that does: which one applies is not known)."""
+    if policy.get("enabled", True) is False:
+        return "off", 0, None, ""
+    for index, item in _ordered_rules(policy):
+        if item.get("enabled", True) is False:
+            continue
+        state, why = _split_match(item, user, reduced=bool(policy.get("reduced")))
+        if state == "yes":
+            return "match", index, item, ""
+        if state == "maybe":
+            return "maybe", index, item, why
+    return "none", 0, None, ""
+
+
+def _split_destinations(item: dict, book: AddressBook) -> tuple[list[tuple[str, list[str]]], list[str], list[str]]:
+    """``(ranges, unresolved, other)`` of a Split Tunnel rule's destinations:
+    its global IP ranges with their CIDRs, the names of those Plexus cannot
+    resolve (not collected, or a name several share), and what is no
+    address (applications, domains, FQDNs)."""
+    destination = _obj(item.get("destination"))
+    ranges: list[tuple[str, list[str]]] = []
+    unresolved: list[str] = []
+    for ref in _items_of(destination.get("globalIpRange")):
+        cidrs = _resolve(book, "globalIpRange", ref)
+        if cidrs:
+            ranges.append((_ref_name(ref), cidrs))
+        else:
+            unresolved.append(_ref_name(ref))
+    other = [f"application {_ref_name(a)}" for a in _items_of(destination.get("application"))]
+    other += [f"domain {_text(d)}" for d in _items_of(destination.get("domain")) if _text(d)]
+    other += [f"FQDN {_text(f)}" for f in _items_of(destination.get("fqdn")) if _text(f)]
+    return ranges, unresolved, other
+
+
+def _split_destination_texts(item: dict, book: AddressBook) -> list[str]:
+    ranges, unresolved, other = _split_destinations(item, book)
+    texts = [f"{name} ({', '.join(cidrs)})" for name, cidrs in ranges]
+    return texts + [f"global IP range {name} (not resolved)" for name in unresolved] + other
+
+
+def _split_rule_row(index: int, item: dict, book: AddressBook) -> list[Any]:
+    """One rule in the account's Split Tunnel policy table."""
+    source = _obj(item.get("source"))
+    users = [_ref_name(u) for u in _items_of(source.get("user"))]
+    users += [f"group {_ref_name(g)}" for g in _items_of(source.get("usersGroup"))]
+    network = _text(_obj(item.get("sourceNetwork")).get("sourceNetworkType"))
+    coverage = _text(item.get("coverage")).upper()
+    priority = _text(item.get("routingPriority")).upper()
+    return [
+        index,
+        item.get("name"),
+        item.get("enabled", True) is not False,
+        users or "Any user",
+        [_text(p) for p in _items_of(item.get("platform"))] or "Any",
+        [_ref_name(c) for c in _items_of(item.get("country"))] or "Any",
+        network.replace("_", " ").lower().capitalize() if network else "",
+        _SPLIT_MODE_WORDS.get(_split_mode(item)) or item.get("action"),
+        _split_destination_texts(item, book),
+        _SPLIT_COVERAGE.get(coverage, coverage),
+        _SPLIT_PRIORITY.get(priority, priority),
+    ]
+
+
 class _Builder:
     def __init__(self, raw: dict, inventory: InventoryIndex) -> None:
         self.raw = raw
@@ -480,6 +692,8 @@ class _Builder:
         self._pops: dict[str, list[str]] = {}
         self._wans: dict[str, list[tuple[str, str, bool]]] = {}
         self._users: list[tuple[str, str, str]] = []
+        # User node id -> the user as Cato reports it, for its Split Tunnel rule.
+        self._user_raw: dict[str, dict] = {}
         # Range and interface entity id -> (site id, source, interface,
         # CIDR), for the objects firewall rules name by id.
         self._entities: dict[str, tuple[str, str, str, str]] = {}
@@ -977,6 +1191,7 @@ class _Builder:
                     ("Sites", len(self.sites_raw)),
                     ("PoPs in use", len(pop_rows)),
                     ("Remote users connected", len(connected) if include_users else ""),
+                    ("Split Tunnel policy", self._split_state() if include_users else ""),
                     ("Snapshot time", self.raw.get("timestamp")),
                 ],
             ),
@@ -986,6 +1201,24 @@ class _Builder:
             cloud["sections"],
             table_section("Sites without a PoP", ["Site", "Device", "State"], self._cloud_sites),
         )
+        # The account's Split Tunnel policy, which the users' blocks apply.
+        split = self.raw.get("split_tunnel")
+        if include_users and isinstance(split, dict):
+            book = self._address_book()
+            rows = [_split_rule_row(index, item, book) for index, item in _ordered_rules(split)]
+            title = (
+                "Split Tunnel policy" if split.get("enabled", True) is not False else "Split Tunnel policy (disabled)"
+            )
+            _add(cloud["sections"], table_section(title, SPLIT_TUNNEL_COLUMNS, rows))
+
+    def _split_state(self) -> str:
+        split = self.raw.get("split_tunnel")
+        if not isinstance(split, dict):
+            return "Not collected"
+        if split.get("enabled", True) is False:
+            return "Disabled: all traffic to Cato"
+        count = len(_ordered_rules(split))
+        return f"Enabled, {count} rule{'' if count == 1 else 's'}"
 
     def _offices_by_ip(self) -> dict[str, str]:
         """Public address -> the site that answers on it, so a user connected
@@ -1019,6 +1252,7 @@ class _Builder:
             node = self._user_node(node_id, site_id, user, offices)
             self._edge(node_id, target, "vpn", status="reachable", label="Cato Client", a_port=node["ip"])
             self._users.append((node_id, node["ip"], pop))
+            self._user_raw[node_id] = user
 
     def _no_pop_box(self, users: list[dict]) -> None:
         sections: list[dict] = []
@@ -1158,6 +1392,7 @@ class _Builder:
             return f"pop:{pops[0]}" if pops else CLOUD_NODE_ID
 
         bgp_note, ranges_note = self._routing_notes()
+        book = self._address_book()
         for node_id, pops in self._pops.items():
             node = self.nodes[node_id]
             block = new_block()
@@ -1217,24 +1452,7 @@ class _Builder:
                 )
                 node["forwarding"] = block
             elif node["kind"] == "user":
-                block = new_block()
-                if node["ip"]:
-                    block["interfaces"].append(interface("Cato Client", "tunnel", ip=node["ip"], cidr=node["ip"]))
-                    block["routes"].append(
-                        route(
-                            canonical(node["ip"]), "connected", interface="Cato Client", source="Address given by Cato"
-                        )
-                    )
-                pop = next((p for u, _a, p in self._users if u == node["id"]), "")
-                block["routes"].append(
-                    route(
-                        "0.0.0.0/0",
-                        "default",
-                        peer={"org_node": f"pop:{pop}" if pop else CLOUD_NODE_ID},
-                        source=f"Cato Client tunnel to PoP {pop}" if pop else "Cato Client tunnel",
-                    )
-                )
-                node["forwarding"] = block
+                node["forwarding"] = self._user_forwarding(node, book)
 
         cloud = new_block()
         # Cato egresses to the internet from the PoP, behind a Cato public
@@ -1269,7 +1487,7 @@ class _Builder:
         # Cato enforces the account's policy at the PoP a flow enters by: the
         # rule sets go on every PoP, and on the Cloud for a Socket or user
         # attached to no PoP. The tracer applies them once per flow.
-        policies, missing = self._firewall_policies()
+        policies, missing = self._firewall_policies(book)
         for node in self.nodes.values():
             if node["id"] == CLOUD_NODE_ID or node["id"].startswith("pop:"):
                 block = node["forwarding"]
@@ -1278,10 +1496,120 @@ class _Builder:
                 for name in missing:
                     note(block, name)
 
-    def _firewall_policies(self) -> tuple[list[dict], list[str]]:
+    def _user_forwarding(self, node: dict, book: AddressBook) -> dict:
+        """A remote user's block: its VPN address, and where the Cato Client
+        sends the rest, as the Split Tunnel policy decides for this user
+        (Cato's default, with no rule matching, is everything to Cato). The
+        user's "Split Tunnel" section says which rule decided it."""
+        user = self._user_raw.get(node["id"]) or {}
+        block = new_block()
+        if node["ip"]:
+            block["interfaces"].append(interface("Cato Client", "tunnel", ip=node["ip"], cidr=node["ip"]))
+            block["routes"].append(
+                route(canonical(node["ip"]), "connected", interface="Cato Client", source="Address given by Cato")
+            )
+        pop = next((p for u, _a, p in self._users if u == node["id"]), "")
+        to_cato = {"org_node": f"pop:{pop}" if pop else CLOUD_NODE_ID}
+        rows: list[tuple[str, Any]] = []
+        policy = self.raw.get("split_tunnel")
+        full_tunnel = True
+        if user.get("connectedInOffice"):
+            # Behind the site: its configuration steers the traffic, not the policy.
+            note(block, SPLIT_OFFICE_NOTE)
+            rows.append(("Rule", "Office Mode: the policy does not apply"))
+        elif not isinstance(policy, dict):
+            note(block, SPLIT_TUNNEL_NOTE)
+            rows.append(("Rule", "Not collected"))
+        else:
+            state, index, item, why = _split_choice(policy, user)
+            name = _text((item or {}).get("name")) or f"Rule {index}"
+            if state == "off":
+                rows.append(("Rule", "Policy disabled: all traffic to Cato"))
+            elif state == "none":
+                rows.append(("Rule", "No rule matches: all traffic to Cato"))
+            elif state == "maybe":
+                note(block, f"Route table (Split Tunnel rule {name} may apply: {why})")
+                rows.append(("Rule", f"Undetermined: rule {index} {name} may apply ({why})"))
+            elif item is not None:
+                full_tunnel = self._split_routes(block, item, f"{index} {name}", name, book, to_cato, rows)
+        if full_tunnel:
+            block["routes"].append(
+                route(
+                    "0.0.0.0/0",
+                    "default",
+                    peer=to_cato,
+                    source=f"Cato Client tunnel to PoP {pop}" if pop else "Cato Client tunnel",
+                )
+            )
+        _add(node["sections"], kv_section("Split Tunnel", rows))
+        return block
+
+    @staticmethod
+    def _split_routes(
+        block: dict, item: dict, label: str, name: str, book: AddressBook, to_cato: dict, rows: list[tuple[str, Any]]
+    ) -> bool:
+        """The routes and notes of the Split Tunnel rule that applies to a
+        user; whether the default route still goes to Cato. Only global IP
+        ranges become routes: a domain, FQDN or application destination, or
+        a web-only coverage, is a note that leaves a default-route lookup
+        unknown."""
+        mode = _split_mode(item)
+        coverage = _text(item.get("coverage")).upper()
+        priority = _text(item.get("routingPriority")).upper()
+        rows += [
+            ("Rule", label),
+            ("Mode", _SPLIT_MODE_WORDS.get(mode) or item.get("action")),
+            ("Coverage", _SPLIT_COVERAGE.get(coverage, coverage)),
+            ("Routing priority", _SPLIT_PRIORITY.get(priority, priority)),
+        ]
+        if priority == "LAN":
+            note(block, _SPLIT_LAN_NOTE)
+        if mode == "off":
+            return True
+        if mode == "user":
+            note(block, _SPLIT_USER_DEFINED_NOTE)
+            return True
+        if mode not in _SPLIT_DESTINATIONS:
+            note(block, f"Route table (Split Tunnel rule {name}: action {_text(item.get('action')) or 'not set'})")
+            return True
+        word = _SPLIT_DESTINATIONS[mode]
+        ranges, unresolved, other = _split_destinations(item, book)
+        rows += [
+            (word.capitalize(), _split_destination_texts(item, book)),
+            ("DNS exclusions", [_text(d) for d in _items_of(_obj(item.get("dnsExclusion")).get("domain"))]),
+        ]
+        if other:
+            note(block, f"Route table (Split Tunnel {word} by domain, FQDN or application)")
+        for range_name in unresolved:
+            note(block, f"Route table (Split Tunnel {word}: global IP range {range_name})")
+        if coverage == "WEB_ONLY":
+            note(block, _SPLIT_WEB_ONLY_NOTE)
+        cidrs = list(dict.fromkeys(c for _n, found in ranges for c in found))
+        if mode == "except":
+            if cidrs:
+                block["interfaces"].append(interface(DIRECT_INTERFACE, "wan"))
+            for cidr in cidrs:
+                source = f"Split Tunnel rule {name}: exception"
+                block["routes"].append(route(cidr, "static", interface=DIRECT_INTERFACE, source=source))
+            return True
+        block["interfaces"].append(interface(DIRECT_INTERFACE, "wan"))
+        for cidr in cidrs:
+            block["routes"].append(
+                route(cidr, "static", peer=to_cato, source=f"Split Tunnel rule {name}: routed to Cato")
+            )
+        block["routes"].append(
+            route(
+                "0.0.0.0/0",
+                "default",
+                interface=DIRECT_INTERFACE,
+                source=f"Split Tunnel rule {name}: everything else leaves the device directly",
+            )
+        )
+        return False
+
+    def _firewall_policies(self, book: AddressBook) -> tuple[list[dict], list[str]]:
         """The account's firewall rule sets, and the names of those that
         were not collected."""
-        book = self._address_book()
         policies: list[dict] = []
         missing: list[str] = []
         for key, name, applies, default in (

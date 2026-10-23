@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
-from netcontrol.drivers.base import Driver, DriverCapabilityError, NetflowConfig, RouteTableCommands, register_driver
+from netcontrol.drivers.base import (
+    CiscoStyleTables,
+    Driver,
+    DriverCapabilityError,
+    NetflowConfig,
+    RouteTableCommands,
+    register_driver,
+)
 
 
 @register_driver
-class CiscoNXOSDriver(Driver):
+class CiscoNXOSDriver(CiscoStyleTables, Driver):
     # Netmiko exposes both ssh and non-ssh transports under separate
     # device_type strings; both map to the same NX-OS syntax here.
     device_types = ("cisco_nxos", "cisco_nxos_ssh")
@@ -75,6 +82,19 @@ class CiscoNXOSDriver(Driver):
 
     def parse_mac_table(self, parsed_rows: list[dict]) -> list[dict]:
         return self._parse_cisco_style_mac_rows(parsed_rows)
+
+    def vlan_show_command(self) -> str:
+        return "show vlan brief"
+
+    def interface_status_show_command(self) -> str:
+        # NX-OS spells it ``interface`` (singular), as its templates do.
+        return "show interface status"
+
+    def interface_switchport_show_command(self) -> str:
+        return "show interface switchport"
+
+    def neighbor_show_commands(self) -> list[tuple[str, str]]:
+        return [("cdp", "show cdp neighbors detail"), ("lldp", "show lldp neighbors detail")]
 
     def snmpv3_show_existing_command(self) -> str:
         # NX-OS accepts the same include-style filter as IOS/XE.
