@@ -23,13 +23,19 @@ What is read:
   - ``policy.wanFirewall``      the WAN firewall rules (site, user and range
                                 to site, user and range), for path tracing
   - ``policy.internetFirewall`` the Internet firewall rules, for path tracing
+  - ``policy.splitTunnel``      the Split Tunnel policy (which traffic of a
+                                remote user's Cato Client leaves the device
+                                directly), read with the users. ``@beta`` in
+                                Cato's schema; the key needs the SDP Split
+                                Tunnel permission
   - ``object.globalIpRangeList`` the account's global IP range objects, so a
-                                rule that names one can be evaluated
+                                firewall or Split Tunnel rule that names one
+                                can be evaluated
 
 Failure policy: the site list is required; everything else is best-effort and
 a failure is recorded in ``errors`` and surfaced in the map's collection
 report. GraphQL rejects a whole query when it names one field the schema does
-not have, so the site, user, BGP peer and firewall queries have reduced
+not have, so the site, user, BGP peer, firewall and Split Tunnel queries have reduced
 fallbacks: a schema difference costs detail (HA state, recent connections,
 ASNs and advertised routes, the rarer rule fields, and only as a last resort
 the WAN links), not the map.
@@ -49,7 +55,8 @@ LOGGER = configure_logging("plexus.cato")
 DEFAULT_OPTIONS: dict[str, Any] = {
     # Limit the build to sites whose name contains this text. Empty = all.
     "site_name_contains": "",
-    # Remote users connected with the Cato Client.
+    # Remote users connected with the Cato Client, and the Split Tunnel
+    # policy that decides which of their traffic goes to Cato.
     "include_users": True,
     # Network ranges (subnets) behind every site, and the sites' BGP peers:
     # the routing data path tracing has.
@@ -339,6 +346,63 @@ _FIREWALLS = (
     ("internet_firewall", "internetFirewall", INTERNET_FIREWALL_QUERY, INTERNET_FIREWALL_QUERY_BASIC),
 )
 
+# The Split Tunnel policy (Access > Split Tunnel Policy): an ordered rule base
+# that picks, per remote user, which traffic the Cato Client sends to Cato and
+# which leaves the device directly. ``policy.splitTunnel`` is ``@beta`` in
+# Cato's schema, and its fields are confirmed from Cato's CLI repository
+# (``queryPayloads/query.policy.splitTunnel.policy.txt``): ``input`` is
+# optional and, left out, reads the published policy. Domains, FQDNs and the
+# DNS exclusions are plain strings; destination IP ranges are global IP range
+# objects, resolved like the firewall rules' ones.
+SPLIT_TUNNEL_QUERY = """
+query plexusSplitTunnel($accountId: ID!) {
+  policy(accountId: $accountId) {
+    splitTunnel {
+      policy {
+        enabled
+        rules {
+          rule {
+            id name description index enabled action
+            section @REF@
+            source { user @REF@ usersGroup @REF@ }
+            platform
+            country @REF@
+            destination { application @REF@ globalIpRange @REF@ domain fqdn }
+            sourceNetwork { sourceNetworkType }
+            coverage
+            dnsExclusion { domain }
+            routingPriority
+          }
+        }
+      }
+    }
+  }
+}
+""".replace("@REF@", _REF)
+
+# Used when Cato refuses the full query: who a rule applies to and the IP
+# ranges it names. The normalizer treats such rules as incomplete.
+SPLIT_TUNNEL_QUERY_BASIC = """
+query plexusSplitTunnelBasic($accountId: ID!) {
+  policy(accountId: $accountId) {
+    splitTunnel {
+      policy {
+        enabled
+        rules {
+          rule {
+            id name index enabled action
+            source { user { id name } usersGroup { id name } }
+            platform
+            destination { globalIpRange { id name } }
+            sourceNetwork { sourceNetworkType }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
 # The account's global IP ranges: objects defined once (Networking > IP
 # Ranges) and named by rules of any policy. ``ipRange`` is ``from-to`` text,
 # ``subnet`` the CIDR when the range is one. The schema is confirmed from
@@ -438,12 +502,13 @@ async def _bgp_peers(
     return scrub_secrets(peers)
 
 
-async def _firewall(
+async def _policy(
     client: CatoClient, account_id: str, field: str, full: str, basic: str, errors: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    """One firewall policy: ``{"enabled", "rules", "reduced"}``, the rules
-    as Cato returns them. ``reduced`` is set when Cato refused the full query
-    and the rules hold only their addresses and ports."""
+    """One policy under ``policy.<field>.policy`` (a firewall, the Split
+    Tunnel policy): ``{"enabled", "rules", "reduced"}``, the rules as Cato
+    returns them. ``reduced`` is set when Cato refused the full query and the
+    rules hold only the fields of the reduced one."""
     variables = {"accountId": account_id}
     operation = "plexus" + field[0].upper() + field[1:]
     reduced = False
@@ -478,7 +543,11 @@ async def collect_account(
         1
         + int(opts["include_users"])
         + 3 * int(opts["include_ranges"])
-        + (len(_FIREWALLS) + 1) * int(opts["include_firewall"])
+        + len(_FIREWALLS) * int(opts["include_firewall"])
+        # The global IP ranges, which firewall and Split Tunnel rules name.
+        + int(opts["include_firewall"] or opts["include_users"])
+        # The Split Tunnel policy, read with the users it routes.
+        + int(opts["include_users"])
     )
     done = 0
 
@@ -557,15 +626,28 @@ async def collect_account(
         for key, field, full, basic in _FIREWALLS:
             report("cato firewall")
             try:
-                firewalls[key] = await _firewall(client, account_id, field, full, basic, errors)
+                firewalls[key] = await _policy(client, account_id, field, full, basic, errors)
             except CatoApiError as exc:
                 errors.append(_error("account", f"policy.{field}", exc))
             done += 1
 
+    # None: not collected, so the normalizer says the users' routing rests on
+    # a policy it does not have instead of taking them for full tunnel.
+    split_tunnel: dict[str, Any] | None = None
+    if opts["include_users"]:
+        report("cato split tunnel")
+        try:
+            split_tunnel = await _policy(
+                client, account_id, "splitTunnel", SPLIT_TUNNEL_QUERY, SPLIT_TUNNEL_QUERY_BASIC, errors
+            )
+        except CatoApiError as exc:
+            errors.append(_error("account", "policy.splitTunnel", exc))
+        done += 1
+
     # None: not collected, so a rule naming a global IP range stays unresolved.
     global_ip_ranges: list[dict] | None = None
-    if opts["include_firewall"]:
-        report("cato firewall")
+    if opts["include_firewall"] or opts["include_users"]:
+        report("cato firewall" if opts["include_firewall"] else "cato split tunnel")
         try:
             data = await client.query("plexusGlobalIpRanges", GLOBAL_IP_RANGES_QUERY, {"accountId": account_id})
             found = ((data.get("object") or {}).get("globalIpRangeList") or {}).get("items") or []
@@ -577,16 +659,18 @@ async def collect_account(
     def rule_count(key: str) -> int:
         return len((firewalls[key] or {}).get("rules") or [])
 
-    report("collected")
+    split_rules = len((split_tunnel or {}).get("rules") or [])
+    report("collected", split_tunnel_rules=split_rules)
     LOGGER.info(
         "cato: collected account %s - %d sites, %d users, %d BGP peers, %d WAN and %d internet firewall rules, "
-        "%d global IP ranges, %d calls, %d errors",
+        "%d split tunnel rules, %d global IP ranges, %d calls, %d errors",
         account_id,
         len(sites),
         len(users),
         len(bgp_peers or []),
         rule_count("wan_firewall"),
         rule_count("internet_firewall"),
+        split_rules,
         len(global_ip_ranges or []),
         client.stats["requests"],
         len(errors),
@@ -601,6 +685,7 @@ async def collect_account(
         "bgp_peers": bgp_peers,
         "wan_firewall": firewalls["wan_firewall"],
         "internet_firewall": firewalls["internet_firewall"],
+        "split_tunnel": split_tunnel,
         "global_ip_ranges": global_ip_ranges,
         "errors": errors,
         "stats": dict(client.stats),

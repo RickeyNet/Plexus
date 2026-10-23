@@ -559,6 +559,21 @@ export function filterBySource(data: TopologyData | undefined, filter: SourceFil
   return { ...data, nodes, edges };
 }
 
+/**
+ * The map without the end devices (phones, servers, cameras) CDP / LLDP found
+ * on access ports, unless `show`: a large site has hundreds of them, each a
+ * leaf that tells nothing about how the network is cabled.
+ */
+export function withoutEndDevices(data: TopologyData | undefined, show: boolean): TopologyData | undefined {
+  if (!data || show || !data.nodes.some((n) => n.end_device)) return data;
+  const hidden = new Set(data.nodes.filter((n) => n.end_device).map((n) => n.id));
+  return {
+    ...data,
+    nodes: data.nodes.filter((n) => !hidden.has(n.id)),
+    edges: data.edges.filter((e) => !hidden.has(e.from) && !hidden.has(e.to)),
+  };
+}
+
 /** Text the toolbar search box matches locally, before the server-side deep search. */
 export function nodeSearchText(node: TopologyNode): string {
   return [

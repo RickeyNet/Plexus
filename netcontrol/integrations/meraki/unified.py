@@ -104,11 +104,23 @@ def meraki_graph_id(org_ref: int, node_id: str) -> str:
     return f"meraki:{org_ref}:{node_id}"
 
 
-def external_key(name: str, ip: str) -> str:
-    """The ``ext_`` id the SNMP topology gives an unknown neighbor, used to find
-    a neighbor that discovery already put on the map."""
+def external_key(name: str, ip: str, *, per_address: bool = False) -> str:
+    """The ``ext_`` id the topology gives an unknown neighbor, used to find a
+    neighbor that discovery already put on the map. A name is shared by the
+    neighbors that print it, unless ``per_address``: a name several
+    addresses print (a phone model, a camera's one-letter name) is not one
+    device, so each address gets its own node."""
     norm = (name or "").strip().lower().split(".")[0]
-    return f"ext_{norm}" if norm else f"ext_{(ip or '').strip()}"
+    address = (ip or "").strip()
+    if not norm:
+        return f"ext_{address}"
+    return f"ext_{norm}@{address}" if per_address and address else f"ext_{norm}"
+
+
+def external_keys(name: str, ip: str) -> list[str]:
+    """The ids a neighbor may have been given, most specific first."""
+    keys = [external_key(name, ip, per_address=True), external_key(name, ip)]
+    return list(dict.fromkeys(keys))
 
 
 def _name_or_blank(label: str) -> str:
@@ -260,6 +272,7 @@ def merge_meraki_into_graph(
     host_node: Callable[[int], dict | None],
     resolve_external: Callable[[str, str], Any],
     match_host: Callable[[int, dict], int | None] | None = None,
+    discovered: Callable[[dict], list[Any]] | None = None,
 ) -> None:
     """Merge ``(org_ref, snapshot)`` pairs into the topology graph in place.
 
@@ -269,6 +282,10 @@ def merge_meraki_into_graph(
     node that already represents that neighbor, or ``None``.
     ``match_host(org_ref, snapshot_node)`` looks a node up in the *current* inventory,
     so a host added after the snapshot was built still collapses.
+    ``discovered(snapshot_node)`` returns the ids of the unknown-neighbor
+    (``ext_``) nodes that inventory discovery made for a snapshot device (an
+    inventory switch's CDP / LLDP sees the Meraki appliance it uplinks to):
+    the device's node takes their links and they leave the graph.
 
     Snapshots of different integrations are stitched together by public
     address: the device that answers on an address (its own, or that of its
@@ -347,6 +364,21 @@ def merge_meraki_into_graph(
                 also.append(ref["provider"])
         return target["id"]
 
+    def absorb(graph_id: Any, stale: list[Any]) -> None:
+        # The unknown-neighbor nodes discovery made for this device: its node
+        # takes their links (pass 3 then drops the Meraki view of the same
+        # adjacency) and they leave the graph.
+        stale_ids = {s for s in stale if s in nodes_by_id and s != graph_id}
+        if not stale_ids:
+            return
+        for edge in edges:
+            if edge["from"] in stale_ids:
+                edge["from"] = graph_id
+            if edge["to"] in stale_ids:
+                edge["to"] = graph_id
+        for stale_id in stale_ids:
+            nodes_by_id.pop(stale_id, None)
+
     # Pass 1: devices. VPN peers wait until every device has claimed its addresses.
     for org_ref, snapshot in snapshots:
         snap_nodes = snapshot.get("nodes") or []
@@ -410,6 +442,8 @@ def merge_meraki_into_graph(
 
             if node["kind"] in ("external", "wan"):
                 continue  # a WAN stub's address belongs to the device behind it
+            if target is None and discovered is not None:
+                absorb(graph_id, discovered(node))
             claim(plan, node, graph_id)
 
         wan_ids = {n["id"] for n in snap_nodes if n["kind"] == "wan"}

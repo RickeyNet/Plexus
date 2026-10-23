@@ -26,6 +26,7 @@ import routes.database as db
 
 import netcontrol.routes.state as state
 from netcontrol.integrations.meraki.normalize import InventoryIndex, _add, table_section, text_section
+from netcontrol.routes.shared import service_credential
 from netcontrol.telemetry import configure_logging, redact_value
 
 LOGGER = configure_logging("plexus.meraki")
@@ -80,7 +81,7 @@ async def collected_sections(host_id: int) -> list[dict]:
     _add(
         sections,
         table_section(
-            "Interfaces (Plexus SNMP)",
+            "Interfaces (Plexus)",
             ["Interface", "Description", "Admin", "Oper", "Speed (Mb)", "Duplex", "Access VLAN", "Trunk VLANs"],
             [
                 [
@@ -101,7 +102,7 @@ async def collected_sections(host_id: int) -> list[dict]:
     _add(
         sections,
         table_section(
-            "VLANs (Plexus SNMP)",
+            "VLANs (Plexus)",
             ["VLAN", "Name", "State"],
             [[v.get("vlan_id"), v.get("name"), v.get("state")] for v in vlans],
         ),
@@ -176,18 +177,6 @@ async def _live_ssh_sections(host: dict, credential: dict) -> tuple[list[dict], 
     return sections, None
 
 
-async def _service_credential() -> dict | None:
-    cred_id = state.AUTH_CONFIG.get("service_credential_id")
-    if not isinstance(cred_id, int):
-        return None
-    cred = await db.get_credential_raw(cred_id)
-    # Unattended work may only use a Plexus-owned service credential, never a
-    # user's personal stored credential.
-    if not cred or not cred.get("is_service"):
-        return None
-    return cred
-
-
 async def enrich_snapshot(snapshot: dict[str, Any], *, ssh: bool = False, progress=None) -> dict[str, Any]:
     """Append inventory-derived sections to matched nodes (in place)."""
     matched = [n for n in snapshot.get("nodes") or [] if (n.get("inventory") or {}).get("host_id")]
@@ -195,7 +184,7 @@ async def enrich_snapshot(snapshot: dict[str, Any], *, ssh: bool = False, progre
     if not matched:
         return snapshot
 
-    credential = await _service_credential() if ssh else None
+    credential = await service_credential() if ssh else None
     if ssh and credential is None:
         collection.setdefault("errors", []).append(
             {

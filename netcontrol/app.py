@@ -193,6 +193,7 @@ from netcontrol.routes.inventory import (
     admin_router as inventory_admin_router,
     router as inventory_router,
 )
+from netcontrol.routes.inventory_collection import router as inventory_collection_router
 from netcontrol.routes.ipam import init_ipam, router as ipam_router
 from netcontrol.routes.ipam_adapters import IpamAdapterError, collect_ipam_snapshot
 from netcontrol.routes.jobs import (
@@ -2125,6 +2126,12 @@ app.include_router(
 # management is additionally admin-gated inside the router)
 app.include_router(
     meraki_topology_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("topology"))],
+)
+# Inventory route/configuration collection, a source of the topology map:
+# collecting is a write, so it needs topology.write like a source build.
+app.include_router(
+    inventory_collection_router,
     dependencies=[Depends(require_auth), Depends(require_feature_method("topology"))],
 )
 # Config Drift + admin

@@ -28,6 +28,11 @@ export interface TopologyNode {
   status?: string | null;
   group_name?: string | null;
   in_inventory: boolean;
+  /**
+   * A neighbor whose CDP / LLDP capabilities make it an end device (a phone,
+   * a station such as a server or a camera): left off the map unless asked for.
+   */
+  end_device?: boolean;
   ipam_subnet?: string | null;
   ipam_utilization_pct?: number | null;
   /** 'meraki' for devices that exist only in a Meraki organization. */

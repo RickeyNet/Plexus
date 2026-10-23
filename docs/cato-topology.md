@@ -38,7 +38,10 @@ shows the most recent collection until you run another.
 - **API key**: create one in the API key settings of the Cato Management
   Application. A key with **View** permission is sufficient: Plexus only
   sends read queries and never changes Cato configuration. If the key is
-  restricted to source IP addresses, allow the Plexus server.
+  restricted to source IP addresses, allow the Plexus server. Reading the
+  Split Tunnel policy also needs the **SDP Split Tunnel** permission; a key
+  without it still collects everything else, and the policy is reported as
+  not collected.
 
 The key is stored encrypted and is never returned by the API or shown in the
 UI again.
@@ -82,8 +85,19 @@ Click a remote user for:
 - **Device**: device name, OS and Cato Client version
 - **Recent connections**: when, how long, device, interface, PoP, public IP,
   location and ISP of their last connections
+- **Split Tunnel**: the Split Tunnel rule that applies to the user (its
+  number and name), or *No rule matches: all traffic to Cato*, *Office Mode*,
+  *Not collected*, or *Undetermined* with the rule that may apply and why;
+  for a rule, its mode (route all traffic to Cato except the exceptions,
+  route only the selected destinations to Cato, off, user-defined),
+  coverage, routing priority, the exceptions or selected destinations
+  (global IP ranges with their subnets, domains, FQDNs, applications) and
+  the DNS exclusions
 
-Click a **PoP** box for a table of all of its users.
+Click a **PoP** box for a table of all of its users, and the **Cato Cloud**
+node for the account's whole **Split Tunnel policy**: every rule with its
+users and groups, platforms, countries, source network, mode, destinations,
+coverage and routing priority.
 
 ### Device details
 
@@ -137,6 +151,27 @@ it. Clicking the person icon in Path Mode picks the user with that address
 too, so the leg is traced either way; the pick reads `Dana Reyes
 (10.88.0.11) · PoP New York`.
 
+Where a user's traffic goes first follows the account's **Split Tunnel
+policy**. The rules are checked top to bottom and the first enabled one that
+matches the user (by user, OS, country and source network) applies; when
+none does, all traffic goes to Cato. With **route all traffic to Cato
+except**, a destination in one of the rule's global IP ranges leaves the
+device directly (out of *Local network (direct)*, the device's own network,
+which Plexus does not see) and the rest goes to the PoP. With **route only
+selected to Cato**, only the rule's global IP ranges go to the PoP and
+everything else leaves the device directly, to the internet. **Off** is all
+traffic to Cato. A user connected from an office (Office Mode) is behind the
+site, and the policy does not apply; the trace says so. What the trace
+cannot tell from the collected data makes a lookup that only the default
+route answers *not decided*, with the reason: a domain, FQDN or application
+destination (not addresses), web-only coverage (non-web traffic leaves the
+device directly), a user-defined routing file, a global IP range that was
+not read, a rule ahead of the one that matches that may apply (it names
+users groups, managed or unmanaged networks, or an OS or country Cato did
+not report: group membership and managed networks are not read), and the
+policy itself when it was not collected. A rule that keeps traffic for the
+device's local subnet on the LAN is a note: that subnet is not collected.
+
 A path is only drawn over links on the map. Plexus does not know that a Cato
 Socket and a Meraki switch at the same location are cabled together unless
 one of them reports the other as a neighbor, so a path between a Meraki
@@ -159,7 +194,8 @@ both hold, or that sits inside a VPC, is listed under **Overlapping Ranges**
 | Connected remote users | `accountSnapshot` (users) | Remote users |
 | Network ranges and LAN interface subnets | `entityLookup` (`siteRange`, `networkInterface`) | Network ranges |
 | WAN and Internet firewall rules | `policy.wanFirewall`, `policy.internetFirewall` | Firewall rules |
-| Global IP range objects the rules name (Networking > IP Ranges) | `object.globalIpRangeList` | Firewall rules |
+| Split Tunnel policy (Access > Split Tunnel Policy), which needs the SDP Split Tunnel permission | `policy.splitTunnel` | Remote users |
+| Global IP range objects the rules name (Networking > IP Ranges) | `object.globalIpRangeList` | Firewall rules or Remote users |
 
 A collection is a handful of queries, sent one at a time and spaced out to
 stay inside Cato's API rate limits. A rate-limit answer is retried after a
@@ -171,11 +207,16 @@ failure with Cato's own error message is listed under **Report** in the HTML
 map. If Cato refuses the detailed site query, Plexus falls back to a reduced
 one, so the sites still appear, without WAN links and HA state. The same goes
 for the user query: the users still appear, without recent connections, state,
-coordinates and phone number.
+coordinates and phone number. And for the Split Tunnel policy: the reduced
+query has no countries, domains, FQDNs, applications, coverage or routing
+priority, so its rules are *not decided* for the users they may apply to.
 
 Only users connected at collection time are read. Their traffic (which
-applications and sites they reach), the firewall and routing policy of the
-account, and hosts behind a site are not collected.
+applications and sites they reach), the users groups' members, the
+account's managed networks, the network each user's device is on, and hosts
+behind a site are not collected. Cato's API has no route table: the routes
+are built from the site ranges, the BGP peers, the connected users and the
+Split Tunnel policy.
 
 ## API reference
 
