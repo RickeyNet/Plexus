@@ -286,6 +286,21 @@ async def require_credential_access(
     raise await _deny(401, "Not authenticated", cred)
 
 
+async def service_credential() -> dict | None:
+    """The Plexus service credential (``AUTH_CONFIG.service_credential_id``),
+    or ``None`` when none is configured or the id no longer points at one.
+
+    Unattended work may only use a Plexus-owned service credential, never a
+    user's personal stored credential."""
+    cred_id = state.AUTH_CONFIG.get("service_credential_id")
+    if not isinstance(cred_id, int):
+        return None
+    cred = await db.get_credential_raw(cred_id)
+    if not cred or not cred.get("is_service"):
+        return None
+    return cred
+
+
 # ── Config capture/push/diff ────────────────────────────────────────────────
 
 # Patterns matching volatile IOS/NX-OS metadata lines that change between

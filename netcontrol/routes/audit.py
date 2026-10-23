@@ -26,6 +26,7 @@ from datetime import UTC, datetime
 import routes.database as db
 from fastapi import APIRouter, Body, HTTPException, Query
 
+from netcontrol.drivers import parse_vlan_ranges
 from netcontrol.routes.reporting import (
     _parse_db_datetime_utc,
     _parse_schedule_interval_seconds,
@@ -459,16 +460,9 @@ class VlanConsistencyRule(Rule):
 
 
 def _parse_vlan_csv(csv_value: str) -> set[int]:
-    out: set[int] = set()
-    for part in (csv_value or "").split(","):
-        part = part.strip()
-        if not part:
-            continue
-        try:
-            out.add(int(part))
-        except ValueError, TypeError:
-            continue
-    return out
+    """The VLAN ids of a stored ``trunk_vlans`` value: a CSV of ids, which
+    may hold ranges (the SSH collection stores every VLAN as ``1-4094``)."""
+    return parse_vlan_ranges(csv_value)
 
 
 # ── Rule pack: security posture ─────────────────────────────────────────────
@@ -1586,11 +1580,8 @@ async def search_hosts_by_vlan(vlan_id: int = Query(..., ge=1, le=4094)):
             "FROM interface_inventory i LEFT JOIN hosts h ON h.id = i.host_id "
             "WHERE i.trunk_vlans IS NOT NULL AND i.trunk_vlans != ''",
         )
-        target = str(vlan_id)
         for row in await cursor.fetchall():
-            csv_val = row[2] or ""
-            members = {p.strip() for p in csv_val.split(",") if p.strip()}
-            if target not in members:
+            if vlan_id not in _parse_vlan_csv(row[2] or ""):
                 continue
             hid = row[0]
             entry = roles.setdefault(hid, {"host_id": hid, "hostname": row[3], "roles": [], "ports": []})

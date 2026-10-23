@@ -155,6 +155,8 @@ async def test_collect_account_falls_back_and_stays_best_effort():
             return httpx.Response(403)
         if name == "plexusBgpPeersOfSite":
             return httpx.Response(200, json={"data": {"site": {"bgpPeerList": {"bgpPeer": [], "total": 0}}}})
+        if name in ("plexusSplitTunnel", "plexusGlobalIpRanges"):
+            return httpx.Response(403)
         # entityLookup: the large page is refused, the default page size works.
         if variables["limit"] == 1000:
             return httpx.Response(200, json={"errors": [{"message": "limit too large"}]})
@@ -176,8 +178,12 @@ async def test_collect_account_falls_back_and_stays_best_effort():
         "accountSnapshot.sites (full detail)",
         "accountSnapshot.sites (WAN links)",
         "accountSnapshot.users",
+        "policy.splitTunnel",
+        "object.globalIpRangeList",
     ]
     assert "hostCount" in raw["errors"][0]["message"] and raw["errors"][2]["status"] == 403
+    # Refused: not collected, which the normalizer tells from a policy with no rules.
+    assert raw["split_tunnel"] is None and raw["global_ip_ranges"] is None
     assert progress[-1]["phase"] == "collected" and progress[-1]["calls_done"] == progress[-1]["calls_total"]
     assert raw["wan_firewall"] is None and raw["internet_firewall"] is None
     assert raw["bgp_peers"] == []
@@ -226,13 +232,19 @@ async def test_collect_account_falls_back_to_the_basic_user_query():
             return httpx.Response(200, json={"errors": [{"message": 'Cannot query field "recentConnections"'}]})
         if name == "plexusUsersBasic":
             return httpx.Response(200, json={"data": {"accountSnapshot": {"users": sample["users"]}}})
+        if name == "plexusSplitTunnel":
+            return _policy_response("splitTunnel", sample["split_tunnel"])
+        if name == "plexusGlobalIpRanges":
+            items = sample["global_ip_ranges"]
+            return httpx.Response(200, json={"data": {"object": {"globalIpRangeList": {"items": items}}}})
         raise AssertionError(name)
 
     async with _client(handler) as client:
         raw = await collect_account(client, "42", {"include_ranges": False, "include_firewall": False})
 
-    assert seen == ["plexusSites", "plexusUsers", "plexusUsersBasic"]
-    assert len(raw["users"]) == 3
+    # The Split Tunnel policy, and the global IP ranges its rules name, come with the users.
+    assert seen == ["plexusSites", "plexusUsers", "plexusUsersBasic", "plexusSplitTunnel", "plexusGlobalIpRanges"]
+    assert len(raw["users"]) == 4
     assert [e["path"] for e in raw["errors"]] == ["accountSnapshot.users (full detail)"]
 
 
@@ -329,6 +341,94 @@ async def test_collect_account_falls_back_to_the_reduced_firewall_queries():
     # What the reduced query leaves out may narrow any rule: none is decided on addresses alone.
     assert all(r["src"] == r["dst"] == ["any"] for r in cloud["policies"][0]["rules"])
     assert all("fields Cato did not return" in r["unresolved"] for r in cloud["policies"][0]["rules"])
+
+
+def _split_handler(sample: dict, seen: list[str], split_tunnel: dict):
+    """The site and user lists and the global IP ranges, then
+    ``split_tunnel[operation]()`` for the Split Tunnel queries."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = _operation(request)
+        name = body["operationName"]
+        seen.append(name)
+        if name == "plexusSites":
+            return httpx.Response(200, json={"data": {"accountSnapshot": {"id": "42", "sites": sample["sites"]}}})
+        if name == "plexusUsers":
+            return httpx.Response(200, json={"data": {"accountSnapshot": {"users": sample["users"]}}})
+        if name == "plexusGlobalIpRanges":
+            items = sample["global_ip_ranges"]
+            return httpx.Response(200, json={"data": {"object": {"globalIpRangeList": {"items": items}}}})
+        assert "policy(accountId: $accountId)" in body["query"] and "splitTunnel" in body["query"]
+        assert body["variables"] == {"accountId": "42"}
+        return split_tunnel[name](body["query"])
+
+    return handler
+
+
+_USERS_ONLY = {"include_ranges": False, "include_firewall": False}
+
+
+@pytest.mark.asyncio
+async def test_collect_account_reads_the_split_tunnel_policy_with_the_users():
+    sample = build_sample_raw()
+    seen: list[str] = []
+
+    def full(query: str) -> httpx.Response:
+        # Every rule field the normalizer reads; the published policy (no input).
+        for field in ("routingPriority", "coverage", "dnsExclusion { domain }", "sourceNetworkType", "fqdn"):
+            assert field in query
+        assert "SplitTunnelPolicyInput" not in query
+        return _policy_response("splitTunnel", sample["split_tunnel"])
+
+    progress: list[dict] = []
+    async with _client(_split_handler(sample, seen, {"plexusSplitTunnel": full})) as client:
+        raw = await collect_account(client, "42", _USERS_ONLY, progress.append)
+
+    assert seen == ["plexusSites", "plexusUsers", "plexusSplitTunnel", "plexusGlobalIpRanges"]
+    assert raw["errors"] == [] and raw["split_tunnel"] == sample["split_tunnel"]
+    assert raw["global_ip_ranges"] == sample["global_ip_ranges"]
+    assert progress[-1]["calls_done"] == progress[-1]["calls_total"] == 4
+    assert progress[-1]["split_tunnel_rules"] == 3
+
+    # Without the users there is nothing for the policy to route: not asked for.
+    seen.clear()
+    async with _client(_split_handler(sample, seen, {})) as client:
+        raw = await collect_account(client, "42", {**_USERS_ONLY, "include_users": False})
+    assert seen == ["plexusSites"] and raw["split_tunnel"] is None
+
+
+@pytest.mark.asyncio
+async def test_collect_account_falls_back_to_the_reduced_split_tunnel_query():
+    sample = build_sample_raw()
+    seen: list[str] = []
+
+    def basic(query: str) -> httpx.Response:
+        assert "routingPriority" not in query and "globalIpRange" in query
+        return _policy_response("splitTunnel", sample["split_tunnel"])
+
+    answers = {"plexusSplitTunnel": lambda _q: _refused("routingPriority"), "plexusSplitTunnelBasic": basic}
+    async with _client(_split_handler(sample, seen, answers)) as client:
+        raw = await collect_account(client, "42", _USERS_ONLY)
+
+    assert seen[2:4] == ["plexusSplitTunnel", "plexusSplitTunnelBasic"]
+    assert raw["split_tunnel"]["reduced"] is True and len(raw["split_tunnel"]["rules"]) == 3
+    assert [e["path"] for e in raw["errors"]] == ["policy.splitTunnel (full detail)"]
+
+
+@pytest.mark.asyncio
+async def test_collect_account_leaves_the_split_tunnel_policy_uncollected_when_cato_refuses_it():
+    # A key without the SDP Split Tunnel permission: best effort, like a refused firewall.
+    sample = build_sample_raw()
+    seen: list[str] = []
+    denied = httpx.Response(200, json={"errors": [{"message": "Permission denied"}]})
+    answers = {"plexusSplitTunnel": lambda _q: denied, "plexusSplitTunnelBasic": lambda _q: denied}
+    async with _client(_split_handler(sample, seen, answers)) as client:
+        raw = await collect_account(client, "42", _USERS_ONLY)
+
+    assert raw["split_tunnel"] is None and len(raw["users"]) == 4
+    assert [e["path"] for e in raw["errors"]] == ["policy.splitTunnel (full detail)", "policy.splitTunnel"]
+    users = [n for n in build_snapshot(raw)["nodes"] if n["kind"] == "user" and n["label"] != "Priya Nair"]
+    assert users and all(n["forwarding"]["not_collected"] == ["Route table (Split Tunnel policy)"] for n in users)
 
 
 _BGP_PEER = {
@@ -489,7 +589,7 @@ def test_snapshot_counts_sites_sockets_and_users(snapshot):
     assert snapshot["provider"] == "cato" and snapshot["schema"] == 1
     assert summary["sites"] == 4 and summary["devices"] == 5
     assert summary["devices_by_status"] == {"online": 4, "offline": 1}
-    assert summary["wan_uplinks"] == 4 and summary["remote_users"] == 3 and summary["vlans"] == 6
+    assert summary["wan_uplinks"] == 4 and summary["remote_users"] == 4 and summary["vlans"] == 6
     # The cloud is a box of its own, sorted ahead of the sites.
     assert snapshot["sites"][0]["id"] == CLOUD_SITE_ID
 
@@ -523,8 +623,8 @@ def test_snapshot_joins_sockets_to_their_pop_and_pops_to_the_cloud(snapshot):
         "Discovered via": "Cato API",
     }
     assert tunnels[0]["sections"][0]["title"] == "IPsec tunnel (primary)"
-    # Four Sockets' tunnels, two PoPs' backbone links, three users' and the two IPsec tunnels.
-    assert snapshot["summary"]["vpn_tunnels"] == len([e for e in snapshot["edges"] if e["kind"] != "uplink"]) == 11
+    # Four Sockets' tunnels, two PoPs' backbone links, four users' and the two IPsec tunnels.
+    assert snapshot["summary"]["vpn_tunnels"] == len([e for e in snapshot["edges"] if e["kind"] != "uplink"]) == 12
     # A site that is down stays attached to the cloud by a down tunnel.
     assert links[("d:5004", CLOUD_NODE_ID)]["status"] == "unreachable"
     down = next(n for n in snapshot["nodes"] if n["id"] == "d:5004")
@@ -572,7 +672,7 @@ def test_snapshot_ha_pair_and_wan_links(snapshot):
 
 def test_every_remote_user_is_a_node_in_the_box_of_its_pop(snapshot):
     users = {n["label"]: n for n in snapshot["nodes"] if n["kind"] == "user"}
-    assert sorted(users) == ["Dana Reyes", "Priya Nair", "Sam Okafor"]
+    assert sorted(users) == ["Dana Reyes", "Lee Park", "Priya Nair", "Sam Okafor"]
     dana = users["Dana Reyes"]
     assert dana["id"] == f"{USER_NODE_PREFIX}9001" and dana["ip"] == "10.88.0.11"
     assert dana["site"] == f"{POP_SITE_ID}:New York" and users["Sam Okafor"]["site"] == f"{POP_SITE_ID}:Ashburn"
@@ -821,7 +921,7 @@ def test_api_cato_account_crud_keeps_the_key_write_only(api):
 def test_api_cato_sample_is_merged_into_the_topology(api):
     built = api.post("/api/sources/sample?provider=cato")
     assert built.status_code == 201, built.text
-    assert built.json()["summary"]["remote_users"] == 3
+    assert built.json()["summary"]["remote_users"] == 4
     org_ref = built.json()["org_ref"]
 
     # An inventory host on a user's VPN address is not that user: the address
@@ -1186,10 +1286,11 @@ def test_ha_sockets_ipsec_sites_and_users_carry_forwarding_too(snapshot):
         ("IPsec tunnel (secondary)", "tunnel", "192.0.2.91", True),
         ("VPC (172.21.0.0/16)", "lan", "", True),
     ]
-    user = _fwd(snapshot, "cato:user:9002")
-    assert user["interfaces"][0]["ip"] == "10.88.0.12" and user["interfaces"][0]["kind"] == "tunnel"
+    # No Split Tunnel rule matches Dana: everything goes to her PoP.
+    user = _fwd(snapshot, "cato:user:9001")
+    assert user["interfaces"][0]["ip"] == "10.88.0.11" and user["interfaces"][0]["kind"] == "tunnel"
     assert [(r["prefix"], r["kind"]) for r in user["routes"]] == [
-        ("10.88.0.12/32", "connected"),
+        ("10.88.0.11/32", "connected"),
         ("0.0.0.0/0", "default"),
     ]
 
@@ -1286,3 +1387,249 @@ def test_ranges_not_read_leave_every_route_table_incomplete():
     snap = build_snapshot(raw)
     for node_id in (*_SITE_BLOCKS, "pop:Ashburn", CLOUD_NODE_ID):
         assert _fwd(snap, node_id)["not_collected"] == ["Route table (site network ranges)"], node_id
+
+
+# ── Split Tunnel policy ──────────────────────────────────────────────────────
+
+_DANA_ID, _SAM_ID, _PRIYA_ID, _LEE_ID = (f"{USER_NODE_PREFIX}{n}" for n in ("9001", "9002", "9003", "9004"))
+
+
+def _split_rule(index: int, name: str, action: str, **fields) -> dict:
+    return {
+        "id": f"t-{index}",
+        "name": name,
+        "index": index,
+        "enabled": True,
+        "action": action,
+        "source": {"user": [{"id": "9001", "name": "Dana Reyes"}], "usersGroup": []},
+        "platform": [],
+        "country": [],
+        "destination": {"application": [], "globalIpRange": [], "domain": [], "fqdn": []},
+        "sourceNetwork": {"sourceNetworkType": "ANY"},
+        "coverage": "ALL",
+        "routingPriority": "TUNNEL",
+        **fields,
+    }
+
+
+def _with_split(rules: list[dict], **policy) -> dict:
+    raw = build_sample_raw()
+    raw["split_tunnel"] = {"enabled": True, "rules": rules, "reduced": False, **policy}
+    return build_snapshot(raw)
+
+
+def _routes(block: dict) -> list[tuple]:
+    return [(r["prefix"], r["kind"], r["interface"], r["peer"], r["source"]) for r in block["routes"]]
+
+
+def _split_rows(snapshot: dict, node_id: str) -> dict:
+    node = next(n for n in snapshot["nodes"] if n["id"] == node_id)
+    return dict(_section(node, "Split Tunnel")["rows"])
+
+
+_TO_NEW_YORK = {"org_node": "pop:New York"}
+_CONNECTED = ("10.88.0.11/32", "connected", "Cato Client", None, "Address given by Cato")
+_FULL_TUNNEL = [_CONNECTED, ("0.0.0.0/0", "default", "", _TO_NEW_YORK, "Cato Client tunnel to PoP New York")]
+
+
+def test_an_except_rule_sends_its_exception_ranges_out_of_the_device_and_the_rest_to_the_pop(snapshot):
+    sam = _fwd(snapshot, _SAM_ID)
+    assert _routes(sam) == [
+        ("10.88.0.12/32", "connected", "Cato Client", None, "Address given by Cato"),
+        (
+            "10.77.128.0/22",
+            "static",
+            "Local network (direct)",
+            None,
+            "Split Tunnel rule Sam direct to the lab: exception",
+        ),
+        ("0.0.0.0/0", "default", "", {"org_node": "pop:Ashburn"}, "Cato Client tunnel to PoP Ashburn"),
+    ]
+    # The device's own network: no address is collected, as for the Cloud's "Internet".
+    assert [(i["name"], i["kind"], i["ip"]) for i in sam["interfaces"]][1] == ("Local network (direct)", "wan", "")
+    # A domain exception is no route: the default route may not be what carries a flow.
+    assert sam["not_collected"] == ["Route table (Split Tunnel exceptions by domain, FQDN or application)"]
+    rows = _split_rows(snapshot, _SAM_ID)
+    assert rows["Rule"] == "1 Sam direct to the lab"
+    assert rows["Mode"] == "Route all traffic to Cato except the exceptions"
+    assert rows["Exceptions"] == "Lab-Pool (10.77.128.0/22), domain updates.example.com"
+    assert (rows["Coverage"], rows["Routing priority"]) == ("All traffic", "Tunnel")
+
+
+def test_an_only_selected_rule_sends_its_ranges_to_the_pop_and_the_rest_out_of_the_device(snapshot):
+    lee = _fwd(snapshot, _LEE_ID)
+    assert _routes(lee) == [
+        ("10.88.0.14/32", "connected", "Cato Client", None, "Address given by Cato"),
+        ("10.0.0.0/8", "static", "", _TO_NEW_YORK, "Split Tunnel rule Lee corporate only: routed to Cato"),
+        (
+            "0.0.0.0/0",
+            "default",
+            "Local network (direct)",
+            None,
+            "Split Tunnel rule Lee corporate only: everything else leaves the device directly",
+        ),
+    ]
+    assert lee["not_collected"] == []
+    rows = _split_rows(snapshot, _LEE_ID)
+    assert rows["Mode"] == "Route only the selected destinations to Cato"
+    assert rows["Selected destinations"] == "Corp-Networks (10.0.0.0/8)"
+
+
+def test_no_rule_matching_and_office_mode_keep_the_full_tunnel(snapshot):
+    # Rules 1 and 2 name other users; rule 3 is a group's, for a platform Dana does not run.
+    assert _routes(_fwd(snapshot, _DANA_ID)) == _FULL_TUNNEL
+    assert _fwd(snapshot, _DANA_ID)["not_collected"] == []
+    assert _split_rows(snapshot, _DANA_ID) == {"Rule": "No rule matches: all traffic to Cato"}
+    # Office Mode: behind the site, the policy does not apply. A plain note, not a route note.
+    priya = _fwd(snapshot, _PRIYA_ID)
+    assert [r["kind"] for r in priya["routes"]] == ["connected", "default"]
+    assert priya["not_collected"] == [
+        "Split Tunnel policy does not apply in Office Mode: the site's configuration steers the traffic"
+    ]
+    assert _split_rows(snapshot, _PRIYA_ID) == {"Rule": "Office Mode: the policy does not apply"}
+
+
+def test_a_rule_that_may_match_ahead_of_one_that_does_leaves_the_choice_undetermined():
+    groups = _split_rule(
+        1, "Remote staff", "ROUTE_ONLY_SELECTED", source={"user": [], "usersGroup": [{"id": "g", "name": "Staff"}]}
+    )
+    snap = _with_split([groups, _split_rule(2, "Dana direct", "ROUTE_ONLY_SELECTED")])
+    dana = _fwd(snap, _DANA_ID)
+    assert _routes(dana) == _FULL_TUNNEL
+    assert dana["not_collected"] == [
+        "Route table (Split Tunnel rule Remote staff may apply: users groups are not collected)"
+    ]
+    assert (
+        _split_rows(snap, _DANA_ID)["Rule"]
+        == "Undetermined: rule 1 Remote staff may apply (users groups are not collected)"
+    )
+
+    # Every criterion Plexus cannot evaluate is named; one that does not match skips the rule.
+    managed = _split_rule(1, "Managed", "OFF", sourceNetwork={"sourceNetworkType": "ANY_MANAGED_NETWORK"})
+    linux = _split_rule(1, "Linux", "OFF", platform=["LINUX"])
+    abroad = _split_rule(2, "Abroad", "OFF", country=[{"id": "FR", "name": "France"}])
+    home = _split_rule(3, "Home", "OFF", country=[{"id": "US", "name": "United States"}], platform=["WINDOWS"])
+    assert _fwd(_with_split([managed]), _DANA_ID)["not_collected"] == [
+        "Route table (Split Tunnel rule Managed may apply: managed networks are not collected)"
+    ]
+    snap = _with_split([linux, abroad, home])
+    assert _fwd(snap, _DANA_ID)["not_collected"] == [] and _split_rows(snap, _DANA_ID)["Rule"] == "3 Home"
+    assert _split_rows(snap, _DANA_ID)["Mode"] == "Off: all traffic to Cato"
+
+
+def test_a_rule_from_the_reduced_query_may_match_on_countries_it_does_not_have():
+    snap = _with_split([_split_rule(1, "Dana direct", "ROUTE_ONLY_SELECTED")], reduced=True)
+    assert _routes(_fwd(snap, _DANA_ID)) == _FULL_TUNNEL
+    assert _fwd(snap, _DANA_ID)["not_collected"] == [
+        "Route table (Split Tunnel rule Dana direct may apply: its countries are not collected "
+        "(fields Cato did not return))"
+    ]
+
+
+def test_a_split_tunnel_policy_not_collected_is_a_route_note_on_every_remote_user():
+    raw = build_sample_raw()
+    raw["split_tunnel"] = None
+    snap = build_snapshot(raw)
+    for node_id in (_DANA_ID, _SAM_ID, _LEE_ID):
+        assert _fwd(snap, node_id)["not_collected"] == ["Route table (Split Tunnel policy)"], node_id
+        assert _split_rows(snap, node_id) == {"Rule": "Not collected"}
+    # The routes are Cato's default, which the note says rests on data not collected.
+    assert _routes(_fwd(snap, _DANA_ID)) == _FULL_TUNNEL
+    cloud = next(n for n in snap["nodes"] if n["id"] == CLOUD_NODE_ID)
+    assert dict(_section(cloud, "Cato Cloud")["rows"])["Split Tunnel policy"] == "Not collected"
+    assert not any(s["title"].startswith("Split Tunnel policy") for s in cloud["sections"])
+
+
+def test_a_disabled_policy_and_an_off_rule_are_the_full_tunnel():
+    snap = _with_split([_split_rule(1, "Dana direct", "ROUTE_ONLY_SELECTED")], enabled=False)
+    assert _routes(_fwd(snap, _DANA_ID)) == _FULL_TUNNEL and _fwd(snap, _DANA_ID)["not_collected"] == []
+    assert _split_rows(snap, _DANA_ID) == {"Rule": "Policy disabled: all traffic to Cato"}
+    # A disabled rule is skipped.
+    snap = _with_split([_split_rule(1, "Dana direct", "ROUTE_ONLY_SELECTED", enabled=False)])
+    assert _split_rows(snap, _DANA_ID)["Rule"] == "No rule matches: all traffic to Cato"
+    snap = _with_split([_split_rule(1, "Dana off", "OFF")])
+    assert _routes(_fwd(snap, _DANA_ID)) == _FULL_TUNNEL and _fwd(snap, _DANA_ID)["not_collected"] == []
+
+
+def test_split_tunnel_destinations_routes_cannot_express_are_route_notes():
+    # The pre-2026 spelling, a range that is not collected, web-only coverage, LAN priority.
+    rule = _split_rule(
+        1,
+        "Dana direct",
+        "INCLUDE",
+        destination={
+            "globalIpRange": [{"id": "gr-9", "name": "Retired"}],
+            "application": [{"id": "a", "name": "Zoom"}],
+        },
+        coverage="WEB_ONLY",
+        routingPriority="LAN",
+        dnsExclusion={"domain": ["corp.example.com"]},
+    )
+    snap = _with_split([rule])
+    dana = _fwd(snap, _DANA_ID)
+    assert _routes(dana)[1:] == [
+        (
+            "0.0.0.0/0",
+            "default",
+            "Local network (direct)",
+            None,
+            "Split Tunnel rule Dana direct: everything else leaves the device directly",
+        )
+    ]
+    assert dana["not_collected"] == [
+        "Traffic to the device's local subnet stays on the LAN (the subnet is not collected)",
+        "Route table (Split Tunnel selected destinations by domain, FQDN or application)",
+        "Route table (Split Tunnel selected destinations: global IP range Retired)",
+        "Route table (Split Tunnel web-only coverage: non-web traffic leaves the device directly)",
+    ]
+    rows = _split_rows(snap, _DANA_ID)
+    assert rows["Selected destinations"] == "global IP range Retired (not resolved), application Zoom"
+    assert (rows["Coverage"], rows["Routing priority"], rows["DNS exclusions"]) == (
+        "Web traffic only",
+        "LAN",
+        "corp.example.com",
+    )
+
+    # A user-defined file, and EXCLUDE, the old spelling of "all to Cato except".
+    snap = _with_split([_split_rule(1, "Dana file", "USER_DEFINED")])
+    assert _routes(_fwd(snap, _DANA_ID)) == _FULL_TUNNEL
+    assert _fwd(snap, _DANA_ID)["not_collected"] == ["Route table (Split Tunnel user-defined routing file)"]
+    exclude = _split_rule(1, "Dana lab", "EXCLUDE", destination={"globalIpRange": [{"name": "Scanners"}]})
+    assert [r[:3] for r in _routes(_fwd(_with_split([exclude]), _DANA_ID))] == [
+        _CONNECTED[:3],
+        ("10.50.10.200/30", "static", "Local network (direct)"),
+        ("0.0.0.0/0", "default", ""),
+    ]
+
+
+def test_the_cloud_lists_the_split_tunnel_policy(snapshot):
+    cloud = next(n for n in snapshot["nodes"] if n["id"] == CLOUD_NODE_ID)
+    assert dict(_section(cloud, "Cato Cloud")["rows"])["Split Tunnel policy"] == "Enabled, 3 rules"
+    table = _section(cloud, "Split Tunnel policy")
+    assert table["columns"] == [
+        "#",
+        "Rule",
+        "Enabled",
+        "Users",
+        "Platforms",
+        "Countries",
+        "Source network",
+        "Mode",
+        "Destinations",
+        "Coverage",
+        "Routing priority",
+    ]
+    assert [r[:4] for r in table["rows"]] == [
+        ["1", "Sam direct to the lab", "Yes", "Sam Okafor"],
+        ["2", "Lee corporate only", "Yes", "Lee Park"],
+        ["3", "Contractors on Linux", "Yes", "group Contractors"],
+    ]
+    assert table["rows"][2][4:] == [
+        "LINUX",
+        "Any",
+        "Any",
+        "Route all traffic to Cato except the exceptions",
+        "FQDN repo.example.com",
+        "All traffic",
+        "Tunnel",
+    ]

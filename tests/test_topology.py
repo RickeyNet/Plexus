@@ -793,6 +793,100 @@ async def test_get_topology_enriches_nodes_with_ipam_utilization(monkeypatch):
     assert ext_node["ipam_utilization_pct"] == 41.0
 
 
+def test_neighbor_is_end_device_by_capabilities():
+    end_device = topology_module.neighbor_is_end_device
+    # LLDP letters and CDP words; a phone bridges its PC port and is still a phone.
+    assert end_device("B,T") and end_device("T") and end_device("Host Phone Two-port Mac Relay")
+    assert end_device("S") and end_device("Host") and end_device("S,O")
+    assert not end_device("B,R") and not end_device("B,W") and not end_device("Router Switch IGMP")
+    assert not end_device("Trans-Bridge Source-Route-Bridge IGMP") and not end_device("B")
+    # Not read: the map draws what it cannot classify.
+    assert not end_device("") and not end_device(None)
+    assert not end_device("", platform="cisco WS-C2960X", ip="", protocol="lldp")
+    assert not end_device("", platform="", ip="10.0.0.5", protocol="lldp")
+    assert not end_device("", platform="", ip="", protocol="cdp")
+    # A name and nothing else over LLDP: a workstation or server's host agent.
+    assert end_device("", platform="", ip="", protocol="lldp")
+    assert end_device(None, platform=None, ip=None, protocol="lldp")
+    assert topology_module._mac_digits("a846.9d22.8c9e") == "a8469d228c9e"
+    assert topology_module._mac_digits("A8:46:9D:22:8C:9E") == "a8469d228c9e"
+    assert topology_module._mac_digits("deadbeefcafe") == "deadbeefcafe"
+    assert topology_module._mac_digits("abc-def-012345") == "" and topology_module._mac_digits("CCMSW01-TDR1-4") == ""
+
+
+@pytest.mark.asyncio
+async def test_get_topology_one_node_per_address_for_a_shared_name_and_end_devices(monkeypatch):
+    """A neighbor name several addresses print is one node per address, not
+    one node cabling every switch that sees it; CDP / LLDP capabilities mark
+    the end devices the map leaves out by default."""
+
+    def link(link_id, src, name, ip, capabilities, src_iface, tgt_iface, platform=""):
+        return {
+            "id": link_id,
+            "source_host_id": src,
+            "target_host_id": None,
+            "target_device_name": name,
+            "target_ip": ip,
+            "target_platform": platform,
+            "target_capabilities": capabilities,
+            "source_interface": src_iface,
+            "target_interface": tgt_iface,
+            "protocol": "lldp",
+        }
+
+    fake_links = [
+        link(1, 10, "Polycom VVX 250", "10.0.5.1", "B,T", "Gi1/0/1", "1"),
+        link(2, 10, "Polycom VVX 250", "10.0.5.2", "B,T", "Gi1/0/2", "1"),
+        link(3, 20, "Polycom VVX 250", "10.0.5.3", "B,T", "Gi1/0/3", "1"),
+        # One address: one shared node, as before.
+        link(4, 10, "core-rtr", "10.0.0.254", "Router Switch IGMP", "Te1/1/1", "Te1/0/1", "cisco ISR4451"),
+        link(5, 20, "core-rtr", "10.0.0.254", "Router Switch IGMP", "Te1/1/1", "Te1/0/2", "cisco ISR4451"),
+        link(6, 10, "cam-7", "", "S", "Gi1/0/7", "eth0"),
+        # Capabilities not read (SNMP discovery): drawn as before.
+        link(7, 20, "legacy-sw", "10.0.9.9", "", "Gi1/0/9", "Gi0/1"),
+        # A workstation's LLDP agent: a name and nothing else.
+        link(8, 20, "DESKTOP-A5G1FQS", "", "", "Gi1/0/10", "b42e.9900.0001"),
+    ]
+    fake_hosts = [
+        {
+            "id": 10,
+            "hostname": "acc-1",
+            "ip_address": "10.0.0.1",
+            "device_type": "cisco_ios",
+            "group_id": 1,
+            "status": "online",
+        },
+        {
+            "id": 20,
+            "hostname": "acc-2",
+            "ip_address": "10.0.0.2",
+            "device_type": "cisco_ios",
+            "group_id": 1,
+            "status": "online",
+        },
+    ]
+    monkeypatch.setattr(app_module.db, "get_topology_links", AsyncMock(return_value=fake_links))
+    monkeypatch.setattr(app_module.db, "get_hosts_by_ids", AsyncMock(return_value=fake_hosts))
+    monkeypatch.setattr(app_module.db, "get_all_groups", AsyncMock(return_value=[{"id": 1, "name": "Access"}]))
+    monkeypatch.setattr(app_module.db, "get_interface_stats_by_hosts", AsyncMock(return_value=[]))
+    monkeypatch.setattr(app_module.db, "get_topology_changes_count", AsyncMock(return_value=0))
+    monkeypatch.setattr(app_module.db, "get_ipam_overview", AsyncMock(return_value={"subnets": []}))
+    monkeypatch.setattr(topology_module, "db", app_module.db)
+    topology_module.invalidate_topology_cache()
+
+    result = await topology_module.get_topology(group_id=None)
+    nodes = {n["id"]: n for n in result["nodes"]}
+    phones = sorted(k for k in nodes if str(k).startswith("ext_polycom vvx 250"))
+    assert phones == [f"ext_polycom vvx 250@10.0.5.{i}" for i in (1, 2, 3)]
+    assert all(nodes[k]["end_device"] is True and nodes[k]["device_category"] == "phone" for k in phones)
+    assert nodes["ext_core-rtr"]["end_device"] is False and nodes["ext_core-rtr"]["device_category"] == "router"
+    assert nodes["ext_cam-7"]["end_device"] is True and nodes["ext_cam-7"]["device_category"] == ""
+    assert nodes["ext_legacy-sw"]["end_device"] is False
+    assert nodes["ext_desktop-a5g1fqs"]["end_device"] is True
+    assert len(result["edges"]) == 8
+    assert {e["to"] for e in result["edges"] if e["id"] in (4, 5)} == {"ext_core-rtr"}
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 6. POST /api/topology/discover/{group_id}
 # ═════════════════════════════════════════════════════════════════════════════

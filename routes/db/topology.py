@@ -40,7 +40,9 @@ __all__ = [
     "get_interface_inventory_for_host",
     "get_interface_inventory_for_hosts",
     "get_interface_inventory_by_name",
+    "replace_interface_inventory_by_name",
     "upsert_vlan_definition",
+    "delete_vlan_definitions_except",
     "get_vlan_definitions_for_host",
     "insert_topology_change",
     "get_topology_changes",
@@ -157,6 +159,7 @@ async def upsert_topology_link(
     target_interface: str,
     protocol: str = "cdp",
     target_platform: str = "",
+    target_capabilities: str = "",
 ) -> int:
     """Insert or replace a topology link (deduplicated by source+interfaces+target)."""
     db = await _dbcore.get_db()
@@ -165,14 +168,15 @@ async def upsert_topology_link(
             """INSERT INTO topology_links
                (source_host_id, source_ip, source_interface,
                 target_host_id, target_ip, target_device_name,
-                target_interface, protocol, target_platform, discovered_at)
-               VALUES (?,?,?,?,?,?,?,?,?, datetime('now'))
+                target_interface, protocol, target_platform, target_capabilities, discovered_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?, datetime('now'))
                ON CONFLICT(source_host_id, source_interface, target_device_name, target_interface)
                DO UPDATE SET
                    target_host_id = excluded.target_host_id,
                    target_ip = excluded.target_ip,
                    protocol = excluded.protocol,
                    target_platform = excluded.target_platform,
+                   target_capabilities = excluded.target_capabilities,
                    discovered_at = excluded.discovered_at""",
             (
                 source_host_id,
@@ -184,6 +188,7 @@ async def upsert_topology_link(
                 target_interface,
                 protocol,
                 target_platform,
+                target_capabilities,
             ),
         )
         await db.commit()
@@ -283,14 +288,15 @@ async def replace_topology_links_for_host(host_id: int, links: list[dict]) -> in
                 """INSERT INTO topology_links
                    (source_host_id, source_ip, source_interface,
                     target_host_id, target_ip, target_device_name,
-                    target_interface, protocol, target_platform, discovered_at)
-                   VALUES (?,?,?,?,?,?,?,?,?, datetime('now'))
+                    target_interface, protocol, target_platform, target_capabilities, discovered_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?, datetime('now'))
                    ON CONFLICT(source_host_id, source_interface, target_device_name, target_interface)
                    DO UPDATE SET
                        target_host_id = excluded.target_host_id,
                        target_ip = excluded.target_ip,
                        protocol = excluded.protocol,
                        target_platform = excluded.target_platform,
+                       target_capabilities = excluded.target_capabilities,
                        discovered_at = excluded.discovered_at""",
                 [
                     (
@@ -303,6 +309,7 @@ async def replace_topology_links_for_host(host_id: int, links: list[dict]) -> in
                         link["target_interface"],
                         link["protocol"],
                         link["target_platform"],
+                        str(link.get("target_capabilities") or ""),
                     )
                     for link in links
                 ],
@@ -486,6 +493,74 @@ async def upsert_interface_inventory(
         await db.close()
 
 
+_INTERFACE_INVENTORY_FIELDS = (
+    "description",
+    "admin_state",
+    "oper_state",
+    "speed_mbps",
+    "duplex",
+    "access_vlan",
+    "trunk_vlans",
+)
+
+
+async def replace_interface_inventory_by_name(host_id: int, rows: list[dict]) -> int:
+    """Write one host's ports read without an SNMP ifIndex (over SSH), keyed
+    by name, in one transaction.
+
+    A port whose name already has a row is updated in place (its ifIndex,
+    SNMP's or synthetic, and its ``last_change`` stay); a new name gets the
+    next free negative ifIndex below the host's lowest (-1 first). Rows with
+    a negative ifIndex whose name this read did not list are deleted; rows
+    with an SNMP ifIndex are never deleted here. Each row carries ``name``
+    and the ``_INTERFACE_INVENTORY_FIELDS``. Returns the number of ports written.
+    """
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute("SELECT if_index, name FROM interface_inventory WHERE host_id = ?", (host_id,))
+        current = [(int(row["if_index"]), str(row["name"])) for row in rows_to_list(await cursor.fetchall())]
+        # An SNMP row wins over a synthetic one of the same name.
+        existing: dict[str, int] = {}
+        for index, name in sorted(current, reverse=True):
+            existing.setdefault(name, index)
+        lowest = min([0, *(index for index, _ in current)])
+        seen: set[str] = set()
+        for row in rows:
+            name = str(row["name"])
+            if name in seen:
+                continue
+            seen.add(name)
+            values = tuple(row[field] for field in _INTERFACE_INVENTORY_FIELDS)
+            if name in existing:
+                await db.execute(
+                    """UPDATE interface_inventory SET
+                           description = ?, admin_state = ?, oper_state = ?, speed_mbps = ?,
+                           duplex = ?, access_vlan = ?, trunk_vlans = ?, collected_at = datetime('now')
+                       WHERE host_id = ? AND if_index = ?""",
+                    (*values, host_id, existing[name]),
+                )
+                continue
+            lowest -= 1
+            await db.execute(
+                """INSERT INTO interface_inventory
+                   (host_id, if_index, name, description, admin_state, oper_state,
+                    speed_mbps, duplex, last_change, access_vlan, trunk_vlans, collected_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, datetime('now'))""",
+                (host_id, lowest, name, *values),
+            )
+        stale = [index for index, name in current if index < 0 and (name not in seen or existing[name] != index)]
+        if stale:
+            placeholders = ",".join("?" * len(stale))
+            await db.execute(
+                f"DELETE FROM interface_inventory WHERE host_id = ? AND if_index IN ({placeholders})",
+                (host_id, *stale),
+            )
+        await db.commit()
+        return len(seen)
+    finally:
+        await db.close()
+
+
 async def get_interface_inventory_for_host(host_id: int) -> list[dict]:
     db = await _dbcore.get_db(read_only=True)
     try:
@@ -559,6 +634,26 @@ async def upsert_vlan_definition(
         )
         await db.commit()
         return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def delete_vlan_definitions_except(host_id: int, vlan_ids: list[int]) -> int:
+    """Delete the host's VLAN rows whose id is not in ``vlan_ids`` (a read
+    that listed the device's VLANs; an empty list deletes them all). Returns the rows deleted."""
+    db = await _dbcore.get_db()
+    try:
+        keep = sorted({int(v) for v in vlan_ids})
+        if keep:
+            placeholders = ",".join("?" * len(keep))
+            cursor = await db.execute(
+                f"DELETE FROM vlan_definitions WHERE host_id = ? AND vlan_id NOT IN ({placeholders})",
+                (host_id, *keep),
+            )
+        else:
+            cursor = await db.execute("DELETE FROM vlan_definitions WHERE host_id = ?", (host_id,))
+        await db.commit()
+        return cursor.rowcount
     finally:
         await db.close()
 

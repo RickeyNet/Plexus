@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { TopologyData, TopologyEdge, TopologyNode } from '@/api/topology';
 
-import { filterBySource, mapProviders, nodeProvider } from './helpers';
+import { filterBySource, mapProviders, nodeProvider, withoutEndDevices } from './helpers';
 
 function node(id: string, provider?: string, inventory = false): TopologyNode {
   return {
@@ -75,6 +75,23 @@ describe('source filter', () => {
     const all = filterBySource(DATA, 'meraki')!;
     expect(all.nodes.map((n) => n.id)).toEqual(['mx1', 'vpc1', 'vpc2', 'cato1', 'core', 'old']);
     expect(all.edges.map((e) => e.id)).toEqual(['e1', 'e2', 'e3']);
+  });
+
+  it('leaves end devices and their links off the map unless asked for them', () => {
+    const phoneId = 'ext_polycom@10.0.0.9';
+    const phone: TopologyNode = { ...node(phoneId), end_device: true };
+    const withPhone = {
+      ...DATA,
+      nodes: [...DATA.nodes, phone],
+      edges: [...DATA.edges, edge('e5', 'sw1', phoneId)],
+    } as TopologyData;
+    const hidden = withoutEndDevices(withPhone, false)!;
+    expect(hidden.nodes.map((n) => n.id)).not.toContain(phoneId);
+    expect(hidden.edges.map((e) => e.id)).toEqual(['e1', 'e2', 'e3', 'e4']);
+    expect(withoutEndDevices(withPhone, true)).toBe(withPhone);
+    // Nothing to hide: the same data, so nothing downstream re-renders.
+    expect(withoutEndDevices(DATA, false)).toBe(DATA);
+    expect(withoutEndDevices(undefined, false)).toBeUndefined();
   });
 });
 

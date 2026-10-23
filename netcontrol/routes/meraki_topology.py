@@ -28,7 +28,9 @@ what feeds and surrounds that merge:
   - The reachability sweep: one destination traced from every source
     network the filters keep, as JSON or CSV (``/api/topology/reachability``)
   - The list of everything that feeds the map (``/api/topology/sources``):
-    neighbor discovery, organizations and accounts, with their last collection
+    neighbor discovery, the inventory route/configuration collection
+    (``netcontrol.routes.inventory_collection``), organizations and accounts,
+    with their last collection
   - Self-contained interactive HTML export of the whole topology
 
 Registered under the ``topology`` feature: reads need ``topology``, builds
@@ -1096,8 +1098,12 @@ async def build_meraki_topology_api(org_ref: int, request: Request):
 
 @router.get("/api/sources/builds/{job_id}")
 async def get_meraki_build_api(job_id: str):
-    job = background_jobs.get_job(job_id, kind=_JOB_KIND)
-    if job is None:
+    """A collection job: a source's build or the inventory collection."""
+    # Imported here: inventory_collection imports this module.
+    from netcontrol.routes.inventory_collection import JOB_KIND as INVENTORY_JOB_KIND
+
+    job = background_jobs.get_job(job_id)
+    if job is None or job["kind"] not in (_JOB_KIND, INVENTORY_JOB_KIND):
         raise HTTPException(status_code=404, detail="Build job not found (it may have expired)")
     return job
 
@@ -1439,13 +1445,17 @@ def _cloud_source(account: dict) -> dict[str, Any]:
 @router.get("/api/topology/sources")
 async def list_topology_sources_api():
     """Everything that feeds the topology map, with its last collection:
-    neighbor discovery of the inventory, Meraki organizations, Cato accounts,
-    Cisco FMCs, Palo Alto Panoramas, Appgate SDP collectives and the AWS, Azure and GCP accounts of
-    Cloud Visibility. Credentials are never included."""
+    neighbor discovery of the inventory, the SSH collection of its route tables
+    and configurations, Meraki organizations, Cato accounts, Cisco FMCs, Palo
+    Alto Panoramas, Appgate SDP collectives and the AWS, Azure and GCP accounts
+    of Cloud Visibility. Credentials are never included."""
+    # Imported here: inventory_collection imports this module.
+    from netcontrol.routes.inventory_collection import inventory_source
+
     newest: dict[int, dict] = {}
     for snapshot in await db.list_meraki_snapshots(limit=500):
         newest.setdefault(snapshot["org_ref"], snapshot)  # newest first
-    sources = [_neighbor_source(await db.get_topology_link_stats())]
+    sources = [_neighbor_source(await db.get_topology_link_stats()), await inventory_source()]
     sources.extend(_org_source(org, newest.get(org["id"])) for org in await db.list_meraki_orgs())
     for cloud in CLOUDS:
         sources.extend(

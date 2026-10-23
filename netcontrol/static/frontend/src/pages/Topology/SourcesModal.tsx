@@ -1,16 +1,19 @@
-import { useEffect, useRef, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router';
+import { useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router";
 
-import { useAuthStatus } from '@/api/auth';
-import { useDiscoverCloudAccount } from '@/api/cloud';
+import { useAuthStatus } from "@/api/auth";
+import { useDiscoverCloudAccount } from "@/api/cloud";
 import {
   CloudAccountProvider,
   CloudProvider,
+  InventoryCollectRequest,
+  InventoryCollectionResult,
   MerakiBuildJob,
   MerakiOrg,
   MerakiSnapshot,
   TopologySource,
+  TopologySourceType,
   useBuildMerakiSample,
   useDeleteMerakiOrg,
   useDeleteMerakiSnapshot,
@@ -18,34 +21,53 @@ import {
   useMerakiOrgs,
   useMerakiSnapshots,
   useSnapshotWarnings,
+  useStartInventoryCollection,
   useStartMerakiBuild,
   useTopologySources,
   useValidateMerakiOrg,
   isCloudAccountProvider,
-} from '@/api/meraki';
-import { useDialogs } from '@/components/DialogProvider-context';
-import { Modal } from '@/components/Modal';
+  isInventoryCollectionResult,
+} from "@/api/meraki";
+import { useDialogs } from "@/components/DialogProvider-context";
+import { Modal } from "@/components/Modal";
 
-import { providerLabel, providerScopeName } from './helpers';
+import {
+  providerLabel,
+  providerScopeName,
+  PROVIDER_INVENTORY,
+} from "./helpers";
+import { InventoryCollectModal } from "./InventoryCollectModal";
 import {
   buildStatusBadge,
+  describeInventoryResult,
   describeProgress,
   formatWhen,
   sourceTypeLabel,
-} from './merakiHelpers';
-import { SourceFormModal } from './SourceFormModal';
-import { defaultOptionsFor } from './sourceForm';
+} from "./merakiHelpers";
+import { SourceFormModal } from "./SourceFormModal";
+import { defaultOptionsFor } from "./sourceForm";
 
-const CLOUD_ACCOUNTS_PATH = '/cloud-visibility';
+const CLOUD_ACCOUNTS_PATH = "/cloud-visibility";
 
 /** Sources that are entries of the organization dialog (collected as a tracked build). */
-const ORG_SOURCE_TYPES = new Set<string>(['meraki', 'cato', 'fmc', 'panorama', 'appgate']);
+const ORG_SOURCE_TYPES = new Set<string>([
+  "meraki",
+  "cato",
+  "fmc",
+  "panorama",
+  "appgate",
+]);
 
 /** Organization sources that sign in with a user and password rather than an API key. */
-const LOGIN_SOURCE_TYPES = new Set<string>(['fmc', 'panorama', 'appgate']);
+const LOGIN_SOURCE_TYPES = new Set<string>(["fmc", "panorama", "appgate"]);
 
 function isOrgSource(source: TopologySource): boolean {
   return ORG_SOURCE_TYPES.has(source.type);
+}
+
+/** The SSH collection of inventory route tables and configurations (tracked as a build, like an organization). */
+function isInventorySource(source: TopologySource): boolean {
+  return source.type === PROVIDER_INVENTORY;
 }
 
 /** AWS accounts, Azure subscriptions and GCP projects: Cloud Visibility accounts. */
@@ -66,14 +88,22 @@ interface WarningsTarget {
 /** Opens the warnings dialog of one collection. */
 type ShowWarnings = (target: WarningsTarget) => void;
 
-function WarningsBadge({ text, onClick }: { text: string | number; onClick: (() => void) | undefined }) {
+function WarningsBadge({
+  text,
+  onClick,
+  title = "Show the collection warnings",
+}: {
+  text: string | number;
+  onClick: (() => void) | undefined;
+  title?: string;
+}) {
   if (!onClick) return <span className="badge badge-warning">{text}</span>;
   return (
     <button
       type="button"
       className="badge badge-warning"
-      style={{ border: 'none', cursor: 'pointer' }}
-      title="Show the collection warnings"
+      style={{ border: "none", cursor: "pointer" }}
+      title={title}
       onClick={onClick}
     >
       {text}
@@ -86,43 +116,60 @@ interface Props {
   onClose: () => void;
   /** Starts CDP / LLDP discovery of the inventory, which has its own progress dialog. */
   onDiscoverNeighbors: () => void;
+  /** The inventory group selected on the map, preselected for an inventory collection; null for all groups. */
+  groupId?: number | null;
 }
 
 /** Everything that feeds the map, in one list: add, collect, history. */
-export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
+export function SourcesModal({
+  isOpen,
+  onClose,
+  onDiscoverNeighbors,
+  groupId = null,
+}: Props) {
   const qc = useQueryClient();
   const { alert } = useDialogs();
   const { data: auth } = useAuthStatus();
-  const isAdmin = auth?.role === 'admin';
-  const canWrite = isAdmin || (auth?.feature_access ?? []).includes('topology.write');
+  const isAdmin = auth?.role === "admin";
+  const canWrite =
+    isAdmin || (auth?.feature_access ?? []).includes("topology.write");
 
   const sources = useTopologySources();
   const orgs = useMerakiOrgs();
   const snapshots = useMerakiSnapshots();
   const startBuild = useStartMerakiBuild();
+  const startInventory = useStartInventoryCollection();
   const buildSample = useBuildMerakiSample();
   const discoverCloud = useDiscoverCloudAccount();
 
-  const [menu, setMenu] = useState<'add' | 'sample' | null>(null);
+  const [menu, setMenu] = useState<"add" | "sample" | null>(null);
   const [editing, setEditing] = useState<MerakiOrg | null>(null);
   const [adding, setAdding] = useState<CloudProvider | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   // Which integration the tracked collection talks to, for the progress text.
-  const [jobProvider, setJobProvider] = useState<CloudProvider>('meraki');
+  const [jobProvider, setJobProvider] = useState<TopologySourceType>("meraki");
+  // The inventory source whose collection dialog (devices, credential) is open.
+  const [inventoryFor, setInventoryFor] = useState<TopologySource | null>(null);
   // AWS / Azure / GCP accounts whose discovery request is in flight.
   const [cloudBusy, setCloudBusy] = useState<number[]>([]);
   const [allBusy, setAllBusy] = useState(false);
-  const [allNote, setAllNote] = useState<{ text: string; failed: boolean } | null>(null);
+  const [allNote, setAllNote] = useState<{
+    text: string;
+    failed: boolean;
+  } | null>(null);
   const [warningsFor, setWarningsFor] = useState<WarningsTarget | null>(null);
 
   const job = useMerakiBuildJob(jobId);
-  const isJobRunning = jobId !== null && !job.isError && (!job.data || job.data.status === 'running');
+  const isJobRunning =
+    jobId !== null &&
+    !job.isError &&
+    (!job.data || job.data.status === "running");
   const isJobSettled = jobId !== null && !isJobRunning;
 
   const refreshMap = () => {
-    qc.invalidateQueries({ queryKey: ['meraki'] });
-    qc.invalidateQueries({ queryKey: ['topology'] });
-    qc.invalidateQueries({ queryKey: ['mac-tracking'] });
+    qc.invalidateQueries({ queryKey: ["meraki"] });
+    qc.invalidateQueries({ queryKey: ["topology"] });
+    qc.invalidateQueries({ queryKey: ["mac-tracking"] });
   };
 
   // A settled job (finished, or its record expired) means new server state:
@@ -138,13 +185,14 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
   const collectingKeys = (sources.data?.sources ?? [])
     .filter((s) => s.collecting)
     .map((s) => s.key)
-    .join(',');
-  const prevCollectingRef = useRef('');
+    .join(",");
+  const prevCollectingRef = useRef("");
   useEffect(() => {
     const previous = prevCollectingRef.current;
     prevCollectingRef.current = collectingKeys;
-    const still = new Set(collectingKeys.split(','));
-    if (previous && previous.split(',').some((key) => !still.has(key))) refreshMap();
+    const still = new Set(collectingKeys.split(","));
+    if (previous && previous.split(",").some((key) => !still.has(key)))
+      refreshMap();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collectingKeys]);
 
@@ -154,12 +202,16 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
   };
 
   /** Resolves to an error message, or null when the discovery succeeded. */
-  const runCloudDiscovery = async (source: TopologySource): Promise<string | null> => {
+  const runCloudDiscovery = async (
+    source: TopologySource,
+  ): Promise<string | null> => {
     const id = source.id as number;
     setCloudBusy((busy) => [...busy, id]);
     try {
       const result = await discoverCloud.mutateAsync(id);
-      return result?.ok === false ? (result.message ?? 'Discovery failed') : null;
+      return result?.ok === false
+        ? (result.message ?? "Discovery failed")
+        : null;
     } catch (err) {
       return errorText(err);
     } finally {
@@ -168,15 +220,42 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
     }
   };
 
+  const startInventoryCollection = async (
+    body: InventoryCollectRequest,
+  ): Promise<string> => {
+    const started = await startInventory.mutateAsync(body);
+    return started.job_id;
+  };
+
+  /** The Collect button of the inventory collection dialog: track the job like an organization build. */
+  const handleInventoryCollect = async (body: InventoryCollectRequest) => {
+    try {
+      const started = await startInventoryCollection(body);
+      setInventoryFor(null);
+      setJobProvider(PROVIDER_INVENTORY);
+      setJobId(started);
+    } catch (err) {
+      void alert({
+        message: `Could not start the collection: ${errorText(err)}`,
+        variant: "error",
+      });
+    }
+  };
+
   const handleCollect = async (source: TopologySource) => {
     setAllNote(null);
-    if (source.type === 'neighbors') {
+    if (source.type === "neighbors") {
       onDiscoverNeighbors();
+      return;
+    }
+    if (isInventorySource(source)) {
+      setInventoryFor(source);
       return;
     }
     if (isCloudAccountProvider(source.type)) {
       const failure = await runCloudDiscovery(source);
-      if (failure) void alert({ message: `${source.name}: ${failure}`, variant: 'error' });
+      if (failure)
+        void alert({ message: `${source.name}: ${failure}`, variant: "error" });
       return;
     }
     try {
@@ -184,32 +263,50 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
       setJobProvider(source.type);
       setJobId(started);
     } catch (err) {
-      void alert({ message: `Could not start the collection: ${errorText(err)}`, variant: 'error' });
+      void alert({
+        message: `Could not start the collection: ${errorText(err)}`,
+        variant: "error",
+      });
     }
   };
 
   const canCollect = (source: TopologySource): boolean => {
-    if (!source.can_collect || !source.enabled || source.collecting) return false;
+    if (!source.can_collect || !source.enabled || source.collecting)
+      return false;
     // AWS / Azure / GCP discovery belongs to Cloud Visibility, where it is an administrator action.
-    return isCloudSource(source) ? isAdmin && !cloudBusy.includes(source.id as number) : canWrite;
+    return isCloudSource(source)
+      ? isAdmin && !cloudBusy.includes(source.id as number)
+      : canWrite;
   };
 
+  // The inventory collection needs a credential; without its dialog only the service credential can be used.
+  const inCollectAll = (source: TopologySource): boolean =>
+    canCollect(source) &&
+    (!isInventorySource(source) || source.service_credential === true);
+
   const handleCollectAll = async () => {
-    const targets = (sources.data?.sources ?? []).filter(canCollect);
+    const targets = (sources.data?.sources ?? []).filter(inCollectAll);
     if (targets.length === 0) return;
     setAllBusy(true);
     setAllNote(null);
     setJobId(null);
     const failures: string[] = [];
     try {
-      for (const source of targets.filter(isOrgSource)) {
+      for (const source of targets.filter(
+        (s) => isOrgSource(s) || isInventorySource(s),
+      )) {
         try {
-          await startOrgBuild(source);
+          if (isInventorySource(source))
+            await startInventoryCollection({
+              group_id: null,
+              credential_id: null,
+            });
+          else await startOrgBuild(source);
         } catch (err) {
           failures.push(`${source.name}: ${errorText(err)}`);
         }
       }
-      if (targets.some((s) => s.type === 'neighbors')) onDiscoverNeighbors();
+      if (targets.some((s) => s.type === "neighbors")) onDiscoverNeighbors();
       const cloud = targets.filter(isCloudSource);
       const outcomes = await Promise.all(cloud.map(runCloudDiscovery));
       outcomes.forEach((failure, i) => {
@@ -217,11 +314,14 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
       });
     } finally {
       setAllBusy(false);
-      qc.invalidateQueries({ queryKey: ['meraki', 'sources'] });
+      qc.invalidateQueries({ queryKey: ["meraki", "sources"] });
     }
     setAllNote(
       failures.length
-        ? { text: `Could not collect from ${failures.length} of ${targets.length}:\n${failures.join('\n')}`, failed: true }
+        ? {
+            text: `Could not collect from ${failures.length} of ${targets.length}:\n${failures.join("\n")}`,
+            failed: true,
+          }
         : {
             text: `Collection started for ${targets.length} source(s). The map updates as each one finishes.`,
             failed: false,
@@ -229,13 +329,18 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
     );
   };
 
-  const handleSample = async (provider: CloudProvider | CloudAccountProvider) => {
+  const handleSample = async (
+    provider: CloudProvider | CloudAccountProvider,
+  ) => {
     setJobId(null);
     setMenu(null);
     try {
       await buildSample.mutateAsync(provider);
     } catch (err) {
-      void alert({ message: `Sample build failed: ${errorText(err)}`, variant: 'error' });
+      void alert({
+        message: `Sample build failed: ${errorText(err)}`,
+        variant: "error",
+      });
     }
   };
 
@@ -247,19 +352,29 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
   const rows = sources.data?.sources ?? [];
   const formProvider = adding ?? editing?.provider ?? null;
   const orgById = new Map((orgs.data?.orgs ?? []).map((org) => [org.id, org]));
-  const anyCollectable = rows.some(canCollect);
+  const anyCollectable = rows.some(inCollectAll);
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Map Sources" size="large">
-      <p className="text-muted" style={{ marginTop: 0, fontSize: '0.9rem' }}>
-        Everything on the map comes from one of these sources. Inventory devices are scanned for their CDP
-        and LLDP neighbors. Meraki organizations, Cato accounts, Cisco FMCs, Palo Alto Panoramas, Appgate SDP
-        collectives, AWS accounts, Azure subscriptions and GCP projects are read from their APIs.
-        Collect again whenever you want a fresh picture.
+      <p className="text-muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
+        Everything on the map comes from one of these sources. Meraki
+        organizations, Cato accounts, Cisco FMCs, Palo Alto Panoramas, Appgate
+        SDP collectives, AWS accounts, Azure subscriptions and GCP projects are
+        read from their APIs. All other devices, the ones in the inventory, are
+        scanned over SNMP for their CDP and LLDP neighbors, and read over SSH
+        for their route tables and running configurations (which the path
+        trace uses), VLANs, ports, neighbors and MAC tables. Collect again
+        whenever you want a fresh picture.
       </p>
 
       <div
-        style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', flexWrap: 'wrap', marginBottom: '0.75rem' }}
+        style={{
+          display: "flex",
+          gap: "0.5rem",
+          justifyContent: "flex-end",
+          flexWrap: "wrap",
+          marginBottom: "0.75rem",
+        }}
       >
         {canWrite && (
           <>
@@ -270,13 +385,13 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
               title="Collect from every source you are allowed to collect from"
               onClick={handleCollectAll}
             >
-              {allBusy ? 'Collecting…' : 'Collect All'}
+              {allBusy ? "Collecting…" : "Collect All"}
             </button>
             <button
               type="button"
-              className={`btn btn-sm ${menu === 'sample' ? 'btn-primary' : 'btn-secondary'}`}
+              className={`btn btn-sm ${menu === "sample" ? "btn-primary" : "btn-secondary"}`}
               title="Preview a source with demo data - no API key needed"
-              onClick={() => setMenu(menu === 'sample' ? null : 'sample')}
+              onClick={() => setMenu(menu === "sample" ? null : "sample")}
             >
               Load Sample
             </button>
@@ -285,29 +400,47 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
         {isAdmin && (
           <button
             type="button"
-            className={`btn btn-sm ${menu === 'add' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setMenu(menu === 'add' ? null : 'add')}
+            className={`btn btn-sm ${menu === "add" ? "btn-primary" : "btn-secondary"}`}
+            onClick={() => setMenu(menu === "add" ? null : "add")}
           >
             Add Source
           </button>
         )}
       </div>
 
-      {menu === 'add' && (
-        <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '0.75rem' }}>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+      {menu === "add" && (
+        <div
+          className="card"
+          style={{ padding: "0.75rem 1rem", marginBottom: "0.75rem" }}
+        >
+          <div
+            style={{
+              display: "flex",
+              gap: "0.5rem",
+              alignItems: "center",
+              flexWrap: "wrap",
+            }}
+          >
             <strong>Add:</strong>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleAdd('meraki')}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => handleAdd("meraki")}
+            >
               Meraki Organization
             </button>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleAdd('cato')}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => handleAdd("cato")}
+            >
               Cato Account
             </button>
             <button
               type="button"
               className="btn btn-secondary btn-sm"
               title="A Cisco Secure Firewall Management Center and the FTDs it manages"
-              onClick={() => handleAdd('fmc')}
+              onClick={() => handleAdd("fmc")}
             >
               Cisco FMC
             </button>
@@ -315,7 +448,7 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
               type="button"
               className="btn btn-secondary btn-sm"
               title="A Palo Alto Networks Panorama and the firewalls it manages"
-              onClick={() => handleAdd('panorama')}
+              onClick={() => handleAdd("panorama")}
             >
               Palo Alto Panorama
             </button>
@@ -323,31 +456,68 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
               type="button"
               className="btn btn-secondary btn-sm"
               title="An Appgate SDP collective: its Controllers, Gateways, sites, entitlements and connected users"
-              onClick={() => handleAdd('appgate')}
+              onClick={() => handleAdd("appgate")}
             >
               Appgate SDP
             </button>
-            <Link className="btn btn-secondary btn-sm" to={`${CLOUD_ACCOUNTS_PATH}?add=aws`} onClick={onClose}>
+            <Link
+              className="btn btn-secondary btn-sm"
+              to={`${CLOUD_ACCOUNTS_PATH}?add=aws`}
+              onClick={onClose}
+            >
               AWS Account
             </Link>
-            <Link className="btn btn-secondary btn-sm" to={`${CLOUD_ACCOUNTS_PATH}?add=azure`} onClick={onClose}>
+            <Link
+              className="btn btn-secondary btn-sm"
+              to={`${CLOUD_ACCOUNTS_PATH}?add=azure`}
+              onClick={onClose}
+            >
               Azure Subscription
             </Link>
-            <Link className="btn btn-secondary btn-sm" to={`${CLOUD_ACCOUNTS_PATH}?add=gcp`} onClick={onClose}>
+            <Link
+              className="btn btn-secondary btn-sm"
+              to={`${CLOUD_ACCOUNTS_PATH}?add=gcp`}
+              onClick={onClose}
+            >
               GCP Project
             </Link>
           </div>
-          <div className="text-muted" style={{ fontSize: '0.85em', marginTop: '0.4rem' }}>
-            AWS accounts, Azure subscriptions and GCP projects are added under Cloud Visibility, which also uses them
-            for flow logs and policy. Inventory devices are added under Inventory.
+          <div
+            className="text-muted"
+            style={{ fontSize: "0.85em", marginTop: "0.4rem" }}
+          >
+            AWS accounts, Azure subscriptions and GCP projects are added under
+            Cloud Visibility, which also uses them for flow logs and policy.
+            Inventory devices are added under Inventory.
           </div>
         </div>
       )}
-      {menu === 'sample' && (
-        <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '0.75rem' }}>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+      {menu === "sample" && (
+        <div
+          className="card"
+          style={{ padding: "0.75rem 1rem", marginBottom: "0.75rem" }}
+        >
+          <div
+            style={{
+              display: "flex",
+              gap: "0.5rem",
+              alignItems: "center",
+              flexWrap: "wrap",
+            }}
+          >
             <strong>Load demo data for:</strong>
-            {(['meraki', 'cato', 'fmc', 'panorama', 'appgate', 'aws', 'azure', 'gcp'] as const).map((provider) => (
+            {(
+              [
+                "meraki",
+                "cato",
+                "fmc",
+                "panorama",
+                "appgate",
+                "aws",
+                "azure",
+                "gcp",
+              ] as const
+            ).map((provider) => (
               <button
                 key={provider}
                 type="button"
@@ -355,13 +525,16 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
                 disabled={buildSample.isPending}
                 onClick={() => handleSample(provider)}
               >
-                {buildSample.isPending ? 'Building…' : providerLabel(provider)}
+                {buildSample.isPending ? "Building…" : providerLabel(provider)}
               </button>
             ))}
           </div>
-          <div className="text-muted" style={{ fontSize: '0.85em', marginTop: '0.4rem' }}>
-            Each adds a demo source to the map. Delete it from this list when you are done (the AWS, Azure and GCP
-            ones under Cloud Visibility).
+          <div
+            className="text-muted"
+            style={{ fontSize: "0.85em", marginTop: "0.4rem" }}
+          >
+            Each adds a demo source to the map. Delete it from this list when
+            you are done (the AWS, Azure and GCP ones under Cloud Visibility).
           </div>
         </div>
       )}
@@ -387,19 +560,36 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
               <SourceRow
                 key={source.key}
                 source={source}
-                org={source.id != null && !isCloudSource(source) ? orgById.get(source.id) : undefined}
+                org={
+                  source.id != null && !isCloudSource(source)
+                    ? orgById.get(source.id)
+                    : undefined
+                }
                 isAdmin={isAdmin}
                 canWrite={canWrite}
                 canCollect={
                   canCollect(source) &&
                   !allBusy &&
-                  // One tracked organization collection at a time, as its progress is shown below.
-                  !(isOrgSource(source) && (isJobRunning || startBuild.isPending))
+                  // One tracked collection (organization or inventory) at a time, as its progress is shown below.
+                  !(
+                    (isOrgSource(source) || isInventorySource(source)) &&
+                    (isJobRunning ||
+                      startBuild.isPending ||
+                      startInventory.isPending)
+                  )
                 }
-                isBusy={source.collecting || (isCloudSource(source) && cloudBusy.includes(source.id as number))}
+                isBusy={
+                  source.collecting ||
+                  (isCloudSource(source) &&
+                    cloudBusy.includes(source.id as number))
+                }
                 isSampleBusy={buildSample.isPending}
                 onCollect={() => handleCollect(source)}
-                onReloadSample={() => handleSample(source.type as CloudProvider | CloudAccountProvider)}
+                onReloadSample={() =>
+                  handleSample(
+                    source.type as CloudProvider | CloudAccountProvider,
+                  )
+                }
                 onEdit={setEditing}
                 onNavigate={onClose}
                 onShowWarnings={setWarningsFor}
@@ -411,18 +601,29 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
 
       {allNote && (
         <div
-          className={allNote.failed ? 'error' : 'card'}
-          style={{ marginTop: '1rem', padding: '0.75rem 1rem', whiteSpace: 'pre-line' }}
+          className={allNote.failed ? "error" : "card"}
+          style={{
+            marginTop: "1rem",
+            padding: "0.75rem 1rem",
+            whiteSpace: "pre-line",
+          }}
         >
           {allNote.text}
         </div>
       )}
       {isJobRunning && <BuildProgress job={job.data} provider={jobProvider} />}
       {isJobSettled && (
-        <BuildOutcome job={job.data} onDismiss={() => setJobId(null)} onShowWarnings={setWarningsFor} />
+        <BuildOutcome
+          job={job.data}
+          onDismiss={() => setJobId(null)}
+          onShowWarnings={setWarningsFor}
+        />
       )}
 
-      <h4 style={{ margin: '1.25rem 0 0.5rem' }}>Collection history (Meraki, Cato, Cisco FMC, Palo Alto Panorama and Appgate SDP)</h4>
+      <h4 style={{ margin: "1.25rem 0 0.5rem" }}>
+        Collection history (Meraki, Cato, Cisco FMC, Palo Alto Panorama and
+        Appgate SDP)
+      </h4>
       {snapshots.isPending && <div className="loading">Loading history…</div>}
       {snapshots.error && (
         <div className="error">
@@ -430,10 +631,30 @@ export function SourcesModal({ isOpen, onClose, onDiscoverNeighbors }: Props) {
         </div>
       )}
       {snapshots.data && (
-        <SnapshotTable snapshots={snapshots.data.snapshots} canWrite={canWrite} onShowWarnings={setWarningsFor} />
+        <SnapshotTable
+          snapshots={snapshots.data.snapshots}
+          canWrite={canWrite}
+          onShowWarnings={setWarningsFor}
+        />
       )}
 
-      {warningsFor && <WarningsModal target={warningsFor} onClose={() => setWarningsFor(null)} />}
+      {warningsFor && (
+        <WarningsModal
+          target={warningsFor}
+          onClose={() => setWarningsFor(null)}
+        />
+      )}
+
+      {inventoryFor && (
+        <InventoryCollectModal
+          groupId={groupId}
+          serviceCredentialId={inventoryFor.service_credential_id ?? null}
+          isAdmin={isAdmin}
+          onCollect={handleInventoryCollect}
+          isPending={startInventory.isPending}
+          onClose={() => setInventoryFor(null)}
+        />
+      )}
 
       {formProvider && (
         <SourceFormModal
@@ -468,19 +689,31 @@ interface SourceRowProps {
 }
 
 function collectTitle(source: TopologySource, isAdmin: boolean): string {
-  if (source.type === 'neighbors') {
+  if (source.type === "neighbors") {
     return source.can_collect
-      ? 'Scan inventory devices over SNMP for their CDP and LLDP neighbors (the group selected on the map, or all groups)'
-      : 'No devices in inventory';
+      ? "Scan inventory devices over SNMP for their CDP and LLDP neighbors (the group selected on the map, or all groups)"
+      : "No devices in inventory";
+  }
+  if (isInventorySource(source)) {
+    return source.can_collect
+      ? "Read every inventory device the sources above do not cover, over SSH: route table and running configuration for the path trace, VLANs, ports, CDP / LLDP neighbors and MAC table for the map (the group selected on the map, or all groups)"
+      : "No devices in inventory";
   }
   if (isCloudSource(source)) {
     const scopeName = providerScopeName(source.type);
-    if (!source.enabled) return `This ${scopeName} is disabled in Cloud Visibility`;
-    return isAdmin ? `Discover this ${scopeName} and update the map` : `${providerLabel(source.type)} discovery needs an administrator`;
+    if (!source.enabled)
+      return `This ${scopeName} is disabled in Cloud Visibility`;
+    return isAdmin
+      ? `Discover this ${scopeName} and update the map`
+      : `${providerLabel(source.type)} discovery needs an administrator`;
   }
-  if (source.can_collect) return `Collect from ${providerLabel(source.type)} and update the map`;
-  if (source.type === 'fmc' || source.type === 'appgate') return 'No password stored';
-  return source.type === 'panorama' ? 'No password or API key stored' : 'No API key stored';
+  if (source.can_collect)
+    return `Collect from ${providerLabel(source.type)} and update the map`;
+  if (source.type === "fmc" || source.type === "appgate")
+    return "No password stored";
+  return source.type === "panorama"
+    ? "No password or API key stored"
+    : "No API key stored";
 }
 
 function SourceRow({
@@ -505,20 +738,25 @@ function SourceRow({
   const handleValidate = async () => {
     try {
       const result = await validate.mutateAsync(source.id as number);
-      const visible = result.organizations.map((o) => `${o.name} (ID ${o.id})`).join('\n');
+      const visible = result.organizations
+        .map((o) => `${o.name} (ID ${o.id})`)
+        .join("\n");
       void alert({
         message:
-          visible && source.type === 'meraki'
+          visible && source.type === "meraki"
             ? `${result.message}\n\nVisible organizations:\n${visible}`
-            : visible && source.type === 'fmc'
+            : visible && source.type === "fmc"
               ? `${result.message}\n\nDomains the account can see:\n${visible}`
-              : visible && source.type === 'panorama'
+              : visible && source.type === "panorama"
                 ? `${result.message}\n\nDevice groups the account can see:\n${visible}`
                 : result.message,
-        variant: result.ok ? undefined : 'error',
+        variant: result.ok ? undefined : "error",
       });
     } catch (err) {
-      void alert({ message: `Validation failed: ${errorText(err)}`, variant: 'error' });
+      void alert({
+        message: `Validation failed: ${errorText(err)}`,
+        variant: "error",
+      });
     }
   };
 
@@ -533,7 +771,10 @@ function SourceRow({
     try {
       await remove.mutateAsync(source.id as number);
     } catch (err) {
-      void alert({ message: `Delete failed: ${errorText(err)}`, variant: 'error' });
+      void alert({
+        message: `Delete failed: ${errorText(err)}`,
+        variant: "error",
+      });
     }
   };
 
@@ -543,14 +784,17 @@ function SourceRow({
         {source.name}
         {source.demo && (
           <>
-            {' '}
+            {" "}
             <span className="badge">demo</span>
           </>
         )}
         {!source.enabled && (
           <>
-            {' '}
-            <span className="badge badge-warning" title="Disabled in Cloud Visibility: not on the map">
+            {" "}
+            <span
+              className="badge badge-warning"
+              title="Disabled in Cloud Visibility: not on the map"
+            >
               disabled
             </span>
           </>
@@ -564,31 +808,45 @@ function SourceRow({
           <span className="badge badge-info">Collecting…</span>
         ) : (
           <>
-            <span className={buildStatusBadge(source.status)}>{source.status || 'never'}</span>{' '}
-            <span className="text-muted">{source.last_collected_at ? formatWhen(source.last_collected_at) : ''}</span>
+            <span className={buildStatusBadge(source.status)}>
+              {source.status || "never"}
+            </span>{" "}
+            <span className="text-muted">
+              {source.last_collected_at
+                ? formatWhen(source.last_collected_at)
+                : ""}
+            </span>
             {source.warning_count > 0 && (
               <>
-                {' '}
+                {" "}
                 <WarningsBadge
-                  text={`${source.warning_count} warning(s)`}
+                  text={
+                    isInventorySource(source)
+                      ? `${source.warning_count} failed`
+                      : `${source.warning_count} warning(s)`
+                  }
                   onClick={
                     source.snapshot_id != null
-                      ? () => onShowWarnings({ snapshotId: source.snapshot_id as number, name: source.name })
+                      ? () =>
+                          onShowWarnings({
+                            snapshotId: source.snapshot_id as number,
+                            name: source.name,
+                          })
                       : undefined
                   }
                 />
               </>
             )}
             {(source.detail || source.message) && (
-              <div className="text-muted" style={{ fontSize: '0.85em' }}>
-                {[source.detail, source.message].filter(Boolean).join(' · ')}
+              <div className="text-muted" style={{ fontSize: "0.85em" }}>
+                {[source.detail, source.message].filter(Boolean).join(" · ")}
               </div>
             )}
           </>
         )}
       </td>
       <td>
-        <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+        <div style={{ display: "flex", gap: "0.25rem", flexWrap: "wrap" }}>
           {source.demo && canWrite ? (
             <button
               type="button"
@@ -620,7 +878,11 @@ function SourceRow({
                 disabled={!source.can_collect || validate.isPending}
                 onClick={handleValidate}
               >
-                {validate.isPending ? '…' : LOGIN_SOURCE_TYPES.has(source.type) ? 'Test Login' : 'Test Key'}
+                {validate.isPending
+                  ? "…"
+                  : LOGIN_SOURCE_TYPES.has(source.type)
+                    ? "Test Login"
+                    : "Test Key"}
               </button>
               <button
                 type="button"
@@ -650,11 +912,15 @@ function SourceRow({
               Manage
             </Link>
           )}
-          {source.type === 'neighbors' && (
+          {(source.type === "neighbors" || isInventorySource(source)) && (
             <Link
               className="btn btn-sm btn-secondary"
               to="/inventory"
-              title="Devices and their SNMP credentials are managed under Inventory"
+              title={
+                isInventorySource(source)
+                  ? "Devices are managed under Inventory"
+                  : "Devices and their SNMP credentials are managed under Inventory"
+              }
               onClick={onNavigate}
             >
               Manage
@@ -666,39 +932,62 @@ function SourceRow({
   );
 }
 
-function BuildProgress({ job, provider }: { job: MerakiBuildJob | undefined; provider: CloudProvider }) {
-  const { label, percent } = describeProgress(job);
+function BuildProgress({
+  job,
+  provider,
+}: {
+  job: MerakiBuildJob | undefined;
+  provider: TopologySourceType;
+}) {
+  const { label, percent } = describeProgress(job, provider);
+  const isInventory = provider === PROVIDER_INVENTORY;
   return (
-    <div className="card" style={{ marginTop: '1rem', padding: '1rem' }}>
-      <strong>Collecting from {providerLabel(provider)}…</strong>
-      <div className="text-muted" style={{ margin: '0.35rem 0' }}>{label}</div>
+    <div className="card" style={{ marginTop: "1rem", padding: "1rem" }}>
+      <strong>
+        {isInventory
+          ? "Collecting from inventory devices…"
+          : `Collecting from ${providerLabel(provider)}…`}
+      </strong>
+      <div className="text-muted" style={{ margin: "0.35rem 0" }}>
+        {label}
+      </div>
       <div
         role="progressbar"
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={percent ?? undefined}
-        style={{ height: 8, borderRadius: 4, background: 'var(--bg-secondary)', overflow: 'hidden' }}
+        style={{
+          height: 8,
+          borderRadius: 4,
+          background: "var(--bg-secondary)",
+          overflow: "hidden",
+        }}
       >
         <div
           style={{
-            height: '100%',
+            height: "100%",
             width: `${percent ?? 100}%`,
             opacity: percent === null ? 0.35 : 1,
-            background: 'var(--primary, var(--success))',
-            transition: 'width 0.4s ease',
+            background: "var(--primary, var(--success))",
+            transition: "width 0.4s ease",
           }}
         />
       </div>
-      <div className="text-muted" style={{ fontSize: '0.85em', marginTop: '0.35rem' }}>
-        {provider === 'cato'
-          ? 'A Cato account takes a few queries, sent slowly to stay inside the Cato API rate limits.'
-          : provider === 'fmc'
-            ? 'An FMC takes several requests per device (interfaces, routing, NAT, policies), sent slowly to stay inside the FMC limit of 120 requests per minute.'
-            : provider === 'panorama'
-              ? 'A Panorama takes a few requests per device group and template, plus a few per firewall when device state is collected.'
-              : provider === 'appgate'
-                ? 'An Appgate collective takes one query per connected user for the access details; large user counts take a while.'
-            : 'Large organizations take several minutes: Meraki limits the API to 10 requests per second.'}{' '}
+      <div
+        className="text-muted"
+        style={{ fontSize: "0.85em", marginTop: "0.35rem" }}
+      >
+        {isInventory
+          ? "One SSH session per device, a few at a time. The path trace uses the new route tables and configurations at the next trace."
+          : provider === "cato"
+            ? "A Cato account takes a few queries, sent slowly to stay inside the Cato API rate limits."
+            : provider === "fmc"
+              ? "An FMC takes several requests per device (interfaces, routing, NAT, policies), sent slowly to stay inside the FMC limit of 120 requests per minute."
+              : provider === "panorama"
+                ? "A Panorama takes a few requests per device group and template, plus a few per firewall when device state is collected."
+                : provider === "appgate"
+                  ? "An Appgate collective takes one query per connected user for the access details; large user counts take a while."
+                  : "Large organizations take several minutes: Meraki limits the API to 10 requests per second."}{" "}
         You can close this dialog; the map updates when collection finishes.
       </div>
     </div>
@@ -716,38 +1005,134 @@ function BuildOutcome({
 }) {
   // No job record means the poll failed: the server restarted or the record
   // expired. The build may still have produced a snapshot.
-  const failed = !job || job.status === 'failed';
-  const result = job?.result;
+  const failed = !job || job.status === "failed";
+  const jobResult = job?.result;
+  if (!failed && isInventoryCollectionResult(jobResult)) {
+    return <InventoryOutcome result={jobResult} onDismiss={onDismiss} />;
+  }
+  const result = isInventoryCollectionResult(jobResult) ? null : jobResult;
   return (
-    <div className={failed ? 'error' : 'card'} style={{ marginTop: '1rem', padding: '0.75rem 1rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center' }}>
+    <div
+      className={failed ? "error" : "card"}
+      style={{ marginTop: "1rem", padding: "0.75rem 1rem" }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: "1rem",
+          alignItems: "center",
+        }}
+      >
         <div>
-          {!job && <>Lost track of the collection job. Check the history below for its result.</>}
+          {!job && (
+            <>
+              Lost track of the collection job. Check the history below for its
+              result.
+            </>
+          )}
           {job && failed && (
             <>
-              <strong>Collection failed:</strong> {job.error ?? 'Unknown error'}
+              <strong>Collection failed:</strong> {job.error ?? "Unknown error"}
             </>
           )}
           {!failed && result && (
             <>
-              <strong>Map updated</strong> in {result.duration_seconds}s: {result.summary.sites ?? 0} sites,{' '}
-              {result.summary.devices ?? 0} devices, {result.summary.vpn_tunnels ?? 0} VPN tunnels.
+              <strong>Map updated</strong> in {result.duration_seconds}s:{" "}
+              {result.summary.sites ?? 0} sites, {result.summary.devices ?? 0}{" "}
+              devices, {result.summary.vpn_tunnels ?? 0} VPN tunnels.
               {result.warning_count > 0 && (
                 <>
-                  {' '}
+                  {" "}
                   <WarningsBadge
                     text={`${result.warning_count} collection warning(s)`}
-                    onClick={() => onShowWarnings({ snapshotId: result.snapshot_id, name: 'Latest collection' })}
+                    onClick={() =>
+                      onShowWarnings({
+                        snapshotId: result.snapshot_id,
+                        name: "Latest collection",
+                      })
+                    }
                   />
                 </>
               )}
             </>
           )}
         </div>
-        <button type="button" className="btn btn-sm btn-ghost" onClick={onDismiss}>
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost"
+          onClick={onDismiss}
+        >
           Dismiss
         </button>
       </div>
+    </div>
+  );
+}
+
+/** How an inventory collection went, with the devices it could not read (this source has no snapshot warnings). */
+function InventoryOutcome({
+  result,
+  onDismiss,
+}: {
+  result: InventoryCollectionResult;
+  onDismiss: () => void;
+}) {
+  const [showErrors, setShowErrors] = useState(false);
+  const errors = result.errors ?? [];
+  return (
+    <div
+      className="card"
+      style={{ marginTop: "1rem", padding: "0.75rem 1rem" }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: "1rem",
+          alignItems: "center",
+        }}
+      >
+        <div>
+          {describeInventoryResult(result)}
+          {errors.length > 0 && (
+            <>
+              {" "}
+              <WarningsBadge
+                text={`${errors.length} failed`}
+                title={
+                  showErrors
+                    ? "Hide the devices that failed"
+                    : "Show the devices that failed"
+                }
+                onClick={() => setShowErrors((shown) => !shown)}
+              />
+            </>
+          )}
+        </div>
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost"
+          onClick={onDismiss}
+        >
+          Dismiss
+        </button>
+      </div>
+      {showErrors && errors.length > 0 && (
+        <ul
+          style={{
+            margin: "0.5rem 0 0",
+            paddingLeft: "1.25rem",
+            fontSize: "0.85em",
+          }}
+        >
+          {errors.map((e) => (
+            <li key={e.host_id}>
+              {e.hostname} ({e.ip_address}): {e.message}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -771,15 +1156,24 @@ function SnapshotTable({
   // The map always shows the newest snapshot of each organization.
   const newestByOrg = new Map<number, number>();
   for (const s of snapshots) {
-    if ((newestByOrg.get(s.org_ref) ?? 0) < s.id) newestByOrg.set(s.org_ref, s.id);
+    if ((newestByOrg.get(s.org_ref) ?? 0) < s.id)
+      newestByOrg.set(s.org_ref, s.id);
   }
 
   const handleDelete = async (snapshot: MerakiSnapshot) => {
-    if (!(await confirm(`Delete the ${formatWhen(snapshot.created_at)} collection of "${snapshot.org_name}"?`))) return;
+    if (
+      !(await confirm(
+        `Delete the ${formatWhen(snapshot.created_at)} collection of "${snapshot.org_name}"?`,
+      ))
+    )
+      return;
     try {
       await remove.mutateAsync(snapshot.id);
     } catch (err) {
-      void alert({ message: `Delete failed: ${errorText(err)}`, variant: 'error' });
+      void alert({
+        message: `Delete failed: ${errorText(err)}`,
+        variant: "error",
+      });
     }
   };
 
@@ -800,12 +1194,16 @@ function SnapshotTable({
         {snapshots.map((s) => (
           <tr key={s.id}>
             <td>
-              {s.org_name}{' '}
-              {newestByOrg.get(s.org_ref) === s.id && <span className="badge badge-success">on map</span>}
+              {s.org_name}{" "}
+              {newestByOrg.get(s.org_ref) === s.id && (
+                <span className="badge badge-success">on map</span>
+              )}
             </td>
             <td>
               {formatWhen(s.created_at)}
-              {s.built_by && <span className="text-muted"> by {s.built_by}</span>}
+              {s.built_by && (
+                <span className="text-muted"> by {s.built_by}</span>
+              )}
             </td>
             <td>{s.summary.sites ?? 0}</td>
             <td>{s.summary.devices ?? 0}</td>
@@ -817,7 +1215,7 @@ function SnapshotTable({
                   onClick={() =>
                     onShowWarnings({
                       snapshotId: s.id,
-                      name: `${s.org_name ?? 'Collection'} - ${formatWhen(s.created_at)}`,
+                      name: `${s.org_name ?? "Collection"} - ${formatWhen(s.created_at)}`,
                     })
                   }
                 />
@@ -845,14 +1243,26 @@ function SnapshotTable({
 }
 
 /** The API calls one collection could not make, so a partial map can be explained. */
-function WarningsModal({ target, onClose }: { target: WarningsTarget; onClose: () => void }) {
+function WarningsModal({
+  target,
+  onClose,
+}: {
+  target: WarningsTarget;
+  onClose: () => void;
+}) {
   const warnings = useSnapshotWarnings(target.snapshotId);
   const rows = warnings.data?.warnings ?? [];
   return (
-    <Modal isOpen onClose={onClose} title={`Collection warnings - ${target.name}`} size="large">
-      <p className="text-muted" style={{ marginTop: 0, fontSize: '0.9rem' }}>
-        These API calls failed or were refused during the collection. The rest of the map was built; what these calls
-        would have added (users, subnets, WAN links...) is missing from it.
+    <Modal
+      isOpen
+      onClose={onClose}
+      title={`Collection warnings - ${target.name}`}
+      size="large"
+    >
+      <p className="text-muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
+        These API calls failed or were refused during the collection. The rest
+        of the map was built; what these calls would have added (users, subnets,
+        WAN links...) is missing from it.
       </p>
       {warnings.isPending && <div className="loading">Loading warnings…</div>}
       {warnings.error && (
@@ -860,7 +1270,9 @@ function WarningsModal({ target, onClose }: { target: WarningsTarget; onClose: (
           <strong>Failed to load warnings:</strong> {warnings.error.message}
         </div>
       )}
-      {warnings.data && rows.length === 0 && <p className="text-muted">No warnings recorded.</p>}
+      {warnings.data && rows.length === 0 && (
+        <p className="text-muted">No warnings recorded.</p>
+      )}
       {rows.length > 0 && (
         <table className="data-table">
           <thead>
@@ -875,11 +1287,11 @@ function WarningsModal({ target, onClose }: { target: WarningsTarget; onClose: (
             {rows.map((w, i) => (
               <tr key={i}>
                 <td>{w.scope}</td>
-                <td style={{ wordBreak: 'break-all' }}>
+                <td style={{ wordBreak: "break-all" }}>
                   <code>{w.path}</code>
                 </td>
-                <td>{w.status ?? ''}</td>
-                <td style={{ whiteSpace: 'pre-wrap' }}>{w.message}</td>
+                <td>{w.status ?? ""}</td>
+                <td style={{ whiteSpace: "pre-wrap" }}>{w.message}</td>
               </tr>
             ))}
           </tbody>

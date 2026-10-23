@@ -75,6 +75,20 @@ class JuniperJunosDriver(Driver):
         # the curly-brace tree).
         return "show configuration | display set"
 
+    def vlan_show_command(self) -> str:
+        return "show vlans"
+
+    def neighbor_show_commands(self) -> list[tuple[str, str]]:
+        # The template of the summary table carries every field Plexus stores.
+        return [("lldp", "show lldp neighbors")]
+
+    def parse_vlans(self, rows: list[dict]) -> list[dict]:
+        # Junos names a VLAN first and prints its id as the "Tag" column.
+        return self._parse_cisco_style_vlan_rows(rows)
+
+    def parse_neighbors(self, protocol: str, rows: list[dict]) -> list[dict]:
+        return self._parse_neighbor_rows(protocol, rows)
+
     def save_config_commands(self) -> list[str]:
         # Junos has no running-vs-startup split: ``commit`` persists the
         # candidate config.  Netmiko's ``save_config()`` on a Junos

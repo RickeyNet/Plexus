@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 import netcontrol.routes.state as state
+from netcontrol.integrations.meraki.unified import external_key, external_keys
 from netcontrol.routes.snmp import _discover_neighbors, _infer_device_category, _snmp_walk  # noqa: F401
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
@@ -71,6 +72,48 @@ def _normalize_link_key(
     )
 
 
+# CDP words ("Host Phone Two-port Mac Relay") and LLDP letters ("B,T") that
+# name an end device, and the ones that name nothing in particular.
+_PHONE_CAPABILITIES = {"phone", "telephone", "t"}
+_STATION_CAPABILITIES = {
+    "host",
+    "h",
+    "station",
+    "s",
+    "other",
+    "o",
+    "igmp",
+    "remote",
+    "cvta",
+    "two-port",
+    "mac",
+    "relay",
+}
+
+
+def _capability_words(capabilities: str) -> set[str]:
+    return {w for w in re.split(r"[\s,]+", str(capabilities or "").strip().lower()) if w}
+
+
+def neighbor_is_end_device(capabilities: str, *, platform: str = "", ip: str = "", protocol: str = "") -> bool:
+    """Whether what a neighbor advertises over CDP / LLDP describes an end
+    device (a phone, or a station such as a server or a camera) rather than
+    network infrastructure (a bridge, router, access point or repeater).
+    Capabilities decide; a phone's bridge capability is its PC port, so a
+    phone counts as an end device even when it also bridges. An LLDP
+    neighbor that advertises nothing but its name (no capabilities, no
+    system description, no management address) is a workstation or server
+    running a host LLDP agent: every switch, router and AP advertises at
+    least its capabilities. Otherwise a neighbor whose capabilities were not
+    read is not an end device: the map draws what it cannot classify."""
+    words = _capability_words(capabilities)
+    if not words:
+        return protocol == "lldp" and not str(platform or "").strip() and not str(ip or "").strip()
+    if words & _PHONE_CAPABILITIES:
+        return True
+    return words <= _STATION_CAPABILITIES
+
+
 async def _write_links_and_stats(host_id: int, neighbors: list[dict], if_stats: list[dict]) -> None:
     """Persist one host's discovered neighbors and interface counters.
 
@@ -89,6 +132,7 @@ async def _write_links_and_stats(host_id: int, neighbors: list[dict], if_stats: 
                 "target_interface": n["remote_interface"],
                 "protocol": n["protocol"],
                 "target_platform": n.get("remote_platform", ""),
+                "target_capabilities": n.get("remote_capabilities", ""),
             }
             for n in neighbors
         ],
@@ -793,6 +837,17 @@ def _normalize_mac(raw: str) -> str:
     return cleaned if len(cleaned) == 12 else ""
 
 
+_MAC_TEXT = re.compile(r"[0-9a-f]{12}|(?:[0-9a-f]{4}\.){2}[0-9a-f]{4}|(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}")
+
+
+def _mac_digits(text: str) -> str:
+    """The 12 hex digits of ``text`` when it is written as a MAC address
+    (``a8469d228c9e``, ``a846.9d22.8c9e``, ``a8:46:9d:22:8c:9e``), else ''.
+    A device name that merely contains hex letters is not one."""
+    lowered = str(text or "").strip().lower()
+    return _normalize_mac(lowered) if _MAC_TEXT.fullmatch(lowered) else ""
+
+
 async def _build_mac_ownership_map(host_ids: list[int]) -> dict[str, tuple[int, str]]:
     """For every interface MAC across the given hosts, return mac -> (host_id, if_name).
 
@@ -1479,6 +1534,19 @@ async def _build_topology(group_id: int | None) -> dict:
 
         seen_edge_keys: set[tuple] = set()
 
+        # A neighbor name several addresses print ("Polycom VVX 250" on every
+        # phone port, a camera's one-letter name) is not one device: one shared
+        # node would cable every switch that sees the name together.
+        addresses_by_name: dict[str, set[str]] = {}
+        for link in links:
+            if link.get("target_host_id") in nodes_by_id:
+                continue
+            name_key = external_key(link.get("target_device_name") or "", "")
+            address = (link.get("target_ip") or "").strip()
+            if address:
+                addresses_by_name.setdefault(name_key, set()).add(address)
+        shared_names = {name for name, addresses in addresses_by_name.items() if len(addresses) > 1}
+
         for link in links:
             src_id = link["source_host_id"]
             tgt_host_id = link.get("target_host_id")
@@ -1490,13 +1558,12 @@ async def _build_topology(group_id: int | None) -> dict:
             else:
                 # External neighbor -- normalize to prevent duplicate nodes
                 # from minor SNMP string variations (case, domain suffix, whitespace)
-                norm_name = tgt_name.strip().lower().split(".")[0] if tgt_name else ""
                 norm_ip = tgt_ip.strip() if tgt_ip else ""
-                ext_key = f"ext_{norm_name}" if norm_name else f"ext_{norm_ip}"
+                ext_key = external_key(tgt_name, norm_ip, per_address=external_key(tgt_name, "") in shared_names)
 
                 # Check if this external neighbor matches an inventory host
                 # by hostname or by IP address
-                matched_host_id = _ext_to_host.get(ext_key)
+                matched_host_id = _ext_to_host.get(external_key(tgt_name, norm_ip))
                 if not matched_host_id and norm_ip:
                     matched_host_id = _ip_to_host.get(norm_ip)
                 if matched_host_id and matched_host_id in nodes_by_id:
@@ -1506,6 +1573,15 @@ async def _build_topology(group_id: int | None) -> dict:
                     if ext_key not in nodes_by_id:
                         tgt_platform = link.get("target_platform", "")
                         ext_category = _infer_device_category(tgt_platform, "", "unknown")
+                        capabilities = str(link.get("target_capabilities") or "")
+                        end_device = neighbor_is_end_device(
+                            capabilities,
+                            platform=tgt_platform,
+                            ip=tgt_ip,
+                            protocol=str(link.get("protocol") or ""),
+                        )
+                        if end_device and not ext_category and _PHONE_CAPABILITIES & _capability_words(capabilities):
+                            ext_category = "phone"
                         ipam_match = _match_ipam_subnet(tgt_ip, ipam_subnet_index)
                         nodes_by_id[ext_key] = {
                             "id": ext_key,
@@ -1519,6 +1595,9 @@ async def _build_topology(group_id: int | None) -> dict:
                             "status": "unknown",
                             "in_inventory": False,
                             "platform": tgt_platform,
+                            # A phone or a station by its CDP / LLDP capabilities:
+                            # the map leaves end devices out unless asked for them.
+                            "end_device": end_device,
                             "ipam_subnet": (ipam_match or {}).get("subnet", ""),
                             "ipam_utilization_pct": (ipam_match or {}).get("utilization_pct"),
                             "ipam_source_types": (ipam_match or {}).get("source_types", []),
@@ -1602,7 +1681,7 @@ async def _merge_meraki(
     """Fold the latest snapshot of each Meraki organization and Cato account,
     and the AWS discovery, into the graph."""
     from netcontrol.integrations.meraki.enrich import load_inventory_index
-    from netcontrol.integrations.meraki.unified import external_key, merge_meraki_into_graph
+    from netcontrol.integrations.meraki.unified import merge_meraki_into_graph
     from netcontrol.routes.meraki_topology import latest_snapshots
 
     snapshots = await latest_snapshots()
@@ -1672,14 +1751,29 @@ async def _merge_meraki(
         return nodes_by_id.get(canonical)
 
     def resolve_external(name: str, ip: str):
-        key = external_key(name, ip)
-        host_id = ext_to_host.get(key) or (ip_to_host.get(ip) if ip else None)
+        host_id = ext_to_host.get(external_key(name, ip)) or (ip_to_host.get(ip) if ip else None)
         if host_id is not None and host_id in nodes_by_id:
             return host_id
-        return key if key in nodes_by_id else None
+        return next((key for key in external_keys(name, ip) if key in nodes_by_id), None)
 
     def match_host(org_ref: int, node: dict) -> int | None:
         return live_match.get((org_ref, node["id"]))
+
+    # The unknown neighbors inventory discovery made, by the name CDP / LLDP
+    # printed and by MAC (CDP names a Meraki device by its MAC address).
+    ext_by_mac: dict[str, list[str]] = {}
+    for nid, ndata in nodes_by_id.items():
+        if isinstance(nid, str) and nid.startswith("ext_"):
+            mac = _mac_digits(ndata.get("label") or "")
+            if mac:
+                ext_by_mac.setdefault(mac, []).append(nid)
+
+    def discovered(node: dict) -> list[str]:
+        label = str(node.get("label") or "")
+        name = "" if _normalize_ip_text(label) else label  # a device labelled by its address has no name
+        found = [key for key in external_keys(name, node.get("ip") or "") if key in nodes_by_id]
+        found.extend(ext_by_mac.get(_mac_digits(node.get("mac") or ""), []))
+        return found
 
     merge_meraki_into_graph(
         nodes_by_id,
@@ -1688,6 +1782,7 @@ async def _merge_meraki(
         host_node=host_node,
         resolve_external=resolve_external,
         match_host=match_host,
+        discovered=discovered,
     )
 
 

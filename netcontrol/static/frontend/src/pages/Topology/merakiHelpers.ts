@@ -3,17 +3,18 @@ import type {
   CatoBuildOptions,
   DetailSection,
   FmcBuildOptions,
+  InventoryCollectionResult,
   MerakiBuildJob,
   MerakiBuildOptions,
   MerakiNodeDetails,
   PanoramaBuildOptions,
-} from '@/api/meraki';
+} from "@/api/meraki";
 
-export const DEFAULT_BASE_URL = 'https://api.meraki.com/api/v1';
+export const DEFAULT_BASE_URL = "https://api.meraki.com/api/v1";
 
 export const FALLBACK_OPTIONS: MerakiBuildOptions = {
   network_tags: [],
-  network_name_contains: '',
+  network_name_contains: "",
   include_lldp_cdp: true,
   include_switch_ports: true,
   include_port_statuses: false,
@@ -27,10 +28,10 @@ export const FALLBACK_OPTIONS: MerakiBuildOptions = {
   requests_per_second: 8,
 };
 
-export const CATO_BASE_URL = 'https://api.catonetworks.com/api/v1/graphql2';
+export const CATO_BASE_URL = "https://api.catonetworks.com/api/v1/graphql2";
 
 export const FALLBACK_CATO_OPTIONS: CatoBuildOptions = {
-  site_name_contains: '',
+  site_name_contains: "",
   include_users: true,
   include_ranges: true,
   include_firewall: true,
@@ -38,22 +39,44 @@ export const FALLBACK_CATO_OPTIONS: CatoBuildOptions = {
 };
 
 type CatoToggleKey = {
-  [K in keyof CatoBuildOptions]: CatoBuildOptions[K] extends boolean ? K : never;
+  [K in keyof CatoBuildOptions]: CatoBuildOptions[K] extends boolean
+    ? K
+    : never;
 }[keyof CatoBuildOptions];
 
-export const CATO_OPTION_TOGGLES: { key: CatoToggleKey; label: string; hint: string }[] = [
-  { key: 'include_users', label: 'Remote users', hint: 'Users connected with the Cato Client when the collection runs, one node each next to their PoP: name, email, device, VPN IP, public IP, ISP, location and recent connections.' },
-  { key: 'include_ranges', label: 'Network ranges (subnets)', hint: 'The ranges behind every site, for search and for picking path endpoints by subnet, and the BGP peers of each site, so path tracing knows where routes may be learned.' },
-  { key: 'include_firewall', label: 'Firewall rules', hint: 'The WAN and Internet firewall rules, which path tracing applies at the Cato Cloud.' },
-  { key: 'inventory_enrich', label: 'Correlate with Plexus inventory', hint: 'Attach SNMP/SSH data Plexus already holds for a Socket that is also an inventory host.' },
+export const CATO_OPTION_TOGGLES: {
+  key: CatoToggleKey;
+  label: string;
+  hint: string;
+}[] = [
+  {
+    key: "include_users",
+    label: "Remote users",
+    hint: "Users connected with the Cato Client when the collection runs, one node each next to their PoP: name, email, device, VPN IP, public IP, ISP, location and recent connections.",
+  },
+  {
+    key: "include_ranges",
+    label: "Network ranges (subnets)",
+    hint: "The ranges behind every site, for search and for picking path endpoints by subnet, and the BGP peers of each site, so path tracing knows where routes may be learned.",
+  },
+  {
+    key: "include_firewall",
+    label: "Firewall rules",
+    hint: "The WAN and Internet firewall rules, which path tracing applies at the Cato Cloud.",
+  },
+  {
+    key: "inventory_enrich",
+    label: "Correlate with Plexus inventory",
+    hint: "Attach SNMP/SSH data Plexus already holds for a Socket that is also an inventory host.",
+  },
 ];
 
-export const FMC_URL_PLACEHOLDER = 'https://fmc.example.com';
+export const FMC_URL_PLACEHOLDER = "https://fmc.example.com";
 
 // Used until the server reports its own defaults (`fmc_default_options`).
 export const FALLBACK_FMC_OPTIONS: FmcBuildOptions = {
-  username: '',
-  device_name_contains: '',
+  username: "",
+  device_name_contains: "",
   include_all_devices: true,
   include_interfaces: true,
   include_routing: true,
@@ -70,26 +93,70 @@ type FmcToggleKey = {
   [K in keyof FmcBuildOptions]: FmcBuildOptions[K] extends boolean ? K : never;
 }[keyof FmcBuildOptions];
 
-export const FMC_OPTION_TOGGLES: { key: FmcToggleKey; label: string; hint: string }[] = [
-  { key: 'include_all_devices', label: 'Every managed device', hint: 'Draw every FTD the FMC manages. Off draws only the FTDs with a remote access VPN policy.' },
-  { key: 'include_interfaces', label: 'Device interfaces', hint: 'Every interface of each FTD (physical, sub-interfaces, EtherChannels, VLANs, VTIs, loopbacks...) and its connected subnets. A few API calls per device.' },
-  { key: 'include_routing', label: 'Routing', hint: 'Virtual routers, static routes, BGP, OSPF, EIGRP, policy-based routes and ECMP zones of each FTD.' },
-  { key: 'include_s2s_vpn', label: 'Site-to-site VPN', hint: 'Site-to-site VPN topologies with their endpoints, IKE and IPsec settings and tunnel status. Pre-shared keys are never read.' },
-  { key: 'include_nat', label: 'NAT', hint: 'The NAT policy of each FTD and its rules.' },
-  { key: 'include_access_policies', label: 'Access control policies', hint: 'Access control policies with their rules (the first 1000 per policy) and prefilter policies.' },
-  { key: 'include_health', label: 'Health', hint: 'Health alerts and the devices with changes waiting to be deployed.' },
-  { key: 'include_sessions', label: 'Connected users', hint: 'Users connected to the remote access VPN (AnyConnect / Secure Client) when the collection runs (FMC 7.3 or later): user, assigned IP, public IP, profile, client. One node per headend.' },
-  { key: 'inventory_enrich', label: 'Correlate with Plexus inventory', hint: 'Attach SNMP/SSH data Plexus already holds for an FTD that is also an inventory host.' },
-  { key: 'verify_tls', label: 'Verify the FMC certificate', hint: 'Turn off only for an FMC with a self-signed certificate.' },
+export const FMC_OPTION_TOGGLES: {
+  key: FmcToggleKey;
+  label: string;
+  hint: string;
+}[] = [
+  {
+    key: "include_all_devices",
+    label: "Every managed device",
+    hint: "Draw every FTD the FMC manages. Off draws only the FTDs with a remote access VPN policy.",
+  },
+  {
+    key: "include_interfaces",
+    label: "Device interfaces",
+    hint: "Every interface of each FTD (physical, sub-interfaces, EtherChannels, VLANs, VTIs, loopbacks...) and its connected subnets. A few API calls per device.",
+  },
+  {
+    key: "include_routing",
+    label: "Routing",
+    hint: "Virtual routers, static routes, BGP, OSPF, EIGRP, policy-based routes and ECMP zones of each FTD.",
+  },
+  {
+    key: "include_s2s_vpn",
+    label: "Site-to-site VPN",
+    hint: "Site-to-site VPN topologies with their endpoints, IKE and IPsec settings and tunnel status. Pre-shared keys are never read.",
+  },
+  {
+    key: "include_nat",
+    label: "NAT",
+    hint: "The NAT policy of each FTD and its rules.",
+  },
+  {
+    key: "include_access_policies",
+    label: "Access control policies",
+    hint: "Access control policies with their rules (the first 1000 per policy) and prefilter policies.",
+  },
+  {
+    key: "include_health",
+    label: "Health",
+    hint: "Health alerts and the devices with changes waiting to be deployed.",
+  },
+  {
+    key: "include_sessions",
+    label: "Connected users",
+    hint: "Users connected to the remote access VPN (AnyConnect / Secure Client) when the collection runs (FMC 7.3 or later): user, assigned IP, public IP, profile, client. One node per headend.",
+  },
+  {
+    key: "inventory_enrich",
+    label: "Correlate with Plexus inventory",
+    hint: "Attach SNMP/SSH data Plexus already holds for an FTD that is also an inventory host.",
+  },
+  {
+    key: "verify_tls",
+    label: "Verify the FMC certificate",
+    hint: "Turn off only for an FMC with a self-signed certificate.",
+  },
 ];
 
-export const PANORAMA_URL_PLACEHOLDER = 'https://panorama.example.com';
+export const PANORAMA_URL_PLACEHOLDER = "https://panorama.example.com";
 
 // Used until the server reports its own defaults (`panorama_default_options`).
 export const FALLBACK_PANORAMA_OPTIONS: PanoramaBuildOptions = {
-  username: '',
+  username: "",
   verify_tls: true,
-  device_name_contains: '',
+  device_name_contains: "",
   include_interfaces: true,
   include_routing: true,
   include_security_policies: true,
@@ -101,28 +168,66 @@ export const FALLBACK_PANORAMA_OPTIONS: PanoramaBuildOptions = {
 };
 
 type PanoramaToggleKey = {
-  [K in keyof PanoramaBuildOptions]: PanoramaBuildOptions[K] extends boolean ? K : never;
+  [K in keyof PanoramaBuildOptions]: PanoramaBuildOptions[K] extends boolean
+    ? K
+    : never;
 }[keyof PanoramaBuildOptions];
 
-export const PANORAMA_OPTION_TOGGLES: { key: PanoramaToggleKey; label: string; hint: string }[] = [
-  { key: 'include_interfaces', label: 'Interfaces', hint: 'Template and template stack network interfaces, zones and virtual routers' },
-  { key: 'include_routing', label: 'Routing', hint: 'Static routes, BGP and OSPF of each virtual router' },
-  { key: 'include_security_policies', label: 'Security policies', hint: 'Pre and post rulebases of the shared and device group hierarchy, with the default rules' },
-  { key: 'include_nat', label: 'NAT', hint: 'Pre and post NAT rulebases' },
-  { key: 'include_vpn', label: 'Site-to-site VPN', hint: 'IKE gateways and IPsec tunnels' },
-  { key: 'include_global_protect', label: 'GlobalProtect', hint: 'Gateways, address pools and the users connected right now' },
-  { key: 'include_device_state', label: 'Device state', hint: 'Read through Panorama from each connected firewall: interface addresses, routing table, BGP peers, tunnel state and HA state' },
-  { key: 'inventory_enrich', label: 'Correlate with Plexus inventory', hint: 'Attach SNMP/SSH data Plexus already holds for a firewall that is also an inventory host.' },
-  { key: 'verify_tls', label: 'Verify the Panorama certificate', hint: 'Turn off only for a Panorama with a self-signed certificate.' },
+export const PANORAMA_OPTION_TOGGLES: {
+  key: PanoramaToggleKey;
+  label: string;
+  hint: string;
+}[] = [
+  {
+    key: "include_interfaces",
+    label: "Interfaces",
+    hint: "Template and template stack network interfaces, zones and virtual routers",
+  },
+  {
+    key: "include_routing",
+    label: "Routing",
+    hint: "Static routes, BGP and OSPF of each virtual router",
+  },
+  {
+    key: "include_security_policies",
+    label: "Security policies",
+    hint: "Pre and post rulebases of the shared and device group hierarchy, with the default rules",
+  },
+  { key: "include_nat", label: "NAT", hint: "Pre and post NAT rulebases" },
+  {
+    key: "include_vpn",
+    label: "Site-to-site VPN",
+    hint: "IKE gateways and IPsec tunnels",
+  },
+  {
+    key: "include_global_protect",
+    label: "GlobalProtect",
+    hint: "Gateways, address pools and the users connected right now",
+  },
+  {
+    key: "include_device_state",
+    label: "Device state",
+    hint: "Read through Panorama from each connected firewall: interface addresses, routing table, BGP peers, tunnel state and HA state",
+  },
+  {
+    key: "inventory_enrich",
+    label: "Correlate with Plexus inventory",
+    hint: "Attach SNMP/SSH data Plexus already holds for a firewall that is also an inventory host.",
+  },
+  {
+    key: "verify_tls",
+    label: "Verify the Panorama certificate",
+    hint: "Turn off only for a Panorama with a self-signed certificate.",
+  },
 ];
 
-export const APPGATE_URL_PLACEHOLDER = 'https://appgate.example.com:8443';
+export const APPGATE_URL_PLACEHOLDER = "https://appgate.example.com:8443";
 
 // Used until the server reports its own defaults (`appgate_default_options`).
 export const FALLBACK_APPGATE_OPTIONS: AppgateBuildOptions = {
-  username: '',
+  username: "",
   verify_tls: true,
-  site_name_contains: '',
+  site_name_contains: "",
   include_appliance_state: true,
   include_entitlements: true,
   include_users: true,
@@ -133,116 +238,208 @@ export const FALLBACK_APPGATE_OPTIONS: AppgateBuildOptions = {
 // verify_tls is a checkbox of its own next to the login, not a kind of data.
 type AppgateToggleKey = Exclude<
   {
-    [K in keyof AppgateBuildOptions]: AppgateBuildOptions[K] extends boolean ? K : never;
+    [K in keyof AppgateBuildOptions]: AppgateBuildOptions[K] extends boolean
+      ? K
+      : never;
   }[keyof AppgateBuildOptions],
-  'verify_tls'
+  "verify_tls"
 >;
 
-export const APPGATE_OPTION_TOGGLES: { key: AppgateToggleKey; label: string; hint: string }[] = [
-  { key: 'include_appliance_state', label: 'Appliance health and sessions', hint: 'Status, version, CPU, memory, disk and session counts of every Controller, Gateway, Portal, LogServer and Connector.' },
-  { key: 'include_entitlements', label: 'Policies and entitlements', hint: 'Policies, entitlements, conditions and ringfence rules, which path tracing applies at each Gateway.' },
-  { key: 'include_users', label: 'Connected users', hint: 'Users connected with the Appgate Client when the collection runs, one node each next to the Gateways they use.' },
-  { key: 'include_session_details', label: 'Per-user access details', hint: 'One query per connected user (the first 500): tunnel IP, Gateways, entitlements granted and firewall rules. Needs Connected users.' },
-  { key: 'inventory_enrich', label: 'Correlate with Plexus inventory', hint: 'Attach SNMP/SSH data Plexus already holds for an appliance that is also an inventory host.' },
+export const APPGATE_OPTION_TOGGLES: {
+  key: AppgateToggleKey;
+  label: string;
+  hint: string;
+}[] = [
+  {
+    key: "include_appliance_state",
+    label: "Appliance health and sessions",
+    hint: "Status, version, CPU, memory, disk and session counts of every Controller, Gateway, Portal, LogServer and Connector.",
+  },
+  {
+    key: "include_entitlements",
+    label: "Policies and entitlements",
+    hint: "Policies, entitlements, conditions and ringfence rules, which path tracing applies at each Gateway.",
+  },
+  {
+    key: "include_users",
+    label: "Connected users",
+    hint: "Users connected with the Appgate Client when the collection runs, one node each next to the Gateways they use.",
+  },
+  {
+    key: "include_session_details",
+    label: "Per-user access details",
+    hint: "One query per connected user (the first 500): tunnel IP, Gateways, entitlements granted and firewall rules. Needs Connected users.",
+  },
+  {
+    key: "inventory_enrich",
+    label: "Correlate with Plexus inventory",
+    hint: "Attach SNMP/SSH data Plexus already holds for an appliance that is also an inventory host.",
+  },
 ];
 
 type ToggleKey = {
-  [K in keyof MerakiBuildOptions]: MerakiBuildOptions[K] extends boolean ? K : never;
+  [K in keyof MerakiBuildOptions]: MerakiBuildOptions[K] extends boolean
+    ? K
+    : never;
 }[keyof MerakiBuildOptions];
 
-export const OPTION_TOGGLES: { key: ToggleKey; label: string; hint: string }[] = [
-  { key: 'include_lldp_cdp', label: 'LLDP / CDP neighbors', hint: 'Per-device neighbor tables; finds non-Meraki gear. One API call per device.' },
-  { key: 'include_switch_ports', label: 'Switch port configuration', hint: 'VLAN, trunk, PoE and STP settings for every switch port.' },
-  { key: 'include_port_statuses', label: 'Live switch port status', hint: 'Link speed, duplex, clients and errors. One extra API call per switch.' },
-  { key: 'include_switch_routing', label: 'Switch routing (SVIs, static routes, OSPF)', hint: 'Layer 3 interfaces and routes on switches and stacks.' },
-  { key: 'include_firewall', label: 'Firewall and NAT rules', hint: 'Layer 3 firewall, port forwarding and 1:1 NAT per appliance network.' },
-  { key: 'include_wireless', label: 'Wireless SSIDs', hint: 'Enabled SSIDs with auth mode and VLAN. Pre-shared keys are never collected.' },
-  { key: 'include_clients', label: 'Clients (MAC / IP)', hint: 'Clients seen in the last day with MAC, IP, VLAN and port - the MAC/ARP tab. One paginated API call per network.' },
-  { key: 'inventory_enrich', label: 'Correlate with Plexus inventory', hint: 'Attach SNMP/SSH data Plexus already holds for matching devices and neighbors.' },
-  { key: 'ssh_enrich', label: 'Live SSH show commands', hint: 'SSH to matched inventory hosts with the Plexus service credential for routes, VLANs and neighbors.' },
-];
+export const OPTION_TOGGLES: { key: ToggleKey; label: string; hint: string }[] =
+  [
+    {
+      key: "include_lldp_cdp",
+      label: "LLDP / CDP neighbors",
+      hint: "Per-device neighbor tables; finds non-Meraki gear. One API call per device.",
+    },
+    {
+      key: "include_switch_ports",
+      label: "Switch port configuration",
+      hint: "VLAN, trunk, PoE and STP settings for every switch port.",
+    },
+    {
+      key: "include_port_statuses",
+      label: "Live switch port status",
+      hint: "Link speed, duplex, clients and errors. One extra API call per switch.",
+    },
+    {
+      key: "include_switch_routing",
+      label: "Switch routing (SVIs, static routes, OSPF)",
+      hint: "Layer 3 interfaces and routes on switches and stacks.",
+    },
+    {
+      key: "include_firewall",
+      label: "Firewall and NAT rules",
+      hint: "Layer 3 firewall, port forwarding and 1:1 NAT per appliance network.",
+    },
+    {
+      key: "include_wireless",
+      label: "Wireless SSIDs",
+      hint: "Enabled SSIDs with auth mode and VLAN. Pre-shared keys are never collected.",
+    },
+    {
+      key: "include_clients",
+      label: "Clients (MAC / IP)",
+      hint: "Clients seen in the last day with MAC, IP, VLAN and port - the MAC/ARP tab. One paginated API call per network.",
+    },
+    {
+      key: "inventory_enrich",
+      label: "Correlate with Plexus inventory",
+      hint: "Attach SNMP/SSH data Plexus already holds for matching devices and neighbors.",
+    },
+    {
+      key: "ssh_enrich",
+      label: "Live SSH show commands",
+      hint: "SSH to matched inventory hosts with the Plexus service credential for routes, VLANs and neighbors.",
+    },
+  ];
 
 export function formatWhen(iso?: string | null): string {
-  if (!iso) return '-';
-  const normalized = /[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso.replace(' ', 'T')}Z`;
+  if (!iso) return "-";
+  const normalized = /[zZ]|[+-]\d\d:?\d\d$/.test(iso)
+    ? iso
+    : `${iso.replace(" ", "T")}Z`;
   const date = new Date(normalized);
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
 }
 
 /** What kind of map source a row of the Sources dialog is. */
 export function sourceTypeLabel(type: string): string {
-  if (type === 'neighbors') return 'Neighbor discovery';
-  if (type === 'aws') return 'AWS';
-  if (type === 'azure') return 'Azure';
-  if (type === 'gcp') return 'GCP';
-  if (type === 'fmc') return 'Cisco FMC';
-  if (type === 'panorama') return 'Palo Alto Panorama';
-  if (type === 'appgate') return 'Appgate';
-  return type === 'cato' ? 'Cato' : 'Meraki';
+  if (type === "neighbors") return "Neighbor discovery";
+  if (type === "inventory") return "Inventory";
+  if (type === "aws") return "AWS";
+  if (type === "azure") return "Azure";
+  if (type === "gcp") return "GCP";
+  if (type === "fmc") return "Cisco FMC";
+  if (type === "panorama") return "Palo Alto Panorama";
+  if (type === "appgate") return "Appgate";
+  return type === "cato" ? "Cato" : "Meraki";
 }
 
 export function buildStatusBadge(status?: string): string {
-  if (status === 'success') return 'badge badge-success';
-  if (status === 'partial') return 'badge badge-warning';
-  if (status === 'failed') return 'badge badge-danger';
-  return 'badge';
+  if (status === "success") return "badge badge-success";
+  if (status === "partial") return "badge badge-warning";
+  if (status === "failed") return "badge badge-danger";
+  return "badge";
 }
 
 const PHASE_LABELS: Record<string, string> = {
-  starting: 'Starting',
-  inventory: 'Reading organization inventory',
-  organization: 'Collecting organization-wide status',
-  networks: 'Collecting network configuration',
-  devices: 'Collecting device details',
-  stacks: 'Collecting switch stack routing',
-  collected: 'Collection finished',
-  'cato sites': 'Reading Cato sites and Sockets',
-  'cato users': 'Reading connected remote users',
-  'cato ranges': 'Reading site network ranges',
-  'cato routing': 'Reading BGP peers',
-  'cato firewall': 'Reading the WAN and internet firewall rules',
-  'fmc login': 'Signing in to the FMC',
-  'fmc devices': 'Reading managed devices',
-  'fmc ha': 'Reading HA pairs and clusters',
-  'fmc objects': 'Reading network objects and zones',
-  'fmc vpn policies': 'Reading remote access VPN policies',
-  'fmc pools': 'Reading VPN address pools',
-  'fmc interfaces': 'Reading device interfaces',
-  'fmc routing': 'Reading routing',
-  'fmc nat': 'Reading NAT policies',
-  'fmc access policies': 'Reading access control policies',
-  'fmc s2s vpn': 'Reading site-to-site VPN',
-  'fmc health': 'Reading health and deployment status',
-  'fmc sessions': 'Reading connected users',
-  'panorama login': 'Signing in to Panorama',
-  'panorama devices': 'Reading managed firewalls',
-  'panorama device groups': 'Reading device groups',
-  'panorama templates': 'Reading templates and template stacks',
-  'panorama objects': 'Reading address and service objects',
-  'panorama policies': 'Reading security rules',
-  'panorama nat': 'Reading NAT rules',
-  'panorama network': 'Reading interfaces and routing',
-  'panorama vpn': 'Reading IKE gateways and IPsec tunnels',
-  'panorama global protect': 'Reading GlobalProtect gateways and users',
-  'panorama device state': 'Reading firewall state',
-  'appgate version': 'Checking the Appgate API version',
-  'appgate appliances': 'Reading appliances',
-  'appgate sites': 'Reading sites',
-  'appgate policy': 'Reading policies and entitlements',
-  'appgate pools': 'Reading IP pools and identity providers',
-  'appgate users': 'Reading connected users',
-  'appgate sessions': 'Reading per-user access',
-  'building map': 'Building the map',
-  saving: 'Saving snapshot',
+  starting: "Starting",
+  inventory: "Reading organization inventory",
+  organization: "Collecting organization-wide status",
+  networks: "Collecting network configuration",
+  devices: "Collecting device details",
+  stacks: "Collecting switch stack routing",
+  collected: "Collection finished",
+  "cato sites": "Reading Cato sites and Sockets",
+  "cato users": "Reading connected remote users",
+  "cato ranges": "Reading site network ranges",
+  "cato routing": "Reading BGP peers",
+  "cato firewall": "Reading the WAN and internet firewall rules",
+  "fmc login": "Signing in to the FMC",
+  "fmc devices": "Reading managed devices",
+  "fmc ha": "Reading HA pairs and clusters",
+  "fmc objects": "Reading network objects and zones",
+  "fmc vpn policies": "Reading remote access VPN policies",
+  "fmc pools": "Reading VPN address pools",
+  "fmc interfaces": "Reading device interfaces",
+  "fmc routing": "Reading routing",
+  "fmc nat": "Reading NAT policies",
+  "fmc access policies": "Reading access control policies",
+  "fmc s2s vpn": "Reading site-to-site VPN",
+  "fmc health": "Reading health and deployment status",
+  "fmc sessions": "Reading connected users",
+  "panorama login": "Signing in to Panorama",
+  "panorama devices": "Reading managed firewalls",
+  "panorama device groups": "Reading device groups",
+  "panorama templates": "Reading templates and template stacks",
+  "panorama objects": "Reading address and service objects",
+  "panorama policies": "Reading security rules",
+  "panorama nat": "Reading NAT rules",
+  "panorama network": "Reading interfaces and routing",
+  "panorama vpn": "Reading IKE gateways and IPsec tunnels",
+  "panorama global protect": "Reading GlobalProtect gateways and users",
+  "panorama device state": "Reading firewall state",
+  "appgate version": "Checking the Appgate API version",
+  "appgate appliances": "Reading appliances",
+  "appgate sites": "Reading sites",
+  "appgate policy": "Reading policies and entitlements",
+  "appgate pools": "Reading IP pools and identity providers",
+  "appgate users": "Reading connected users",
+  "appgate sessions": "Reading per-user access",
+  "building map": "Building the map",
+  saving: "Saving snapshot",
 };
 
-export function describeProgress(job: MerakiBuildJob | undefined): { label: string; percent: number | null } {
+/**
+ * The progress line and percent (null when unknown) of a tracked collection.
+ * `source` 'inventory' names the phases of an inventory collection (route
+ * tables and configurations over SSH) rather than an organization build.
+ */
+export function describeProgress(
+  job: MerakiBuildJob | undefined,
+  source?: string,
+): { label: string; percent: number | null } {
   const progress = job?.progress ?? {};
-  const phase = progress.phase ?? 'starting';
-  if (phase === 'inventory' && progress.hosts_total) {
+  const phase = progress.phase ?? "starting";
+  if (phase === "collecting" && progress.hosts_total) {
+    const done = progress.hosts_done ?? 0;
+    const host = progress.host ? `: ${progress.host}` : "";
+    return {
+      label: `Reading route tables and configurations (${done} of ${progress.hosts_total} devices${host})`,
+      percent: Math.min(100, Math.round((done / progress.hosts_total) * 100)),
+    };
+  }
+  if (source === "inventory" && phase === "collecting") {
+    return { label: "Reading route tables and configurations", percent: null };
+  }
+  if (source === "inventory" && phase === "saving") {
+    return { label: "Saving route tables and configurations", percent: null };
+  }
+  if (phase === "inventory" && progress.hosts_total) {
     return {
       label: `Enriching from Plexus inventory (${progress.hosts_done ?? 0} of ${progress.hosts_total} hosts)`,
-      percent: Math.round(((progress.hosts_done ?? 0) / progress.hosts_total) * 100),
+      percent: Math.round(
+        ((progress.hosts_done ?? 0) / progress.hosts_total) * 100,
+      ),
     };
   }
   const label = PHASE_LABELS[phase] ?? phase;
@@ -256,131 +453,185 @@ export function describeProgress(job: MerakiBuildJob | undefined): { label: stri
   return { label, percent: null };
 }
 
+/** Select value of the Plexus service credential Settings names, sent as `credential_id: null`. */
+export const SETTINGS_SERVICE_CREDENTIAL = "service";
+
+/**
+ * The credential an inventory collection starts with: the service credential
+ * Settings names (its id for an administrator, who sees the service list;
+ * the Settings placeholder otherwise), else the first service credential,
+ * else the first of the user's own. '' when there is none.
+ */
+export function defaultCollectCredential(
+  settingsId: number | null | undefined,
+  serviceIds: number[],
+  ownIds: number[],
+  isAdmin: boolean,
+): string {
+  if (settingsId != null)
+    return isAdmin ? String(settingsId) : SETTINGS_SERVICE_CREDENTIAL;
+  if (isAdmin && serviceIds.length) return String(serviceIds[0]);
+  return ownIds.length ? String(ownIds[0]) : "";
+}
+
+/**
+ * "Collected from 12 of 14 devices in 40s: 12 route tables, 11 configurations,
+ * 12 VLAN tables, 12 port tables, 10 neighbor tables, 12 MAC tables." A part
+ * no device gave (or a run from before it was read) is left out.
+ */
+export function describeInventoryResult(
+  result: InventoryCollectionResult,
+): string {
+  const plural = (count: number, one: string, many: string) =>
+    `${count} ${count === 1 ? one : many}`;
+  const parts = [
+    plural(result.routes, "route table", "route tables"),
+    plural(result.configs, "configuration", "configurations"),
+  ];
+  const extras: Array<[number | undefined, string, string]> = [
+    [result.vlans, "VLAN table", "VLAN tables"],
+    [result.interfaces, "port table", "port tables"],
+    [result.neighbors, "neighbor table", "neighbor tables"],
+    [result.macs, "MAC table", "MAC tables"],
+  ];
+  for (const [count, one, many] of extras) {
+    if (count) parts.push(plural(count, one, many));
+  }
+  return (
+    `Collected from ${result.collected} of ${plural(result.hosts, "device", "devices")} in ${result.duration_seconds}s: ` +
+    `${parts.join(", ")}.`
+  );
+}
+
 /** A tab of the node details panel filled from Meraki Dashboard data. */
 export type MerakiView =
-  | 'meraki'
-  | 'interfaces'
-  | 'vlans'
-  | 'mac'
-  | 'routing'
-  | 'vpn'
-  | 'firewall'
-  | 'switching'
-  | 'wireless';
+  | "meraki"
+  | "interfaces"
+  | "vlans"
+  | "mac"
+  | "routing"
+  | "vpn"
+  | "firewall"
+  | "switching"
+  | "wireless";
 
 // Which collected sections (by title) each tab shows. 'meraki' is the device
 // summary and takes every section no other tab claims, so nothing is lost
 // when the collector gains a section.
-const VIEW_TITLES: Record<Exclude<MerakiView, 'meraki'>, string[]> = {
+const VIEW_TITLES: Record<Exclude<MerakiView, "meraki">, string[]> = {
   interfaces: [
-    'Switch ports',
-    'Appliance ports',
-    'WAN uplinks',
-    'Layer 3 interfaces (SVIs)',
-    'Neighbors (LLDP/CDP)',
-    'WAN links',
-    'Site interfaces',
-    'Network interfaces',
-    'FTD interfaces',
-    'Router interfaces',
-    'Firewall interfaces',
-    'Zones',
-    'Interfaces',
-    'Allowed destinations',
+    "Switch ports",
+    "Appliance ports",
+    "WAN uplinks",
+    "Layer 3 interfaces (SVIs)",
+    "Neighbors (LLDP/CDP)",
+    "WAN links",
+    "Site interfaces",
+    "Network interfaces",
+    "FTD interfaces",
+    "Router interfaces",
+    "Firewall interfaces",
+    "Zones",
+    "Interfaces",
+    "Allowed destinations",
   ],
   vlans: [
-    'VLANs',
-    'Single LAN',
-    'VLANs on ports',
-    'Layer 3 interfaces (SVIs)',
-    'Network ranges',
-    'Subnets',
-    'VPN address pools',
-    'Connected subnets',
-    'Protected resources',
-    'Name resolution',
+    "VLANs",
+    "Single LAN",
+    "VLANs on ports",
+    "Layer 3 interfaces (SVIs)",
+    "Network ranges",
+    "Subnets",
+    "VPN address pools",
+    "Connected subnets",
+    "Protected resources",
+    "Name resolution",
   ],
-  mac: ['Clients (MAC/ARP)', 'Network clients (MAC/ARP)'],
+  mac: ["Clients (MAC/ARP)", "Network clients (MAC/ARP)"],
   routing: [
-    'Effective routes (derived)',
-    'Static routes',
-    'BGP',
-    'BGP neighbors',
-    'OSPF',
-    'OSPF areas',
-    'Route tables',
-    'Transit gateway routes',
-    'VPC peerings',
-    'Routes to this VPC',
-    'VNet peerings',
-    'ExpressRoute peerings',
-    'Virtual routers',
-    'EIGRP',
-    'Policy-based routes',
-    'ECMP zones',
-    'VPC routes',
-    'Dynamic routes',
-    'BGP sessions',
-    'Learned routes',
-    'Routing table',
-    'BGP peers',
+    "Effective routes (derived)",
+    "Static routes",
+    "BGP",
+    "BGP neighbors",
+    "OSPF",
+    "OSPF areas",
+    "Route tables",
+    "Transit gateway routes",
+    "VPC peerings",
+    "Routes to this VPC",
+    "VNet peerings",
+    "ExpressRoute peerings",
+    "Virtual routers",
+    "EIGRP",
+    "Policy-based routes",
+    "ECMP zones",
+    "VPC routes",
+    "Dynamic routes",
+    "BGP sessions",
+    "Learned routes",
+    "Routing table",
+    "BGP peers",
   ],
   vpn: [
-    'Site-to-site VPN',
-    'VPN peers',
-    'VPN local subnets',
-    'IPsec tunnel',
-    'VPN connections',
-    'Remote access VPN',
-    'Connection profiles',
-    'Access interfaces',
-    'Connected users',
-    'VPN tunnels',
-    'IKE gateways',
-    'IPsec tunnels',
-    'GlobalProtect gateways',
+    "Site-to-site VPN",
+    "VPN peers",
+    "VPN local subnets",
+    "IPsec tunnel",
+    "VPN connections",
+    "Remote access VPN",
+    "Connection profiles",
+    "Access interfaces",
+    "Connected users",
+    "VPN tunnels",
+    "IKE gateways",
+    "IPsec tunnels",
+    "GlobalProtect gateways",
   ],
   firewall: [
-    'Layer 3 firewall rules',
-    'Port forwarding',
-    '1:1 NAT',
-    'Security group rules',
-    'Network ACL rules',
-    'Network security group rules',
-    'NAT rules',
-    'Access control',
-    'Access control rules',
-    'Access control rules (note)',
-    'VPC firewall rules',
-    'Security rules',
-    'Security policy',
-    'Entitlements',
-    'Policies',
-    'Ringfence rules',
-    'Conditions',
-    'Entitlement results',
-    'Firewall rules',
+    "Layer 3 firewall rules",
+    "Port forwarding",
+    "1:1 NAT",
+    "Security group rules",
+    "Network ACL rules",
+    "Network security group rules",
+    "NAT rules",
+    "Access control",
+    "Access control rules",
+    "Access control rules (note)",
+    "VPC firewall rules",
+    "Security rules",
+    "Security policy",
+    "Entitlements",
+    "Policies",
+    "Ringfence rules",
+    "Conditions",
+    "Entitlement results",
+    "Firewall rules",
   ],
-  switching: ['Switch stacks', 'Spanning tree', 'STP bridge priority'],
-  wireless: ['Wireless SSIDs'],
+  switching: ["Switch stacks", "Spanning tree", "STP bridge priority"],
+  wireless: ["Wireless SSIDs"],
 };
 
 const CLAIMED_TITLES = new Set(Object.values(VIEW_TITLES).flat());
 
 export const MERAKI_VIEW_ORDER: MerakiView[] = [
-  'meraki',
-  'interfaces',
-  'vlans',
-  'mac',
-  'routing',
-  'vpn',
-  'firewall',
-  'switching',
-  'wireless',
+  "meraki",
+  "interfaces",
+  "vlans",
+  "mac",
+  "routing",
+  "vpn",
+  "firewall",
+  "switching",
+  "wireless",
 ];
 
-function pickSections(sections: DetailSection[], view: MerakiView): DetailSection[] {
-  if (view === 'meraki') return sections.filter((s) => !CLAIMED_TITLES.has(s.title));
+function pickSections(
+  sections: DetailSection[],
+  view: MerakiView,
+): DetailSection[] {
+  if (view === "meraki")
+    return sections.filter((s) => !CLAIMED_TITLES.has(s.title));
   const titles = VIEW_TITLES[view];
   return sections.filter((s) => titles.includes(s.title));
 }
@@ -392,8 +643,13 @@ export function merakiViewSections(
 ): { sections: DetailSection[]; siteSections: DetailSection[] } {
   // An appliance carries its whole site's configuration; any other device
   // still shows the site's VLANs on its VLANs tab.
-  const site = data.site_sections.length ? data.site_sections : (data.site_addressing ?? []);
-  return { sections: pickSections(data.sections, view), siteSections: pickSections(site, view) };
+  const site = data.site_sections.length
+    ? data.site_sections
+    : (data.site_addressing ?? []);
+  return {
+    sections: pickSections(data.sections, view),
+    siteSections: pickSections(site, view),
+  };
 }
 
 /** Tabs that have something to show for this device, in display order. */
@@ -410,14 +666,19 @@ export function searchTerms(text: string): string[] {
 
 export function rowMatches(cells: string[], terms: string[]): boolean {
   if (!terms.length) return false;
-  const text = cells.join(' ').toLowerCase();
+  const text = cells.join(" ").toLowerCase();
   return terms.every((t) => text.includes(t));
 }
 
 /** True when a row (or the text) of any section matches every term. */
-export function sectionsMatch(sections: DetailSection[], terms: string[]): boolean {
+export function sectionsMatch(
+  sections: DetailSection[],
+  terms: string[],
+): boolean {
   if (!terms.length) return false;
   return sections.some((s) =>
-    s.kind === 'text' ? rowMatches([s.text ?? ''], terms) : (s.rows ?? []).some((r) => rowMatches(r, terms)),
+    s.kind === "text"
+      ? rowMatches([s.text ?? ""], terms)
+      : (s.rows ?? []).some((r) => rowMatches(r, terms)),
   );
 }

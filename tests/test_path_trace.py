@@ -1384,6 +1384,70 @@ def test_cato_remote_user_is_found_by_its_address_ahead_of_a_range_that_covers_i
     assert (status, name) == ("unknown", "WAN firewall rules") and text.startswith("Rule 3 Remote users to HQ")
 
 
+_LEE = {"source_node": "meraki:3:cato:user:9004"}
+_SAM = {"source_node": "meraki:3:cato:user:9002"}
+
+
+def test_cato_split_tunnel_only_selected_sends_the_rest_out_of_the_device():
+    # Lee's rule routes only Corp-Networks (10.0.0.0/8) to Cato.
+    tracer = _cato_tracer()
+    direct = tracer.trace("10.88.0.14", "8.8.8.8", **_LEE, **_HTTPS)
+    request = direct["request"]
+    assert _labels(request) == ["Lee Park", "Internet"]
+    lookup = _route_item(request["hops"][0])
+    assert (lookup["status"], lookup["where"]) == (
+        "ok",
+        "Split Tunnel rule Lee corporate only: everything else leaves the device directly",
+    )
+    assert request["hops"][0]["out"] == "Local network (direct)"
+    # Never through Cato: no firewall of the account is met.
+    assert not any(_policies(h) for h in request["hops"])
+
+    selected = tracer.trace("10.88.0.14", "10.50.10.20", **_LEE, **_HTTPS)
+    assert _labels(selected["request"]) == [
+        "Lee Park",
+        "PoP New York",
+        "Cato Cloud",
+        "PoP Ashburn",
+        "HQ-DataCenter (primary)",
+    ]
+    lookup = _route_item(selected["request"]["hops"][0])
+    assert (lookup["status"], lookup["where"]) == ("ok", "Split Tunnel rule Lee corporate only: routed to Cato")
+
+
+def test_cato_split_tunnel_exceptions_leave_the_device_and_a_domain_exception_makes_the_default_unknown():
+    tracer = _cato_tracer()
+    # Sam's exception range leaves the device directly, to a network Plexus does not see.
+    lab = tracer.trace("10.88.0.12", "10.77.128.5", **_SAM, **_HTTPS)
+    hop = lab["request"]["hops"][0]
+    lookup = _route_item(hop)
+    assert (lookup["status"], lookup["where"]) == ("unknown", "Split Tunnel rule Sam direct to the lab: exception")
+    assert lookup["text"].startswith("10.77.128.0/22 out of Local network (direct)")
+    assert _labels(lab["request"]) == ["Sam Okafor"]
+
+    # Anything else follows the default route to the PoP, but a domain exception may cover it.
+    web = tracer.trace("10.88.0.12", "8.8.8.8", **_SAM, **_HTTPS)
+    assert _labels(web["request"])[:2] == ["Sam Okafor", "PoP Ashburn"]
+    lookup = _route_item(web["request"]["hops"][0])
+    assert lookup["status"] == "unknown"
+    assert lookup["text"].endswith(
+        "Only the default route matches 8.8.8.8; route table (Split Tunnel exceptions by domain, FQDN or "
+        "application) is not collected, so a more specific route may exist."
+    )
+
+
+def test_cato_split_tunnel_policy_not_collected_makes_a_users_default_route_unknown():
+    raw = build_cato_sample_raw()
+    raw["split_tunnel"] = None
+    result = _cato_tracer(raw).trace("10.88.0.11", "8.8.8.8", **_DANA, **_HTTPS)
+    lookup = _route_item(result["request"]["hops"][0])
+    assert lookup["status"] == "unknown"
+    assert lookup["text"].endswith(
+        "Only the default route matches 8.8.8.8; route table (Split Tunnel policy) is not collected, "
+        "so a more specific route may exist."
+    )
+
+
 def test_cato_site_to_site_replies_take_the_same_hops_back():
     result = _cato_tracer().trace("10.60.20.5", "10.50.10.20", **_MADISON_TO_HQ, **_HTTPS)
 

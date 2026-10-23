@@ -30,11 +30,18 @@ differences that motivate a dedicated driver instead of reusing
 
 from __future__ import annotations
 
-from netcontrol.drivers.base import Driver, DriverCapabilityError, NetflowConfig, RouteTableCommands, register_driver
+from netcontrol.drivers.base import (
+    CiscoStyleTables,
+    Driver,
+    DriverCapabilityError,
+    NetflowConfig,
+    RouteTableCommands,
+    register_driver,
+)
 
 
 @register_driver
-class AristaEOSDriver(Driver):
+class AristaEOSDriver(CiscoStyleTables, Driver):
     device_types = ("arista_eos",)
     vendor = "arista"
     display_name = "Arista EOS"
@@ -102,6 +109,17 @@ class AristaEOSDriver(Driver):
 
     def parse_mac_table(self, parsed_rows: list[dict]) -> list[dict]:
         return self._parse_cisco_style_mac_rows(parsed_rows)
+
+    def vlan_show_command(self) -> str:
+        return "show vlan brief"
+
+    def interface_status_show_command(self) -> str:
+        return "show interfaces status"
+
+    def neighbor_show_commands(self) -> list[tuple[str, str]]:
+        # EOS speaks LLDP only; no switchport template ships for it, so a
+        # trunk's allowed VLANs stay unknown.
+        return [("lldp", "show lldp neighbors detail")]
 
     def snmpv3_show_existing_command(self) -> str:
         # EOS mirrors IOS-XE's ``snmp-server`` config noun, so the same

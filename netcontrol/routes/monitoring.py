@@ -6,7 +6,6 @@ and background poll/escalation loops.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import random
 import time
@@ -18,14 +17,20 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import netcontrol.routes.state as state
-from netcontrol.drivers import IOS_ROUTE_TABLE_COMMANDS, DriverCapabilityError, RouteTableCommands, get_driver
-from netcontrol.integrations.pathtrace.inventory import CAPTURE_LIMIT
 from netcontrol.routes.icmp import ICMP_AVAILABLE, ping_host
 from netcontrol.routes.metrics_engine import (
     emit_metric_samples_from_poll,
     run_retention_cleanup as metrics_retention_cleanup,
     store_interface_error_metrics_from_poll,
     store_interface_ts_from_poll,
+)
+from netcontrol.routes.route_capture import (  # re-exported: tests and callers import them from here
+    _is_route_table as _is_route_table,
+    _parse_route_summary_count as _parse_route_summary_count,
+    _route_table_commands as _route_table_commands,
+    assemble_route_text,
+    read_full_route_tables,
+    store_route_snapshot,
 )
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.routes.snmp import PYSMNP_AVAILABLE, _snmp_walk
@@ -129,50 +134,6 @@ def _poll_backoff_record(host_id: int, *, ok: bool) -> None:
     # 1st failure retries next cycle; from the 2nd on skip 1, 2, 4, ... cycles.
     skip = 0 if failures < 2 else min(2 ** (failures - 2), _POLL_BACKOFF_MAX_SKIP)
     _POLL_BACKOFF[host_id] = [failures, skip]
-
-
-def _route_table_commands(device_type: str) -> RouteTableCommands:
-    """The route table commands of a device type: its driver's, or the IOS
-    ones for a type without a driver (what every device was sent before)."""
-    try:
-        return get_driver(device_type).route_table_commands()
-    except DriverCapabilityError:
-        return IOS_ROUTE_TABLE_COMMANDS
-
-
-def _is_route_table(text: str) -> bool:
-    """Whether a route table command printed a table rather than the error a
-    platform that lacks the command gives."""
-    head = str(text or "").strip()
-    if not head:
-        return False
-    first = head.splitlines()[0].strip().lower()
-    return not (
-        first.startswith(("%", "^", "error", "syntax error", "unknown command", "command fail"))
-        or "invalid input" in first
-        or "incomplete command" in first
-    )
-
-
-def _parse_route_summary_count(summary_text: str) -> int | None:
-    """Best-effort total route count from `show ip route summary` output.
-
-    Handles IOS/IOS-XE ("Total  <networks> <subnets> ...") and NX-OS
-    ("Total number of routes: N"). Returns None when the format is
-    unrecognized so the caller falls back to pulling the full table.
-    """
-    for line in (summary_text or "").splitlines():
-        parts = line.split()
-        if not parts or parts[0].lower() != "total":
-            continue
-        if "route" in line.lower():
-            try:
-                return int(parts[-1])
-            except ValueError:
-                continue
-        if len(parts) >= 3 and parts[1].isdigit() and parts[2].isdigit():
-            return int(parts[1]) + int(parts[2])
-    return None
 
 
 async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
@@ -604,16 +565,11 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
                             or (now - last_full_ts) >= full_interval
                         )
                         if need_full:
-                            outputs["routes_full"] = net_connect.send_command(commands.table, read_timeout=read_timeout)
                             # The VRF tables too, for the path trace. Best-effort:
                             # a device that rejects the command keeps the global table.
-                            if commands.all_vrfs:
-                                try:
-                                    outputs["routes_vrf"] = net_connect.send_command(
-                                        commands.all_vrfs, read_timeout=read_timeout
-                                    )
-                                except Exception as exc:
-                                    LOGGER.debug("monitoring: VRF route table not read: %s", type(exc).__name__)
+                            outputs["routes_full"], outputs["routes_vrf"] = read_full_route_tables(
+                                net_connect, commands, read_timeout
+                            )
                             _ROUTE_POLL_STATE[host["id"]] = (now, summary_count)
                         else:
                             _ROUTE_POLL_STATE[host["id"]] = (last_full_ts, summary_count)
@@ -664,22 +620,12 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
             # Parse route output. route_count prefers the summary total so the
             # metric stays in one domain across lean and full ticks; the
             # snapshot (and churn hashing downstream) only exists on full ticks.
-            summary_count = ssh_outputs.get("route_summary_count")
-            routes_full = ssh_outputs.get("routes_full", "")
-            if routes_full:
-                route_lines = [
-                    line
-                    for line in routes_full.strip().splitlines()
-                    if line.strip() and not line.strip().startswith(("Codes:", "Gateway", "---"))
-                ]
-                result["route_count"] = summary_count if summary_count is not None else len(route_lines)
-                result["route_snapshot"] = routes_full.strip()
-                routes_vrf = str(ssh_outputs.get("routes_vrf") or "")
-                if _is_route_table(routes_vrf):
-                    # The VRF tables follow the global one; the count stays the global table's.
-                    result["route_snapshot"] += "\n\n" + routes_vrf.strip()
-            elif summary_count is not None:
-                result["route_count"] = summary_count
+            # The VRF tables follow the global one; the count stays the global table's.
+            result["route_snapshot"], result["route_count"] = assemble_route_text(
+                str(ssh_outputs.get("routes_full") or ""),
+                str(ssh_outputs.get("routes_vrf") or ""),
+                ssh_outputs.get("route_summary_count"),
+            )
 
         except Exception as exc:
             LOGGER.warning(
@@ -1088,15 +1034,8 @@ async def _process_poll_result(
 
     # Route churn detection
     if res["route_snapshot"]:
-        route_hash = hashlib.sha256(res["route_snapshot"].encode()).hexdigest()[:16]
-        prev_snap = await db.get_latest_route_snapshot(res["host_id"])
-        if prev_snap is None or prev_snap["routes_hash"] != route_hash:
-            await db.create_route_snapshot(
-                host_id=res["host_id"],
-                route_count=res["route_count"],
-                routes_text=res["route_snapshot"][:CAPTURE_LIMIT],
-                routes_hash=route_hash,
-            )
+        written, prev_snap = await store_route_snapshot(res["host_id"], res["route_snapshot"], res["route_count"])
+        if written:
             if prev_snap is not None:
                 delta = abs(res["route_count"] - prev_snap["route_count"])
                 suppressed = await db.is_alert_suppressed(res["host_id"], "route_churn", h.get("group_id"))

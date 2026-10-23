@@ -114,6 +114,12 @@ class CiscoXRDriver(Driver):
         # this returns.
         return "show running-config"
 
+    def neighbor_show_commands(self) -> list[tuple[str, str]]:
+        return [("cdp", "show cdp neighbors detail"), ("lldp", "show lldp neighbors detail")]
+
+    def parse_neighbors(self, protocol: str, rows: list[dict]) -> list[dict]:
+        return self._parse_neighbor_rows(protocol, rows)
+
     def save_config_commands(self) -> list[str]:
         # XR is commit-based: edits go into a candidate config and must
         # be committed before they take effect.  ``commit`` is the

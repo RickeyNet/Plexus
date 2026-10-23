@@ -445,6 +445,9 @@ CREATE TABLE IF NOT EXISTS topology_links (
     target_interface    TEXT    NOT NULL DEFAULT '',
     protocol            TEXT    NOT NULL DEFAULT 'cdp',
     target_platform     TEXT    DEFAULT '',
+    -- The neighbor's CDP / LLDP capabilities as printed ("Host Phone", "B,R"):
+    -- an end device (a phone, a station) is kept off the map by default.
+    target_capabilities TEXT    NOT NULL DEFAULT '',
     discovered_at       TEXT    NOT NULL DEFAULT (datetime('now')),
     UNIQUE(source_host_id, source_interface, target_device_name, target_interface)
 );

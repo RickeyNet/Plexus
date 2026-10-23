@@ -1173,9 +1173,10 @@ def test_api_sources_lists_everything_that_feeds_the_map(api):
         assert response.status_code == 200, response.text
         return {s["key"]: s for s in response.json()["sources"]}
 
-    # Neighbor discovery is always a source, even with nothing else set up.
+    # Neighbor discovery and the inventory collection are always sources,
+    # even with nothing else set up.
     listed = sources()
-    assert list(listed) == ["neighbors"]
+    assert list(listed) == ["neighbors", "inventory"]
     assert listed["neighbors"]["type"] == "neighbors" and listed["neighbors"]["status"] == "never"
 
     org = api.post("/api/sources", json={"name": "HQ", "api_key": "k" * 40}).json()["org"]
@@ -1185,7 +1186,7 @@ def test_api_sources_lists_everything_that_feeds_the_map(api):
     account = api.post("/api/cloud/accounts", json=body).json()["account"]
 
     listed = sources()
-    assert [s["type"] for s in listed.values()] == ["neighbors", "meraki", "cato", "aws", "aws"]
+    assert [s["type"] for s in listed.values()] == ["neighbors", "inventory", "meraki", "cato", "aws", "aws"]
     real = listed[f"org:{org['id']}"]
     assert (real["status"], real["can_collect"], real["demo"], real["detail"]) == ("never", True, False, "")
     cato = next(s for s in listed.values() if s["type"] == "cato")
