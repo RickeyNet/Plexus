@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import socket
 
+from netcontrol.routes.host_identity import placeholder_hostname
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.icmp")
@@ -109,7 +110,7 @@ async def _probe_discovery_target_icmp(
         # Reverse DNS blocks for the resolver timeout; keep it off the loop.
         hostname = (await asyncio.to_thread(socket.gethostbyaddr, ip_address))[0]
     except Exception:
-        hostname = f"{hostname_prefix}-{ip_address.replace('.', '-')}"
+        hostname = placeholder_hostname(hostname_prefix, ip_address)
 
     return {
         "hostname": hostname,

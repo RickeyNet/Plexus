@@ -35,6 +35,9 @@ export const FALLBACK_CATO_OPTIONS: CatoBuildOptions = {
   include_users: true,
   include_ranges: true,
   include_firewall: true,
+  include_policies: true,
+  include_site_config: true,
+  include_client_reports: true,
   inventory_enrich: true,
 };
 
@@ -63,6 +66,21 @@ export const CATO_OPTION_TOGGLES: {
     key: "include_firewall",
     label: "Firewall rules",
     hint: "The WAN and Internet firewall rules, which path tracing applies at the Cato Cloud.",
+  },
+  {
+    key: "include_policies",
+    label: "All other policies",
+    hint: "Every other Cato policy (WAN network, Socket LAN and bypass, TLS inspection, application control, client connectivity, IP allocation, private access, always-on and the rest), listed in the details of the Cato Cloud, the sites and the users they name, but not applied in path tracing; with the groups, users groups, containers and custom applications rules name, so group members can be resolved.",
+  },
+  {
+    key: "include_site_config",
+    label: "Site and network configuration",
+    hint: "Per-site settings (network ranges with DHCP, static and known hosts, Socket configuration, location, backhauling, Wi-Fi SSIDs, DNS override) and the account's DHCP and DNS configuration. Eight queries per site at about one a second; only the first 250 sites are read.",
+  },
+  {
+    key: "include_client_reports",
+    label: "Client connection reports",
+    hint: "The latest Client Connectivity Policy event of each remote user's device in the last 7 days, from Cato's events: the Split Tunnel configuration (Disabled, Admin Defined, User Defined), Office Mode and Managed Networks the Cato Client reported applying. Settles a Split Tunnel rule whose source network (any managed or unmanaged network) the configuration cannot decide. Read with the remote users; the API key needs the View permission for events.",
   },
   {
     key: "inventory_enrich",

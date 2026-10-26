@@ -316,7 +316,7 @@ where its NAT and inbound rules decide. Documentation ranges such as
 | Meraki | Layer 3 firewall rules, inbound firewall rules, site-to-site VPN firewall rules, 1:1 NAT, port forwarding, 1:Many NAT, VPN subnet translation, static and AutoVPN routes, routes to non-Meraki VPN peers, switch ACLs and SVI routes | Layer 7 firewall rules, group policies |
 | Cisco FMC | Prefilter rules, access control rules, NAT rules, connected and static routes, site-to-site VPN protected networks | Routes learned by BGP, OSPF or EIGRP, access control rules beyond the first 1000 |
 | Palo Alto Panorama | Security rules in the order each firewall applies them (shared, device group and ancestors, pre then post, the intrazone and interzone default rules) with their zones, addresses and services, NAT rules, connected routes, the firewall's routing table (static, BGP, OSPF) or else its configured static routes, IPsec tunnels and their state | Rules configured on the firewall itself, App-ID (a rule with applications or `application-default` is unknown when it matches), users, URL categories, FQDNs and dynamic address groups, routes learned by BGP or OSPF when the routing table was not read; see [panorama-topology.md](panorama-topology.md#search-and-path-mode) |
-| Cato | The hops: Socket or remote user, PoP, Cato Cloud, PoP, Socket; the WAN firewall rules for a destination a site's range or a user's address covers (WAN traffic) and the internet firewall rules for any other destination, a private one included (internet traffic), applied once at the PoP the flow enters by; a remote user's Split Tunnel rule (the first enabled one that matches the user, else all traffic to Cato): the global IP ranges of a *route all to Cato except* rule leave the device directly and the rest goes to the PoP, the global IP ranges of a *route only selected* rule go to the PoP and the rest leaves the device directly; a user in Office Mode is behind the site, where the policy does not apply | Routes learned by BGP; rule objects Plexus cannot turn into addresses (users groups, applications, categories, countries) make a rule that matches *unknown*; a user's default route is *unknown* when its Split Tunnel rule names domains, FQDNs, applications or a global IP range that was not read, covers web traffic only, is user-defined, when a rule ahead of it may apply (users groups, managed networks, an OS or country Cato did not report), or when the policy was not collected; the network of the user's device (where its direct traffic goes, and its local subnet); see [cato-topology.md](cato-topology.md#search-and-path-mode) |
+| Cato | The hops: Socket or remote user, PoP, Cato Cloud, PoP, Socket; the WAN firewall rules for a destination a site's range or a user's address covers (WAN traffic) and the internet firewall rules for any other destination, a private one included (internet traffic), applied once at the PoP the flow enters by; a remote user's Split Tunnel rule (the first enabled one that matches the user, by name or users group membership, else all traffic to Cato): the global IP ranges of a *route all to Cato except* rule leave the device directly and the rest goes to the PoP, the global IP ranges of a *route only selected* rule go to the PoP and the rest leaves the device directly; a rule whose source network (any managed or unmanaged network) the configuration cannot decide is settled by the Split Tunnel configuration the user's Cato Client reported for the device connected now (its latest Client Connectivity Policy event): *Disabled* is all traffic to Cato, *Admin Defined* or *User Defined* decides the rule when only one rule that may apply has that mode; a user in Office Mode is behind the site, where the policy does not apply | Routes learned by BGP; rule objects Plexus cannot turn into addresses (groups and users groups whose members were not read in full or include a host or VLAN, containers, applications, categories, countries) make a rule that matches *unknown*; a group or users group read in full is resolved to its members' addresses (a users group to its connected members' VPN addresses); a user's default route is *unknown* when its Split Tunnel rule names domains, FQDNs, applications or a global IP range that was not read, covers web traffic only, is user-defined, when a rule ahead of it may apply (users groups whose members were not read in full, managed networks with no Client report for the current device or a report that fits several rules, an OS or country Cato did not report), or when the policy was not collected; the network of the user's device (its local subnet, and its local address unless the Meraki client table places it; see [A remote user's direct traffic](#a-remote-users-direct-traffic)); see [cato-topology.md](cato-topology.md#search-and-path-mode) |
 | Appgate SDP | The hops: user, Gateway. Each Gateway applies the **Entitlements** of its site (sources the tunnel addresses of the connected users that hold each one, default deny) and its **Allowed destinations**, routes each user's tunnel address back over the tunnel, and translates the client pool when the site uses SNAT; a user routes what its entitlements cover to the Gateway that grants them and has no other route (split tunnel) unless a site is its default gateway | Entitlement hosts that are names (`dns://`, `aws://`...), HTTP method rules and, without the per-user access details, which users hold an entitlement; see [appgate-topology.md](appgate-topology.md#search-and-path-mode) |
 | Inventory devices | Read from the latest route capture and configuration backup, which **Sources → All other devices (SSH) → Collect**, the monitoring poll (routes) or a Config Backups policy (configuration) write; see [below](#inventory-devices-and-configuration-backups). The routes of the latest SSH route table capture, with every VRF's table where the platform lists them (Cisco IOS, IOS-XE, NX-OS, IOS-XR, ASA and FTD, Arista EOS, Juniper Junos, Fortinet FortiOS, Aruba AOS-CX and AOS-Switch). From the latest successful [configuration backup](#inventory-devices-and-configuration-backups) of those platforms: the access lists applied to each interface, in and out (switches and routers, Junos filters), the stateful rule sets of a firewall (ASA / FTD access groups and security levels, SRX security policies, FortiGate firewall policies), their NAT rules, the interface addresses, secondaries, zones, VRFs and HSRP / VRRP / GLBP / VARP / active-gateway addresses, and the connected and static routes of the VRFs the capture lacks | Access lists of a device without a successful configuration backup, or of a platform Plexus does not read (PAN-OS: trace it through a Panorama); objects, object groups, address books, applications, services and port names the configuration does not define, FQDN, geography and wildcard objects, wildcard masks that are not a prefix, time ranges and schedules, DSCP, TCP flag and ICMP type matches, users, identities and security groups, negated matches (a rule that uses one is *unknown* when it matches); IPv6 access lists and policies, port and MAC access lists, VLAN access maps, classifier and traffic policies, policy-based routes, zone-based firewall policies, inspection and application services, VPN tunnels, other VDOMs and contexts; without a route capture, the routes learned by the routing protocols the configuration runs |
 | AWS | Route tables, transit gateways, VPC peerings, network ACLs, security groups, as in [the AWS check of a path](aws-topology.md#the-aws-check-of-a-path) | See that section |
@@ -327,9 +327,45 @@ Whether what is not collected makes a hop *unknown* or is a note is
 explained under [What is not collected](#what-is-not-collected). A Cato
 trace between sites is decided by the WAN firewall at the PoP the flow
 enters by, and is *unknown* only where a rule that names something Plexus
-cannot evaluate (a users group, an application) matches. A trace from a
+cannot evaluate (a users group whose members were not read, an application) matches. The other Cato policies (WAN network, Socket LAN, TLS inspection, client connectivity and the rest) are listed in the node details, not applied in the trace. A trace from a
 Cato remote user first follows the user's Split Tunnel rule, which decides
 whether the flow enters Cato at all.
+
+### A remote user's direct traffic
+
+Traffic a Split Tunnel rule sends out of the device directly leaves by
+*Local network (direct)*, the device's own network, which Plexus does not
+collect. That interface carries the public address the Cato Client connects
+from (Cato's `remoteIP`), when it is a public one. The trace uses it this way:
+
+- A destination that is not on the internet (a private address, or any
+  destination of a route other than the default) is followed to the device
+  on the map that answers on that public address (an appliance's WAN
+  uplink; of a warm-spare pair, the primary). The route item names the
+  device and its interface; a link item, *not decided*, says the hops
+  between the device's network and that appliance are not on the map. The
+  flow arrives there as LAN traffic, with no link on the map. When no
+  device on the map answers on the address, the trace ends at the user and
+  the item names the address it looked for.
+- A public destination of the default route goes to the internet, as
+  before.
+- The traffic leaves with the device's local address, which no Cato field
+  holds. When the Meraki client table of the network of the appliance that
+  answers on the public address lists the device, that address is used: the
+  first DNS label of the device name Cato reports must equal the first
+  label of the client's description (its reported name), ignoring case,
+  and of several such rows the most recently seen is taken. The item names
+  the address, VLAN, network, the Meraki device that saw it and when; the
+  walk goes on from the device whose collected subnet holds the address (a
+  first hop, so its interface is picked by that address), and the replies
+  are traced back to it.
+- Without such a row, the source from there on is any address: a rule set
+  that names a source decides only part of the traffic. Where the replies
+  go is not known, so they are not traced and whether routing is
+  asymmetric is *unknown*.
+
+The client table is what the latest Meraki collection stored. A trace
+exported to an HTML file carries the placements found when it was made.
 
 ### Inventory devices and configuration backups
 
