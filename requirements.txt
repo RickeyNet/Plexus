@@ -16,7 +16,11 @@ requests==2.34.2
 urllib3==2.8.0
 # idna is transitive via requests/httpx/anyio; <3.15 has PYSEC-2026-215.
 idna>=3.15
-netmiko==4.7.0
+netmiko==4.8.0
+# paramiko is netmiko's SSH transport. 4.x carries PYSEC-2026-2858 (rsakey.py
+# accepts SHA-1) with no 4.x fix; netmiko 4.8 lifted its paramiko<5 cap and
+# 5.x is clear, so floor it here.
+paramiko>=5.1,<6
 # ntc-templates is a transitive dep of netmiko but used directly via
 # send_command(..., use_textfsm=True) in the mac_tracking CLI collector.
 # Pinning here keeps the dependency intentional rather than coincidental.
