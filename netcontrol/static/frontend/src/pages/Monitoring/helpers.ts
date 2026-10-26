@@ -1,3 +1,5 @@
+import type { SlaStatus } from '@/api/monitoring';
+
 export function formatTimestamp(ts: string | null | undefined): string {
   if (!ts) return '-';
   return new Date(ts + (ts.endsWith('Z') ? '' : 'Z')).toLocaleString();
@@ -32,38 +34,16 @@ export function severityColor(sev: string | undefined | null): string {
   return SEVERITY_COLOR[sev] ?? 'text-muted';
 }
 
-export interface SlaCompliance {
-  status: 'met' | 'warn' | 'breach' | 'none';
-}
+// Badge class and label of each server-computed SLA status (see
+// /api/sla/compliance); `none` is a host with no SLA target.
+export const SLA_STATUS_BADGE: Record<SlaStatus | 'none', { cls: string; label: string }> = {
+  met: { cls: 'badge badge-success', label: 'Met' },
+  warn: { cls: 'badge badge-warning', label: 'Warning' },
+  breach: { cls: 'badge badge-danger', label: 'Breach' },
+  no_data: { cls: 'badge badge-secondary', label: 'No Data' },
+  none: { cls: 'badge badge-secondary', label: 'No Target' },
+};
 
-export function getHostSlaCompliance(
-  host: { uptime_pct?: number | null; avg_latency_ms?: number | null; jitter_ms?: number | null; avg_packet_loss_pct?: number | null; host_id: number },
-  targets: { metric: string; target_value: number; warning_value: number; enabled: boolean; host_id?: number | null; group_id?: number | null }[],
-): SlaCompliance {
-  const applicable = targets.filter((t) => t.enabled && (t.host_id == null || t.host_id === host.host_id));
-  if (!applicable.length) return { status: 'none' };
-
-  let worst: 'met' | 'warn' | 'breach' = 'met';
-  for (const t of applicable) {
-    const value = t.metric === 'uptime' ? host.uptime_pct
-      : t.metric === 'latency' ? host.avg_latency_ms
-      : t.metric === 'jitter' ? host.jitter_ms
-      : t.metric === 'packet_loss' ? host.avg_packet_loss_pct
-      : null;
-    if (value == null) continue;
-    const higherIsBetter = t.metric === 'uptime';
-    let status: 'met' | 'warn' | 'breach';
-    if (higherIsBetter) {
-      if (value >= t.target_value) status = 'met';
-      else if (value >= t.warning_value) status = 'warn';
-      else status = 'breach';
-    } else {
-      if (value <= t.target_value) status = 'met';
-      else if (value <= t.warning_value) status = 'warn';
-      else status = 'breach';
-    }
-    if (status === 'breach') worst = 'breach';
-    else if (status === 'warn' && worst === 'met') worst = 'warn';
-  }
-  return { status: worst };
+export function slaStatusBadge(status: SlaStatus | null | undefined): { cls: string; label: string } {
+  return SLA_STATUS_BADGE[status ?? 'none'];
 }

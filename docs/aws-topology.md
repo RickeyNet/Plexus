@@ -346,6 +346,10 @@ appear in IPAM's cloud CIDR view, where each VPC's range is checked against
 the ranges of every Meraki, Cato and Cisco FMC site under **Overlapping
 Ranges** (see the [Meraki guide](meraki-topology.md#ipam)).
 
+## Availability tracking
+
+Each collection also records the state of what it reports, shown under **Monitoring > Availability > Integrations and cloud** with uptime, outages and alerts: the instances drawn on the map, the transit, VPN, NAT and Direct Connect gateways and the Direct Connect connections (devices), site-to-site VPN connections (up when a tunnel is UP), Direct Connect connections, virtual interfaces and gateway associations (circuits), VPC peerings, and transit gateway and VPN gateway attachments (links). VPCs and customer gateways are left out. The state mapping, alerting and retention are described in [Meraki in the Topology Map](meraki-topology.md#availability-tracking).
+
 ## API reference
 
 | Method | Path | Notes for AWS |

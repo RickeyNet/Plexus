@@ -334,11 +334,31 @@ export const OPTION_TOGGLES: { key: ToggleKey; label: string; hint: string }[] =
 
 export function formatWhen(iso?: string | null): string {
   if (!iso) return "-";
+  const date = stampDate(iso);
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
+}
+
+/** A stored stamp as a Date; one without a zone is UTC. */
+function stampDate(iso: string): Date {
   const normalized = /[zZ]|[+-]\d\d:?\d\d$/.test(iso)
     ? iso
     : `${iso.replace(" ", "T")}Z`;
-  const date = new Date(normalized);
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
+  return new Date(normalized);
+}
+
+/**
+ * When the scheduler collects a source next, for its row in the Sources
+ * dialog: empty when it never will, "next scheduler pass" once it is due.
+ */
+export function describeNextCollection(
+  iso: string | null | undefined,
+  now: number = Date.now(),
+): string {
+  if (!iso) return "";
+  const time = stampDate(iso).getTime();
+  return !Number.isNaN(time) && time <= now
+    ? "next scheduler pass"
+    : formatWhen(iso);
 }
 
 /** What kind of map source a row of the Sources dialog is. */

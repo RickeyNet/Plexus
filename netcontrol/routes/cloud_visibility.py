@@ -98,6 +98,14 @@ def _topology_changed() -> None:
     invalidate_topology_cache()
 
 
+async def _availability_changed(provider: str | None) -> None:
+    """A discovery was stored: record the availability of what it found
+    (Monitoring > Availability). Best-effort; never raises."""
+    from netcontrol.routes.meraki_topology import cloud_availability_changed
+
+    await cloud_availability_changed(str(provider or ""))
+
+
 def _normalize_provider(raw: str | None) -> str:
     provider = str(raw or "").strip().lower()
     if provider not in _VALID_PROVIDERS:
@@ -1158,6 +1166,7 @@ async def run_scheduled_discovery() -> dict:
             )
             refreshed += 1
             _topology_changed()
+            await _availability_changed(account.get("provider"))
         except CloudCollectorError as exc:
             message = getattr(exc, "user_message", "") or str(exc) or type(exc).__name__
             LOGGER.warning(
@@ -1623,6 +1632,7 @@ async def discover_cloud_account_api(account_id: int, request: Request, body: Cl
             sync_message=sync_message,
         )
         _topology_changed()
+        await _availability_changed(account.get("provider"))
     except HTTPException:
         raise
     except Exception:

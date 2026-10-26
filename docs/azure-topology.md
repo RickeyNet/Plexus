@@ -159,6 +159,10 @@ own.
 Limits: only IPv4 can be typed in Path Mode. Azure Virtual WAN hubs, private
 endpoints, load balancers and application gateways are not collected.
 
+## Availability tracking
+
+Each collection also records the state of what it reports, shown under **Monitoring > Availability > Integrations and cloud** with uptime, outages and alerts: the virtual machines drawn on the map, virtual network gateways, firewalls, NAT gateways and ExpressRoute circuits (devices), gateway connections (VPN connections: Connected is up, NotConnected is down), ExpressRoute connections (circuits), VNet peerings and gateway attachments (links). VNets and local network gateways are left out. The state mapping, alerting and retention are described in [Meraki in the Topology Map](meraki-topology.md#availability-tracking).
+
 ## API reference
 
 | Method | Path | Notes for Azure |
