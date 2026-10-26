@@ -41,7 +41,7 @@ __all__ = [
 # Columns safe to hand to callers: everything except the encrypted API key.
 _ORG_COLUMNS = (
     "id, name, provider, org_id, base_url, options_json, last_build_at, last_build_status, "
-    "last_build_message, created_by, created_at, updated_at, "
+    "last_build_message, auto_collect, collect_interval_seconds, created_by, created_at, updated_at, "
     "(api_key_enc <> '') AS has_api_key"
 )
 _SNAPSHOT_META_COLUMNS = "id, org_ref, summary_json, warning_count, duration_seconds, built_by, created_at"
@@ -75,6 +75,8 @@ def _org_row(row) -> dict | None:
         return None
     _iso_stamps(org, "last_build_at", "created_at", "updated_at")
     org["has_api_key"] = bool(org.get("has_api_key"))
+    org["auto_collect"] = bool(org.get("auto_collect", 1))
+    org["collect_interval_seconds"] = int(org.get("collect_interval_seconds") or 0)
     try:
         org["options"] = json.loads(org.pop("options_json", None) or "{}")
     except TypeError, ValueError:
@@ -99,6 +101,8 @@ async def create_meraki_org(
     base_url: str = "",
     api_key: str = "",
     options: dict | None = None,
+    auto_collect: bool = True,
+    collect_interval_seconds: int = 0,
     created_by: str = "",
 ) -> dict | None:
     """Insert a Meraki organization (``provider`` "meraki"), a Cato account
@@ -110,9 +114,20 @@ async def create_meraki_org(
         try:
             cursor = await db.execute(
                 """INSERT INTO meraki_orgs
-                   (name, provider, org_id, base_url, api_key_enc, options_json, created_by)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (name, provider, org_id, base_url, _encrypt_key(api_key), json.dumps(options or {}), created_by),
+                   (name, provider, org_id, base_url, api_key_enc, options_json,
+                    auto_collect, collect_interval_seconds, created_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    name,
+                    provider,
+                    org_id,
+                    base_url,
+                    _encrypt_key(api_key),
+                    json.dumps(options or {}),
+                    1 if auto_collect else 0,
+                    int(collect_interval_seconds),
+                    created_by,
+                ),
             )
         except Exception as exc:
             if _is_unique_violation(exc):
@@ -168,6 +183,8 @@ async def update_meraki_org(org_ref: int, **kwargs) -> dict | None:
         "last_build_at": "last_build_at",
         "last_build_status": "last_build_status",
         "last_build_message": "last_build_message",
+        "auto_collect": "auto_collect",
+        "collect_interval_seconds": "collect_interval_seconds",
     }
     sets: list[str] = []
     vals: list = []
@@ -180,6 +197,10 @@ async def update_meraki_org(org_ref: int, **kwargs) -> dict | None:
             value = json.dumps(value)
         elif key == "last_build_at":
             value = _stamp_param(value)
+        elif key == "auto_collect":
+            value = 1 if value else 0
+        elif key == "collect_interval_seconds":
+            value = int(value)
         sets.append(f"{column_for[key]} = ?")
         vals.append(value)
     if not sets:

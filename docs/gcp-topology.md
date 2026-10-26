@@ -183,6 +183,10 @@ are not collected, and the rules of global network firewall policies are not
 evaluated. Private Service Connect, load balancers, Network Connectivity
 Center hubs and the custom routes a peering exchanges are not collected.
 
+## Availability tracking
+
+Each collection also records the state of what it reports, shown under **Monitoring > Availability > Integrations and cloud** with uptime, outages and alerts: the instances drawn on the map, Cloud Routers, HA VPN gateways, Cloud NAT, Interconnects and Interconnect attachments (devices), HA VPN tunnels (VPN connections), Interconnect attachments and Interconnects (circuits) and VPC peerings. VPC networks and external VPN gateways are left out. The state mapping, alerting and retention are described in [Meraki in the Topology Map](meraki-topology.md#availability-tracking).
+
 ## API reference
 
 | Method | Path | Notes for GCP |

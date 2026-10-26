@@ -22,6 +22,7 @@ from routes.database import (
     row_to_dict,
     rows_to_list,
 )
+from routes.db.inventory import GROUP_SUBTREE_SQL as _GROUP_SUBTREE_SQL
 
 __all__ = [
     "set_alert_created_hook",
@@ -62,6 +63,13 @@ __all__ = [
     "get_sla_summary",
     "get_sla_host_detail",
     "delete_old_sla_metrics",
+    "SLA_METRIC_NAMES",
+    "get_sla_host_metrics",
+    "rollup_sla_metrics",
+    "get_sla_target_hosts",
+    "record_sla_target_statuses",
+    "get_sla_compliance",
+    "get_sla_compliance_history",
 ]
 
 # The notification-channel engine registers itself here via
@@ -928,6 +936,12 @@ async def bulk_acknowledge_alerts(alert_ids: list[int], acknowledged_by: str) ->
 
 # ── SLA Targets ──────────────────────────────────────────────────────────────
 
+# The metrics an SLA target can track, and the rollup rows written for them.
+SLA_METRIC_NAMES = ("uptime", "latency", "jitter", "packet_loss")
+
+# Worst first: a host's SLA status is the worst status of its targets.
+_SLA_STATUS_RANK = {"breach": 3, "warn": 2, "met": 1, "no_data": 0}
+
 
 async def get_sla_targets(
     host_id: int | None = None,
@@ -984,14 +998,15 @@ async def create_sla_target(
     host_id: int | None = None,
     group_id: int | None = None,
     created_by: str = "",
+    window_days: int = 30,
 ) -> int:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
             """INSERT INTO sla_targets
-               (name, metric, target_value, warning_value, host_id, group_id, created_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (name, metric, target_value, warning_value, host_id, group_id, created_by),
+               (name, metric, target_value, warning_value, host_id, group_id, created_by, window_days)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (name, metric, target_value, warning_value, host_id, group_id, created_by, window_days),
         )
         await db.commit()
         return cursor.lastrowid
@@ -1000,7 +1015,7 @@ async def create_sla_target(
 
 
 async def update_sla_target(target_id: int, **kwargs) -> None:
-    allowed = {"name", "metric", "target_value", "warning_value", "enabled", "host_id", "group_id"}
+    allowed = {"name", "metric", "target_value", "warning_value", "enabled", "host_id", "group_id", "window_days"}
     fields = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
     if not fields:
         return
@@ -1024,14 +1039,237 @@ async def delete_sla_target(target_id: int) -> None:
         await db.close()
 
 
+# ── SLA windows: raw polls + hourly/daily rollups ────────────────────────────
+#
+# Raw ``monitoring_polls`` are purged after ``retention_days`` (default 30),
+# so a longer SLA window cannot be computed from them. The SLA rollup job
+# (``rollup_sla_metrics``) writes one ``sla_metrics`` row per host, metric and
+# completed hour, then one per completed day from the hourly rows. Each row
+# carries the sums needed to recombine it exactly:
+#
+#   uptime       sample_count = polls,            sum_value = ok polls
+#   latency      sample_count = response samples, sum_value = sum, sum_sq = sum of squares
+#   jitter       same sums as latency; value = population stddev of the hour/day
+#   packet_loss  sample_count = loss samples,     sum_value = sum
+#
+# A window [now - days, now) is then read as: daily rows for the whole days up
+# to the daily watermark (the end of the last daily rollup), hourly rows for
+# the hours after that (and for the partial first day) up to the hourly
+# watermark, and raw polls for the rest (the partial first hour and the hours
+# not rolled up yet). Without rollups this is the raw-poll computation.
+
+_SLA_TS_FORMAT = "%Y-%m-%d %H:%M:%S"
+# Hours (and days) before the watermark that a rollup pass re-reads. Rows that
+# exist are kept (ON CONFLICT DO NOTHING); this only fills a period a host
+# had no row for, e.g. polls committed just after the previous pass.
+_SLA_HOURLY_LOOKBACK = timedelta(hours=2)
+_SLA_DAILY_LOOKBACK = timedelta(days=1)
+
+
+def _sla_ts(dt: datetime) -> str:
+    return dt.strftime(_SLA_TS_FORMAT)
+
+
+def _sla_now(now: datetime | None) -> datetime:
+    if now is None:
+        return datetime.now(UTC)
+    return now if now.tzinfo else now.replace(tzinfo=UTC)
+
+
+def _sla_parse_ts(value: str) -> datetime:
+    return datetime.strptime(value[:19], _SLA_TS_FORMAT).replace(tzinfo=UTC)
+
+
+def _ceil_hour(dt: datetime) -> datetime:
+    floor = dt.replace(minute=0, second=0, microsecond=0)
+    return floor if floor == dt else floor + timedelta(hours=1)
+
+
+def _ceil_day(dt: datetime) -> datetime:
+    floor = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    return floor if floor == dt else floor + timedelta(days=1)
+
+
+async def _sla_watermark(db, time_window: str) -> str | None:
+    """End of the newest ``time_window`` rollup period (all hosts are rolled
+    up together, so every period before it is complete)."""
+    cursor = await db.execute(
+        "SELECT MAX(period_end) FROM sla_metrics WHERE time_window = ?",
+        (time_window,),
+    )
+    row = await cursor.fetchone()
+    return row[0] if row and row[0] else None
+
+
+async def _sla_host_aggregates(
+    db,
+    days: int,
+    now: datetime,
+    *,
+    host_id: int | None = None,
+    group_id: int | None = None,
+    by_day: bool = False,
+) -> tuple[list[dict], str, str]:
+    """Per-host (and per-day with ``by_day``) poll counts and sums over the
+    window ``[now - days, now)``, combining raw polls and rollups (see the
+    comment above). Returns ``(rows, window_start, window_end)``."""
+    hourly_mark = await _sla_watermark(db, "hourly")
+    daily_mark = await _sla_watermark(db, "daily")
+    start = now - timedelta(days=days)
+    start_s = _sla_ts(start)
+    start_hour = _sla_ts(_ceil_hour(start))
+    start_day = _sla_ts(_ceil_day(start))
+    # Raw polls: the partial first hour, then everything after the hourly
+    # watermark (everything at all when nothing is rolled up yet).
+    raw_from = max(hourly_mark, start_hour) if hourly_mark else start_s
+    # Hourly rows: the partial first day, then the hours after the daily
+    # watermark; daily rows cover the whole days in between.
+    hourly_after = max(daily_mark, start_day) if daily_mark else start_day
+
+    raw_filter = ""
+    roll_filter = ""
+    filter_params: list = []
+    if host_id is not None:
+        raw_filter += " AND p.host_id = ?"
+        roll_filter += " AND m.host_id = ?"
+        filter_params.append(host_id)
+    if group_id is not None:
+        raw_filter += " AND p.host_id IN (SELECT id FROM hosts WHERE group_id = ?)"
+        roll_filter += " AND m.host_id IN (SELECT id FROM hosts WHERE group_id = ?)"
+        filter_params.append(group_id)
+
+    raw_day = "substr(p.polled_at, 1, 10) AS day," if by_day else ""
+    raw_day_group = ", substr(p.polled_at, 1, 10)" if by_day else ""
+    roll_day = "substr(m.period_start, 1, 10) AS day," if by_day else ""
+    roll_day_group = ", substr(m.period_start, 1, 10)" if by_day else ""
+    outer_day = "x.day," if by_day else ""
+    outer_day_group = ", x.day" if by_day else ""
+
+    cursor = await db.execute(
+        f"""SELECT h.id AS host_id, h.hostname, h.ip_address, h.group_id, {outer_day}
+                   SUM(x.total) AS total_polls,
+                   SUM(x.ok) AS ok_polls,
+                   SUM(x.rt_n) AS rt_n,
+                   SUM(x.rt_sum) AS rt_sum,
+                   SUM(x.rt_sq) AS rt_sq,
+                   SUM(x.pl_n) AS pl_n,
+                   SUM(x.pl_sum) AS pl_sum
+            FROM (
+                SELECT p.host_id, {raw_day}
+                       COUNT(*) AS total,
+                       SUM(CASE WHEN p.poll_status = 'ok' THEN 1 ELSE 0 END) AS ok,
+                       COUNT(p.response_time_ms) AS rt_n,
+                       COALESCE(SUM(p.response_time_ms), 0) AS rt_sum,
+                       COALESCE(SUM(p.response_time_ms * p.response_time_ms), 0) AS rt_sq,
+                       COUNT(p.packet_loss_pct) AS pl_n,
+                       COALESCE(SUM(p.packet_loss_pct), 0) AS pl_sum
+                FROM monitoring_polls p
+                WHERE p.polled_at >= ? AND (p.polled_at < ? OR p.polled_at >= ?){raw_filter}
+                GROUP BY p.host_id{raw_day_group}
+                UNION ALL
+                SELECT m.host_id, {roll_day}
+                       SUM(CASE WHEN m.metric = 'uptime' THEN m.sample_count ELSE 0 END) AS total,
+                       SUM(CASE WHEN m.metric = 'uptime' THEN m.sum_value ELSE 0 END) AS ok,
+                       SUM(CASE WHEN m.metric = 'latency' THEN m.sample_count ELSE 0 END) AS rt_n,
+                       SUM(CASE WHEN m.metric = 'latency' THEN m.sum_value ELSE 0 END) AS rt_sum,
+                       SUM(CASE WHEN m.metric = 'latency' THEN m.sum_sq ELSE 0 END) AS rt_sq,
+                       SUM(CASE WHEN m.metric = 'packet_loss' THEN m.sample_count ELSE 0 END) AS pl_n,
+                       SUM(CASE WHEN m.metric = 'packet_loss' THEN m.sum_value ELSE 0 END) AS pl_sum
+                FROM sla_metrics m
+                WHERE m.metric IN ('uptime', 'latency', 'packet_loss')
+                  AND ((m.time_window = 'hourly' AND m.period_start >= ? AND m.period_end <= ?
+                        AND (m.period_start < ? OR m.period_start >= ?))
+                    OR (m.time_window = 'daily' AND m.period_start >= ? AND m.period_end <= ?)){roll_filter}
+                GROUP BY m.host_id{roll_day_group}
+            ) x
+            JOIN hosts h ON h.id = x.host_id
+            GROUP BY h.id{outer_day_group}
+            HAVING SUM(x.total) > 0
+            ORDER BY h.hostname{outer_day_group}""",
+        (
+            start_s,
+            start_hour,
+            raw_from,
+            *filter_params,
+            start_hour,
+            hourly_mark or "",
+            start_day,
+            hourly_after,
+            start_day,
+            daily_mark or "",
+            *filter_params,
+        ),
+    )
+    return rows_to_list(await cursor.fetchall()), start_s, _sla_ts(now)
+
+
+def _sla_values(r: dict) -> dict:
+    """Uptime %, mean latency, jitter (population stddev of the response
+    time) and mean packet loss from one aggregate row's counts and sums."""
+    total = int(r.get("total_polls") or 0)
+    ok = int(round(float(r.get("ok_polls") or 0)))
+    rt_n = int(r.get("rt_n") or 0)
+    pl_n = int(r.get("pl_n") or 0)
+    latency = jitter = packet_loss = None
+    if rt_n:
+        mean = float(r.get("rt_sum") or 0) / rt_n
+        variance = float(r.get("rt_sq") or 0) / rt_n - mean * mean
+        latency = round(mean, 2)
+        jitter = round(max(0.0, variance) ** 0.5, 2)
+    if pl_n:
+        packet_loss = round(float(r.get("pl_sum") or 0) / pl_n, 2)
+    return {
+        "total_polls": total,
+        "ok_polls": ok,
+        "uptime_pct": round(ok / total * 100, 3) if total else None,
+        "avg_latency_ms": latency,
+        "jitter_ms": jitter,
+        "avg_packet_loss_pct": packet_loss,
+        "latency_samples": rt_n,
+        "packet_loss_samples": pl_n,
+    }
+
+
+async def get_sla_host_metrics(
+    days: int = 30,
+    *,
+    now: datetime | None = None,
+    host_id: int | None = None,
+    group_id: int | None = None,
+) -> dict:
+    """SLA values of every host with data in the window ``[now - days, now)``:
+    ``{"window_start", "window_end", "hosts": {host_id: values}}``."""
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        rows, window_start, window_end = await _sla_host_aggregates(
+            db, days, _sla_now(now), host_id=host_id, group_id=group_id
+        )
+    finally:
+        await db.close()
+    return {
+        "window_start": window_start,
+        "window_end": window_end,
+        "hosts": {int(r["host_id"]): {**_sla_values(r), "hostname": r["hostname"]} for r in rows},
+    }
+
+
 # ── SLA Summary & Host Detail ────────────────────────────────────────────────
+
+
+def _worst_sla_status(statuses: list[str]) -> str | None:
+    if not statuses:
+        return None
+    return max(statuses, key=lambda s: _SLA_STATUS_RANK.get(s, 0))
 
 
 async def get_sla_summary(
     group_id: int | None = None,
     days: int = 30,
+    now: datetime | None = None,
 ) -> dict:
-    """Compute SLA summary from monitoring_polls data directly."""
+    """SLA summary over the last ``days``: raw polls combined with the SLA
+    rollups (so windows longer than the poll retention are complete), with
+    the latest server-side target evaluation per host."""
     db = await _dbcore.get_db(read_only=True)
     try:
         group_filter = ""
@@ -1040,23 +1278,27 @@ async def get_sla_summary(
             group_filter = "AND h.group_id = ?"
             params.append(group_id)
 
-        # Per-host uptime (% of polls with status='ok'), latency, packet loss
+        rows, _start, _end = await _sla_host_aggregates(db, days, _sla_now(now), group_id=group_id)
+
+        # Latest target evaluation per host (worst status across its targets).
         cursor = await db.execute(
-            f"""SELECT h.id AS host_id, h.hostname, h.ip_address, h.group_id,
-                       COUNT(*) AS total_polls,
-                       SUM(CASE WHEN p.poll_status = 'ok' THEN 1 ELSE 0 END) AS ok_polls,
-                       AVG(p.response_time_ms) AS avg_latency,
-                       AVG(p.response_time_ms * p.response_time_ms) AS mean_sq_rt,
-                       AVG(p.packet_loss_pct) AS avg_packet_loss
-                FROM monitoring_polls p
-                JOIN hosts h ON h.id = p.host_id
-                WHERE p.polled_at >= datetime('now', '-' || ? || ' days')
-                {group_filter}
-                GROUP BY h.id
-                ORDER BY h.hostname""",
-            tuple(params),
+            f"""SELECT s.host_id, s.status, s.evaluated_at
+                FROM sla_target_status s
+                JOIN hosts h ON h.id = s.host_id
+                WHERE 1=1 {group_filter}""",
+            tuple(params[1:]),
         )
-        rows = rows_to_list(await cursor.fetchall())
+        host_statuses: dict[int, list[str]] = {}
+        evaluated_at = None
+        for srow in rows_to_list(await cursor.fetchall()):
+            host_statuses.setdefault(int(srow["host_id"]), []).append(srow["status"])
+            if srow["evaluated_at"] and (evaluated_at is None or srow["evaluated_at"] > evaluated_at):
+                evaluated_at = srow["evaluated_at"]
+        worst_by_host = {hid: _worst_sla_status(sts) for hid, sts in host_statuses.items()}
+        compliance = {"met": 0, "warn": 0, "breach": 0, "no_data": 0}
+        for status in worst_by_host.values():
+            if status in compliance:
+                compliance[status] += 1
 
         hosts = []
         total_uptime = 0.0
@@ -1066,22 +1308,10 @@ async def get_sla_summary(
         pkt_count = 0
 
         for r in rows:
-            total = r["total_polls"] or 1
-            ok = r["ok_polls"] or 0
-            uptime_pct = round(ok / total * 100, 3)
-            lat = round(r["avg_latency"], 2) if r["avg_latency"] is not None else None
-            pkt = round(r["avg_packet_loss"], 2) if r["avg_packet_loss"] is not None else None
-
-            # Jitter = stddev of response time, derived from the same grouped
-            # aggregate (mean and mean-of-squares) rather than a per-host query.
-            mean_rt = r["avg_latency"]
-            mean_sq = r["mean_sq_rt"]
-            if mean_rt is not None and mean_sq is not None:
-                variance = mean_sq - (mean_rt**2)
-                jitter = round(max(0.0, variance) ** 0.5, 2)
-            else:
-                jitter = None
-
+            values = _sla_values(r)
+            uptime_pct = values["uptime_pct"] or 0.0
+            lat = values["avg_latency_ms"]
+            pkt = values["avg_packet_loss_pct"]
             total_uptime += uptime_pct
             if lat is not None:
                 total_latency += lat
@@ -1096,12 +1326,13 @@ async def get_sla_summary(
                     "hostname": r["hostname"],
                     "ip_address": r["ip_address"],
                     "group_id": r["group_id"],
-                    "total_polls": total,
-                    "ok_polls": ok,
+                    "total_polls": values["total_polls"],
+                    "ok_polls": values["ok_polls"],
                     "uptime_pct": uptime_pct,
                     "avg_latency_ms": lat,
                     "avg_packet_loss_pct": pkt,
-                    "jitter_ms": jitter,
+                    "jitter_ms": values["jitter_ms"],
+                    "sla_status": worst_by_host.get(int(r["host_id"])),
                 }
             )
 
@@ -1162,6 +1393,7 @@ async def get_sla_summary(
             "mttd_minutes": mttd,
             "total_alerts": total_alerts,
             "resolved_alerts": resolved_alerts,
+            "compliance": {**compliance, "hosts": len(worst_by_host), "evaluated_at": evaluated_at},
             "hosts": hosts,
         }
     finally:
@@ -1171,45 +1403,25 @@ async def get_sla_summary(
 async def get_sla_host_detail(
     host_id: int,
     days: int = 30,
+    now: datetime | None = None,
 ) -> dict:
-    """Detailed SLA metrics for a single host over time."""
+    """Detailed SLA metrics for a single host over time (one point per day,
+    from raw polls and the SLA rollups)."""
     db = await _dbcore.get_db(read_only=True)
     try:
-        # Daily uptime/latency/packet_loss trend
-        cursor = await db.execute(
-            """SELECT date(p.polled_at) AS day,
-                      COUNT(*) AS total_polls,
-                      SUM(CASE WHEN p.poll_status = 'ok' THEN 1 ELSE 0 END) AS ok_polls,
-                      AVG(p.response_time_ms) AS avg_latency,
-                      AVG(p.packet_loss_pct) AS avg_packet_loss,
-                      AVG(p.response_time_ms * p.response_time_ms) AS mean_sq_rt,
-                      AVG(p.response_time_ms) AS mean_rt
-               FROM monitoring_polls p
-               WHERE p.host_id = ?
-                 AND p.polled_at >= datetime('now', '-' || ? || ' days')
-               GROUP BY date(p.polled_at)
-               ORDER BY day ASC""",
-            (host_id, days),
-        )
+        rows, _start, _end = await _sla_host_aggregates(db, days, _sla_now(now), host_id=host_id, by_day=True)
         daily = []
-        for r in rows_to_list(await cursor.fetchall()):
-            total = r["total_polls"] or 1
-            ok = r["ok_polls"] or 0
-            mean = r["mean_rt"]
-            mean_sq = r["mean_sq_rt"]
-            jitter = None
-            if mean is not None and mean_sq is not None:
-                variance = mean_sq - (mean**2)
-                jitter = round(max(0, variance) ** 0.5, 2)
+        for r in rows:
+            values = _sla_values(r)
             daily.append(
                 {
                     "day": r["day"],
-                    "uptime_pct": round(ok / total * 100, 3),
-                    "avg_latency_ms": round(r["avg_latency"], 2) if r["avg_latency"] is not None else None,
-                    "avg_packet_loss_pct": round(r["avg_packet_loss"], 2) if r["avg_packet_loss"] is not None else None,
-                    "jitter_ms": jitter,
-                    "total_polls": total,
-                    "ok_polls": ok,
+                    "uptime_pct": values["uptime_pct"],
+                    "avg_latency_ms": values["avg_latency_ms"],
+                    "avg_packet_loss_pct": values["avg_packet_loss_pct"],
+                    "jitter_ms": values["jitter_ms"],
+                    "total_polls": values["total_polls"],
+                    "ok_polls": values["ok_polls"],
                 }
             )
 
@@ -1252,14 +1464,290 @@ async def get_sla_host_detail(
         await db.close()
 
 
+# ── SLA Rollups ──────────────────────────────────────────────────────────────
+
+# One row per host, metric and completed hour of raw polls. ``to_char`` of the
+# truncated hour writes the same ``YYYY-MM-DD HH:MM:SS`` text the window
+# reader compares against (the session time zone is UTC).
+_SLA_HOURLY_ROLLUP_SQL = """
+INSERT INTO sla_metrics
+    (host_id, metric, time_window, value, sample_count, sum_value, sum_sq, period_start, period_end)
+SELECT a.host_id, m.metric, 'hourly',
+       CASE m.metric
+           WHEN 'uptime' THEN 100.0 * a.ok / a.total
+           WHEN 'latency' THEN a.rt_sum / a.rt_n
+           WHEN 'jitter' THEN sqrt(GREATEST(0, a.rt_sq / a.rt_n - (a.rt_sum / a.rt_n) * (a.rt_sum / a.rt_n)))
+           ELSE a.pl_sum / a.pl_n
+       END,
+       CASE m.metric WHEN 'uptime' THEN a.total WHEN 'packet_loss' THEN a.pl_n ELSE a.rt_n END,
+       CASE m.metric WHEN 'uptime' THEN a.ok WHEN 'packet_loss' THEN a.pl_sum ELSE a.rt_sum END,
+       CASE WHEN m.metric IN ('latency', 'jitter') THEN a.rt_sq ELSE 0 END,
+       a.period_start, a.period_end
+FROM (
+    SELECT p.host_id,
+           to_char(date_trunc('hour', p.polled_at::timestamptz), 'YYYY-MM-DD HH24:MI:SS') AS period_start,
+           to_char(date_trunc('hour', p.polled_at::timestamptz) + INTERVAL '1 hour', 'YYYY-MM-DD HH24:MI:SS')
+               AS period_end,
+           COUNT(*) AS total,
+           SUM(CASE WHEN p.poll_status = 'ok' THEN 1 ELSE 0 END) AS ok,
+           COUNT(p.response_time_ms) AS rt_n,
+           COALESCE(SUM(p.response_time_ms), 0) AS rt_sum,
+           COALESCE(SUM(p.response_time_ms * p.response_time_ms), 0) AS rt_sq,
+           COUNT(p.packet_loss_pct) AS pl_n,
+           COALESCE(SUM(p.packet_loss_pct), 0) AS pl_sum
+    FROM monitoring_polls p
+    WHERE p.polled_at >= ? AND p.polled_at < ?
+    GROUP BY p.host_id, 2, 3
+) a
+CROSS JOIN (VALUES ('uptime'), ('latency'), ('jitter'), ('packet_loss')) AS m (metric)
+WHERE m.metric = 'uptime'
+   OR (m.metric IN ('latency', 'jitter') AND a.rt_n > 0)
+   OR (m.metric = 'packet_loss' AND a.pl_n > 0)
+ON CONFLICT (host_id, metric, time_window, period_start) DO NOTHING
+"""
+
+# One row per host, metric and completed day, recombined from the hourly rows.
+_SLA_DAILY_ROLLUP_SQL = """
+INSERT INTO sla_metrics
+    (host_id, metric, time_window, value, sample_count, sum_value, sum_sq, period_start, period_end)
+SELECT d.host_id, d.metric, 'daily',
+       CASE d.metric
+           WHEN 'uptime' THEN 100.0 * d.s / d.n
+           WHEN 'jitter' THEN sqrt(GREATEST(0, d.q / d.n - (d.s / d.n) * (d.s / d.n)))
+           ELSE d.s / d.n
+       END,
+       d.n, d.s, d.q,
+       d.day || ' 00:00:00',
+       to_char(d.day::date + 1, 'YYYY-MM-DD') || ' 00:00:00'
+FROM (
+    SELECT host_id, metric, substr(period_start, 1, 10) AS day,
+           SUM(sample_count) AS n, SUM(sum_value) AS s, SUM(sum_sq) AS q
+    FROM sla_metrics
+    WHERE time_window = 'hourly' AND period_start >= ? AND period_start < ?
+    GROUP BY host_id, metric, substr(period_start, 1, 10)
+) d
+WHERE d.n > 0
+ON CONFLICT (host_id, metric, time_window, period_start) DO NOTHING
+"""
+
+
+async def rollup_sla_metrics(now: datetime | None = None) -> dict:
+    """Write the SLA rollups for every completed hour and day not rolled up
+    yet. Idempotent: a (host, metric, window, period_start) is never written
+    twice. The first pass rolls up every raw poll still retained."""
+    current = _sla_now(now)
+    hour_end = current.replace(minute=0, second=0, microsecond=0)
+    day_end = current.replace(hour=0, minute=0, second=0, microsecond=0)
+    db = await _dbcore.get_db()
+    try:
+        mark = await _sla_watermark(db, "hourly")
+        hourly_from = _sla_ts(min(_sla_parse_ts(mark) - _SLA_HOURLY_LOOKBACK, hour_end)) if mark else ""
+        cursor = await db.execute(_SLA_HOURLY_ROLLUP_SQL, (hourly_from, _sla_ts(hour_end)))
+        hourly = cursor.rowcount
+
+        mark = await _sla_watermark(db, "daily")
+        daily_from = _sla_ts(min(_sla_parse_ts(mark) - _SLA_DAILY_LOOKBACK, day_end)) if mark else ""
+        cursor = await db.execute(_SLA_DAILY_ROLLUP_SQL, (daily_from, _sla_ts(day_end)))
+        daily = cursor.rowcount
+        await db.commit()
+    finally:
+        await db.close()
+    return {"hourly_rows": hourly, "daily_rows": daily}
+
+
 async def delete_old_sla_metrics(retention_days: int) -> int:
+    """Drop SLA rollups (and SLA status history) older than ``retention_days``.
+    Returns the number of rollup rows deleted."""
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
             "DELETE FROM sla_metrics WHERE period_start < datetime('now', '-' || ? || ' days')",
             (retention_days,),
         )
+        deleted = cursor.rowcount
+        await db.execute(
+            "DELETE FROM sla_target_status_history WHERE evaluated_at < datetime('now', '-' || ? || ' days')",
+            (retention_days,),
+        )
         await db.commit()
-        return cursor.rowcount
+        return deleted
+    finally:
+        await db.close()
+
+
+# ── SLA Target Evaluation ────────────────────────────────────────────────────
+
+
+async def get_sla_target_hosts(host_id: int | None = None, group_id: int | None = None) -> list[dict]:
+    """The hosts a target scoped to ``host_id`` / ``group_id`` applies to: the
+    host, every host of the group and of its sub-groups, or (neither set)
+    every host."""
+    if host_id is not None:
+        where, params = "h.id = ?", (host_id,)
+    elif group_id is not None:
+        where, params = f"h.group_id IN {_GROUP_SUBTREE_SQL}", (group_id,)
+    else:
+        where, params = "1=1", ()
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(
+            f"SELECT h.id AS host_id, h.hostname, h.group_id FROM hosts h WHERE {where} ORDER BY h.hostname",
+            params,
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+_SLA_STATUS_COLUMNS = (
+    "target_id",
+    "host_id",
+    "metric",
+    "value",
+    "target_value",
+    "warning_value",
+    "status",
+    "sample_count",
+    "window_days",
+    "window_start",
+    "window_end",
+)
+
+
+async def record_sla_target_statuses(results: list[dict], evaluated_at: str) -> list[dict]:
+    """Store one evaluation pass: upsert the latest status of every
+    (target, host), append a history row where the status changed (or was
+    never recorded), and drop the latest-status rows this pass did not
+    evaluate (a disabled or deleted target, a host that left the group).
+
+    Returns ``results`` with ``previous_status`` ('' when new) on each."""
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute("SELECT target_id, host_id, status, status_since FROM sla_target_status")
+        previous = {(int(r["target_id"]), int(r["host_id"])): r for r in rows_to_list(await cursor.fetchall())}
+        upserts = []
+        history = []
+        out = []
+        for res in results:
+            prev = previous.get((int(res["target_id"]), int(res["host_id"])))
+            prev_status = prev["status"] if prev else ""
+            changed = prev_status != res["status"]
+            since = evaluated_at if changed or not prev or not prev["status_since"] else prev["status_since"]
+            upserts.append((*(res[c] for c in _SLA_STATUS_COLUMNS), evaluated_at, since))
+            if changed:
+                history.append(
+                    (
+                        res["target_id"],
+                        res["host_id"],
+                        res["metric"],
+                        res["value"],
+                        res["status"],
+                        prev_status,
+                        res["window_start"],
+                        res["window_end"],
+                        evaluated_at,
+                    )
+                )
+            out.append({**res, "previous_status": prev_status, "status_since": since})
+        if upserts:
+            await db.executemany(
+                f"""INSERT INTO sla_target_status
+                    ({", ".join(_SLA_STATUS_COLUMNS)}, evaluated_at, status_since)
+                    VALUES ({", ".join("?" for _ in range(len(_SLA_STATUS_COLUMNS) + 2))})
+                    ON CONFLICT (target_id, host_id) DO UPDATE SET
+                        metric = excluded.metric,
+                        value = excluded.value,
+                        target_value = excluded.target_value,
+                        warning_value = excluded.warning_value,
+                        status = excluded.status,
+                        sample_count = excluded.sample_count,
+                        window_days = excluded.window_days,
+                        window_start = excluded.window_start,
+                        window_end = excluded.window_end,
+                        evaluated_at = excluded.evaluated_at,
+                        status_since = excluded.status_since""",
+                upserts,
+            )
+        if history:
+            await db.executemany(
+                """INSERT INTO sla_target_status_history
+                   (target_id, host_id, metric, value, status, previous_status,
+                    window_start, window_end, evaluated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                history,
+            )
+        current = {(int(res["target_id"]), int(res["host_id"])) for res in results}
+        stale = [key for key in previous if key not in current]
+        if stale:
+            await db.executemany("DELETE FROM sla_target_status WHERE target_id = ? AND host_id = ?", stale)
+        await db.commit()
+    finally:
+        await db.close()
+    return out
+
+
+async def get_sla_compliance(
+    group_id: int | None = None,
+    host_id: int | None = None,
+    target_id: int | None = None,
+) -> list[dict]:
+    """Latest evaluation of every (target, host). ``group_id`` keeps the hosts
+    of the group and of its sub-groups."""
+    where = ["1=1"]
+    params: list = []
+    if group_id is not None:
+        where.append(f"h.group_id IN {_GROUP_SUBTREE_SQL}")
+        params.append(group_id)
+    if host_id is not None:
+        where.append("s.host_id = ?")
+        params.append(host_id)
+    if target_id is not None:
+        where.append("s.target_id = ?")
+        params.append(target_id)
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(
+            f"""SELECT s.*, t.name AS target_name,
+                       h.hostname, h.ip_address, h.group_id
+                FROM sla_target_status s
+                JOIN sla_targets t ON t.id = s.target_id
+                JOIN hosts h ON h.id = s.host_id
+                WHERE {" AND ".join(where)}
+                ORDER BY h.hostname, t.name""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_sla_compliance_history(
+    target_id: int | None = None,
+    host_id: int | None = None,
+    limit: int = 100,
+) -> list[dict]:
+    """Status changes of SLA targets, newest first."""
+    where = ["1=1"]
+    params: list = []
+    if target_id is not None:
+        where.append("x.target_id = ?")
+        params.append(target_id)
+    if host_id is not None:
+        where.append("x.host_id = ?")
+        params.append(host_id)
+    params.append(limit)
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(
+            f"""SELECT x.*, t.name AS target_name, h.hostname
+                FROM sla_target_status_history x
+                JOIN sla_targets t ON t.id = x.target_id
+                JOIN hosts h ON h.id = x.host_id
+                WHERE {" AND ".join(where)}
+                ORDER BY x.id DESC
+                LIMIT ?""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()

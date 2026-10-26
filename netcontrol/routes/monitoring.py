@@ -9,7 +9,7 @@ import asyncio
 import json
 import random
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -954,7 +954,11 @@ async def _run_retention_cleanup_throttled() -> None:
         await db.delete_old_monitoring_alerts(retention_days)
         await db.delete_old_route_snapshots(retention_days)
         await db.delete_expired_suppressions()
+        await db.delete_old_sla_metrics(
+            int(state.MONITORING_CONFIG.get("sla_retention_days", state.MONITORING_DEFAULTS["sla_retention_days"]))
+        )
         await metrics_retention_cleanup()
+        await db.purge_topology_availability(retention_days)
     except Exception as exc:
         LOGGER.warning("monitoring: retention cleanup failed: %s", redact_value(_exc_text(exc)))
 
@@ -1201,6 +1205,199 @@ async def _alert_escalation_loop() -> None:
         except Exception as exc:
             LOGGER.warning("alert escalation loop failure: %s", redact_value(str(exc)))
             await asyncio.sleep(60)
+
+
+# ── SLA rollups and target evaluation ───────────────────────────────────────
+
+# The summary value each SLA metric is compared on, and how it is printed.
+_SLA_VALUE_KEYS = {
+    "uptime": "uptime_pct",
+    "latency": "avg_latency_ms",
+    "jitter": "jitter_ms",
+    "packet_loss": "avg_packet_loss_pct",
+}
+_SLA_METRIC_LABELS = {
+    "uptime": ("Uptime", "%"),
+    "latency": ("Latency", " ms"),
+    "jitter": ("Jitter", " ms"),
+    "packet_loss": ("Packet loss", "%"),
+}
+_SLA_WINDOW_DAYS_MAX = 365
+# First SLA pass after startup: soon, so a restart does not push the rollups
+# back by a whole interval, but after the first poll cycles have settled.
+_SLA_STARTUP_DELAY_SECONDS = 120
+
+
+def classify_sla_value(metric: str, value: float | None, target_value: float, warning_value: float) -> str:
+    """``met`` / ``warn`` / ``breach`` (``no_data`` without a value). Uptime is
+    higher-is-better; latency, jitter and packet loss are lower-is-better."""
+    if value is None:
+        return "no_data"
+    if metric == "uptime":
+        if value >= target_value:
+            return "met"
+        return "warn" if value >= warning_value else "breach"
+    if value <= target_value:
+        return "met"
+    return "warn" if value <= warning_value else "breach"
+
+
+def _sla_alert_message(target: dict, status: str, value: float, window_days: int) -> str:
+    label, unit = _SLA_METRIC_LABELS.get(target["metric"], (target["metric"], ""))
+    state_text = "breached" if status == "breach" else "at warning level"
+    return (
+        f"SLA target '{target['name']}' {state_text}: {label} {value:g}{unit} over the last "
+        f"{window_days} days (target {target['target_value']:g}{unit}, "
+        f"warning {target['warning_value']:g}{unit})"
+    )
+
+
+async def _raise_sla_alert(target: dict, host: dict, status: str, value: float, window_days: int) -> int:
+    """Open (or bump) the SLA alert of one (target, host). Severity is
+    ``warning`` for warn and ``critical`` for breach; an open warning alert
+    that turns into a breach is escalated to critical."""
+    severity = "critical" if status == "breach" else "warning"
+    threshold = target["warning_value"] if status == "breach" else target["target_value"]
+    alert_id = await db.create_monitoring_alert(
+        host_id=host["host_id"],
+        poll_id=None,
+        alert_type="sla_breach",
+        metric=f"sla_{target['metric']}",
+        message=_sla_alert_message(target, status, value, window_days),
+        severity=severity,
+        value=value,
+        threshold=threshold,
+        dedup_key=f"sla:{target['id']}:{host['host_id']}",
+        hostname=host.get("hostname") or "",
+    )
+    if severity == "critical":
+        existing = await db.get_monitoring_alert(alert_id)
+        if existing and existing.get("severity") == "warning":
+            await db.escalate_alert(alert_id, "critical")
+    return alert_id
+
+
+def _sla_sample_count(metric: str, values: dict | None) -> int:
+    if values is None:
+        return 0
+    if metric == "uptime":
+        return int(values["total_polls"])
+    if metric == "packet_loss":
+        return int(values["packet_loss_samples"])
+    return int(values["latency_samples"])
+
+
+async def evaluate_sla_targets(now: datetime | None = None) -> dict:
+    """Evaluate every enabled SLA target for every host it applies to, store
+    the result (latest status + history of changes) and open an alert for
+    each warn/breach that no active suppression covers."""
+    targets = [t for t in await db.get_sla_targets() if t.get("enabled")]
+    evaluated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+    suppressions = await db.get_active_alert_suppressions()
+    metrics_by_window: dict[int, dict] = {}
+    results: list[dict] = []
+    alerts: list[tuple[dict, dict, str, float, int]] = []
+    suppressed = 0
+    for target in targets:
+        metric = target.get("metric")
+        if metric not in _SLA_VALUE_KEYS:
+            continue
+        window_days = max(1, min(_SLA_WINDOW_DAYS_MAX, int(target.get("window_days") or 30)))
+        if window_days not in metrics_by_window:
+            metrics_by_window[window_days] = await db.get_sla_host_metrics(window_days, now=now)
+        window = metrics_by_window[window_days]
+        hosts = await db.get_sla_target_hosts(host_id=target.get("host_id"), group_id=target.get("group_id"))
+        for host in hosts:
+            values = window["hosts"].get(int(host["host_id"]))
+            value = values.get(_SLA_VALUE_KEYS[metric]) if values else None
+            status = classify_sla_value(metric, value, float(target["target_value"]), float(target["warning_value"]))
+            results.append(
+                {
+                    "target_id": target["id"],
+                    "host_id": host["host_id"],
+                    "metric": metric,
+                    "value": value,
+                    "target_value": target["target_value"],
+                    "warning_value": target["warning_value"],
+                    "status": status,
+                    "sample_count": _sla_sample_count(metric, values),
+                    "window_days": window_days,
+                    "window_start": window["window_start"],
+                    "window_end": window["window_end"],
+                }
+            )
+            if status in ("warn", "breach") and value is not None:
+                if _suppression_active_local(suppressions, host["host_id"], f"sla_{metric}", host.get("group_id")):
+                    suppressed += 1
+                    continue
+                alerts.append((target, host, status, value, window_days))
+
+    await db.record_sla_target_statuses(results, evaluated_at)
+
+    alerts_raised = 0
+    for target, host, status, value, window_days in alerts:
+        try:
+            await _raise_sla_alert(target, host, status, value, window_days)
+            alerts_raised += 1
+        except Exception as exc:
+            LOGGER.warning(
+                "sla: alert for target %s host %s failed: %s",
+                target["id"],
+                host["host_id"],
+                redact_value(_exc_text(exc)),
+            )
+
+    counts = {"met": 0, "warn": 0, "breach": 0, "no_data": 0}
+    for res in results:
+        counts[res["status"]] += 1
+    return {
+        "targets": len(targets),
+        "evaluated": len(results),
+        **counts,
+        "alerts": alerts_raised,
+        "suppressed": suppressed,
+        "evaluated_at": evaluated_at,
+    }
+
+
+async def run_sla_cycle(now: datetime | None = None) -> dict:
+    """One SLA pass: roll up the completed hours and days, then evaluate."""
+    rollups = await db.rollup_sla_metrics(now)
+    evaluation = await evaluate_sla_targets(now)
+    LOGGER.info(
+        "sla: rollup %d hourly / %d daily rows; %d evaluations (%d met, %d warn, %d breach, %d no data), %d alerts",
+        rollups["hourly_rows"],
+        rollups["daily_rows"],
+        evaluation["evaluated"],
+        evaluation["met"],
+        evaluation["warn"],
+        evaluation["breach"],
+        evaluation["no_data"],
+        evaluation["alerts"],
+    )
+    return {"rollups": rollups, "evaluation": evaluation}
+
+
+async def _sla_rollup_loop() -> None:
+    """Background loop: SLA rollups + target evaluation every
+    ``sla_rollup_interval_seconds`` while monitoring is enabled."""
+    delay: float = _SLA_STARTUP_DELAY_SECONDS
+    while True:
+        try:
+            await asyncio.sleep(delay)
+            interval = int(
+                state.MONITORING_CONFIG.get(
+                    "sla_rollup_interval_seconds", state.MONITORING_DEFAULTS["sla_rollup_interval_seconds"]
+                )
+            )
+            delay = interval + random.uniform(0, max(1.0, interval * 0.05))
+            if state.MONITORING_CONFIG.get("enabled"):
+                await run_sla_cycle()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning("sla rollup loop failure: %s", redact_value(_exc_text(exc)))
+            delay = 300
 
 
 # ── Monitoring Routes ─────────────────────────────────────────────────────────
@@ -1453,6 +1650,26 @@ async def admin_run_monitoring_now(request: Request):
     return result
 
 
+@admin_router.post("/api/sla/evaluate")
+async def admin_evaluate_sla(request: Request):
+    """Run an SLA pass now: roll up the completed hours and days, then
+    evaluate every enabled target (whether or not monitoring is enabled)."""
+    result = await run_sla_cycle()
+    session = _get_session(request)
+    evaluation = result["evaluation"]
+    await _audit(
+        "sla",
+        "targets.evaluated",
+        user=session["user"] if session else "",
+        detail=(
+            f"evaluated={evaluation['evaluated']} met={evaluation['met']} warn={evaluation['warn']} "
+            f"breach={evaluation['breach']} alerts={evaluation['alerts']}"
+        ),
+        correlation_id=_corr_id(request),
+    )
+    return result
+
+
 # ── Alert Rules CRUD ─────────────────────────────────────────────────────────
 
 
@@ -1651,6 +1868,27 @@ async def sla_summary(
     return await db.get_sla_summary(group_id, days)
 
 
+@router.get("/api/sla/compliance")
+async def sla_compliance(
+    group_id: int | None = Query(default=None),
+    host_id: int | None = Query(default=None),
+    target_id: int | None = Query(default=None),
+):
+    """Latest server-side evaluation of every SLA target for every host it
+    applies to (``group_id`` includes the group's sub-groups)."""
+    return await db.get_sla_compliance(group_id=group_id, host_id=host_id, target_id=target_id)
+
+
+@router.get("/api/sla/compliance/history")
+async def sla_compliance_history(
+    target_id: int | None = Query(default=None),
+    host_id: int | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+):
+    """SLA status changes, newest first."""
+    return await db.get_sla_compliance_history(target_id=target_id, host_id=host_id, limit=limit)
+
+
 @router.get("/api/sla/host/{host_id}")
 async def sla_host_detail(host_id: int, days: int = Query(default=30, ge=1, le=365)):
     return await db.get_sla_host_detail(host_id, days)
@@ -1664,25 +1902,49 @@ async def sla_targets_list(
     return await db.get_sla_targets(host_id, group_id)
 
 
+def _validate_sla_target_fields(body: dict) -> dict:
+    """Validated ``metric`` / ``window_days`` / threshold fields present in
+    ``body`` (HTTP 400 for a bad value)."""
+    out: dict = {}
+    if "metric" in body:
+        if body["metric"] not in _SLA_VALUE_KEYS:
+            raise HTTPException(status_code=400, detail=f"metric must be one of: {', '.join(_SLA_VALUE_KEYS)}")
+        out["metric"] = body["metric"]
+    for key in ("target_value", "warning_value"):
+        if key in body:
+            try:
+                out[key] = float(body[key])
+            except ValueError, TypeError:
+                raise HTTPException(status_code=400, detail="target_value and warning_value must be valid numbers")
+    if "window_days" in body and body["window_days"] is not None:
+        try:
+            window_days = int(body["window_days"])
+        except ValueError, TypeError:
+            window_days = 0
+        if not 1 <= window_days <= _SLA_WINDOW_DAYS_MAX:
+            raise HTTPException(
+                status_code=400, detail=f"window_days must be a whole number from 1 to {_SLA_WINDOW_DAYS_MAX}"
+            )
+        out["window_days"] = window_days
+    return out
+
+
 @router.post("/api/sla/targets", status_code=201)
 async def sla_target_create(body: dict, request: Request):
     session = _get_session(request)
     user = session["user"] if session else ""
     if not body.get("name") or not body.get("metric"):
         raise HTTPException(status_code=400, detail="name and metric required")
-    try:
-        target_value = float(body.get("target_value", 99.9))
-        warning_value = float(body.get("warning_value", 99.0))
-    except ValueError, TypeError:
-        raise HTTPException(status_code=400, detail="target_value and warning_value must be valid numbers")
+    fields = _validate_sla_target_fields({"target_value": 99.9, "warning_value": 99.0, "window_days": 30, **body})
     target_id = await db.create_sla_target(
         name=body["name"],
-        metric=body["metric"],
-        target_value=target_value,
-        warning_value=warning_value,
+        metric=fields["metric"],
+        target_value=fields["target_value"],
+        warning_value=fields["warning_value"],
         host_id=body.get("host_id"),
         group_id=body.get("group_id"),
         created_by=user,
+        window_days=fields["window_days"],
     )
     await _audit(
         "sla",
@@ -1699,7 +1961,7 @@ async def sla_target_update(target_id: int, body: dict, request: Request):
     target = await db.get_sla_target(target_id)
     if not target:
         raise HTTPException(status_code=404, detail="Target not found")
-    await db.update_sla_target(target_id, **body)
+    await db.update_sla_target(target_id, **{**body, **_validate_sla_target_fields(body)})
     session = _get_session(request)
     await _audit(
         "sla",
@@ -1769,6 +2031,64 @@ async def availability_outages_api(
         "outages": await db.get_outage_history(
             host_id=host_id,
             group_id=group_id,
+            days=days,
+            limit=limit,
+        )
+    }
+
+
+_TOPOLOGY_PROVIDER_RE = r"^(meraki|cato|fmc|panorama|appgate|aws|azure|gcp)$"
+_TOPOLOGY_ENTITY_RE = r"^(device|site|uplink|tunnel|vpn_connection|circuit|peering|link)$"
+
+
+@router.get("/api/availability/topology/summary")
+async def topology_availability_summary_api(
+    provider: str | None = Query(default=None, pattern=_TOPOLOGY_PROVIDER_RE),
+    org_ref: int | None = Query(default=None),
+    entity_type: str | None = Query(default=None, pattern=_TOPOLOGY_ENTITY_RE),
+    days: int = Query(default=30, ge=1, le=365),
+):
+    """Uptime of the devices, sites, uplinks, tunnels, VPN connections,
+    circuits, peerings and links that integrations collect."""
+    return await db.get_topology_availability_summary(provider, org_ref, entity_type, days)
+
+
+@router.get("/api/availability/topology/transitions")
+async def topology_availability_transitions_api(
+    provider: str | None = Query(default=None, pattern=_TOPOLOGY_PROVIDER_RE),
+    org_ref: int | None = Query(default=None),
+    entity_type: str | None = Query(default=None, pattern=_TOPOLOGY_ENTITY_RE),
+    entity_id: str | None = Query(default=None, max_length=500),
+    days: int = Query(default=30, ge=1, le=365),
+    limit: int = Query(default=500, ge=1, le=10000),
+):
+    return {
+        "transitions": await db.get_topology_transitions(
+            provider=provider,
+            org_ref=org_ref,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            days=days,
+            limit=limit,
+        )
+    }
+
+
+@router.get("/api/availability/topology/outages")
+async def topology_availability_outages_api(
+    provider: str | None = Query(default=None, pattern=_TOPOLOGY_PROVIDER_RE),
+    org_ref: int | None = Query(default=None),
+    entity_type: str | None = Query(default=None, pattern=_TOPOLOGY_ENTITY_RE),
+    entity_id: str | None = Query(default=None, max_length=500),
+    days: int = Query(default=30, ge=1, le=365),
+    limit: int = Query(default=200, ge=1, le=10000),
+):
+    return {
+        "outages": await db.get_topology_outages(
+            provider=provider,
+            org_ref=org_ref,
+            entity_type=entity_type,
+            entity_id=entity_id,
             days=days,
             limit=limit,
         )

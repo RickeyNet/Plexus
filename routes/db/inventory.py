@@ -290,6 +290,22 @@ async def _group_chain(db, group_id: int) -> list[dict]:
     return rows_to_list(await cursor.fetchall())
 
 
+# SQL subquery: the ids of a group and of all of its sub-groups, bound to one
+# ``?`` (the group id). Walks ``inventory_groups.parent_id`` down from the
+# group (``_group_chain`` walks up), depth-guarded the same way. Shared by
+# every module that scopes something to "a group and everything under it"
+# (SLA targets, ...); embed it as ``... IN {GROUP_SUBTREE_SQL}``.
+GROUP_SUBTREE_SQL = f"""(
+    WITH RECURSIVE sub (id, lvl) AS (
+        SELECT id, 0 FROM inventory_groups WHERE id = ?
+        UNION ALL
+        SELECT g.id, s.lvl + 1 FROM inventory_groups g JOIN sub s ON g.parent_id = s.id
+        WHERE s.lvl < {_MAX_GROUP_DEPTH}
+    )
+    SELECT id FROM sub
+)"""
+
+
 async def _check_parent(db, group_id: int | None, parent_id: int | None) -> None:
     """Raise ``ValueError`` when ``parent_id`` is not a group, or is
     ``group_id`` itself or one of its sub-groups (a cycle)."""

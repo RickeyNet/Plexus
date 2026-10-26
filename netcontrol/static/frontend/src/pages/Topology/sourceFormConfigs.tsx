@@ -369,12 +369,46 @@ const APPGATE: SourceFormConfig = {
   ],
 };
 
+/** Scheduled collection, the same for every provider. */
+const SCHEDULE_BLOCKS: SourceFormBlock[] = [
+  { kind: 'heading', text: 'Scheduled collection' },
+  {
+    kind: 'fields',
+    fields: [
+      {
+        name: 'auto_collect',
+        label: 'Auto-collect',
+        type: 'checkbox',
+        help: 'Collect this source on a schedule, so its map and availability stay current. Off: only Collect Now collects it.',
+      },
+    ],
+  },
+  {
+    kind: 'fields',
+    maxWidth: 320,
+    fields: [
+      {
+        name: 'collect_interval_minutes',
+        label: 'Interval (minutes)',
+        type: 'number',
+        min: 0,
+        max: 1440,
+        help: '0 uses the default interval set in the Sources dialog. Otherwise 5 to 1440 minutes.',
+      },
+    ],
+  },
+];
+
+function withSchedule(config: SourceFormConfig): SourceFormConfig {
+  return { ...config, blocks: [...config.blocks, ...SCHEDULE_BLOCKS] };
+}
+
 export const SOURCE_FORM_CONFIGS: Record<CloudProvider, SourceFormConfig> = {
-  meraki: MERAKI,
-  cato: CATO,
-  fmc: FMC,
-  panorama: PANORAMA,
-  appgate: APPGATE,
+  meraki: withSchedule(MERAKI),
+  cato: withSchedule(CATO),
+  fmc: withSchedule(FMC),
+  panorama: withSchedule(PANORAMA),
+  appgate: withSchedule(APPGATE),
 };
 
 /** Every field of a form, for the required-field check. */

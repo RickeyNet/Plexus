@@ -119,6 +119,8 @@ groups, playbooks, templates and a default credential.
 - [docs/meraki-compliance.md](docs/meraki-compliance.md) - Meraki security compliance audits
 - [docs/path-trace.md](docs/path-trace.md) - Path Mode on the topology map
 - [docs/software-versions.md](docs/software-versions.md) - software versions and vulnerability alerts
+- [docs/sla-monitoring.md](docs/sla-monitoring.md) - SLA rollups, targets, evaluation and alerts
+- [docs/vendor-monitoring-coverage.md](docs/vendor-monitoring-coverage.md) - per-vendor availability, SLA and CVE coverage matrix
 - [docs/upgrade-tool-guide.md](docs/upgrade-tool-guide.md) - Cisco Catalyst IOS-XE upgrade procedure
 - [docs/network-documentation-usage.md](docs/network-documentation-usage.md) - automated network documentation reports
 - [docs/flow-collector.md](docs/flow-collector.md) - NetFlow / sFlow / IPFIX collector

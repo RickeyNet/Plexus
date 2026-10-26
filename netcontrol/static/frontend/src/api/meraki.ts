@@ -142,6 +142,12 @@ export interface MerakiOrg {
   last_build_at?: string | null;
   last_build_status?: "never" | "success" | "partial" | "failed" | string;
   last_build_message?: string | null;
+  /** Collected by the scheduler (on by default). */
+  auto_collect: boolean;
+  /** The entry's own collection interval; 0 uses the global one. */
+  collect_interval_seconds: number;
+  /** When the scheduler collects it next; null when it never will. */
+  next_collection_at: string | null;
 }
 
 export interface MerakiOrgInput {
@@ -152,6 +158,22 @@ export interface MerakiOrgInput {
   base_url: string;
   api_key?: string;
   options: OrgBuildOptions;
+  auto_collect?: boolean;
+  /** 0 uses the global interval; otherwise clamped to the schedule's bounds. */
+  collect_interval_seconds?: number;
+}
+
+/** The schedule that collects the organization sources (Meraki, Cato, FMC, Panorama, Appgate). */
+export interface SourceScheduleConfig {
+  enabled: boolean;
+  /** The default interval; an entry can set its own. */
+  interval_seconds: number;
+}
+
+export interface SourceSchedule {
+  config: SourceScheduleConfig;
+  min_interval_seconds: number;
+  max_interval_seconds: number;
 }
 
 export interface MerakiSnapshotSummary {
@@ -819,6 +841,12 @@ export interface TopologySource {
   service_credential?: boolean;
   /** Inventory source only: the service credential Settings names, the collection's default. */
   service_credential_id?: number | null;
+  /** Organization sources only: collected by the scheduler. */
+  auto_collect?: boolean;
+  /** Organization sources only: the entry's own interval; 0 uses the global one. */
+  collect_interval_seconds?: number;
+  /** Organization sources only: when the scheduler collects it next; null when it never will. */
+  next_collection_at?: string | null;
 }
 
 export function useTopologySources(enabled = true) {
@@ -830,6 +858,25 @@ export function useTopologySources(enabled = true) {
     // Collections are background jobs with no push channel.
     refetchInterval: (query) =>
       query.state.data?.sources.some((s) => s.collecting) ? 4000 : false,
+  });
+}
+
+/** The collection schedule of the organization sources (administrators only). */
+export function useSourceSchedule(enabled: boolean) {
+  return useQuery({
+    queryKey: ["meraki", "schedule"],
+    queryFn: () => apiRequest<SourceSchedule>("/sources/schedule"),
+    enabled,
+  });
+}
+
+export function useUpdateSourceSchedule() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Partial<SourceScheduleConfig>) =>
+      apiRequest<SourceSchedule>("/sources/schedule", { method: "PUT", body }),
+    // Every entry's next collection moves with the schedule.
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["meraki"] }),
   });
 }
 

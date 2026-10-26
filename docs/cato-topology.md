@@ -28,8 +28,9 @@ different.
    account and reports what Cato answered.
 5. **Collect.** Click **Collect Now**. When it finishes the map updates.
 
-Collection runs when you click **Collect Now**; it is not scheduled. The map
-shows the most recent collection until you run another.
+Collection runs when you click **Collect Now**, and on a schedule (hourly by
+default) as described in [Scheduled collection](meraki-topology.md#scheduled-collection).
+The map shows the most recent collection until you run another.
 
 ### Account ID and API key
 
@@ -217,6 +218,10 @@ account's managed networks, the network each user's device is on, and hosts
 behind a site are not collected. Cato's API has no route table: the routes
 are built from the site ranges, the BGP peers, the connected users and the
 Split Tunnel policy.
+
+## Availability tracking
+
+Each collection also records the state of what it reports, shown under **Monitoring > Availability > Integrations and cloud** with uptime, outages and alerts: Sockets and IPsec sites (devices), sites (from their connectivity status: connected is up, degraded is degraded, disconnected is down), Socket WAN uplinks and the Socket and IPsec site tunnels. Remote users, PoPs and the Cato Cloud are left out. The state mapping, alerting and retention are described in [Meraki in the Topology Map](meraki-topology.md#availability-tracking).
 
 ## API reference
 

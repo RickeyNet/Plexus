@@ -231,6 +231,11 @@ MONITORING_DEFAULTS = {
     # Retention cleanup (DELETE of aged polls/alerts/snapshots) is a full-table
     # scan; run it at most this often rather than every poll cycle.
     "retention_interval_seconds": 3600,
+    # SLA rollups: how often completed hours/days of polls are rolled up into
+    # sla_metrics and every enabled SLA target is evaluated, and how long the
+    # rollups are kept (longer than the 365-day SLA window the API accepts).
+    "sla_rollup_interval_seconds": 3600,
+    "sla_retention_days": 400,
 }
 MONITORING_MIN_INTERVAL = 60
 MONITORING_MAX_INTERVAL = 86400
@@ -565,6 +570,21 @@ CLOUD_DISCOVERY_SYNC_MIN_INTERVAL = 300
 CLOUD_DISCOVERY_SYNC_MAX_INTERVAL = 86400
 
 CLOUD_DISCOVERY_SYNC_CONFIG: dict = dict(CLOUD_DISCOVERY_SYNC_DEFAULTS)
+
+# Scheduled collection of the integration sources (Meraki organizations, Cato
+# accounts, Cisco FMCs, Palo Alto Panoramas, Appgate SDP collectives): without
+# it a source is only collected when someone clicks Collect, and its map and
+# availability go stale. ``interval_seconds`` is the default interval; a source
+# can override it (``meraki_orgs.collect_interval_seconds``).
+SOURCE_COLLECTION_SYNC_DEFAULTS = {
+    "enabled": True,
+    "interval_seconds": 3600,  # hourly
+}
+
+SOURCE_COLLECTION_SYNC_MIN_INTERVAL = 300
+SOURCE_COLLECTION_SYNC_MAX_INTERVAL = 86400
+
+SOURCE_COLLECTION_SYNC_CONFIG: dict = dict(SOURCE_COLLECTION_SYNC_DEFAULTS)
 
 IPAM_SYNC_DEFAULTS = {
     "enabled": True,
@@ -980,6 +1000,10 @@ def _sanitize_monitoring_config(data: dict | None) -> dict:
         cfg["default_cooldown_minutes"] = max(
             1, min(1440, int(data.get("default_cooldown_minutes", cfg["default_cooldown_minutes"])))
         )
+        cfg["sla_rollup_interval_seconds"] = max(
+            300, min(86400, int(data.get("sla_rollup_interval_seconds", cfg["sla_rollup_interval_seconds"])))
+        )
+        cfg["sla_retention_days"] = max(30, min(3650, int(data.get("sla_retention_days", cfg["sla_retention_days"]))))
     return cfg
 
 
@@ -1041,15 +1065,40 @@ def _sanitize_cloud_traffic_metric_sync_config(data: dict | None) -> dict:
     return cfg
 
 
-def _sanitize_cloud_discovery_sync_config(data: dict | None) -> dict:
-    cfg = dict(CLOUD_DISCOVERY_SYNC_DEFAULTS)
+def _sanitize_interval_sync_config(data: dict | None, defaults: dict, minimum: int, maximum: int) -> dict:
+    """An ``{enabled, interval_seconds}`` schedule with the interval clamped."""
+    cfg = dict(defaults)
     if isinstance(data, dict):
         cfg["enabled"] = bool(data.get("enabled", cfg["enabled"]))
-        cfg["interval_seconds"] = max(
-            CLOUD_DISCOVERY_SYNC_MIN_INTERVAL,
-            min(CLOUD_DISCOVERY_SYNC_MAX_INTERVAL, int(data.get("interval_seconds", cfg["interval_seconds"]))),
+        cfg["interval_seconds"] = clamp_interval(
+            data.get("interval_seconds", cfg["interval_seconds"]), minimum, maximum, cfg["interval_seconds"]
         )
     return cfg
+
+
+def clamp_interval(value: int | float | str | None, minimum: int, maximum: int, default: int) -> int:
+    """``value`` as whole seconds within ``[minimum, maximum]``; ``default``
+    when it is not a number."""
+    try:
+        seconds = int(value if value is not None else default)
+    except TypeError, ValueError:
+        seconds = default
+    return max(minimum, min(maximum, seconds))
+
+
+def _sanitize_cloud_discovery_sync_config(data: dict | None) -> dict:
+    return _sanitize_interval_sync_config(
+        data, CLOUD_DISCOVERY_SYNC_DEFAULTS, CLOUD_DISCOVERY_SYNC_MIN_INTERVAL, CLOUD_DISCOVERY_SYNC_MAX_INTERVAL
+    )
+
+
+def _sanitize_source_collection_sync_config(data: dict | None) -> dict:
+    return _sanitize_interval_sync_config(
+        data,
+        SOURCE_COLLECTION_SYNC_DEFAULTS,
+        SOURCE_COLLECTION_SYNC_MIN_INTERVAL,
+        SOURCE_COLLECTION_SYNC_MAX_INTERVAL,
+    )
 
 
 def _sanitize_cloud_sync_status(data: dict | None) -> dict:

@@ -31,8 +31,9 @@ different.
    answered (`Login OK: Appgate SDP peer v22, 3 sites, 8 appliances`).
 5. **Collect.** Click **Collect Now**. When it finishes the map updates.
 
-Collection runs when you click **Collect Now**; it is not scheduled. The map
-shows the most recent collection until you run another.
+Collection runs when you click **Collect Now**, and on a schedule (hourly by
+default) as described in [Scheduled collection](meraki-topology.md#scheduled-collection).
+The map shows the most recent collection until you run another.
 
 ### Credentials
 
@@ -195,6 +196,10 @@ of a site's cloud resolvers and the bind passwords, shared secrets, client
 secrets and keys of identity providers are dropped before the snapshot is
 saved. The users' traffic, the claims of their devices beyond what
 `session-info` reports, and hosts behind a site are not collected.
+
+## Availability tracking
+
+Each collection also records the state of what it reports, shown under **Monitoring > Availability > Integrations and cloud** with uptime, outages and alerts: Controllers, Gateways and the other appliances (healthy is up, warning or busy is degraded, error or offline is down), sites (unhealthy or no active Gateway is down) and appliance peer links. Connected users and the collective node are left out. The state mapping, alerting and retention are described in [Meraki in the Topology Map](meraki-topology.md#availability-tracking).
 
 ## API reference
 
