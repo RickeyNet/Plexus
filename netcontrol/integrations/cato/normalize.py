@@ -44,18 +44,37 @@ PoP); the tracer applies an account-wide rule set at the first of them a
 flow meets and says it was already applied at the rest. Sockets carry
 none: a flow between two LANs of one site is not subject to the WAN
 firewall. Rule objects Plexus can turn into addresses (sites, ranges,
-connected users) are resolved; the rest (groups, applications, categories,
-countries...) is kept in the rule's ``unresolved`` list, so a flow such a
-rule may cover is reported as unknown. A policy that was not collected is a
-note on the PoPs and the Cloud instead.
+connected users, global IP ranges, and the groups and users groups whose
+members were read in full and are all such objects) are resolved; the rest
+(hosts, applications, categories, countries, FQDN containers...) is kept in
+the rule's ``unresolved`` list, so a flow such a rule may cover is reported
+as unknown. A rule whose source or destination names only objects with no
+address (a users group none of whose members is connected) matches no flow.
+A policy that was not collected is a note on the PoPs and the Cloud instead.
+
+Every other policy Cato's API has (WAN network, Socket LAN, TLS inspection,
+client connectivity, IP allocation... ``collector.POLICIES``) is listed, not
+applied: a table on the Cato Cloud, the rules of the site-scoped ones on the
+Sockets of the sites they name, and the rules of the user-scoped ones that
+name a remote user (by name or by users group) on that user. None of them
+adds a route, a rule or a note to the forwarding data.
 
 The Split Tunnel policy decides, per remote user, which traffic the Cato
 Client sends into the tunnel and which leaves the device directly (out of
-``DIRECT_INTERFACE``, the device's own network, which is not collected). The
-first enabled rule that matches the user applies: by user, OS, country and
-source network; no match is all traffic to Cato. A rule that only may match
-(it names users groups, managed networks, or an OS or country Cato did not
-report) ahead of any that does leaves the choice undetermined. "Route all
+``DIRECT_INTERFACE``, the device's own network, which is not collected; the
+interface carries the public address the Client connects from as its
+``behind_ip`` when that address is a public one, so the trace can follow the
+traffic to the device on the map that answers on it). The
+first enabled rule that matches the user applies: by user (or users group,
+when its members were read in full), OS, country and source network; no
+match is all traffic to Cato. A rule that only may match (it names users
+groups whose members were not read, managed networks, or an OS or country
+Cato did not report) ahead of any that does leaves the choice undetermined,
+unless the Client's report for the user's current device settles it
+(``client_reports``): "Disabled" is all traffic to Cato, and "Admin
+Defined" or "User Defined" decides the rule when only one rule that may
+apply has that mode. A report never overrides a rule decided from the
+configuration; one that disagrees is a plain note. "Route all
 to Cato except" keeps the default route into the PoP and sends the
 exceptions' global IP ranges out directly; "route only selected" sends
 those ranges to the PoP and the default route out directly. What routes
@@ -70,9 +89,14 @@ from __future__ import annotations
 
 import copy
 import ipaddress
+import re
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from typing import Any
 
+from netcontrol.integrations.cato.client_reports import NOT_COLLECTED, ClientReports, describe
+from netcontrol.integrations.cato.collector import POLICIES, POLICY_LISTS, PolicySpec
+from netcontrol.integrations.cato.site_config import account_config_sections, site_config_sections
 from netcontrol.integrations.meraki.forwarding import (
     ANY,
     canonical,
@@ -147,6 +171,11 @@ def _place(info: Any) -> list[Any]:
 
 
 USER_COLUMNS = ["User", "Email", "Device", "VPN IP", "Public IP", "Location", "ISP", "Uptime (s)"]
+
+
+def _public_ip(user: dict) -> str:
+    """The address the user's Cato Client connects from, as Cato sees it."""
+    return _text(user.get("remoteIP")) or _text(_obj(user.get("remoteIPInfo")).get("ip"))
 
 
 def _user_row(user: dict) -> list[Any]:
@@ -234,9 +263,30 @@ def _bgp_row(peer: dict) -> list[Any]:
 # Rule objects that stand for addresses Plexus may know, by the field of a
 # rule's source or destination that names them. ``AddressBook`` maps each
 # to ``{object id or lower-cased name: CIDRs}``; ``None`` marks a name that
-# several objects share.
+# several objects share. Only a group or users group can have no CIDRs (``[]``:
+# its members were read and none has an address now).
 AddressBook = dict[str, dict[str, list[str] | None]]
-_RESOLVABLE = ("site", "siteNetworkSubnet", "networkInterface", "floatingSubnet", "user", "globalIpRange")
+_RESOLVABLE = (
+    "site",
+    "siteNetworkSubnet",
+    "networkInterface",
+    "floatingSubnet",
+    "user",
+    "globalIpRange",
+    "group",
+    "usersGroup",
+    "ipAddressRangeContainer",
+)
+# A group's member types (``GroupMemberRefType``) that are book entries.
+_GROUP_MEMBER_FIELDS = {
+    "SITE": "site",
+    "SITE_NETWORK_SUBNET": "siteNetworkSubnet",
+    "NETWORK_INTERFACE": "networkInterface",
+    "FLOATING_SUBNET": "floatingSubnet",
+    "GLOBAL_IP_RANGE": "globalIpRange",
+}
+# The containers an Internet firewall destination names (``containers {}``).
+_CONTAINER_WORDS = {"ipAddressRangeContainer": "IP range container", "fqdnContainer": "FQDN container"}
 # Every object a rule can name, as the trace words it.
 _OBJECT_WORDS = {
     "site": "site",
@@ -285,12 +335,14 @@ def _ref_name(ref: Any) -> str:
 
 
 def _resolve(book: AddressBook, field: str, ref: Any) -> list[str] | None:
-    """The CIDRs of one object a rule names, by id and then by name."""
+    """The CIDRs of one object a rule names, by id and then by name;
+    ``None`` when the object is not known (or its name is shared)."""
     known = book.get(field) or {}
     ref = ref if isinstance(ref, dict) else {"name": ref}
     for key in (_text(ref.get("id")), _text(ref.get("name")).lower()):
-        if key and known.get(key):
-            return known[key]
+        found = known.get(key) if key else None
+        if found is not None:
+            return found
     return None
 
 
@@ -321,10 +373,13 @@ def _rule_addresses(endpoint: Any, book: AddressBook) -> tuple[list[str], list[s
     Cato matches a flow when any object listed matches, and an empty one is
     any address. As in ``forwarding._field``, a field Plexus cannot resolve
     in full is treated as any address with the names kept as unresolved, so
-    a flow it might cover is reported as unknown, never as allowed."""
+    a flow it might cover is reported as unknown, never as allowed. A field
+    that names only objects with no address (a group none of whose members
+    has one now) is ``([], [])``: no address at all."""
     endpoint = endpoint if isinstance(endpoint, dict) else {}
     cidrs: list[str] = []
     unresolved: list[str] = []
+    named = False
     for value in _items_of(endpoint.get("ip")) + _items_of(endpoint.get("subnet")):
         cidr = canonical(value)
         if cidr:
@@ -339,10 +394,14 @@ def _rule_addresses(endpoint: Any, book: AddressBook) -> tuple[list[str], list[s
             cidrs += [str(n) for n in ipaddress.summarize_address_range(first, last)]
         except TypeError, ValueError:
             unresolved.append(f"range {_text(span.get('from'))}-{_text(span.get('to'))}")
-    for field, word in _OBJECT_WORDS.items():
-        for ref in _items_of(endpoint.get(field)):
+    containers = _obj(endpoint.get("containers"))
+    named_objects = [(field, word, endpoint.get(field)) for field, word in _OBJECT_WORDS.items()]
+    named_objects += [(field, word, containers.get(field)) for field, word in _CONTAINER_WORDS.items()]
+    for field, word, refs in named_objects:
+        for ref in _items_of(refs):
+            named = True
             found = _resolve(book, field, ref) if field in _RESOLVABLE else None
-            if found:
+            if found is not None:
                 cidrs += found
             else:
                 unresolved.append(f"{word} {_ref_name(ref)}")
@@ -350,6 +409,8 @@ def _rule_addresses(endpoint: Any, book: AddressBook) -> tuple[list[str], list[s
         unresolved += [f"{word} {_text(v)}" for v in _items_of(endpoint.get(field))]
     if unresolved:
         return [ANY], unresolved
+    if named and not cidrs:
+        return [], []
     return list(dict.fromkeys(cidrs)) or [ANY], []
 
 
@@ -446,6 +507,9 @@ def _firewall_rules(payload: dict, book: AddressBook, *, directional: bool) -> l
         unresolved = unresolved_src + unresolved_dst + unresolved_service + _rule_context(item)
         if payload.get("reduced"):
             src, dst, unresolved = [ANY], [ANY], [*unresolved, _REDUCED]
+        elif not src or not dst:
+            # It names only objects with no address now: it matches no flow.
+            continue
         raw_action = _text(item.get("action")).upper()
         action = _ACTIONS.get(raw_action, raw_action.lower() or "unknown")
         comment = "Remote browser isolation" if raw_action == "RBI" else _text(item.get("description"))
@@ -480,6 +544,115 @@ def _firewall_policy(name: str, applies: str, payload: dict, book: AddressBook, 
         return policy_set(name, "firewall", applies, [], default="unknown")
     rules = _firewall_rules(payload, book, directional=applies == "wan_traffic")
     return policy_set(name, "firewall", applies, rules, default=default)
+
+
+# ── Groups and users groups ────────────────────────────────────────────────
+
+
+class GroupIndex:
+    """The groups (or users groups) of the account as collected, found by
+    id or by name. ``read`` is false when the list itself was not
+    collected; a group's ``members`` is ``None`` when they were not read in
+    full."""
+
+    def __init__(self, raw: Any) -> None:
+        self.read = isinstance(raw, list)
+        self._by_key: dict[str, dict | None] = {}
+        # The identities of each group's members, by the group's id(), once
+        # asked for: a users group is matched against every connected user.
+        self._keys: dict[int, set[str]] = {}
+        for group in raw if isinstance(raw, list) else []:
+            if not isinstance(group, dict):
+                continue
+            for key in (_text(group.get("id")), _text(group.get("name")).lower()):
+                if key:
+                    # A name several groups share finds none of them.
+                    self._by_key[key] = None if key in self._by_key else group
+
+    def __iter__(self) -> Iterator[dict]:
+        seen: set[int] = set()
+        for group in self._by_key.values():
+            if group is not None and id(group) not in seen:
+                seen.add(id(group))
+                yield group
+
+    def find(self, ref: Any) -> dict | None:
+        ref = ref if isinstance(ref, dict) else {"name": ref}
+        for key in (_text(ref.get("id")), _text(ref.get("name")).lower()):
+            found = self._by_key.get(key) if key else None
+            if found is not None:
+                return found
+        return None
+
+    def members(self, ref: Any) -> list[dict] | None:
+        """The members of the group ``ref`` names, or ``None`` when they are
+        not known in full (the group is not listed, or its members were not
+        read)."""
+        members = (self.find(ref) or {}).get("members")
+        return [m for m in members if isinstance(m, dict)] if isinstance(members, list) else None
+
+    def member_keys(self, ref: Any) -> set[str] | None:
+        """The identities (``_identity_keys``) of the members of the users
+        group ``ref`` names, or ``None`` when they are not known in full."""
+        group = self.find(ref)
+        if group is None:
+            return None
+        keys = self._keys.get(id(group))
+        if keys is None:
+            members = self.members(group)
+            if members is None:
+                return None
+            keys = {key for member in members for key in _identity_keys(member)}
+            self._keys[id(group)] = keys
+        return keys
+
+
+def _identity_keys(member: dict) -> set[str]:
+    """What identifies a users group member (``{id displayName email
+    userId}``): its id, e-mail and lower-cased name, each tagged."""
+    keys = {
+        f"id:{_text(member.get('id'))}",
+        f"email:{_text(member.get('email')).lower()}",
+        f"name:{_text(member.get('displayName') or member.get('name')).lower()}",
+    }
+    return {k for k in keys if not k.endswith(":")}
+
+
+def _user_keys(user: dict) -> set[str]:
+    """What identifies a remote user of the account snapshot, as
+    ``_identity_keys`` tags it: id, e-mail, name."""
+    return _identity_keys(
+        {"id": user.get("id"), "email": (user.get("info") or {}).get("email"), "name": _user_name(user)}
+    )
+
+
+def _member_of(groups: GroupIndex, ref: Any, user: dict) -> bool | None:
+    """Whether ``user`` is a member of the users group ``ref`` names (by id,
+    e-mail or name); ``None`` when its members are not known in full."""
+    keys = groups.member_keys(ref)
+    if keys is None:
+        return None
+    return bool(keys & _user_keys(user))
+
+
+def _site_in_group(groups: GroupIndex, ref: Any, site_id: str, site_name: str) -> bool | None:
+    """Whether a site is a member of the group ``ref`` names; ``None`` when
+    its members are not known in full."""
+    members = groups.members(ref)
+    if members is None:
+        return None
+    return any(_text(m.get("type")).upper() == "SITE" and _names_object(m, site_id, site_name) for m in members)
+
+
+def _keys(item: dict) -> list[str]:
+    """The address book keys of an object: its id and lower-cased name."""
+    return [_text(item.get("id")), _text(item.get("name")).lower()]
+
+
+def _names_object(ref: Any, ident: str, name: str) -> bool:
+    """Whether a reference names the object with ``ident`` or ``name``."""
+    ref = ref if isinstance(ref, dict) else {"name": ref}
+    return bool((ident and _text(ref.get("id")) == ident) or (name and _text(ref.get("name")).lower() == name.lower()))
 
 
 # ── Split Tunnel policy ────────────────────────────────────────────────────
@@ -554,25 +727,43 @@ def _split_mode(item: dict) -> str:
     return _SPLIT_MODES.get(_text(item.get("action")).upper(), "")
 
 
-def _split_match(item: dict, user: dict, *, reduced: bool) -> tuple[str, str]:
+def _managed_unknown(missing: str = NOT_COLLECTED) -> str:
+    """Why a rule's source network (any managed or unmanaged network) is not
+    decided: Cato's API reports no managed networks. ``missing`` says why
+    the Client's own report cannot settle it (``""``: a report is used)."""
+    reason = "not reported by Cato's API"
+    if missing:
+        reason += f"; the Client's last report is {missing}"
+    return f"whether the device is on a managed network is not known ({reason})"
+
+
+def _split_match(
+    item: dict, user: dict, *, reduced: bool, groups: GroupIndex | None = None, managed: str = ""
+) -> tuple[str, str]:
     """Whether a Split Tunnel rule applies to a connected user, from what was
     collected: ``("yes", "")``, ``("no", "")`` or ``("maybe", why)``. A
-    criterion that rests on data Plexus does not read (users group
-    membership, managed networks, an OS or country Cato did not report) is
-    never guessed. Every criterion must match; an empty one is any."""
+    criterion that rests on data Plexus does not have (the members of a
+    users group not read in full, managed networks, an OS or country Cato
+    did not report) is never guessed. Every criterion must match; an empty
+    one is any. ``managed`` is the why for a source network criterion
+    (``_managed_unknown``)."""
     why: list[str] = []
+    groups = groups or GroupIndex(None)
     source = _obj(item.get("source"))
     users = [u for u in _items_of(source.get("user")) if isinstance(u, dict)]
-    groups = _items_of(source.get("usersGroup"))
-    if users or groups:
+    named_groups = _items_of(source.get("usersGroup"))
+    if users or named_groups:
         ident, name = _text(user.get("id")), _text(_user_name(user)).lower()
-        named = any(
-            (ident and _text(u.get("id")) == ident) or (name and _text(u.get("name")).lower() == name) for u in users
-        )
-        if not named:
-            if not groups:
+        named = any(_names_object(u, ident, name) for u in users)
+        member = [_member_of(groups, g, user) for g in named_groups]
+        if not named and True not in member:
+            if all(m is False for m in member):
                 return "no", ""
-            why.append("users groups are not collected")
+            if not groups.read:
+                why.append("users groups are not collected")
+            else:
+                unknown = [_ref_name(g) for g, m in zip(named_groups, member, strict=True) if m is None]
+                why.append(f"the members of users group {', '.join(unknown)} were not read")
     platforms = {_os_key(p) or _text(p).upper() for p in _items_of(item.get("platform"))}
     if platforms:
         os_key = _os_key(user.get("osType"))
@@ -595,30 +786,92 @@ def _split_match(item: dict, user: dict, *, reduced: bool) -> tuple[str, str]:
             return "no", ""
     network = _text(_obj(item.get("sourceNetwork")).get("sourceNetworkType")).upper()
     if network in ("ANY_MANAGED_NETWORK", "ANY_UNMANAGED_NETWORK"):
-        why.append("managed networks are not collected")
+        why.append(managed or _managed_unknown())
     elif network not in ("", "ANY"):
         why.append(f"source network {network.lower()} is not known")
     return ("maybe", ", ".join(why)) if why else ("yes", "")
 
 
-def _split_choice(policy: dict, user: dict) -> tuple[str, int, dict | None, str]:
+# The Split Tunnel configuration a Client reports applying (the
+# ``split_tunnel_configuration`` of its Client Connectivity Policy event), as
+# the connection modes of the rules it can come from. "Disabled" is no
+# exception: no rule matched, or the rule's action is OFF.
+_REPORTED_MODES = {
+    "disabled": ("off",),
+    "admin defined": ("except", "only"),
+    "user defined": ("user",),
+}
+
+
+def _rule_label(index: int, item: dict) -> str:
+    return f"{index} {_text(item.get('name')) or f'Rule {index}'}"
+
+
+def _split_choice(
+    policy: dict,
+    user: dict,
+    groups: GroupIndex | None = None,
+    report: dict | None = None,
+    missing: str = NOT_COLLECTED,
+) -> tuple[str, int, dict | None, str]:
     """The Split Tunnel rule that applies to a user: ``(state, index, rule,
     why)``. Cato checks the enabled rules top to bottom and the first that
     matches applies; no match is full tunnel. ``state`` is ``match``
-    (``rule`` applies), ``none`` (no rule does), ``off`` (the policy is
-    disabled) or ``maybe`` (``rule`` may apply, for ``why``, ahead of any
-    that does: which one applies is not known)."""
+    (``rule`` applies; ``why`` is empty, or says the Client's report decided
+    it), ``none`` (no rule does), ``off`` (the policy is disabled),
+    ``reported_off`` (``rule`` may apply, for ``why``, but the Client
+    reported Split Tunnel "Disabled": all traffic to Cato) or ``maybe``
+    (``rule`` may apply, for ``why``, ahead of any that does: which one
+    applies is not known).
+
+    ``report`` is the Client's report for the user's current device: when
+    the configuration leaves the choice undetermined, the Split Tunnel
+    configuration the Client applied settles it if only one rule that may
+    apply has that mode. ``missing`` says why there is no report."""
     if policy.get("enabled", True) is False:
         return "off", 0, None, ""
+    managed = _managed_unknown("" if report else missing)
+    found: list[tuple[int, dict, str, str]] = []
     for index, item in _ordered_rules(policy):
         if item.get("enabled", True) is False:
             continue
-        state, why = _split_match(item, user, reduced=bool(policy.get("reduced")))
+        state, why = _split_match(item, user, reduced=bool(policy.get("reduced")), groups=groups, managed=managed)
+        if state != "no":
+            found.append((index, item, state, why))
         if state == "yes":
-            return "match", index, item, ""
-        if state == "maybe":
-            return "maybe", index, item, why
-    return "none", 0, None, ""
+            break
+    if not found:
+        return "none", 0, None, ""
+    index, item, state, why = found[0]
+    if state == "yes":
+        return "match", index, item, ""
+    if report is None:
+        return "maybe", index, item, why
+    value, device, at = describe(report)
+    modes = _REPORTED_MODES.get(value.lower())
+    if modes is None:
+        return "maybe", index, item, f'the Client reported Split Tunnel "{value}", which Plexus does not know'
+    if modes == ("off",):
+        return "reported_off", index, item, why
+    candidates = [(i, rule) for i, rule, _state, _why in found if _split_mode(rule) in modes]
+    if len(candidates) == 1:
+        index, item = candidates[0]
+        return "match", index, item, f'decided by the Client\'s report of Split Tunnel "{value}" on {device} at {at}'
+    reported = f'the Client reported Split Tunnel "{value}" at {at}'
+    if not candidates:
+        return "maybe", index, item, f"{reported}, and no rule that may apply has that mode"
+    names = ", ".join(_rule_label(i, rule) for i, rule in candidates)
+    index, item = candidates[0]
+    return "maybe", index, item, f"{reported}, and rules {names} could be the one applied"
+
+
+def _report_disagrees(report: dict | None, item: dict) -> bool:
+    """Whether a Client's report names a Split Tunnel configuration that the
+    rule decided from the configuration cannot give."""
+    if report is None:
+        return False
+    modes = _REPORTED_MODES.get(describe(report)[0].lower())
+    return modes is not None and _split_mode(item) not in modes
 
 
 def _split_destinations(item: dict, book: AddressBook) -> tuple[list[tuple[str, list[str]]], list[str], list[str]]:
@@ -641,17 +894,24 @@ def _split_destinations(item: dict, book: AddressBook) -> tuple[list[tuple[str, 
     return ranges, unresolved, other
 
 
+def _global_range_texts(refs: Any, book: AddressBook) -> list[str]:
+    """Global IP ranges a rule names, each with its CIDRs when known."""
+    texts = []
+    for ref in _items_of(refs):
+        cidrs = _resolve(book, "globalIpRange", ref)
+        name = _ref_name(ref)
+        texts.append(f"{name} ({', '.join(cidrs)})" if cidrs else f"global IP range {name} (not resolved)")
+    return texts
+
+
 def _split_destination_texts(item: dict, book: AddressBook) -> list[str]:
-    ranges, unresolved, other = _split_destinations(item, book)
-    texts = [f"{name} ({', '.join(cidrs)})" for name, cidrs in ranges]
-    return texts + [f"global IP range {name} (not resolved)" for name in unresolved] + other
+    destination = _obj(item.get("destination"))
+    _ranges, _unresolved, other = _split_destinations(item, book)
+    return _global_range_texts(destination.get("globalIpRange"), book) + other
 
 
 def _split_rule_row(index: int, item: dict, book: AddressBook) -> list[Any]:
     """One rule in the account's Split Tunnel policy table."""
-    source = _obj(item.get("source"))
-    users = [_ref_name(u) for u in _items_of(source.get("user"))]
-    users += [f"group {_ref_name(g)}" for g in _items_of(source.get("usersGroup"))]
     network = _text(_obj(item.get("sourceNetwork")).get("sourceNetworkType"))
     coverage = _text(item.get("coverage")).upper()
     priority = _text(item.get("routingPriority")).upper()
@@ -659,15 +919,400 @@ def _split_rule_row(index: int, item: dict, book: AddressBook) -> list[Any]:
         index,
         item.get("name"),
         item.get("enabled", True) is not False,
-        users or "Any user",
-        [_text(p) for p in _items_of(item.get("platform"))] or "Any",
-        [_ref_name(c) for c in _items_of(item.get("country"))] or "Any",
+        _rule_users(item),
+        _any(_names(item.get("platform"))),
+        _any(_names(item.get("country"))),
         network.replace("_", " ").lower().capitalize() if network else "",
         _SPLIT_MODE_WORDS.get(_split_mode(item)) or item.get("action"),
         _split_destination_texts(item, book),
         _SPLIT_COVERAGE.get(coverage, coverage),
         _SPLIT_PRIORITY.get(priority, priority),
     ]
+
+
+# ── Every policy, as tables ────────────────────────────────────────────────
+
+# The most names one cell lists; the rest are counted.
+MAX_CELL_NAMES = 20
+_EXTRA_WORDS = {"vlan": "VLAN", "mac": "MAC", "service": "service", "tlsInspectCategory": "TLS category"}
+
+
+def _cap(texts: list[str]) -> list[str]:
+    """``texts`` once each, at most ``MAX_CELL_NAMES`` of them and a count
+    of the rest."""
+    unique = list(dict.fromkeys(t for t in texts if t))
+    if len(unique) > MAX_CELL_NAMES:
+        return [*unique[:MAX_CELL_NAMES], f"… +{len(unique) - MAX_CELL_NAMES}"]
+    return unique
+
+
+def _any(texts: list[str], word: str = "Any") -> list[str] | str:
+    return _cap(texts) or word
+
+
+def _names(value: Any, word: str = "") -> list[str]:
+    """The names of what a rule's field lists: object references (``{ id
+    name }``) or plain values, each after ``word``."""
+    return [f"{word} {name}".strip() for name in (_ref_name(v) for v in _items_of(value)) if name]
+
+
+def _span(value: Any) -> str:
+    span = _obj(value)
+    first, last = _text(span.get("from")), _text(span.get("to"))
+    return f"{first}-{last}" if first != last else first
+
+
+def _endpoint_texts(endpoint: Any) -> list[str]:
+    """What a rule's source, destination or application lists, as text."""
+    endpoint = _obj(endpoint)
+    texts = _names(endpoint.get("ip")) + _names(endpoint.get("subnet"))
+    texts += [_span(s) for s in _items_of(endpoint.get("ipRange"))]
+    for field, word in {**_OBJECT_WORDS, **_TEXT_WORDS, **_EXTRA_WORDS}.items():
+        texts += _names(endpoint.get(field), word)
+    containers = _obj(endpoint.get("containers"))
+    for field, word in _CONTAINER_WORDS.items():
+        texts += _names(containers.get(field), word)
+    texts += _service_texts({"custom": endpoint.get("customService")})
+    texts += _names(endpoint.get("customServiceIp"), "service")
+    return _cap(texts)
+
+
+def _service_texts(service: Any) -> list[str]:
+    service = _obj(service)
+    texts = _names(service.get("standard")) + _names(service.get("simple"))
+    for custom in _items_of(service.get("custom")):
+        custom = _obj(custom)
+        ports = _names(custom.get("port")) + [_span(r) for r in _items_of(custom.get("portRange"))]
+        texts.append(f"{_text(custom.get('protocol'))} {','.join(ports)}".strip())
+    return _cap(texts)
+
+
+def _rule_users(item: dict) -> list[str] | str:
+    """Who a rule of a client policy applies to: users, users groups."""
+    source = _obj(item.get("source"))
+    texts = _names(source.get("user")) + _names(source.get("usersGroup"), "group")
+    return _any(texts + _names(source.get("systemGroup"), "system group"), "Any user")
+
+
+def _rule_sites(item: dict) -> list[str] | str:
+    site = _obj(item.get("site"))
+    return _any(_names(site.get("site")) + _names(site.get("group"), "group"), "All sites")
+
+
+def _on(value: Any, word: str) -> str:
+    return word if value is True else ""
+
+
+def _app_control_rule(item: dict) -> dict:
+    """The part of an application control rule its ``ruleType`` names."""
+    kind = _text(item.get("ruleType")).upper()
+    part = {"APPLICATION": "applicationRule", "DATA": "dataRule", "FILE": "fileRule"}.get(kind, "")
+    return _obj(item.get(part)) or _obj(item.get("applicationRule") or item.get("dataRule") or item.get("fileRule"))
+
+
+def _transport(value: Any) -> str:
+    transport = _obj(value)
+    roles = "/".join(
+        r for r in (_text(transport.get(k)) for k in ("primaryInterfaceRole", "secondaryInterfaceRole")) if r
+    )
+    kind = _text(transport.get("transportType"))
+    return f"{kind} (interfaces {roles})" if kind and roles else kind or roles
+
+
+# A column of a policy's table: its title, and its cell from a rule and the
+# address book.
+Column = tuple[str, Callable[[dict, AddressBook], Any]]
+_FIREWALL_COLUMNS: list[Column] = [
+    ("Source", lambda r, _c: _any(_endpoint_texts(r.get("source")))),
+    ("Destination", lambda r, _c: _any(_endpoint_texts(r.get("destination")))),
+    ("Service", lambda r, _c: _any(_service_texts(r.get("service")))),
+    ("Action", lambda r, _c: r.get("action")),
+    ("Conditions", lambda r, _c: _cap(_rule_context(r))),
+]
+_CLIENT_COLUMNS: list[Column] = [
+    ("Users", lambda r, _c: _rule_users(r)),
+    ("Platforms", lambda r, _c: _any(_names(r.get("platform")))),
+    ("Countries", lambda r, _c: _any(_names(r.get("country")))),
+]
+# The columns of each policy's table after "#", "Rule" and "Enabled". The
+# Split Tunnel policy has a table of its own (``SPLIT_TUNNEL_COLUMNS``).
+POLICY_COLUMNS: dict[str, list[Column]] = {
+    "wan_firewall": [("Direction", lambda r, _c: r.get("direction")), *_FIREWALL_COLUMNS],
+    "internet_firewall": _FIREWALL_COLUMNS,
+    "anti_malware_file_hash": [
+        ("Action", lambda r, _c: r.get("action")),
+        ("File name", lambda r, _c: r.get("fileName")),
+        ("SHA-256", lambda r, _c: r.get("sha256")),
+        ("Expires", lambda r, _c: r.get("expirationDate")),
+    ],
+    "application_control": [
+        ("Type", lambda r, _c: r.get("ruleType")),
+        ("Source", lambda r, _c: _any(_endpoint_texts(_app_control_rule(r).get("source")))),
+        ("Applications", lambda r, _c: _any(_endpoint_texts(_app_control_rule(r).get("application")))),
+        (
+            "Data and files",
+            lambda r, _c: _cap(
+                _names(_obj(_app_control_rule(r).get("dlpProfile")).get("contentProfile"), "DLP")
+                + _names(_obj(_app_control_rule(r).get("dlpProfile")).get("edmProfile"), "EDM")
+                + [
+                    f"{_text(a.get('fileAttribute'))} {_text(a.get('operator'))} {_text(a.get('value'))}".strip()
+                    for a in map(_obj, _items_of(_app_control_rule(r).get("fileAttribute")))
+                ]
+            ),
+        ),
+        ("Action", lambda r, _c: _app_control_rule(r).get("action")),
+        ("Severity", lambda r, _c: _app_control_rule(r).get("severity")),
+    ],
+    "app_tenant_restriction": [
+        ("Source", lambda r, _c: _any(_endpoint_texts(r.get("source")))),
+        ("Application", lambda r, _c: _ref_name(r.get("application"))),
+        (
+            "Headers",
+            lambda r, _c: _cap(
+                [f"{_text(h.get('name'))}: {_text(h.get('value'))}" for h in map(_obj, _items_of(r.get("headers")))]
+            ),
+        ),
+        ("Action", lambda r, _c: r.get("action")),
+        ("Severity", lambda r, _c: r.get("severity")),
+    ],
+    "client_connectivity": [
+        *_CLIENT_COLUMNS,
+        ("Device posture", lambda r, _c: _cap(_names(r.get("device")))),
+        ("Source ranges", lambda r, c: _cap(_global_range_texts(_obj(r.get("sourceRange")).get("globalIpRange"), c))),
+        ("Origin", lambda r, _c: _cap(_names(r.get("connectionOrigin")))),
+        ("Confidence", lambda r, _c: r.get("confidenceLevel")),
+        ("Action", lambda r, _c: r.get("action")),
+    ],
+    "dynamic_ip_allocation": [
+        *_CLIENT_COLUMNS,
+        ("Device posture", lambda r, _c: _cap(_names(r.get("devicePostureProfile")))),
+        ("Allocation ranges", lambda r, c: _cap(_global_range_texts(_obj(r.get("range")).get("globalIpRange"), c))),
+    ],
+    "private_access": [
+        *_CLIENT_COLUMNS,
+        ("Applications", lambda r, _c: _any(_names(_obj(r.get("applications")).get("application")))),
+        ("Device posture", lambda r, _c: _cap(_names(r.get("device")))),
+        ("Origin", lambda r, _c: _cap(_names(r.get("connectionOrigin")))),
+        ("Schedule", lambda r, _c: _obj(r.get("schedule")).get("activeOn")),
+        ("Action", lambda r, _c: _obj(r.get("action")).get("action")),
+    ],
+    "remote_port_fwd": [
+        ("External IP", lambda r, _c: _ref_name(r.get("externalIp"))),
+        ("External ports", lambda r, _c: _span(r.get("externalPortRange"))),
+        ("Internal IP", lambda r, _c: r.get("internalIp")),
+        ("Internal ports", lambda r, _c: _span(r.get("internalPortRange"))),
+        ("Forward ICMP", lambda r, _c: r.get("forwardIcmp")),
+        ("Restriction", lambda r, _c: r.get("restrictionType")),
+        ("Remote IPs", lambda r, _c: _any(_endpoint_texts(r.get("remoteIPs")))),
+    ],
+    "sdp_static_ip_allocation": [
+        ("Users", lambda r, _c: _rule_users(r)),
+        ("IP", lambda r, _c: r.get("ip")),
+    ],
+    "site_web_proxy": [
+        (
+            "Sites",
+            lambda r, _c: (
+                "All sites" if r.get("shouldAssociateWithAllSites") else _cap(_names(r.get("associatedSite")))
+            ),
+        ),
+        ("Proxy", lambda r, _c: ":".join(t for t in (_text(r.get("fqdn")), _text(r.get("port"))) if t)),
+        ("Protocol", lambda r, _c: r.get("allowedDestinationProtocol")),
+        ("Authentication", lambda r, _c: _obj(r.get("authenticationConfig")).get("method")),
+        (
+            "Traffic rules",
+            lambda r, _c: _cap(
+                [
+                    f"{_text(t.get('name'))} ({_text(t.get('action'))})"
+                    for t in (_obj(_obj(p).get("rule")) for p in _items_of(r.get("webProxyTraffic")))
+                ]
+            ),
+        ),
+    ],
+    "socket_bypass": [
+        ("Sites", lambda r, _c: _rule_sites(r)),
+        ("Source", lambda r, _c: _any(_endpoint_texts(r.get("source")))),
+        ("Destination", lambda r, _c: _any(_endpoint_texts(r.get("destination")))),
+        ("Service", lambda r, _c: _any(_service_texts(r.get("service")))),
+        ("Bypass ports", lambda r, _c: _cap(_names(_obj(r.get("action")).get("port")))),
+        ("Exceptions", lambda r, _c: _cap(_names(r.get("exception")))),
+    ],
+    "socket_lan": [
+        ("Sites", lambda r, _c: _rule_sites(r)),
+        ("Direction", lambda r, _c: r.get("direction")),
+        ("Transport", lambda r, _c: r.get("transport")),
+        ("Source", lambda r, _c: _any(_endpoint_texts(r.get("source")))),
+        ("Destination", lambda r, _c: _any(_endpoint_texts(r.get("destination")))),
+        ("Service", lambda r, _c: _any(_service_texts(r.get("service")))),
+        ("NAT", lambda r, _c: _text(_obj(r.get("nat")).get("natType")) if _obj(r.get("nat")).get("enabled") else "Off"),
+        (
+            "LAN firewall rules",
+            lambda r, _c: _cap(
+                [
+                    f"{_text(f.get('name'))} ({_text(f.get('action'))})"
+                    for f in (_obj(_obj(p).get("rule")) for p in _items_of(r.get("firewall")))
+                ]
+            ),
+        ),
+    ],
+    "terminal_server": [
+        ("Allowed host IP", lambda r, c: _global_range_texts(r.get("allowedHostIP"), c)),
+        ("Excluded traffic", lambda r, c: _cap(_global_range_texts(r.get("excludeTraffic"), c))),
+    ],
+    "tls_inspect": [
+        ("Source", lambda r, _c: _any(_endpoint_texts(r.get("source")))),
+        ("Applications", lambda r, _c: _any(_endpoint_texts(r.get("application")))),
+        ("Platforms", lambda r, _c: _any(_names(r.get("platform")))),
+        ("Countries", lambda r, _c: _any(_names(r.get("country")))),
+        ("Device posture", lambda r, _c: _cap(_names(r.get("devicePostureProfile")))),
+        ("Untrusted certificate", lambda r, _c: r.get("untrustedCertificateAction")),
+        ("Action", lambda r, _c: r.get("action")),
+    ],
+    "wan_network": [
+        ("Type", lambda r, _c: r.get("ruleType")),
+        ("Source", lambda r, _c: _any(_endpoint_texts(r.get("source")))),
+        ("Destination", lambda r, _c: _any(_endpoint_texts(r.get("destination")))),
+        ("Application", lambda r, _c: _any(_endpoint_texts(r.get("application")))),
+        ("Bandwidth priority", lambda r, _c: _ref_name(r.get("bandwidthPriority"))),
+        (
+            "Route",
+            lambda r, _c: _cap(
+                _names(r.get("routeType"))
+                + _names(_obj(r.get("configuration")).get("popLocation"), "PoP")
+                + _names(_obj(r.get("configuration")).get("backhaulingSite"), "via site")
+                + _names(_obj(r.get("configuration")).get("allocationIp"), "NAT IP")
+            ),
+        ),
+        (
+            "Transport",
+            lambda r, _c: _cap(
+                [
+                    f"{word} {_transport(_obj(r.get('configuration')).get(field))}"
+                    for word, field in (("primary", "primaryTransport"), ("secondary", "secondaryTransport"))
+                    if _transport(_obj(r.get("configuration")).get(field))
+                ]
+            ),
+        ),
+        (
+            "Optimizations",
+            lambda r, _c: _cap(
+                [
+                    _on(_obj(r.get("configuration")).get("activeTcpAcceleration"), "TCP acceleration"),
+                    _on(_obj(r.get("configuration")).get("packetLossMitigation"), "packet loss mitigation"),
+                    _on(_obj(r.get("configuration")).get("preserveSourcePort"), "preserve source port"),
+                ]
+            ),
+        ),
+        ("Exceptions", lambda r, _c: _cap(_names(r.get("exceptions")))),
+    ],
+    "ztna_always_on": [
+        ("Users", lambda r, _c: _rule_users(r)),
+        ("Platforms", lambda r, _c: _any(_names(r.get("platform")))),
+        ("Device posture", lambda r, _c: _cap(_names(r.get("devicePostureProfile")))),
+        ("Action", lambda r, _c: r.get("action")),
+        (
+            "Settings",
+            lambda r, _c: _cap(
+                [
+                    _on(r.get("allowFailOpen"), "fail open"),
+                    (
+                        "user bypass "
+                        + " ".join(_text(_obj(r.get("bypassDuration")).get(k)) for k in ("time", "unit")).strip()
+                    ).strip()
+                    if r.get("allowUserBypass") is True
+                    else "",
+                    f"anti-tamper {_text(r.get('antiTamperMode'))}" if _text(r.get("antiTamperMode")) else "",
+                ]
+            ),
+        ),
+    ],
+}
+# Policies whose rules name sites: listed on the Sockets of those sites.
+SITE_POLICIES = ("socket_lan", "socket_bypass", "site_web_proxy")
+# Policies whose rules name remote users: listed on those users' nodes.
+CLIENT_POLICIES = (
+    "client_connectivity",
+    "dynamic_ip_allocation",
+    "sdp_static_ip_allocation",
+    "ztna_always_on",
+    "private_access",
+)
+CLIENT_POLICY_COLUMNS = ["Policy", "#", "Rule", "Enabled", "Applies", "Settings"]
+SUB_POLICY_COLUMNS = ["Name", "Level", "Enabled", "Description"]
+_LABELS = {spec.key: spec.label for spec in POLICIES}
+
+
+def policy_title(key: str, payload: dict) -> str:
+    """The title of a policy's table: "<label> policy", and whether it is
+    turned off or was read with the reduced query."""
+    title = f"{_LABELS[key]} policy"
+    if payload.get("enabled", True) is False:
+        title += " (disabled)"
+    if payload.get("reduced"):
+        title += " (reduced)"
+    return title
+
+
+def _policy_row(key: str, index: int, item: dict, book: AddressBook) -> list[Any]:
+    """One rule in a policy's table: "#", "Rule", "Enabled" and the policy's
+    own columns."""
+    cells = [fn(item, book) for _name, fn in POLICY_COLUMNS[key]]
+    return [index, item.get("name"), item.get("enabled", True) is not False, *cells]
+
+
+def _policy_columns(key: str) -> list[str]:
+    return ["#", "Rule", "Enabled", *(name for name, _fn in POLICY_COLUMNS[key])]
+
+
+def _words(key: str) -> str:
+    """``camelCase`` as words: ``dataControlEnabled`` -> ``Data control enabled``."""
+    return re.sub(r"(?<!^)(?=[A-Z])", " ", key).lower().capitalize()
+
+
+def _site_applies(key: str, item: dict, groups: GroupIndex, site_id: str, site_name: str) -> str:
+    """Why a rule of a site-scoped policy applies to a site ("This site",
+    "All sites", "Group X", "Group X: may apply ..."), or ``""``."""
+    if key == "site_web_proxy":
+        if item.get("shouldAssociateWithAllSites") is True:
+            return "All sites"
+        named = any(_names_object(s, site_id, site_name) for s in _items_of(item.get("associatedSite")))
+        return "This site" if named else ""
+    site = _obj(item.get("site"))
+    sites, named_groups = _items_of(site.get("site")), _items_of(site.get("group"))
+    if not sites and not named_groups:
+        return "All sites"
+    if any(_names_object(s, site_id, site_name) for s in sites):
+        return "This site"
+    found = ""
+    for group in named_groups:
+        member = _site_in_group(groups, group, site_id, site_name)
+        if member:
+            return f"Group {_ref_name(group)}"
+        if member is None and not found:
+            found = f"Group {_ref_name(group)}: may apply (its members were not read)"
+    return found
+
+
+def _user_applies(item: dict, user: dict, groups: GroupIndex) -> str:
+    """Why a rule of a client policy applies to a remote user ("This user",
+    "All users", "Group X", "Group X: may apply ..."), or ``""``."""
+    source = _obj(item.get("source"))
+    users = _items_of(source.get("user"))
+    named_groups, system_groups = _items_of(source.get("usersGroup")), _items_of(source.get("systemGroup"))
+    if not users and not named_groups and not system_groups:
+        return "All users"
+    if any(_names_object(u, _text(user.get("id")), _text(_user_name(user))) for u in users):
+        return "This user"
+    found = ""
+    for group in named_groups:
+        member = _member_of(groups, group, user)
+        if member:
+            return f"Group {_ref_name(group)}"
+        if member is None and not found:
+            found = f"Group {_ref_name(group)}: may apply (its members were not read)"
+    if not found and system_groups:
+        found = f"System group {_ref_name(system_groups[0])}: may apply (system groups are not collected)"
+    return found
 
 
 class _Builder:
@@ -703,6 +1348,13 @@ class _Builder:
         self._bgp = self._bgp_by_site()
         self._ipsec: dict[str, list[tuple[str, str, str]]] = {}
         self._tunnel_of_edge: dict[str, dict] = {}
+        # The groups and users groups rules name, with their members.
+        self.groups = GroupIndex(raw.get("groups"))
+        self.users_groups = GroupIndex(raw.get("user_groups"))
+        # The Client Connectivity Policy reports of the users' devices.
+        self.client_reports = ClientReports(raw.get("client_reports"))
+        # The address book, built once the sites are (``_address_book``).
+        self._book: AddressBook | None = None
 
     # ── Graph primitives ───────────────────────────────────────────────────
 
@@ -932,6 +1584,7 @@ class _Builder:
                     ],
                 ),
             )
+            node["sections"].extend(site_config_sections(self.raw.get("site_config"), site_id))
             self._gateway[site_id] = node["id"]
             tunnels = _ipsec_tunnels(info)
             if not site_pop or not tunnels:
@@ -1024,6 +1677,9 @@ class _Builder:
                         ],
                     ),
                 )
+            # The site's configuration as Cato keeps it (ranges with DHCP,
+            # hosts, Socket settings...), when it was collected.
+            node["sections"].extend(site_config_sections(self.raw.get("site_config"), site_id, serial=serial))
             self._wan_links(node, ident, interfaces)
 
             pops = sorted({_text(i.get("popName")) for i in interfaces if i.get("connected") and i.get("popName")})
@@ -1192,6 +1848,15 @@ class _Builder:
                     ("PoPs in use", len(pop_rows)),
                     ("Remote users connected", len(connected) if include_users else ""),
                     ("Split Tunnel policy", self._split_state() if include_users else ""),
+                    (
+                        "Policies not collected",
+                        [spec.label for spec in POLICIES if not self._policy_read(spec) and self._asked(spec.option)],
+                    ),
+                    ("Policies not asked for", [spec.label for spec in POLICIES if not self._asked(spec.option)]),
+                    (
+                        "Policies read with the reduced query",
+                        [spec.label for spec in POLICIES if (self.raw.get(spec.key) or {}).get("reduced")],
+                    ),
                     ("Snapshot time", self.raw.get("timestamp")),
                 ],
             ),
@@ -1201,15 +1866,49 @@ class _Builder:
             cloud["sections"],
             table_section("Sites without a PoP", ["Site", "Device", "State"], self._cloud_sites),
         )
-        # The account's Split Tunnel policy, which the users' blocks apply.
-        split = self.raw.get("split_tunnel")
-        if include_users and isinstance(split, dict):
-            book = self._address_book()
-            rows = [_split_rule_row(index, item, book) for index, item in _ordered_rules(split)]
-            title = (
-                "Split Tunnel policy" if split.get("enabled", True) is not False else "Split Tunnel policy (disabled)"
+        self._policy_tables(cloud["sections"], include_users)
+        # The account and its DHCP and DNS configuration, when collected.
+        cloud["sections"].extend(account_config_sections(self.raw.get("site_config")))
+
+    def _asked(self, option: str) -> bool:
+        """Whether the build asked for what ``option`` governs."""
+        return bool((self.raw.get("options") or {}).get(option, True))
+
+    def _policy_read(self, spec: PolicySpec) -> bool:
+        return isinstance(self.raw.get(spec.key), dict)
+
+    def _policy_tables(self, sections: list[dict], include_users: bool) -> None:
+        """A table per policy collected (the Split Tunnel policy, which the
+        users' blocks apply, only with the users), its settings and its
+        sub-policies."""
+        book = self._address_book()
+        sub_policies = {key for key, _field, _input in POLICY_LISTS}
+        for spec in POLICIES:
+            payload = self.raw.get(spec.key)
+            if not isinstance(payload, dict) or (spec.key == "split_tunnel" and not include_users):
+                continue
+            title = policy_title(spec.key, payload)
+            if spec.key == "split_tunnel":
+                rows = [_split_rule_row(index, item, book) for index, item in _ordered_rules(payload)]
+                _add(sections, table_section(title, SPLIT_TUNNEL_COLUMNS, rows))
+            else:
+                rows = [_policy_row(spec.key, index, item, book) for index, item in _ordered_rules(payload)]
+                _add(sections, table_section(title, _policy_columns(spec.key), rows))
+            attributes = _obj(payload.get("attributes"))
+            _add(sections, kv_section(f"{spec.label} settings", [(_words(k), v) for k, v in attributes.items()]))
+            listed = self.raw.get(f"{spec.key}_policies") if spec.key in sub_policies else None
+            _add(
+                sections,
+                table_section(
+                    f"{spec.label} sub-policies",
+                    SUB_POLICY_COLUMNS,
+                    [
+                        [p.get("name"), p.get("policyLevel"), p.get("enabled"), p.get("description")]
+                        for p in listed or []
+                        if isinstance(p, dict)
+                    ],
+                ),
             )
-            _add(cloud["sections"], table_section(title, SPLIT_TUNNEL_COLUMNS, rows))
 
     def _split_state(self) -> str:
         split = self.raw.get("split_tunnel")
@@ -1286,7 +1985,7 @@ class _Builder:
     def _user_node(self, node_id: str, site_id: str, user: dict, offices: dict[str, str]) -> dict:
         info = user.get("info") or {}
         remote = user.get("remoteIPInfo") or {}
-        public_ip = _text(user.get("remoteIP")) or _text(remote.get("ip"))
+        public_ip = _public_ip(user)
         office = offices.get(public_ip, "")
         if office:
             origin = f"Office: {office}"
@@ -1297,7 +1996,16 @@ class _Builder:
         pop = _text(user.get("popName"))
         label = _text(_user_name(user)) or _text(info.get("email")) or _text(user.get("deviceName")) or node_id
         node = self._node(
-            node_id, "user", label, site_id, "online", model="Cato Client", ip=_text(user.get("internalIP"))
+            node_id,
+            "user",
+            label,
+            site_id,
+            "online",
+            model="Cato Client",
+            ip=_text(user.get("internalIP")),
+            # The name the device reports, which the path trace looks up in
+            # the client tables of the network behind its public address.
+            device_name=_text(user.get("deviceName")),
         )
         _add(
             node["sections"],
@@ -1355,6 +2063,7 @@ class _Builder:
                 ],
             ),
         )
+        _add(node["sections"], self.client_reports.section(user.get("id"), user.get("deviceName")))
         recent = [c for c in user.get("recentConnections") or [] if isinstance(c, dict)]
         _add(
             node["sections"],
@@ -1521,7 +2230,12 @@ class _Builder:
             note(block, SPLIT_TUNNEL_NOTE)
             rows.append(("Rule", "Not collected"))
         else:
-            state, index, item, why = _split_choice(policy, user)
+            # Only a report for the device connected now speaks for this connection.
+            report, current = self.client_reports.for_user(user.get("id"), user.get("deviceName"))
+            report = report if current else None
+            state, index, item, why = _split_choice(
+                policy, user, self.users_groups, report, self.client_reports.missing
+            )
             name = _text((item or {}).get("name")) or f"Rule {index}"
             if state == "off":
                 rows.append(("Rule", "Policy disabled: all traffic to Cato"))
@@ -1530,8 +2244,26 @@ class _Builder:
             elif state == "maybe":
                 note(block, f"Route table (Split Tunnel rule {name} may apply: {why})")
                 rows.append(("Rule", f"Undetermined: rule {index} {name} may apply ({why})"))
+            elif state == "reported_off" and report is not None:
+                value, device, at = describe(report)
+                rows.append(
+                    (
+                        "Rule",
+                        f'All traffic to Cato: the Client reported Split Tunnel "{value}" on {device} at {at} '
+                        f"(rule {index} {name} would otherwise be undetermined: {why})",
+                    )
+                )
             elif item is not None:
-                full_tunnel = self._split_routes(block, item, f"{index} {name}", name, book, to_cato, rows)
+                label = f"{index} {name} ({why})" if why else f"{index} {name}"
+                full_tunnel = self._split_routes(
+                    block, item, label, name, book, to_cato, rows, behind_ip=_public_ip(user)
+                )
+                if not why and _report_disagrees(report, item):
+                    value, _device, at = describe(report or {})
+                    note(
+                        block,
+                        f'The Client reported Split Tunnel "{value}" at {at}, which does not agree with rule {index} {name}',
+                    )
         if full_tunnel:
             block["routes"].append(
                 route(
@@ -1546,13 +2278,22 @@ class _Builder:
 
     @staticmethod
     def _split_routes(
-        block: dict, item: dict, label: str, name: str, book: AddressBook, to_cato: dict, rows: list[tuple[str, Any]]
+        block: dict,
+        item: dict,
+        label: str,
+        name: str,
+        book: AddressBook,
+        to_cato: dict,
+        rows: list[tuple[str, Any]],
+        *,
+        behind_ip: str = "",
     ) -> bool:
         """The routes and notes of the Split Tunnel rule that applies to a
         user; whether the default route still goes to Cato. Only global IP
         ranges become routes: a domain, FQDN or application destination, or
         a web-only coverage, is a note that leaves a default-route lookup
-        unknown."""
+        unknown. The direct interface carries ``behind_ip``, the public
+        address the Client connects from, when it is a public one."""
         mode = _split_mode(item)
         coverage = _text(item.get("coverage")).upper()
         priority = _text(item.get("routingPriority")).upper()
@@ -1585,14 +2326,15 @@ class _Builder:
         if coverage == "WEB_ONLY":
             note(block, _SPLIT_WEB_ONLY_NOTE)
         cidrs = list(dict.fromkeys(c for _n, found in ranges for c in found))
+        direct = interface(DIRECT_INTERFACE, "wan", behind_ip=behind_ip)
         if mode == "except":
             if cidrs:
-                block["interfaces"].append(interface(DIRECT_INTERFACE, "wan"))
+                block["interfaces"].append(direct)
             for cidr in cidrs:
                 source = f"Split Tunnel rule {name}: exception"
                 block["routes"].append(route(cidr, "static", interface=DIRECT_INTERFACE, source=source))
             return True
-        block["interfaces"].append(interface(DIRECT_INTERFACE, "wan"))
+        block["interfaces"].append(direct)
         for cidr in cidrs:
             block["routes"].append(
                 route(cidr, "static", peer=to_cato, source=f"Split Tunnel rule {name}: routed to Cato")
@@ -1627,14 +2369,19 @@ class _Builder:
 
     def _address_book(self) -> AddressBook:
         """The objects firewall rules name that stand for known addresses:
-        sites, their ranges and interfaces, connected users, and the
-        account's global IP ranges."""
+        sites, their ranges and interfaces, connected users, the account's
+        global IP ranges, and the groups, users groups and IP range
+        containers whose members are known in full and all resolve. Built
+        once, after the sites (every caller runs after ``build_sites``)."""
+        if self._book is not None:
+            return self._book
         book: AddressBook = {field: {} for field in _RESOLVABLE}
 
-        def add(field: str, keys: list[str], cidrs: list[str]) -> None:
+        def add(field: str, keys: list[str], cidrs: list[str], *, empty: bool = False) -> None:
+            """``empty``: the object may stand for no address at all."""
             known = book[field]
             for key in keys:
-                if not key or not cidrs:
+                if not key or not (cidrs or empty):
                     continue
                 if key not in known:
                     known[key] = list(cidrs)
@@ -1657,17 +2404,100 @@ class _Builder:
                 add("networkInterface", [entity_id], [r[0] for r in self._ranges.get(site_id, []) if r[2] == iface])
         # Cato does not list floating ranges; one may share a name with a range.
         book["floatingSubnet"] = book["siteNetworkSubnet"]
-        for user in self.raw.get("users") or []:
-            if isinstance(user, dict) and _text(user.get("connectivityStatus")).lower() != "disconnected":
-                address = canonical(user.get("internalIP"))
-                add("user", [_text(user.get("id")), _text(_user_name(user)).lower()], [address] if address else [])
+        connected = [
+            u
+            for u in self.raw.get("users") or []
+            if isinstance(u, dict) and _text(u.get("connectivityStatus")).lower() != "disconnected"
+        ]
+        for user in connected:
+            address = canonical(user.get("internalIP"))
+            add("user", [_text(user.get("id")), _text(_user_name(user)).lower()], [address] if address else [])
         # None when not collected: a rule naming one stays unresolved.
         for item in self.raw.get("global_ip_ranges") or []:
             if isinstance(item, dict):
                 add(
                     "globalIpRange", [_text(item.get("id")), _text(item.get("name")).lower()], _global_range_cidrs(item)
                 )
+        # A group resolves member by member through the entries above; one
+        # member Plexus cannot turn into addresses (a host, a device, a VLAN,
+        # an object not collected) leaves the whole group unresolved.
+        for group in self.groups:
+            members = self.groups.members(group)
+            found: list[str] = []
+            for member in members if members is not None else [None]:
+                field = _GROUP_MEMBER_FIELDS.get(_text((member or {}).get("type")).upper(), "")
+                resolved = _resolve(book, field, member) if field else None
+                if resolved is None:
+                    break
+                found += resolved
+            else:
+                add("group", _keys(group), list(dict.fromkeys(found)), empty=True)
+        # A users group is the VPN addresses of its members that are
+        # connected, when the users were read and so were its members.
+        if self._users_read():
+            addressed = [(canonical(u.get("internalIP")), _user_keys(u)) for u in connected]
+            for group in self.users_groups:
+                keys = self.users_groups.member_keys(group)
+                if keys is not None:
+                    found = [address for address, user_keys in addressed if address and keys & user_keys]
+                    add("usersGroup", _keys(group), list(dict.fromkeys(found)), empty=True)
+        # Cato hands out a container's contents only as a file: one whose
+        # ``members`` (CIDRs or ranges) are known resolves, the rest stays
+        # unresolved.
+        for container in self.raw.get("containers") or []:
+            members = container.get("members") if isinstance(container, dict) else None
+            if isinstance(members, list) and "Fqdn" not in _text(container.get("__typename")):
+                parsed = [_global_range_cidrs({"ipRange": _span(m) if isinstance(m, dict) else m}) for m in members]
+                if all(parsed):
+                    add("ipAddressRangeContainer", _keys(container), [c for p in parsed for c in p], empty=True)
+        self._book = book
         return book
+
+    def _users_read(self) -> bool:
+        """Whether the remote users were collected (asked for and read)."""
+        if not (self.raw.get("options") or {}).get("include_users", True):
+            return False
+        errors = [e for e in self.raw.get("errors") or [] if isinstance(e, dict)]
+        return not any(_text(e.get("path")) == "accountSnapshot.users" for e in errors)
+
+    def build_policies(self) -> None:
+        """The rules of the site-scoped policies on the Sockets of the sites
+        they apply to, and the rules of the client policies on the remote
+        users they apply to. Listed only: no forwarding data comes of them."""
+        book = self._address_book()
+        site_names = {s["id"]: s["name"] for s in self.sites}
+        for key in SITE_POLICIES:
+            payload = self.raw.get(key)
+            if not isinstance(payload, dict):
+                continue
+            columns = ["#", "Rule", "Enabled", "Applies", *_policy_columns(key)[3:]]
+            for site_id, site_name in site_names.items():
+                rows = []
+                for index, item in _ordered_rules(payload):
+                    applies = _site_applies(key, item, self.groups, site_id, site_name)
+                    if applies:
+                        row = _policy_row(key, index, item, book)
+                        rows.append([*row[:3], applies, *row[3:]])
+                section = table_section(f"{policy_title(key, payload)}: rules for this site", columns, rows)
+                for node in self.nodes.values():
+                    if section and node["site"] == site_id and node["id"].startswith("d:"):
+                        _add(node["sections"], copy.deepcopy(section))
+        for node_id, user in self._user_raw.items():
+            rows = []
+            for key in CLIENT_POLICIES:
+                payload = self.raw.get(key)
+                if not isinstance(payload, dict):
+                    continue
+                names = [name for name, _fn in POLICY_COLUMNS[key] if name != "Users"]
+                for index, item in _ordered_rules(payload):
+                    applies = _user_applies(item, user, self.users_groups)
+                    if applies:
+                        cells = dict(zip(_policy_columns(key), _policy_row(key, index, item, book), strict=True))
+                        settings = [f"{name}: {_s(cells[name])}" for name in names if _s(cells[name])]
+                        rows.append(
+                            [_LABELS[key], index, item.get("name"), cells["Enabled"], applies, "; ".join(settings)]
+                        )
+            _add(self.nodes[node_id]["sections"], table_section("Client policies", CLIENT_POLICY_COLUMNS, rows))
 
     def build_edge_sections(self) -> None:
         titles = {"vpn": "Cato tunnel", "uplink": "WAN link"}
@@ -1703,6 +2533,7 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
     builder.build_sites()
     builder.build_cloud()
     builder.build_forwarding()
+    builder.build_policies()
     builder.build_edge_sections()
 
     cloud_members = [n for n in builder.nodes.values() if n["site"] == CLOUD_SITE_ID]

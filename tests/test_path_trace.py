@@ -59,7 +59,9 @@ def _snapshot(name: str, nodes: list[dict], edges: list[dict], sites: dict[str, 
     }
 
 
-def _tracer(snapshots: dict, *, clouds=None, hosts=None, extra_nodes=(), extra_edges=(), subnets=()) -> Tracer:
+def _tracer(
+    snapshots: dict, *, clouds=None, hosts=None, extra_nodes=(), extra_edges=(), subnets=(), placements=None
+) -> Tracer:
     nodes: dict = {n["id"]: n for n in extra_nodes}
     edges: list = []
     merge_meraki_into_graph(
@@ -71,7 +73,7 @@ def _tracer(snapshots: dict, *, clouds=None, hosts=None, extra_nodes=(), extra_e
     )
     edges.extend(extra_edges)
     graph = {"nodes": list(nodes.values()), "edges": edges}
-    return Tracer(graph, snapshots, clouds or {}, hosts or {}, list(subnets))
+    return Tracer(graph, snapshots, clouds or {}, hosts or {}, list(subnets), placements=placements)
 
 
 def _mx(
@@ -226,6 +228,48 @@ def test_an_autovpn_route_to_a_site_with_a_warm_spare_lands_on_the_primary():
     assert _labels(result["request"]) == ["Branch 01 MX", "Hub 01 MX"]
     assert _labels(result["reply"]) == ["Hub 01 MX", "Branch 01 MX"]
     assert _items(result["request"]["hops"][0])[-1] == ("link", "ok", "Link to Hub 01 MX")
+
+
+def test_a_next_hop_a_warm_spare_pair_shares_is_followed_to_the_primary():
+    # A warm spare owns the same VLAN addresses as the primary. A switch
+    # behind the pair routes to that address; both appliances are cabled to
+    # it, the spare first. The trace must follow the primary: the spare
+    # holds no AutoVPN tunnel, and the path would end "No AutoVPN tunnel".
+    snapshots = _branch_and_hub()
+    snap = snapshots[1]
+    branch, primary = snap["nodes"]
+    branch["forwarding"]["routes"].append(
+        route("10.0.20.0/24", "autovpn", peer={"site": "HUB"}, source="AutoVPN from Hub 01")
+    )
+    primary["forwarding"]["routes"].append(
+        route("10.0.20.0/24", "static", next_hop="10.0.10.2", interface="VLAN 10", source="Static route Core")
+    )
+    primary["site_sections"] = True
+    spare = _node("d:HUB2", "appliance", "HUB", "Hub 01 MX spare", primary["forwarding"])
+    snap["nodes"].insert(1, spare)
+    snap["edges"].append(_edge("e2", "d:HUB2", "d:HUB", kind="lan", status="active"))
+    core = new_block()
+    core["interfaces"] += [
+        interface("Vlan10", "vlan", ip="10.0.10.2", cidr="10.0.10.0/24"),
+        interface("Vlan20", "vlan", ip="10.0.20.1", cidr="10.0.20.0/24"),
+    ]
+    core["routes"] += [
+        route("10.0.10.0/24", "connected", interface="Vlan10", source="Connected"),
+        route("10.0.20.0/24", "connected", interface="Vlan20", source="Connected"),
+        route("0.0.0.0/0", "default", next_hop="10.0.10.1", source="Static route"),
+    ]
+    host = {"id": 7, "label": "core-sw", "ip": "10.0.10.2", "in_inventory": True, "device_type": "cisco_ios"}
+    cables = [
+        {"id": 42, "from": "meraki:1:d:HUB2", "to": 7, "protocol": "lldp", "status": ""},
+        {"id": 43, "from": "meraki:1:d:HUB", "to": 7, "protocol": "lldp", "status": ""},
+    ]
+    tracer = _tracer(snapshots, hosts={7: core}, extra_nodes=[host], extra_edges=cables, subnets=_SUBNETS)
+    result = tracer.trace("10.0.20.5", "10.1.10.5", source_node=7, protocol="tcp", port=443)
+
+    assert result["verdict"] == "allowed", result["summary"]
+    assert _labels(result["request"]) == ["core-sw", "Hub 01 MX", "Branch 01 MX"]
+    assert _labels(result["reply"]) == ["Branch 01 MX", "Hub 01 MX", "core-sw"]
+    assert result["asymmetric"]["status"] == "no"
 
 
 def test_a_vpn_firewall_rule_that_denies_blocks_at_the_branch():
@@ -1434,6 +1478,168 @@ def test_cato_split_tunnel_exceptions_leave_the_device_and_a_domain_exception_ma
         "Only the default route matches 8.8.8.8; route table (Split Tunnel exceptions by domain, FQDN or "
         "application) is not collected, so a more specific route may exist."
     )
+
+
+# ── A device behind a public address ─────────────────────────────────────────
+
+_USER = "meraki:2:cato:user:1"
+
+
+def _behind_branch(behind_ip: str = "198.51.100.2", *, default_direct: bool = False, spare: bool = False) -> dict:
+    """The AutoVPN branch and hub, and a remote user whose 10.0.10.0/24
+    leaves its device directly, into a network that sits behind
+    ``behind_ip`` (the branch's wan1)."""
+    snapshots = _branch_and_hub()
+    if spare:
+        snap = snapshots[1]
+        branch = snap["nodes"][0]
+        branch["site_sections"] = True
+        snap["nodes"].insert(0, _node("d:BR2", "appliance", "BR", "Branch 01 MX spare", branch["forwarding"]))
+        snap["edges"].append(_edge("e2", "d:BR2", "d:BR", kind="lan", status="active"))
+    block = new_block()
+    block["interfaces"] += [
+        interface("Cato Client", "tunnel", ip="10.41.0.5", cidr="10.41.0.5"),
+        interface("Local network (direct)", "wan", behind_ip=behind_ip),
+    ]
+    block["routes"] += [
+        route("10.41.0.5/32", "connected", interface="Cato Client", source="Address given by Cato"),
+        route("10.0.10.0/24", "static", interface="Local network (direct)", source="Split Tunnel rule 3: exception"),
+    ]
+    if default_direct:
+        block["routes"].append(
+            route("0.0.0.0/0", "default", interface="Local network (direct)", source="Split Tunnel: the rest")
+        )
+    user = _node("cato:user:1", "user", "users", "Kelechi", block, device_name="LT-KEL.corp.example")
+    snapshots[2] = _snapshot("Cato", [user], [], {"users": "Remote users"}, provider="cato")
+    return snapshots
+
+
+def _behind_tracer(snapshots: dict, placements: dict | None = None) -> Tracer:
+    return _tracer(snapshots, subnets=_SUBNETS, placements=placements)
+
+
+def test_a_device_behind_a_public_address_continues_at_the_device_that_answers_on_it():
+    result = _behind_tracer(_behind_branch()).trace("10.41.0.5", "10.0.10.20", source_node=_USER)
+
+    request = result["request"]
+    assert _labels(request) == ["Kelechi", "Branch 01 MX", "Hub 01 MX"]
+    user, branch, hub = request["hops"]
+    lookup = _route_item(user)
+    assert lookup["status"] == "ok" and lookup["text"] == (
+        "10.0.10.0/24 out of Local network (direct): the device is behind Branch 01 MX "
+        "(the public address 198.51.100.2 it connects from is that device's wan1)."
+    )
+    local = next(i for i in user["items"] if i["stage"] == "nat")
+    assert local["status"] == "info" and "local address, which is not collected" in local["text"]
+    link = _link_item(user)
+    assert link["status"] == "unknown" and "not on the map" in link["text"]
+    # No link on the map: a LAN arrival, which the branch's Layer 3 rules see.
+    assert branch["edge"] is None and branch["out"] == "AutoVPN to Hub 01"
+    assert ("policy", "ok", "Layer 3 firewall rules") in _items(branch)
+    assert "delivered on VLAN 10" in hub["items"][-1]["text"]
+    # The source is any address from the user on, and the replies are not traced.
+    assert result["reply"]["hops"] == []
+    assert result["reply"]["summary"] == (
+        "Not traced: the device's local address is not collected, so where the replies go is not known."
+    )
+    asymmetric = result["asymmetric"]
+    assert asymmetric["status"] == "unknown" and "local address is not collected" in asymmetric["text"]
+    assert result["verdict"] == "unknown"
+
+
+def test_a_rule_that_names_a_source_decides_part_of_traffic_whose_local_address_is_not_known():
+    deny = rule(1, "deny", src=["10.1.10.0/24"], dst=["10.0.10.0/24"])
+    snapshots = _behind_branch()
+    snapshots[1]["nodes"][0]["forwarding"]["policies"][0]["rules"].insert(0, deny)
+    result = _behind_tracer(snapshots).trace("10.41.0.5", "10.0.10.20", source_node=_USER)
+
+    branch = result["request"]["hops"][1]
+    decided = next(i for i in branch["items"] if i["where"] == "Layer 3 firewall rules")
+    assert decided["status"] == "partial" and decided["text"].startswith("rule 1 denies part of it")
+
+
+def test_a_device_behind_a_warm_spare_pair_goes_to_the_primary():
+    result = _behind_tracer(_behind_branch(spare=True)).trace("10.41.0.5", "10.0.10.20", source_node=_USER)
+
+    assert _labels(result["request"]) == ["Kelechi", "Branch 01 MX", "Hub 01 MX"]
+    assert result["request"]["hops"][1]["node"] == "meraki:1:d:BR"
+    # The other device that answers on the address is named, so the choice is visible.
+    assert ("note", "info", "Public address") in _items(result["request"]["hops"][0], info=True)
+    noted = next(i for i in result["request"]["hops"][0]["items"] if i["where"] == "Public address")
+    assert noted["text"] == "Branch 01 MX spare also answers on 198.51.100.2: the trace goes on from Branch 01 MX."
+
+
+def test_a_device_behind_an_address_no_device_answers_on_names_the_address():
+    result = _behind_tracer(_behind_branch("192.0.2.77")).trace("10.41.0.5", "10.0.10.20", source_node=_USER)
+
+    assert _labels(result["request"]) == ["Kelechi"]
+    lookup = _route_item(result["request"]["hops"][0])
+    assert lookup["status"] == "unknown"
+    assert lookup["text"] == (
+        "10.0.10.0/24 out of Local network (direct): the device at the far end is not on the map "
+        "(no device on the map answers on 192.0.2.77, the public address it connects from)."
+    )
+
+
+def test_a_placed_device_starts_at_the_owner_of_its_local_address_and_the_replies_are_traced():
+    placed = {
+        "ip": "10.1.10.50",
+        "vlan": 10,
+        "org_ref": 1,
+        "network_id": "BR",
+        "network_name": "Branch 01",
+        "device_name": "Branch 01 AP",
+        "seen": "2026-10-23T10:00:00+00:00",
+        "description": "LT-KEL",
+        "source": "Meraki",
+    }
+    tracer = _behind_tracer(_behind_branch(), {_USER: placed})
+    result = tracer.trace("10.41.0.5", "10.0.10.20", source_node=_USER, protocol="tcp", port=443)
+
+    request = result["request"]
+    assert _labels(request) == ["Kelechi", "Branch 01 MX", "Hub 01 MX"]
+    user, branch, _hub = request["hops"]
+    local = next(i for i in user["items"] if i["stage"] == "nat")
+    assert local["status"] == "ok" and local["text"] == (
+        "Leaves with the device's local address 10.1.10.50 (VLAN 10 of Branch 01, seen by Meraki at "
+        "Branch 01 AP on 2026-10-23T10:00:00+00:00, as LT-KEL)."
+    )
+    assert _link_item(user)["status"] == "info"
+    # A first arrival: the ingress is picked by the placed source address.
+    assert branch["in"] == "VLAN 10" and branch["edge"] is None
+    assert result["verdict"] == "allowed", result["summary"]
+    assert _labels(result["reply"]) == ["Hub 01 MX", "Branch 01 MX"]
+    assert result["reply"]["verdict"] == "allowed"
+    assert result["asymmetric"] == {"status": "no", "text": "Replies take the same hops back."}
+
+    # A placement seen on another network than the device's that answers is not used.
+    tracer.placements[_USER] = {**placed, "network_id": "HUB"}
+    other = tracer.trace("10.41.0.5", "10.0.10.20", source_node=_USER)
+    assert other["reply"]["hops"] == []
+
+
+def test_the_demo_places_sam_behind_the_branch_he_connects_from():
+    from netcontrol.integrations.meraki.normalize import build_snapshot as build_meraki_snapshot
+    from netcontrol.integrations.meraki.sample import build_sample_raw as build_meraki_sample_raw
+
+    snapshots = {1: build_meraki_snapshot(build_meraki_sample_raw()), 3: build_cato_snapshot(build_cato_sample_raw())}
+    result = _tracer(snapshots).trace("10.88.0.12", "10.77.128.5", **_SAM, **_HTTPS)
+
+    request = result["request"]
+    assert _labels(request)[0] == "Sam Okafor" and request["hops"][1]["site"] == "Branch-Atlanta"
+    assert "the device is behind" in _route_item(request["hops"][0])["text"]
+    assert "198.51.100.12" in _route_item(request["hops"][0])["text"]
+
+
+def test_a_public_destination_out_of_an_interface_behind_a_public_address_goes_to_the_internet():
+    tracer = _behind_tracer(_behind_branch(default_direct=True))
+    web = tracer.trace("10.41.0.5", "8.8.8.8", source_node=_USER)
+    assert _labels(web["request"]) == ["Kelechi", "Internet"]
+    assert _route_item(web["request"]["hops"][0])["text"].endswith(": to the internet.")
+
+    # A private destination only the default route carries is followed behind the address.
+    private = tracer.trace("10.41.0.5", "10.1.30.7", source_node=_USER)
+    assert _labels(private["request"]) == ["Kelechi", "Branch 01 MX"]
 
 
 def test_cato_split_tunnel_policy_not_collected_makes_a_users_default_route_unknown():

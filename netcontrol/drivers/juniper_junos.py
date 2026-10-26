@@ -20,7 +20,11 @@ Junos diverges from Cisco IOS / IOS-XE / NX-OS in nearly every capability:
 
 from __future__ import annotations
 
+import re
+
 from netcontrol.drivers.base import Driver, DriverCapabilityError, NetflowConfig, RouteTableCommands, register_driver
+
+_CONFIG_HOST_NAME = re.compile(r'^\s*(?:set\s+system\s+)?host-name\s+"?([^";\s]+)"?\s*;?\s*$', re.MULTILINE)
 
 
 @register_driver
@@ -74,6 +78,12 @@ class JuniperJunosDriver(Driver):
         # which is what Plexus's backup/diff code expects (text lines, not
         # the curly-brace tree).
         return "show configuration | display set"
+
+    def parse_config_hostname(self, config_text: str) -> str:
+        # ``set system host-name X`` (``| display set``) or ``host-name X;``
+        # (the curly-brace tree).
+        match = _CONFIG_HOST_NAME.search(str(config_text or ""))
+        return match.group(1) if match else ""
 
     def vlan_show_command(self) -> str:
         return "show vlans"

@@ -4,9 +4,19 @@
 FROM node:24-alpine AS frontend-build
 WORKDIR /frontend
 
+# Extra CA certificates the build trusts (deploy/build-ca/*.crt, PEM): the
+# root CA of a TLS-inspecting proxy on the build host (Cato, Zscaler, ...)
+# that re-signs the registry's certificate. Empty by default; see
+# deploy/build-ca/README.txt. Node uses its own bundle, so the files are
+# handed to npm through NODE_EXTRA_CA_CERTS only when there are any.
+COPY deploy/build-ca/ /build-ca/
+
 # Copy manifests first so the install layer caches across source-only changes.
 COPY netcontrol/static/frontend/package.json netcontrol/static/frontend/package-lock.json ./
-RUN npm ci --no-audit --no-fund
+RUN if ls /build-ca/*.crt >/dev/null 2>&1; then \
+        cat /build-ca/*.crt > /build-ca/bundle.pem && export NODE_EXTRA_CA_CERTS=/build-ca/bundle.pem; \
+    fi \
+    && npm ci --no-audit --no-fund
 
 COPY netcontrol/static/frontend/ ./
 RUN npm run build
@@ -18,6 +28,12 @@ FROM python:3.14-slim
 
 ENV PYTHONUNBUFFERED=1
 WORKDIR /app
+
+# Extra CA certificates the build trusts (see the frontend stage above). Added
+# to the system store, which apt, pip (truststore) and the Pyodide fetch
+# (urllib) all read.
+COPY deploy/build-ca/ /usr/local/share/ca-certificates/plexus-build/
+RUN update-ca-certificates
 
 # System dependencies for python-ldap and pysnmp.
 # Use HTTPS mirrors: the build host blocks outbound plain HTTP (port 80),

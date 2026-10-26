@@ -10,6 +10,15 @@ import { nodeProvider, PROVIDER_ORDER } from './helpers';
 // scattered among another's. Links between sources are still drawn; they
 // just do not shape the layout.
 //
+// One exception: an inventory device (no integration record) whose linked
+// neighbours in an integration site are all in the same site is drawn in
+// that site - hung under its neighbour and framed with it - instead of in the
+// inventory region a canvas away from it. Devices that follow it the same
+// way (an unmatched neighbour of an adopted switch) go with it, nearest site
+// first. One linked to two sites, or to none, stays in the inventory region.
+// Only the layout changes: the device is still an inventory device to the
+// source filter, the legend and its details.
+//
 // Within a source every connected part of the network becomes a tree that
 // grows down from its most central gateway. Each node owns a horizontal span
 // exactly as wide as its subtree, so no two nodes (or their labels) can
@@ -204,6 +213,72 @@ export interface TidyTree {
    * is left to be drawn as a curve.
    */
   routes: Map<NodeId, XY[]>;
+  /**
+   * The source each node is laid out (and its region framed) with: its own,
+   * or for an inventory device drawn in an integration site, that site's.
+   */
+  sources: Map<NodeId, string>;
+}
+
+/** The source and site (group key) each node is laid out in. */
+export interface LayoutSites {
+  source: Map<NodeId, string>;
+  group: Map<NodeId, string>;
+}
+
+/**
+ * Where each node is laid out: its own source and site, except an inventory
+ * node whose linked neighbours in an integration site are all in one site,
+ * which is drawn in that site. Adoption spreads one hop at a time, decided
+ * from the sites known at the start of the hop, so a node goes with its
+ * nearest sited neighbours whatever order the nodes come in; one whose
+ * nearest sited neighbours are in two sites stays where it is.
+ */
+export function layoutSites(nodes: TopologyNode[], edges: TopologyEdge[]): LayoutSites {
+  const source = new Map<NodeId, string>();
+  const group = new Map<NodeId, string>();
+  const neighbors = new Map<NodeId, Set<NodeId>>();
+  for (const n of nodes) {
+    source.set(n.id, nodeProvider(n));
+    group.set(n.id, layoutGroupKey(n));
+    neighbors.set(n.id, new Set());
+  }
+  for (const e of edges) {
+    if (e.from === e.to || !neighbors.has(e.from) || !neighbors.has(e.to)) continue;
+    neighbors.get(e.from)!.add(e.to);
+    neighbors.get(e.to)!.add(e.from);
+  }
+  const sited = (id: NodeId) => group.get(id)!.startsWith('m:');
+  // Inventory nodes: those with no integration record.
+  let pending = nodes.filter((n) => !source.get(n.id)).map((n) => n.id);
+  for (;;) {
+    const found = new Map<NodeId, { site: string; source: string }>();
+    const left: NodeId[] = [];
+    for (const id of pending) {
+      const sites = new Map<string, string>();
+      for (const other of neighbors.get(id)!) {
+        if (!sited(other)) continue;
+        const site = group.get(other)!;
+        const src = source.get(other)!;
+        // The lowest source key, so the choice does not depend on edge order.
+        if (!sites.has(site) || src < sites.get(site)!) sites.set(site, src);
+      }
+      if (sites.size === 1) {
+        const [[site, src]] = sites;
+        found.set(id, { site, source: src });
+      } else if (!sites.size) {
+        left.push(id);
+      }
+      // Two sites or more: left where it is for good.
+    }
+    if (!found.size) break;
+    for (const [id, to] of found) {
+      group.set(id, to.site);
+      source.set(id, to.source);
+    }
+    pending = left;
+  }
+  return { source, group };
 }
 
 export function tidyTreeLayout(nodes: TopologyNode[], edges: TopologyEdge[]): Map<NodeId, XY> {
@@ -258,15 +333,12 @@ export function tidyTree(nodes: TopologyNode[], edges: TopologyEdge[]): TidyTree
   const positions = new Map<NodeId, XY>();
   const pieces = new Map<NodeId, string>();
   const routes = new Map<NodeId, XY[]>();
-  if (!nodes.length) return { positions, pieces, routes };
+  if (!nodes.length) return { positions, pieces, routes, sources: new Map() };
 
-  const group = new Map<NodeId, string>();
-  const source = new Map<NodeId, string>();
+  const { source, group } = layoutSites(nodes, edges);
   const bySource = new Map<string, TopologyNode[]>();
   for (const n of nodes) {
-    group.set(n.id, layoutGroupKey(n));
-    const key = nodeProvider(n);
-    source.set(n.id, key);
+    const key = source.get(n.id)!;
     const members = bySource.get(key);
     if (members) members.push(n);
     else bySource.set(key, [n]);
@@ -306,7 +378,7 @@ export function tidyTree(nodes: TopologyNode[], edges: TopologyEdge[]): TidyTree
     const site = group.get(n.id)!;
     if (site) pieces.set(n.id, `${site}#${String(find(n.id))}`);
   }
-  return { positions, pieces, routes };
+  return { positions, pieces, routes, sources: source };
 }
 
 // One key for both directions of a link between two nodes. The type is kept
@@ -344,7 +416,10 @@ function placeSource(
   for (const n of nodes) {
     rank.set(n.id, tierRank(n));
     slot.set(n.id, slotWidth(n));
-    siteName.set(group.get(n.id)!, n.meraki?.site_name || n.group_name || '');
+    // A site's name comes from its own members, not an inventory device
+    // drawn in it (whose group name is its inventory group's).
+    const key = group.get(n.id)!;
+    if (n.meraki || !siteName.has(key)) siteName.set(key, n.meraki?.site_name || n.group_name || '');
   }
   // Sites in name order.
   const compareSites = (a: string, b: string) =>

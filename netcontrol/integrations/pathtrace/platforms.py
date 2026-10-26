@@ -30,7 +30,7 @@ from netcontrol.integrations.pathtrace import (  # noqa: F401  (the vendor reade
 )
 from netcontrol.integrations.pathtrace.device_config import RunningConfig
 
-__all__ = ["PLATFORMS", "Platform", "platform_of"]
+__all__ = ["PLATFORMS", "Platform", "interface_addresses", "platform_of"]
 
 ConfigParser = Callable[[str], RunningConfig]
 
@@ -135,3 +135,15 @@ def platform_of(device_type: str) -> Platform:
         if any(word in flavour for word in platform.matches):
             return platform
     return IOS
+
+
+def interface_addresses(device_type: str, text: str) -> list[str] | None:
+    """The addresses configured on the interfaces of a running configuration
+    (every interface, primary and secondary, in configuration order), read by
+    the platform's configuration parser. HSRP / VRRP / GLBP addresses are
+    left out: a group shares them.
+    ``None`` when the platform's configuration is not read."""
+    parse = platform_of(device_type).config
+    if parse is None:
+        return None
+    return [address for conf in parse(text).interfaces for address, _network in conf.addresses]

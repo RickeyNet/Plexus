@@ -70,3 +70,5 @@ Thumbs.db
 # Deploy scripts (not needed inside container; entrypoint is copied at build time)
 deploy/*
 !deploy/docker-entrypoint.sh
+# Extra CA certificates the build trusts (see deploy/build-ca/README.txt).
+!deploy/build-ca/

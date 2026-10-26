@@ -37,6 +37,9 @@ export interface CatoBuildOptions {
   include_users: boolean;
   include_ranges: boolean;
   include_firewall: boolean;
+  include_policies: boolean;
+  include_site_config: boolean;
+  include_client_reports: boolean;
   inventory_enrich: boolean;
 }
 

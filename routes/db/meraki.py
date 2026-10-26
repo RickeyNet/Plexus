@@ -34,6 +34,7 @@ __all__ = [
     "prune_meraki_snapshots",
     "upsert_meraki_clients",
     "search_meraki_clients",
+    "list_described_meraki_clients",
     "get_meraki_client_stats",
     "cleanup_stale_meraki_clients",
 ]
@@ -434,6 +435,29 @@ async def search_meraki_clients(query: str, limit: int = 100) -> list[dict]:
             (*params, limit),
         )
         return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def list_described_meraki_clients(networks: list[tuple[int, str]]) -> list[dict]:
+    """The clients with a description (the name the client reports) in the
+    given (organization, network ID) pairs, newest first."""
+    if not networks:
+        return []
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        found: list[dict] = []
+        for org_ref, network_id in dict.fromkeys(networks):
+            cursor = await db.execute(
+                """SELECT * FROM meraki_clients
+                    WHERE org_ref = ? AND network_id = ? AND description <> ''
+                    ORDER BY last_seen DESC, id DESC""",
+                (org_ref, network_id),
+            )
+            for row in rows_to_list(await cursor.fetchall()):
+                _iso_stamps(row, "first_seen", "last_seen")
+                found.append(row)
+        return found
     finally:
         await db.close()
 
