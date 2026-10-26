@@ -2,17 +2,17 @@
 pytest==9.1.1
 # pygments is pytest's syntax-highlighting dep; <2.20 has PYSEC-2026-2987.
 pygments>=2.20.0
-pytest-asyncio==1.4.0
+pytest-asyncio==1.4.1
 pytest-cov==7.1.0
 # Per-test wall-clock cap: a wedged event loop fails in minutes with a
 # traceback instead of hanging the whole run (see pytest.ini [timeout]).
 pytest-timeout==2.4.0
 # Parallel test execution: run `pytest -n auto` (~4 min vs ~18 min serial)
 pytest-xdist==3.8.0
-ruff==0.16.0
-mypy==2.3.0
-pre-commit==4.6.1
-types-requests==2.33.0.20260712
+ruff==0.17.2
+mypy==2.4.0
+pre-commit==4.7.0
+types-requests==2.33.0.20261006
 pip-audit==2.10.1
 bandit==1.9.4
 # Lock-file generator: `uv pip compile --universal --generate-hashes` (see README).
