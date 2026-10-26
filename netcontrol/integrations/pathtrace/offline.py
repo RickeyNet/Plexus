@@ -156,13 +156,17 @@ def inputs(
     host_forwarding: dict[int, dict],
     subnets: list[dict],
     snapshot: dict[str, Any],
+    *,
+    placements: dict[Any, dict] | None = None,
 ) -> dict[str, Any]:
     """Everything ``build`` needs, as JSON-ready data. ``clouds`` holds, per
     cloud ``org_ref``, its ``provider`` and the discovered ``resources`` and
     ``connections`` rows; ``snapshot`` is the exported map, whose own node
-    and edge ids the traces are given in."""
+    and edge ids the traces are given in; ``placements`` is the tracer's,
+    by graph node id."""
     node_ids, edge_ids = export_ids(snapshot)
     return {
+        "placements": {str(gid): found for gid, found in (placements or {}).items()},
         "graph": graph,
         "snapshots": {str(org_ref): snap for org_ref, snap in snapshots.items()},
         "clouds": {
@@ -195,7 +199,15 @@ def build(data: dict[str, Any]) -> Tracer:
         if engine is not None:
             clouds[int(org_ref)] = engine(cloud.get("resources") or [], cloud.get("connections") or [])
     host_forwarding = {int(host_id): block for host_id, block in (data.get("host_forwarding") or {}).items()}
-    return Tracer(data.get("graph") or {}, snapshots, clouds, host_forwarding, list(data.get("subnets") or []))
+    placements = {graph_node_id(gid): found for gid, found in (data.get("placements") or {}).items()}
+    return Tracer(
+        data.get("graph") or {},
+        snapshots,
+        clouds,
+        host_forwarding,
+        list(data.get("subnets") or []),
+        placements=placements,
+    )
 
 
 def open_session(path: str) -> Callable[[str], str]:

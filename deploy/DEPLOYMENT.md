@@ -564,6 +564,31 @@ After this, the box is back to a stock Ubuntu state. Re-run
 
 ## Troubleshooting
 
+### Image build fails with `SSL routines::certificate verify failed`
+
+```
+Err:1 https://deb.debian.org/debian trixie InRelease
+  SSL connection failed: error:0A000086:SSL routines::certificate verify failed
+E: Unable to locate package libldap2-dev
+```
+
+The build host is behind a TLS-inspecting proxy (Cato, Zscaler, Netskope,
+...) that re-signs outbound HTTPS with its own CA. The host trusts that CA,
+the build containers do not, so `apt-get`, the Pyodide download from GitHub
+and, depending on the proxy's rules, `npm ci` and `pip install` fail. Confirm
+with:
+
+```bash
+docker run --rm python:3.14-slim sh -c \
+  "echo | openssl s_client -connect deb.debian.org:443 2>/dev/null | openssl x509 -noout -issuer"
+# issuer=CN=Cato-Networks-Server-...   <- a proxy CA instead of a public one
+```
+
+Export the proxy's root CA from the host's trust store as PEM and put it in
+`deploy/build-ca/` as a `*.crt` file (see `deploy/build-ca/README.txt` for
+the export commands), then rebuild. Every build stage trusts the
+certificates in that directory; git ignores them, so they stay on the host.
+
 ### `apt` sits on "Waiting for cache lock ... held by process NNNN (unattended-upgr)"
 
 Not hung. A fresh Ubuntu starts `unattended-upgrades` a minute or two after

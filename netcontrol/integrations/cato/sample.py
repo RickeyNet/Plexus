@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from netcontrol.integrations.cato.collector import DEFAULT_OPTIONS
+from netcontrol.integrations.cato.site_config import build_sample_site_config
 
 
 def _iface(ident: str, name: str, *, pop: str, ip: str, provider: str, role: str, up: int, down: int) -> dict:
@@ -318,7 +319,9 @@ def _split_rule(index: int, name: str, action: str, *, users: list[dict] | None 
 
 def _split_tunnel() -> dict:
     """The Split Tunnel policy: one user with exceptions, one routing only a
-    range to Cato, and a group rule for a platform no sample user runs."""
+    range to Cato, a group rule for a platform no sample user runs, and a
+    group rule for devices off the managed networks, which the configuration
+    cannot decide and Dana's Client report does."""
     rules = [
         _split_rule(
             1,
@@ -342,14 +345,433 @@ def _split_tunnel() -> dict:
             platform=["LINUX"],
             destination={"fqdn": ["repo.example.com"]},
         ),
+        _split_rule(
+            4,
+            "Contractors away from the office",
+            "ROUTE_ALL_TO_CATO_EXCEPT",
+            groups=[_ref("g-2", "Contractors")],
+            sourceNetwork={"sourceNetworkType": "ANY_UNMANAGED_NETWORK"},
+            destination={"globalIpRange": [_ref("gr-1", "Lab-Pool")]},
+        ),
     ]
     return {"enabled": True, "rules": rules, "reduced": False}
+
+
+def _client_report(user: dict, split: str, at: str, *, device: str = "", office: str = "Disabled") -> dict:
+    """A user device's latest Client Connectivity Policy report, as
+    ``client_reports.collect_client_reports`` stores it."""
+    return {
+        "user_id": user["id"],
+        "user_name": user["name"],
+        "device_name": device or user["deviceName"],
+        "os_type": user["osType"],
+        "split_tunnel_configuration": split,
+        "office_mode": office,
+        "trusted_networks": "Enabled",
+        "src_ip": user["remoteIP"],
+        "pop_name": user["popName"],
+        "time": at,
+        "event_count": 3,
+    }
+
+
+def _client_reports(users: list[dict]) -> dict:
+    """Dana's report decides rule 4 ("Admin Defined", the one rule of that
+    mode that may apply); Lee's agrees with his rule; Priya, in an office,
+    reports "Disabled"; Sam's only report is from another device."""
+    dana, sam, priya, lee = users
+    rows = [
+        _client_report(dana, "Admin Defined", "2026-10-01T12:40:05Z"),
+        _client_report(priya, "Disabled", "2026-10-01T11:58:40Z", office="Enabled"),
+        _client_report(lee, "Admin Defined", "2026-10-01T09:02:11Z"),
+        _client_report(sam, "Admin Defined", "2026-09-28T08:15:00Z", device="LT-SAM-OLD"),
+    ]
+    return {"from": "2026-09-24T13:00:00Z", "to": "2026-10-01T13:00:00Z", "rows": rows}
+
+
+def _rule(index: int, name: str, **fields: Any) -> dict:
+    """A rule of a policy path tracing does not evaluate: the fields every
+    rule has, and ``fields``."""
+    return {
+        "id": f"{name.lower().replace(' ', '-')}-{index}",
+        "name": name,
+        "description": "",
+        "index": index,
+        "enabled": True,
+        "section": _ref("s-9", "Demo"),
+        **fields,
+    }
+
+
+def _policy(*rules: dict, **fields: Any) -> dict:
+    return {"enabled": True, "rules": list(rules), "reduced": False, **fields}
+
+
+def _users(*users: dict, groups: list[dict] | None = None) -> dict:
+    return {"user": list(users), "usersGroup": groups or []}
+
+
+_LEE = _ref("9004", "Lee Park")
+_ENGINEERING, _ALL_STAFF = _ref("ug-3", "Engineering"), _ref("ug-4", "All Staff")
+_MADISON, _BRANCHES = _ref("1002", "Branch-Madison"), _ref("g-10", "Branch sites")
+_TRACKING = {
+    "alert": {"enabled": False, "frequency": "HOURLY", "mailingList": [], "subscriptionGroup": [], "webhook": []},
+    "event": {"enabled": True},
+}
+_SCHEDULE = {"activeOn": "ALWAYS", "customRecurring": None, "customTimeframe": None}
+
+
+def _other_policies() -> dict[str, Any]:
+    """One or two rules of every policy path tracing does not evaluate, as
+    ``policy.<field>.policy`` returns them."""
+    lan_source = _endpoint(vlan=[], mac=[]) | {"subnet": ["10.60.20.0/24"]}
+    return {
+        "anti_malware_file_hash": _policy(
+            _rule(
+                1,
+                "Block known dropper",
+                action="BLOCK",
+                fileName="invoice.exe",
+                sha256="9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                expirationDate="2027-01-01T00:00:00Z",
+            )
+        ),
+        "application_control": _policy(
+            _rule(
+                1,
+                "Block file sharing uploads",
+                ruleType="APPLICATION",
+                applicationRule={
+                    "action": "BLOCK",
+                    "severity": "HIGH",
+                    "source": _endpoint(country=[]),
+                    "application": {"application": [], "appCategory": [_ref("c-31", "File Sharing")]},
+                    "schedule": _SCHEDULE,
+                    "tracking": _TRACKING,
+                },
+                dataRule=None,
+                fileRule=None,
+            ),
+            attributes={"dataControlEnabled": False},
+        ),
+        "app_tenant_restriction": _policy(
+            _rule(
+                1,
+                "Corporate Microsoft 365 only",
+                action="INJECT_HEADERS",
+                severity="MEDIUM",
+                application=_ref("office365", "Microsoft 365"),
+                headers=[{"name": "Restrict-Access-To-Tenants", "value": "example.com"}],
+                schedule=_SCHEDULE,
+                source=_endpoint(country=[]),
+            )
+        ),
+        "client_connectivity": _policy(
+            _rule(
+                1,
+                "Engineering on managed devices",
+                action="ALLOW",
+                confidenceLevel="HIGH",
+                connectionOrigin=["REMOTE"],
+                platform=["WINDOWS", "MACOS"],
+                country=[],
+                device=[_ref("dp-1", "Corporate laptop")],
+                source=_users(groups=[_ENGINEERING]),
+                sourceRange=[],
+            ),
+            _rule(
+                2,
+                "Block everyone else from abroad",
+                action="BLOCK",
+                confidenceLevel="ANY",
+                connectionOrigin=["ANY"],
+                platform=[],
+                country=[_ref("KP", "North Korea")],
+                device=[],
+                source=_users(),
+                sourceRange=[],
+            ),
+        ),
+        "dynamic_ip_allocation": _policy(
+            _rule(
+                1,
+                "Engineering pool",
+                platform=[],
+                country=[],
+                devicePostureProfile=[],
+                range={"globalIpRange": [_ref("gr-4", "SDP-Engineering")]},
+                source=_users(groups=[_ENGINEERING]),
+            )
+        ),
+        "private_access": _policy(
+            _rule(
+                1,
+                "Staff to the intranet",
+                action={"action": "ALLOW"},
+                connectionOrigin=["REMOTE"],
+                connectionsOriginList=[],
+                platform=[],
+                applications={"application": [_ref("pa-1", "Intranet")]},
+                country=[],
+                device=[],
+                schedule=_SCHEDULE,
+                source={"user": [], "usersGroup": [_ALL_STAFF], "systemGroup": []},
+                tracking=_TRACKING,
+            )
+        ),
+        "remote_port_fwd": _policy(
+            _rule(
+                1,
+                "Camera NVR",
+                forwardIcmp=False,
+                internalIp="10.60.20.40",
+                restrictionType="ALLOW_LIST",
+                externalIp=_ref("ip-1", "203.0.113.200"),
+                externalPortRange={"from": 8443, "to": 8443},
+                internalPortRange={"from": 443, "to": 443},
+                remoteIPs={"ip": ["198.51.100.250"], "subnet": [], "ipRange": [], "globalIpRange": []},
+                tracking=_TRACKING["alert"],
+            )
+        ),
+        "sdp_static_ip_allocation": _policy(_rule(1, "Lee fixed address", ip="10.88.0.14", source={"user": [_LEE]})),
+        "site_web_proxy": _policy(
+            _rule(
+                1,
+                "HQ explicit proxy",
+                allowedDestinationProtocol="BOTH",
+                fqdn="proxy.example.com",
+                port=8080,
+                shouldAssociateWithAllSites=False,
+                associatedSite=[_ref("1001", "HQ-DataCenter")],
+                authenticationConfig={"method": "NONE", "kerberosConfig": None},
+                webProxyTraffic=[
+                    {"rule": _rule(1, "Proxy the web", action="PROXY", destination={}, source=_endpoint())}
+                ],
+            )
+        ),
+        "socket_bypass": _policy(
+            _rule(
+                1,
+                "Backup to the local NAS",
+                action={"port": [], "event": {"enabled": False}},
+                site={"site": [], "group": [_BRANCHES]},
+                source=lan_source,
+                destination={"ip": ["10.60.20.50"], "subnet": [], "ipRange": [], "domain": [], "fqdn": []},
+                service={"custom": [{"port": ["445"], "portRange": None, "protocol": "TCP"}], "simple": []},
+                exception=[],
+            )
+        ),
+        "socket_lan": _policy(
+            _rule(
+                1,
+                "Madison LAN to LAN",
+                direction="BOTH",
+                transport="LAN",
+                site={"site": [_MADISON], "group": []},
+                source=lan_source,
+                destination=_endpoint(vlan=[]) | {"subnet": ["10.60.30.0/24"]},
+                service={"custom": [], "simple": []},
+                nat={"enabled": False, "natType": "DYNAMIC_PAT"},
+                firewall=[
+                    {
+                        "ruleType": "RULE",
+                        "subPolicy": None,
+                        "rule": _rule(1, "Allow printing", action="ALLOW", direction="TO"),
+                    }
+                ],
+            ),
+            _rule(
+                2,
+                "Every site routes guest traffic",
+                direction="TO",
+                transport="WAN",
+                site={"site": [], "group": []},
+                source=_endpoint(vlan=[30]),
+                destination=_endpoint(),
+                service={"custom": [], "simple": []},
+                nat={"enabled": True, "natType": "DYNAMIC_PAT"},
+                firewall=[],
+            ),
+        ),
+        "terminal_server": _policy(
+            _rule(
+                1,
+                "Citrix farm",
+                allowedHostIP=_ref("gr-2", "Scanners"),
+                excludeTraffic=[],
+            )
+        ),
+        "tls_inspect": _policy(
+            _rule(
+                1,
+                "Do not inspect banking",
+                action="BYPASS",
+                untrustedCertificateAction="BLOCK",
+                connectionOrigin="ANY",
+                connectionsOriginList=[],
+                platform=[],
+                country=[],
+                devicePostureProfile=[],
+                source=_endpoint(),
+                application={"appCategory": [_ref("c-7", "Financial Services")], "tlsInspectCategory": []},
+            ),
+            attributes={"defaultRuleAction": "INSPECT", "defaultRuleUntrustedCertificateAction": "PROMPT"},
+        ),
+        "wan_network": _policy(
+            _rule(
+                1,
+                "Voice first",
+                ruleType="WAN",
+                routeType="OPTIMIZED",
+                bandwidthPriority=_ref("bp-1", "P10"),
+                source=_endpoint(),
+                destination=_endpoint(site=[_ref("1001", "HQ-DataCenter")]),
+                application={"application": [_ref("teams", "Microsoft Teams")], "domain": [], "fqdn": []},
+                configuration={
+                    "activeTcpAcceleration": True,
+                    "packetLossMitigation": True,
+                    "preserveSourcePort": False,
+                    "allocationIp": [],
+                    "backhaulingSite": [],
+                    "popLocation": [],
+                    "primaryTransport": {
+                        "transportType": "WAN",
+                        "primaryInterfaceRole": "AUTOMATIC",
+                        "secondaryInterfaceRole": "AUTOMATIC",
+                    },
+                    "secondaryTransport": {
+                        "transportType": "AUTOMATIC",
+                        "primaryInterfaceRole": "AUTOMATIC",
+                        "secondaryInterfaceRole": "AUTOMATIC",
+                    },
+                },
+                exceptions=[],
+            )
+        ),
+        "ztna_always_on": _policy(
+            _rule(
+                1,
+                "Always on for staff",
+                action="ENFORCE",
+                allowFailOpen=True,
+                allowUserBypass=True,
+                antiTamperMode="PROTECT",
+                platform=["WINDOWS"],
+                bypassDuration={"time": 30, "unit": "MINUTES"},
+                devicePostureProfile=[],
+                source=_users(groups=[_ALL_STAFF]),
+            )
+        ),
+    }
+
+
+def _objects() -> dict[str, Any]:
+    """The groups, users groups, containers and custom applications rules
+    name, as the collector returns them."""
+    return {
+        "groups": [
+            {
+                "id": "g-10",
+                "name": "Branch sites",
+                "description": "Every branch office",
+                "membersCount": 2,
+                "membersCountPerType": [{"type": "SITE", "membersCount": 2}],
+                "members": [
+                    {"id": "1002", "name": "Branch-Madison", "type": "SITE"},
+                    {"id": "1003", "name": "Branch-Denver", "type": "SITE"},
+                ],
+            },
+            {
+                "id": "g-11",
+                "name": "Printers",
+                "description": "",
+                "membersCount": 1,
+                "membersCountPerType": [{"type": "HOST", "membersCount": 1}],
+                "members": [{"id": "h-1", "name": "printer-1", "type": "HOST"}],
+            },
+        ],
+        "user_groups": [
+            {
+                "id": "g-2",
+                "name": "Contractors",
+                "description": "Outside contractors",
+                "membersCount": 1,
+                "importType": "MANUAL",
+                "directoryId": None,
+                "members": [
+                    {"id": "9001", "displayName": "Dana Reyes", "email": "dana.reyes@example.com", "userId": None}
+                ],
+            },
+            {
+                "id": "ug-3",
+                "name": "Engineering",
+                "description": "",
+                "membersCount": 2,
+                "importType": "LDAP",
+                "directoryId": "cn=engineering",
+                "members": [
+                    {"id": "9002", "displayName": "Sam Okafor", "email": "sam.okafor@example.com", "userId": None},
+                    {"id": "9004", "displayName": "Lee Park", "email": "lee.park@example.com", "userId": None},
+                ],
+            },
+            {
+                # More members than the collector reads: not read.
+                "id": "ug-4",
+                "name": "All Staff",
+                "description": "",
+                "membersCount": 1250,
+                "importType": "LDAP",
+                "directoryId": "cn=staff",
+                "members": None,
+            },
+        ],
+        "containers": [
+            {
+                "__typename": "IpAddressRangeContainer",
+                "id": "c-1",
+                "name": "Blocked ranges",
+                "description": "Threat feed",
+                "size": 120,
+                "syncData": None,
+                "syncDataAudit": None,
+                "members": None,
+            },
+            {
+                "__typename": "FqdnContainer",
+                "id": "c-2",
+                "name": "Blocked domains",
+                "description": "",
+                "size": 40,
+                "syncData": None,
+                "syncDataAudit": None,
+                "members": None,
+            },
+        ],
+        "custom_applications": [
+            {
+                "id": "ca-1",
+                "name": "Payroll portal",
+                "description": "",
+                "category": [_ref("c-40", "Business")],
+                "criteria": [
+                    {
+                        "protocol": "TCP",
+                        "port": [8443],
+                        "portRange": [],
+                        "destination": {"domain": [], "fqdn": ["payroll.example.com"], "destinationIp": None},
+                    }
+                ],
+            }
+        ],
+    }
 
 
 def build_sample_raw() -> dict[str, Any]:
     """A small account: an HA data center, two Socket branches (one down), an
     IPsec site and a few remote users, across two PoPs, and the account's
-    WAN and Internet firewall rules and Split Tunnel policy."""
+    WAN and Internet firewall rules, Split Tunnel policy, a rule or two of
+    every other policy, and the groups, users groups, containers and custom
+    applications rules name."""
     sites = [
         _site(
             "1001",
@@ -490,7 +912,7 @@ def build_sample_raw() -> dict[str, Any]:
     ]
     users = [
         _user("9001", "Dana Reyes", "New York", "10.88.0.11", "198.51.100.201", "OS_WINDOWS"),
-        _user("9002", "Sam Okafor", "Ashburn", "10.88.0.12", "198.51.100.202", "OS_MAC"),
+        _user("9002", "Sam Okafor", "Ashburn", "10.88.0.12", "198.51.100.12", "OS_MAC"),
         _user("9003", "Priya Nair", "Ashburn", "10.88.0.13", "198.51.100.10", "OS_WINDOWS", office=True),
         _user("9004", "Lee Park", "New York", "10.88.0.14", "198.51.100.204", "OS_WINDOWS"),
     ]
@@ -500,6 +922,8 @@ def build_sample_raw() -> dict[str, Any]:
         "timestamp": "2026-10-01T13:00:00Z",
         "sites": sites,
         "users": users,
+        # The latest Client Connectivity Policy report of each user device.
+        "client_reports": _client_reports(users),
         "ranges": ranges,
         "interfaces": interfaces,
         # Read, and no site has a BGP peer: the routes are the ranges.
@@ -507,6 +931,8 @@ def build_sample_raw() -> dict[str, Any]:
         "wan_firewall": wan_firewall,
         "internet_firewall": internet_firewall,
         "split_tunnel": _split_tunnel(),
+        # The sites' configuration and the account's DHCP and DNS settings.
+        "site_config": build_sample_site_config(),
         # The account's global IP range objects (Networking > IP Ranges), as
         # ``object.globalIpRangeList`` returns them.
         "global_ip_ranges": [
@@ -531,7 +957,27 @@ def build_sample_raw() -> dict[str, Any]:
                 "ipRange": "10.0.0.0-10.255.255.255",
                 "subnet": "10.0.0.0/8",
             },
+            {
+                "id": "gr-4",
+                "name": "SDP-Engineering",
+                "description": "Remote user addresses for engineering",
+                "ipRange": "10.89.0.0-10.89.0.255",
+                "subnet": "10.89.0.0/24",
+            },
         ],
+        **_other_policies(),
+        # The sub-policies of the policies that have them.
+        "wan_firewall_policies": [
+            {"id": "p-1", "name": "Main", "description": "", "enabled": True, "policyLevel": "MAIN"},
+            {"id": "p-2", "name": "Lab", "description": "Lab sites", "enabled": False, "policyLevel": "SUB_POLICY"},
+        ],
+        "internet_firewall_policies": [
+            {"id": "p-3", "name": "Main", "description": "", "enabled": True, "policyLevel": "MAIN"}
+        ],
+        "socket_lan_policies": [
+            {"id": "p-4", "name": "Main", "description": "", "enabled": True, "policyLevel": "MAIN"}
+        ],
+        **_objects(),
         "errors": [],
         "stats": {"requests": 0, "retries": 0, "rate_limited": 0},
         "options": dict(DEFAULT_OPTIONS),

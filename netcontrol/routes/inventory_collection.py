@@ -14,6 +14,10 @@ credential or one the caller picks, reads and stores:
     the CDP / LLDP neighbors (``topology_links``) and the MAC address table,
     which otherwise only the SNMP collectors write; a successful read
     replaces what SNMP stored for that host
+  - from the configuration, the IPv4 addresses of the device's interfaces
+    (``host_ip_aliases``, which the map matches neighbors and integration
+    records by) and its hostname, which replaces a discovery placeholder
+    name (``discovered-10-74-103-1``) but never a name a user chose
 
 The show commands and the parsing of their ntc-templates rows come from the
 host's driver; a type without a driver gets the Cisco IOS ones, as the
@@ -44,8 +48,11 @@ from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
 from netcontrol.drivers import Driver, DriverCapabilityError, GenericDriver, RouteTableCommands, get_driver
+from netcontrol.integrations.pathtrace.platforms import interface_addresses
 from netcontrol.integrations.pathtrace.route_tables import interface_key
 from netcontrol.routes import background_jobs
+from netcontrol.routes.host_identity import interface_ip, is_placeholder_hostname
+from netcontrol.routes.ipam_push import push_inventory_host_allocation
 from netcontrol.routes.mac_tracking import mac_sightings_from_cli, store_mac_sightings
 from netcontrol.routes.meraki_topology import _count_text, _source, _utc_iso
 from netcontrol.routes.route_capture import (
@@ -249,13 +256,15 @@ def _capture_host(host: dict, credential: dict) -> dict[str, Any]:
 
     Returns ``{"skipped", "routes": (text, count) | None, "config": str | None,
     "vlans" | "interfaces" | "neighbors" | "macs": [row, ...] | None,
-    "errors": [message, ...]}`` (``None``: not read; ``skipped`` is never
-    set: every type gets commands, and it is kept so a caller reads one shape).
+    "device_type": the type the session resolved, "errors": [message, ...]}``
+    (``None``: not read; ``skipped`` is never set: every type gets commands,
+    and it is kept so a caller reads one shape).
     """
     outcome: dict[str, Any] = {"skipped": False, "routes": None, "config": None, "errors": []}
     outcome.update(dict.fromkeys(TABLE_PARTS))
     # The type may be autodetected on connect, so the commands follow the resolved one.
     conn, resolved_type = _open_netmiko_session(host, credential)
+    outcome["device_type"] = resolved_type
     try:
         route_commands, config_command = _commands(resolved_type)
         try:
@@ -303,7 +312,54 @@ async def _store_neighbors(host: dict, neighbors: list[dict]) -> None:
     await _write_links_and_stats(int(host["id"]), [{**source, **entry} for entry in neighbors], [])
 
 
-async def _store_host(host: dict, outcome: dict[str, Any]) -> dict[str, bool]:
+def _config_identity(device_type: str, config: str) -> tuple[str, list[str] | None]:
+    """``(hostname, addresses)`` a running configuration sets: the device's
+    own name (``""``: none found) and the IPv4 addresses of its interfaces
+    (``None``: the platform's configuration is not read). Best effort: a
+    configuration a parser trips on gives neither."""
+    try:
+        hostname = _table_driver(device_type).parse_config_hostname(config)
+    except Exception as exc:  # noqa: BLE001 - the addresses are still read
+        LOGGER.debug("inventory collection: hostname not parsed: %s", type(exc).__name__)
+        hostname = ""
+    try:
+        found = interface_addresses(device_type, config)
+    except Exception as exc:  # noqa: BLE001 - the stored aliases stay
+        LOGGER.debug("inventory collection: interface addresses not parsed: %s", type(exc).__name__)
+        found = None
+    if found is None:
+        return hostname, None
+    return hostname, list(dict.fromkeys(ip for ip in map(interface_ip, found) if ip))
+
+
+async def _store_identity(host: dict, device_type: str, config: str, rename_lock: asyncio.Lock) -> None:
+    """What the configuration says the device is. Its interface addresses
+    become the host's IP aliases, as the SNMP discovery records a device's
+    ipAddrTable (none found: the stored aliases stay). Its hostname replaces
+    the inventory name only when that is a discovery placeholder for the
+    host's address (``discovered-10-74-103-1``) and no other host has the
+    name: a name a user chose is never changed. ``rename_lock`` keeps two
+    hosts of one run from both taking the same name."""
+    host_id = int(host["id"])
+    ip = str(host.get("ip_address") or "").strip()
+    hostname, addresses = _config_identity(device_type, config)
+    if ip and addresses:
+        await db.set_host_ip_aliases(host_id, ip, [address for address in addresses if address != ip])
+    current = str(host.get("hostname") or "").strip()
+    if not ip or not hostname or not is_placeholder_hostname(current, ip):
+        return
+    async with rename_lock:
+        if any(int(other["id"]) != host_id for other in await db.find_hosts_by_hostname(hostname)):
+            LOGGER.info(
+                "inventory collection: %s (%s) not renamed to %s: another host has that name", current, ip, hostname
+            )
+            return
+        await db.update_host(host_id, hostname, ip, str(host.get("device_type") or ""))
+    await push_inventory_host_allocation(hostname=hostname, ip_address=ip, source_hint="inventory-collection")
+    LOGGER.info("inventory collection: renamed %s (%s) to %s, its configured hostname", current, ip, hostname)
+
+
+async def _store_host(host: dict, outcome: dict[str, Any], rename_lock: asyncio.Lock) -> dict[str, bool]:
     """Write what was read into the stores the path trace and the map read.
     Returns, for each of ``PARTS``, whether it was read and stored."""
     host_id = int(host["id"])
@@ -321,6 +377,8 @@ async def _store_host(host: dict, outcome: dict[str, Any]) -> dict[str, bool]:
                 policy_id=None, host_id=host_id, config_text=config, capture_method="topology", status="success"
             )
         stored["configs"] = True
+        device_type = str(outcome.get("device_type") or host.get("device_type") or "")
+        await _store_identity(host, device_type, config, rename_lock)
     # None: not read, so what SNMP or an earlier run stored stays.
     if outcome.get("vlans") is not None:
         await _store_vlans(host_id, outcome["vlans"])
@@ -355,7 +413,7 @@ def _host_result(error: str | None, *, skipped: bool = False, stored: dict[str, 
     return {"skipped": skipped, **dict.fromkeys(PARTS, False), **(stored or {}), "error": error}
 
 
-async def _collect_host(host: dict, credential: dict) -> dict[str, Any]:
+async def _collect_host(host: dict, credential: dict, rename_lock: asyncio.Lock) -> dict[str, Any]:
     """One host: capture over SSH, then store. Never raises."""
     try:
         async with state.device_op_semaphore():
@@ -370,7 +428,7 @@ async def _collect_host(host: dict, credential: dict) -> dict[str, Any]:
     if outcome.get("skipped"):
         return _host_result(None, skipped=True)
     try:
-        stored = await _store_host(host, outcome)
+        stored = await _store_host(host, outcome, rename_lock)
     except Exception as exc:  # noqa: BLE001 - recorded in the collection report
         LOGGER.warning("inventory collection: store failed for %s: %s", _host_label(host), redact_value(str(exc)))
         return _host_result("Capture not saved; see the server log")
@@ -400,10 +458,11 @@ async def _run_collection(job_id: str, hosts: list[dict], credential: dict, user
     done = 0
     errors: list[dict[str, Any]] = []
     counts = {"collected": 0, **dict.fromkeys(PARTS, 0), "skipped": 0}
+    rename_lock = asyncio.Lock()
 
     async def _one(host: dict) -> None:
         nonlocal done
-        outcome = await _collect_host(host, credential)
+        outcome = await _collect_host(host, credential, rename_lock)
         counts["skipped"] += int(bool(outcome["skipped"]))
         for part in PARTS:
             counts[part] += int(bool(outcome[part]))
