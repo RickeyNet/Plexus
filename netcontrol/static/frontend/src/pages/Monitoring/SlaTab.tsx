@@ -3,14 +3,15 @@ import { useState } from 'react';
 import { Modal } from '@/components/Modal';
 import { TabBar } from '@/components/TabBar';
 import {
+  useSlaCompliance,
+  useSlaComplianceHistory,
   useSlaHostDetail,
   useSlaSummary,
-  useSlaTargets,
+  type SlaComplianceCounts,
   type SlaDailyPoint,
   type SlaHostSummary,
-  type SlaTarget,
 } from '@/api/monitoring';
-import { formatMinutes, getHostSlaCompliance } from './helpers';
+import { formatMinutes, formatTimestamp, slaStatusBadge } from './helpers';
 
 type SubTab = 'hosts' | 'trends';
 
@@ -23,7 +24,6 @@ export function SlaTab() {
   const [days, setDays] = useState(30);
   const [subTab, setSubTab] = useState<SubTab>('hosts');
   const summary = useSlaSummary(days);
-  const targets = useSlaTargets();
   const [hostQuery, setHostQuery] = useState('');
   const [detailHostId, setDetailHostId] = useState<number | null>(null);
 
@@ -35,8 +35,11 @@ export function SlaTab() {
           <option value={7}>Last 7 days</option>
           <option value={30}>Last 30 days</option>
           <option value={90}>Last 90 days</option>
+          <option value={365}>Last 365 days</option>
         </select>
       </div>
+
+      <SlaComplianceStrip compliance={summary.data?.compliance} />
 
       <SlaGauges summary={summary.data} />
 
@@ -53,7 +56,6 @@ export function SlaTab() {
           />
           <SlaHostsList
             summary={summary.data}
-            targets={targets.data ?? []}
             query={hostQuery}
             onSelect={setDetailHostId}
           />
@@ -69,6 +71,39 @@ export function SlaTab() {
           onClose={() => setDetailHostId(null)}
         />
       )}
+    </div>
+  );
+}
+
+// Hosts per worst SLA target status, as evaluated on the server (hourly, or
+// on demand from Configure -> SLA Targets). Target windows are set per target
+// and are independent of the Period selector.
+function SlaComplianceStrip({ compliance }: { compliance?: SlaComplianceCounts }) {
+  if (!compliance || compliance.hosts === 0) {
+    return (
+      <div className="card text-muted" style={{ padding: '0.6rem 1rem', marginBottom: '0.75rem', fontSize: '0.9em' }}>
+        No SLA target has been evaluated yet. Define targets under Configure, SLA Targets.
+      </div>
+    );
+  }
+  const items: { key: 'met' | 'warn' | 'breach' | 'no_data'; color: string }[] = [
+    { key: 'met', color: 'var(--success)' },
+    { key: 'warn', color: 'var(--warning)' },
+    { key: 'breach', color: 'var(--danger)' },
+    { key: 'no_data', color: 'var(--text-muted)' },
+  ];
+  return (
+    <div className="card" style={{ padding: '0.6rem 1rem', marginBottom: '0.75rem', display: 'flex', gap: '1.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+      <strong>SLA compliance</strong>
+      {items.map(({ key, color }) => (
+        <div key={key}>
+          <span className="text-muted">{slaStatusBadge(key).label}:</span>{' '}
+          <strong style={{ color }}>{compliance[key]}</strong>
+        </div>
+      ))}
+      <div className="text-muted" style={{ fontSize: '0.85em', marginLeft: 'auto' }}>
+        {compliance.hosts} host{compliance.hosts === 1 ? '' : 's'} with targets, evaluated {formatTimestamp(compliance.evaluated_at)}
+      </div>
     </div>
   );
 }
@@ -120,12 +155,10 @@ function SlaGauges({ summary }: { summary?: { avg_uptime_pct?: number | null; av
 
 function SlaHostsList({
   summary,
-  targets,
   query,
   onSelect,
 }: {
   summary?: { hosts: SlaHostSummary[] };
-  targets: SlaTarget[];
   query: string;
   onSelect: (id: number) => void;
 }) {
@@ -149,10 +182,8 @@ function SlaHostsList({
         <div>Status</div>
       </div>
       {filtered.map((h) => {
-        const compliance = getHostSlaCompliance(h, targets);
         const uptimeColor = (h.uptime_pct ?? 0) >= 99.9 ? 'success' : (h.uptime_pct ?? 0) >= 99 ? 'warning' : 'danger';
-        const badgeColor = compliance.status === 'breach' ? 'danger' : compliance.status === 'warn' ? 'warning' : compliance.status === 'met' ? 'success' : 'text-muted';
-        const badgeLabel = compliance.status === 'none' ? 'No Target' : compliance.status === 'met' ? 'Met' : compliance.status === 'warn' ? 'Warning' : 'Breach';
+        const badge = slaStatusBadge(h.sla_status);
         return (
           <div
             key={h.host_id}
@@ -168,9 +199,7 @@ function SlaHostsList({
             <div>{h.jitter_ms != null ? `${h.jitter_ms.toFixed(1)}ms` : '-'}</div>
             <div>{h.avg_packet_loss_pct != null ? `${h.avg_packet_loss_pct.toFixed(2)}%` : '-'}</div>
             <div>
-              <span style={{ background: `var(--${badgeColor})`, color: 'white', padding: '2px 8px', borderRadius: 3, fontSize: '0.8em', fontWeight: 600 }}>
-                {badgeLabel}
-              </span>
+              <span className={badge.cls}>{badge.label}</span>
             </div>
           </div>
         );
@@ -331,6 +360,7 @@ function SlaHostDetailModal({ hostId, days, onClose }: { hostId: number; days: n
             <div><span className="text-muted">Alerts:</span> {detail.data.total_alerts} ({detail.data.resolved_alerts} resolved)</div>
             <div><span className="text-muted">MTTR:</span> {formatMinutes(detail.data.mttr_minutes)}</div>
           </div>
+          <SlaHostTargets hostId={hostId} />
           {detail.data.daily && detail.data.daily.length > 0 ? (
             <>
               <SlaChart daily={detail.data.daily} field="uptime_pct" label="Daily Uptime %" color="var(--success)" minY={95} maxY={100} />
@@ -344,5 +374,71 @@ function SlaHostDetailModal({ hostId, days, onClose }: { hostId: number; days: n
         </>
       )}
     </Modal>
+  );
+}
+
+const SLA_METRIC_UNITS: Record<string, string> = { uptime: '%', latency: ' ms', jitter: ' ms', packet_loss: '%' };
+
+function formatSlaValue(metric: string, value: number | null | undefined): string {
+  if (value == null) return '-';
+  return `${value.toFixed(metric === 'uptime' ? 3 : 2)}${SLA_METRIC_UNITS[metric] ?? ''}`;
+}
+
+// The host's SLA targets as last evaluated on the server, and the recent
+// status changes.
+function SlaHostTargets({ hostId }: { hostId: number }) {
+  const compliance = useSlaCompliance(hostId);
+  const history = useSlaComplianceHistory(hostId, 10);
+  const rows = compliance.data ?? [];
+  const changes = history.data ?? [];
+  if (rows.length === 0 && changes.length === 0) return null;
+  return (
+    <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
+      <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>SLA targets</div>
+      {rows.length > 0 && (
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Target</th>
+              <th>Value</th>
+              <th>Target / Warning</th>
+              <th>Window</th>
+              <th>Status</th>
+              <th>Since</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const badge = slaStatusBadge(r.status);
+              return (
+                <tr key={r.target_id}>
+                  <td>{r.target_name}</td>
+                  <td>{formatSlaValue(r.metric, r.value)}</td>
+                  <td>{formatSlaValue(r.metric, r.target_value)} / {formatSlaValue(r.metric, r.warning_value)}</td>
+                  <td>{r.window_days} days</td>
+                  <td><span className={badge.cls}>{badge.label}</span></td>
+                  <td>{formatTimestamp(r.status_since)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      {changes.length > 0 && (
+        <>
+          <div className="text-muted" style={{ fontSize: '0.85em', margin: '0.75rem 0 0.25rem' }}>Recent status changes</div>
+          {changes.map((c) => (
+            <div key={c.id} style={{ fontSize: '0.85em', display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <span className="text-muted">{formatTimestamp(c.evaluated_at)}</span>
+              <span>{c.target_name}:</span>
+              {c.previous_status && <span className={slaStatusBadge(c.previous_status).cls}>{slaStatusBadge(c.previous_status).label}</span>}
+              {c.previous_status && <span className="text-muted">to</span>}
+              <span className={slaStatusBadge(c.status).cls}>{slaStatusBadge(c.status).label}</span>
+              <span className="text-muted">{formatSlaValue(c.metric, c.value)}</span>
+            </div>
+          ))}
+        </>
+      )}
+    </div>
   );
 }

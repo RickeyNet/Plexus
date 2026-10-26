@@ -29,6 +29,9 @@ function org(over: Partial<MerakiOrg>): MerakiOrg {
     has_api_key: true,
     options: FALLBACK_OPTIONS,
     building: false,
+    auto_collect: true,
+    collect_interval_seconds: 0,
+    next_collection_at: null,
     ...over,
   };
 }
@@ -107,5 +110,26 @@ describe('defaultOptionsFor', () => {
     const server = { ...FALLBACK_CATO_OPTIONS, include_users: false };
     expect(defaultOptionsFor('cato', { cato_default_options: server })).toBe(server);
     expect(defaultOptionsFor('appgate', undefined)).toBe(FALLBACK_APPGATE_OPTIONS);
+  });
+});
+
+describe('scheduled collection fields', () => {
+  it('open on the entry and are sent as fields, not build options', () => {
+    const v = catoForm.fromRecord(
+      org({ provider: 'cato', auto_collect: false, collect_interval_seconds: 900 }),
+      FALLBACK_CATO_OPTIONS,
+    );
+    expect(v).toMatchObject({ auto_collect: false, collect_interval_minutes: 15 });
+    const body = catoForm.toPayload({ ...v, collect_interval_minutes: 30 });
+    expect(body.auto_collect).toBe(false);
+    expect(body.collect_interval_seconds).toBe(1800);
+    expect(body.options).not.toHaveProperty('auto_collect');
+    expect(body.options).not.toHaveProperty('collect_interval_minutes');
+  });
+
+  it('default to on with the global interval', () => {
+    const body = merakiForm.toPayload(merakiForm.fromRecord(null, FALLBACK_OPTIONS));
+    expect(body.auto_collect).toBe(true);
+    expect(body.collect_interval_seconds).toBe(0);
   });
 });

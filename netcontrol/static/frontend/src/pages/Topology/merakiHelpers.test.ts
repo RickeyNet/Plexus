@@ -18,6 +18,7 @@ import {
   PANORAMA_OPTION_TOGGLES,
   defaultCollectCredential,
   describeInventoryResult,
+  describeNextCollection,
   describeProgress,
   SETTINGS_SERVICE_CREDENTIAL,
   merakiViewSections,
@@ -831,5 +832,31 @@ describe("sourceTypeLabel", () => {
       "Azure",
       "GCP",
     ]);
+  });
+});
+
+describe("next collection", () => {
+  const now = Date.parse("2026-10-26T12:00:00Z");
+
+  it("is blank when the scheduler never collects the source", () => {
+    expect(describeNextCollection(null, now)).toBe("");
+    expect(describeNextCollection(undefined, now)).toBe("");
+  });
+
+  it("says the next pass once the source is due", () => {
+    expect(describeNextCollection("2026-10-26T11:00:00+00:00", now)).toBe(
+      "next scheduler pass",
+    );
+    // A stamp without a zone is UTC.
+    expect(describeNextCollection("2026-10-26 12:00:00", now)).toBe(
+      "next scheduler pass",
+    );
+  });
+
+  it("shows the time of a later collection", () => {
+    const iso = "2026-10-26T13:00:00+00:00";
+    expect(describeNextCollection(iso, now)).toBe(
+      new Date(iso).toLocaleString(),
+    );
   });
 });

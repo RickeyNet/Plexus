@@ -107,6 +107,9 @@ export interface AlertSuppression {
   created_by?: string | null;
 }
 
+/** Server-side SLA target evaluation result for one (target, host). */
+export type SlaStatus = 'met' | 'warn' | 'breach' | 'no_data';
+
 export interface SlaHostSummary {
   host_id: number;
   hostname?: string | null;
@@ -115,6 +118,18 @@ export interface SlaHostSummary {
   avg_latency_ms?: number | null;
   jitter_ms?: number | null;
   avg_packet_loss_pct?: number | null;
+  /** Worst status of the host's SLA targets at the last evaluation; null without targets. */
+  sla_status?: SlaStatus | null;
+}
+
+/** Hosts per worst SLA status at the last evaluation. */
+export interface SlaComplianceCounts {
+  met: number;
+  warn: number;
+  breach: number;
+  no_data: number;
+  hosts: number;
+  evaluated_at?: string | null;
 }
 
 export interface SlaSummary {
@@ -126,6 +141,7 @@ export interface SlaSummary {
   mttd_minutes?: number | null;
   total_alerts?: number;
   resolved_alerts?: number;
+  compliance?: SlaComplianceCounts;
   hosts: SlaHostSummary[];
 }
 
@@ -159,6 +175,58 @@ export interface SlaTarget {
   group_id?: number | null;
   host_name?: string | null;
   group_name?: string | null;
+  /** Days the target is evaluated over (1-365). */
+  window_days?: number;
+}
+
+/** Latest evaluation of one SLA target for one host (GET /sla/compliance). */
+export interface SlaComplianceRow {
+  target_id: number;
+  target_name: string;
+  host_id: number;
+  hostname?: string | null;
+  ip_address?: string | null;
+  group_id?: number | null;
+  metric: string;
+  value?: number | null;
+  target_value: number;
+  warning_value: number;
+  status: SlaStatus;
+  sample_count: number;
+  window_days: number;
+  window_start: string;
+  window_end: string;
+  evaluated_at: string;
+  status_since: string;
+}
+
+/** One SLA status change (GET /sla/compliance/history). */
+export interface SlaComplianceChange {
+  id: number;
+  target_id: number;
+  target_name: string;
+  host_id: number;
+  hostname?: string | null;
+  metric: string;
+  value?: number | null;
+  status: SlaStatus;
+  previous_status: SlaStatus | '';
+  evaluated_at: string;
+}
+
+export interface SlaEvaluateResult {
+  rollups: { hourly_rows: number; daily_rows: number };
+  evaluation: {
+    targets: number;
+    evaluated: number;
+    met: number;
+    warn: number;
+    breach: number;
+    no_data: number;
+    alerts: number;
+    suppressed: number;
+    evaluated_at: string;
+  };
 }
 
 export interface AvailabilityHost {
@@ -316,6 +384,26 @@ export function useSlaTargets() {
   });
 }
 
+export function useSlaCompliance(hostId: number | null = null, groupId: number | null = null) {
+  const params = new URLSearchParams();
+  if (hostId != null) params.set('host_id', String(hostId));
+  if (groupId != null) params.set('group_id', String(groupId));
+  return useQuery<SlaComplianceRow[]>({
+    queryKey: ['sla-compliance', hostId, groupId],
+    queryFn: () => apiRequest(`/sla/compliance?${params}`),
+  });
+}
+
+export function useSlaComplianceHistory(hostId: number | null = null, limit = 20) {
+  const params = new URLSearchParams();
+  if (hostId != null) params.set('host_id', String(hostId));
+  params.set('limit', String(limit));
+  return useQuery<SlaComplianceChange[]>({
+    queryKey: ['sla-compliance-history', hostId, limit],
+    queryFn: () => apiRequest(`/sla/compliance/history?${params}`),
+  });
+}
+
 export function useAvailabilitySummary(groupId: number | null = null, days = 7) {
   const params = new URLSearchParams();
   params.set('days', String(days));
@@ -468,6 +556,7 @@ export interface SlaTargetCreate {
   warning_value: number;
   host_id?: number | null;
   group_id?: number | null;
+  window_days?: number;
 }
 
 export function useCreateSlaTarget() {
@@ -494,6 +583,20 @@ export function useDeleteSlaTarget() {
     mutationFn: (id: number) =>
       apiRequest(`/sla/targets/${id}`, { method: 'DELETE' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['sla-targets'] }),
+  });
+}
+
+/** Admin: roll up and evaluate every enabled SLA target now. */
+export function useEvaluateSla() {
+  const qc = useQueryClient();
+  return useMutation<SlaEvaluateResult, Error, void>({
+    mutationFn: () => apiRequest('/sla/evaluate', { method: 'POST' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sla-compliance'] });
+      qc.invalidateQueries({ queryKey: ['sla-compliance-history'] });
+      qc.invalidateQueries({ queryKey: ['sla-summary'] });
+      qc.invalidateQueries({ queryKey: ['monitoring-alerts'] });
+    },
   });
 }
 
@@ -660,5 +763,123 @@ export function useDeleteOidProfile() {
     mutationFn: (id: number) =>
       apiRequest(`/oid-profiles/${id}`, { method: 'DELETE' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['oid-profiles'] }),
+  });
+}
+
+// ── Topology availability (API-collected devices, sites, links) ─────────────
+
+export type TopologyAvailabilityState = 'up' | 'degraded' | 'down' | 'unknown';
+
+export interface TopologyAvailabilityFilters {
+  provider?: string | null;
+  orgRef?: number | null;
+  entityType?: string | null;
+  days?: number;
+  limit?: number;
+}
+
+export interface TopologyAvailabilityEntity {
+  provider: string;
+  org_ref: number;
+  org_name: string;
+  entity_type: string;
+  entity_id: string;
+  name: string;
+  site: string;
+  model: string;
+  host_id: number | null;
+  raw_status: string;
+  missing: boolean;
+  current_state: TopologyAvailabilityState;
+  last_change: string | null;
+  first_seen: string | null;
+  last_seen: string | null;
+  outage_count: number;
+  uptime_pct: number | null;
+  up_seconds: number;
+  degraded_seconds: number;
+  down_seconds: number;
+  unknown_seconds: number;
+}
+
+export interface TopologyAvailabilityOrg {
+  provider: string;
+  org_ref: number;
+  org_name: string;
+  entity_count: number;
+}
+
+export interface TopologyAvailabilitySummary {
+  period_days: number;
+  window_start: string;
+  window_end: string;
+  entity_count: number;
+  up: number;
+  degraded: number;
+  down: number;
+  unknown: number;
+  avg_uptime_pct: number | null;
+  total_outages: number;
+  orgs: TopologyAvailabilityOrg[];
+  entities: TopologyAvailabilityEntity[];
+}
+
+export interface TopologyAvailabilityOutage {
+  provider: string;
+  org_ref: number;
+  org_name: string;
+  entity_type: string;
+  entity_id: string;
+  name: string;
+  site: string;
+  host_id: number | null;
+  started_at: string;
+  ended_at: string | null;
+  ongoing: boolean;
+  duration_seconds: number | null;
+}
+
+export interface TopologyAvailabilityTransition {
+  id: number;
+  provider: string;
+  org_ref: number;
+  entity_type: string;
+  entity_id: string;
+  name: string;
+  site: string;
+  old_state: TopologyAvailabilityState;
+  new_state: TopologyAvailabilityState;
+  transition_at: string;
+  snapshot_ref: string;
+}
+
+function topologyAvailabilityQuery(f: TopologyAvailabilityFilters, defaultLimit?: number): string {
+  const params = new URLSearchParams();
+  if (f.provider) params.set('provider', f.provider);
+  if (f.orgRef != null) params.set('org_ref', String(f.orgRef));
+  if (f.entityType) params.set('entity_type', f.entityType);
+  params.set('days', String(f.days ?? 7));
+  if (defaultLimit != null) params.set('limit', String(f.limit ?? defaultLimit));
+  return params.toString();
+}
+
+export function useTopologyAvailabilitySummary(f: TopologyAvailabilityFilters = {}) {
+  return useQuery<TopologyAvailabilitySummary>({
+    queryKey: ['topology-availability-summary', f.provider ?? null, f.orgRef ?? null, f.entityType ?? null, f.days ?? 7],
+    queryFn: () => apiRequest(`/availability/topology/summary?${topologyAvailabilityQuery(f)}`),
+  });
+}
+
+export function useTopologyAvailabilityOutages(f: TopologyAvailabilityFilters = {}) {
+  return useQuery<{ outages: TopologyAvailabilityOutage[] }>({
+    queryKey: ['topology-availability-outages', f.provider ?? null, f.orgRef ?? null, f.entityType ?? null, f.days ?? 7, f.limit ?? 200],
+    queryFn: () => apiRequest(`/availability/topology/outages?${topologyAvailabilityQuery(f, 200)}`),
+  });
+}
+
+export function useTopologyAvailabilityTransitions(f: TopologyAvailabilityFilters = {}) {
+  return useQuery<{ transitions: TopologyAvailabilityTransition[] }>({
+    queryKey: ['topology-availability-transitions', f.provider ?? null, f.orgRef ?? null, f.entityType ?? null, f.days ?? 7, f.limit ?? 500],
+    queryFn: () => apiRequest(`/availability/topology/transitions?${topologyAvailabilityQuery(f, 500)}`),
   });
 }

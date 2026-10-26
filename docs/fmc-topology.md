@@ -46,8 +46,9 @@ on-box by Firepower Device Manager, is not read.
    lists the domains the user can see.
 5. **Collect.** Click **Collect Now**. When it finishes the map updates.
 
-Collection runs when you click **Collect Now**; it is not scheduled. The map
-shows the most recent collection until you run another.
+Collection runs when you click **Collect Now**, and on a schedule (hourly by
+default) as described in [Scheduled collection](meraki-topology.md#scheduled-collection).
+The map shows the most recent collection until you run another.
 
 ### FMC address, domain and credentials
 
@@ -295,6 +296,10 @@ answers with configuration and health, not with the devices' CLI.
 **Secrets.** Every payload goes through the secret filter before anything
 is stored: pre-shared keys (including the IKE settings' manual pre-shared
 key), passwords, secrets and tokens are dropped.
+
+## Availability tracking
+
+Each collection also records the state of what it reports, shown under **Monitoring > Availability > Integrations and cloud** with uptime, outages and alerts: the FTDs (devices), their outside uplinks, site-to-site tunnels (up/down from the FMC's tunnel status) and HA and cluster links. The FMC itself, remote access users and VPN peers are left out. The state mapping, alerting and retention are described in [Meraki in the Topology Map](meraki-topology.md#availability-tracking).
 
 ## API reference
 

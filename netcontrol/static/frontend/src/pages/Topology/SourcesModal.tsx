@@ -40,11 +40,13 @@ import { InventoryCollectModal } from "./InventoryCollectModal";
 import {
   buildStatusBadge,
   describeInventoryResult,
+  describeNextCollection,
   describeProgress,
   formatWhen,
   sourceTypeLabel,
 } from "./merakiHelpers";
 import { SourceFormModal } from "./SourceFormModal";
+import { SourceScheduleBar } from "./SourceScheduleBar";
 import { defaultOptionsFor } from "./sourceForm";
 
 const CLOUD_ACCOUNTS_PATH = "/cloud-visibility";
@@ -366,6 +368,8 @@ export function SourcesModal({
         trace uses), VLANs, ports, neighbors and MAC tables. Collect again
         whenever you want a fresh picture.
       </p>
+
+      {isAdmin && <SourceScheduleBar />}
 
       <div
         style={{
@@ -840,6 +844,12 @@ function SourceRow({
             {(source.detail || source.message) && (
               <div className="text-muted" style={{ fontSize: "0.85em" }}>
                 {[source.detail, source.message].filter(Boolean).join(" · ")}
+              </div>
+            )}
+            {isOrg && source.next_collection_at && (
+              <div className="text-muted" style={{ fontSize: "0.85em" }}>
+                Next collection:{" "}
+                {describeNextCollection(source.next_collection_at)}
               </div>
             )}
           </>

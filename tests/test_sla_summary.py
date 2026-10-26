@@ -1,4 +1,4 @@
-"""Tests for get_sla_summary jitter computation.
+"""Tests for get_sla_summary jitter computation (raw polls and SLA rollups).
 
 The per-host jitter was previously computed with one extra query per host (an
 N+1 that issued 500 queries for a 500-host summary). It is now folded into the
@@ -95,5 +95,56 @@ def test_jitter_none_when_no_latency_samples(sla_db):
         summary = await db_module.get_sla_summary()
         host = next(h for h in summary["hosts"] if h["hostname"] == "sw-null")
         assert host["jitter_ms"] is None
+
+    asyncio.run(_go())
+
+
+def test_jitter_recombined_from_rollups_matches_population_stddev(sla_db):
+    """Jitter over a window read partly from hourly/daily rollups (sum and sum
+    of squares) and partly from raw polls equals the stddev of all samples."""
+
+    async def _go():
+        from datetime import UTC, datetime, timedelta
+
+        host_id = await _seed_host_with_polls("sw-rolled", [12.0, 18.0])  # current hour: raw
+        old = (datetime.now(UTC) - timedelta(days=5)).strftime("%Y-%m-%d 08:15:00")
+        db = await db_module.get_db()
+        try:
+            for rt in (5.0, 45.0, 30.0):
+                await db.execute(
+                    "INSERT INTO monitoring_polls (host_id, poll_status, response_time_ms, packet_loss_pct, "
+                    "polled_at) VALUES (?, 'ok', ?, 0, ?)",
+                    (host_id, rt, old),
+                )
+            await db.commit()
+        finally:
+            await db.close()
+
+        await db_module.rollup_sla_metrics()
+        summary = await db_module.get_sla_summary(days=30)
+        host = next(h for h in summary["hosts"] if h["hostname"] == "sw-rolled")
+        expected = round(_population_stddev([12.0, 18.0, 5.0, 45.0, 30.0]), 2)
+        assert host["jitter_ms"] == pytest.approx(expected, abs=0.01)
+        assert host["total_polls"] == 5
+        assert host["avg_latency_ms"] == pytest.approx(22.0)
+
+    asyncio.run(_go())
+
+
+def test_summary_compliance_fields_are_additive(sla_db):
+    async def _go():
+        await _seed_host_with_polls("sw-plain", [10.0])
+        summary = await db_module.get_sla_summary()
+        assert summary["compliance"] == {
+            "met": 0,
+            "warn": 0,
+            "breach": 0,
+            "no_data": 0,
+            "hosts": 0,
+            "evaluated_at": None,
+        }
+        host = next(h for h in summary["hosts"] if h["hostname"] == "sw-plain")
+        assert host["sla_status"] is None
+        assert {"uptime_pct", "avg_latency_ms", "jitter_ms", "avg_packet_loss_pct", "total_polls"} <= set(host)
 
     asyncio.run(_go())

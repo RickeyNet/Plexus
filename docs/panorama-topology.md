@@ -48,8 +48,9 @@ Panorama.
    lists the device groups it has.
 5. **Collect.** Click **Collect Now**. When it finishes the map updates.
 
-Collection runs when you click **Collect Now**; it is not scheduled. The map
-shows the most recent collection until you run another.
+Collection runs when you click **Collect Now**, and on a schedule (hourly by
+default) as described in [Scheduled collection](meraki-topology.md#scheduled-collection).
+The map shows the most recent collection until you run another.
 
 ### Panorama address, device group and credentials
 
@@ -312,6 +313,10 @@ hashes, SNMP communities, secrets and passwords are dropped. The API key
 **XML.** Panorama is the operator-configured management server, so its
 answers are parsed with the standard library's XML parser; an answer that
 declares a document type (and so could declare entities) is refused.
+
+## Availability tracking
+
+Each collection also records the state of what it reports, shown under **Monitoring > Availability > Integrations and cloud** with uptime, outages and alerts: the firewalls (devices), their uplinks, site-to-site tunnels and HA links. Panorama itself, GlobalProtect users and VPN peers are left out. The state mapping, alerting and retention are described in [Meraki in the Topology Map](meraki-topology.md#availability-tracking).
 
 ## API reference
 

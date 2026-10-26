@@ -54,8 +54,9 @@ other hardening controls; see [meraki-compliance.md](meraki-compliance.md).
    download the whole map as one file, or **Open HTML map** to view it in a
    new tab.
 
-Collection runs when you click **Collect Now**; it is not scheduled. The map
-shows the most recent collection for each organization until you run another.
+Collection runs when you click **Collect Now**, and on a schedule (hourly by
+default, see [Scheduled collection](#scheduled-collection)). The map shows the
+most recent collection for each organization until you run another.
 
 ### API key
 
@@ -405,6 +406,116 @@ VLANs disabled) are skipped silently. Anything else that fails - such as an
 endpoint the key lacks access to - is counted as a collection warning and the
 collection is marked *partial*; the rest of the data is still used.
 
+## Scheduled collection
+
+Meraki organizations, Cato accounts, Cisco FMCs, Palo Alto Panoramas and
+Appgate SDP collectives are collected on a schedule as well as by **Collect
+Now**, so their map, MAC tracking clients and availability stay current
+without anyone clicking. It is on by default: after an upgrade every source
+that has an API key or password is collected hourly.
+
+- **The schedule** (admins): the bar at the top of the Sources dialog turns
+  **Auto-collect sources** on or off and sets the default interval, 5 to 1440
+  minutes (auth setting `source_collection_sync`).
+- **Per source**: the **Scheduled collection** part of a source's Edit form
+  turns **Auto-collect** off for that source (it is then collected only by
+  **Collect Now**) or sets its own **Interval (minutes)**; 0 uses the
+  default.
+- **When**: a source is due once its interval has passed since its last
+  collection, whatever started that collection and whether it worked, so
+  **Collect Now** restarts the clock and a failing source is retried after
+  one interval, not on every pass. A source never collected is due at once.
+  Each row shows **Next collection**.
+- **Left alone**: sources with no API key or password, demo entries, sources
+  with Auto-collect off, and a source whose collection is already running.
+- **How**: a background job wakes every five minutes and collects the due
+  sources one after the other, never several at once, with the same job as
+  **Collect Now**; the build is recorded as by `scheduler` in the collection
+  history and the audit log. A source that fails is marked *failed* with its
+  message and the others are still collected.
+
+AWS, Azure and GCP accounts follow the cloud discovery schedule under Cloud
+Visibility instead.
+
+## Availability tracking
+
+Every stored collection of a Meraki organization, Cato account, Cisco FMC,
+Palo Alto Panorama or Appgate SDP collective, and every AWS, Azure or GCP
+discovery (scheduled or **Discover**), also records the state of what it
+reports, so devices Plexus knows only through an API get uptime and outage
+history like polled hosts. The results are under **Monitoring > Availability >
+Integrations and cloud**, filtered by source, organization and type, over the
+period picked at the top of the tab.
+
+Each entity is `up`, `degraded`, `down` or `unknown`:
+
+| Snapshot status | State |
+|---|---|
+| Node `online` | up |
+| Node `alerting` (Meraki alerting, Cato degraded site, Appgate warning/busy) | degraded |
+| Node `offline`, `dormant` | down |
+| Node `unknown` (not collected, pending) | unknown |
+| Uplink `active`, `ready` | up |
+| Uplink `connecting` | degraded |
+| Uplink `failed` | down |
+| Tunnel `reachable`, `ready` (a standby tunnel) | up |
+| Tunnel `degraded` (Cato site degraded) | degraded |
+| Tunnel `unreachable` | down |
+| Cloud connection `active` | up |
+| Cloud connection `failed` | down |
+| No status, or anything else | unknown |
+
+What is tracked, per source:
+
+| Source | Devices | Other entities |
+|---|---|---|
+| Meraki | appliances, switches, access points, cameras, sensors, cellular gateways | WAN uplinks, AutoVPN and third-party IPsec tunnels |
+| Cato | Sockets and IPsec sites | sites (connectivity status), Socket WAN uplinks, Socket and IPsec tunnels |
+| Cisco FMC | FTDs | outside uplinks, site-to-site tunnels, HA and cluster links |
+| Palo Alto Panorama | firewalls | uplinks, site-to-site tunnels, HA links |
+| Appgate SDP | Controllers, Gateways and other appliances | sites, appliance peer links |
+| AWS | instances drawn on the map, transit, VPN, NAT and Direct Connect gateways, Direct Connect connections | site-to-site VPN connections, Direct Connect (circuits), VPC peerings, transit gateway and VPN gateway attachments (links) |
+| Azure | virtual machines drawn on the map, virtual network gateways, firewalls, NAT gateways, ExpressRoute circuits | gateway connections (VPN), ExpressRoute connections (circuits), VNet peerings, gateway attachments (links) |
+| GCP | instances drawn on the map, Cloud Routers, HA VPN gateways, Cloud NAT, Interconnects and Interconnect attachments | HA VPN tunnels, Interconnect attachments and Interconnects (circuits), VPC peerings |
+
+Left out, because their state means nothing on its own: WAN address nodes
+(the uplink is tracked), CDP/LLDP neighbors, third-party VPN peers (their
+tunnel is tracked), remote users and user groups (and their tunnels), VPCs and
+VNets, the FMC, Panorama, Appgate collective and Cato PoP and backbone nodes
+(drawn online whenever the collection worked), structural links (LAN, stack,
+managed by) and Meraki networks (their status is only the worst of their
+devices').
+
+How it behaves:
+
+- An entity seen for the first time is a baseline and raises no alert.
+- An entity in an earlier collection and missing from the latest one turns
+  `unknown` (*not in last collection*) and comes back when it reappears.
+- Uptime is time-weighted between collections: (time up + time degraded) /
+  time in a known state. Time in `unknown` is left out, and so is the time
+  before Plexus first saw the entity. Outages are the periods spent `down`.
+- A change to `down` raises a critical alert, a change to `degraded` a warning
+  (alert type `topology_availability`, dedup key
+  `topo:<provider>:<org_ref>:<entity_type>:<entity_id>`), once: it is not
+  raised again while the entity stays down, and is raised again after the
+  entity has been back `up`. A device matched to an inventory host gets a
+  monitoring alert on that host (listed under **Alerts**, deduplicated while
+  unacknowledged); any other entity is handed straight to the notification
+  channels.
+- Transitions older than the monitoring retention (`retention_days`) are
+  deleted, and so are entities no collection has reported for that long.
+- Collections are what drive it: AWS, Azure and GCP follow the cloud
+  discovery schedule (hourly by default, when enabled under Cloud
+  Visibility); Meraki, Cato, FMC, Panorama and Appgate follow the source
+  collection schedule (see [Scheduled collection](#scheduled-collection))
+  and **Collect Now** in the Sources dialog.
+
+API (needs `monitoring`): `GET /api/availability/topology/summary`,
+`GET /api/availability/topology/outages` and
+`GET /api/availability/topology/transitions`, each filtered by `provider`,
+`org_ref`, `entity_type` and `days` (1-365); outages and transitions also take
+`entity_id` and `limit`. AWS, Azure and GCP are `org_ref` -1, -2 and -3.
+
 ## Collection history
 
 Every collection is saved as a snapshot (the 10 most recent per organization
@@ -477,7 +588,8 @@ it shows. The selector appears only when the export includes an integration.
 | `GET` | `/api/sources/nodes?org_ref=&node_id=` | Detail sections for one Meraki node |
 | `GET` | `/api/sources` | List organizations and default collection options |
 | `POST` | `/api/sources` | Add an organization (admin) |
-| `PUT` / `DELETE` | `/api/sources/{id}` | Edit / delete an organization (admin) |
+| `PUT` / `DELETE` | `/api/sources/{id}` | Edit / delete an organization (admin); `auto_collect` and `collect_interval_seconds` (0: the default interval) set its scheduled collection |
+| `GET` / `PUT` | `/api/sources/schedule` | The collection schedule of every source: `enabled`, `interval_seconds` (300-86400) (admin) |
 | `POST` | `/api/sources/{id}/validate` | Test the stored key, list visible organizations (admin) |
 | `POST` | `/api/sources/{id}/build` | Start a collection; returns `job_id` |
 | `GET` | `/api/sources/builds/{job_id}` | Collection progress and result |

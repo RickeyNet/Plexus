@@ -19,7 +19,9 @@ what feeds and surrounds that merge:
   - AWS, Azure and GCP: the accounts Cloud Visibility discovers are turned
     into one more snapshot per cloud (``provider`` "aws" / "azure" / "gcp")
     whenever their discovery changes
-  - On-demand collection builds as background jobs with pollable progress
+  - On-demand collection builds as background jobs with pollable progress,
+    and scheduled collection of every source that is due
+    (``run_scheduled_collections``, run by a background loop of the app)
   - Stored snapshots: list / fetch JSON / delete, and an in-memory cache of
     the latest one per organization
   - Per-node Meraki detail sections and whole-map deep search
@@ -52,7 +54,7 @@ import json
 import re
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import routes.database as db
@@ -161,7 +163,7 @@ from netcontrol.integrations.pathtrace.offline import (
     inputs as offline_inputs,
     trace as offline_trace,
 )
-from netcontrol.routes import background_jobs
+from netcontrol.routes import background_jobs, state
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, supervise_task
 from netcontrol.telemetry import configure_logging, redact_value
 
@@ -169,6 +171,8 @@ router = APIRouter()
 LOGGER = configure_logging("plexus.meraki")
 
 _JOB_KIND = "meraki-topology-build"
+# The user a scheduled collection is built and audited as.
+SCHEDULER_USER = "scheduler"
 # Snapshots are multi-megabyte JSON blobs; keep a short history per org.
 _SNAPSHOTS_KEPT_PER_ORG = 10
 SAMPLE_ORG_NAME = "Sample Organization (demo data)"
@@ -429,6 +433,32 @@ async def _software_changed() -> None:
     await refresh_after_collection()
 
 
+async def _availability_changed(provider: str, org_ref: int, snapshot: dict, snapshot_ref: str) -> None:
+    """A collection was stored: record the availability of what it reports
+    (``netcontrol.routes.topology_availability``). Best-effort; never raises."""
+    from netcontrol.routes.topology_availability import record_snapshot_states
+
+    await record_snapshot_states(provider, org_ref, snapshot, snapshot_ref=snapshot_ref)
+
+
+async def cloud_availability_changed(provider: str) -> None:
+    """A discovery of an AWS, Azure or GCP account was stored: rebuild that
+    cloud's snapshot and record the availability of what it reports.
+    Best-effort; never raises."""
+    cloud = _CLOUD_BY_PROVIDER.get(str(provider or "").lower())
+    if cloud is None:
+        return
+    try:
+        entry = await _cloud_entry(cloud)
+    except Exception as exc:  # noqa: BLE001 - the discovery is already stored
+        LOGGER.warning("%s: availability not recorded: %s", cloud.provider, type(exc).__name__)
+        return
+    if entry is not None:
+        snapshot = entry["snapshot"]
+        ref = f"discovery:{snapshot.get('generated_at') or ''}"
+        await _availability_changed(cloud.provider, cloud.org_ref, snapshot, ref)
+
+
 def init_meraki_topology(require_admin):
     global _require_admin
     _require_admin = require_admin
@@ -454,6 +484,14 @@ class MerakiOrgCreate(BaseModel):
     base_url: str = Field(default="", max_length=200)
     api_key: str = Field(default="", max_length=400)
     options: dict = Field(default_factory=dict)
+    # Collected by the scheduler; its own interval (0: the global one).
+    auto_collect: bool = True
+    collect_interval_seconds: int = Field(default=0, ge=0)
+
+
+class SourceScheduleUpdate(BaseModel):
+    enabled: bool | None = None
+    interval_seconds: int | None = None
 
 
 class SummarizeRequest(BaseModel):
@@ -483,6 +521,8 @@ class MerakiOrgUpdate(BaseModel):
     # Write-only: an empty/omitted key means "keep the stored one".
     api_key: str | None = Field(default=None, max_length=400)
     options: dict | None = None
+    auto_collect: bool | None = None
+    collect_interval_seconds: int | None = Field(default=None, ge=0)
 
 
 def _provider_key(raw: str | None) -> str:
@@ -561,7 +601,129 @@ def _serialize_org(org: dict) -> dict:
     item["provider"] = _provider_of(org)
     item["options"] = _options_for(item["provider"], item.get("options"))
     item["building"] = org["id"] in _running_builds
+    item.update(_schedule_fields(org))
     return item
+
+
+# ── Scheduled collection ─────────────────────────────────────────────────────
+
+
+def _is_demo(org: dict) -> bool:
+    """A demo entry: bundled sample data, never collected from an API."""
+    return org["name"] in SAMPLE_ORG_NAMES and not org.get("has_api_key")
+
+
+def _clean_collect_interval(seconds: int) -> int:
+    """A source's own interval: 0 (use the global one) or clamped to the
+    bounds of the global schedule."""
+    if seconds <= 0:
+        return 0
+    return state.clamp_interval(
+        seconds,
+        state.SOURCE_COLLECTION_SYNC_MIN_INTERVAL,
+        state.SOURCE_COLLECTION_SYNC_MAX_INTERVAL,
+        state.SOURCE_COLLECTION_SYNC_DEFAULTS["interval_seconds"],
+    )
+
+
+def collection_interval(org: dict) -> int:
+    """Seconds between scheduled collections of a source: its own interval,
+    or the global one when it has none."""
+    own = int(org.get("collect_interval_seconds") or 0)
+    if own > 0:
+        return _clean_collect_interval(own)
+    return int(state.SOURCE_COLLECTION_SYNC_CONFIG.get("interval_seconds") or 3600)
+
+
+def _parse_stamp(stamp: object) -> datetime | None:
+    text = _utc_iso(stamp)
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def next_collection_at(org: dict, now: datetime | None = None) -> datetime | None:
+    """When the scheduler collects a source next, or ``None`` when it never
+    will: scheduling is off, the source opted out, has no API key or is a
+    demo entry. A source never collected is due now. The clock runs from the
+    last collection, manual or scheduled, successful or failed."""
+    if not state.SOURCE_COLLECTION_SYNC_CONFIG.get("enabled"):
+        return None
+    if not org.get("has_api_key") or not org.get("auto_collect", True) or _is_demo(org):
+        return None
+    last = _parse_stamp(org.get("last_build_at"))
+    if last is None:
+        return now or datetime.now(UTC)
+    return last + timedelta(seconds=collection_interval(org))
+
+
+def _iso_or_none(moment: datetime | None) -> str | None:
+    return moment.isoformat() if moment else None
+
+
+def _schedule_fields(org: dict) -> dict[str, Any]:
+    """The scheduled-collection settings of a source, as the API hands them out."""
+    return {
+        "auto_collect": bool(org.get("auto_collect", True)),
+        "collect_interval_seconds": int(org.get("collect_interval_seconds") or 0),
+        "next_collection_at": _iso_or_none(next_collection_at(org)),
+    }
+
+
+def collection_due(org: dict, now: datetime | None = None) -> bool:
+    """Whether a scheduler pass at ``now`` collects the source."""
+    if org["id"] in _running_builds:
+        return False
+    now = now or datetime.now(UTC)
+    due_at = next_collection_at(org, now)
+    return due_at is not None and due_at <= now
+
+
+def _start_build_job(org: dict) -> str:
+    """Register a running collection job of a source and return its id; the
+    caller runs ``_run_build`` with it. No await: check ``_running_builds``
+    right before calling it and the check-then-set is atomic under asyncio."""
+    job = background_jobs.create_job(_JOB_KIND, {"phase": "starting", "org_ref": org["id"], "org_name": org["name"]})
+    _running_builds[org["id"]] = job["job_id"]
+    return str(job["job_id"])
+
+
+async def run_scheduled_collections(now: datetime | None = None) -> dict[str, int]:
+    """One scheduler pass: collect every source that is due, one after the
+    other, so a pass never puts the API load of several sources on at once.
+    A failing source is counted and the pass goes on.
+
+    ``now`` fixes the clock the sources are judged by (tests); by default
+    each source is judged at the moment its turn comes."""
+    counts = {"sources": 0, "due": 0, "started": 0, "skipped": 0, "errors": 0}
+    orgs = await db.list_meraki_orgs()
+    counts["sources"] = len(orgs)
+    due = [org for org in orgs if collection_due(org, now)]
+    counts["due"] = len(due)
+    counts["skipped"] = len(orgs) - len(due)
+    for listed in due:
+        try:
+            # Re-read: an earlier collection of this pass may have taken a
+            # while, and the source may have been changed, collected by hand
+            # or deleted since.
+            org = await db.get_meraki_org(listed["id"])
+            if not org or not collection_due(org, now):
+                counts["skipped"] += 1
+                continue
+            job_id = _start_build_job(org)
+            counts["started"] += 1
+            await _run_build(job_id, org, SCHEDULER_USER)
+            if (background_jobs.get_job(job_id) or {}).get("status") == "failed":
+                counts["errors"] += 1
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - one source must not stop the pass
+            counts["errors"] += 1
+            LOGGER.warning("Scheduled collection of source %s failed: %s", listed["name"], type(exc).__name__)
+    return counts
 
 
 async def _get_org_or_404(org_ref: int) -> dict:
@@ -660,6 +822,8 @@ async def create_meraki_org_api(body: MerakiOrgCreate, request: Request):
         base_url=_clean_base_url(body.base_url, provider),
         api_key=body.api_key.strip(),
         options=_options_for(provider, body.options),
+        auto_collect=body.auto_collect,
+        collect_interval_seconds=_clean_collect_interval(body.collect_interval_seconds),
         created_by=user,
     )
     if not org:
@@ -672,6 +836,41 @@ async def create_meraki_org_api(body: MerakiOrgCreate, request: Request):
         correlation_id=_corr_id(request),
     )
     return {"ok": True, "org": _serialize_org(org)}
+
+
+def _schedule_payload() -> dict[str, Any]:
+    return {
+        "config": dict(state.SOURCE_COLLECTION_SYNC_CONFIG),
+        "min_interval_seconds": state.SOURCE_COLLECTION_SYNC_MIN_INTERVAL,
+        "max_interval_seconds": state.SOURCE_COLLECTION_SYNC_MAX_INTERVAL,
+    }
+
+
+# Registered before ``/api/sources/{org_ref}``, which would otherwise match.
+@router.get("/api/sources/schedule", dependencies=[Depends(_require_admin_dep)])
+async def get_source_schedule_api():
+    """The schedule of source collection: on or off, and the default interval."""
+    return _schedule_payload()
+
+
+@router.put("/api/sources/schedule", dependencies=[Depends(_require_admin_dep)])
+async def update_source_schedule_api(body: SourceScheduleUpdate, request: Request):
+    current = dict(state.SOURCE_COLLECTION_SYNC_CONFIG)
+    if body.enabled is not None:
+        current["enabled"] = body.enabled
+    if body.interval_seconds is not None:
+        current["interval_seconds"] = body.interval_seconds
+    sanitized = state._sanitize_source_collection_sync_config(current)
+    state.SOURCE_COLLECTION_SYNC_CONFIG = sanitized
+    await db.set_auth_setting("source_collection_sync", sanitized)
+    await _audit(
+        "meraki_topology",
+        "update_collection_schedule",
+        user=_session_user(request),
+        detail=f"enabled={sanitized['enabled']} interval={sanitized['interval_seconds']}s",
+        correlation_id=_corr_id(request),
+    )
+    return _schedule_payload()
 
 
 @router.put("/api/sources/{org_ref}", dependencies=[Depends(_require_admin_dep)])
@@ -688,6 +887,10 @@ async def update_meraki_org_api(org_ref: int, body: MerakiOrgUpdate, request: Re
         updates["api_key"] = body.api_key.strip()
     if body.options is not None:
         updates["options"] = _options_for(provider, body.options)
+    if body.auto_collect is not None:
+        updates["auto_collect"] = body.auto_collect
+    if body.collect_interval_seconds is not None:
+        updates["collect_interval_seconds"] = _clean_collect_interval(body.collect_interval_seconds)
     org = await db.update_meraki_org(org_ref, **updates)
     if not org:
         raise HTTPException(status_code=409, detail="An organization or account with this name already exists")
@@ -967,6 +1170,7 @@ async def _store_snapshot(org: dict, snapshot: dict, *, user: str, started: floa
     )
     _topology_changed()
     await _software_changed()
+    await _availability_changed(_provider_of(org), org["id"], snapshot, f"snapshot:{snapshot_id}")
     return {
         "snapshot_id": snapshot_id,
         "summary": snapshot.get("summary") or {},
@@ -1090,10 +1294,9 @@ async def build_meraki_topology_api(org_ref: int, request: Request):
     # Check-then-set with no await in between: atomic under asyncio.
     if org_ref in _running_builds:
         raise HTTPException(status_code=409, detail="A topology build is already running for this organization")
-    job = background_jobs.create_job(_JOB_KIND, {"phase": "starting", "org_ref": org_ref, "org_name": org["name"]})
-    _running_builds[org_ref] = job["job_id"]
-    supervise_task(asyncio.create_task(_run_build(job["job_id"], org, _session_user(request))), "meraki-topology-build")
-    return {"job_id": job["job_id"], "status": "running"}
+    job_id = _start_build_job(org)
+    supervise_task(asyncio.create_task(_run_build(job_id, org, _session_user(request))), "meraki-topology-build")
+    return {"job_id": job_id, "status": "running"}
 
 
 @router.get("/api/sources/builds/{job_id}")
@@ -1222,6 +1425,7 @@ async def _build_cloud_sample(cloud: _Cloud, user: str) -> dict:
         sync_message="Sample discovery snapshot refreshed",
     )
     _topology_changed()
+    await cloud_availability_changed(cloud.provider)
     entry = await _cloud_entry(cloud)
     return {
         "ok": True,
@@ -1416,7 +1620,8 @@ def _org_source(org: dict, newest: dict | None) -> dict[str, Any]:
         snapshot_id=(newest or {}).get("id"),
         collecting=org["id"] in _running_builds,
         can_collect=bool(org.get("has_api_key")),
-        demo=org["name"] in SAMPLE_ORG_NAMES and not org.get("has_api_key"),
+        demo=_is_demo(org),
+        **_schedule_fields(org),
     )
 
 

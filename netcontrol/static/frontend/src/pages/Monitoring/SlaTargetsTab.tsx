@@ -2,18 +2,24 @@ import { useMemo, useState, type FormEvent } from 'react';
 
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { useAuthStatus } from '@/api/auth';
 import { groupLabel, useInventoryGroupsFull } from '@/api/inventory';
 import {
   useCreateSlaTarget,
   useDeleteSlaTarget,
+  useEvaluateSla,
   useSlaTargets,
   useUpdateSlaTarget,
   type SlaTarget,
   type SlaTargetCreate,
 } from '@/api/monitoring';
 
-// SLA targets are configuration (Monitoring -> Configure -> SLA Targets); the
-// SLA tab reports host compliance against them.
+// SLA targets are configuration (Monitoring -> Configure -> SLA Targets). The
+// server evaluates every enabled target over its window after each hourly
+// rollup (a group target covers the group's sub-groups too); the SLA tab
+// reports the result, and a warn or breach opens an alert.
+
+const DEFAULT_WINDOW_DAYS = 30;
 
 const METRIC_LABELS: Record<string, string> = {
   uptime: 'Uptime %',
@@ -26,8 +32,20 @@ export function SlaTargetsTab() {
   const targets = useSlaTargets().data ?? [];
   const { confirm, alert } = useDialogs();
   const deleteMut = useDeleteSlaTarget();
+  const evaluateMut = useEvaluateSla();
+  const isAdmin = useAuthStatus().data?.role === 'admin';
   const [editing, setEditing] = useState<SlaTarget | null>(null);
   const [creating, setCreating] = useState(false);
+
+  function handleEvaluate() {
+    evaluateMut.mutate(undefined, {
+      onSuccess: (r) => {
+        const e = r.evaluation;
+        void alert(`Evaluated ${e.evaluated} target/host pairs: ${e.met} met, ${e.warn} warning, ${e.breach} breach, ${e.no_data} no data. ${e.alerts} alerts raised.`);
+      },
+      onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
+    });
+  }
 
   async function handleDelete(t: SlaTarget) {
     if (!(await confirm(`Delete SLA target '${t.name}'?`))) return;
@@ -36,7 +54,12 @@ export function SlaTargetsTab() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.75rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginBottom: '0.75rem' }}>
+        {isAdmin && (
+          <button className="btn btn-secondary" onClick={handleEvaluate} disabled={evaluateMut.isPending}>
+            {evaluateMut.isPending ? 'Evaluating…' : 'Evaluate Now'}
+          </button>
+        )}
         <button className="btn btn-primary" onClick={() => setCreating(true)}>+ New Target</button>
       </div>
       {targets.length === 0 ? (
@@ -61,6 +84,7 @@ export function SlaTargetsTab() {
                   <div><span className="text-muted">Metric:</span> {METRIC_LABELS[t.metric] ?? t.metric}</div>
                   <div><span className="text-muted">Target:</span> <strong style={{ color: 'var(--success)' }}>{t.target_value}</strong></div>
                   <div><span className="text-muted">Warning:</span> <strong style={{ color: 'var(--warning)' }}>{t.warning_value}</strong></div>
+                  <div><span className="text-muted">Window:</span> {t.window_days ?? DEFAULT_WINDOW_DAYS} days</div>
                   <div><span className="text-muted">Scope:</span> {scope}</div>
                 </div>
               </div>
@@ -93,6 +117,7 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
   const [metric, setMetric] = useState('uptime');
   const [targetValue, setTargetValue] = useState('99.9');
   const [warningValue, setWarningValue] = useState('99.0');
+  const [windowDays, setWindowDays] = useState(String(DEFAULT_WINDOW_DAYS));
   const [scope, setScope] = useState<'global' | 'group' | 'host'>('global');
   const [groupId, setGroupId] = useState('');
   const [hostId, setHostId] = useState('');
@@ -107,11 +132,13 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
       setMetric(target.metric);
       setTargetValue(String(target.target_value));
       setWarningValue(String(target.warning_value));
+      setWindowDays(String(target.window_days ?? DEFAULT_WINDOW_DAYS));
       if (target.host_id != null) { setScope('host'); setHostId(String(target.host_id)); setGroupId(''); }
       else if (target.group_id != null) { setScope('group'); setGroupId(String(target.group_id)); setHostId(''); }
       else { setScope('global'); setHostId(''); setGroupId(''); }
     } else if (isCreate) {
       setName(''); setMetric('uptime'); setTargetValue('99.9'); setWarningValue('99.0');
+      setWindowDays(String(DEFAULT_WINDOW_DAYS));
       setScope('global'); setGroupId(''); setHostId('');
     }
   }
@@ -119,11 +146,14 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!name.trim()) { void alert('Name is required'); return; }
+    const days = parseInt(windowDays, 10);
+    if (!Number.isFinite(days) || days < 1 || days > 365) { void alert('Window must be 1 to 365 days'); return; }
     const data: SlaTargetCreate = {
       name: name.trim(),
       metric,
       target_value: parseFloat(targetValue) || 0,
       warning_value: parseFloat(warningValue) || 0,
+      window_days: days,
       host_id: scope === 'host' ? (Number.isFinite(parseInt(hostId, 10)) ? parseInt(hostId, 10) : null) : null,
       group_id: scope === 'group' ? (Number.isFinite(parseInt(groupId, 10)) ? parseInt(groupId, 10) : null) : null,
     };
@@ -167,6 +197,15 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
             <label className="form-label">Warning</label>
             <input className="form-input" type="number" step="0.01" value={warningValue} onChange={(e) => setWarningValue(e.target.value)} />
           </div>
+          <div className="form-group" style={{ flex: 1 }}>
+            <label className="form-label">Window (days)</label>
+            <input className="form-input" type="number" min={1} max={365} step={1} value={windowDays} onChange={(e) => setWindowDays(e.target.value)} />
+          </div>
+        </div>
+        <div className="text-muted" style={{ fontSize: '0.8em', marginTop: '-0.5rem', marginBottom: '0.75rem' }}>
+          {metric === 'uptime'
+            ? 'Met at or above Target, Warning at or above Warning, Breach below it.'
+            : 'Met at or below Target, Warning at or below Warning, Breach above it.'}
         </div>
         <div className="form-group">
           <label className="form-label">Scope</label>

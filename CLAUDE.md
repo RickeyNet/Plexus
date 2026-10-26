@@ -90,3 +90,21 @@
 - **Workers inherit this rule.** Every delegated worker prompt must include
   the reuse rule and name the shared modules relevant to its scope, and the
   reviewer checks worker output for duplicated code before accepting it.
+
+## Vendor monitoring parity
+
+- **One bar for every vendor.** Availability/SLA and software/CVE monitoring
+  must cover every supported vendor the same way, with Cisco, Cato, AWS and
+  Azure as the priority set. The full standard is the "Vendor Monitoring
+  Parity Standard" section of `AGENTS.md`; the per-vendor state of coverage
+  is `docs/vendor-monitoring-coverage.md`.
+- **Server-side, persisted, alerting.** SLA targets are evaluated on the
+  server into `monitoring_alerts` and notification channels, never only in
+  the browser; availability state and rollups are persisted beyond raw-poll
+  retention; every platform with a version has an advisory source or a
+  documented gap.
+- **Same-change updates.** A change that adds or alters a vendor integration
+  updates its status extractor, version classifier, advisory source, sample
+  based tests, per-vendor doc and the coverage matrix in the same change.
+  Worker prompts that touch monitoring, SLA, software or an integration name
+  this rule and the matrix.

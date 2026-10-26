@@ -9,6 +9,7 @@ import {
   useAvailabilityTransitions,
 } from '@/api/monitoring';
 import { formatTimestamp, formatUptime } from './helpers';
+import { TopologyAvailabilityPanel } from './TopologyAvailabilityPanel';
 
 type SubTab = 'hosts' | 'outages' | 'transitions';
 
@@ -158,6 +159,8 @@ export function AvailabilityTab() {
           </div>
         )
       )}
+
+      <TopologyAvailabilityPanel days={days} />
     </div>
   );
 }

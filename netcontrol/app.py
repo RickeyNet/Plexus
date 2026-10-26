@@ -240,6 +240,7 @@ from netcontrol.routes.monitoring import (
     _poll_host_monitoring,
     _run_alert_escalation,
     _run_monitoring_poll_once,
+    _sla_rollup_loop,
     admin_router as monitoring_admin_router,
     router as monitoring_router,
 )
@@ -1083,6 +1084,8 @@ async def _load_persisted_security_settings():
     state.CLOUD_TRAFFIC_METRIC_SYNC_STATUS = state._sanitize_cloud_sync_status(cloud_traffic_metric_sync_status)
     cloud_discovery_sync = await db.get_auth_setting("cloud_discovery_sync")
     state.CLOUD_DISCOVERY_SYNC_CONFIG = state._sanitize_cloud_discovery_sync_config(cloud_discovery_sync)
+    source_collection_sync = await db.get_auth_setting("source_collection_sync")
+    state.SOURCE_COLLECTION_SYNC_CONFIG = state._sanitize_source_collection_sync_config(source_collection_sync)
     feature_visibility = await db.get_auth_setting("feature_visibility")
     if isinstance(feature_visibility, dict):
         state.FEATURE_VISIBILITY_HIDDEN = state._sanitize_feature_visibility(feature_visibility.get("hidden") or [])
@@ -1373,6 +1376,38 @@ async def _cloud_discovery_sync_loop() -> None:
             LOGGER.warning("Cloud discovery sync loop failed: %s", type(exc).__name__)
 
 
+async def _source_collection_sync_loop() -> None:
+    """Periodically collect the integration sources (Meraki, Cato, Cisco FMC,
+    Palo Alto Panorama, Appgate SDP) that are due.
+
+    Wakes at most every five minutes so a source whose own interval is
+    shorter than the default one is still collected on time; which sources
+    are due is decided by ``run_scheduled_collections``.
+    """
+    from netcontrol.routes.meraki_topology import run_scheduled_collections
+
+    while True:
+        cfg = state.SOURCE_COLLECTION_SYNC_CONFIG
+        interval = min(int(cfg.get("interval_seconds", 3600)), 300)
+        await asyncio.sleep(interval)
+        cfg = state.SOURCE_COLLECTION_SYNC_CONFIG
+        if not cfg.get("enabled"):
+            continue
+        try:
+            result = await run_scheduled_collections()
+            if result.get("started"):
+                LOGGER.info(
+                    "Source collection sync: collected %s of %s due source(s) (%s error(s))",
+                    result.get("started"),
+                    result.get("due"),
+                    result.get("errors"),
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning("Source collection sync loop failed: %s", type(exc).__name__)
+
+
 async def _cloud_traffic_metric_sync_loop() -> None:
     """Periodically pull cloud traffic metrics for all enabled accounts."""
     while True:
@@ -1515,6 +1550,7 @@ async def lifespan(app: FastAPI):
             fdm_poll_loop,
             _alert_escalation_loop,
             _baseline_computation_loop,
+            _sla_rollup_loop,
             _downsampling_loop,
             _rate_limit_cleanup_loop,
             _report_scheduler_loop,
@@ -1522,6 +1558,7 @@ async def lifespan(app: FastAPI):
             _cloud_flow_sync_loop,
             _cloud_traffic_metric_sync_loop,
             _cloud_discovery_sync_loop,
+            _source_collection_sync_loop,
             federation_sync_loop,
             _ipam_sync_loop,
             _dhcp_sync_loop,

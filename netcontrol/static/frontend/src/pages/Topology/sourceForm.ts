@@ -32,7 +32,10 @@ export interface RequiredRule {
   required?: boolean | 'create';
 }
 
-const COMMON_KEYS = ['name', 'base_url', 'org_id', 'secret'] as const;
+/** Form keys of the scheduled collection, which are fields of the entry rather than build options. */
+export const SCHEDULE_KEYS = ['auto_collect', 'collect_interval_minutes'] as const;
+
+const COMMON_KEYS = ['name', 'base_url', 'org_id', 'secret', ...SCHEDULE_KEYS] as const;
 
 function text(values: SourceFormValues, key: string): string {
   const v = values[key];
@@ -56,6 +59,9 @@ function recordValues(
   values.base_url = existing?.base_url ?? fallbackBaseUrl;
   values.org_id = existing?.org_id ?? '';
   values.secret = '';
+  values.auto_collect = existing?.auto_collect ?? true;
+  // The form edits minutes; 0 uses the global interval.
+  values.collect_interval_minutes = Math.round((existing?.collect_interval_seconds ?? 0) / 60);
   return values;
 }
 
@@ -77,6 +83,8 @@ function recordPayload(
     options: { ...options, ...extraOptions } as unknown as OrgBuildOptions,
   };
   if (provider) body.provider = provider;
+  body.auto_collect = values.auto_collect !== false;
+  body.collect_interval_seconds = Math.max(0, Math.round(Number(values.collect_interval_minutes) || 0)) * 60;
   const secret = text(values, 'secret').trim();
   if (secret) body.api_key = secret;
   return body;
