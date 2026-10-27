@@ -247,7 +247,14 @@ async def test_socket_configuration_is_not_asked_for_a_site_without_a_socket():
     the snapshot): Cato answers its Socket configuration with an error, so
     the query is not sent, the payload says not collected, and the skipped
     call still counts for the progress."""
-    sites = [*SITES, {"id": "1004", "info": {"name": "AWS", "connType": "IPSEC_V2", "sockets": []}, "devices": []}]
+    # Cato lists an IPsec site's tunnel as a device too: type IPSEC-IKEv2, no
+    # Socket info (the shape the full sites query returns for CLE_HQ).
+    tunnel = {"id": "1", "name": "", "connected": True, "haRole": "MASTER", "type": "IPSEC-IKEv2", "socketInfo": None}
+    sites = [
+        *SITES,
+        {"id": "1004", "info": {"name": "AWS", "connType": "IPSEC_V2", "sockets": []}, "devices": []},
+        {"id": "1005", "info": {"name": "HQ IPsec", "connType": "IPSEC_V2", "sockets": None}, "devices": [tunnel]},
+    ]
     asked: list[str] = []
     progress: list[int] = []
 
@@ -265,6 +272,7 @@ async def test_socket_configuration_is_not_asked_for_a_site_without_a_socket():
 
     assert asked == ["1001", "1002"]
     assert raw["sites"]["1004"]["socket_configuration"] is None
+    assert raw["sites"]["1005"]["socket_configuration"] is None
     assert raw["sites"]["1004"]["ranges"][0]["name"] == "R1004"
     assert errors == []
     assert sum(progress) == planned_calls(len(sites))

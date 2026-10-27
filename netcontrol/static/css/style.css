@@ -2048,15 +2048,22 @@ body {
     color: var(--text);
 }
 
+/* Every text input paints on its own compositing layer. Inside a
+   backdrop-filter container (.card, the page header) Chromium otherwise
+   fails to repaint the field as it is typed in, so the placeholder stays
+   drawn under the typed value (seen on the topology path bar). */
+input.form-input {
+    background-clip: padding-box;
+    position: relative;
+    transform: translateZ(0);
+}
+
 input[type="search"].form-input {
     -webkit-appearance: none;
     appearance: none;
     outline-offset: -2px;
     background-color: var(--bg-secondary);
-    background-clip: padding-box;
-    position: relative;
     z-index: 1;
-    transform: translateZ(0);
 }
 
 input[type="search"].form-input::-webkit-search-decoration,
