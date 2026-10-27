@@ -17,7 +17,7 @@ import httpx
 import netcontrol.app as app_module
 import pytest
 from netcontrol.integrations.cato.client import CatoApiError, CatoClient, validate_base_url
-from netcontrol.integrations.cato.collector import SITES_QUERY_WAN, collect_account, sanitize_options
+from netcontrol.integrations.cato.collector import POLICIES, SITES_QUERY_WAN, collect_account, sanitize_options
 from netcontrol.integrations.cato.normalize import (
     CLOUD_NODE_ID,
     CLOUD_SITE_ID,
@@ -134,6 +134,8 @@ def test_sanitize_options_defaults_and_coerces():
     opts = sanitize_options({"include_users": 0, "site_name_contains": "  branch ", "bogus": 1})
     assert opts["include_users"] is False and opts["include_ranges"] is True
     assert opts["site_name_contains"] == "branch" and "bogus" not in opts
+    assert opts["include_client_reports"] is True
+    assert sanitize_options({"include_client_reports": ""})["include_client_reports"] is False
 
 
 @pytest.mark.asyncio
@@ -167,7 +169,16 @@ async def test_collect_account_falls_back_and_stays_best_effort():
     progress: list[dict] = []
     async with _client(handler) as client:
         raw = await collect_account(
-            client, "42", {"site_name_contains": "branch", "include_firewall": False}, progress.append
+            client,
+            "42",
+            {
+                "site_name_contains": "branch",
+                "include_firewall": False,
+                "include_policies": False,
+                "include_site_config": False,
+                "include_client_reports": False,
+            },
+            progress.append,
         )
 
     assert [s["info"]["name"] for s in raw["sites"]] == ["Branch-Madison", "Branch-Denver"]
@@ -208,7 +219,15 @@ async def test_collect_account_keeps_the_wan_links_when_the_full_query_is_refuse
 
     async with _client(handler) as client:
         raw = await collect_account(
-            client, "42", {"include_users": False, "include_ranges": False, "include_firewall": False}
+            client,
+            "42",
+            {
+                "include_users": False,
+                "include_ranges": False,
+                "include_firewall": False,
+                "include_policies": False,
+                "include_site_config": False,
+            },
         )
 
     assert seen == ["plexusSites", "plexusSitesWan"]
@@ -240,7 +259,17 @@ async def test_collect_account_falls_back_to_the_basic_user_query():
         raise AssertionError(name)
 
     async with _client(handler) as client:
-        raw = await collect_account(client, "42", {"include_ranges": False, "include_firewall": False})
+        raw = await collect_account(
+            client,
+            "42",
+            {
+                "include_ranges": False,
+                "include_firewall": False,
+                "include_policies": False,
+                "include_site_config": False,
+                "include_client_reports": False,
+            },
+        )
 
     # The Split Tunnel policy, and the global IP ranges its rules name, come with the users.
     assert seen == ["plexusSites", "plexusUsers", "plexusUsersBasic", "plexusSplitTunnel", "plexusGlobalIpRanges"]
@@ -249,8 +278,10 @@ async def test_collect_account_falls_back_to_the_basic_user_query():
 
 
 def _policy_response(field: str, payload: dict) -> httpx.Response:
-    """A firewall policy as Cato returns it: every rule wrapped in ``rule``."""
+    """A policy as Cato returns it: every rule wrapped in ``rule``."""
     policy = {"enabled": payload["enabled"], "rules": [{"rule": r} for r in payload["rules"]]}
+    if "attributes" in payload:
+        policy["additionalAttributes"] = payload["attributes"]
     return httpx.Response(200, json={"data": {"policy": {field: {"policy": policy}}}})
 
 
@@ -281,7 +312,12 @@ async def test_collect_account_reads_the_wan_and_internet_firewall_policies():
 
     progress: list[dict] = []
     async with _client(handler) as client:
-        raw = await collect_account(client, "42", {"include_users": False, "include_ranges": False}, progress.append)
+        raw = await collect_account(
+            client,
+            "42",
+            {"include_users": False, "include_ranges": False, "include_policies": False, "include_site_config": False},
+            progress.append,
+        )
 
     assert seen[1:] == [
         ("plexusWanFirewall", {"accountId": "42"}),
@@ -314,7 +350,11 @@ async def test_collect_account_falls_back_to_the_reduced_firewall_queries():
         raise AssertionError(name)
 
     async with _client(handler) as client:
-        raw = await collect_account(client, "42", {"include_users": False, "include_ranges": False})
+        raw = await collect_account(
+            client,
+            "42",
+            {"include_users": False, "include_ranges": False, "include_policies": False, "include_site_config": False},
+        )
 
     assert seen == [
         "plexusSites",
@@ -365,7 +405,13 @@ def _split_handler(sample: dict, seen: list[str], split_tunnel: dict):
     return handler
 
 
-_USERS_ONLY = {"include_ranges": False, "include_firewall": False}
+_USERS_ONLY = {
+    "include_ranges": False,
+    "include_firewall": False,
+    "include_policies": False,
+    "include_site_config": False,
+    "include_client_reports": False,
+}
 
 
 @pytest.mark.asyncio
@@ -388,7 +434,7 @@ async def test_collect_account_reads_the_split_tunnel_policy_with_the_users():
     assert raw["errors"] == [] and raw["split_tunnel"] == sample["split_tunnel"]
     assert raw["global_ip_ranges"] == sample["global_ip_ranges"]
     assert progress[-1]["calls_done"] == progress[-1]["calls_total"] == 4
-    assert progress[-1]["split_tunnel_rules"] == 3
+    assert progress[-1]["split_tunnel_rules"] == 4
 
     # Without the users there is nothing for the policy to route: not asked for.
     seen.clear()
@@ -411,7 +457,7 @@ async def test_collect_account_falls_back_to_the_reduced_split_tunnel_query():
         raw = await collect_account(client, "42", _USERS_ONLY)
 
     assert seen[2:4] == ["plexusSplitTunnel", "plexusSplitTunnelBasic"]
-    assert raw["split_tunnel"]["reduced"] is True and len(raw["split_tunnel"]["rules"]) == 3
+    assert raw["split_tunnel"]["reduced"] is True and len(raw["split_tunnel"]["rules"]) == 4
     assert [e["path"] for e in raw["errors"]] == ["policy.splitTunnel (full detail)"]
 
 
@@ -429,6 +475,40 @@ async def test_collect_account_leaves_the_split_tunnel_policy_uncollected_when_c
     assert [e["path"] for e in raw["errors"]] == ["policy.splitTunnel (full detail)", "policy.splitTunnel"]
     users = [n for n in build_snapshot(raw)["nodes"] if n["kind"] == "user" and n["label"] != "Priya Nair"]
     assert users and all(n["forwarding"]["not_collected"] == ["Route table (Split Tunnel policy)"] for n in users)
+
+
+@pytest.mark.asyncio
+async def test_collect_account_reads_the_client_reports_after_the_users():
+    sample = build_sample_raw()
+    seen: list[str] = []
+    policy = {"plexusSplitTunnel": lambda _q: _policy_response("splitTunnel", sample["split_tunnel"])}
+    others = _split_handler(sample, seen, policy)
+    dana = sample["client_reports"]["rows"][0]
+    fields = {**{k: v for k, v in dana.items() if k != "time"}, "last_time": "2026-10-01 12:40:05.000"}
+    answer = {"data": {"events": {"from": None, "to": None, "totalCount": 1, "records": [{"fieldsMap": fields}]}}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if _operation(request)["operationName"] == "plexusClientReports":
+            seen.append("plexusClientReports")
+            return httpx.Response(200, json=answer)
+        return others(request)
+
+    options = {**_USERS_ONLY, "include_client_reports": True}
+    progress: list[dict] = []
+    async with _client(handler) as client:
+        raw = await collect_account(client, "42", options, progress.append)
+    assert seen == ["plexusSites", "plexusUsers", "plexusClientReports", "plexusSplitTunnel", "plexusGlobalIpRanges"]
+    assert raw["errors"] == [] and raw["client_reports"]["rows"] == [dana]
+    assert progress[-1]["calls_done"] == progress[-1]["calls_total"] == 5
+
+    # Refused (no View permission for events): not collected, and the rest still loads.
+    answer = {"errors": [{"message": "Permission denied"}]}
+    progress.clear()
+    async with _client(handler) as client:
+        raw = await collect_account(client, "42", options, progress.append)
+    assert raw["client_reports"] is None and raw["split_tunnel"] == sample["split_tunnel"]
+    assert [e["path"] for e in raw["errors"]] == ["events (Client Connectivity Policy)"]
+    assert progress[-1]["calls_done"] == progress[-1]["calls_total"] == 5
 
 
 _BGP_PEER = {
@@ -493,7 +573,17 @@ async def test_collect_account_reads_the_bgp_peers_site_by_site_with_the_ranges(
 
     progress: list[dict] = []
     async with _client(_bgp_handler(sample, seen, {"plexusBgpPeersOfSite": of_site})) as client:
-        raw = await collect_account(client, "42", {"include_users": False, "include_firewall": False}, progress.append)
+        raw = await collect_account(
+            client,
+            "42",
+            {
+                "include_users": False,
+                "include_firewall": False,
+                "include_policies": False,
+                "include_site_config": False,
+            },
+            progress.append,
+        )
 
     assert seen == ["plexusSites", "plexusLookup", "plexusLookup"] + ["plexusBgpPeersOfSite"] * 4
     assert asked == _SITE_IDS
@@ -524,7 +614,16 @@ async def test_collect_account_falls_back_to_the_reduced_bgp_peer_query():
 
     answers = {"plexusBgpPeersOfSite": lambda _site: _refused("catoAsn"), "plexusBgpPeersOfSiteBasic": basic}
     async with _client(_bgp_handler(sample, seen, answers)) as client:
-        raw = await collect_account(client, "42", {"include_users": False, "include_firewall": False})
+        raw = await collect_account(
+            client,
+            "42",
+            {
+                "include_users": False,
+                "include_firewall": False,
+                "include_policies": False,
+                "include_site_config": False,
+            },
+        )
 
     # Refused once: the full query is not asked again for the later sites.
     assert seen[3:] == ["plexusBgpPeersOfSite"] + ["plexusBgpPeersOfSiteBasic"] * 4
@@ -542,7 +641,16 @@ async def test_collect_account_leaves_the_bgp_peers_uncollected_when_cato_refuse
         "plexusBgpPeersOfSiteBasic": lambda _site: _refused("bgpPeer"),
     }
     async with _client(_bgp_handler(sample, seen, answers)) as client:
-        raw = await collect_account(client, "42", {"include_users": False, "include_firewall": False})
+        raw = await collect_account(
+            client,
+            "42",
+            {
+                "include_users": False,
+                "include_firewall": False,
+                "include_policies": False,
+                "include_site_config": False,
+            },
+        )
 
     # The first site's reduced query is refused too: no other site is asked.
     assert seen[3:] == ["plexusBgpPeersOfSite", "plexusBgpPeersOfSiteBasic"]
@@ -557,7 +665,15 @@ async def test_collect_account_asks_for_no_bgp_peers_without_the_ranges():
     seen: list[str] = []
     async with _client(_bgp_handler(sample, seen, {})) as client:
         raw = await collect_account(
-            client, "42", {"include_users": False, "include_ranges": False, "include_firewall": False}
+            client,
+            "42",
+            {
+                "include_users": False,
+                "include_ranges": False,
+                "include_firewall": False,
+                "include_policies": False,
+                "include_site_config": False,
+            },
         )
     assert seen == ["plexusSites"] and raw["bgp_peers"] is None
 
@@ -690,7 +806,7 @@ def test_every_remote_user_is_a_node_in_the_box_of_its_pop(snapshot):
     assert ["Remote users connected", "2"] in _section(pop, "Cato PoP")["rows"]
     rows = _section(pop, "Connected remote users")["rows"]
     assert [r[0] for r in rows] == ["Priya Nair", "Sam Okafor"]
-    assert rows[1][3:5] == ["10.88.0.12", "198.51.100.202"]
+    assert rows[1][3:5] == ["10.88.0.12", "198.51.100.12"]
 
 
 def test_a_remote_user_says_where_it_connects_from_and_to(snapshot):
@@ -896,8 +1012,13 @@ def test_api_cato_account_crud_keeps_the_key_write_only(api):
         "include_users": True,
         "include_ranges": True,
         "include_firewall": True,
+        "include_policies": True,
+        "include_site_config": True,
+        "include_client_reports": True,
         "inventory_enrich": True,
     }
+    assert listing["cato_default_options"]["include_policies"] is True
+    assert listing["cato_default_options"]["include_site_config"] is True
     assert "super-secret-key" not in created.text
     assert "super-secret-key" not in api.get("/api/sources").text
 
@@ -1286,11 +1407,12 @@ def test_ha_sockets_ipsec_sites_and_users_carry_forwarding_too(snapshot):
         ("IPsec tunnel (secondary)", "tunnel", "192.0.2.91", True),
         ("VPC (172.21.0.0/16)", "lan", "", True),
     ]
-    # No Split Tunnel rule matches Dana: everything goes to her PoP.
+    # Dana's Split Tunnel rule (decided by her Client's report): one exception, the rest to her PoP.
     user = _fwd(snapshot, "cato:user:9001")
     assert user["interfaces"][0]["ip"] == "10.88.0.11" and user["interfaces"][0]["kind"] == "tunnel"
     assert [(r["prefix"], r["kind"]) for r in user["routes"]] == [
         ("10.88.0.11/32", "connected"),
+        ("10.77.128.0/22", "static"),
         ("0.0.0.0/0", "default"),
     ]
 
@@ -1412,10 +1534,30 @@ def _split_rule(index: int, name: str, action: str, **fields) -> dict:
     }
 
 
-def _with_split(rules: list[dict], **policy) -> dict:
+def _with_split(rules: list[dict], reports: list[dict] | None = None, **policy) -> dict:
+    """The sample with these Split Tunnel rules and, when given, these Client
+    reports (else the reports were not collected)."""
     raw = build_sample_raw()
     raw["split_tunnel"] = {"enabled": True, "rules": rules, "reduced": False, **policy}
+    raw["client_reports"] = None if reports is None else {"from": "", "to": "", "rows": reports}
     return build_snapshot(raw)
+
+
+def _report(split: str, device: str = "LT-DANA", user: str = "9001") -> dict:
+    """A Client Connectivity Policy report, as ``collect_client_reports`` stores it."""
+    return {
+        "user_id": user,
+        "user_name": "Dana Reyes",
+        "device_name": device,
+        "os_type": "OS_WINDOWS",
+        "split_tunnel_configuration": split,
+        "office_mode": "Disabled",
+        "trusted_networks": "Enabled",
+        "src_ip": "198.51.100.201",
+        "pop_name": "New York",
+        "time": "2026-10-01T12:40:05Z",
+        "event_count": 3,
+    }
 
 
 def _routes(block: dict) -> list[tuple]:
@@ -1475,11 +1617,36 @@ def test_an_only_selected_rule_sends_its_ranges_to_the_pop_and_the_rest_out_of_t
     assert rows["Selected destinations"] == "Corp-Networks (10.0.0.0/8)"
 
 
+def _direct(snapshot: dict, node_id: str) -> dict:
+    return next(i for i in _fwd(snapshot, node_id)["interfaces"] if i["name"] == "Local network (direct)")
+
+
+def test_the_direct_interface_sits_behind_the_public_address_the_client_connects_from(snapshot):
+    # Sam's sample public address is a documentation one, which stands for a public address.
+    assert _direct(snapshot, _SAM_ID)["behind_ip"] == "198.51.100.12"
+    assert _direct(snapshot, _LEE_ID)["behind_ip"] == "198.51.100.204"
+    sam = next(n for n in snapshot["nodes"] if n["id"] == _SAM_ID)
+    assert sam["device_name"] == "LT-SAM"
+
+    def lee_from(**fields) -> dict:
+        raw = build_sample_raw()
+        lee = next(u for u in raw["users"] if u["id"] == "9004")
+        lee.update(fields)
+        return _direct(build_snapshot(raw), _LEE_ID)
+
+    # A global address, from the location record when remoteIP is empty.
+    assert lee_from(remoteIP="", remoteIPInfo={"ip": "50.173.129.34"})["behind_ip"] == "50.173.129.34"
+    # A private or missing address is not one a device on the map can answer on.
+    assert "behind_ip" not in lee_from(remoteIP="192.168.1.20", remoteIPInfo={"ip": "192.168.1.20"})
+    assert "behind_ip" not in lee_from(remoteIP="", remoteIPInfo={})
+
+
 def test_no_rule_matching_and_office_mode_keep_the_full_tunnel(snapshot):
     # Rules 1 and 2 name other users; rule 3 is a group's, for a platform Dana does not run.
-    assert _routes(_fwd(snapshot, _DANA_ID)) == _FULL_TUNNEL
-    assert _fwd(snapshot, _DANA_ID)["not_collected"] == []
-    assert _split_rows(snapshot, _DANA_ID) == {"Rule": "No rule matches: all traffic to Cato"}
+    first_three = _with_split(build_sample_raw()["split_tunnel"]["rules"][:3])
+    assert _routes(_fwd(first_three, _DANA_ID)) == _FULL_TUNNEL
+    assert _fwd(first_three, _DANA_ID)["not_collected"] == []
+    assert _split_rows(first_three, _DANA_ID) == {"Rule": "No rule matches: all traffic to Cato"}
     # Office Mode: behind the site, the policy does not apply. A plain note, not a route note.
     priya = _fwd(snapshot, _PRIYA_ID)
     assert [r["kind"] for r in priya["routes"]] == ["connected", "default"]
@@ -1493,16 +1660,24 @@ def test_a_rule_that_may_match_ahead_of_one_that_does_leaves_the_choice_undeterm
     groups = _split_rule(
         1, "Remote staff", "ROUTE_ONLY_SELECTED", source={"user": [], "usersGroup": [{"id": "g", "name": "Staff"}]}
     )
+    # A users group the account does not list: its members are not known.
     snap = _with_split([groups, _split_rule(2, "Dana direct", "ROUTE_ONLY_SELECTED")])
     dana = _fwd(snap, _DANA_ID)
     assert _routes(dana) == _FULL_TUNNEL
     assert dana["not_collected"] == [
-        "Route table (Split Tunnel rule Remote staff may apply: users groups are not collected)"
+        "Route table (Split Tunnel rule Remote staff may apply: the members of users group Staff were not read)"
     ]
     assert (
         _split_rows(snap, _DANA_ID)["Rule"]
-        == "Undetermined: rule 1 Remote staff may apply (users groups are not collected)"
+        == "Undetermined: rule 1 Remote staff may apply (the members of users group Staff were not read)"
     )
+    # The users groups were not collected at all.
+    raw = build_sample_raw()
+    raw["user_groups"] = raw["client_reports"] = None
+    raw["split_tunnel"] = {"enabled": True, "rules": [groups], "reduced": False}
+    assert _fwd(build_snapshot(raw), _DANA_ID)["not_collected"] == [
+        "Route table (Split Tunnel rule Remote staff may apply: users groups are not collected)"
+    ]
 
     # Every criterion Plexus cannot evaluate is named; one that does not match skips the rule.
     managed = _split_rule(1, "Managed", "OFF", sourceNetwork={"sourceNetworkType": "ANY_MANAGED_NETWORK"})
@@ -1510,7 +1685,8 @@ def test_a_rule_that_may_match_ahead_of_one_that_does_leaves_the_choice_undeterm
     abroad = _split_rule(2, "Abroad", "OFF", country=[{"id": "FR", "name": "France"}])
     home = _split_rule(3, "Home", "OFF", country=[{"id": "US", "name": "United States"}], platform=["WINDOWS"])
     assert _fwd(_with_split([managed]), _DANA_ID)["not_collected"] == [
-        "Route table (Split Tunnel rule Managed may apply: managed networks are not collected)"
+        "Route table (Split Tunnel rule Managed may apply: whether the device is on a managed network is not "
+        "known (not reported by Cato's API; the Client's last report is not collected))"
     ]
     snap = _with_split([linux, abroad, home])
     assert _fwd(snap, _DANA_ID)["not_collected"] == [] and _split_rows(snap, _DANA_ID)["Rule"] == "3 Home"
@@ -1602,9 +1778,122 @@ def test_split_tunnel_destinations_routes_cannot_express_are_route_notes():
     ]
 
 
+# ── Client connection reports ────────────────────────────────────────────────
+
+_REPORTED_AT = "2026-10-01 12:40:05 UTC"
+_LAB = {"application": [], "globalIpRange": [{"id": "gr-1", "name": "Lab-Pool"}], "domain": [], "fqdn": []}
+
+
+def _away(index: int = 1, name: str = "Dana away", action: str = "ROUTE_ALL_TO_CATO_EXCEPT", **fields) -> dict:
+    """A rule for Dana that only applies off (or on) a managed network."""
+    network = fields.pop("network", "ANY_MANAGED_NETWORK")
+    return _split_rule(index, name, action, sourceNetwork={"sourceNetworkType": network}, destination=_LAB, **fields)
+
+
+def test_a_users_client_report_is_a_section_of_its_node(snapshot):
+    nodes = {n["id"]: n for n in snapshot["nodes"]}
+    assert _section(nodes[_DANA_ID], "Client report")["rows"] == [
+        ["Reported", _REPORTED_AT],
+        ["Device", "LT-DANA"],
+        ["OS", "OS_WINDOWS"],
+        ["Split Tunnel", "Admin Defined"],
+        ["Office Mode", "Disabled"],
+        ["Managed Networks (Trusted Networks)", "Enabled"],
+        ["Public IP", "198.51.100.201"],
+        ["PoP", "New York"],
+    ]
+    titles = [s["title"] for s in nodes[_DANA_ID]["sections"]]
+    assert titles.index("Client report") == titles.index("Device") + 1
+    # Sam's only report is from another device: shown, and said not to be used.
+    sam = dict(_section(nodes[_SAM_ID], "Client report")["rows"])
+    assert sam["Device"] == "LT-SAM-OLD"
+    assert (
+        sam["Note"] == "From another device than the one connected now (LT-SAM): not used for the Split Tunnel decision"
+    )
+
+    rules = build_sample_raw()["split_tunnel"]["rules"]
+    lee = next(n for n in _with_split(rules)["nodes"] if n["id"] == _LEE_ID)
+    assert _section(lee, "Client report")["rows"] == [["Reports", "Not collected"]]
+    lee = next(n for n in _with_split(rules, reports=[])["nodes"] if n["id"] == _LEE_ID)
+    assert _section(lee, "Client report")["rows"] == [
+        ["Reports", "No Client Connectivity Policy event in the last 7 days"]
+    ]
+
+
+def test_admin_defined_with_one_rule_that_may_apply_decides_it():
+    snap = _with_split([_away()], reports=[_report("Admin Defined")])
+    dana = _fwd(snap, _DANA_ID)
+    assert _routes(dana) == [
+        _CONNECTED,
+        ("10.77.128.0/22", "static", "Local network (direct)", None, "Split Tunnel rule Dana away: exception"),
+        _FULL_TUNNEL[1],
+    ]
+    assert dana["not_collected"] == []
+    rows = _split_rows(snap, _DANA_ID)
+    assert rows["Rule"] == (
+        f'1 Dana away (decided by the Client\'s report of Split Tunnel "Admin Defined" on LT-DANA at {_REPORTED_AT})'
+    )
+    assert rows["Exceptions"] == "Lab-Pool (10.77.128.0/22)"
+    # The sample: Dana's report decides rule 4, the one Admin Defined rule that may apply to her.
+    assert _split_rows(build_snapshot(build_sample_raw()), _DANA_ID)["Rule"].startswith(
+        "4 Contractors away from the office (decided by the Client's report"
+    )
+
+
+def test_disabled_is_all_traffic_to_cato():
+    snap = _with_split([_away()], reports=[_report("Disabled")])
+    assert _routes(_fwd(snap, _DANA_ID)) == _FULL_TUNNEL and _fwd(snap, _DANA_ID)["not_collected"] == []
+    assert _split_rows(snap, _DANA_ID) == {
+        "Rule": f'All traffic to Cato: the Client reported Split Tunnel "Disabled" on LT-DANA at {_REPORTED_AT} '
+        "(rule 1 Dana away would otherwise be undetermined: whether the device is on a managed network is not "
+        "known (not reported by Cato's API))"
+    }
+
+
+def test_a_report_that_fits_several_rules_leaves_the_choice_undetermined():
+    rules = [_away(), _away(2, "Dana off", "OFF"), _away(3, "Dana only", "ROUTE_ONLY_SELECTED", network="ANY")]
+    snap = _with_split(rules, reports=[_report("Admin Defined")])
+    why = f'the Client reported Split Tunnel "Admin Defined" at {_REPORTED_AT}, and rules 1 Dana away, 3 Dana only could be the one applied'
+    assert _routes(_fwd(snap, _DANA_ID)) == _FULL_TUNNEL
+    assert _fwd(snap, _DANA_ID)["not_collected"] == [f"Route table (Split Tunnel rule Dana away may apply: {why})"]
+    assert _split_rows(snap, _DANA_ID) == {"Rule": f"Undetermined: rule 1 Dana away may apply ({why})"}
+    # User Defined: no rule that may apply has that mode.
+    snap = _with_split(rules, reports=[_report("User Defined")])
+    assert _split_rows(snap, _DANA_ID)["Rule"].endswith("and no rule that may apply has that mode)")
+    # A value Plexus does not know is never guessed.
+    snap = _with_split(rules, reports=[_report("Sometimes")])
+    assert _split_rows(snap, _DANA_ID) == {
+        "Rule": 'Undetermined: rule 1 Dana away may apply (the Client reported Split Tunnel "Sometimes", '
+        "which Plexus does not know)"
+    }
+
+
+def test_a_report_from_another_device_is_shown_but_not_used():
+    snap = _with_split([_away()], reports=[_report("Disabled", device="OLD-PC")])
+    assert _fwd(snap, _DANA_ID)["not_collected"] == [
+        "Route table (Split Tunnel rule Dana away may apply: whether the device is on a managed network is not "
+        "known (not reported by Cato's API; the Client's last report is not found for this device))"
+    ]
+    dana = next(n for n in snap["nodes"] if n["id"] == _DANA_ID)
+    assert dict(_section(dana, "Client report")["rows"])["Device"] == "OLD-PC"
+
+
+def test_a_report_never_overrides_a_rule_decided_from_the_configuration():
+    rules = build_sample_raw()["split_tunnel"]["rules"]
+    lee = _fwd(_with_split(rules, reports=[_report("Disabled", device="LT-LEE", user="9004")]), _LEE_ID)
+    assert _routes(lee)[1][4] == "Split Tunnel rule Lee corporate only: routed to Cato"
+    assert lee["not_collected"] == [
+        f'The Client reported Split Tunnel "Disabled" at {_REPORTED_AT}, which does not agree with rule 2 Lee '
+        "corporate only"
+    ]
+    # One that agrees adds nothing.
+    lee = _fwd(_with_split(rules, reports=[_report("Admin Defined", device="LT-LEE", user="9004")]), _LEE_ID)
+    assert lee["not_collected"] == []
+
+
 def test_the_cloud_lists_the_split_tunnel_policy(snapshot):
     cloud = next(n for n in snapshot["nodes"] if n["id"] == CLOUD_NODE_ID)
-    assert dict(_section(cloud, "Cato Cloud")["rows"])["Split Tunnel policy"] == "Enabled, 3 rules"
+    assert dict(_section(cloud, "Cato Cloud")["rows"])["Split Tunnel policy"] == "Enabled, 4 rules"
     table = _section(cloud, "Split Tunnel policy")
     assert table["columns"] == [
         "#",
@@ -1623,7 +1912,9 @@ def test_the_cloud_lists_the_split_tunnel_policy(snapshot):
         ["1", "Sam direct to the lab", "Yes", "Sam Okafor"],
         ["2", "Lee corporate only", "Yes", "Lee Park"],
         ["3", "Contractors on Linux", "Yes", "group Contractors"],
+        ["4", "Contractors away from the office", "Yes", "group Contractors"],
     ]
+    assert table["rows"][3][6] == "Any unmanaged network"
     assert table["rows"][2][4:] == [
         "LINUX",
         "Any",
@@ -1632,4 +1923,520 @@ def test_the_cloud_lists_the_split_tunnel_policy(snapshot):
         "FQDN repo.example.com",
         "All traffic",
         "Tunnel",
+    ]
+
+
+# ── Every other policy and the objects rules name ────────────────────────────
+
+_LISTED = POLICIES[3:]
+_POLICIES_ONLY = {
+    "include_users": False,
+    "include_ranges": False,
+    "include_firewall": False,
+    "include_site_config": False,
+}
+
+
+def _policies_handler(sample: dict, seen: list[str], answers: dict):
+    """The site list, then ``answers[operation](body)``; anything else is
+    refused, as by a key without the permission."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = _operation(request)
+        name = body["operationName"]
+        seen.append(name)
+        if name == "plexusSites":
+            return httpx.Response(200, json={"data": {"accountSnapshot": {"id": "42", "sites": sample["sites"]}}})
+        if name in answers:
+            return answers[name](body)
+        return httpx.Response(200, json={"errors": [{"message": "Permission denied"}]})
+
+    return handler
+
+
+def test_the_policy_table_lists_every_policy_of_catos_schema_once():
+    assert len(POLICIES) == 18 and len({p.key for p in POLICIES}) == len({p.field for p in POLICIES}) == 18
+    assert {p.field for p in POLICIES} == {
+        "antiMalwareFileHash", "applicationControl", "appTenantRestriction", "clientConnectivity",
+        "dynamicIpAllocation", "internetFirewall", "privateAccess", "remotePortFwd", "sdpStaticIpAllocation",
+        "siteWebProxy", "socketBypass", "socketLan", "splitTunnel", "terminalServer", "tlsInspect",
+        "wanFirewall", "wanNetwork", "ztnaAlwaysOn",
+    }  # fmt: skip
+    # The options of the three path tracing evaluates are the ones stored entries already have.
+    assert [(p.key, p.option) for p in POLICIES[:3]] == [
+        ("wan_firewall", "include_firewall"),
+        ("internet_firewall", "include_firewall"),
+        ("split_tunnel", "include_users"),
+    ]
+    assert all(p.option == "include_policies" for p in _LISTED)
+    for spec in POLICIES:
+        # snake_case of the field; every query reads the published policy and no secret.
+        assert spec.key == "".join("_" + c.lower() if c.isupper() else c for c in spec.field)
+        for query in (spec.full, spec.basic):
+            assert "policy(accountId: $accountId)" in query and f"{spec.field} {{" in query and "@" not in query
+            assert "Keytab" not in query and "password" not in query.lower()
+        if spec in _LISTED:
+            assert "rule { id name index enabled }" in " ".join(spec.basic.split())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spec", _LISTED, ids=[p.key for p in _LISTED])
+async def test_collect_account_reads_every_other_policy_in_full(spec):
+    sample = build_sample_raw()
+    seen: list[str] = []
+    operation = "plexus" + spec.field[0].upper() + spec.field[1:]
+
+    def full(body: dict) -> httpx.Response:
+        assert body["query"] == spec.full and body["variables"] == {"accountId": "42"}
+        return _policy_response(spec.field, sample[spec.key])
+
+    async with _client(_policies_handler(sample, seen, {operation: full})) as client:
+        raw = await collect_account(client, "42", _POLICIES_ONLY)
+
+    assert raw[spec.key] == sample[spec.key]
+    assert operation in seen and f"{operation}Basic" not in seen
+    assert f"policy.{spec.field}" not in [e["path"] for e in raw["errors"]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spec", _LISTED, ids=[p.key for p in _LISTED])
+async def test_collect_account_falls_back_to_the_reduced_query_of_every_other_policy(spec):
+    sample = build_sample_raw()
+    seen: list[str] = []
+    operation = "plexus" + spec.field[0].upper() + spec.field[1:]
+    reduced = {"enabled": True, "rules": [{"id": "r", "name": "Kept", "index": 1, "enabled": True}]}
+
+    def basic(body: dict) -> httpx.Response:
+        assert body["query"] == spec.basic
+        return _policy_response(spec.field, reduced)
+
+    answers = {operation: lambda _b: _refused("section"), f"{operation}Basic": basic}
+    async with _client(_policies_handler(sample, seen, answers)) as client:
+        raw = await collect_account(client, "42", _POLICIES_ONLY)
+
+    assert raw[spec.key] == {**reduced, "reduced": True}
+    paths = [e["path"] for e in raw["errors"]]
+    assert f"policy.{spec.field} (full detail)" in paths and f"policy.{spec.field}" not in paths
+    # Listed with what was read, and said to be reduced.
+    cloud = next(n for n in build_snapshot(raw)["nodes"] if n["id"] == CLOUD_NODE_ID)
+    table = _section(cloud, f"{spec.label} policy (reduced)")
+    assert [r[:3] for r in table["rows"]] == [["1", "Kept", "Yes"]]
+    assert spec.label in dict(_section(cloud, "Cato Cloud")["rows"])["Policies read with the reduced query"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spec", _LISTED, ids=[p.key for p in _LISTED])
+async def test_a_policy_cato_refuses_is_not_collected_and_the_rest_still_load(spec):
+    sample = build_sample_raw()
+    seen: list[str] = []
+    answers = {
+        "plexus" + other.field[0].upper() + other.field[1:]: (
+            lambda _b, other=other: _policy_response(other.field, sample[other.key])
+        )
+        for other in _LISTED
+        if other is not spec
+    }
+    async with _client(_policies_handler(sample, seen, answers)) as client:
+        raw = await collect_account(client, "42", _POLICIES_ONLY)
+
+    assert raw[spec.key] is None
+    assert all(raw[other.key] == sample[other.key] for other in _LISTED if other is not spec)
+    paths = [e["path"] for e in raw["errors"] if e["path"].split(" ")[0] == f"policy.{spec.field}"]
+    assert paths == [f"policy.{spec.field} (full detail)", f"policy.{spec.field}"]
+    cloud = next(n for n in build_snapshot(raw)["nodes"] if n["id"] == CLOUD_NODE_ID)
+    rows = dict(_section(cloud, "Cato Cloud")["rows"])
+    assert rows["Policies not collected"] == spec.label
+    assert rows["Policies not asked for"] == "WAN firewall, Internet firewall, Split Tunnel"
+    assert not any(s["title"].startswith(f"{spec.label} policy") for s in cloud["sections"])
+
+
+@pytest.mark.asyncio
+async def test_include_policies_off_sends_none_of_the_other_queries():
+    sample = build_sample_raw()
+    seen: list[str] = []
+    async with _client(_policies_handler(sample, seen, {})) as client:
+        raw = await collect_account(client, "42", {**_POLICIES_ONLY, "include_policies": False})
+    assert seen == ["plexusSites"] and raw["errors"] == []
+    for key in [p.key for p in POLICIES] + ["groups", "user_groups", "containers", "custom_applications"]:
+        assert raw[key] is None, key
+    assert raw["wan_firewall_policies"] is raw["socket_lan_policies"] is None
+    assert raw["site_config"] is None
+    # The stored options of an entry made before the option existed read it as on.
+    assert sanitize_options({"include_firewall": True})["include_policies"] is True
+    assert sanitize_options({"include_policies": 0})["include_policies"] is False
+    assert sanitize_options({})["include_site_config"] is True
+
+
+@pytest.mark.asyncio
+async def test_site_configuration_is_read_with_the_sites_and_counted_in_the_progress():
+    """The site and network configuration (``site_config``) is read right
+    after the site list, for the sites the build keeps, and its queries are
+    part of the progress total."""
+    sample = build_sample_raw()
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = _operation(request)
+        seen.append(body["operationName"])
+        if body["operationName"] == "plexusSites":
+            return httpx.Response(200, json={"data": {"accountSnapshot": {"id": "42", "sites": sample["sites"]}}})
+        if body["operationName"] == "plexusAccountInfo":
+            return httpx.Response(200, json={"data": {"accountManagement": {"account": {"id": "42", "name": "Acme"}}}})
+        # Every other configuration query is refused: best-effort, like the rest.
+        return httpx.Response(200, json={"errors": [{"message": "no permission"}]})
+
+    progress: list[dict] = []
+    options = {**_POLICIES_ONLY, "include_policies": False, "include_site_config": True, "site_name_contains": "hq"}
+    async with _client(handler) as client:
+        raw = await collect_account(client, "42", options, progress.append)
+
+    assert seen[0] == "plexusSites" and "plexusAccountInfo" in seen and "plexusSiteNetworkRanges" in seen
+    assert [s["info"]["name"] for s in raw["sites"]] == ["HQ-DataCenter"]
+    assert raw["site_config"]["account"] == {"id": "42", "name": "Acme"}
+    assert list(raw["site_config"]["sites"]) == ["1001"] and raw["site_config"]["sites"]["1001"]["ranges"] is None
+    assert any(e["path"] == "site.networkRangeList" and e["scope"] == "site HQ-DataCenter" for e in raw["errors"])
+    assert progress[-1]["phase"] == "collected" and progress[-1]["calls_done"] == progress[-1]["calls_total"]
+
+
+def test_site_configuration_sections_are_on_the_sockets_and_the_cloud(snapshot):
+    """The demo account's configuration shows on its Sockets (the site's
+    settings, ranges with DHCP, hosts) and on the Cato Cloud (DHCP, DNS)."""
+    by_id = {n["id"]: n for n in snapshot["nodes"]}
+    hq_titles = [s["title"] for s in by_id["d:5001"]["sections"]]
+    assert "Site settings" in hq_titles and "Network range settings" in hq_titles and "Known hosts" in hq_titles
+    # The HA pair: each Socket shows its own configuration only.
+    socket = next(s for s in by_id["d:5001"]["sections"] if s["title"] == "Socket configuration")
+    assert ["Serial", "X1700-0001-AAAA"] in socket["rows"]
+    socket = next(s for s in by_id["d:5002"]["sections"] if s["title"] == "Socket configuration")
+    assert ["Serial", "X1700-0002-BBBB"] in socket["rows"]
+    # An IPsec site has no Socket, but its ranges and settings still show.
+    assert "Network range settings" in [s["title"] for s in by_id["s:1004"]["sections"]]
+    cloud_titles = [s["title"] for s in by_id[CLOUD_NODE_ID]["sections"]]
+    assert "DHCP settings" in cloud_titles and "DNS forwarding rules" in cloud_titles and "Account" in cloud_titles
+    # Not collected: no section, and the map still builds.
+    raw = build_sample_raw()
+    raw["site_config"] = None
+    bare = {n["id"]: n for n in build_snapshot(raw)["nodes"]}
+    assert "Site settings" not in [s["title"] for s in bare["d:5001"]["sections"]]
+
+
+@pytest.mark.asyncio
+async def test_collect_account_reads_the_policies_sub_policies_and_objects(monkeypatch):
+    import netcontrol.integrations.cato.collector as collector_module
+
+    sample = build_sample_raw()
+    seen: list[str] = []
+    answers = {
+        "plexus" + p.field[0].upper() + p.field[1:]: (lambda _b, p=p: _policy_response(p.field, sample[p.key]))
+        for p in POLICIES
+    }
+
+    def policy_list(body: dict) -> httpx.Response:
+        # Only the Socket LAN firewall: the WAN and Internet ones come with the firewall option.
+        assert "$input: SocketLanPolicyListInput!" in body["query"]
+        assert body["variables"]["input"] == {"paging": {"limit": 100, "from": 0}}
+        items = sample["socket_lan_policies"]
+        payload = {"policyList": {"items": items, "paging": {"total": len(items)}}}
+        return httpx.Response(200, json={"data": {"policy": {"socketLan": payload}}})
+
+    def page(items: list[dict], body: dict) -> dict:
+        paging = body["variables"]["input"]["paging"]
+        return {"items": items[paging["from"] : paging["from"] + paging["limit"]], "paging": {"total": len(items)}}
+
+    def users_groups(body: dict) -> httpx.Response:
+        listed = [{k: v for k, v in g.items() if k != "members"} for g in sample["user_groups"][:2]]
+        return httpx.Response(200, json={"data": {"user": {"usersGroupList": page(listed, body)}}})
+
+    def users_group_members(body: dict) -> httpx.Response:
+        group = next(g for g in sample["user_groups"] if g["id"] == body["variables"]["group"]["group"]["input"])
+        payload = {"usersGroup": {"members": page(group["members"], body)}}
+        return httpx.Response(200, json={"data": {"user": payload}})
+
+    def containers(body: dict) -> httpx.Response:
+        assert body["variables"]["input"] == {"refs": [], "types": []}
+        listed = [{k: v for k, v in c.items() if k != "members"} for c in sample["containers"]]
+        return httpx.Response(200, json={"data": {"container": {"list": {"containers": listed}}}})
+
+    def custom_apps(body: dict) -> httpx.Response:
+        payload = {"customApplicationList": page(sample["custom_applications"], body)}
+        return httpx.Response(200, json={"data": {"customAppData": payload}})
+
+    answers |= {
+        "plexusSocketLanPolicies": policy_list,
+        "plexusGroups": lambda _b: httpx.Response(200, json={"errors": [{"message": "Permission denied"}]}),
+        "plexusUsersGroups": users_groups,
+        "plexusUsersGroupMembers": users_group_members,
+        "plexusContainers": containers,
+        "plexusCustomApplications": custom_apps,
+        "plexusGlobalIpRanges": lambda _b: httpx.Response(
+            200, json={"data": {"object": {"globalIpRangeList": {"items": sample["global_ip_ranges"]}}}}
+        ),
+    }
+    monkeypatch.setattr(collector_module, "_USERS_GROUP_PAGE", 1)
+    progress: list[dict] = []
+    async with _client(_policies_handler(sample, seen, answers)) as client:
+        raw = await collect_account(client, "42", {**_POLICIES_ONLY}, progress.append)
+
+    assert seen[0] == "plexusSites" and len([n for n in seen if n.endswith("Basic")]) == 0
+    assert all(raw[p.key] == sample[p.key] for p in _LISTED)
+    assert raw["socket_lan_policies"] == sample["socket_lan_policies"]
+    assert raw["wan_firewall_policies"] is None and raw["wan_firewall"] is None
+    # Refused: not collected, and said so.
+    assert raw["groups"] is None and [e["path"] for e in raw["errors"]] == ["groups.groupList"]
+    # One page per users group and per member, at a page size of one.
+    assert seen.count("plexusUsersGroups") == 2 and seen.count("plexusUsersGroupMembers") == 1 + 2
+    assert raw["user_groups"] == sample["user_groups"][:2]
+    # Contents of a container are a file download: not read.
+    assert raw["containers"] == sample["containers"] and all(c["members"] is None for c in raw["containers"])
+    assert raw["custom_applications"] == sample["custom_applications"]
+    assert progress[-1]["calls_done"] == progress[-1]["calls_total"] == 1 + 15 + 1 + 1 + 4
+
+
+@pytest.mark.asyncio
+async def test_group_members_are_paged_and_capped(monkeypatch):
+    import netcontrol.integrations.cato.collector as collector_module
+
+    monkeypatch.setattr(collector_module, "_GROUP_PAGE", 2)
+    monkeypatch.setattr(collector_module, "_MAX_GROUP_MEMBERS", 3)
+    monkeypatch.setattr(collector_module, "_MAX_GROUPS_WITH_MEMBERS", 2)
+
+    def member(n: int) -> dict:
+        return {"id": f"s{n}", "name": f"Site {n}", "type": "SITE"}
+
+    groups = {
+        "a": [member(1), member(2), member(3)],  # two pages
+        "b": [member(n) for n in range(5)],  # more members than the cap: not asked
+        "c": [member(9)],
+        "d": [member(8)],  # past the groups cap: not asked
+    }
+    listed = [{"id": k, "name": k.upper(), "membersCount": len(v)} for k, v in groups.items()]
+    asked: list[tuple[str, int]] = []
+
+    def respond(body: dict) -> httpx.Response:
+        paging = body["variables"]["input"]["paging"]
+        if body["operationName"] == "plexusGroups":
+            payload = {"items": listed[paging["from"] : paging["from"] + paging["limit"]], "paging": {"total": 4}}
+            return httpx.Response(200, json={"data": {"groups": {"groupList": payload}}})
+        group = body["variables"]["group"]
+        assert group["by"] == "ID"
+        asked.append((group["input"], paging["from"]))
+        items = groups[group["input"]][paging["from"] : paging["from"] + paging["limit"]]
+        payload = {"id": group["input"], "members": {"items": items, "paging": {"total": len(groups[group["input"]])}}}
+        return httpx.Response(200, json={"data": {"groups": {"group": payload}}})
+
+    seen: list[str] = []
+    answers = {"plexusGroups": respond, "plexusGroupMembers": respond}
+    async with _client(_policies_handler(build_sample_raw(), seen, answers)) as client:
+        raw = await collect_account(client, "42", _POLICIES_ONLY)
+
+    assert seen.count("plexusGroups") == 2
+    assert asked == [("a", 0), ("a", 2), ("c", 0)]
+    members = {g["id"]: g["members"] for g in raw["groups"]}
+    assert members == {"a": groups["a"], "b": None, "c": groups["c"], "d": None}
+    caps = [e["message"] for e in raw["errors"] if e["path"] == "groups.group.members"]
+    assert caps == [
+        "1 groups have more than 3 members: their members were not read",
+        "the members of 1 groups were not read: Plexus reads the members of 2 groups at most",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_users_group_member_refusal_stops_the_member_reads():
+    sample = build_sample_raw()
+    listed = [{k: v for k, v in g.items() if k != "members"} for g in sample["user_groups"][:2]]
+    seen: list[str] = []
+    answers = {
+        "plexusUsersGroups": lambda _b: httpx.Response(
+            200, json={"data": {"user": {"usersGroupList": {"items": listed, "paging": {"total": 2}}}}}
+        ),
+        "plexusUsersGroupMembers": lambda _b: _refused("usersGroup"),
+    }
+    async with _client(_policies_handler(sample, seen, answers)) as client:
+        raw = await collect_account(client, "42", _POLICIES_ONLY)
+    assert seen.count("plexusUsersGroupMembers") == 1
+    assert [g["members"] for g in raw["user_groups"]] == [None, None]
+    [error] = [e for e in raw["errors"] if e["path"] == "user.usersGroup.members"]
+    assert error["message"].endswith("(members of 0 of 2 groups read)")
+
+
+def test_the_cloud_lists_every_policy_of_the_sample(snapshot):
+    cloud = next(n for n in snapshot["nodes"] if n["id"] == CLOUD_NODE_ID)
+    titles = [s["title"] for s in cloud["sections"]]
+    for spec in POLICIES:
+        assert f"{spec.label} policy" in titles, spec.label
+    rows = dict(_section(cloud, "Cato Cloud")["rows"])
+    assert "Policies not collected" not in rows and "Policies read with the reduced query" not in rows
+    # The policy-level settings and the sub-policies.
+    assert dict(_section(cloud, "TLS inspection settings")["rows"]) == {
+        "Default rule action": "INSPECT",
+        "Default rule untrusted certificate action": "PROMPT",
+    }
+    assert [r[:3] for r in _section(cloud, "WAN firewall sub-policies")["rows"]] == [
+        ["Main", "MAIN", "Yes"],
+        ["Lab", "SUB_POLICY", "No"],
+    ]
+    wan_network = _section(cloud, "WAN network policy")
+    assert wan_network["columns"][3:] == [
+        "Type",
+        "Source",
+        "Destination",
+        "Application",
+        "Bandwidth priority",
+        "Route",
+        "Transport",
+        "Optimizations",
+        "Exceptions",
+    ]
+    assert wan_network["rows"][0][7:10] == [
+        "P10",
+        "OPTIMIZED",
+        "primary WAN (interfaces AUTOMATIC/AUTOMATIC), secondary AUTOMATIC (interfaces AUTOMATIC/AUTOMATIC)",
+    ]
+    allocation = _section(cloud, "Dynamic IP allocation policy")
+    assert (
+        allocation["rows"][0][3] == "group Engineering"
+        and allocation["rows"][0][-1] == "SDP-Engineering (10.89.0.0/24)"
+    )
+    forwarding = _section(cloud, "Remote port forwarding policy")["rows"][0]
+    assert forwarding[3:8] == ["203.0.113.200", "8443", "10.60.20.40", "443", "No"]
+    # The firewalls are listed too: a disabled one says so.
+    raw = build_sample_raw()
+    raw["wan_firewall"]["enabled"] = False
+    cloud = next(n for n in build_snapshot(raw)["nodes"] if n["id"] == CLOUD_NODE_ID)
+    assert any(s["title"] == "WAN firewall policy (disabled)" for s in cloud["sections"])
+
+
+def test_a_long_list_in_a_cell_is_cut_and_counted():
+    raw = build_sample_raw()
+    users = [{"id": str(n), "name": f"User {n:02}"} for n in range(25)]
+    raw["sdp_static_ip_allocation"]["rules"][0]["source"] = {"user": users}
+    cloud = next(n for n in build_snapshot(raw)["nodes"] if n["id"] == CLOUD_NODE_ID)
+    cell = _section(cloud, "SDP static IP allocation policy")["rows"][0][3]
+    assert cell.split(", ")[-1] == "… +5" and cell.count("User") == 20
+
+
+def test_site_scoped_policies_are_listed_on_the_sockets_of_their_sites(snapshot):
+    nodes = {n["id"]: n for n in snapshot["nodes"]}
+    madison = _section(nodes["d:5003"], "Socket LAN policy: rules for this site")
+    assert [r[:4] for r in madison["rows"]] == [
+        ["1", "Madison LAN to LAN", "Yes", "This site"],
+        ["2", "Every site routes guest traffic", "Yes", "All sites"],
+    ]
+    # By group membership (the group's members were read).
+    bypass = _section(nodes["d:5003"], "Socket bypass policy: rules for this site")
+    assert [r[:4] for r in bypass["rows"]] == [["1", "Backup to the local NAS", "Yes", "Group Branch sites"]]
+    titles = [s["title"] for s in nodes["d:5001"]["sections"]]
+    assert "Socket bypass policy: rules for this site" not in titles
+    assert "Site web proxy policy: rules for this site" in titles
+    # Both Sockets of an HA pair; never the IPsec site.
+    assert "Site web proxy policy: rules for this site" in [s["title"] for s in nodes["d:5002"]["sections"]]
+    assert not any("rules for this site" in s["title"] for s in nodes["s:1004"]["sections"])
+
+    # A group whose members were not read may apply.
+    raw = build_sample_raw()
+    raw["groups"][0]["members"] = None
+    node = next(n for n in build_snapshot(raw)["nodes"] if n["id"] == "d:5001")
+    rows = _section(node, "Socket bypass policy: rules for this site")["rows"]
+    assert rows[0][3] == "Group Branch sites: may apply (its members were not read)"
+
+
+def test_client_policies_are_listed_on_the_users_they_name(snapshot):
+    nodes = {n["id"]: n for n in snapshot["nodes"]}
+    sam = _section(nodes[_SAM_ID], "Client policies")
+    assert [r[:5] for r in sam["rows"]] == [
+        ["Client connectivity", "1", "Engineering on managed devices", "Yes", "Group Engineering"],
+        ["Client connectivity", "2", "Block everyone else from abroad", "Yes", "All users"],
+        ["Dynamic IP allocation", "1", "Engineering pool", "Yes", "Group Engineering"],
+        ["ZTNA always-on", "1", "Always on for staff", "Yes", "Group All Staff: may apply (its members were not read)"],
+        [
+            "Private access",
+            "1",
+            "Staff to the intranet",
+            "Yes",
+            "Group All Staff: may apply (its members were not read)",
+        ],
+    ]
+    assert "Allocation ranges: SDP-Engineering (10.89.0.0/24)" in sam["rows"][2][5]
+    lee = [r[:5] for r in _section(nodes[_LEE_ID], "Client policies")["rows"]]
+    assert ["SDP static IP allocation", "1", "Lee fixed address", "Yes", "This user"] in lee
+    dana = [r[0] for r in _section(nodes[_DANA_ID], "Client policies")["rows"]]
+    assert dana == ["Client connectivity", "ZTNA always-on", "Private access"]
+    # Listed only: the new policies add nothing to the users' forwarding data.
+    assert _routes(_fwd(snapshot, _LEE_ID))[1][4] == "Split Tunnel rule Lee corporate only: routed to Cato"
+
+
+def _wan_rule(**fields) -> dict:
+    return _rule_raw(**fields)
+
+
+def test_groups_users_groups_and_containers_resolve_through_their_members():
+    raw = build_sample_raw()
+    raw["user_groups"].append({"id": "ug-9", "name": "Nobody online", "members": [{"id": "77", "displayName": "X"}]})
+    raw["containers"][0]["members"] = ["192.0.2.0/25", "192.0.2.128-192.0.2.255"]
+    rules = [
+        _wan_rule(name="Branches", source={"group": [{"id": "g-10", "name": "Branch sites"}]}),
+        _wan_rule(name="Engineering", source={"usersGroup": [{"name": "Engineering"}]}),
+        _wan_rule(name="Printers", source={"group": [{"id": "g-11", "name": "Printers"}]}),
+        _wan_rule(name="Staff", source={"usersGroup": [{"id": "ug-4", "name": "All Staff"}]}),
+        _wan_rule(name="Offline", source={"usersGroup": [{"id": "ug-9", "name": "Nobody online"}]}),
+        _wan_rule(
+            name="Offline or Lee", source={"usersGroup": [{"id": "ug-9"}], "user": [{"id": "9004", "name": "Lee Park"}]}
+        ),
+    ]
+    raw["wan_firewall"] = {
+        "enabled": True,
+        "rules": [{**r, "index": n} for n, r in enumerate(rules, 1)],
+        "reduced": False,
+    }
+    raw["internet_firewall"] = {
+        "enabled": True,
+        "reduced": False,
+        "rules": [
+            _wan_rule(
+                destination={"containers": {"ipAddressRangeContainer": [{"id": "c-1", "name": "Blocked ranges"}]}}
+            ),
+            _wan_rule(
+                index=2, destination={"containers": {"fqdnContainer": [{"id": "c-2", "name": "Blocked domains"}]}}
+            ),
+        ],
+    }
+    snap = build_snapshot(raw)
+    wan = {r["name"]: r for r in _rules(snap, "WAN firewall rules")}
+    # A group of sites is every range of them.
+    assert wan["Branches"]["src"] == ["10.60.20.0/24", "10.61.20.0/24"] and wan["Branches"]["unresolved"] == []
+    # A users group is the VPN addresses of its connected members.
+    assert wan["Engineering"]["src"] == ["10.88.0.12/32", "10.88.0.14/32"] and wan["Engineering"]["unresolved"] == []
+    # A host member, or members not read: unresolved, as before.
+    assert wan["Printers"]["src"] == ["any"] and wan["Printers"]["unresolved"] == ["group Printers"]
+    assert wan["Staff"]["unresolved"] == ["users group All Staff"]
+    # No member connected: the rule matches no flow; with a user beside it, that user.
+    assert "Offline" not in wan and wan["Offline or Lee"]["src"] == ["10.88.0.14/32"]
+    internet = _rules(snap, "Internet firewall rules")
+    assert internet[0]["dst"] == ["192.0.2.0/25", "192.0.2.128/25"] and internet[0]["unresolved"] == []
+    assert internet[1]["dst"] == ["any"] and internet[1]["unresolved"] == ["FQDN container Blocked domains"]
+
+    # Users not read: a users group cannot be resolved from them.
+    raw["errors"] = [{"scope": "account", "path": "accountSnapshot.users", "status": 403, "message": "denied"}]
+    wan = {r["name"]: r for r in _rules(build_snapshot(raw), "WAN firewall rules")}
+    assert wan["Engineering"]["unresolved"] == ["users group Engineering"] and "Offline" in wan
+
+
+def test_a_split_tunnel_rule_naming_a_users_group_is_decided_by_membership():
+    engineering = _split_rule(
+        1, "Engineering direct", "ROUTE_ONLY_SELECTED", source={"user": [], "usersGroup": [{"id": "ug-3"}]}
+    )
+    snap = _with_split([engineering])
+    # Sam is a member: the rule applies.
+    assert _split_rows(snap, _SAM_ID)["Rule"] == "1 Engineering direct"
+    # Dana is not: no rule matches, and nothing is left undetermined.
+    assert _split_rows(snap, _DANA_ID) == {"Rule": "No rule matches: all traffic to Cato"}
+    assert _fwd(snap, _DANA_ID)["not_collected"] == []
+    # The Contractors group of the sample is decided too: Dana is a member, but runs Windows.
+    contractors = _split_rule(1, "Contractors", "OFF", source={"user": [], "usersGroup": [{"name": "Contractors"}]})
+    assert _split_rows(_with_split([contractors]), _DANA_ID)["Rule"] == "1 Contractors"
+    assert _split_rows(_with_split([contractors]), _SAM_ID)["Rule"] == "No rule matches: all traffic to Cato"
+    # Members not read in full: may apply, as before.
+    staff = _split_rule(1, "Staff", "OFF", source={"user": [], "usersGroup": [{"id": "ug-4", "name": "All Staff"}]})
+    assert _fwd(_with_split([staff]), _SAM_ID)["not_collected"] == [
+        "Route table (Split Tunnel rule Staff may apply: the members of users group All Staff were not read)"
     ]

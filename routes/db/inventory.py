@@ -43,6 +43,7 @@ __all__ = [
     "get_hosts_by_ids",
     "get_all_hosts",
     "find_host_by_ip",
+    "find_hosts_by_hostname",
     "get_host_ip_index",
     "set_host_ip_aliases",
     "get_ip_aliases_for_hosts",
@@ -525,6 +526,19 @@ async def find_host_by_ip(ip_address: str) -> dict | None:
         cursor = await db.execute("SELECT * FROM hosts WHERE ip_address = ? LIMIT 1", (ip_address,))
         row = await cursor.fetchone()
         return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def find_hosts_by_hostname(hostname: str) -> list[dict]:
+    """Every host, in any group, named ``hostname`` (case-insensitive)."""
+    name = (hostname or "").strip()
+    if not name:
+        return []
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute("SELECT * FROM hosts WHERE LOWER(hostname) = LOWER(?) ORDER BY id", (name,))
+        return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
 

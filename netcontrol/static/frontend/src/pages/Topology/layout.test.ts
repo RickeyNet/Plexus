@@ -5,6 +5,7 @@ import type { TopologyEdge, TopologyNode } from '@/api/topology';
 import {
   crowdedGroups,
   fitTitles,
+  layoutSites,
   orderSources,
   SOURCE_GAP,
   tidyLabel,
@@ -140,13 +141,15 @@ describe('tidyTreeLayout', () => {
 });
 
 describe('tidyTree sources', () => {
-  // The inventory core is cabled to a Meraki MX, which also has a tunnel to
-  // a Cato PoP. Each source is still drawn on its own.
+  // The inventory core is cabled to the Meraki MXs of two sites (so it is in
+  // neither), one of which also has a tunnel to a Cato PoP. Each source is
+  // still drawn on its own.
   const nodes: TopologyNode[] = [
     host(1, 'core'),
     host(2, 'access'),
     meraki('mx', 'appliance', 'branch'),
     meraki('ms', 'switch', 'branch'),
+    meraki('mx2', 'appliance', 'branch2'),
     cato('pop', 'cloud', 'cloud'),
     cato('sock', 'appliance', 'office'),
     meraki('vpc', 'vpc', 'prod', 'aws'),
@@ -154,6 +157,7 @@ describe('tidyTree sources', () => {
   const edges: TopologyEdge[] = [
     link(1, 2),
     link(1, 'mx'),
+    link(1, 'mx2'),
     link('mx', 'ms'),
     link('mx', 'pop', 'vpn'),
     link('sock', 'pop', 'vpn'),
@@ -701,5 +705,87 @@ describe('fitTitles', () => {
       { x0: 20, y0: 100, x1: 400, y1: 200, name: 'next' },
     ];
     expect(fitTitles(boxes, 16, 4)[0]).toHaveLength(8);
+  });
+});
+
+describe('inventory devices drawn in their neighbours site', () => {
+  // An inventory switch matched to a Meraki record, and an unmatched
+  // neighbour (not in the inventory) matched to one too, both in site hq.
+  const core: TopologyNode = { ...meraki('core', 'switch', 'hq'), in_inventory: true, source: undefined };
+  const stack: TopologyNode = { ...meraki('ext_stack', 'switch', 'hq'), source: 'lldp' };
+  const unknown = (id: string): TopologyNode => ({ id, label: id, in_inventory: false });
+  const nodes: TopologyNode[] = [
+    meraki('mx', 'appliance', 'hq'),
+    core,
+    stack,
+    meraki('br-mx', 'appliance', 'br'),
+    cato('cato-site', 'site', 'cs'),
+    host(15, 'sw-15'), // its only neighbour is core
+    host(21, 'sw-21'), // its only neighbour is ext_stack
+    unknown('ext_phone'), // its only neighbour is sw-15
+    host(3, 'sw-two-sites'), // linked to hq and br
+    host(4, 'lab-a'), // linked only to lab-b
+    host(5, 'lab-b'),
+  ];
+  const edges = [
+    link('mx', 'core'),
+    link('core', 'ext_stack', 'cdp'),
+    link(15, 'core', 'cdp'),
+    link(21, 'ext_stack', 'cdp'),
+    link('ext_phone', 15, 'cdp'),
+    link(3, 'core'),
+    link(3, 'br-mx'),
+    link(4, 5),
+    link('cato-site', 'core', 'vpn-ipsec'),
+  ];
+
+  it('adopts an inventory device whose sited neighbours are all in one site', () => {
+    const { source, group } = layoutSites(nodes, edges);
+    expect(group.get(15)).toBe('m:1:hq');
+    expect(source.get(15)).toBe('meraki');
+    // Through an unmatched neighbour that carries a Meraki record.
+    expect(group.get(21)).toBe('m:1:hq');
+    // And on from an adopted device, to its own unmatched neighbour.
+    expect(group.get('ext_phone')).toBe('m:1:hq');
+    expect(source.get('ext_phone')).toBe('meraki');
+  });
+
+  it('leaves a device linked to two sites, or to none, in the inventory', () => {
+    const { source, group } = layoutSites(nodes, edges);
+    expect(source.get(3)).toBe('');
+    expect(group.get(3)).toBe('');
+    expect(source.get(4)).toBe('');
+    expect(source.get(5)).toBe('');
+  });
+
+  it('never moves a node with an integration record', () => {
+    const { source, group } = layoutSites(nodes, edges);
+    expect(source.get('cato-site')).toBe('cato');
+    expect(group.get('cato-site')).toBe('m:1:cs');
+    expect(source.get('ext_stack')).toBe('meraki');
+  });
+
+  it('does not depend on the order of the nodes', () => {
+    const first = layoutSites(nodes, edges);
+    const second = layoutSites([...nodes].reverse(), [...edges].reverse());
+    expect([...second.group.entries()].sort()).toEqual([...first.group.entries()].sort());
+    expect([...second.source.entries()].sort()).toEqual([...first.source.entries()].sort());
+  });
+
+  it('draws an adopted device under its neighbour, in the site frame', () => {
+    const { positions: pos, pieces, sources } = tidyTree(nodes, edges);
+    expect(sources.get(15)).toBe('meraki');
+    expect(sources.get(4)).toBe('');
+    // In the site's region, right of the inventory region, not across it.
+    const inventoryRight = Math.max(...[3, 4, 5].map((id) => pos.get(id)!.x));
+    expect(pos.get(15)!.x).toBeGreaterThan(inventoryRight + SOURCE_GAP / 2);
+    expect(pos.get(15)!.y).toBeGreaterThan(pos.get('core')!.y);
+    expect(Math.abs(pos.get(15)!.x - pos.get('core')!.x)).toBeLessThan(SOURCE_GAP);
+    expect(pos.get('ext_phone')!.y).toBeGreaterThan(pos.get(15)!.y);
+    // Framed with the site.
+    expect(pieces.get(15)).toBe(pieces.get('core'));
+    expect(pieces.get(21)).toBe(pieces.get('core'));
+    expect(pieces.get('ext_phone')).toBe(pieces.get('core'));
+    expect(pieces.has(3)).toBe(false);
   });
 });

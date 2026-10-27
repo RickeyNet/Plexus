@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 import netcontrol.routes.state as state
 from netcontrol.drivers import GenericDriver, get_driver
 from netcontrol.routes import background_jobs
+from netcontrol.routes.host_identity import is_placeholder_hostname, placeholder_hostname
 from netcontrol.routes.icmp import _probe_discovery_target_icmp
 from netcontrol.routes.ipam_push import push_inventory_host_allocation
 from netcontrol.routes.shared import (
@@ -293,7 +294,7 @@ async def _probe_discovery_target(
         # loop so a large discovery sweep can't freeze every other request.
         hostname = (await asyncio.to_thread(socket.gethostbyaddr, ip_address))[0]
     except Exception:
-        hostname = f"{hostname_prefix}-{ip_address.replace('.', '-')}"
+        hostname = placeholder_hostname(hostname_prefix, ip_address)
 
     inferred_device_type = device_type
     inferred_os = "unknown"
@@ -397,13 +398,14 @@ def _normalize_discovered_entry(host: dict) -> dict | None:
     ip = str(host.get("ip_address", "")).strip()
     if not ip:
         return None
-    hostname = str(host.get("hostname") or "").strip() or f"host-{ip.replace('.', '-')}"
+    hostname = str(host.get("hostname") or "").strip() or placeholder_hostname("host", ip)
     # A "real" sysName is a stable per-device identity; the snmp-/host- fallback
-    # names are per-IP and must NOT be used to group devices.
+    # and "<prefix>-<ip>" placeholder names are per-IP and must NOT be used to
+    # group devices or to rename the host they match.
     explicit_sys = str(host.get("sys_name") or "").strip()
     if explicit_sys:
         sys_name = explicit_sys
-    elif not _is_fallback_hostname(hostname):
+    elif not _is_fallback_hostname(hostname) and not is_placeholder_hostname(hostname, ip):
         sys_name = hostname
     else:
         sys_name = ""
@@ -488,7 +490,7 @@ def _build_discovery_plan(
         if s:
             existing_by_serial.setdefault(s, h)
         hn = (h.get("hostname") or "").strip()
-        if hn and not _is_fallback_hostname(hn):
+        if hn and not _is_fallback_hostname(hn) and not is_placeholder_hostname(hn, h.get("ip_address") or ""):
             existing_by_name.setdefault(_norm_name(hn), h)
 
     plan: dict = {"add": [], "update": [], "delete": [], "matched": 0, "covered_ips": set()}
