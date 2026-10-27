@@ -87,10 +87,38 @@ def is_address(raw: Any) -> bool:
         return False
 
 
+# Documentation ranges (RFC 5737, RFC 3849) stand in for public addresses in
+# examples, labs and the bundled demo, so they count as public.
+_DOCUMENTATION_NETS = tuple(
+    ipaddress.ip_network(n) for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "2001:db8::/32")
+)
+
+
+def is_public_address(raw: Any) -> bool:
+    """Whether ``raw`` is a global address (or one of the documentation
+    ranges that stand in for one)."""
+    try:
+        parsed = ipaddress.ip_address(str(raw or "").strip())
+    except ValueError:
+        return False
+    return parsed.is_global or any(parsed in n for n in _DOCUMENTATION_NETS if n.version == parsed.version)
+
+
 def interface(
-    name: str, kind: str, *, ip: str = "", cidr: str = "", zone: str = "", vrf: str = "", enabled: bool = True
+    name: str,
+    kind: str,
+    *,
+    ip: str = "",
+    cidr: str = "",
+    zone: str = "",
+    vrf: str = "",
+    enabled: bool = True,
+    behind_ip: str = "",
 ) -> dict[str, Any]:
-    return {
+    """``behind_ip``: the public address of the device or NAT the
+    interface's network sits behind, for an interface whose own network is
+    not collected (kept only when it is a public address)."""
+    found = {
         "name": name,
         "kind": kind,
         "ip": ip if is_address(ip) else "",
@@ -99,6 +127,9 @@ def interface(
         "vrf": vrf,
         "enabled": bool(enabled),
     }
+    if is_public_address(behind_ip):
+        found["behind_ip"] = str(behind_ip).strip()
+    return found
 
 
 def route(

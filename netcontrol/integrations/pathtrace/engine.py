@@ -12,10 +12,14 @@ and VNets (``cloud``) and the blocks built for inventory hosts
      policy-based, VPN and dynamic, default; then the lower metric
   4. the rule sets applied on the way out, and those applied to all traffic
      (FTD access control, which matches the zones of both interfaces)
-  5. source NAT
+  5. source NAT; out into a device's own network that was not collected
+     (an interface with ``behind_ip``), the device's local address: where a
+     client table placed it (``placements``), else not known
   6. a policy-based VPN whose protected networks hold both ends, matched
      on the source as NAT left it (as on an ASA or FTD)
-  7. the link on the map to the next device
+  7. the link on the map to the next device (out of an interface with
+     ``behind_ip``: the device that answers on that public address, or the
+     one that holds the placed address's subnet, with no link on the map)
 
 A device with no forwarding data is passed over the shortest way on the map,
 each such hop with one unknown item. What a device applies that was not
@@ -25,7 +29,9 @@ flow, else as a note the direction's summary repeats.
 The replies are walked from the destination back, with the addresses the
 request left with. Stateful rule sets accept them when the request passed
 the same device; stateless ones are matched again. Comparing the two walks
-tells whether routing is asymmetric.
+tells whether routing is asymmetric. A request that left with a local
+address that was not collected has no known reply address: the replies are
+not traced.
 
 Pure (no I/O): the API handler loads the graph, the snapshots, the cloud
 engines and the inventory blocks.
@@ -243,6 +249,13 @@ class _Walk:
     applied: dict[tuple[int | None, str], str] = field(default_factory=dict)
     # The ports the direction asks about (``_asked``).
     asked: port_sets.Asked | None = None
+    # The flow left into a device's own network with its local address,
+    # which was not collected (``Tracer._local_source``).
+    source_unknown: bool = False
+    # Where that local address was placed instead: the index of the hop the
+    # walk goes on from, and that hop's node.
+    placed_at: int | None = None
+    placed_node: Any = None
 
 
 # Address space that is never routed on the internet. The documentation
@@ -464,6 +477,31 @@ def _port_set(policy: dict, flow: Flow, in_zone: str, out_zone: str, reply: bool
     )
 
 
+def graph_refs(
+    nodes: dict[Any, dict],
+) -> tuple[dict[tuple[int, str], Any], dict[Any, list[tuple[int, str, str]]]]:
+    """Snapshot node ``(org_ref, node_id)`` -> graph node, through ``meraki``
+    and then ``also_refs`` (an inventory host also under its own id), and
+    graph node -> its snapshot refs ``(org_ref, node_id, provider)``."""
+    graph_of: dict[tuple[int, str], Any] = {}
+    refs_of: dict[Any, list[tuple[int, str, str]]] = {}
+    for gid, node in nodes.items():
+        ref = node.get("meraki")
+        if isinstance(ref, dict):
+            key = (int(ref["org_ref"]), str(ref["node_id"]))
+            graph_of.setdefault(key, gid)
+            refs_of.setdefault(gid, []).append((*key, str(ref.get("provider") or "meraki")))
+    for gid, node in nodes.items():
+        for ref in node.get("also_refs") or []:
+            key = (int(ref["org_ref"]), str(ref["node_id"]))
+            graph_of.setdefault(key, gid)
+            refs_of.setdefault(gid, []).append((*key, str(ref.get("provider") or "")))
+        # The subnets of an inventory host name it by its id.
+        if isinstance(gid, int) or node.get("in_inventory"):
+            graph_of.setdefault((INVENTORY_ORG_REF, str(gid)), gid)
+    return graph_of, refs_of
+
+
 class Tracer:
     """A path tracer over one merged topology graph."""
 
@@ -474,29 +512,18 @@ class Tracer:
         clouds: dict[int, Any],
         host_forwarding: dict[int, dict],
         subnets: list[dict],
+        *,
+        placements: dict[Any, dict] | None = None,
     ) -> None:
         self.nodes: dict[Any, dict] = {n["id"]: n for n in graph.get("nodes") or [] if isinstance(n, dict)}
         self.snapshots = snapshots
         self.host_forwarding = host_forwarding
         self.subnets = [s for s in subnets if isinstance(s, dict)]
+        # Graph node -> where the device on its local network was placed
+        # (``pathtrace.placement``), for a node whose own network is not collected.
+        self.placements: dict[Any, dict] = dict(placements or {})
 
-        # Snapshot node -> graph node, through ``meraki`` and then ``also_refs``.
-        self.graph_of: dict[tuple[int, str], Any] = {}
-        self.refs_of: dict[Any, list[tuple[int, str, str]]] = {}
-        for gid, node in self.nodes.items():
-            ref = node.get("meraki")
-            if isinstance(ref, dict):
-                key = (int(ref["org_ref"]), str(ref["node_id"]))
-                self.graph_of.setdefault(key, gid)
-                self.refs_of.setdefault(gid, []).append((*key, str(ref.get("provider") or "meraki")))
-        for gid, node in self.nodes.items():
-            for ref in node.get("also_refs") or []:
-                key = (int(ref["org_ref"]), str(ref["node_id"]))
-                self.graph_of.setdefault(key, gid)
-                self.refs_of.setdefault(gid, []).append((*key, str(ref.get("provider") or "")))
-            # The subnets of an inventory host name it by its id.
-            if isinstance(gid, int) or node.get("in_inventory"):
-                self.graph_of.setdefault((INVENTORY_ORG_REF, str(gid)), gid)
+        self.graph_of, self.refs_of = graph_refs(self.nodes)
 
         self.snap_nodes: dict[tuple[int, str], dict] = {}
         self.gateways: dict[tuple[int, str], str] = {}
@@ -511,6 +538,13 @@ class Tracer:
                 self.gateways[(org_ref, site)] = node_id
             for site in snapshot.get("sites") or []:
                 self.site_names[(org_ref, site["id"])] = site.get("name") or site["id"]
+        # The graph nodes those devices are: among the owners of an address a
+        # warm-spare pair shares, the primary is the one to follow.
+        self.site_devices: set[Any] = set()
+        for (org_ref, _site), node_id in self.gateways.items():
+            gid = self.graph_of.get((org_ref, node_id))
+            if gid is not None:
+                self.site_devices.add(gid)
 
         # Links that carry traffic, by pair, and the AutoVPN tunnels of each organization.
         self.between: dict[frozenset, list[dict]] = {}
@@ -686,6 +720,16 @@ class Tracer:
         if given is not None and given in self.nodes:
             place["node"] = given
             return place
+        owners = self._holders(network)
+        if len(owners) > 1:
+            place["ambiguous"] = owners
+        elif owners:
+            place["node"] = owners[0]
+        return place
+
+    def _holders(self, network: Network) -> list[Any]:
+        """The devices whose collected subnets hold ``network`` (the longest
+        prefix wins), else, for an address, those that answer on it."""
         owners: list[Any] = []
         longest = -1
         for entry in self.subnets:
@@ -703,11 +747,13 @@ class Tracer:
             owners = list(self.ip_owner.get(show(network), []))
             if not owners:
                 owners = list(dict.fromkeys(g for public, g in self.nat_owner if contains(public, network)))
-        if len(owners) > 1:
-            place["ambiguous"] = owners
-        elif owners:
-            place["node"] = owners[0]
-        return place
+        return owners
+
+    def _first_owner(self, owners: list[Any]) -> Any:
+        """The owner of an address the flow goes to: the device that stands
+        for its site (the primary of a warm-spare pair, whose spare owns the
+        same VLAN addresses but holds no tunnel) ahead of the others."""
+        return next((g for g in owners if g in self.site_devices), owners[0])
 
     def _end(self, place: dict) -> dict[str, Any]:
         gid = place["node"]
@@ -781,13 +827,20 @@ class Tracer:
             _Arrival(node=start["node"], first=True), flow, reply=False, dest=end["node"], sessions={}, passed=set()
         )
         result["request"] = self._direction(request)
-        if request.delivered:
+        if request.delivered and request.source_unknown:
+            reply = None
+            text = "the device's local address is not collected, so where the replies go is not known."
+            result["reply"]["summary"] = f"Not traced: {text}"
+            result["asymmetric"] = {"status": "unknown", "text": f"The replies were not traced: {text}"}
+        elif request.delivered:
             back = Flow(request.flow.dst, request.flow.src, protocol, request.flow.dst_ports, ephemeral)
             reply = self._walk(
                 _Arrival(node=request.hops[-1]["node"], first=True),
                 back,
                 reply=True,
-                dest=start["node"],
+                # Replies to an address placed on a device's local network
+                # end at the device that holds that network.
+                dest=start["node"] if request.placed_node is None else request.placed_node,
                 sessions=request.sessions,
                 passed={h["node"] for h in request.hops},
             )
@@ -872,7 +925,9 @@ class Tracer:
                 "text": "Part of a walk follows the links on the map or ended early, so whether the replies take the "
                 "same hops back is not known.",
             }
-        there = [h["node"] for h in request.hops]
+        # The request's hops before its source was placed on a device's
+        # local network (the device itself) never see the replies.
+        there = [h["node"] for h in request.hops[request.placed_at or 0 :]]
         back = [h["node"] for h in reply.hops]
         if list(reversed(back)) == there:
             return {"status": "no", "text": "Replies take the same hops back."}
@@ -1106,7 +1161,7 @@ class Tracer:
             self._leftover_notes(walk, ctx)
             return None
 
-        target = self._route_target(gid, org_ref, route, egress, interfaces, items, source)
+        target = self._route_target(gid, org_ref, route, egress, interfaces, items, source, flow.dst)
         if is_default(route) and route_notes:
             # The route item of the lookup: unknown, since a learned route may be more specific.
             ctx.used.update(route_notes)
@@ -1140,10 +1195,15 @@ class Tracer:
         interfaces: list[dict],
         items: list[dict],
         source: str,
+        dst: Network,
     ) -> dict:
         """Where a route sends the flow: ``node`` (a graph node; ``None`` when
         it is not on the map, and an item says so), or ``internet``. The
-        hop still applies its egress steps to a flow it cannot follow."""
+        hop still applies its egress steps to a flow it cannot follow. Out of
+        an interface into a network that was not collected but sits behind a
+        known public address (``behind_ip``), a flow that is not for the
+        internet goes to the device that answers on that address
+        (``behind``)."""
         prefix = route["prefix"]
         peer = route.get("peer") or {}
         if peer.get("site") and org_ref is not None:
@@ -1185,7 +1245,7 @@ class Tracer:
                 linked = [g for g in owners if _pair(gid, g) in self.between]
                 items.append(item(ROUTE, OK, source, text))
                 return {
-                    "node": (linked or owners)[0],
+                    "node": self._first_owner(linked or owners),
                     "out": out,
                     "out_kind": out_kind,
                     "via_ip": hop_ip,
@@ -1206,6 +1266,9 @@ class Tracer:
                 return {"internet": True, "out": out, "out_kind": "wan", "egress": egress}
             items.append(item(ROUTE, UNKNOWN, source, f"{text[:-1]}: next hop {hop_ip} is not a device on the map."))
             return {"node": None, "out": out, "out_kind": out_kind, "egress": egress}
+        behind = str((egress or {}).get("behind_ip") or "")
+        if egress is not None and behind and (not is_default(route) or not _public(dst)):
+            return self._behind(gid, prefix, egress, behind, items, source)
         if egress is not None and egress.get("kind") == "wan" and is_default(route):
             items.append(item(ROUTE, OK, source, f"{prefix} out of {egress['name']}: to the internet."))
             return {"internet": True, "out": egress["name"], "out_kind": "wan", "egress": egress}
@@ -1218,6 +1281,114 @@ class Tracer:
             "egress": egress,
         }
 
+    def _behind(self, gid: Any, prefix: str, egress: dict, behind: str, items: list[dict], source: str) -> dict:
+        """The route item and target of a flow out of ``egress`` into a
+        network that was not collected, which sits behind the public address
+        ``behind``: the device that answers on it (the primary of a
+        warm-spare pair first), else nowhere on the map."""
+        name = str(egress.get("name") or "")
+        target: dict[str, Any] = {
+            "node": None,
+            "out": name,
+            "out_kind": _iface_class(egress),
+            "egress": egress,
+            "behind": behind,
+        }
+        owners = [g for g in self.ip_owner.get(behind, []) if g != gid]
+        if not owners:
+            text = (
+                f"{prefix} out of {name}: the device at the far end is not on the map (no device on the map "
+                f"answers on {behind}, the public address it connects from)."
+            )
+            items.append(item(ROUTE, UNKNOWN, source, text))
+            return target
+        owner = self._first_owner(owners)
+        interfaces = (self.forwarding(owner)[0] or {}).get("interfaces") or []
+        on = next((str(i.get("name")) for i in interfaces if isinstance(i, dict) and i.get("ip") == behind), "")
+        whose = f"that device's {on}" if on else "an address of that device"
+        text = (
+            f"{prefix} out of {name}: the device is behind {self.label(owner)} "
+            f"(the public address {behind} it connects from is {whose})."
+        )
+        items.append(item(ROUTE, OK, source, text))
+        others = [self.label(g) for g in owners if g != owner]
+        if others:
+            # Another source draws the same site (a Cato IPsec site is the
+            # Meraki appliance that terminates its tunnel), or a warm spare:
+            # the reader sees which device the trace went on from.
+            verb = "answers" if len(others) == 1 else "answer"
+            text = f"{', '.join(others)} also {verb} on {behind}: the trace goes on from {self.label(owner)}."
+            items.append(item(NOTE, INFO, "Public address", text))
+        target["node"] = owner
+        return target
+
+    def _placement(self, gid: Any, owner: Any, flow: Flow) -> tuple[Network, dict] | None:
+        """The local address ``pathtrace.placement`` found for the device of
+        ``gid``, when it was seen on the network of ``owner``, the device
+        that answers on the public address it sits behind."""
+        found = self.placements.get(gid)
+        if not isinstance(found, dict):
+            return None
+        address = net(found.get("ip"))
+        if address is None or address.prefixlen != address.max_prefixlen or address.version != flow.src.version:
+            return None
+        sites = {
+            (org_ref, str((self.snap_nodes.get((org_ref, node_id)) or {}).get("site") or ""))
+            for org_ref, node_id, _provider in self.refs_of.get(owner, [])
+        }
+        seen_on = (found.get("org_ref"), str(found.get("network_id") or ""))
+        return (address, found) if seen_on in sites else None
+
+    def _local_source(self, gid: Any, walk: _Walk, ctx: _Hop, target: dict) -> _Arrival:
+        """Step 5 of a flow out into a device's own network, which was not
+        collected: the flow leaves with the device's local address. Where a
+        client table placed the device, that address, and the walk goes on
+        from the device that holds its subnet; else the source is not known
+        (any address from here on, so rule sets that name a source decide
+        part of the traffic) and the walk goes on from the device that
+        answers on the public address. Returns the arrival of step 7."""
+        items = ctx.items
+        owner = target["node"]
+        placed = self._placement(gid, owner, walk.flow)
+        gap = f"the hops between the device's network and {self.label(owner)} are not on the map."
+        if placed is None:
+            text = (
+                "The traffic leaves with the device's local address, which is not collected, so rule sets "
+                "ahead that name a source are decided for part of the traffic."
+            )
+            items.append(item(NAT, INFO, "Local address", text))
+            anywhere = ipaddress.ip_network("::/0" if walk.flow.src.version == 6 else "0.0.0.0/0")
+            walk.flow = replace(walk.flow, src=anywhere)
+            walk.source_unknown = True
+            items.append(item(LINK, UNKNOWN, f"Link to {self.label(owner)}", gap[0].upper() + gap[1:]))
+            return _Arrival(node=owner, label=f"From the network behind {target['behind']}", prev=gid)
+        address, found = placed
+        where = [
+            f"VLAN {found['vlan']}" if found.get("vlan") not in (None, "") else "",
+            str(found.get("network_name") or ""),
+        ]
+        seen = f"seen by {found.get('source') or 'the client table'}"
+        if found.get("device_name"):
+            seen += f" at {found['device_name']}"
+        if found.get("seen"):
+            seen += f" on {found['seen']}"
+        details = [" of ".join(w for w in where if w), seen]
+        if found.get("description"):
+            details.append(f"as {found['description']}")
+        text = f"Leaves with the device's local address {show(address)} ({', '.join(d for d in details if d)})."
+        items.append(item(NAT, OK, "Local address", text))
+        walk.flow = replace(walk.flow, src=address)
+        holders = self._holders(address)
+        if not holders:
+            text = f"{show(address)} is in no collected subnet: {gap}"
+            items.append(item(LINK, UNKNOWN, f"Link to {self.label(owner)}", text))
+            return _Arrival(node=owner, label=f"From the network behind {target['behind']}", prev=gid)
+        holder = self._first_owner(holders)
+        walk.placed_at, walk.placed_node = len(walk.hops), holder
+        text = f"{show(address)} is in a subnet of {self.label(holder)}: the trace goes on from there."
+        items.append(item(LINK, INFO, f"Link to {self.label(holder)}", text))
+        return _Arrival(node=holder, first=True, prev=gid)
+
     def _leave(
         self,
         at: _Arrival,
@@ -1229,8 +1400,9 @@ class Tracer:
         route: dict,
     ) -> _Arrival | None:
         """Steps 4 to 7 of a hop that forwards the flow: the rule sets on the
-        way out, source NAT, then the policy-based VPN selectors, which see
-        the addresses as NAT left them, then the link."""
+        way out, source NAT (or the local address of a flow into the
+        device's own network, ``_local_source``), then the policy-based VPN
+        selectors, which see the addresses as NAT left them, then the link."""
         gid = at.node
         items = ctx.items
         out_name = (egress or {}).get("name") or ""
@@ -1244,10 +1416,13 @@ class Tracer:
         if _blocked(items):
             return self._stop(walk, ctx)
 
-        # 5. Source NAT.
+        # 5. Source NAT. Into a device's own network that was not collected,
+        # the flow leaves with the device's local address instead.
         before = walk.flow
         if not walk.reply:
             self._snat(gid, block, ctx, egress, out_kind, route, walk)
+        if target.get("behind") and target.get("node") is not None:
+            target = {**target, "arrival": self._local_source(gid, walk, ctx, target)}
 
         # 6. A policy-based VPN on the egress interface. As on an ASA or FTD,
         # NAT comes first: the selectors see the translated source, which is
@@ -1318,6 +1493,9 @@ class Tracer:
         if nxt is None:
             walk.ended = True
             return None
+        if target.get("arrival") is not None:
+            # No link on the map: the hops on the device's network are not collected.
+            return target["arrival"]
         if target.get("autovpn") is not None:
             return self._autovpn(gid, nxt, target, walk, items)
         edge_id, passable = self._link(gid, nxt, items, "vpn" if out_kind == "vpn" else "")
@@ -1965,7 +2143,7 @@ class Tracer:
             owners = self.ip_owner.get(show(flow.dst)) or [
                 g for public, g in self.nat_owner if contains(public, flow.dst)
             ]
-            target = owners[0] if owners else None
+            target = self._first_owner(owners) if owners else None
         if target is not None and target != at.prev:
             if not _public(flow.dst):
                 items.append(

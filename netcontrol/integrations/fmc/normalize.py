@@ -56,6 +56,7 @@ from netcontrol.integrations.fmc.collector import (
     ha_members,
     is_ra_vpn_policy,
 )
+from netcontrol.integrations.meraki.forwarding import is_public_address
 from netcontrol.integrations.meraki.normalize import (
     SCHEMA_VERSION,
     VPN_PEER_SITE_ID,
@@ -123,13 +124,6 @@ _PROTOCOLS = {"1": "ICMP", "6": "TCP", "17": "UDP", "47": "GRE", "50": "ESP", "5
 
 _TUNNEL_EDGE_STATUS = {"up": "reachable", "down": "unreachable"}
 
-# Documentation ranges (RFC 5737, RFC 3849) stand in for public addresses in
-# examples, labs and the bundled demo, so an interface in one is drawn as
-# outside like any public one.
-_DOCUMENTATION_NETS = tuple(
-    ipaddress.ip_network(n) for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "2001:db8::/32")
-)
-
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
@@ -177,14 +171,6 @@ def _health(raw: Any) -> str:
 
 def _yes(value: Any) -> str:
     return "Yes" if value else "No"
-
-
-def _is_public(address: str) -> bool:
-    try:
-        parsed = ipaddress.ip_address(address)
-    except ValueError:
-        return False
-    return parsed.is_global or any(parsed in net for net in _DOCUMENTATION_NETS if net.version == parsed.version)
 
 
 def is_virtual_model(model: Any) -> bool:
@@ -1631,7 +1617,7 @@ class _Builder:
             if not key or not row["ip"]:
                 continue
             via = egress.get(row["ifname"].lower()) if row["ifname"] else None
-            if not _is_public(row["ip"]) and via is None:
+            if not is_public_address(row["ip"]) and via is None:
                 continue
             wan_id = f"w:{did}:{key}"
             if wan_id in self.nodes:

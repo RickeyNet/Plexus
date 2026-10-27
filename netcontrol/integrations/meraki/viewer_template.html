@@ -1526,7 +1526,10 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
       var p = tree.positions.get(n.id) || { x: 0, y: 0 };
       n.x = p.x; n.y = p.y; at.set(n.id, p); labels.set(n.id, LAYOUT.labelWidth(n.label));
       n.piece = tree.pieces.get(n.id) || '';
-      n.region = LAYOUT.nodeProvider(n.topo);
+      // The source as laid out: an inventory device drawn in a site is in its source.
+      var own = LAYOUT.nodeProvider(n.topo);
+      n.region = tree.sources ? tree.sources.get(n.id) : own;
+      n.adopted = n.region !== own;
       var r = byRegion[n.region];
       if (!r) byRegion[n.region] = { x0: n.x, y0: n.y, x1: n.x, y1: n.y };
       else { r.x0 = Math.min(r.x0, n.x); r.y0 = Math.min(r.y0, n.y); r.x1 = Math.max(r.x1, n.x); r.y1 = Math.max(r.y1, n.y); }
@@ -1536,8 +1539,13 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     nodes.forEach(function (n) {
       if (!n.piece || crowded.has(n.piece)) return;
       var b = pieces[n.piece];
-      if (!b) pieces[n.piece] = { x0: n.x, y0: n.y, x1: n.x, y1: n.y, site: n.site, ids: [n.id] };
-      else { b.x0 = Math.min(b.x0, n.x); b.y0 = Math.min(b.y0, n.y); b.x1 = Math.max(b.x1, n.x); b.y1 = Math.max(b.y1, n.y); b.ids.push(n.id); }
+      // A box is titled from the site's own devices, not one drawn in it.
+      var site = n.adopted ? null : n.site;
+      if (!b) pieces[n.piece] = { x0: n.x, y0: n.y, x1: n.x, y1: n.y, site: site, ids: [n.id] };
+      else {
+        b.x0 = Math.min(b.x0, n.x); b.y0 = Math.min(b.y0, n.y); b.x1 = Math.max(b.x1, n.x); b.y1 = Math.max(b.y1, n.y); b.ids.push(n.id);
+        if (b.site == null) b.site = site;
+      }
     });
     allSites.forEach(function (s) { s.boxes = []; });
     var routeBoxes = [], framed = [];
