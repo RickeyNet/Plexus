@@ -583,11 +583,24 @@ async def _read(
         return found
 
 
+def _is_socket(device: dict) -> bool:
+    """Whether a device of the account snapshot is a Socket. An IPsec site
+    lists its tunnel as a device too (type ``IPSEC-IKEv2``, no Socket
+    info); the basic sites query lists neither field, and a device it
+    lists counts."""
+    if device.get("socketInfo"):
+        return True
+    if "type" in device or "socketInfo" in device:
+        return str(device.get("type") or "").upper() == "SOCKET"
+    return True
+
+
 def _has_socket(site: dict) -> bool:
-    """Whether the account snapshot lists a Socket for ``site``: a device,
-    or Socket info. An IPsec or cloud-interconnect site has neither, and
-    Cato answers its Socket configuration with an error."""
-    return bool(site.get("devices")) or bool((site.get("info") or {}).get("sockets"))
+    """Whether the account snapshot lists a Socket for ``site``: a Socket
+    device, or Socket info. An IPsec or cloud-interconnect site has
+    neither, and Cato answers its Socket configuration with an error."""
+    devices = [d for d in site.get("devices") or [] if isinstance(d, dict)]
+    return any(_is_socket(d) for d in devices) or bool((site.get("info") or {}).get("sockets"))
 
 
 def _site_variables(spec: _Spec, account_id: str, site_id: str) -> dict[str, Any]:
