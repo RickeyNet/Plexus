@@ -48,7 +48,11 @@ does not drive those flows for firewalls.
 
 from __future__ import annotations
 
+import re
+
 from netcontrol.drivers.base import Driver, RouteTableCommands, register_driver
+
+_CONFIG_HOSTNAME = re.compile(r'^\s*set\s+hostname\s+"?([^"\r\n]+?)"?\s*$', re.MULTILINE)
 
 
 @register_driver
@@ -61,6 +65,11 @@ class FortinetFortiOSDriver(Driver):
         # FortiOS has no cheap summary, so the poll reads the whole table
         # every tick; the ``all`` form prints every VDOM's VRFs.
         return RouteTableCommands(None, "get router info routing-table all", None)
+
+    def parse_config_hostname(self, config_text: str) -> str:
+        # ``set hostname "FGT-1"`` under ``config system global``.
+        match = _CONFIG_HOSTNAME.search(str(config_text or ""))
+        return match.group(1) if match else ""
 
     def serial_number_show_command(self) -> str:
         # ``get hardware status`` prints chassis identity (model,

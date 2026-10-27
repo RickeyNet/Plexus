@@ -82,7 +82,12 @@ belong to no inventory group).
   up from each end, around the other sites' boxes and devices, to a lane
   over the tops of the regions, then across and down (a vSocket to its VPC,
   for example). Links whose stretches overlap get lanes of their own, the
-  shorter one lower; click one for its details as usual. Within a source each connected network is a tree growing
+  shorter one lower; click one for its details as usual. One exception: an
+  inventory device whose linked neighbours in integration sites are all in
+  the same site (a switch cabled only to a Meraki site's switch, and the
+  unmatched neighbours hanging off it) is drawn inside that site's box; it
+  stays an inventory device for the source filter, legend and details. One
+  linked to two sites stays in the inventory region. Within a source each connected network is a tree growing
   down from its busiest gateway (for a hub-and-spoke VPN, the hub; for Cato,
   the backbone, then the PoPs), following cables first and VPN tunnels only
   to reach other sites. Every device gets its own spot, so nothing overlaps

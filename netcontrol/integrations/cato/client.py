@@ -63,6 +63,20 @@ class CatoApiError(RuntimeError):
         self.detail = detail
 
 
+def error_entry(scope: str, path: str, exc: CatoApiError) -> dict[str, Any]:
+    """A collection report entry for a query Cato refused or that failed:
+    ``scope`` (the account, or a site), ``path`` (the query), Cato's status
+    and message."""
+    message = f"{exc}: {exc.detail}" if exc.detail else str(exc)
+    return {"scope": scope, "path": path, "status": exc.status_code, "message": message}
+
+
+def note_entry(scope: str, path: str, message: str) -> dict[str, Any]:
+    """A collection report entry for data left out by Plexus (a cap, a
+    query not sent), not refused by Cato: the shape of ``error_entry``."""
+    return {"scope": scope, "path": path, "status": None, "message": message}
+
+
 def is_cato_url(url: str) -> bool:
     host = (urlsplit(url).hostname or "").lower()
     return host == CATO_API_DOMAIN or host.endswith("." + CATO_API_DOMAIN)

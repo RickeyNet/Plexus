@@ -215,7 +215,7 @@ def _source(api) -> dict:
 
 
 def _fake_capture(
-    monkeypatch, *, fail: set[str] | None = None, config: str = _CONFIG, tables: dict[str, dict] | None = None
+    monkeypatch, *, fail: set[str] | None = None, config: str | None = _CONFIG, tables: dict[str, dict] | None = None
 ):
     """Replace the SSH capture: every host answers with ``_TABLE`` and
     ``config``, plus the table parts ``tables`` names for its hostname."""
@@ -958,3 +958,187 @@ def test_collection_stores_the_tables_and_counts_them(api, monkeypatch):
     assert _run(api)["result"]["vlans"] == 0
     assert len(_on_app_loop(api, db_module.get_vlan_definitions_for_host, first)) == len(stored)
     assert asyncio.run(pg_raw.fetchval("SELECT COUNT(*) FROM topology_links WHERE source_host_id = $1", first)) == 3
+
+
+# ── The device's own name and interface addresses, from its configuration ──
+
+# A core switch the IP sweep onboarded by its management address, which it
+# advertises another of its addresses from (CDP / LLDP, Meraki).
+_IDENTITY_CONFIG = """\
+hostname CCM-Core-9500
+!
+interface Loopback0
+ ip address 10.255.0.1 255.255.255.255
+!
+interface Vlan14
+ ip address 10.175.14.2 255.255.255.0
+ ip address 10.175.15.2 255.255.255.0 secondary
+ standby 1 ip 10.175.14.1
+!
+interface GigabitEthernet0/0
+ vrf forwarding Mgmt-vrf
+ ip address 10.74.103.1 255.255.255.0
+!
+interface Vlan1
+ no ip address
+ shutdown
+"""
+
+_JUNOS_IDENTITY = """\
+set system host-name srx-edge1
+set interfaces ge-0/0/0 unit 0 family inet address 198.51.100.2/30
+set interfaces irb unit 10 family inet address 10.10.0.1/24
+set interfaces lo0 unit 0 family inet address 10.255.1.1/32
+set interfaces lo0 unit 0 family inet address 127.0.0.1/32
+set interfaces lo0 unit 0 family inet6 address 2001:db8::1/128
+"""
+
+
+def test_placeholder_hostnames():
+    from netcontrol.routes.host_identity import is_placeholder_hostname, placeholder_hostname
+
+    assert placeholder_hostname("discovered", "10.74.103.1") == "discovered-10-74-103-1"
+    for name in (
+        "discovered-10-74-103-1",
+        "Discovered-10-74-103-1",
+        "snmp-10-74-103-1",
+        "host-10-74-103-1",
+        "my-lab-10-74-103-1",
+    ):
+        assert is_placeholder_hostname(name, "10.74.103.1"), name
+    for name in (
+        "CCM-Core-9500",
+        "-10-74-103-1",
+        "10-74-103-1",
+        "discovered-10-74-103-12",
+        "discovered-10-74-103-2",
+        "",
+    ):
+        assert not is_placeholder_hostname(name, "10.74.103.1"), name
+    assert not is_placeholder_hostname("discovered-10-74-103-1", "")
+
+
+def test_config_hostname_parsers():
+    assert get_driver("cisco_xe").parse_config_hostname(_IDENTITY_CONFIG) == "CCM-Core-9500"
+    assert get_driver("cisco_ios").parse_config_hostname("!\r\nhostname edge-rtr1\r\n!\r\n") == "edge-rtr1"
+    assert get_driver("cisco_nxos").parse_config_hostname("switchname n9k-leaf1\n") == "n9k-leaf1"
+    assert get_driver("cisco_ftd").parse_config_hostname(": Saved\nhostname fw-hq\n") == "fw-hq"
+    # AOS-Switch quotes the name (a type without a driver is read with the IOS driver).
+    assert collection._table_driver("hp_procurve").parse_config_hostname('hostname "Core SW 1"\n') == "Core SW 1"
+    # Only a top-level line: not a word inside a banner or another block.
+    assert get_driver("cisco_ios").parse_config_hostname("banner motd ^C\n hostname is a word\n^C\n") == ""
+    assert get_driver("cisco_ios").parse_config_hostname("") == ""
+    assert get_driver("juniper_junos").parse_config_hostname(_JUNOS_IDENTITY) == "srx-edge1"
+    assert get_driver("juniper_junos").parse_config_hostname("system {\n    host-name mx-core1;\n}\n") == "mx-core1"
+    assert get_driver("juniper_junos").parse_config_hostname(_IDENTITY_CONFIG) == ""
+    fortigate = 'config system global\n    set alias "FGT"\n    set hostname "FGT-HQ"\nend\n'
+    assert get_driver("fortinet").parse_config_hostname(fortigate) == "FGT-HQ"
+
+
+def test_config_identity_reads_every_interface_address():
+    # Primary, secondary, SVI, loopback and VRF addresses; never a shared HSRP address.
+    assert collection._config_identity("cisco_xe", _IDENTITY_CONFIG) == (
+        "CCM-Core-9500",
+        ["10.255.0.1", "10.175.14.2", "10.175.15.2", "10.74.103.1"],
+    )
+    # Junos: IPv4 only, no 127/8.
+    assert collection._config_identity("juniper_junos", _JUNOS_IDENTITY) == (
+        "srx-edge1",
+        ["198.51.100.2", "10.10.0.1", "10.255.1.1"],
+    )
+    # A platform whose configuration is not read: the addresses are unknown, not none.
+    assert collection._config_identity("paloalto_panos", "hostname pa-1\n") == ("pa-1", None)
+
+
+def test_capture_reports_the_resolved_type(monkeypatch):
+    fake = _FakeSsh({"show ip route": _TABLE, "show running-config": _IDENTITY_CONFIG})
+    _fake_session(monkeypatch, fake, resolved="cisco_xe")
+    outcome = collection._capture_host({"ip_address": "10.74.103.1", "device_type": "autodetect"}, {})
+    assert outcome["device_type"] == "cisco_xe" and outcome["config"] == _IDENTITY_CONFIG
+
+
+def _hostnames() -> dict[int, str]:
+    rows = asyncio.run(pg_raw.fetch("SELECT id, hostname FROM hosts"))
+    return {int(r["id"]): r["hostname"] for r in rows}
+
+
+def _aliases(api, *host_ids: int) -> dict[int, list[str]]:
+    found: dict[int, list[str]] = {host_id: [] for host_id in host_ids}
+    for row in _on_app_loop(api, db_module.get_ip_aliases_for_hosts, list(host_ids)):
+        found[int(row["host_id"])].append(row["ip_address"])
+    return {host_id: sorted(ips) for host_id, ips in found.items()}
+
+
+def _record_pushes(monkeypatch) -> list[dict]:
+    pushed: list[dict] = []
+
+    async def _push(**kwargs):
+        pushed.append(kwargs)
+        return {"attempted": 0, "pushed": 0, "failed": 0}
+
+    monkeypatch.setattr(collection, "push_inventory_host_allocation", _push)
+    return pushed
+
+
+def test_collection_names_a_placeholder_host_and_records_its_addresses(api, monkeypatch):
+    group_id = _group(api, "core")
+    placeholder = _host(api, group_id, "discovered-10-74-103-1", "10.74.103.1")
+    chosen = _host(api, group_id, "core-a", "10.0.0.2")
+    _service_credential(api, monkeypatch)
+    pushed = _record_pushes(monkeypatch)
+    _fake_capture(monkeypatch, config=_IDENTITY_CONFIG)
+
+    job = _run(api)
+    assert job["status"] == "completed", job
+    assert job["result"]["configs"] == 2
+    names = _hostnames()
+    # The placeholder takes the configured name; a name a user chose stays.
+    assert names[placeholder] == "CCM-Core-9500" and names[chosen] == "core-a"
+    assert pushed == [{"hostname": "CCM-Core-9500", "ip_address": "10.74.103.1", "source_hint": "inventory-collection"}]
+    # Every interface address but the host's own.
+    aliases = _aliases(api, placeholder, chosen)
+    assert aliases[placeholder] == ["10.175.14.2", "10.175.15.2", "10.255.0.1"]
+    assert aliases[chosen] == ["10.175.14.2", "10.175.15.2", "10.255.0.1", "10.74.103.1"]
+
+
+def test_a_configured_hostname_another_host_has_is_not_taken(api, monkeypatch):
+    group_id = _group(api, "core")
+    # Not collected (ICMP only), but it has the name already (in another case).
+    holder = _host(api, group_id, "ccm-core-9500", "10.0.0.9", device_type="icmp_only")
+    first = _host(api, group_id, "discovered-10-74-103-1", "10.74.103.1")
+    second = _host(api, group_id, "scan-10-74-103-2", "10.74.103.2")
+    _service_credential(api, monkeypatch)
+    pushed = _record_pushes(monkeypatch)
+    _fake_capture(monkeypatch, config=_IDENTITY_CONFIG)
+
+    assert _run(api)["status"] == "completed"
+    names = _hostnames()
+    assert (names[first], names[second]) == ("discovered-10-74-103-1", "scan-10-74-103-2") and pushed == []
+    # The aliases are still recorded.
+    assert "10.175.14.2" in _aliases(api, first)[first]
+
+    # With the name free, two hosts of one run reading it: one takes it.
+    asyncio.run(pg_raw.execute("DELETE FROM hosts WHERE id = $1", holder))
+    assert _run(api)["status"] == "completed"
+    names = _hostnames()
+    assert sorted((names[first], names[second])).count("CCM-Core-9500") == 1 and len(pushed) == 1
+
+
+def test_no_configuration_read_leaves_the_name_and_aliases(api, monkeypatch):
+    group_id = _group(api, "core")
+    host_id = _host(api, group_id, "discovered-10-74-103-1", "10.74.103.1")
+    _on_app_loop(api, db_module.set_host_ip_aliases, host_id, "10.74.103.1", ["10.175.14.2"])
+    _service_credential(api, monkeypatch)
+    pushed = _record_pushes(monkeypatch)
+    _fake_capture(monkeypatch, config=None)
+
+    job = _run(api)
+    assert job["status"] == "completed" and job["result"]["configs"] == 0
+    assert _hostnames()[host_id] == "discovered-10-74-103-1" and pushed == []
+    assert _aliases(api, host_id)[host_id] == ["10.175.14.2"]
+
+    # A configuration the platform's parser finds no address in keeps them too.
+    _fake_capture(monkeypatch, config="hostname CCM-Core-9500\n!\nline vty 0 4\n login local\n")
+    assert _run(api)["status"] == "completed"
+    assert _hostnames()[host_id] == "CCM-Core-9500"
+    assert _aliases(api, host_id)[host_id] == ["10.175.14.2"]

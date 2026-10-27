@@ -208,6 +208,7 @@ export function Topology() {
   const tidyPosRef = useRef<Map<number | string, XY> | null>(null);
   // The piece of its site each node of the tidy layout is framed in.
   const tidyPiecesRef = useRef<Map<number | string, string>>(new Map());
+  const tidySourcesRef = useRef<Map<number | string, string>>(new Map());
   // Site frames that would enclose other sites' devices (tidy layout: pieces of sites).
   const crowdedSitesRef = useRef<Set<string>>(new Set());
   // Site frames of the tidy layout, kept until a node moves.
@@ -797,6 +798,16 @@ export function Topology() {
     return (tidyPosRef.current && tidyPiecesRef.current.get(id)) || merakiNodeKey(orgRef, siteId);
   }
 
+  // The site frame a node is drawn in, or '' for none: its own site's, or in
+  // the tidy layout the site the layout drew an inventory device in (one
+  // whose linked neighbours are all in that site).
+  function nodeFrameKey(node: TopologyNode): string {
+    const ref = node.meraki;
+    if (ref?.site_id) return frameKey(node.id, ref.org_ref, ref.site_id);
+    const piece = tidyPosRef.current ? tidyPiecesRef.current.get(node.id) : undefined;
+    return piece?.startsWith('m:') ? piece : '';
+  }
+
   // Which Meraki site frames to leave out because they would swallow other
   // sites' devices. Only the tidy layout has positions stable enough to tell.
   function refreshCrowdedSites() {
@@ -811,8 +822,7 @@ export function Topology() {
     for (const meta of nodeMetaRef.current.values()) {
       const pos = live[meta.raw.id as never];
       if (!pos) continue;
-      const ref = meta.raw.meraki;
-      placed.push({ group: ref?.site_id ? frameKey(meta.raw.id, ref.org_ref, ref.site_id) : '', x: pos.x, y: pos.y });
+      placed.push({ group: nodeFrameKey(meta.raw), x: pos.x, y: pos.y });
     }
     const frame = siteFrame();
     crowdedSitesRef.current = crowdedGroups(placed, frame.padX, frame.padY);
@@ -827,9 +837,11 @@ export function Topology() {
     const tidy = isTidy ? tidyTree(d.nodes, d.edges) : null;
     tidyPosRef.current = tidy?.positions ?? null;
     tidyPiecesRef.current = tidy?.pieces ?? new Map();
+    tidySourcesRef.current = tidy?.sources ?? new Map();
     const sourceLinks = new Set<number | string>();
     if (tidy) {
-      const sourceOf = new Map(d.nodes.map((n) => [n.id, nodeProvider(n)]));
+      // The sources as laid out: an inventory device drawn in a site is in its source.
+      const sourceOf = tidy.sources;
       if (new Set(sourceOf.values()).size > 1) {
         for (const e of d.edges) if (sourceOf.get(e.from) !== sourceOf.get(e.to)) sourceLinks.add(e.id);
       }
@@ -1037,7 +1049,7 @@ export function Topology() {
         // a small source, empties it (which would lose the routed links).
         const laid = tidyPosRef.current?.get(meta.raw.id);
         if (laid) {
-          const key = nodeProvider(meta.raw);
+          const key = tidySourcesRef.current.get(meta.raw.id) ?? nodeProvider(meta.raw);
           const region = sources.get(key);
           if (!region) {
             const name = key ? providerLabel(key) : 'Inventory';
@@ -1049,14 +1061,16 @@ export function Topology() {
             region.y1 = Math.max(region.y1, laid.y);
           }
         }
-        if (!ref || !ref.site_id || !pos) continue;
-        const key = frameKey(meta.raw.id, ref.org_ref, ref.site_id);
-        if (crowdedSitesRef.current.has(key)) continue;
+        if (!pos) continue;
+        const key = nodeFrameKey(meta.raw);
+        if (!key || crowdedSitesRef.current.has(key)) continue;
         const box = boxes.get(key);
         if (!box) {
-          boxes.set(key, { name: ref.site_name, x0: pos.x, y0: pos.y, x1: pos.x, y1: pos.y });
+          boxes.set(key, { name: ref?.site_name ?? '', x0: pos.x, y0: pos.y, x1: pos.x, y1: pos.y });
           members.set(key, [meta.raw.id]);
         } else {
+          // The name comes from the site's own devices, not one drawn in it.
+          if (!box.name && ref?.site_name) box.name = ref.site_name;
           members.get(key)!.push(meta.raw.id);
           box.x0 = Math.min(box.x0, pos.x);
           box.y0 = Math.min(box.y0, pos.y);

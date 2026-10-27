@@ -152,7 +152,11 @@ from netcontrol.integrations.panorama.collector import (
 )
 from netcontrol.integrations.panorama.normalize import build_snapshot as build_panorama_snapshot
 from netcontrol.integrations.panorama.sample import build_sample_raw as build_panorama_sample_raw
-from netcontrol.integrations.pathtrace import summarize as reach_summarize, sweep as reach_sweep
+from netcontrol.integrations.pathtrace import (
+    placement as trace_placement,
+    summarize as reach_summarize,
+    sweep as reach_sweep,
+)
 from netcontrol.integrations.pathtrace.engine import PROTOCOLS as PATH_PROTOCOLS, Tracer
 from netcontrol.integrations.pathtrace.inventory import forwarding_for_host, subnets_for_host
 from netcontrol.integrations.pathtrace.model import INVENTORY_ORG_REF
@@ -1883,20 +1887,38 @@ async def _trace_sources() -> dict[str, Any]:
     hosts = await _inventory_forwarding(graph.get("nodes") or [])
     # The inventory hosts' networks, from the same blocks the tracer reads.
     subnets.extend(row for entry in hosts.values() for row in entry["subnets"])
+    snapshots = {org_ref: entry["snapshot"] for org_ref, entry in entries}
     return {
         "graph": graph,
-        "snapshots": {org_ref: entry["snapshot"] for org_ref, entry in entries},
+        "snapshots": snapshots,
         "clouds": {
             org_ref: entry["reachability"] for org_ref, entry in entries if entry.get("reachability") is not None
         },
         "host_forwarding": {host_id: entry["block"] for host_id, entry in hosts.items()},
         "subnets": subnets,
+        "placements": await _placements(graph, snapshots),
     }
+
+
+async def _placements(graph: dict, snapshots: dict[int, dict]) -> dict[Any, dict]:
+    """Where the Meraki client tables place the devices whose own network
+    sits behind a public address a Meraki device answers on
+    (``pathtrace.placement``)."""
+    networks = trace_placement.networks_to_read(snapshots)
+    if not networks:
+        return {}
+    rows = await db.list_described_meraki_clients(networks)
+    return trace_placement.placements(graph, snapshots, rows)
 
 
 def _tracer_of(sources: dict[str, Any]) -> Callable[[], Tracer]:
     return lambda: Tracer(
-        sources["graph"], sources["snapshots"], sources["clouds"], sources["host_forwarding"], sources["subnets"]
+        sources["graph"],
+        sources["snapshots"],
+        sources["clouds"],
+        sources["host_forwarding"],
+        sources["subnets"],
+        placements=sources.get("placements"),
     )
 
 
@@ -2622,6 +2644,7 @@ async def export_topology_html_api(
                 sources["host_forwarding"],
                 sources["subnets"],
                 snapshot,
+                placements=sources.get("placements"),
             )
             tracer = tracer_payload(offline_dumps(inputs))
         page = render_topology_html(snapshot, path=embedded, tracer=tracer, subnets=inventory_subnets)

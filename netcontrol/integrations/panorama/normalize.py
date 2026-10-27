@@ -47,6 +47,7 @@ import ipaddress
 from datetime import UTC, datetime
 from typing import Any
 
+from netcontrol.integrations.meraki.forwarding import is_public_address
 from netcontrol.integrations.meraki.normalize import (
     SCHEMA_VERSION,
     VPN_PEER_SITE_ID,
@@ -143,13 +144,6 @@ _FLAG_PROTOCOLS = (
     ("H", "Host"),
 )
 
-# Documentation ranges (RFC 5737, RFC 3849) stand in for public addresses in
-# examples, labs and the bundled demo, so an interface in one is drawn as
-# outside like any public one.
-_DOCUMENTATION_NETS = tuple(
-    ipaddress.ip_network(n) for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "2001:db8::/32")
-)
-
 
 # ── Small value helpers ──────────────────────────────────────────────────────
 
@@ -185,14 +179,6 @@ def _first(item: dict, *keys: str) -> Any:
         if value not in (None, "", [], {}):
             return value
     return None
-
-
-def _is_public(address: str) -> bool:
-    try:
-        parsed = ipaddress.ip_address(address)
-    except ValueError:
-        return False
-    return parsed.is_global or any(parsed in net for net in _DOCUMENTATION_NETS if net.version == parsed.version)
 
 
 def is_virtual_model(model: Any) -> bool:
@@ -1756,7 +1742,7 @@ class _Builder:
                 continue
             via = egress.get(name.lower())
             gateway = portals.get(name.lower())
-            if not _is_public(row["ip"]) and via is None and gateway is None:
+            if not is_public_address(row["ip"]) and via is None and gateway is None:
                 continue
             wan_id = f"w:{serial}:{name}"
             if wan_id in self.nodes:

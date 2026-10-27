@@ -14,6 +14,7 @@ import json
 import re
 import socket
 
+from netcontrol.routes.host_identity import interface_ip, placeholder_hostname
 from netcontrol.routes.state import _resolve_snmp_discovery_config  # noqa: F401
 from netcontrol.telemetry import configure_logging
 
@@ -412,7 +413,7 @@ async def _snmp_get(ip_address: str, timeout_seconds: float, snmp_config: dict) 
         hw_model = ent_model.strip()
     category = _infer_device_category(hw_model, sys_descr, detected_type)
     return {
-        "hostname": sys_name or f"snmp-{ip_address.replace('.', '-')}",
+        "hostname": sys_name or placeholder_hostname("snmp", ip_address),
         "ip_address": ip_address,
         "device_type": detected_type,
         "device_category": category,
@@ -477,19 +478,11 @@ async def _collect_interface_ips(ip_address: str, timeout_seconds: float, snmp_c
         # Prefer the value; fall back to the last 4 OID octets.
         candidate = str(value).strip()
         try:
-            parsed = ipaddress.ip_address(candidate)
+            ipaddress.ip_address(candidate)
         except ValueError:
-            suffix = ".".join(oid.rsplit(".", 4)[-4:]) if oid.count(".") >= 4 else ""
-            try:
-                parsed = ipaddress.ip_address(suffix)
-            except ValueError:
-                continue
-        if parsed.version != 4:
-            continue
-        if parsed.is_loopback or parsed.is_link_local or parsed.is_multicast or parsed.is_unspecified:
-            continue
-        text = str(parsed)
-        if text not in seen:
+            candidate = ".".join(oid.rsplit(".", 4)[-4:]) if oid.count(".") >= 4 else ""
+        text = interface_ip(candidate)
+        if text and text not in seen:
             seen.add(text)
             out.append(text)
     return out

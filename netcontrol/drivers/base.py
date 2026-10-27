@@ -122,6 +122,9 @@ _OPER_UP = frozenset({"connected", "up", "monitoring"})
 _ADMIN_DOWN = frozenset({"disabled"})
 _CONFIG_VLAN = re.compile(r"^vlan\s+([\d,\s-]+)$", re.IGNORECASE)
 _CONFIG_NAME = re.compile(r"^\s+name\s+(.+?)\s*$", re.IGNORECASE)
+# ``hostname X`` (IOS, IOS-XE, IOS-XR, NX-OS, EOS, ASA / FTD, AOS-CX),
+# ``hostname "X"`` (AOS-Switch), ``switchname X`` (older NX-OS).
+_CONFIG_HOSTNAME = re.compile(r'^(?:hostname|switchname)\s+(?:"([^"]+)"|(\S+))\s*$', re.IGNORECASE | re.MULTILINE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,6 +341,13 @@ class Driver:
         VLAN command was rejected or not parsed (same row shape as ``parse_vlans``)."""
         raise DriverCapabilityError(f"{type(self).__name__} does not implement parse_config_vlans()")
 
+    def parse_config_hostname(self, config_text: str) -> str:
+        """The device's own name, as its running configuration sets it, or
+        ``""`` when it sets none. The default reads the Cisco-style
+        top-level ``hostname X`` line; a platform that writes its name
+        another way overrides this."""
+        return self._parse_cisco_style_config_hostname(config_text)
+
     def parse_interfaces(self, status_rows: list[dict], switchport_rows: list[dict]) -> list[dict]:
         """Merge the parsed status and switchport rows into ``interface_inventory`` rows."""
         raise DriverCapabilityError(f"{type(self).__name__} does not implement parse_interfaces()")
@@ -379,6 +389,13 @@ class Driver:
             elif line.strip() and not line.startswith((" ", "\t")):
                 current = None
         return [{"vlan_id": vid, "name": found[vid], "state": "active"} for vid in sorted(found)]
+
+    @staticmethod
+    def _parse_cisco_style_config_hostname(config_text: str) -> str:
+        """Shared helper: the first top-level ``hostname X`` (or quoted, or
+        NX-OS ``switchname X``) line of a configuration, or ``""``."""
+        match = _CONFIG_HOSTNAME.search(str(config_text or ""))
+        return (match.group(1) or match.group(2)).strip() if match else ""
 
     @staticmethod
     def _parse_cisco_style_interface_rows(status_rows: list[dict], switchport_rows: list[dict]) -> list[dict]:
