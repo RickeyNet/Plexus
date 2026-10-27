@@ -2174,12 +2174,16 @@ export function Topology() {
                 {pathModeHint(pathSiteList.length > 0, showPathSubnets)}
               </span>
             )}
+            {/* The placeholders are dropped once there is text: inside this
+                blurred card Chromium can leave a placeholder painted under the
+                typed value, so the attribute goes rather than relying on the
+                browser to hide it. */}
             {pathSiteList.length > 0 && (
               <>
                 <input
                   className="form-input"
                   list="topology-path-sites"
-                  placeholder="Add a site…"
+                  placeholder={pathSiteInput ? undefined : 'Add a site…'}
                   aria-label="Add a site to the path"
                   title="Pick a site from the list, or type part of its name and press Enter"
                   value={pathSiteInput}
@@ -2197,7 +2201,7 @@ export function Topology() {
                 <input
                   className="form-input"
                   list="topology-path-subnets"
-                  placeholder={subnetsQuery.isPending ? 'Loading subnets…' : 'Add a subnet or IP address…'}
+                  placeholder={pathSubnetInput ? undefined : subnetsQuery.isPending ? 'Loading subnets…' : 'Add a subnet or IP address…'}
                   aria-label="Add a subnet to the path"
                   title="Pick a subnet from the list, or type an IP address or network and press Enter"
                   value={pathSubnetInput}
@@ -2231,7 +2235,7 @@ export function Topology() {
             {pathHasTraceLeg && (
               <input
                 className="form-input"
-                placeholder="Traffic: any, or tcp/443"
+                placeholder={pathTraffic ? undefined : 'Traffic: any, or tcp/443'}
                 aria-label="Traffic traced through the routes, policies and NAT on the path"
                 title="Traffic the trace is asked about, from the first of two picks to the second: tcp/443, udp/53, icmp, or empty for any traffic"
                 value={pathTraffic}
