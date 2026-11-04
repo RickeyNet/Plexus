@@ -2,18 +2,11 @@ import { useState } from "react";
 
 import { groupLabel } from "@/api/inventory";
 import type { InventoryCollectRequest } from "@/api/meraki";
-import {
-  useCredentialsList,
-  useServiceCredentialsList,
-  type CredentialSummary,
-} from "@/api/settings";
 import { useInventoryGroupsLite } from "@/api/topology";
+import { CredentialSelect } from "@/components/CredentialSelect";
 import { Modal } from "@/components/Modal";
-
-import {
-  defaultCollectCredential,
-  SETTINGS_SERVICE_CREDENTIAL,
-} from "./merakiHelpers";
+import { credentialIdFromChoice } from "@/lib/credentialChoice";
+import { useCredentialChoice } from "@/lib/useCredentialChoice";
 
 interface Props {
   /** The inventory group selected on the map; null when the map shows every group. */
@@ -26,10 +19,6 @@ interface Props {
   onCollect: (body: InventoryCollectRequest) => void;
   isPending: boolean;
   onClose: () => void;
-}
-
-function credentialLabel(c: CredentialSummary): string {
-  return c.username ? `${c.name} (${c.username})` : c.name;
 }
 
 /**
@@ -47,33 +36,16 @@ export function InventoryCollectModal({
   onClose,
 }: Props) {
   const groups = useInventoryGroupsLite();
-  const serviceCredentials = useServiceCredentialsList(isAdmin);
-  const ownCredentials = useCredentialsList();
+  const choice = useCredentialChoice(serviceCredentialId, isAdmin);
   const [group, setGroup] = useState<string>(
     groupId != null ? String(groupId) : "",
   );
-  const [picked, setPicked] = useState<string | null>(null);
-
-  const serviceRows = isAdmin ? (serviceCredentials.data ?? []) : [];
-  const ownRows = ownCredentials.data ?? [];
-  const credential =
-    picked ??
-    defaultCollectCredential(
-      serviceCredentialId,
-      serviceRows.map((c) => c.id),
-      ownRows.map((c) => c.id),
-      isAdmin,
-    );
-  const loading =
-    ownCredentials.isPending || (isAdmin && serviceCredentials.isPending);
+  const { credential } = choice;
 
   const handleCollect = () =>
     onCollect({
       group_id: group ? parseInt(group, 10) : null,
-      credential_id:
-        credential === SETTINGS_SERVICE_CREDENTIAL
-          ? null
-          : parseInt(credential, 10),
+      credential_id: credentialIdFromChoice(credential),
     });
 
   return (
@@ -106,48 +78,12 @@ export function InventoryCollectModal({
         <label className="form-label" htmlFor="inventory-collect-credential">
           Credential
         </label>
-        <select
+        <CredentialSelect
           id="inventory-collect-credential"
-          className="form-select"
-          style={{ width: "100%" }}
-          value={credential}
-          onChange={(e) => setPicked(e.target.value)}
-        >
-          {/* A user who cannot list the service credentials still gets the one Settings names. */}
-          {!isAdmin && serviceCredentialId != null && (
-            <option value={SETTINGS_SERVICE_CREDENTIAL}>
-              Plexus service credential (Settings)
-            </option>
-          )}
-          {serviceRows.length > 0 && (
-            <optgroup label="Service credentials">
-              {serviceRows.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {credentialLabel(c)}
-                  {c.id === serviceCredentialId ? " — default in Settings" : ""}
-                </option>
-              ))}
-            </optgroup>
-          )}
-          {ownRows.length > 0 && (
-            <optgroup label="My credentials">
-              {ownRows.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {credentialLabel(c)}
-                </option>
-              ))}
-            </optgroup>
-          )}
-        </select>
-        {!credential && !loading && (
-          <div
-            className="text-muted"
-            style={{ fontSize: "0.85em", marginTop: "0.35rem" }}
-          >
-            No credential to sign in with: add a service credential under
-            Settings, or one of your own under Credentials.
-          </div>
-        )}
+          choice={choice}
+          serviceCredentialId={serviceCredentialId}
+          isAdmin={isAdmin}
+        />
       </div>
       <div
         style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}

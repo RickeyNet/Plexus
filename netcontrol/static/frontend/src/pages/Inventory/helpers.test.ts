@@ -4,7 +4,10 @@ import { groupLabel, type InventoryGroupFull, type InventoryHost } from '@/api/i
 
 import {
   applyGroupOrder,
+  describeSshEnrichment,
   descendantIds,
+  discoveredHostFacts,
+  discoveredHostSshError,
   filterGroups,
   hiddenByCollapsedAncestor,
   hostMatchesQuery,
@@ -171,5 +174,49 @@ describe('sortHostsForQuery', () => {
     const hosts = [host(1, { hostname: 'no-match' }), host(2, { hostname: 'core-x' })];
     expect(sortHostsForQuery(hosts, 'core').map((h) => h.id)).toEqual([2, 1]);
     expect(sortHostsForQuery(hosts, '').map((h) => h.id)).toEqual([1, 2]);
+  });
+});
+
+describe('discovery SSH show version', () => {
+  const base = {
+    enabled: true,
+    credential: 'plexus-svc',
+    credential_source: 'service' as const,
+    skipped_reason: '',
+  };
+
+  it('describes the enrichment run', () => {
+    expect(describeSshEnrichment(null)).toBe('');
+    expect(describeSshEnrichment({ ...base, enabled: false, credential: null, credential_source: null })).toBe(
+      'SSH show version: off.',
+    );
+    expect(
+      describeSshEnrichment({ ...base, credential: null, credential_source: null, skipped_reason: 'No Plexus service credential is set' }),
+    ).toBe('SSH show version skipped: No Plexus service credential is set.');
+    expect(describeSshEnrichment({ ...base, attempted: 13, enriched: 11, failed: 2 })).toBe(
+      'SSH show version (plexus-svc, service credential): read 11 of 13 hosts, 2 failed.',
+    );
+    expect(
+      describeSshEnrichment({ ...base, credential: 'mine', credential_source: 'explicit', attempted: 1, enriched: 1, failed: 0 }),
+    ).toBe('SSH show version (mine): read 1 of 1 host.');
+    expect(describeSshEnrichment({ ...base, attempted: 0 })).toBe(
+      'SSH show version (plexus-svc, service credential): no host answered on SSH.',
+    );
+  });
+
+  it('lists what a host reported and its SSH error', () => {
+    const host = {
+      ip_address: '10.0.0.1',
+      model: 'C9300-48P',
+      software_version: '17.09.04a',
+      serial_number: 'FOC2345X0AB',
+      discovery: { ssh: { ok: true } },
+    };
+    expect(discoveredHostFacts(host)).toBe('C9300-48P · 17.09.04a · S/N FOC2345X0AB');
+    expect(discoveredHostSshError(host)).toBe('');
+    const failed = { ip_address: '10.0.0.2', discovery: { ssh: { ok: false, error: 'Authentication failed.' } } };
+    expect(discoveredHostFacts(failed)).toBe('');
+    expect(discoveredHostSshError(failed)).toBe('Authentication failed.');
+    expect(discoveredHostSshError({ ip_address: '10.0.0.3' })).toBe('');
   });
 });

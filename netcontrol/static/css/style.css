@@ -4741,11 +4741,33 @@ code {
     }
 }
 
-/* Base alignment for data tables: headers left-align to match their
-   left-aligned cell data (without this, <th> falls back to the browser
-   default of centered text and the columns appear offset). */
+/* Base layout for data tables (used across the React pages). Without cell
+   padding adjacent columns ran together ("InventoryCisco IOS XEC9300-48P")
+   and rows had no separation. Same spacing as .device-health-table.
+   Headers left-align to match their left-aligned cell data (otherwise
+   <th> falls back to the browser default of centered text). Inline styles
+   and the theme rules above (e.g. voyager) still override these. */
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.data-table th,
+.data-table td {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+}
+
 .data-table th {
     text-align: left;
+    font-weight: 600;
+    white-space: nowrap;
+    border-bottom-width: 2px;
+}
+
+.data-table tbody tr:last-child td {
+    border-bottom: none;
 }
 
 .chart-table {

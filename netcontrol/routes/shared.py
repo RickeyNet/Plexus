@@ -290,11 +290,19 @@ async def service_credential() -> dict | None:
     """The Plexus service credential (``AUTH_CONFIG.service_credential_id``),
     or ``None`` when none is configured or the id no longer points at one.
 
+    When no id is configured in Settings but exactly one service credential
+    exists, that one is used: there is nothing to choose between, and an
+    admin who created a service credential expects unattended work to pick
+    it up. With several and none selected, the choice stays explicit.
+
     Unattended work may only use a Plexus-owned service credential, never a
     user's personal stored credential."""
     cred_id = state.AUTH_CONFIG.get("service_credential_id")
     if not isinstance(cred_id, int):
-        return None
+        candidates = await db.get_service_credentials()
+        if len(candidates) != 1:
+            return None
+        cred_id = int(candidates[0]["id"])
     cred = await db.get_credential_raw(cred_id)
     if not cred or not cred.get("is_service"):
         return None
@@ -350,8 +358,13 @@ def _compute_config_diff(
     return diff_text, added, removed
 
 
-def _open_netmiko_session(host: dict, credentials: dict):
+def _open_netmiko_session(host: dict, credentials: dict, *, autodetect: bool = True, **connect_options):
     """Open a Netmiko session, autodetecting device_type when generic.
+
+    ``autodetect=False`` opens one session with the given type and skips the
+    SSHDetect login (discovery reads ``show version`` itself and classifies
+    the OS from it). ``connect_options`` (``conn_timeout``, ``auth_timeout``
+    ...) go to Netmiko's ``ConnectHandler``.
 
     Returns ``(connection, resolved_device_type)``.  The caller is
     responsible for ``disconnect()``.
@@ -377,7 +390,7 @@ def _open_netmiko_session(host: dict, credentials: dict):
 
     # Autodetect when the stored type is a generic Cisco default
     # that may be wrong (e.g. IOS-XE devices mis-classified as IOS).
-    if device["device_type"] in ("cisco_ios", "unknown"):
+    if autodetect and device["device_type"] in ("cisco_ios", "unknown"):
         guesser = None
         try:
             detect_device = {**device, "device_type": "autodetect"}
@@ -397,7 +410,7 @@ def _open_netmiko_session(host: dict, credentials: dict):
                 except Exception:
                     LOGGER.debug("SSHDetect disconnect failed for %s", device["host"])
 
-    net_connect = netmiko.ConnectHandler(**device)
+    net_connect = netmiko.ConnectHandler(**device, **connect_options)
     if device["secret"]:
         net_connect.enable()
     return net_connect, device["device_type"]
@@ -430,16 +443,19 @@ async def _capture_running_config(host: dict, credentials: dict) -> str:
     return await asyncio.to_thread(_do_capture)
 
 
-async def _run_show_command(host: dict, credentials: dict, command: str) -> str:
+async def _run_show_command(
+    host: dict, credentials: dict, command: str, *, autodetect: bool = True, **connect_options
+) -> str:
     """SSH to a device and run a single show command via Netmiko.
 
     The command is supplied by the caller verbatim - this helper only
     handles the SSH session lifecycle and autodetect.  Returns the raw
-    command output string.
+    command output string. ``autodetect`` and ``connect_options`` are
+    passed to :func:`_open_netmiko_session`.
     """
 
     def _do_run():
-        conn, _ = _open_netmiko_session(host, credentials)
+        conn, _ = _open_netmiko_session(host, credentials, autodetect=autodetect, **connect_options)
         try:
             return conn.send_command(command)
         finally:

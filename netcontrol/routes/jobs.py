@@ -85,6 +85,10 @@ _job_sockets_lock = asyncio.Lock()
 # available via GET /api/jobs/{id}/events (limit up to 100k).
 _WS_HISTORY_REPLAY_LIMIT = 2000
 
+# A job in one of these states has not finished: it is waiting for a worker
+# slot (queued) or executing (running). Anything else is terminal.
+_ACTIVE_JOB_STATUSES = ("queued", "running")
+
 
 async def _broadcast_to_job_sockets(job_id: int, payload: dict) -> None:
     """Send one payload to every subscriber of a job, concurrently.
@@ -1062,7 +1066,7 @@ async def cancel_job_endpoint(job_id: int, request: Request):
     job = await db.get_job(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
-    if job["status"] not in ("queued", "running"):
+    if job["status"] not in _ACTIVE_JOB_STATUSES:
         raise HTTPException(400, f"Cannot cancel job with status '{job['status']}'")
 
     await require_owner_or_admin(request, job.get("launched_by"))
@@ -1165,7 +1169,7 @@ async def rerun_job_endpoint(job_id: int, request: Request):
     job = await db.get_job(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
-    if job["status"] in ("queued", "running"):
+    if job["status"] in _ACTIVE_JOB_STATUSES:
         raise HTTPException(400, f"Job is still {job['status']} - wait for it to finish first")
 
     await require_owner_or_admin(request, job.get("launched_by"))
@@ -1302,8 +1306,10 @@ async def websocket_job(websocket: WebSocket, job_id: int):
             )
         )
 
-    # Check if job is already done
-    if job and job["status"] not in ("running", "pending"):
+    # Already finished: say so and close. A queued job is not finished - it
+    # is waiting for a worker slot - so it subscribes like a running one
+    # (treating it as done closed the stream before the job even started).
+    if job["status"] not in _ACTIVE_JOB_STATUSES:
         await websocket.send_json({"type": "job_complete", "job_id": job_id, "status": job["status"]})
         await websocket.close()
         return
@@ -1313,6 +1319,40 @@ async def websocket_job(websocket: WebSocket, job_id: int):
         if job_id not in _job_sockets:
             _job_sockets[job_id] = []
         _job_sockets[job_id].append(websocket)
+
+    # A short job can finish between the status read above and this
+    # subscription, so its final lines and job_complete broadcast went to
+    # nobody. Re-check now: send what was logged after the replay, then
+    # job_complete, instead of leaving the viewer waiting on a dead stream.
+    latest = await db.get_job(job_id)
+    if latest and latest["status"] not in _ACTIVE_JOB_STATUSES:
+        last_id = max((int(e["id"]) for e in events if e.get("id") is not None), default=0)
+        missed = [
+            e
+            for e in await db.get_job_events(job_id, limit=_WS_HISTORY_REPLAY_LIMIT)
+            if e.get("id") is not None and int(e["id"]) > last_id
+        ]
+        try:
+            for event in missed:
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "level": event["level"],
+                            "message": event["message"],
+                            "host": event["host"],
+                            "timestamp": event["timestamp"],
+                        }
+                    )
+                )
+            await websocket.send_json({"type": "job_complete", "job_id": job_id, "status": latest["status"]})
+            await websocket.close()
+        except Exception as exc:
+            LOGGER.debug("job %s: WS client gone before late completion was sent: %s", job_id, exc)
+        finally:
+            async with _job_sockets_lock:
+                if job_id in _job_sockets and websocket in _job_sockets[job_id]:
+                    _job_sockets[job_id].remove(websocket)
+        return
 
     try:
         # Keep connection alive until client disconnects (120s idle timeout)
