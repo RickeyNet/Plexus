@@ -5,6 +5,47 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
+// Boot mode badge for the campaign table: INSTALL (upgradable), BUNDLE
+// (install-mode upgrades and ISSU are blocked until converted), or unread.
+export function bootModeDisplay(mode: string | null | undefined): {
+  label: string;
+  badgeClass: string;
+  title: string;
+} {
+  if (mode === 'install') {
+    return {
+      label: 'INSTALL',
+      badgeClass: 'badge-success',
+      title: 'Install mode: install-mode upgrades and ISSU can run',
+    };
+  }
+  if (mode === 'bundle') {
+    return {
+      label: 'BUNDLE',
+      badgeClass: 'badge-error',
+      title:
+        'Bundle mode: install-mode upgrades and ISSU are blocked. Convert the switch to install mode (boot flash:packages.conf) first.',
+    };
+  }
+  return {
+    label: '-',
+    badgeClass: '',
+    title: 'Not read yet: Prestage, Transfer or Check status reads it from the switch',
+  };
+}
+
+// scp-style clock for transfer ETA/elapsed: "00:54", "12:07", "1:02:33".
+// Unknown (null/negative/non-finite) renders as scp's "--:--".
+export function formatEta(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return '--:--';
+  const s = Math.floor(seconds);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return h ? `${h}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
+}
+
 export function formatBackupTimestamp(iso: string | null | undefined): string {
   if (!iso) return '';
   // Backend emits naive local time without a Z suffix. Match the legacy
@@ -25,7 +66,8 @@ export function phaseLabel(phase: UpgradePhase | string): string {
     transfer: 'Transfer',
     activate: 'Activate',
     verify: 'Verify Upgrade',
-    verify_prestage: 'Re-Verify Prestage',
+    // Phase key kept for stored history; it is the read-only status check.
+    verify_prestage: 'Check Status',
   };
   return (
     labels[phase] ||
@@ -59,12 +101,14 @@ const STATUS_LABELS: Record<string, string> = {
   running_transfer: 'Transferring…',
   running_activate: 'Activating (reload)…',
   running_verify: 'Verifying…',
-  running_verify_prestage: 'Re-verifying prestage…',
+  running_verify_prestage: 'Checking status…',
   prestage_complete: 'Prestage complete',
   transfer_complete: 'Transfer complete',
   activate_complete: 'Activated',
   verify_complete: 'Verified',
-  verify_prestage_complete: 'Prestage verified',
+  verify_prestage_complete: 'Status checked — all ready',
+  verify_prestage_partial: 'Status checked',
+  verify_prestage_failed: 'Status checked — none ready',
   activate_missed: 'Reload missed — reschedule',
   cancelled: 'Cancelled',
 };

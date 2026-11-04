@@ -1,17 +1,29 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 
+import { useAuthStatus } from '@/api/auth';
+import { CredentialSelect } from '@/components/CredentialSelect';
 import { Modal } from '@/components/Modal';
 import {
   type DiscoveredHost,
   type DiscoveryOptions,
   type InventoryGroupFull,
   type ScanStreamEvent,
+  type SshEnrichmentSummary,
   streamScanInventoryGroup,
   streamSyncInventoryGroup,
+  useDiscoverySshDefaults,
   useOnboardDiscoveredHosts,
   useTestGroupSnmpProfile,
   groupLabel,
 } from '@/api/inventory';
+import { credentialIdFromChoice } from '@/lib/credentialChoice';
+import { useCredentialChoice } from '@/lib/useCredentialChoice';
+
+import {
+  describeSshEnrichment,
+  discoveredHostFacts,
+  discoveredHostSshError,
+} from './helpers';
 
 export type DiscoveryMode = 'sync' | 'scan' | 'global';
 
@@ -41,7 +53,7 @@ interface ScanState {
   scanned: number;
   found: number;
   currentIp: string;
-  feed: { ip: string; hostname?: string; deviceType?: string }[];
+  feed: { ip: string; hostname?: string; deviceType?: string; facts?: string; sshError?: string }[];
   startedAt: number;
   // Sync only: probing finished, now reconciling with the database.
   syncing: boolean;
@@ -52,6 +64,10 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
   const isGlobal = mode === 'global';
   const onboard = useOnboardDiscoveredHosts();
   const testSnmp = useTestGroupSnmpProfile();
+  const isAdmin = useAuthStatus().data?.role === 'admin';
+  const sshDefaults = useDiscoverySshDefaults();
+  const serviceCredentialId = sshDefaults.data?.service_credential_id ?? null;
+  const credentialChoice = useCredentialChoice(serviceCredentialId, isAdmin);
 
   const initialCidrs = isSync && group?.hosts
     ? (group.hosts.map((h) => h.ip_address).filter(Boolean) as string[]).join('\n')
@@ -66,6 +82,8 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
   const [hostnamePrefix, setHostnamePrefix] = useState('discovered');
   const [useSnmp, setUseSnmp] = useState(true);
   const [useIcmp, setUseIcmp] = useState(true);
+  const [useSsh, setUseSsh] = useState(true);
+  const [sshSummary, setSshSummary] = useState<SshEnrichmentSummary | null>(null);
   const [removeAbsent, setRemoveAbsent] = useState(false);
   const [testOnly, setTestOnly] = useState(false);
   const [testTargetIp, setTestTargetIp] = useState('');
@@ -109,7 +127,17 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
     hostnamePrefix: hostnamePrefix.trim() || 'discovered',
     useSnmp,
     useIcmp,
+    useSsh,
+    credentialId: credentialIdFromChoice(credentialChoice.credential),
     removeAbsent,
+  });
+
+  const feedEntry = (host: DiscoveredHost): ScanState['feed'][number] => ({
+    ip: host.ip_address,
+    hostname: host.hostname,
+    deviceType: host.device_type,
+    facts: discoveredHostFacts(host),
+    sshError: discoveredHostSshError(host),
   });
 
   const parsedCidrs = cidrs
@@ -120,6 +148,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
+    setSshSummary(null);
 
     if (isGlobal && testOnly) {
       const targetIp = testTargetIp.trim();
@@ -185,20 +214,14 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
                 };
                 if (event.found && event.host) {
                   next.found = prev.found + 1;
-                  next.feed = [
-                    ...prev.feed,
-                    {
-                      ip: event.host.ip_address,
-                      hostname: event.host.hostname,
-                      deviceType: event.host.device_type,
-                    },
-                  ];
+                  next.feed = [...prev.feed, feedEntry(event.host)];
                 }
                 return next;
               });
             } else if (event.type === 'syncing') {
               setScanState((prev) => (prev ? { ...prev, syncing: true } : prev));
             } else if (event.type === 'done') {
+              setSshSummary(event.ssh_enrichment ?? null);
               const s = event.sync || {};
               finalSync = {
                 added: s.added || 0,
@@ -244,19 +267,13 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
               };
               if (event.found && event.host) {
                 next.found = prev.found + 1;
-                next.feed = [
-                  ...prev.feed,
-                  {
-                    ip: event.host.ip_address,
-                    hostname: event.host.hostname,
-                    deviceType: event.host.device_type,
-                  },
-                ];
+                next.feed = [...prev.feed, feedEntry(event.host)];
               }
               return next;
             });
           } else if (event.type === 'done') {
             finalDiscovered = event.discovered_hosts || [];
+            setSshSummary(event.ssh_enrichment ?? null);
           }
         },
         abort.signal,
@@ -328,6 +345,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
               </tr>
             </tbody>
           </table>
+          <SshSummaryNote summary={sshSummary} />
         </div>
         <div
           style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.75rem' }}
@@ -531,6 +549,13 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
               >
                 ✓ {entry.ip} - {entry.hostname || 'unknown'} (
                 {entry.deviceType || 'unknown'})
+                {entry.facts ? ` ${entry.facts}` : ''}
+                {entry.sshError && (
+                  <span style={{ color: 'var(--warning)' }}>
+                    {' '}
+                    SSH: {entry.sshError}
+                  </span>
+                )}
               </div>
             ))}
           </div>
@@ -568,6 +593,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
         <div className="card-description" style={{ marginBottom: '0.75rem' }}>
           Found {discovered.length} reachable device(s). Will onboard into{' '}
           <strong>{targetGroup?.name ?? 'selected group'}</strong>.
+          <SshSummaryNote summary={sshSummary} />
         </div>
         <div
           style={{
@@ -603,12 +629,44 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
                     });
                   }}
                 />
-                <span style={{ flex: 1 }}>{host.hostname || '-'}</span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  {host.hostname || '-'}
+                  {discoveredHostFacts(host) && (
+                    <span
+                      style={{
+                        display: 'block',
+                        fontSize: '0.8em',
+                        color: 'var(--text-muted)',
+                      }}
+                    >
+                      {discoveredHostFacts(host)}
+                    </span>
+                  )}
+                  {discoveredHostSshError(host) && (
+                    <span
+                      style={{
+                        display: 'block',
+                        fontSize: '0.8em',
+                        color: 'var(--warning)',
+                      }}
+                    >
+                      SSH: {discoveredHostSshError(host)}
+                    </span>
+                  )}
+                </span>
                 <span style={{ color: 'var(--text-muted)' }}>
                   {host.ip_address}
                 </span>
-                <span style={{ color: 'var(--text-muted)', fontSize: '0.85em' }}>
+                <span
+                  style={{ color: 'var(--text-muted)', fontSize: '0.85em' }}
+                  title={
+                    host.discovery?.device_type_source === 'ssh'
+                      ? 'Reported by show version over SSH'
+                      : 'Guessed from the SNMP description or SSH banner'
+                  }
+                >
                   {host.device_type || 'unknown'}
+                  {host.discovery?.device_type_source === 'ssh' ? ' (SSH)' : ''}
                 </span>
               </label>
             ))
@@ -794,6 +852,44 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
           />{' '}
           Fall back to ICMP ping (catches firewalls / appliances with locked-down management)
         </label>
+        {!testOnly && (
+          <>
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                marginTop: '0.5rem',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={useSsh}
+                onChange={(e) => setUseSsh(e.target.checked)}
+              />{' '}
+              Read model/serial/version over SSH (show version also sets the
+              device type, no SNMP needed)
+            </label>
+            {useSsh && (
+              <div className="form-group" style={{ marginTop: '0.5rem' }}>
+                <label className="form-label" htmlFor="discovery-ssh-credential">
+                  SSH Credential
+                </label>
+                <CredentialSelect
+                  id="discovery-ssh-credential"
+                  choice={credentialChoice}
+                  serviceCredentialId={serviceCredentialId}
+                  isAdmin={isAdmin}
+                />
+                <div className="form-help">
+                  {sshDefaults.data && !sshDefaults.data.service_credential
+                    ? 'No Plexus service credential is set in Settings: pick a credential, or hosts are found without SSH details.'
+                    : 'Defaults to the Plexus service credential. Hosts that refuse the login are still found; the error is shown per host.'}
+                </div>
+              </div>
+            )}
+          </>
+        )}
         {isSync && (
           <label
             style={{
@@ -886,5 +982,26 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
         </div>
       </form>
     </Modal>
+  );
+}
+
+/** The SSH show version summary under a scan or sync result, with each host that failed. */
+function SshSummaryNote({ summary }: { summary: SshEnrichmentSummary | null }) {
+  if (!summary) return null;
+  const failures = summary.failures ?? [];
+  return (
+    <div style={{ marginTop: '0.5rem', fontSize: '0.85rem' }}>
+      <div style={{ opacity: 0.8 }}>{describeSshEnrichment(summary)}</div>
+      {failures.length > 0 && (
+        <ul style={{ margin: '0.25rem 0 0', paddingLeft: '1.1rem', color: 'var(--warning)' }}>
+          {failures.slice(0, 20).map((f) => (
+            <li key={f.ip_address}>
+              {f.ip_address}: {f.error}
+            </li>
+          ))}
+          {failures.length > 20 && <li>and {failures.length - 20} more</li>}
+        </ul>
+      )}
+    </div>
   );
 }

@@ -1,14 +1,41 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  bootModeDisplay,
   campaignStatusBadgeClass,
   campaignStatusLabel,
   formatBackupTimestamp,
   formatBytes,
+  formatEta,
   formatRelativeTime,
   formatScheduledTime,
   phaseLabel,
 } from './helpers';
+
+describe('bootModeDisplay', () => {
+  it('labels install, bundle and unread modes', () => {
+    expect(bootModeDisplay('install')).toMatchObject({ label: 'INSTALL', badgeClass: 'badge-success' });
+    expect(bootModeDisplay('bundle')).toMatchObject({ label: 'BUNDLE', badgeClass: 'badge-error' });
+    expect(bootModeDisplay('')).toMatchObject({ label: '-', badgeClass: '' });
+    expect(bootModeDisplay(undefined).label).toBe('-');
+  });
+});
+
+describe('formatEta', () => {
+  it('renders scp-style clocks', () => {
+    expect(formatEta(0)).toBe('00:00');
+    expect(formatEta(54)).toBe('00:54');
+    expect(formatEta(727.9)).toBe('12:07');
+    expect(formatEta(3753)).toBe('1:02:33');
+  });
+
+  it('shows --:-- when unknown', () => {
+    expect(formatEta(null)).toBe('--:--');
+    expect(formatEta(undefined)).toBe('--:--');
+    expect(formatEta(-1)).toBe('--:--');
+    expect(formatEta(Infinity)).toBe('--:--');
+  });
+});
 
 describe('formatBytes', () => {
   it('handles each scale', () => {
@@ -35,7 +62,7 @@ describe('formatBackupTimestamp', () => {
 describe('phaseLabel', () => {
   it('maps known phases', () => {
     expect(phaseLabel('prestage')).toBe('Prestage');
-    expect(phaseLabel('verify_prestage')).toBe('Re-Verify Prestage');
+    expect(phaseLabel('verify_prestage')).toBe('Check Status');
   });
 
   it('falls back to title-cased input for unknown phases', () => {

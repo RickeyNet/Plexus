@@ -201,6 +201,8 @@ export interface UpgradeDevice {
   current_version?: string | null;
   target_image?: string | null;
   phase?: string | null;
+  // 'install' | 'bundle' as read from the switch; '' when not read yet.
+  boot_mode?: string | null;
   prestage_status?: string | null;
   transfer_status?: string | null;
   activate_status?: string | null;

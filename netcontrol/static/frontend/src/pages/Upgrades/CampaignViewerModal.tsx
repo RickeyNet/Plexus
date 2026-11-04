@@ -16,8 +16,11 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { DeviceUpgradeLogModal } from './DeviceUpgradeLogModal';
 import { PhaseConfirmModal } from './PhaseConfirmModal';
 import {
+  bootModeDisplay,
   campaignStatusBadgeClass,
   campaignStatusLabel,
+  formatBytes,
+  formatEta,
   formatLogTimestamp,
   formatOperationTime,
   formatScheduledTime,
@@ -37,6 +40,7 @@ interface PhaseRequest {
 
 interface DeviceStatusUpdate {
   device_id: number;
+  boot_mode?: string;
   prestage_status?: string;
   transfer_status?: string;
   activate_status?: string;
@@ -56,11 +60,70 @@ interface UpgradeEventMsg {
   status?: string;
   phase?: string;
   events?: UpgradeEventMsg[];
+  boot_mode?: string;
   prestage_status?: string;
   transfer_status?: string;
   activate_status?: string;
   verify_status?: string;
   error_message?: string | null;
+  sent?: number;
+  total?: number;
+  percent?: number;
+  rate_bps?: number;
+  eta_seconds?: number | null;
+}
+
+// Live SCP progress for one device, from `transfer_progress` WS events.
+interface TransferProgress {
+  sent: number;
+  total: number;
+  percent: number;
+  rateBps: number;
+  etaSeconds: number | null;
+}
+
+// scp-style progress readout: a bar, the percentage, bytes sent of total,
+// throughput and ETA ("ETA" swaps for "done" once the last chunk lands).
+function TransferProgressBar({ p }: { p: TransferProgress }) {
+  const pct = Math.max(0, Math.min(100, p.percent));
+  const done = p.total > 0 && p.sent >= p.total;
+  return (
+    <div
+      style={{ minWidth: 200, fontFamily: 'var(--font-mono)', fontSize: '0.82em' }}
+      title={`${p.sent.toLocaleString()} of ${p.total.toLocaleString()} bytes`}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+        <div
+          role="progressbar"
+          aria-label="Image transfer"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(pct)}
+          style={{
+            flex: 1,
+            height: 8,
+            borderRadius: 4,
+            background: 'var(--glass-border)',
+            overflow: 'hidden',
+          }}
+        >
+          <div
+            style={{
+              width: `${pct}%`,
+              height: '100%',
+              background: done ? 'var(--success)' : 'var(--info)',
+              transition: 'width 0.4s linear',
+            }}
+          />
+        </div>
+        <span style={{ minWidth: '3.2em', textAlign: 'right' }}>{Math.floor(pct)}%</span>
+      </div>
+      <div style={{ opacity: 0.7, whiteSpace: 'nowrap' }}>
+        {formatBytes(p.sent)} / {formatBytes(p.total)} · {formatBytes(p.rateBps)}/s ·{' '}
+        {done ? 'done' : `${formatEta(p.etaSeconds)} ETA`}
+      </div>
+    </div>
+  );
 }
 
 type ColumnPhase = 'prestage' | 'transfer' | 'activate' | 'verify';
@@ -348,6 +411,9 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
   const [liveStatuses, setLiveStatuses] = useState<
     Record<number, DeviceStatusUpdate>
   >({});
+  const [transferProgress, setTransferProgress] = useState<
+    Record<number, TransferProgress>
+  >({});
   const [wsState, setWsState] = useState<'connecting' | 'open' | 'closed' | 'error'>(
     'connecting',
   );
@@ -447,6 +513,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
     setWsState('connecting');
     setLiveLines([]);
     setLiveStatuses({});
+    setTransferProgress({});
   }
 
   // WebSocket for live events
@@ -483,8 +550,31 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
         return;
       }
 
+      if (msg.type === 'transfer_progress' && typeof msg.device_id === 'number') {
+        const id = msg.device_id;
+        const progress: TransferProgress = {
+          sent: msg.sent ?? 0,
+          total: msg.total ?? 0,
+          percent: msg.percent ?? 0,
+          rateBps: msg.rate_bps ?? 0,
+          etaSeconds: msg.eta_seconds ?? null,
+        };
+        setTransferProgress((prev) => ({ ...prev, [id]: progress }));
+        return;
+      }
+
       if (msg.type === 'device_status' && typeof msg.device_id === 'number') {
         const id = msg.device_id;
+        // A transfer that is no longer running (completed/failed/cancelled)
+        // drops its live progress bar.
+        if (msg.transfer_status !== undefined && msg.transfer_status !== 'running') {
+          setTransferProgress((prev) => {
+            if (!(id in prev)) return prev;
+            const next = { ...prev };
+            delete next[id];
+            return next;
+          });
+        }
         setLiveStatuses((prev) => ({
           ...prev,
           [id]: {
@@ -758,6 +848,14 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                 <span className="text-muted" style={{ fontSize: '0.82em' }}>
                   Run in order. Each step acts on <strong>{targetText}</strong>.
                 </span>
+                <button
+                  className="btn btn-sm btn-secondary"
+                  onClick={() => requestPhase('verify_prestage')}
+                  disabled={isRunning}
+                  title="Read-only: re-check each switch (target version running, or image on flash with matching MD5 and expanded) and update its checkmarks. Nothing is copied or reloaded."
+                >
+                  Check status
+                </button>
                 {canCancelActivateDevices && (
                   <button
                     className="btn btn-sm btn-danger"
@@ -793,13 +891,6 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                     disabled={isRunning}
                   >
                     Run prestage
-                  </button>
-                  <button
-                    className="btn btn-sm btn-secondary"
-                    onClick={() => requestPhase('verify_prestage')}
-                    disabled={isRunning}
-                  >
-                    Re-verify
                   </button>
                 </PhaseStep>
 
@@ -936,6 +1027,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                     <th>Device</th>
                     <th>Model</th>
                     <th>Current</th>
+                    <th title="Boot mode read from the switch (show version)">Mode</th>
                     <th>Target Image</th>
                     {PHASE_COLUMNS.map((p) => (
                       <th key={p} style={{ textAlign: 'center' }}>
@@ -952,6 +1044,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                       live?.error_message !== undefined
                         ? live.error_message
                         : d.error_message;
+                    const progress = transferProgress[d.id];
                     return (
                       <tr
                         key={d.id}
@@ -985,6 +1078,20 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                           <code>{d.model || '-'}</code>
                         </td>
                         <td>{d.current_version || '-'}</td>
+                        <td>
+                          {(() => {
+                            const bm = bootModeDisplay(live?.boot_mode ?? d.boot_mode);
+                            return bm.badgeClass ? (
+                              <span className={`badge ${bm.badgeClass}`} title={bm.title}>
+                                {bm.label}
+                              </span>
+                            ) : (
+                              <span style={{ opacity: 0.5 }} title={bm.title}>
+                                {bm.label}
+                              </span>
+                            );
+                          })()}
+                        </td>
                         <td style={{ fontSize: '0.85em' }}>
                           {shortImageName(d.target_image)}
                         </td>
@@ -998,7 +1105,9 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                           );
                         })}
                         <td>
-                          {errMsg ? (
+                          {progress ? (
+                            <TransferProgressBar p={progress} />
+                          ) : errMsg ? (
                             <span
                               title={errMsg}
                               style={{
