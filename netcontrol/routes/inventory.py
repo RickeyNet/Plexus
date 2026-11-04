@@ -19,7 +19,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 import netcontrol.routes.state as state
-from netcontrol.drivers import GenericDriver, get_driver
+from netcontrol.drivers import DriverCapabilityError, GenericDriver, get_driver
+from netcontrol.drivers.show_version import ShowVersionFacts, parse_show_version
+from netcontrol.integrations.software.versions import classify_host
 from netcontrol.routes import background_jobs
 from netcontrol.routes.host_identity import is_placeholder_hostname, placeholder_hostname
 from netcontrol.routes.icmp import _probe_discovery_target_icmp
@@ -30,12 +32,14 @@ from netcontrol.routes.shared import (
     _get_session,
     _run_show_command,
     require_credential_access,
+    service_credential,
     supervise_task,
 )
 from netcontrol.routes.snmp import (
     PYSMNP_AVAILABLE,  # noqa: F401
     _collect_interface_ips,
     _discover_neighbors,  # noqa: F401
+    _infer_device_category,
     _probe_discovery_target_snmp,
     _snmp_get,
     _snmp_walk,  # noqa: F401
@@ -196,6 +200,11 @@ class DiscoveryScanRequest(BaseModel):
     hostname_prefix: str = "discovered"
     use_snmp: bool = True
     use_icmp: bool = True
+    # Read model, serial, software version, hostname and the OS (device
+    # type) over SSH ``show version`` from every host that answers.
+    use_ssh: bool = True
+    # A stored credential the caller may use; none: the Plexus service credential.
+    credential_id: int | None = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -359,24 +368,208 @@ async def _probe_discovery_target(
     }
 
 
-async def _discover_hosts(request: DiscoveryScanRequest, group_id: int | None = None) -> tuple[int, list[dict]]:
+# ── SSH show version enrichment ──────────────────────────────────────────────
+#
+# A reachable host is read over SSH (``show version``) so its model, serial,
+# software version, hostname and OS come from the device, with no SNMP. The
+# OS ``show version`` reports is the host's device_type: an SSH banner
+# (``SSH-2.0-Cisco-1.25``) names the vendor, never IOS vs IOS XE.
+
+# Cap on one host's whole login + ``show version``; a slow or silent host is
+# recorded as an SSH failure on that host, never a failed scan.
+DISCOVERY_SSH_TIMEOUT_SECONDS = 45.0
+_DISCOVERY_SSH_CONNECT_OPTIONS = {"conn_timeout": 10, "auth_timeout": 15, "banner_timeout": 15}
+
+# Netmiko platforms discovery may open a session with; any other guess
+# (``unknown``, a free-text type) opens the generic Cisco handler, whose
+# ``show version`` reads IOS, IOS XE, NX-OS and IOS XR alike.
+_SSH_SESSION_TYPES = frozenset(
+    {
+        "cisco_ios",
+        "cisco_xe",
+        "cisco_nxos",
+        "cisco_xr",
+        "cisco_asa",
+        "cisco_ftd",
+        "arista_eos",
+        "juniper_junos",
+        "paloalto_panos",
+        "fortinet",
+    }
+)
+
+
+async def _resolve_discovery_ssh(body: DiscoveryScanRequest, session: dict | None) -> tuple[dict | None, dict]:
+    """The credential discovery reads ``show version`` with, and the base of
+    the ``ssh_enrichment`` summary reported with the result.
+
+    An explicit ``credential_id`` must pass the usual access check (403/404
+    on failure). Without one the Plexus service credential is used; when
+    none is set, SSH enrichment is skipped (and says why) but the scan runs.
+    """
+    if not body.use_ssh:
+        return None, {
+            "enabled": False,
+            "credential": None,
+            "credential_source": None,
+            "skipped_reason": "Reading show version over SSH is turned off",
+        }
+    if body.credential_id is not None:
+        credential = await require_credential_access(body.credential_id, session=session, allow_service=True)
+        source = "explicit"
+    else:
+        credential = await service_credential()
+        source = "service"
+        if credential is None:
+            return None, {
+                "enabled": True,
+                "credential": None,
+                "credential_source": None,
+                "skipped_reason": (
+                    "No Plexus service credential is set: pick a credential or set one in Settings "
+                    "to read model, serial and version over SSH"
+                ),
+            }
+    name = str(credential.get("name") or "").strip() or f"credential {credential.get('id')}"
+    return credential, {"enabled": True, "credential": name, "credential_source": source, "skipped_reason": ""}
+
+
+def _ssh_enrichment_summary(base: dict, discovered: list[dict]) -> dict:
+    """``base`` plus how many hosts were read over SSH, and each failure."""
+    attempted = enriched = 0
+    failures: list[dict] = []
+    for host in discovered:
+        ssh = (host.get("discovery") or {}).get("ssh")
+        if not isinstance(ssh, dict):
+            continue
+        attempted += 1
+        if ssh.get("ok"):
+            enriched += 1
+        else:
+            failures.append({"ip_address": host.get("ip_address", ""), "error": str(ssh.get("error") or "")})
+    return {**base, "attempted": attempted, "enriched": enriched, "failed": len(failures), "failures": failures}
+
+
+def _ssh_session_type(device_type: str | None) -> str:
+    dt = str(device_type or "").strip()
+    return dt if dt in _SSH_SESSION_TYPES else "cisco_ios"
+
+
+def _show_version_command(device_type: str) -> str:
+    try:
+        return get_driver(device_type).show_version_command()
+    except DriverCapabilityError:
+        return "show version"
+
+
+def _apply_show_version_facts(host: dict, facts: ShowVersionFacts) -> None:
+    """Overlay what ``show version`` reported on a probe result. A recognized
+    OS is the device_type (``discovery.device_type_source = "ssh"`` tells the
+    planner it is authoritative); a fact the output lacks keeps the probe's
+    (SNMP) value."""
+    discovery = host.setdefault("discovery", {})
+    discovery["ssh"] = {"ok": True, "facts": facts.to_dict()}
+    if facts.os_device_type:
+        host["device_type"] = facts.os_device_type
+        discovery["device_type_source"] = "ssh"
+        discovery["vendor"] = facts.os_device_type.split("_", 1)[0]
+        platform, _ = classify_host(facts.os_device_type, facts.model, facts.software_version)
+        if platform:
+            discovery["os"] = platform
+    if facts.model:
+        host["model"] = facts.model
+    if facts.software_version:
+        host["software_version"] = facts.software_version
+    if facts.serial_number:
+        host["serial_number"] = facts.serial_number
+    if facts.hostname and not str(host.get("sys_name") or "").strip():
+        # The configured hostname is a device identity like sysName.
+        host["sys_name"] = facts.hostname
+        host["hostname"] = facts.hostname
+    if not host.get("device_category") and facts.model:
+        category = _infer_device_category(facts.model, "", str(host.get("device_type") or ""))
+        if category:
+            host["device_category"] = category
+
+
+async def _enrich_with_show_version(host: dict, credential: dict) -> None:
+    """Read ``show version`` from a reachable probe result over SSH and apply
+    it. Hosts with no SSH surface (HTTPS-only or ping-only) are left alone;
+    a failure is recorded on the host as ``discovery.ssh.error``."""
+    discovery = host.setdefault("discovery", {})
+    protocol = str(discovery.get("protocol") or "")
+    # TCP 22 answered, or SNMP answered (which does not probe port 22).
+    if protocol != "ssh" and not protocol.startswith("snmp"):
+        return
+    session_type = _ssh_session_type(host.get("device_type"))
+    target = {"ip_address": host["ip_address"], "device_type": session_type}
+    try:
+        async with state.device_op_semaphore():
+            output = await asyncio.wait_for(
+                _run_show_command(
+                    target,
+                    credential,
+                    _show_version_command(session_type),
+                    autodetect=False,
+                    **_DISCOVERY_SSH_CONNECT_OPTIONS,
+                ),
+                timeout=DISCOVERY_SSH_TIMEOUT_SECONDS,
+            )
+    except TimeoutError:
+        discovery["ssh"] = {"ok": False, "error": f"SSH timed out after {DISCOVERY_SSH_TIMEOUT_SECONDS:g}s"}
+        return
+    except Exception as exc:
+        detail = redact_value(str(exc)).strip().splitlines()
+        discovery["ssh"] = {
+            "ok": False,
+            "error": f"{type(exc).__name__}: {detail[0][:200]}" if detail else type(exc).__name__,
+        }
+        return
+    facts = parse_show_version(output if isinstance(output, str) else "")
+    if facts.empty:
+        discovery["ssh"] = {"ok": False, "error": "show version output named no model, version or OS"}
+        return
+    _apply_show_version_facts(host, facts)
+
+
+async def _scan_target(
+    ip_address: str,
+    body: DiscoveryScanRequest,
+    snmp_config: dict,
+    probe_slots: asyncio.Semaphore,
+    credential: dict | None,
+) -> dict | None:
+    """Probe one target (SNMP, TCP 22/443, ICMP) inside the probe fan-out
+    cap, then, outside it, read ``show version`` over SSH when a credential
+    was resolved. Every discovery entry point scans through this."""
+    async with probe_slots:
+        host = await _probe_discovery_target(
+            ip_address=ip_address,
+            timeout_seconds=body.timeout_seconds,
+            device_type=body.device_type,
+            hostname_prefix=body.hostname_prefix,
+            use_snmp=body.use_snmp,
+            snmp_config=snmp_config,
+            use_icmp=body.use_icmp,
+        )
+    if host is not None and credential is not None:
+        await _enrich_with_show_version(host, credential)
+    return host
+
+
+async def _discover_hosts(
+    request: DiscoveryScanRequest,
+    group_id: int | None = None,
+    *,
+    credential: dict | None = None,
+) -> tuple[int, list[dict]]:
     targets = _expand_scan_targets(request.cidrs, request.max_hosts)
     semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
     snmp_cfg = state._resolve_snmp_discovery_config(group_id)
 
-    async def _scan_one(ip_address: str) -> dict | None:
-        async with semaphore:
-            return await _probe_discovery_target(
-                ip_address=ip_address,
-                timeout_seconds=request.timeout_seconds,
-                device_type=request.device_type,
-                hostname_prefix=request.hostname_prefix,
-                use_snmp=request.use_snmp,
-                snmp_config=snmp_cfg,
-                use_icmp=request.use_icmp,
-            )
-
-    discovered_raw = await asyncio.gather(*[_scan_one(ip) for ip in targets])
+    discovered_raw = await asyncio.gather(
+        *[_scan_target(ip, request, snmp_cfg, semaphore, credential) for ip in targets]
+    )
     discovered = [item for item in discovered_raw if item is not None]
     discovered.sort(key=lambda item: ipaddress.ip_address(item["ip_address"]))
     return len(targets), discovered
@@ -409,7 +602,8 @@ def _normalize_discovered_entry(host: dict) -> dict | None:
         sys_name = hostname
     else:
         sys_name = ""
-    probe_protocol = str(host.get("discovery", {}).get("protocol", "")).strip()
+    discovery = host.get("discovery") or {}
+    probe_protocol = str(discovery.get("protocol", "")).strip()
     return {
         "ip": ip,
         "hostname": hostname,
@@ -422,6 +616,8 @@ def _normalize_discovered_entry(host: dict) -> dict | None:
         "device_category": str(host.get("device_category") or "").strip(),
         "probe_protocol": probe_protocol,
         "snmp_reachable": probe_protocol.startswith("snmp"),
+        # The device_type is the OS the device's own show version reported.
+        "ssh_typed": discovery.get("device_type_source") == "ssh",
     }
 
 
@@ -512,8 +708,13 @@ def _build_discovery_plan(
             (e["hostname"] for e in entries if e["sys_name_norm"]),
             (snmp_entries or entries)[0]["hostname"],
         )
-        device_type = next((e["device_type"] for e in snmp_entries if e["device_type"] != "unknown"), "") or next(
-            (e["device_type"] for e in entries if e["device_type"] != "unknown"), "unknown"
+        # Device type precedence: the OS show version reported over SSH, then
+        # SNMP sysDescr, then any probe's guess (SSH banner, caller default).
+        ssh_typed = [e for e in entries if e.get("ssh_typed") and e["device_type"] != "unknown"]
+        device_type = (
+            next((e["device_type"] for e in ssh_typed), "")
+            or next((e["device_type"] for e in snmp_entries if e["device_type"] != "unknown"), "")
+            or next((e["device_type"] for e in entries if e["device_type"] != "unknown"), "unknown")
         )
         model = next((e["model"] for e in entries if e["model"]), "")
         sw = next((e["software_version"] for e in entries if e["software_version"]), "")
@@ -569,10 +770,14 @@ def _build_discovery_plan(
             existing_dt = canonical.get("device_type", "unknown")
             eff_dt = device_type
             # Only an *explicit* SSH/HTTPS probe is low-confidence (its banner
-            # reveals vendor but not OS variant); a blank protocol or any SNMP
-            # probe is authoritative. A low-confidence probe may only fill an
-            # unknown type, never overwrite an established one.
-            low_confidence = (not any_snmp) and any(e["probe_protocol"] in ("ssh", "https") for e in entries)
+            # reveals vendor but not OS variant); a blank protocol, any SNMP
+            # probe, or an OS read from show version over SSH is
+            # authoritative (and may correct cisco_ios to cisco_xe). A
+            # low-confidence probe may only fill an unknown type, never
+            # overwrite an established one.
+            low_confidence = (
+                not ssh_typed and not any_snmp and any(e["probe_protocol"] in ("ssh", "https") for e in entries)
+            )
             if low_confidence and existing_dt != "unknown" and device_type != existing_dt:
                 eff_dt = existing_dt
             elif device_type == "unknown" and existing_dt != "unknown":
@@ -767,7 +972,9 @@ async def _run_discovery_sync_once() -> dict:
                     "remove_absent": profile.get("remove_absent", False),
                 }
             )
-            _, discovered = await _discover_hosts(body, group_id=group_id)
+            # Unattended: only the Plexus service credential (never a user's).
+            credential, _ = await _resolve_discovery_ssh(body, None)
+            _, discovered = await _discover_hosts(body, group_id=group_id, credential=credential)
             result = await _sync_group_hosts(group_id, discovered, remove_absent=body.remove_absent)
             synced_groups += 1
             LOGGER.info(
@@ -1475,8 +1682,20 @@ async def move_hosts(body: dict):
 # ── Discovery routes ─────────────────────────────────────────────────────────
 
 
+@router.get("/api/inventory/discovery/ssh-defaults")
+async def discovery_ssh_defaults():
+    """The credential discovery reads ``show version`` with by default: the
+    Plexus service credential, when one is set."""
+    service = await service_credential()
+    return {
+        "service_credential": service is not None,
+        "service_credential_id": int(service["id"]) if service else None,
+        "service_credential_name": str(service.get("name") or "") if service else None,
+    }
+
+
 @router.post("/api/inventory/{group_id}/discovery/scan", status_code=202)
-async def discovery_scan(group_id: int, body: DiscoveryScanRequest):
+async def discovery_scan(group_id: int, body: DiscoveryScanRequest, request: Request):
     """Launch a discovery scan as a background job.
 
     A full-CIDR probe (up to 4096 hosts) can run for minutes; running it
@@ -1492,36 +1711,35 @@ async def discovery_scan(group_id: int, body: DiscoveryScanRequest):
         targets = _expand_scan_targets(body.cidrs, body.max_hosts)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+    credential, ssh_base = await _resolve_discovery_ssh(body, _get_session(request))
 
     job = background_jobs.create_job(
         "discovery-scan",
         {"group_id": group_id, "scanned": 0, "total": len(targets), "found": 0},
     )
     supervise_task(
-        asyncio.create_task(_run_discovery_scan_job(job["job_id"], group_id, body, targets)),
+        asyncio.create_task(
+            _run_discovery_scan_job(job["job_id"], group_id, body, targets, credential=credential, ssh_base=ssh_base)
+        ),
         "discovery-scan",
     )
     return {"job_id": job["job_id"], "status": "running", "group_id": group_id, "total_targets": len(targets)}
 
 
-async def _run_discovery_scan_job(job_id: str, group_id: int, body: DiscoveryScanRequest, targets: list[str]) -> None:
+async def _run_discovery_scan_job(
+    job_id: str,
+    group_id: int,
+    body: DiscoveryScanRequest,
+    targets: list[str],
+    *,
+    credential: dict | None = None,
+    ssh_base: dict | None = None,
+) -> None:
     """Background task: probe every target, tracking progress on the job."""
     semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
     snmp_cfg = state._resolve_snmp_discovery_config(group_id)
 
-    async def _scan_one(ip_address: str) -> dict | None:
-        async with semaphore:
-            return await _probe_discovery_target(
-                ip_address=ip_address,
-                timeout_seconds=body.timeout_seconds,
-                device_type=body.device_type,
-                hostname_prefix=body.hostname_prefix,
-                use_snmp=body.use_snmp,
-                snmp_config=snmp_cfg,
-                use_icmp=body.use_icmp,
-            )
-
-    tasks = [asyncio.create_task(_scan_one(ip)) for ip in targets]
+    tasks = [asyncio.create_task(_scan_target(ip, body, snmp_cfg, semaphore, credential)) for ip in targets]
     try:
         discovered: list[dict] = []
         scanned = 0
@@ -1540,6 +1758,7 @@ async def _run_discovery_scan_job(job_id: str, group_id: int, body: DiscoverySca
                 "scanned_hosts": len(targets),
                 "discovered_count": len(discovered),
                 "discovered_hosts": discovered,
+                "ssh_enrichment": _ssh_enrichment_summary(ssh_base or {}, discovered),
             },
         )
     except Exception as exc:
@@ -1562,7 +1781,7 @@ async def get_discovery_scan_job(job_id: str):
 
 
 @router.post("/api/inventory/{group_id}/discovery/scan/stream")
-async def discovery_scan_stream(group_id: int, body: DiscoveryScanRequest):
+async def discovery_scan_stream(group_id: int, body: DiscoveryScanRequest, request: Request):
     """SSE streaming scan -- yields per-host results as they complete."""
     group = await db.get_group(group_id)
     if not group:
@@ -1575,22 +1794,14 @@ async def discovery_scan_stream(group_id: int, body: DiscoveryScanRequest):
     total = len(targets)
     semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
     snmp_cfg = state._resolve_snmp_discovery_config(group_id)
+    credential, ssh_base = await _resolve_discovery_ssh(body, _get_session(request))
 
     async def _scan_one(ip_address: str) -> tuple[str, dict | None]:
-        async with semaphore:
-            result = await _probe_discovery_target(
-                ip_address=ip_address,
-                timeout_seconds=body.timeout_seconds,
-                device_type=body.device_type,
-                hostname_prefix=body.hostname_prefix,
-                use_snmp=body.use_snmp,
-                snmp_config=snmp_cfg,
-            )
-            return ip_address, result
+        return ip_address, await _scan_target(ip_address, body, snmp_cfg, semaphore, credential)
 
     async def event_generator():
         # Send initial metadata
-        yield f"data: {json.dumps({'type': 'start', 'total': total})}\n\n"
+        yield f"data: {json.dumps({'type': 'start', 'total': total, 'ssh_enrichment': ssh_base})}\n\n"
 
         scanned = 0
         discovered = []
@@ -1604,7 +1815,14 @@ async def discovery_scan_stream(group_id: int, body: DiscoveryScanRequest):
             yield f"data: {json.dumps({'type': 'progress', 'scanned': scanned, 'total': total, 'ip': ip_address, 'found': result is not None, 'host': result})}\n\n"
 
         discovered.sort(key=lambda item: ipaddress.ip_address(item["ip_address"]))
-        yield f"data: {json.dumps({'type': 'done', 'scanned_hosts': total, 'discovered_count': len(discovered), 'discovered_hosts': discovered})}\n\n"
+        done = {
+            "type": "done",
+            "scanned_hosts": total,
+            "discovered_count": len(discovered),
+            "discovered_hosts": discovered,
+            "ssh_enrichment": _ssh_enrichment_summary(ssh_base, discovered),
+        }
+        yield f"data: {json.dumps(done)}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -1675,9 +1893,10 @@ async def discovery_sync(group_id: int, body: DiscoverySyncRequest, request: Req
             raise HTTPException(400, "Group has no hosts to sync. Add hosts first or provide CIDR targets.")
         body.cidrs = host_ips
 
-    scanned_count, discovered = await _discover_hosts(body, group_id=group_id)
-    sync_result = await _sync_group_hosts(group_id, discovered, remove_absent=body.remove_absent)
     session = _get_session(request)
+    credential, ssh_base = await _resolve_discovery_ssh(body, session)
+    scanned_count, discovered = await _discover_hosts(body, group_id=group_id, credential=credential)
+    sync_result = await _sync_group_hosts(group_id, discovered, remove_absent=body.remove_absent)
     audit_user = session["user"] if session else "api-token"
 
     await _audit(
@@ -1696,6 +1915,7 @@ async def discovery_sync(group_id: int, body: DiscoverySyncRequest, request: Req
         "scanned_hosts": scanned_count,
         "discovered_count": len(discovered),
         "sync": sync_result,
+        "ssh_enrichment": _ssh_enrichment_summary(ssh_base, discovered),
     }
 
 
@@ -1724,25 +1944,17 @@ async def discovery_sync_stream(group_id: int, body: DiscoverySyncRequest, reque
     total = len(targets)
     semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
     snmp_cfg = state._resolve_snmp_discovery_config(group_id)
+    session = _get_session(request)
+    credential, ssh_base = await _resolve_discovery_ssh(body, session)
 
     async def _scan_one(ip_address: str) -> tuple[str, dict | None]:
-        async with semaphore:
-            result = await _probe_discovery_target(
-                ip_address=ip_address,
-                timeout_seconds=body.timeout_seconds,
-                device_type=body.device_type,
-                hostname_prefix=body.hostname_prefix,
-                use_snmp=body.use_snmp,
-                snmp_config=snmp_cfg,
-            )
-            return ip_address, result
+        return ip_address, await _scan_target(ip_address, body, snmp_cfg, semaphore, credential)
 
-    session = _get_session(request)
     audit_user = session["user"] if session else "api-token"
     corr_id = _corr_id(request)
 
     async def event_generator():
-        yield f"data: {json.dumps({'type': 'start', 'total': total})}\n\n"
+        yield f"data: {json.dumps({'type': 'start', 'total': total, 'ssh_enrichment': ssh_base})}\n\n"
 
         scanned = 0
         discovered = []
@@ -1772,7 +1984,14 @@ async def discovery_sync_stream(group_id: int, body: DiscoverySyncRequest, reque
             correlation_id=corr_id,
         )
 
-        yield f"data: {json.dumps({'type': 'done', 'scanned_hosts': total, 'discovered_count': len(discovered), 'sync': sync_result})}\n\n"
+        done = {
+            "type": "done",
+            "scanned_hosts": total,
+            "discovered_count": len(discovered),
+            "sync": sync_result,
+            "ssh_enrichment": _ssh_enrichment_summary(ssh_base, discovered),
+        }
+        yield f"data: {json.dumps(done)}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 

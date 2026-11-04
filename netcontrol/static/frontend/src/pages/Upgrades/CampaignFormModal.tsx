@@ -15,6 +15,7 @@ import {
   useUpgradeImages,
 } from '@/api/upgrades';
 import { Modal } from '@/components/Modal';
+import { parseBoundedInt } from '@/lib/numberInput';
 
 interface Host {
   id: number;
@@ -102,6 +103,10 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
   const [options, setOptions] = useState<Required<UpgradeCampaignOptions>>(
     DEFAULT_OPTIONS,
   );
+  // The numeric options are edited as raw text so the field can be cleared
+  // and retyped; they are parsed and clamped on submit.
+  const [parallelText, setParallelText] = useState(String(DEFAULT_OPTIONS.parallel));
+  const [retriesText, setRetriesText] = useState(String(DEFAULT_OPTIONS.retries));
   const [error, setError] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
 
@@ -142,15 +147,21 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
           typeof opts.credential_id === 'number' ? opts.credential_id : '',
         );
         setImageMapRows(rows.length ? rows : [{ pattern: '', image: images[0]?.filename ?? '' }]);
+        const parallel =
+          typeof opts.parallel === 'number' ? opts.parallel : DEFAULT_OPTIONS.parallel;
+        const retries =
+          typeof opts.retries === 'number' ? opts.retries : DEFAULT_OPTIONS.retries;
         setOptions({
           skip_backup: Boolean(opts.skip_backup),
           skip_md5: Boolean(opts.skip_md5),
           skip_health_check: Boolean(opts.skip_health_check),
           verify_upgrade: opts.verify_upgrade !== false,
           issu: Boolean(opts.issu),
-          parallel: typeof opts.parallel === 'number' ? opts.parallel : 4,
-          retries: typeof opts.retries === 'number' ? opts.retries : 2,
+          parallel,
+          retries,
         });
+        setParallelText(String(parallel));
+        setRetriesText(String(retries));
         const ids = new Set<number>();
         const ips: string[] = [];
         for (const d of existing.devices) {
@@ -249,7 +260,11 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
       credential_id: credentialId ? Number(credentialId) : null,
       host_ids: Array.from(hostIds),
       ad_hoc_ips: ips,
-      options,
+      options: {
+        ...options,
+        parallel: parseBoundedInt(parallelText, 1, 8, DEFAULT_OPTIONS.parallel),
+        retries: parseBoundedInt(retriesText, 0, 5, DEFAULT_OPTIONS.retries),
+      },
     };
 
     const onError = (err: unknown) => setError((err as Error).message);
@@ -524,13 +539,9 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
                   className="form-input"
                   min={1}
                   max={8}
-                  value={options.parallel}
-                  onChange={(e) =>
-                    setOptions((o) => ({
-                      ...o,
-                      parallel: Number(e.target.value) || 4,
-                    }))
-                  }
+                  required
+                  value={parallelText}
+                  onChange={(e) => setParallelText(e.target.value)}
                 />
               </div>
               <div className="form-group" style={{ flex: 1 }}>
@@ -540,13 +551,9 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
                   className="form-input"
                   min={0}
                   max={5}
-                  value={options.retries}
-                  onChange={(e) =>
-                    setOptions((o) => ({
-                      ...o,
-                      retries: Number(e.target.value) || 0,
-                    }))
-                  }
+                  required
+                  value={retriesText}
+                  onChange={(e) => setRetriesText(e.target.value)}
                 />
               </div>
             </div>

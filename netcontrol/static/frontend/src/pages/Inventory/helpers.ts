@@ -1,4 +1,9 @@
-import type { InventoryGroupFull, InventoryHost } from '@/api/inventory';
+import type {
+  DiscoveredHost,
+  InventoryGroupFull,
+  InventoryHost,
+  SshEnrichmentSummary,
+} from '@/api/inventory';
 
 export type InventorySort =
   | 'custom'
@@ -208,4 +213,40 @@ export function saveCompactMode(on: boolean): void {
   } catch {
     // ignore
   }
+}
+
+/**
+ * One line on how discovery read show version over SSH, e.g. "SSH show
+ * version (plexus-svc, service credential): read 11 of 13 hosts, 2 failed."
+ * or why it was skipped. '' without a summary.
+ */
+export function describeSshEnrichment(summary: SshEnrichmentSummary | null | undefined): string {
+  if (!summary) return '';
+  if (!summary.enabled) return 'SSH show version: off.';
+  if (summary.skipped_reason) return `SSH show version skipped: ${summary.skipped_reason}.`;
+  const name = summary.credential || 'credential';
+  const who = summary.credential_source === 'service' ? `${name}, service credential` : name;
+  const attempted = summary.attempted ?? 0;
+  const enriched = summary.enriched ?? 0;
+  const failed = summary.failed ?? 0;
+  if (attempted === 0) return `SSH show version (${who}): no host answered on SSH.`;
+  return (
+    `SSH show version (${who}): read ${enriched} of ${attempted} host${attempted === 1 ? '' : 's'}` +
+    (failed ? `, ${failed} failed.` : '.')
+  );
+}
+
+/** "C9300-48P · 17.09.04a · S/N FOC2345X0AB" from what discovery learned. */
+export function discoveredHostFacts(host: DiscoveredHost): string {
+  const parts: string[] = [];
+  if (host.model) parts.push(host.model);
+  if (host.software_version) parts.push(host.software_version);
+  if (host.serial_number) parts.push(`S/N ${host.serial_number}`);
+  return parts.join(' · ');
+}
+
+/** The SSH error on one discovered host ('' when SSH read it or never tried). */
+export function discoveredHostSshError(host: DiscoveredHost): string {
+  const ssh = host.discovery?.ssh;
+  return ssh && !ssh.ok ? ssh.error || 'SSH failed' : '';
 }

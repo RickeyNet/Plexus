@@ -491,26 +491,12 @@ export function describeProgress(
   return { label, percent: null };
 }
 
-/** Select value of the Plexus service credential Settings names, sent as `credential_id: null`. */
-export const SETTINGS_SERVICE_CREDENTIAL = "service";
-
-/**
- * The credential an inventory collection starts with: the service credential
- * Settings names (its id for an administrator, who sees the service list;
- * the Settings placeholder otherwise), else the first service credential,
- * else the first of the user's own. '' when there is none.
- */
-export function defaultCollectCredential(
-  settingsId: number | null | undefined,
-  serviceIds: number[],
-  ownIds: number[],
-  isAdmin: boolean,
-): string {
-  if (settingsId != null)
-    return isAdmin ? String(settingsId) : SETTINGS_SERVICE_CREDENTIAL;
-  if (isAdmin && serviceIds.length) return String(serviceIds[0]);
-  return ownIds.length ? String(ownIds[0]) : "";
-}
+// The credential choice is shared with Inventory discovery; it lives in
+// @/lib/credentialChoice and is re-exported here for existing callers.
+export {
+  defaultCollectCredential,
+  SETTINGS_SERVICE_CREDENTIAL,
+} from "@/lib/credentialChoice";
 
 /**
  * "Collected from 12 of 14 devices in 40s: 12 route tables, 11 configurations,

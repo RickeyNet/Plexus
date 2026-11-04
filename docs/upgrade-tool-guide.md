@@ -146,7 +146,7 @@ Risk mitigations built into this procedure:
 - The software image is MD5-verified after transfer, so a corrupt image is never installed.
 - The unpacked packages are verified on flash after `install add`, and can be re-verified any time before the reload window.
 - On redundant chassis, the standby supervisor must be STANDBY HOT before both Transfer and Activate. A cold or absent standby blocks the operation.
-- The tool refuses to activate on bundle-mode devices.
+- Each switch's boot mode (INSTALL or BUNDLE) is read from `show version` in Prestage, before the Transfer copy, in Check status and in Activate, and shown in the campaign's **Mode** column. A bundle-mode switch is stopped before any image is copied. Install mode is required for every upgrade the tool runs, ISSU included.
 - The switch is not rebooted until the image is re-verified on flash and the boot-mode and redundancy gates pass.
 - Post-upgrade verification confirms the running version, then runs `install commit`, then re-reads the version to confirm nothing rolled back.
 - Interactive confirmation is required before an immediate Activate.
@@ -207,7 +207,7 @@ Check each item off as it is completed. All items must be done before the mainte
 - ☐ Recorded the Cisco-published MD5 for each image and confirmed it matches the MD5 shown in the Images table.
 - ☐ Confirmed the auto-detected **Version** and **Model Pattern** on each image row are correct (9200 images match `9200`, 9300 and above match `9300`, and so on).
 - ☐ Confirmed the target version is compatible with all hardware in scope (Cisco release notes).
-- ☐ Confirmed every switch in scope is running in install mode. The tool refuses to activate on bundle-mode devices.
+- ☐ Confirmed every switch in scope is running in install mode. **Check status** (or Prestage) fills the campaign's **Mode** column; any switch showing BUNDLE must be converted before it can be upgraded.
 - ☐ Confirmed SSH (port 22) and SCP are enabled on every switch (see Appendix B).
 - ☐ Confirmed there is enough free space on `flash:` for the image plus its unpacked packages.
 - ☐ Created the campaign with only the in-scope devices, the correct image map, and reviewed options (see Appendix C).
@@ -284,10 +284,11 @@ All steps below are performed in the Plexus web UI under **Network → Software 
 Click **Run prestage**. On each device the tool:
 
 1. Connects and detects the model and running version, then resolves the target image from the image map.
-2. Runs a pre-flight health check (skippable). A failed check fails the device and stops it there.
-3. Backs up `show running-config` (downloadable later from the **Backups** tab).
-4. Saves the config (`write memory`).
-5. Frees flash space with `install remove inactive`.
+2. Reads the boot mode and shows it in the **Mode** column. A BUNDLE-mode switch fails Prestage here, because install-mode upgrades and ISSU cannot run on it.
+3. Runs a pre-flight health check (skippable). A failed check fails the device and stops it there.
+4. Backs up `show running-config` (downloadable later from the **Backups** tab).
+5. Saves the config (`write memory`).
+6. Frees flash space with `install remove inactive`.
 
 **What you will see, per device:** model and version detected, image resolved, health check result, backup saved, config saved, inactive packages removed.
 
@@ -304,9 +305,20 @@ Click **Run transfer**. On each device the tool:
 
 **Dual-sup / StackWise Virtual:** before `install add`, the standby supervisor must be **STANDBY HOT**. If it isn't, the transfer is refused (with "Skip health check" enabled it is only a warning). This is because `install add` silently skips syncing packages to a cold or absent standby and the problem would otherwise only surface at Activate time. Timeouts are automatically widened for redundant chassis.
 
-**What you will see, per device:** flash free space, transfer progress, MD5 verified, `install add` output, packages verified.
+**What you will see, per device:** flash free space, a live progress bar in the device's Status cell (percent, MB sent, rate, ETA), MD5 verified, `install add` output, packages verified.
 
-**If it fails:** See Appendix E. Use **Retry failed (N)** to re-run only the devices that failed. If time has passed between Transfer and the reload window, click **Re-verify** (on the Prestage step) to re-check the unpacked artifacts on flash.
+**If it fails:** See Appendix E. Use **Retry failed (N)** to re-run only the devices that failed.
+
+**Check status (read-only):** the **Check status** button next to "Upgrade steps" reconnects to each selected device and resets its checkmarks from what is actually on the switch. Nothing is copied, installed or reloaded. Use it when time has passed between Transfer and the reload window, or when checkmarks look wrong.
+
+| What the switch shows | Result |
+|---|---|
+| Already running the target version | Every step is marked done |
+| Image on flash, MD5 matches the server copy, `install add` artifacts present | Transfer is marked done, ready to activate |
+| Image on flash and complete, but not expanded | Transfer is marked failed. **Retry failed** finishes `install add` without re-copying the image |
+| Image on flash but MD5 mismatch (partial/corrupt copy) | Transfer is marked failed. **Retry failed** re-copies it |
+| Image not on flash | Transfer is left pending |
+| Switch unreachable, or the check errors | The previous checkmark is kept and the error is shown |
 
 ### Step 3. Activate (OUTAGE - maintenance window only)
 
@@ -509,7 +521,7 @@ The **Backups** tab lists every running-config capture taken during Prestage (`b
 | Device shows "No image map match for model" | The model pattern on the image or in the campaign's image map does not match this device | Add or fix the model pattern on the image (Images tab) or in the campaign's image map |
 | Transfer refused: standby not STANDBY HOT | The standby supervisor is cold, absent, or not synced | Fix the standby sup (reseat, boot, sync) before transferring. Do not bypass unless you accept an unsynced standby |
 | Health check FAILED | Switch is not healthy enough to upgrade safely | Open the device log for the specific warnings. Fix and re-run Prestage |
-| Activate refused: bundle mode / boot-mode gate | The switch is not in install mode | Convert the switch to install mode first |
+| "Device is booted in BUNDLE mode" (Prestage, Transfer, Check status or Activate); **Mode** shows BUNDLE | The switch boots the `.bin` directly, not `packages.conf` | Convert the switch to install mode first, then re-run the step. No image is copied while it is in bundle mode |
 | "ISSU not supported on this platform" | The device does not support in-service upgrade | Untick the ISSU option. The device will do a normal reload |
 | "Reload missed - reschedule" | The Plexus server was down over the scheduled window | Schedule a new time |
 | Commit failed / switch will roll back | The post-reload version check or `install commit` did not succeed | Connect to the switch and investigate immediately. Run `install commit` manually if the state is good, before the rollback timer expires |

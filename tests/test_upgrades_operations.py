@@ -337,11 +337,52 @@ async def test_resolve_campaign_credential_falls_back_to_service(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_resolve_campaign_credential_uses_sole_service_credential(monkeypatch):
+    """No campaign credential and none selected in Settings, but exactly one
+    service credential exists → the campaign runs with it."""
+    monkeypatch.setattr(upgrades.state, "AUTH_CONFIG", {})
+
+    async def fake_list_service():
+        return [{"id": 4, "name": "svc", "is_service": 1}]
+
+    async def fake_get_raw(cred_id):
+        return {"id": cred_id, "username": "svc", "password": "p", "secret": "", "is_service": 1}
+
+    monkeypatch.setattr(upgrades.db, "get_service_credentials", fake_list_service)
+    monkeypatch.setattr(upgrades.db, "get_credential_raw", fake_get_raw)
+
+    cred = await upgrades._resolve_campaign_credential(None, "alice")
+    assert cred["id"] == 4
+
+
+@pytest.mark.asyncio
+async def test_resolve_campaign_credential_ambiguous_service_credentials(monkeypatch):
+    """Several service credentials and none selected in Settings → 400 rather
+    than guessing which one to run with."""
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(upgrades.state, "AUTH_CONFIG", {})
+
+    async def fake_list_service():
+        return [{"id": 4, "is_service": 1}, {"id": 7, "is_service": 1}]
+
+    monkeypatch.setattr(upgrades.db, "get_service_credentials", fake_list_service)
+    with pytest.raises(HTTPException) as exc:
+        await upgrades._resolve_campaign_credential(None, "alice")
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_resolve_campaign_credential_none_configured(monkeypatch):
     """No campaign credential and no service/default configured → 400."""
     from fastapi import HTTPException
 
     monkeypatch.setattr(upgrades.state, "AUTH_CONFIG", {})
+
+    async def fake_list_service():
+        return []
+
+    monkeypatch.setattr(upgrades.db, "get_service_credentials", fake_list_service)
     with pytest.raises(HTTPException) as exc:
         await upgrades._resolve_campaign_credential(None, "alice")
     assert exc.value.status_code == 400

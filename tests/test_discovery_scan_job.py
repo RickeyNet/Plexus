@@ -22,6 +22,21 @@ async def _wait_for_job(job_id: str, deadline_seconds: float = 5.0) -> dict:
         await asyncio.sleep(0.01)
 
 
+class _HttpRequest:
+    """The bits of a FastAPI Request the discovery endpoints read."""
+
+    cookies: dict = {}
+    state = type("S", (), {"correlation_id": "corr-1"})()
+
+
+@pytest.fixture(autouse=True)
+def _no_service_credential(monkeypatch):
+    async def none():
+        return None
+
+    monkeypatch.setattr(inventory, "service_credential", none)
+
+
 def _request() -> DiscoveryScanRequest:
     return DiscoveryScanRequest(
         cidrs=["10.0.0.0/30"],  # expands to 10.0.0.1 and 10.0.0.2
@@ -54,7 +69,7 @@ async def test_discovery_scan_launches_job_and_collects_results(monkeypatch):
     monkeypatch.setattr(inventory, "_probe_discovery_target", fake_probe)
     monkeypatch.setattr(inventory.state, "_resolve_snmp_discovery_config", lambda _gid: {"enabled": False})
 
-    launched = await inventory.discovery_scan(1, _request())
+    launched = await inventory.discovery_scan(1, _request(), _HttpRequest())
     assert launched["status"] == "running"
     assert launched["total_targets"] == 2
 
@@ -83,7 +98,7 @@ async def test_discovery_scan_job_failure_is_reported(monkeypatch):
     monkeypatch.setattr(inventory, "_probe_discovery_target", exploding_probe)
     monkeypatch.setattr(inventory.state, "_resolve_snmp_discovery_config", lambda _gid: {"enabled": False})
 
-    launched = await inventory.discovery_scan(1, _request())
+    launched = await inventory.discovery_scan(1, _request(), _HttpRequest())
     job = await _wait_for_job(launched["job_id"])
     assert job["status"] == "failed"
     assert "probe blew up" in (job["error"] or "")
@@ -106,5 +121,5 @@ async def test_discovery_scan_invalid_cidr_rejected_before_job(monkeypatch):
     bad = _request()
     bad.cidrs = ["not-a-cidr"]
     with pytest.raises(HTTPException) as exc:
-        await inventory.discovery_scan(1, bad)
+        await inventory.discovery_scan(1, bad, _HttpRequest())
     assert exc.value.status_code == 400

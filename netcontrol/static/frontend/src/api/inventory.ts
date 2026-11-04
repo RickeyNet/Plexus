@@ -82,7 +82,32 @@ export interface DiscoveredHost {
   hostname?: string;
   ip_address: string;
   device_type?: string;
+  model?: string;
+  software_version?: string;
+  serial_number?: string;
+  discovery?: {
+    protocol?: string;
+    /** "ssh" when device_type is the OS the device's show version reported. */
+    device_type_source?: string;
+    /** The show version read over SSH: ok, or the error on this host. */
+    ssh?: { ok: boolean; error?: string };
+    [key: string]: unknown;
+  };
   [key: string]: unknown;
+}
+
+/** How discovery read show version over SSH (model, serial, version, OS). */
+export interface SshEnrichmentSummary {
+  enabled: boolean;
+  /** The credential's name; null when none was used. */
+  credential: string | null;
+  credential_source: 'explicit' | 'service' | null;
+  /** Why no host was read over SSH ('' when SSH ran). */
+  skipped_reason: string;
+  attempted?: number;
+  enriched?: number;
+  failed?: number;
+  failures?: { ip_address: string; error: string }[];
 }
 
 export interface DiscoverySyncResult {
@@ -90,12 +115,14 @@ export interface DiscoverySyncResult {
   discovered_count?: number;
   discovered_hosts?: DiscoveredHost[];
   sync?: { added?: number; updated?: number; removed?: number };
+  ssh_enrichment?: SshEnrichmentSummary;
 }
 
 export interface DiscoveryScanResult {
   scanned_hosts?: number;
   discovered_count?: number;
   discovered_hosts?: DiscoveredHost[];
+  ssh_enrichment?: SshEnrichmentSummary;
 }
 
 export interface DiscoveryOptions {
@@ -105,6 +132,10 @@ export interface DiscoveryOptions {
   hostnamePrefix?: string;
   useSnmp?: boolean;
   useIcmp?: boolean;
+  /** Read model, serial, version and OS over SSH show version (default on). */
+  useSsh?: boolean;
+  /** The credential for SSH; null/omitted: the Plexus service credential. */
+  credentialId?: number | null;
   removeAbsent?: boolean;
 }
 
@@ -119,6 +150,14 @@ export interface ScanStreamEvent {
   scanned_hosts?: number;
   discovered_count?: number;
   sync?: DiscoverySyncResult['sync'];
+  ssh_enrichment?: SshEnrichmentSummary;
+}
+
+/** The credential discovery uses for SSH by default. */
+export interface DiscoverySshDefaults {
+  service_credential: boolean;
+  service_credential_id: number | null;
+  service_credential_name: string | null;
 }
 
 export interface SnmpTestResponse {
@@ -481,8 +520,17 @@ function discoveryBody(
     hostname_prefix: opts.hostnamePrefix,
     use_snmp: opts.useSnmp !== false,
     use_icmp: opts.useIcmp !== false,
+    use_ssh: opts.useSsh !== false,
+    credential_id: opts.credentialId ?? null,
     ...(includeRemoveAbsent ? { remove_absent: !!opts.removeAbsent } : {}),
   };
+}
+
+export function useDiscoverySshDefaults() {
+  return useQuery<DiscoverySshDefaults>({
+    queryKey: ['inventory', 'discovery', 'ssh-defaults'],
+    queryFn: () => apiRequest('/inventory/discovery/ssh-defaults'),
+  });
 }
 
 export function useScanInventoryGroup() {

@@ -398,7 +398,15 @@ async def delete_upgrade_campaign(campaign_id):
         await db.close()
 
 
-async def delete_upgrade_devices_by_campaign(campaign_id):
+async def delete_upgrade_devices_by_campaign(campaign_id, keep_ips=None):
+    """Delete a campaign's non-running devices, except those in ``keep_ips``.
+
+    Kept rows retain their per-phase status and event history (events
+    cascade-delete with the device row), so a campaign edit passes the IPs
+    still selected to avoid resetting work already done on them.
+    """
+    keep = sorted({ip for ip in (keep_ips or ()) if ip})
+    keep_clause = f" AND ip_address NOT IN ({', '.join('?' for _ in keep)})" if keep else ""
     db = await _dbcore.get_db()
     try:
         await db.execute(
@@ -407,8 +415,8 @@ async def delete_upgrade_devices_by_campaign(campaign_id):
             "AND COALESCE(prestage_status, 'pending') != 'running' "
             "AND COALESCE(transfer_status, 'pending') != 'running' "
             "AND COALESCE(activate_status, 'pending') != 'running' "
-            "AND COALESCE(verify_status, 'pending') != 'running'",
-            (campaign_id,),
+            "AND COALESCE(verify_status, 'pending') != 'running'" + keep_clause,
+            (campaign_id, *keep),
         )
         await db.commit()
         return True
@@ -593,6 +601,7 @@ async def update_upgrade_device(device_id, **kwargs):
             "phase",
             "phase_detail",
             "health_status",
+            "boot_mode",
             "prestage_status",
             "transfer_status",
             "activate_status",

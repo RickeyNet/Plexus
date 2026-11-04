@@ -1467,6 +1467,7 @@ CREATE TABLE IF NOT EXISTS upgrade_devices (
     phase           TEXT    NOT NULL DEFAULT 'pending',
     phase_detail    TEXT    NOT NULL DEFAULT '',
     health_status   TEXT    NOT NULL DEFAULT '',
+    boot_mode       TEXT    NOT NULL DEFAULT '',
     prestage_status TEXT    NOT NULL DEFAULT 'pending',
     transfer_status TEXT    NOT NULL DEFAULT 'pending',
     activate_status TEXT    NOT NULL DEFAULT 'pending',

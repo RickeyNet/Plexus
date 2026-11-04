@@ -67,7 +67,7 @@ export function PhaseConfirmModal({
     : phase === 'verify'
       ? 'Verify Upgrade'
       : phase === 'verify_prestage'
-        ? 'Re-Verify Prestage'
+        ? 'Check Status'
         : `Execute ${label}`;
 
   const body = schedule
@@ -77,7 +77,7 @@ export function PhaseConfirmModal({
       : phase === 'verify'
         ? `Connect to ${targetText} and check the running version against the target?`
         : phase === 'verify_prestage'
-          ? `Check install-add unpackaged artifacts on ${targetText}?`
+          ? `Connect to ${targetText} and update the checkmarks from what is on the switch: already on the target version, or the image fully transferred (MD5 matches the server copy) and expanded. Nothing is copied, installed or reloaded.`
           : `Run ${label} phase on ${targetText}?`;
 
   const confirmText = schedule

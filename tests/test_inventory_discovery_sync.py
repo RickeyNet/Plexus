@@ -411,9 +411,18 @@ async def test_run_discovery_sync_once_runs_profiles(monkeypatch):
         assert group_id == 9
         return {"id": 9, "name": "edge"}
 
-    async def fake_discover(_body, group_id=None):
+    service = {"id": 3, "name": "plexus-svc", "is_service": 1}
+
+    async def fake_service_credential():
+        return service
+
+    async def fake_discover(_body, group_id=None, *, credential=None):
         assert group_id == 9
+        # Unattended sync reads show version with the service credential.
+        assert credential is service
         return 2, [{"hostname": "edge-a", "ip_address": "10.9.0.10", "device_type": "unknown", "status": "online"}]
+
+    monkeypatch.setattr(inventory_module, "service_credential", fake_service_credential)
 
     async def fake_sync_group_hosts(group_id, discovered_hosts, remove_absent=False):
         assert group_id == 9
