@@ -268,6 +268,13 @@ since the trace applies the rules after destination NAT, a rule whose
 destination is the original address of a destination NAT rule also matches
 the translated address.
 
+A flow that leaves the Cato Cloud for the internet takes the source address
+the account's **Network Rules** give it (see
+[Cato network rules and the egress address](#cato-network-rules-and-the-egress-address)):
+an allocated IP, several candidate allocated IPs, or an unknown public
+address. The private address the flow came in with never continues past
+the Cato Cloud.
+
 NAT is applied before the policy-based VPN selectors are matched, as on an
 ASA or FTD: the selectors see the translated source. A flow that the
 interface address hides no longer matches the protected networks and leaves
@@ -309,6 +316,123 @@ a flow from the internet reaches the destination's device on its uplink,
 where its NAT and inbound rules decide. Documentation ranges such as
 198.51.100.0/24 count as public here, since the samples use them that way.
 
+The public address of a cloud instance (an EC2 instance's public or Elastic
+IP, an Azure virtual machine's public IP, a GCP instance's external IP, as
+discovery collected them on the instance's network interfaces) ends at the
+instance's VPC or VNet. A flow to it crosses the internet to that network
+(**Crosses the internet to sql-public-1 (203.0.113.60) in edge-security-vpc**),
+enters through the internet gateway the VPC's routes lead to, is delivered
+to the private address behind the public one (a NAT item at the gateway
+says which), and meets the subnet's network ACL and the instance's security
+groups or network security groups there. Those are matched against the
+source the flow arrived with: the address it left its own network with,
+never a private address from before a NAT. The replies leave from the
+public address again. The address of an instance that is a device the
+trace follows itself (a vMX, an FTDv) is left to that device's own data.
+
+### Cato network rules and the egress address
+
+The Cato Cloud's internet egress follows the account's Network Rules
+(`policy.wanNetwork`, read with the other policies). At the Cato Cloud hop
+the trace walks the enabled **INTERNET** rules in order and shows:
+
+- the first rule that matches the flow on addresses (source: a site, range,
+  user, users group or group, resolved as the firewall rules are;
+  destination: addresses; application field: global IP ranges, groups of
+  addresses, custom services, custom applications defined by destination IP
+  or port), with an exception of the rule that matches excluding it. Its
+  route decides the source the flow leaves Cato with: **NAT** gives the
+  allocated IP (several when the rule names several; each is then checked
+  where the address matters, and a security group that admits only some of
+  them is *partial*, naming which); **VIA**, **OPTIMIZED** and **NONE** leave
+  behind the shared address of a PoP, which Cato does not report, so the
+  source is an unknown public address; **BACKHAUL** leaves through a site's
+  own internet connection, which is not traced (*unknown*). With no rule
+  matching, Cato's default is the PoP the flow is connected to
+- every enabled rule ahead of it that matches **only by name**: a domain, an
+  FQDN, an application, an app category, a custom category (Cato's API does
+  not list a custom category's contents) or a custom application defined by
+  domain. Cato tells those from the hostname it sees (its DNS, the TLS SNI)
+  or from application identification, and a connection made to the bare IP
+  gives it no name. The item says so (**Rule 2 Geoblocked apps egress matches only
+  if Cato identifies the traffic by name ... A connection made to the bare
+  IP 203.0.113.60 falls to Rule 4 Internet Traffic - Predefined**) and the
+  route that rule would take. The trace follows the bare-IP path
+- a rule ahead of it that may apply because it names something Plexus
+  cannot resolve (a users group whose members were not read, a custom
+  application whose definition was not collected) is *unknown*
+
+An allocated IP's address is read from the account's allocated IP list
+(`popLocations.allocatedIpList`), else from the allocated IP's name
+("NAT IP Ashburn - 192.0.2.101", and the item says so). When the Network
+Rules were not collected, were read with the reduced query, or the policy
+is off, the rule item is *unknown* and the source is an unknown public
+address.
+
+Where an unknown public address meets a security group, network security
+group, VPC firewall rule or network ACL, only a rule for every address
+decides: one that admits part of the public address space (a partner's
+allow list) is *unknown*, and the item lists the rules, so the mismatch is
+visible (**The flow leaves Cato from the shared address of its PoP, which
+Cato does not report, so whether this lets it in is not known. Only part of
+it is allowed: sql-public: tcp 1433 from 192.0.2.101/32; ...**). A rule for
+private ranges never matches it. The replies of such a flow are not traced:
+the address they go back to is not known. With a known allocated IP, the
+replies go back to the Cato Cloud, which translates them to the original
+source.
+
+Several candidate addresses are carried to a cloud's security groups and
+network ACLs; any other device on the way (a Meraki or FTD inbound rule
+behind a public address) sees the first of them.
+
+#### The egress check (Monitoring > Availability)
+
+The same evaluation also runs on its own, without a trace, as the **Cato
+egress vs cloud allow-lists** check
+(`netcontrol/integrations/cato/egress_check.py`,
+`netcontrol/routes/cato_egress_check.py`). It runs on the server after every
+stored Cato collection and every AWS, Azure or GCP discovery (scheduled or
+manual, so hourly by default), and on demand (**Run Check** on Monitoring >
+Availability, or `POST /api/monitoring/cato-egress/run`). For the latest
+snapshot of every Cato account it:
+
+1. finds every collected instance with a public address (an EC2 public or
+   Elastic IP, an Azure VM's public IP, a GCP external IP) and the inbound
+   allow rules of its filters (security groups, NSGs of its subnet and NIC,
+   VPC firewall rules) whose source names one of the account's allocated IPs,
+   exactly or by a covering range no broader than /16 (a rule for every
+   address, or a /8, says nothing about Cato and is left out);
+2. evaluates, with the network rules above, a flow to that public address on
+   the rule's protocol and ports from every source the Cato Cloud routes
+   (each site range and each connected remote user);
+3. checks every allocated IP a matching NAT rule leaves with against the
+   instance's filters (network ACL and security groups, NSGs, or firewall
+   rules), the same way a trace does.
+
+One finding is kept per (Cato account, instance, public address, ports, cloud
+rule), with the worst result over the sources and the sources of each result
+listed:
+
+| Finding | Severity | When |
+|---|---|---|
+| Reachable only by hostname | warning | The bare-IP flow falls to a NONE / VIA / OPTIMIZED / BACKHAUL rule (or none) while a rule ahead of it NATs to the allowed IPs but matches only by name. The message names both rules, the instance, address and port, and the cloud rule. |
+| Allocated IP mismatch | warning | The rule that matches NATs to allocated IPs the instance's filters do not let in. |
+| No Cato rule egresses via the allowed IPs | warning | No rule that applies NATs to the allowed IPs. |
+| Undetermined | info | A rule that NATs to the allowed IPs may apply but names something that cannot be resolved, or a NAT rule's address could not be read. |
+| Account notes | info | Network rules not collected (a snapshot taken before they were read), read with the reduced query or turned off; allocated IP list not collected (the addresses the NAT rules name are used instead); no Cato source; no cloud account collected. |
+
+A source whose flow leaves from an allowed IP raises nothing. Findings are
+stored in `cato_egress_findings` (migration 0078): a run updates the ones it
+reports again, resolves the ones it no longer reports (unless that cloud
+could not be read this run) and reopens a resolved one that comes back.
+A warning alerts once while it stays open: as a `cato_egress` monitoring
+alert when the instance's public or private address is an inventory host
+(deduplicated per finding; acknowledged as `auto-resolved` when the
+finding resolves or turns informational), otherwise straight to the
+notification channels. `GET /api/monitoring/cato-egress/findings`
+(`include_resolved`, `limit`) lists them; both endpoints need the
+`monitoring` feature (`monitoring.write` to run).
+
 ## What each source contributes
 
 | Source | Traced | Not collected |
@@ -316,7 +440,7 @@ where its NAT and inbound rules decide. Documentation ranges such as
 | Meraki | Layer 3 firewall rules, inbound firewall rules, site-to-site VPN firewall rules, 1:1 NAT, port forwarding, 1:Many NAT, VPN subnet translation, static and AutoVPN routes, routes to non-Meraki VPN peers, switch ACLs and SVI routes | Layer 7 firewall rules, group policies |
 | Cisco FMC | Prefilter rules, access control rules, NAT rules, connected and static routes, site-to-site VPN protected networks | Routes learned by BGP, OSPF or EIGRP, access control rules beyond the first 1000 |
 | Palo Alto Panorama | Security rules in the order each firewall applies them (shared, device group and ancestors, pre then post, the intrazone and interzone default rules) with their zones, addresses and services, NAT rules, connected routes, the firewall's routing table (static, BGP, OSPF) or else its configured static routes, IPsec tunnels and their state | Rules configured on the firewall itself, App-ID (a rule with applications or `application-default` is unknown when it matches), users, URL categories, FQDNs and dynamic address groups, routes learned by BGP or OSPF when the routing table was not read; see [panorama-topology.md](panorama-topology.md#search-and-path-mode) |
-| Cato | The hops: Socket or remote user, PoP, Cato Cloud, PoP, Socket; the WAN firewall rules for a destination a site's range or a user's address covers (WAN traffic) and the internet firewall rules for any other destination, a private one included (internet traffic), applied once at the PoP the flow enters by; a remote user's Split Tunnel rule (the first enabled one that matches the user, by name or users group membership, else all traffic to Cato): the global IP ranges of a *route all to Cato except* rule leave the device directly and the rest goes to the PoP, the global IP ranges of a *route only selected* rule go to the PoP and the rest leaves the device directly; a rule whose source network (any managed or unmanaged network) the configuration cannot decide is settled by the Split Tunnel configuration the user's Cato Client reported for the device connected now (its latest Client Connectivity Policy event): *Disabled* is all traffic to Cato, *Admin Defined* or *User Defined* decides the rule when only one rule that may apply has that mode; a user in Office Mode is behind the site, where the policy does not apply | Routes learned by BGP; rule objects Plexus cannot turn into addresses (groups and users groups whose members were not read in full or include a host or VLAN, containers, applications, categories, countries) make a rule that matches *unknown*; a group or users group read in full is resolved to its members' addresses (a users group to its connected members' VPN addresses); a user's default route is *unknown* when its Split Tunnel rule names domains, FQDNs, applications or a global IP range that was not read, covers web traffic only, is user-defined, when a rule ahead of it may apply (users groups whose members were not read in full, managed networks with no Client report for the current device or a report that fits several rules, an OS or country Cato did not report), or when the policy was not collected; the network of the user's device (its local subnet, and its local address unless the Meraki client table places it; see [A remote user's direct traffic](#a-remote-users-direct-traffic)); see [cato-topology.md](cato-topology.md#search-and-path-mode) |
+| Cato | The hops: Socket or remote user, PoP, Cato Cloud, PoP, Socket; the WAN firewall rules for a destination a site's range or a user's address covers (WAN traffic) and the internet firewall rules for any other destination, a private one included (internet traffic), applied once at the PoP the flow enters by; a remote user's Split Tunnel rule (the first enabled one that matches the user, by name or users group membership, else all traffic to Cato): the global IP ranges of a *route all to Cato except* rule leave the device directly and the rest goes to the PoP, the global IP ranges of a *route only selected* rule go to the PoP and the rest leaves the device directly; a rule whose source network (any managed or unmanaged network) the configuration cannot decide is settled by the Split Tunnel configuration the user's Cato Client reported for the device connected now (its latest Client Connectivity Policy event): *Disabled* is all traffic to Cato, *Admin Defined* or *User Defined* decides the rule when only one rule that may apply has that mode; a user in Office Mode is behind the site, where the policy does not apply; at the Cato Cloud, the INTERNET Network Rules: the first rule that matches on addresses, its route and the allocated IP the flow leaves from, with the rules ahead of it that match only by name listed ([details](#cato-network-rules-and-the-egress-address)) | The shared public address of a PoP (a flow leaving behind one has an unknown public source), the contents of custom categories, the internet path of a backhauled flow; routes learned by BGP; rule objects Plexus cannot turn into addresses (groups and users groups whose members were not read in full or include a host or VLAN, containers, applications, categories, countries) make a rule that matches *unknown*; a group or users group read in full is resolved to its members' addresses (a users group to its connected members' VPN addresses); a user's default route is *unknown* when its Split Tunnel rule names domains, FQDNs, applications or a global IP range that was not read, covers web traffic only, is user-defined, when a rule ahead of it may apply (users groups whose members were not read in full, managed networks with no Client report for the current device or a report that fits several rules, an OS or country Cato did not report), or when the policy was not collected; the network of the user's device (its local subnet, and its local address unless the Meraki client table places it; see [A remote user's direct traffic](#a-remote-users-direct-traffic)); see [cato-topology.md](cato-topology.md#search-and-path-mode) |
 | Appgate SDP | The hops: user, Gateway. Each Gateway applies the **Entitlements** of its site (sources the tunnel addresses of the connected users that hold each one, default deny) and its **Allowed destinations**, routes each user's tunnel address back over the tunnel, and translates the client pool when the site uses SNAT; a user routes what its entitlements cover to the Gateway that grants them and has no other route (split tunnel) unless a site is its default gateway | Entitlement hosts that are names (`dns://`, `aws://`...), HTTP method rules and, without the per-user access details, which users hold an entitlement; see [appgate-topology.md](appgate-topology.md#search-and-path-mode) |
 | Inventory devices | Read from the latest route capture and configuration backup, which **Sources → All other devices (SSH) → Collect**, the monitoring poll (routes) or a Config Backups policy (configuration) write; see [below](#inventory-devices-and-configuration-backups). The routes of the latest SSH route table capture, with every VRF's table where the platform lists them (Cisco IOS, IOS-XE, NX-OS, IOS-XR, ASA and FTD, Arista EOS, Juniper Junos, Fortinet FortiOS, Aruba AOS-CX and AOS-Switch). From the latest successful [configuration backup](#inventory-devices-and-configuration-backups) of those platforms: the access lists applied to each interface, in and out (switches and routers, Junos filters), the stateful rule sets of a firewall (ASA / FTD access groups and security levels, SRX security policies, FortiGate firewall policies), their NAT rules, the interface addresses, secondaries, zones, VRFs and HSRP / VRRP / GLBP / VARP / active-gateway addresses, and the connected and static routes of the VRFs the capture lacks | Access lists of a device without a successful configuration backup, or of a platform Plexus does not read (PAN-OS: trace it through a Panorama); objects, object groups, address books, applications, services and port names the configuration does not define, FQDN, geography and wildcard objects, wildcard masks that are not a prefix, time ranges and schedules, DSCP, TCP flag and ICMP type matches, users, identities and security groups, negated matches (a rule that uses one is *unknown* when it matches); IPv6 access lists and policies, port and MAC access lists, VLAN access maps, classifier and traffic policies, policy-based routes, zone-based firewall policies, inspection and application services, VPN tunnels, other VDOMs and contexts; without a route capture, the routes learned by the routing protocols the configuration runs |
 | AWS | Route tables, transit gateways, VPC peerings, network ACLs, security groups, as in [the AWS check of a path](aws-topology.md#the-aws-check-of-a-path) | See that section |
@@ -327,7 +451,7 @@ Whether what is not collected makes a hop *unknown* or is a note is
 explained under [What is not collected](#what-is-not-collected). A Cato
 trace between sites is decided by the WAN firewall at the PoP the flow
 enters by, and is *unknown* only where a rule that names something Plexus
-cannot evaluate (a users group whose members were not read, an application) matches. The other Cato policies (WAN network, Socket LAN, TLS inspection, client connectivity and the rest) are listed in the node details, not applied in the trace. A trace from a
+cannot evaluate (a users group whose members were not read, an application) matches. A flow to the internet leaves the Cato Cloud as its Network Rules decide (see [Cato network rules and the egress address](#cato-network-rules-and-the-egress-address)). The other Cato policies (the WAN rules of the Network Rules, Socket LAN, TLS inspection, client connectivity and the rest) are listed in the node details, not applied in the trace. A trace from a
 Cato remote user first follows the user's Split Tunnel rule, which decides
 whether the flow enters Cato at all.
 

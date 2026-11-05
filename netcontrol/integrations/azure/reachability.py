@@ -64,6 +64,8 @@ from netcontrol.integrations.aws.reachability import (
     _net,
     _show,
     _traffic_cover,
+    is_public_net,
+    peer_cidr_cover,
 )
 from netcontrol.integrations.azure.normalize import _meta, _rid, _short, _text, _value, next_hop_name
 from netcontrol.integrations.pathtrace import ports as port_sets
@@ -89,6 +91,12 @@ def _rule_direction(rule: dict) -> str:
 
 def _rule_action(rule: dict) -> str:
     return _value(rule.get("action")).lower()
+
+
+def _nsg_rule_name(rule: dict) -> str:
+    label = _text(rule.get("rule_name")) or _text(rule.get("rule_uid"))
+    priority = rule.get("priority")
+    return f"rule {label} ({priority})" if priority is not None else f"rule {label}"
 
 
 def _ports_of(expression: Any) -> list[tuple[int | None, int | None]]:
@@ -460,7 +468,7 @@ class Reachability:
             if in_azure:
                 step(BLOCKED, "route", where, f"{via} sends it to the internet, {outside}.")
                 return {"kind": "stop"}
-            if not net.is_global:
+            if not (is_public_net(net) or target.get("public_unknown")):
                 down = self._down_connection(vnet_id, net)
                 if down is not None:
                     gateway, conn = down
@@ -739,11 +747,12 @@ class Reachability:
             return self._vnet_tag(vnet_id, place, local)
         if lowered == "internet":
             # The public address space outside the VNet.
-            return _FULL if place["subnet"] is None and place["net"].is_global else _NONE
+            public = place.get("public_unknown") or is_public_net(place["net"])
+            return _FULL if place["subnet"] is None and public else _NONE
         if lowered == "azureloadbalancer":
             return _FULL if _show(place["net"]) == _LOAD_BALANCER_PROBE else _NONE
         if _net(item) is not None:
-            return _cidr_cover(item, place["net"])
+            return peer_cidr_cover(item, place)
         # A service tag (Storage, Sql...) or an application security group: entries not collected.
         return _PART
 
@@ -785,11 +794,7 @@ class Reachability:
             if cover == _PART:
                 partly.append(rule)
 
-        def name(rule: dict) -> str:
-            label = _text(rule.get("rule_name")) or _text(rule.get("rule_uid"))
-            priority = rule.get("priority")
-            return f"rule {label} ({priority})" if priority is not None else f"rule {label}"
-
+        name = _nsg_rule_name
         own, far = (place, peer) if outbound else (peer, place)
 
         def why(rule: dict) -> str:
@@ -843,14 +848,10 @@ class Reachability:
             return {**result, "status": OK, "text": f"Allowed by {name(decided)}.{why(decided)}"}
         return {**result, "status": BLOCKED, "text": f"Denied by {name(decided)}.{why(decided)}"}
 
-    def _security_groups(
-        self, place: dict, peer: dict, outbound: bool, protocol: str, ports: tuple[int, int] | None
-    ) -> list[dict]:
-        """The network security groups traffic passes at ``place``: the
-        subnet's and, for a virtual machine, its network interface's."""
-        if place["subnet"] is None:
-            return []
-        way = "outbound" if outbound else "inbound"
+    def _nsg_levels(self, place: dict) -> list[tuple[dict | None, str]]:
+        """The network security groups at ``place`` (``None``: none applied)
+        with the level each is on: the subnet's and, for a virtual machine,
+        its network interface's, in the order inbound traffic meets them."""
         subnet = place["subnet"]
         levels: list[tuple[dict | None, str]] = [(self._nsg_of_subnet.get(subnet["rid"]), self._subnet_name(subnet))]
         instance, interface = place["instance"], place["interface"]
@@ -861,6 +862,18 @@ class Reachability:
             nic_id = _text((nic or {}).get("id"))
             nic_name = _text((nic or {}).get("name")) or _short(nic_id)
             levels.append((self._nsg_of_nic.get(nic_id), f"interface {nic_name} of {self._owner_name(instance)}"))
+        return levels
+
+    def _security_groups(
+        self, place: dict, peer: dict, outbound: bool, protocol: str, ports: tuple[int, int] | None
+    ) -> list[dict]:
+        """The network security groups traffic passes at ``place``: the
+        subnet's and, for a virtual machine, its network interface's."""
+        if place["subnet"] is None:
+            return []
+        way = "outbound" if outbound else "inbound"
+        instance = place["instance"]
+        levels = self._nsg_levels(place)
         if outbound:
             levels.reverse()  # leaving: the interface's group first, then the subnet's
         steps: list[dict] = []
@@ -911,11 +924,58 @@ class Reachability:
         """Traffic from outside Azure towards ``target`` through the gateway ``left`` names."""
         self._enter(left, target, direction, initiating, steps)
 
+    def address_owners(self) -> dict[tuple[str, str], tuple[dict, dict | None]]:
+        """``(VNet, private address) -> (virtual machine or firewall,
+        interface)``: the index ``locate`` reads, for the public addresses of
+        the virtual machines (``pathtrace.cloud.public_addresses``)."""
+        return self._address_owner
+
     def nsg(self, place: dict, peer: dict, outbound: bool, protocol: str, ports: tuple[int, int] | None) -> list[dict]:
         """The network security group steps at ``place`` (subnet, then interface)."""
         return self._security_groups(place, peer, outbound, protocol, ports)
 
     security_groups = nsg
+
+    def inbound_rules(self, place: dict) -> list[dict]:
+        """The inbound rules of the network security groups at ``place``
+        (subnet, then interface) whose destination takes it in, for a check
+        that looks for the ones naming given sources: ``{"filter", "rule",
+        "rule_id", "action", "sources", "traffic"}``, ``sources`` the source
+        selector's items and ``traffic`` its ``(protocol, low port, high
+        port)`` ranges (``None`` ports: every port)."""
+        if place["subnet"] is None:
+            return []
+        found: list[dict] = []
+        for nsg, level in self._nsg_levels(place):
+            if nsg is None:
+                continue
+            name = f"network security group {_text(nsg.get('name')) or _short(nsg['rid'])} on {level}"
+            for rule in nsg["meta"].get("policy_rules") or []:
+                if not isinstance(rule, dict) or _rule_direction(rule) != "inbound":
+                    continue
+                if (
+                    self._selector_cover(rule.get("destination_selector"), place, place["vnet_id"], place["subnet"])
+                    == _NONE
+                ):
+                    continue
+                found.append(
+                    {
+                        "filter": name,
+                        "rule": _nsg_rule_name(rule),
+                        "rule_id": f"{nsg['rid']}:{_text(rule.get('rule_uid')) or _text(rule.get('rule_name'))}",
+                        "action": _rule_action(rule),
+                        "sources": [s.strip() for s in _text(rule.get("source_selector")).split(",") if s.strip()],
+                        "traffic": [
+                            (_rule_protocol(rule), low, high) for low, high in _ports_of(rule.get("port_expression"))
+                        ],
+                    }
+                )
+        return found
+
+    def inbound_filters(self, place: dict, peer: dict, protocol: str, ports: tuple[int, int] | None) -> list[dict]:
+        """The filter steps traffic from ``peer`` meets entering ``place``:
+        the network security groups of its subnet and interface."""
+        return self._security_groups(place, peer, False, protocol, ports)
 
     # ── The check ──────────────────────────────────────────────────────────
 

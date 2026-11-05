@@ -144,7 +144,12 @@ own.
   10.1.0.6 (virtual machine vmx-hub-1)*, or the peering or gateway
   connection it is behind.
   The interface's group is checked when an end is typed as the **IP address
-  of a virtual machine**.
+  of a virtual machine**. In a path trace across the map, a flow to a
+  virtual machine's public IP is delivered to its private address, and both
+  groups are matched against the address the flow left its own network with
+  (a Cato allocated IP, or an unknown public address when Cato leaves from a
+  PoP's shared one: only a rule for every address decides it); see
+  [path-trace.md](path-trace.md#ends-clouds-and-the-internet).
 
 *Check incomplete* means one of:
 

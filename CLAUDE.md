@@ -91,6 +91,24 @@
   the reuse rule and name the shared modules relevant to its scope, and the
   reviewer checks worker output for duplicated code before accepting it.
 
+## No real environment data in the repo
+
+- **Never write live data into repository files.** Code, tests, samples,
+  fixtures, docs, comments and commit messages must not contain anything
+  read from the user's real environment: public or private IPs, hostnames,
+  FQDNs, server/instance/site/user names, emails, account, tenant or
+  resource IDs (AWS `i-`/`sg-`/`vpc-`, Azure, Cato, Meraki), rule or policy
+  names, or company names. This applies even when quoting a live trace or
+  query result as a "real example".
+- **Use invented data instead.** Samples and examples use made-up names and
+  the documentation ranges (`192.0.2.0/24`, `198.51.100.0/24`,
+  `203.0.113.0/24`, `2001:db8::/32`, `example.com`). Live data may be read
+  to diagnose an issue, but it stays in the conversation and the scratchpad.
+- **Check before reporting.** After a change, grep the changed and new
+  files for the live identifiers seen in the session and replace any hits.
+- **Workers inherit this rule.** Every delegated worker prompt that shares
+  live data for context must say that none of it may appear in the repo.
+
 ## Vendor monitoring parity
 
 - **One bar for every vendor.** Availability/SLA and software/CVE monitoring

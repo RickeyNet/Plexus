@@ -43,6 +43,7 @@ import re
 from typing import Any
 
 from netcontrol.integrations.aws.normalize import _meta, _rid, _text
+from netcontrol.integrations.meraki.forwarding import is_public_address
 from netcontrol.integrations.pathtrace import ports as port_sets
 
 OK, BLOCKED, PARTIAL, UNKNOWN, INFO = "ok", "blocked", "partial", "unknown", "info"
@@ -85,6 +86,31 @@ def _cidr_cover(rule_cidr: Any, net: _Network) -> int:
     return _PART if rule.overlaps(net) else _NONE
 
 
+def is_public_net(net: _Network) -> bool:
+    """Whether every address of ``net`` is reached over the internet: global,
+    or in the documentation ranges that stand in for public addresses in
+    samples and labs (``forwarding.is_public_address``)."""
+    return is_public_address(net.network_address) and is_public_address(net.broadcast_address)
+
+
+def peer_cidr_cover(rule_cidr: Any, peer: dict) -> int:
+    """How much of the far end ``peer`` (a place of ``locate``) a rule
+    written for ``rule_cidr`` applies to. A peer that stands for a public
+    address nobody reported (``peer["public_unknown"]``: a flow that left
+    another network behind an address it does not report; its ``net`` is
+    every address) is covered in full only by a rule for every address, not
+    at all by a rule for private addresses, and in part by any other: which
+    public address it is decides."""
+    if not peer.get("public_unknown"):
+        return _cidr_cover(rule_cidr, peer["net"])
+    rule = _net(rule_cidr)
+    if rule is None or rule.version != peer["net"].version:
+        return _NONE
+    if rule.prefixlen == 0:
+        return _FULL
+    return _PART if is_public_net(rule) else _NONE
+
+
 def _traffic_cover(
     rule_protocol: str, low: int | None, high: int | None, protocol: str, ports: tuple[int, int] | None
 ) -> int:
@@ -120,6 +146,12 @@ def _port_range(expression: Any) -> tuple[int | None, int | None]:
     if not match:
         return None, None
     return int(match.group(1)), int(match.group(2) or match.group(1))
+
+
+def _traffic_text(rule: dict) -> str:
+    """What a security group rule lets through: ``all traffic`` or ``tcp 443``."""
+    protocol = _text(rule.get("protocol"))
+    return "all traffic" if protocol == "all" else f"{protocol} {_text(rule.get('port_expression'))}"
 
 
 def _int(value: Any) -> int | None:
@@ -382,7 +414,7 @@ class Reachability:
             if in_aws:
                 step(BLOCKED, "route", where, f"{via} sends it to the {gateway}, {outside}.")
                 return {"kind": "stop"}
-            if not net.is_global:
+            if not (is_public_net(net) or target.get("public_unknown")):
                 step(BLOCKED, "route", where, f"{via} sends {_show(net)}, a private address, to the {gateway}.")
                 return {"kind": "stop"}
             instance = origin["instance"]
@@ -617,7 +649,7 @@ class Reachability:
         partly: list[dict] = []
         for entry in entries:
             cover = min(
-                _cidr_cover(entry.get("cidr"), peer["net"]),
+                peer_cidr_cover(entry.get("cidr"), peer),
                 _traffic_cover(
                     _text(entry.get("protocol")),
                     _int(entry.get("port_from")),
@@ -659,7 +691,7 @@ class Reachability:
             # is the client's port, not the service's, so a reply has no set.
             matches = [
                 port_sets.Match(
-                    cover=_cidr_cover(entry.get("cidr"), peer["net"]),
+                    cover=peer_cidr_cover(entry.get("cidr"), peer),
                     protocol=_text(entry.get("protocol")),
                     ports=(_int(entry.get("port_from")), _int(entry.get("port_to"))),
                     action=_text(entry.get("action")),
@@ -701,7 +733,7 @@ class Reachability:
             elif item.startswith("prefix:"):
                 cover = _PART  # the prefix list's entries are not collected
             else:
-                cover = _cidr_cover(item, peer["net"])
+                cover = peer_cidr_cover(item, peer)
             best = max(best, cover)
         return best
 
@@ -750,11 +782,10 @@ class Reachability:
                 )
                 if cover == _NONE:
                     continue
-                rule_protocol = _text(rule.get("protocol"))
-                what = (
-                    "all traffic" if rule_protocol == "all" else f"{rule_protocol} {_text(rule.get('port_expression'))}"
+                shown = (
+                    f"{_text(group.get('name')) or group['rid']}: {_traffic_text(rule)} "
+                    f"{'to' if outbound else 'from'} {selector}"
                 )
-                shown = f"{_text(group.get('name')) or group['rid']}: {what} {'to' if outbound else 'from'} {selector}"
                 (allowing if cover == _FULL else partly).append(shown)
         names = ", ".join(_text(g.get("name")) or g["rid"] for g in groups)
         asked = port_sets.Asked(protocol, ports)
@@ -793,6 +824,12 @@ class Reachability:
         """Traffic from outside AWS towards ``target`` through the gateway ``left`` names."""
         self._enter(left, target, direction, initiating, steps)
 
+    def address_owners(self) -> dict[tuple[str, str], tuple[dict, dict | None]]:
+        """``(VPC, private address) -> (instance, interface)``: the index
+        ``locate`` reads, for the public addresses of the instances
+        (``pathtrace.cloud.public_addresses``)."""
+        return self._address_owner
+
     def acl(
         self, place: dict, peer: dict, egress: bool, protocol: str, ports: tuple[int, int] | None, direction: str
     ) -> dict:
@@ -804,6 +841,42 @@ class Reachability:
     ) -> dict | None:
         """The security group step of the instance at ``place`` (``None`` outside AWS)."""
         return self._security_groups(place, peer, outbound, protocol, ports)
+
+    def inbound_rules(self, place: dict) -> list[dict]:
+        """The inbound rules of the security groups of the instance at
+        ``place``, for a check that looks for the ones naming given sources:
+        ``{"filter", "rule", "rule_id", "action", "sources", "traffic"}``,
+        ``sources`` the selector's items and ``traffic`` its ``(protocol,
+        low port, high port)`` (``None`` ports: every port)."""
+        if place.get("instance") is None:
+            return []
+        found: list[dict] = []
+        for group in self._groups_of(place)[0]:
+            name = f"security group {_text(group.get('name')) or group['rid']} ({group['rid']})"
+            for index, rule in enumerate(group["meta"].get("policy_rules") or []):
+                if not isinstance(rule, dict) or _text(rule.get("direction")) != "inbound":
+                    continue
+                selector = _text(rule.get("source_selector"))
+                found.append(
+                    {
+                        "filter": name,
+                        "rule": f"{_traffic_text(rule)} from {selector}",
+                        "rule_id": _text(rule.get("rule_uid")) or f"{group['rid']}:inbound:{index}",
+                        "action": _text(rule.get("action")) or "allow",
+                        "sources": [s.strip() for s in selector.split(",") if s.strip()],
+                        "traffic": [(_text(rule.get("protocol")), *_port_range(rule.get("port_expression")))],
+                    }
+                )
+        return found
+
+    def inbound_filters(self, place: dict, peer: dict, protocol: str, ports: tuple[int, int] | None) -> list[dict]:
+        """The filter steps traffic from ``peer`` meets entering ``place``:
+        its subnet's network ACL and its instance's security groups."""
+        if place["subnet"] is None:
+            return []
+        steps = [self._acl(place, peer, False, protocol, ports, FORWARD)]
+        group = self._security_groups(place, peer, False, protocol, ports)
+        return [*steps, group] if group is not None else steps
 
     # ── The check ──────────────────────────────────────────────────────────
 

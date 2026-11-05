@@ -39,6 +39,8 @@ MODULES = (
     "netcontrol/integrations/azure/__init__.py",
     "netcontrol/integrations/azure/normalize.py",
     "netcontrol/integrations/azure/reachability.py",
+    "netcontrol/integrations/cato/__init__.py",
+    "netcontrol/integrations/cato/network_rules.py",
     "netcontrol/integrations/gcp/__init__.py",
     "netcontrol/integrations/gcp/normalize.py",
     "netcontrol/integrations/gcp/reachability.py",

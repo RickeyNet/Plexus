@@ -36,6 +36,7 @@ __all__ = [
     "get_monitoring_alert",
     "acknowledge_monitoring_alert",
     "delete_old_monitoring_alerts",
+    "resolve_monitoring_alerts",
     "create_route_snapshot",
     "get_route_snapshots",
     "get_latest_route_snapshot",
@@ -515,6 +516,25 @@ async def acknowledge_monitoring_alert(
             (acknowledged_by, alert_id),
         )
         await db.commit()
+    finally:
+        await db.close()
+
+
+async def resolve_monitoring_alerts(dedup_key: str, resolved_by: str = "auto-resolved") -> int:
+    """Acknowledge the open alerts with ``dedup_key`` as ``resolved_by``: the
+    condition that raised them has cleared. Returns how many were open."""
+    if not dedup_key:
+        return 0
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute(
+            """UPDATE monitoring_alerts
+               SET acknowledged = 1, acknowledged_by = ?, acknowledged_at = datetime('now')
+               WHERE dedup_key = ? AND acknowledged = 0""",
+            (resolved_by, dedup_key),
+        )
+        await db.commit()
+        return cursor.rowcount or 0
     finally:
         await db.close()
 

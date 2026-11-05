@@ -2953,6 +2953,7 @@ def rows_to_list(rows) -> list[dict]:
 from routes.db.audit import *  # noqa: E402,F403
 from routes.db.baselines import *  # noqa: E402,F403
 from routes.db.billing import *  # noqa: E402,F403
+from routes.db.cato_egress import *  # noqa: E402,F403
 from routes.db.cloud import *  # noqa: E402,F403
 from routes.db.credentials import *  # noqa: E402,F403
 from routes.db.flows import *  # noqa: E402,F403
