@@ -61,6 +61,36 @@ platform.
 | Arista EOS | SNMP/SSH; SSH `show version` at inventory discovery / sync | Manual / import | Manual | |
 | Fortinet FortiOS | SNMP/SSH | Manual / import | Manual | Candidate: FortiGuard PSIRT feed. Discovery's SSH `show version` does not read FortiOS (`get system status`): gap. |
 
+## Internet egress and cloud ingress (path trace)
+
+How a flow that leaves one vendor to the internet is checked where it lands
+in another (`netcontrol/integrations/pathtrace`, see `docs/path-trace.md`,
+"Cato network rules and the egress address").
+
+| Vendor | Egress address of a flow to the internet | Public address of a resource as a trace destination | Filtering checked against the post-NAT source | Notes |
+|---|---|---|---|---|
+| Cato Networks | Yes: INTERNET network rules (`policy.wanNetwork`) evaluated at the Cato Cloud; NAT gives the allocated IP (`popLocations.allocatedIpList`, else the allocated IP's name), several candidates checked each; VIA / OPTIMIZED / NONE give an unknown public address (a PoP's shared address is not reported); rules that match only by name are listed | n/a | n/a | Custom category contents are not in the API (reported as not collected); BACKHAUL egress is not traced past the site. |
+| Cisco Meraki | Partial: uplink NAT when the deployment mode is collected | Yes: 1:1 NAT, port forwarding | Yes (inbound rules) | |
+| AWS | n/a | Yes: EC2 instance public / Elastic IP on its interfaces, delivered to the private address at the internet gateway | Yes: network ACL and security groups; an unknown public source is unknown unless a rule allows every address | RDS, load balancers and other non-instance public endpoints are not collected (gap). |
+| Azure | n/a | Yes: VM public IP on its NIC | Yes: subnet and NIC network security groups | Load balancers, application gateways and Azure Firewall DNAT rules are not collected (gap). |
+| GCP | n/a | Yes: instance external IP | Yes: VPC firewall rules | Load balancers are not collected (gap). |
+
+### Cato egress vs cloud allow-lists (scheduled check)
+
+The same evaluation run on the server after every Cato collection and cloud
+discovery, and on demand: cloud filter rules that admit a Cato account's
+allocated IPs, checked against the network rule a flow from every Cato site
+range and remote user to the protected public address matches. Findings are
+persisted (`cato_egress_findings`) and warnings alert (monitoring alert on a
+matched inventory host, else the notification channels); see
+`docs/path-trace.md`, "The egress check".
+
+| Cloud | Rules read | Resources checked | Status | Notes |
+|---|---|---|---|---|
+| AWS | Security group inbound rules (CIDR sources); admission through network ACL + security groups | EC2 instances with a public or Elastic IP | Yes | RDS, load balancers: not collected (gap). Prefix-list and security-group sources are not Cato addresses and are skipped. |
+| Azure | Subnet and NIC NSG inbound rules (CIDR sources, destination covering the VM) | VMs with a public IP | Yes | Azure Firewall DNAT, load balancers, application gateways: not collected (gap). Service tags are skipped. |
+| GCP | VPC firewall ingress rules that target the instance (source ranges) | Instances with an external IP | Yes | Hierarchical / network firewall policies: not collected (an evaluation through them is unknown). Load balancers: gap. |
+
 ## Known gaps, priority order
 
 1. Cato `accountMetrics` (per-link loss, latency, jitter) into the topology
@@ -74,3 +104,7 @@ platform.
 5. Cato Socket release-note import as a `cato-socket` advisory source.
 6. NVD / CISA KEV enrichment of every advisory by CVE id (CVSS, known
    exploited flag).
+7. Public endpoints that are not instances (AWS RDS and load balancers,
+   Azure load balancers and application gateways, GCP load balancers) as
+   path trace destinations and egress check targets, so a Cato egress
+   address is checked against their security groups too.

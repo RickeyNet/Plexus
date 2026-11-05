@@ -388,6 +388,23 @@ async def latest_snapshots() -> list[tuple[int, dict]]:
     return [(org_ref, entry["snapshot"]) for org_ref, entry in await _latest_entries()]
 
 
+async def cloud_engines() -> tuple[list[tuple[str, Any]], set[str]]:
+    """``(provider, reachability engine)`` of every cloud with a discovered
+    account, and the providers whose data could not be read."""
+    engines: list[tuple[str, Any]] = []
+    failed: set[str] = set()
+    for cloud in CLOUDS:
+        try:
+            entry = await _cloud_entry(cloud)
+        except Exception as exc:  # noqa: BLE001 - reported as a provider not read
+            LOGGER.warning("%s: reachability not built: %s", cloud.provider, type(exc).__name__)
+            failed.add(cloud.provider)
+            continue
+        if entry is not None:
+            engines.append((cloud.provider, entry["reachability"]))
+    return engines, failed
+
+
 async def _subnets_of(entry: dict[str, Any]) -> list[dict[str, Any]]:
     """The subnet index of a cached snapshot, built once per snapshot."""
     if entry.get("subnets") is None:
@@ -443,6 +460,17 @@ async def _availability_changed(provider: str, org_ref: int, snapshot: dict, sna
     from netcontrol.routes.topology_availability import record_snapshot_states
 
     await record_snapshot_states(provider, org_ref, snapshot, snapshot_ref=snapshot_ref)
+    if provider in (PROVIDER_CATO, *_CLOUD_BY_PROVIDER):
+        await _egress_check_changed(f"{provider} collection")
+
+
+async def _egress_check_changed(trigger: str) -> None:
+    """A Cato or cloud collection was stored: run the Cato egress vs cloud
+    allow-list check (``netcontrol.routes.cato_egress_check``). Best-effort;
+    never raises."""
+    from netcontrol.routes.cato_egress_check import run_egress_check
+
+    await run_egress_check(trigger)
 
 
 async def cloud_availability_changed(provider: str) -> None:

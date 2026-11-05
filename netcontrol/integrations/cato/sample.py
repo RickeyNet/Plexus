@@ -6,6 +6,7 @@ All addresses are documentation / private ranges.
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from netcontrol.integrations.cato.collector import DEFAULT_OPTIONS
@@ -421,6 +422,118 @@ _TRACKING = {
 _SCHEDULE = {"activeOn": "ALWAYS", "customRecurring": None, "customTimeframe": None}
 
 
+_NETWORK_APP = "domain fqdn application appCategory customApp customCategory globalIpRange group service"
+_NETWORK_APP_FIELDS = (*_NETWORK_APP.split(), "customService", "customServiceIp")
+# The account's allocated IPs, as ``popLocations.allocatedIpList`` returns them.
+ALLOCATED_IPS = [
+    {
+        "id": "aip-1",
+        "ip": "192.0.2.101",
+        "allocationType": "SYSTEM",
+        "description": "Egress for partner allow lists",
+        "subnet": None,
+        "popLocation": _ref("pl-1", "Ashburn"),
+    },
+    {
+        "id": "aip-2",
+        "ip": "192.0.2.102",
+        "allocationType": "SYSTEM",
+        "description": "",
+        "subnet": None,
+        "popLocation": _ref("pl-2", "New York"),
+    },
+]
+NAT_ASHBURN = _ref("aip-1", "NAT IP Ashburn - 192.0.2.101")
+NAT_NEW_YORK = _ref("aip-2", "NAT IP New York - 192.0.2.102")
+
+
+def network_rule(
+    index: int,
+    name: str,
+    route: str,
+    *,
+    rule_type: str = "INTERNET",
+    source: dict | None = None,
+    destination: dict | None = None,
+    allocation: list[dict] | None = None,
+    pops: list[dict] | None = None,
+    sites: list[dict] | None = None,
+    exceptions: list[dict] | None = None,
+    **application: Any,
+) -> dict:
+    """A rule of the Network Rules policy (``policy.wanNetwork``) as the
+    collector reads it: every field of its query, empty unless given."""
+    transport = {
+        "transportType": "AUTOMATIC",
+        "primaryInterfaceRole": "AUTOMATIC",
+        "secondaryInterfaceRole": "AUTOMATIC",
+    }
+    return _rule(
+        index,
+        name,
+        ruleType=rule_type,
+        routeType=route,
+        bandwidthPriority=_ref("bp-0", "Default"),
+        source=source or _endpoint(),
+        destination=destination or _endpoint(),
+        application={**{field: [] for field in _NETWORK_APP_FIELDS}, **application},
+        configuration={
+            "activeTcpAcceleration": True,
+            "packetLossMitigation": False,
+            "preserveSourcePort": False,
+            "allocationIp": allocation or [],
+            "backhaulingSite": sites or [],
+            "popLocation": pops or [],
+            "primaryTransport": transport,
+            "secondaryTransport": transport,
+        },
+        exceptions=exceptions or [],
+    )
+
+
+def _network_rules() -> dict:
+    """The Network Rules policy: a WAN rule, an INTERNET rule that NATs the
+    apps of a custom category (matched by name only), one that NATs Branch
+    Madison's traffic to one public address (matched by address) and Cato's
+    predefined rule for the rest of the internet traffic."""
+    voice = network_rule(
+        1,
+        "Voice first",
+        "OPTIMIZED",
+        rule_type="WAN",
+        destination=_endpoint(site=[_ref("1001", "HQ-DataCenter")]),
+        application=[_ref("teams", "Microsoft Teams")],
+    )
+    voice["bandwidthPriority"] = _ref("bp-1", "P10")
+    voice["configuration"]["packetLossMitigation"] = True
+    voice["configuration"]["primaryTransport"] = {
+        "transportType": "WAN",
+        "primaryInterfaceRole": "AUTOMATIC",
+        "secondaryInterfaceRole": "AUTOMATIC",
+    }
+    return _policy(
+        voice,
+        network_rule(
+            2,
+            "Geoblocked apps egress",
+            "NAT",
+            allocation=[dict(NAT_ASHBURN), dict(NAT_NEW_YORK)],
+            customCategory=[_ref("cc-1", "Geoblocked Apps")],
+            domain=["sql.example.com"],
+            customApp=[_ref("ca-1", "Payroll portal")],
+        ),
+        network_rule(
+            3,
+            "Madison to the SQL server by address",
+            "NAT",
+            source=_endpoint(site=[_MADISON]),
+            destination=_endpoint(ip=["203.0.113.60"]),
+            allocation=[dict(NAT_ASHBURN)],
+        ),
+        network_rule(4, "Internet Traffic - Predefined", "NONE"),
+    )
+
+
 def _other_policies() -> dict[str, Any]:
     """One or two rules of every policy path tracing does not evaluate, as
     ``policy.<field>.policy`` returns them."""
@@ -617,37 +730,7 @@ def _other_policies() -> dict[str, Any]:
             ),
             attributes={"defaultRuleAction": "INSPECT", "defaultRuleUntrustedCertificateAction": "PROMPT"},
         ),
-        "wan_network": _policy(
-            _rule(
-                1,
-                "Voice first",
-                ruleType="WAN",
-                routeType="OPTIMIZED",
-                bandwidthPriority=_ref("bp-1", "P10"),
-                source=_endpoint(),
-                destination=_endpoint(site=[_ref("1001", "HQ-DataCenter")]),
-                application={"application": [_ref("teams", "Microsoft Teams")], "domain": [], "fqdn": []},
-                configuration={
-                    "activeTcpAcceleration": True,
-                    "packetLossMitigation": True,
-                    "preserveSourcePort": False,
-                    "allocationIp": [],
-                    "backhaulingSite": [],
-                    "popLocation": [],
-                    "primaryTransport": {
-                        "transportType": "WAN",
-                        "primaryInterfaceRole": "AUTOMATIC",
-                        "secondaryInterfaceRole": "AUTOMATIC",
-                    },
-                    "secondaryTransport": {
-                        "transportType": "AUTOMATIC",
-                        "primaryInterfaceRole": "AUTOMATIC",
-                        "secondaryInterfaceRole": "AUTOMATIC",
-                    },
-                },
-                exceptions=[],
-            )
-        ),
+        "wan_network": _network_rules(),
         "ztna_always_on": _policy(
             _rule(
                 1,
@@ -666,8 +749,8 @@ def _other_policies() -> dict[str, Any]:
 
 
 def _objects() -> dict[str, Any]:
-    """The groups, users groups, containers and custom applications rules
-    name, as the collector returns them."""
+    """The groups, users groups, containers, custom applications and
+    allocated IPs rules name, as the collector returns them."""
     return {
         "groups": [
             {
@@ -763,6 +846,7 @@ def _objects() -> dict[str, Any]:
                 ],
             }
         ],
+        "allocated_ips": copy.deepcopy(ALLOCATED_IPS),
     }
 
 

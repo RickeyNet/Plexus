@@ -1221,14 +1221,17 @@ def test_sockets_pops_and_the_cloud_carry_forwarding_hops(snapshot):
     # A site that is down is reached over its down tunnel to the cloud.
     assert by_prefix["10.61.20.0/24"]["peer"] == {"org_node": "d:5004"}
     assert _fwd(snapshot, "d:5004")["routes"][-1]["peer"] == {"org_node": CLOUD_NODE_ID}
-    # Everything else leaves for the internet, behind a Cato address that is not collected.
+    # Everything else leaves for the internet, from the address the network
+    # rules pick (an allocated IP, else a PoP's shared one): no NAT rule of its own.
     assert [(i["name"], i["kind"], i["ip"]) for i in cloud["interfaces"]] == [("Internet", "wan", "")]
     default = by_prefix["0.0.0.0/0"]
     assert (default["kind"], default["interface"], default["peer"]) == ("default", "Internet", None)
     assert cloud["routes"][-1] is default
-    assert [(n["kind"], n["original_src"], n["translated_src"]) for n in cloud["nat"]] == [
-        ("interface_pat", ["any"], ["interface"])
-    ]
+    assert cloud["nat"] == []
+    egress = cloud["egress_policy"]
+    assert (egress["kind"], egress["collected"]) == ("cato_network_rules", True)
+    # Only the INTERNET rules, in Cato's order; the WAN rule is listed, not evaluated.
+    assert [(r["index"], r["egress"]["route"]) for r in egress["rules"]] == [(2, "NAT"), (3, "NAT"), (4, "NONE")]
     assert [(p["name"], p["applies"], p["default"]) for p in cloud["policies"]] == [
         ("WAN firewall rules", "wan_traffic", "deny"),
         ("Internet firewall rules", "internet_traffic", "allow"),
@@ -2057,7 +2060,8 @@ async def test_include_policies_off_sends_none_of_the_other_queries():
     async with _client(_policies_handler(sample, seen, {})) as client:
         raw = await collect_account(client, "42", {**_POLICIES_ONLY, "include_policies": False})
     assert seen == ["plexusSites"] and raw["errors"] == []
-    for key in [p.key for p in POLICIES] + ["groups", "user_groups", "containers", "custom_applications"]:
+    objects = ["groups", "user_groups", "containers", "custom_applications", "allocated_ips"]
+    for key in [p.key for p in POLICIES] + objects:
         assert raw[key] is None, key
     assert raw["wan_firewall_policies"] is raw["socket_lan_policies"] is None
     assert raw["site_config"] is None
@@ -2161,7 +2165,13 @@ async def test_collect_account_reads_the_policies_sub_policies_and_objects(monke
         payload = {"customApplicationList": page(sample["custom_applications"], body)}
         return httpx.Response(200, json={"data": {"customAppData": payload}})
 
+    def allocated_ips(body: dict) -> httpx.Response:
+        assert body["variables"] == {"accountId": "42"} and "allocatedIpList(input: {})" in body["query"]
+        payload = {"allocatedIpList": {"allocatedIp": sample["allocated_ips"], "paging": {"total": 2}}}
+        return httpx.Response(200, json={"data": {"popLocations": payload}})
+
     answers |= {
+        "plexusAllocatedIps": allocated_ips,
         "plexusSocketLanPolicies": policy_list,
         "plexusGroups": lambda _b: httpx.Response(200, json={"errors": [{"message": "Permission denied"}]}),
         "plexusUsersGroups": users_groups,
@@ -2189,7 +2199,9 @@ async def test_collect_account_reads_the_policies_sub_policies_and_objects(monke
     # Contents of a container are a file download: not read.
     assert raw["containers"] == sample["containers"] and all(c["members"] is None for c in raw["containers"])
     assert raw["custom_applications"] == sample["custom_applications"]
-    assert progress[-1]["calls_done"] == progress[-1]["calls_total"] == 1 + 15 + 1 + 1 + 4
+    # The allocated IPs network rules NAT to.
+    assert raw["allocated_ips"] == sample["allocated_ips"]
+    assert progress[-1]["calls_done"] == progress[-1]["calls_total"] == 1 + 15 + 1 + 1 + 5
 
 
 @pytest.mark.asyncio

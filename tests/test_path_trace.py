@@ -1185,9 +1185,17 @@ def test_cato_internet_traffic_leaves_from_the_cloud_through_the_internet_firewa
     route_item = next(i for i in cloud["items"] if i["stage"] == "route")
     assert (route_item["status"], route_item["where"]) == ("ok", "Cato internet egress")
     assert cloud["out"] == "Internet"
-    # The source leaves as Cato's public address, which is not collected.
+    # The network rules route it: only by name for rule 2, so the predefined
+    # rule 4, out of the PoP's shared address, which Cato does not report.
+    rules = [(i["status"], i["rule"]) for i in cloud["items"] if i["where"] == "Network rules"]
+    assert rules == [("info", 2), ("ok", 4)]
     nat_item = next(i for i in cloud["items"] if i["stage"] == "nat")
-    assert nat_item["text"] == "Source 10.60.20.5 becomes the address of Internet, which was not collected."
+    assert nat_item["text"] == (
+        "Source 10.60.20.5: the flow leaves Cato from the shared address of its PoP, which Cato does not report. "
+        "From here on the source is an unknown public address."
+    )
+    # So the replies' address is not known: they are not traced.
+    assert result["reply"]["summary"].startswith("Not traced: the flow leaves Cato from the shared address")
     assert internet["node"] is None and "8.8.8.8 is on the internet" in internet["items"][0]["text"]
     assert request["verdict"] == "unknown"
     assert request["summary"].startswith(

@@ -26,7 +26,14 @@ Forwarding data (``node["forwarding"]``, see
 ranges and a default route into its PoP; a PoP routes the ranges and users
 connected to it to them and everything else to the Cato Cloud; the Cloud
 routes every range and user to its PoP, and everything else out of its
-"Internet" interface, behind a Cato public address that is not collected.
+"Internet" interface. What leaves there is routed by the Network Rules
+policy (``egress_policy``, see ``network_rules`` and
+``network_rule_policy_of``): the first INTERNET rule that matches the flow
+on addresses decides whether it leaves from one of the account's allocated
+IPs (NAT) or behind the shared address of a PoP, which the API does not
+report; rules that match only by name (domain, application, category) are
+listed ahead of it. Network rules that were not collected leave the rule
+and the address unknown.
 
 Cato's API has no route table, so a route lookup that rests on data that
 was not collected says so (``not_collected``): a site with a BGP peer may
@@ -52,12 +59,14 @@ as unknown. A rule whose source or destination names only objects with no
 address (a users group none of whose members is connected) matches no flow.
 A policy that was not collected is a note on the PoPs and the Cloud instead.
 
-Every other policy Cato's API has (WAN network, Socket LAN, TLS inspection,
-client connectivity, IP allocation... ``collector.POLICIES``) is listed, not
+Every other policy Cato's API has (Socket LAN, TLS inspection, client
+connectivity, IP allocation... ``collector.POLICIES``) is listed, not
 applied: a table on the Cato Cloud, the rules of the site-scoped ones on the
 Sockets of the sites they name, and the rules of the user-scoped ones that
 name a remote user (by name or by users group) on that user. None of them
-adds a route, a rule or a note to the forwarding data.
+adds a route, a rule or a note to the forwarding data. The Network Rules
+policy is listed too, and its INTERNET rules are also the Cloud's
+``egress_policy`` (above); its WAN rules (QoS, transport) are listed only.
 
 The Split Tunnel policy decides, per remote user, which traffic the Cato
 Client sends into the tunnel and which leaves the device directly (out of
@@ -94,6 +103,7 @@ from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from typing import Any
 
+from netcontrol.integrations.cato import network_rules
 from netcontrol.integrations.cato.client_reports import NOT_COLLECTED, ClientReports, describe
 from netcontrol.integrations.cato.collector import POLICIES, POLICY_LISTS, PolicySpec
 from netcontrol.integrations.cato.site_config import account_config_sections, site_config_sections
@@ -534,6 +544,132 @@ def _firewall_rules(payload: dict, book: AddressBook, *, directional: bool) -> l
                     )
                 )
     return found
+
+
+def _app_criteria(app: Any, book: AddressBook, custom_apps: Any) -> list[dict]:
+    """The application field of a network rule (``WanNetworkRuleApplication``)
+    as criteria ``network_rules`` matches: ``ip`` (addresses, and the
+    ``services`` they go with), ``service`` (protocol and ports), ``name``
+    (what only Cato's identification by hostname, application or category
+    can match) and ``unresolved`` (an object Plexus cannot turn into
+    addresses or ports). ``custom_apps`` is the collected custom application
+    list, ``None`` when it was not read."""
+    app = _obj(app)
+    found: list[dict] = []
+
+    def add(kind: str, text: str, cidrs: list[str] | None = None, services: list | None = None) -> None:
+        found.append({"kind": kind, "text": text, "cidrs": list(cidrs or []), "services": list(services or [])})
+
+    def addresses(text: str, endpoint: dict, services: list | None = None) -> None:
+        cidrs, unresolved = _rule_addresses(endpoint, book)
+        if unresolved:
+            add("unresolved", f"{text} ({', '.join(unresolved)})")
+        elif cidrs != [ANY]:
+            # No CIDR at all (a group none of whose members has an address
+            # now) is a criterion that matches nothing.
+            add("ip", text, cidrs, services)
+
+    for ref in _items_of(app.get("globalIpRange")):
+        addresses(f"global IP range {_ref_name(ref)}", {"globalIpRange": [ref]})
+    for ref in _items_of(app.get("group")):
+        cidrs = _resolve(book, "group", ref)
+        if cidrs is not None:
+            add("ip", f"group {_ref_name(ref)}", cidrs)
+        else:
+            # An advanced group of applications, categories, domains...
+            add("name", f"group {_ref_name(ref)} (its members are not all addresses)")
+    for entry in map(_obj, _items_of(app.get("customServiceIp"))):
+        endpoint = {"ip": _items_of(entry.get("ip")), "ipRange": _items_of(entry.get("ipRange"))}
+        addresses(f"service {_text(entry.get('name')) or ', '.join(_endpoint_texts(endpoint))}", endpoint)
+    for custom in _items_of(app.get("customService")):
+        services, _unresolved = _rule_service({"custom": [custom]})
+        add("service", f"service {', '.join(_service_texts({'custom': [custom]}))}", services=services or [[ANY, ANY]])
+    for ref in _items_of(app.get("service")):
+        services, unresolved = _rule_service({"standard": [ref]})
+        if unresolved:
+            add("unresolved", f"service {_ref_name(ref)}")
+        else:
+            add("service", f"service {_ref_name(ref)}", services=services)
+    listed = {key: a for a in _items_of(custom_apps) if isinstance(a, dict) for key in _keys(a) if key}
+    for ref in _items_of(app.get("customApp")):
+        name = _ref_name(ref)
+        definition = next(
+            (listed[k] for k in (_text(_obj(ref).get("id")), name.lower()) if k and k in listed),
+            None,
+        )
+        if definition is None:
+            why = "its definition is not collected" if custom_apps is None else "not in the custom application list"
+            add("unresolved", f"custom application {name} ({why})")
+            continue
+        for criterion in map(_obj, _items_of(definition.get("criteria"))):
+            port = {"port": criterion.get("port"), "portRange": criterion.get("portRange")}
+            services, _unresolved = _rule_service({"custom": [{**port, "protocol": criterion.get("protocol")}]})
+            destination = _obj(criterion.get("destination"))
+            names = [*_names(destination.get("domain"), "domain"), *_names(destination.get("fqdn"), "FQDN")]
+            if names:
+                add("name", f"custom application {name} ({', '.join(names)})")
+            for ip in map(_obj, _items_of(destination.get("destinationIp"))):
+                endpoint = {k: _items_of(ip.get(k)) for k in ("ip", "subnet", "ipRange")}
+                addresses(f"custom application {name} ({', '.join(_endpoint_texts(endpoint))})", endpoint, services)
+            if not names and not destination.get("destinationIp"):
+                add("service", f"custom application {name}", services=services or [[ANY, ANY]])
+    for field, word in (("domain", "domain"), ("fqdn", "FQDN")):
+        for value in _items_of(app.get(field)):
+            add("name", f"{word} {_text(value)}")
+    for field, word in (("application", "application"), ("appCategory", "app category")):
+        for ref in _items_of(app.get(field)):
+            add("name", f"{word} {_ref_name(ref)}")
+    for ref in _items_of(app.get("customCategory")):
+        # Cato's API lists no members of a custom category.
+        add("name", f"custom category {_ref_name(ref)} (its contents are not collected)")
+    return found
+
+
+def network_rule_policy_of(payload: Any, book: AddressBook, *, custom_apps: Any, allocated: Any) -> dict:
+    """The INTERNET rules of the Network Rules policy (``wan_network``) as
+    ``network_rules.evaluate`` reads them, in Cato's order: sources and
+    destinations as CIDRs (``_rule_addresses``, as the firewall rules), the
+    application field as criteria (``_app_criteria``), the exceptions the
+    same way, the route each takes (``network_rules.egress_of``) and the
+    account's allocated IPs (``allocated``: ``None`` when not collected)."""
+    if not isinstance(payload, dict):
+        return network_rules.not_collected()
+
+    def matched(entry: dict) -> dict:
+        src, src_unresolved = _rule_addresses(entry.get("source"), book)
+        dst, dst_unresolved = _rule_addresses(entry.get("destination"), book)
+        return {
+            "src": src,
+            "src_unresolved": src_unresolved,
+            "dst": dst,
+            "dst_unresolved": dst_unresolved,
+            "app": _app_criteria(entry.get("application"), book, custom_apps),
+        }
+
+    rules = []
+    for index, item in _ordered_rules(payload):
+        if _text(item.get("ruleType")).upper() != "INTERNET":
+            continue
+        rules.append(
+            {
+                "index": index,
+                "name": _text(item.get("name")),
+                "enabled": item.get("enabled", True) is not False,
+                **matched(item),
+                "exceptions": [
+                    {"name": _text(e.get("name")), **matched(e)} for e in map(_obj, _items_of(item.get("exceptions")))
+                ],
+                "egress": network_rules.egress_of(item, allocated),
+            }
+        )
+    return {
+        **network_rules.not_collected(),
+        "collected": True,
+        "enabled": payload.get("enabled", True) is not False,
+        "reduced": bool(payload.get("reduced")),
+        "rules": rules,
+        "allocated": network_rules.allocated_addresses(allocated),
+    }
 
 
 def _firewall_policy(name: str, applies: str, payload: dict, book: AddressBook, *, default: str) -> dict:
@@ -1867,6 +2003,19 @@ class _Builder:
             table_section("Sites without a PoP", ["Site", "Device", "State"], self._cloud_sites),
         )
         self._policy_tables(cloud["sections"], include_users)
+        # The public addresses network rules NAT to (``popLocations.allocatedIpList``).
+        allocated = [a for a in _items_of(self.raw.get("allocated_ips")) if isinstance(a, dict)]
+        _add(
+            cloud["sections"],
+            table_section(
+                "Allocated IPs",
+                ["IP", "PoP", "Type", "Description"],
+                [
+                    [a.get("ip"), _ref_name(a.get("popLocation")), a.get("allocationType"), a.get("description")]
+                    for a in allocated
+                ],
+            ),
+        )
         # The account and its DHCP and DNS configuration, when collected.
         cloud["sections"].extend(account_config_sections(self.raw.get("site_config")))
 
@@ -2188,9 +2337,9 @@ class _Builder:
                     )
                 )
         cloud["routes"].append(route("0.0.0.0/0", "default", interface="Internet", source="Cato internet egress"))
-        cloud["nat"].append(
-            nat(1, "interface_pat", name="Cato public address", original_src=[ANY], translated_src=["interface"])
-        )
+        # Which network rule routes a flow out to the internet, and the
+        # address it leaves with (an allocated IP, else a PoP's shared one).
+        cloud["egress_policy"] = self.network_rules(book)
         self.nodes[CLOUD_NODE_ID]["forwarding"] = cloud
 
         # Cato enforces the account's policy at the PoP a flow enters by: the
@@ -2348,6 +2497,17 @@ class _Builder:
             )
         )
         return False
+
+    def network_rules(self, book: AddressBook) -> dict:
+        """The account's internet network rules, compiled for
+        ``network_rules.evaluate`` (not collected when ``wan_network`` was
+        not read)."""
+        return network_rule_policy_of(
+            self.raw.get("wan_network"),
+            book,
+            custom_apps=self.raw.get("custom_applications"),
+            allocated=self.raw.get("allocated_ips"),
+        )
 
     def _firewall_policies(self, book: AddressBook) -> tuple[list[dict], list[str]]:
         """The account's firewall rule sets, and the names of those that
@@ -2525,6 +2685,16 @@ def _in_box_as_lan(edge: dict, nodes: dict[str, dict]) -> dict:
     if nodes[edge["a"]]["site"] == nodes[edge["b"]]["site"]:
         return {**edge, "kind": "lan"}
     return edge
+
+
+def network_rule_policy(raw: dict) -> dict:
+    """The internet network rules of a raw account (``collect_account``'s
+    output), compiled for ``network_rules.evaluate`` with the same address
+    book the snapshot's forwarding data uses: what a check that runs without
+    the path tracer evaluates a flow against."""
+    builder = _Builder(raw, InventoryIndex())
+    builder.build_sites()
+    return builder.network_rules(builder._address_book())
 
 
 def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[str, Any]:

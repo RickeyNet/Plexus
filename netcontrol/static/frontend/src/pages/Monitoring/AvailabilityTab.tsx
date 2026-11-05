@@ -8,6 +8,7 @@ import {
   useAvailabilitySummary,
   useAvailabilityTransitions,
 } from '@/api/monitoring';
+import { CatoEgressPanel } from './CatoEgressPanel';
 import { formatTimestamp, formatUptime } from './helpers';
 import { TopologyAvailabilityPanel } from './TopologyAvailabilityPanel';
 
@@ -161,6 +162,7 @@ export function AvailabilityTab() {
       )}
 
       <TopologyAvailabilityPanel days={days} />
+      <CatoEgressPanel />
     </div>
   );
 }

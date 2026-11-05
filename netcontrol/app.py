@@ -96,6 +96,7 @@ from netcontrol.routes.baseline_alerting import router as baseline_alerting_rout
 from netcontrol.routes.billing import (
     router as billing_router,
 )
+from netcontrol.routes.cato_egress_check import router as cato_egress_check_router
 from netcontrol.routes.cdef_engine import router as cdef_router
 from netcontrol.routes.cloud_flow_pullers import pull_flow_logs_all_accounts
 from netcontrol.routes.cloud_metric_pullers import pull_traffic_metrics_all_accounts
@@ -2227,6 +2228,10 @@ app.include_router(
 app.include_router(
     monitoring_admin_router,
     dependencies=[Depends(require_admin)],
+)
+app.include_router(
+    cato_egress_check_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("monitoring"))],
 )
 # Admin self-update routes (check, channel config, apply/rollback via the
 # host updater handoff directory, progress).

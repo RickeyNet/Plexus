@@ -14,7 +14,12 @@ and VNets (``cloud``) and the blocks built for inventory hosts
      (FTD access control, which matches the zones of both interfaces)
   5. source NAT; out into a device's own network that was not collected
      (an interface with ``behind_ip``), the device's local address: where a
-     client table placed it (``placements``), else not known
+     client table placed it (``placements``), else not known. A block with
+     an ``egress_policy`` (the Cato Cloud's network rules) decides the
+     source of what leaves it to the internet instead: one address, several
+     candidates (``Flow.src_options``, each checked where it matters: the
+     security groups of a cloud instance) or an unknown public address
+     (``Flow.src_unknown``), never the private source it came in with
   6. a policy-based VPN whose protected networks hold both ends, matched
      on the source as NAT left it (as on an ASA or FTD)
   7. the link on the map to the next device (out of an interface with
@@ -45,6 +50,7 @@ from collections import deque
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from netcontrol.integrations.cato import network_rules as cato_network_rules
 from netcontrol.integrations.meraki.subnets import site_gateways
 from netcontrol.integrations.pathtrace import ports as port_sets
 from netcontrol.integrations.pathtrace.cloud import CloudAdapter
@@ -155,6 +161,8 @@ _NAT_KINDS = {
     "central_snat": "Central SNAT",
 }
 _MERAKI_DNAT = ("one_to_one", "port_forward", "one_to_many")
+# The evaluators of a block's ``egress_policy``, by its ``kind``.
+_EGRESS_POLICIES = {cato_network_rules.KIND: cato_network_rules.trace_egress}
 _LINK_WORDS = {
     "vpn": "VPN tunnel",
     "vpn-ipsec": "IPsec tunnel",
@@ -193,6 +201,13 @@ class Flow:
     protocol: str
     src_ports: tuple[int, int] | None
     dst_ports: tuple[int, int] | None
+    # The addresses the source may have become, when the device that
+    # translated it reported several (a Cato network rule that NATs to one
+    # of several allocated IPs); ``src`` is the first.
+    src_options: tuple[Network, ...] = ()
+    # Why the source is a public address nobody reported (``src`` is then
+    # every address): the shared address of a Cato PoP. ``""`` otherwise.
+    src_unknown: str = ""
 
 
 @dataclass
@@ -250,8 +265,11 @@ class _Walk:
     # The ports the direction asks about (``_asked``).
     asked: port_sets.Asked | None = None
     # The flow left into a device's own network with its local address,
-    # which was not collected (``Tracer._local_source``).
+    # which was not collected (``Tracer._local_source``), or left a network
+    # with a public address it does not report (``Tracer._egress``): why, in
+    # ``source_text`` for the latter.
     source_unknown: bool = False
+    source_text: str = ""
     # Where that local address was placed instead: the index of the hop the
     # walk goes on from, and that hop's node.
     placed_at: int | None = None
@@ -600,6 +618,15 @@ class Tracer:
                 if ref_org == org_ref and node_id.startswith(("i:", "vm:")) and self.forwarding(gid)[0] is not None:
                     handoffs[node_id.split(":", 1)[1]] = str(self.nodes[gid].get("label") or gid)
             self.clouds[org_ref] = CloudAdapter(provider, org_ref, engine, snapshot, handoffs)
+        # The public addresses of cloud instances answer at their VPC or VNet,
+        # which delivers to the private address behind (``CloudAdapter.cross``).
+        self.public_names: dict[str, str] = {}
+        for adapter in self.clouds.values():
+            for public_ip, (network_node, name) in adapter.public_networks().items():
+                gid, public_net = self.graph_of.get((adapter.org_ref, network_node)), net(public_ip)
+                if gid is not None and public_net is not None:
+                    self.nat_owner.append((public_net, gid))
+                    self.public_names.setdefault(show(public_net), name)
 
     # ── Lookups ────────────────────────────────────────────────────────────
 
@@ -829,7 +856,8 @@ class Tracer:
         result["request"] = self._direction(request)
         if request.delivered and request.source_unknown:
             reply = None
-            text = "the device's local address is not collected, so where the replies go is not known."
+            why = _sentence_item(request.source_text.rstrip(".")) or "the device's local address is not collected"
+            text = f"{why}, so where the replies go is not known."
             result["reply"]["summary"] = f"Not traced: {text}"
             result["asymmetric"] = {"status": "unknown", "text": f"The replies were not traced: {text}"}
         elif request.delivered:
@@ -1419,7 +1447,10 @@ class Tracer:
         # 5. Source NAT. Into a device's own network that was not collected,
         # the flow leaves with the device's local address instead.
         before = walk.flow
-        if not walk.reply:
+        egress_policy = block.get("egress_policy")
+        if not walk.reply and out_kind == "wan" and isinstance(egress_policy, dict):
+            self._egress(gid, egress_policy, ctx, walk)
+        elif not walk.reply:
             self._snat(gid, block, ctx, egress, out_kind, route, walk)
         if target.get("behind") and target.get("node") is not None:
             target = {**target, "arrival": self._local_source(gid, walk, ctx, target)}
@@ -2029,6 +2060,38 @@ class Tracer:
             walk.flow = replace(flow, src=translated)
             return
 
+    def _egress(self, gid: Any, policy: dict, ctx: _Hop, walk: _Walk) -> None:
+        """Step 5 of a flow leaving to the internet from a block whose
+        ``egress_policy`` decides its source (the Cato Cloud's network rules,
+        ``cato.network_rules``): the rule's items, then the source becomes
+        the address the rule leaves from, several candidates, or an unknown
+        public address."""
+        flow = walk.flow
+        evaluate = _EGRESS_POLICIES.get(str(policy.get("kind") or ""))
+        if evaluate is None:
+            why = "The address the flow leaves with is not known: its egress policy is not one Plexus evaluates"
+            decision: dict[str, Any] = {
+                "items": [(NAT, UNKNOWN, str(policy.get("name") or "Egress policy"), f"{why}.", None)],
+                "addresses": [],
+                "unknown": why,
+            }
+        else:
+            decision = evaluate(policy, flow.src, flow.dst, flow.protocol, flow.dst_ports)
+        for stage, status, where, text, index in decision["items"]:
+            ctx.items.append(item(stage, status, where, text, index))
+        found = [n for n in (net(a) for a in decision["addresses"]) if n is not None and n.version == flow.src.version]
+        if found:
+            walk.sessions.setdefault(gid, []).append(
+                {"field": "src", "original": flow.src, "translated": found[0], "where": cato_network_rules.EGRESS}
+            )
+            options = tuple(found) if len(found) > 1 else ()
+            walk.flow = replace(flow, src=found[0], src_options=options, src_unknown="")
+            return
+        anywhere = ipaddress.ip_network("::/0" if flow.src.version == 6 else "0.0.0.0/0")
+        why = str(decision.get("unknown") or "The address the flow leaves with is not known")
+        walk.flow = replace(flow, src=anywhere, src_options=(), src_unknown=why)
+        walk.source_unknown, walk.source_text = True, why
+
     def _untranslate(self, gid: Any, walk: _Walk, items: list[dict]) -> None:
         for session in walk.sessions.get(gid, []):
             flow = walk.flow
@@ -2082,6 +2145,20 @@ class Tracer:
             last = self._new_hop(gid, edges[0].get("id") if edges else None)
             last["items"].extend(found)
             walk.hops.append(last)
+        translated = net(result.get("translated_dst"))
+        if translated is not None and not walk.reply:
+            # A public address of an instance, delivered to its private one:
+            # the replies leave from the public address again.
+            walk.sessions.setdefault(at.node, []).append(
+                {
+                    "field": "dst",
+                    "original": walk.flow.dst,
+                    "translated": translated,
+                    "where": f"{adapter.term} public address",
+                    "cloud": adapter.org_ref,
+                }
+            )
+            walk.flow = replace(walk.flow, dst=translated)
         if result["kind"] == "delivered":
             # The address of an instance that is a device the trace follows
             # itself (a vMX, an FTDv) is not the end of the way unless that
@@ -2113,6 +2190,8 @@ class Tracer:
             return None
         nxt = result.get("next") or {}
         if nxt.get("internet"):
+            if walk.reply:
+                self._public_reply(adapter, walk, last["items"])
             return _Arrival(node=None, label=f"From {adapter.term}", prev=last["node"])
         target = self.graph_of.get((adapter.org_ref, str(nxt.get("node") or "")))
         if target is None:
@@ -2133,12 +2212,40 @@ class Tracer:
             prev=last["node"],
         )
 
+    def _public_reply(self, adapter: CloudAdapter, walk: _Walk, items: list[dict]) -> None:
+        """A reply leaving a cloud to the internet from an instance whose
+        public address the request was sent to leaves from that address."""
+        for sessions in walk.sessions.values():
+            for session in sessions:
+                if (
+                    session.get("cloud") == adapter.org_ref
+                    and session["field"] == "dst"
+                    and session["translated"].overlaps(walk.flow.src)
+                ):
+                    text = (
+                        f"Replies from {show(session['translated'])} leave as {show(session['original'])}, "
+                        "its public address."
+                    )
+                    items.append(item(NAT, INFO, session["where"], text))
+                    walk.flow = replace(walk.flow, src=session["original"])
+                    return
+
+    def _translated_by(self, walk: _Walk, address: Network) -> Any:
+        """The device that translated a request's source to ``address``,
+        where the replies to it go back to."""
+        for gid, sessions in walk.sessions.items():
+            if any(s["field"] == "src" and contains(s["translated"], address) for s in sessions):
+                return gid
+        return None
+
     def _internet(self, at: _Arrival, walk: _Walk) -> _Arrival | None:
         current = self._new_hop(None, None, at.label)
         walk.hops.append(current)
         items = current["items"]
         flow = walk.flow
         target = walk.dest
+        if walk.reply and flow.dst.prefixlen == flow.dst.max_prefixlen:
+            target = self._translated_by(walk, flow.dst) or target
         if target is None and flow.dst.prefixlen == flow.dst.max_prefixlen:
             owners = self.ip_owner.get(show(flow.dst)) or [
                 g for public, g in self.nat_owner if contains(public, flow.dst)
@@ -2157,8 +2264,23 @@ class Tracer:
                 walk.ended = True
                 return None
             cloud = self._cloud_of(target)
+            if cloud is not None and not walk.reply and not walk.source_unknown and not _public(flow.src):
+                # No NAT on the way gave the private source a public address
+                # the trace knows: a cloud's filters never see the private one.
+                why = (
+                    f"The address the flow crosses the internet with is not known: no NAT on the way translated "
+                    f"{show(flow.src)}, a private address"
+                )
+                items.append(
+                    item(NAT, INFO, "Internet", f"{why}. From here on the source is an unknown public address.")
+                )
+                anywhere = ipaddress.ip_network("::/0" if flow.src.version == 6 else "0.0.0.0/0")
+                walk.flow = replace(flow, src=anywhere, src_options=(), src_unknown=why)
+                walk.source_unknown, walk.source_text = True, why
             if cloud is not None or self.forwarding(target)[0] is not None:
-                items.append(item(ROUTE, OK, "Internet", f"Crosses the internet to {self.label(target)}."))
+                name = self.public_names.get(show(flow.dst)) if cloud is not None else None
+                where = f"{name} ({show(flow.dst)}) in {self.label(target)}" if name else self.label(target)
+                items.append(item(ROUTE, OK, "Internet", f"Crosses the internet to {where}."))
                 return _Arrival(node=target, kind="" if cloud else "wan", label="Internet", prev=None)
             items.append(
                 item(ROUTE, UNKNOWN, "Internet", f"The internet path to {self.label(target)} is not on the map.")

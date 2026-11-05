@@ -288,7 +288,16 @@ incomplete, with the reason, in both directions.
 - **An end outside AWS** (a branch subnet, an internet address) is followed
   to the gateway it leaves by, and back in through the same gateway. A NAT
   gateway accepts no connection from outside; an internet gateway only for
-  an instance with a public address.
+  an instance with a public address. In a path trace across the map, a flow
+  to an instance's public address (its public or Elastic IP, as collected on
+  its interfaces) enters through that internet gateway and is delivered to
+  the private address behind it, and the subnet's ACL and the instance's
+  security groups are matched against the address the flow left its own
+  network with (a Cato allocated IP, or an unknown public address when
+  Cato leaves from a PoP's shared one); see
+  [path-trace.md](path-trace.md#ends-clouds-and-the-internet). Documentation
+  ranges (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24) count as public
+  addresses, as in the samples.
 - **Through a Meraki vMX.** When the route table hands the traffic to an
   instance that is a Meraki appliance on the map, the check goes on with the
   latest Meraki collection instead of stopping: the far address must be a

@@ -95,6 +95,8 @@ from netcontrol.integrations.aws.reachability import (
     _net,
     _show,
     _traffic_cover,
+    is_public_net,
+    peer_cidr_cover,
 )
 from netcontrol.integrations.gcp.normalize import DEFAULT_INTERNET_GATEWAY, _meta, _rid, _short, _text
 from netcontrol.integrations.pathtrace import ports as port_sets
@@ -585,7 +587,7 @@ class Reachability:
                 f"{via} sends it to the internet, but {target['label']} is in {self._vpc_name(target['vpc_id'])}.",
             )
             return {"kind": "stop"}
-        if not net.is_global:
+        if not (is_public_net(net) or target.get("public_unknown")):
             if uncollected:
                 step(
                     UNKNOWN,
@@ -876,13 +878,13 @@ class Reachability:
         """How much of ``peer`` (the far end) a rule of ``place``'s network names."""
         if outbound:
             ranges = meta.get("destination_ranges") or []
-            return max((_cidr_cover(r, peer["net"]) for r in ranges), default=_FULL)
+            return max((peer_cidr_cover(r, peer) for r in ranges), default=_FULL)
         ranges = meta.get("source_ranges") or []
         tags = set(meta.get("source_tags") or [])
         accounts = set(meta.get("source_service_accounts") or [])
         if not (ranges or tags or accounts):
             return _FULL
-        best = max((_cidr_cover(r, peer["net"]) for r in ranges), default=_NONE)
+        best = max((peer_cidr_cover(r, peer) for r in ranges), default=_NONE)
         if tags or accounts:
             # Source tags and service accounts name instances of the same network.
             if peer["subnet"] is not None and peer["vpc_id"] == place["vpc_id"]:
@@ -900,6 +902,16 @@ class Reachability:
     @staticmethod
     def _targets(meta: dict) -> tuple[set[str], set[str]]:
         return set(meta.get("target_tags") or []), set(meta.get("target_service_accounts") or [])
+
+    @classmethod
+    def _aims_at(cls, meta: dict, instance: dict) -> bool:
+        """Whether a rule applies to ``instance``: it names no target, or
+        one of the instance's network tags or service accounts."""
+        tags, accounts = cls._targets(meta)
+        if not (tags or accounts):
+            return True
+        own = instance["meta"]
+        return bool(tags & set(own.get("network_tags") or []) or accounts & set(own.get("service_accounts") or []))
 
     def _firewall_ports(
         self,
@@ -964,8 +976,7 @@ class Reachability:
                 if instance is None:
                     skipped.append(entry)
                     continue
-                own = instance["meta"]
-                if not (tags & set(own.get("network_tags") or []) or accounts & set(own.get("service_accounts") or [])):
+                if not self._aims_at(meta, instance):
                     continue
             candidates.append(entry)
         candidates.append(
@@ -1071,6 +1082,12 @@ class Reachability:
         """Traffic from outside GCP towards ``target`` through the exit ``left`` names."""
         self._enter(left, target, direction, initiating, steps)
 
+    def address_owners(self) -> dict[tuple[str, str], tuple[dict, dict]]:
+        """``(network, internal address) -> (instance, interface)``: the
+        index ``locate`` reads, for the external IPs of the instances
+        (``pathtrace.cloud.public_addresses``)."""
+        return self._address_owner
+
     def firewall(
         self, place: dict, peer: dict, outbound: bool, protocol: str, ports: tuple[int, int] | None
     ) -> list[dict]:
@@ -1078,6 +1095,47 @@ class Reachability:
         return self._firewall(place, peer, outbound, protocol, ports)
 
     security_groups = firewall
+
+    def inbound_rules(self, place: dict) -> list[dict]:
+        """The enabled ingress rules of the VPC network of the instance at
+        ``place`` that apply to it, for a check that looks for the ones
+        naming given sources: ``{"filter", "rule", "rule_id", "action",
+        "sources", "traffic"}``, ``sources`` the rule's source ranges and
+        ``traffic`` its ``(protocol, low port, high port)`` ranges (``None``
+        ports: every port)."""
+        instance = place.get("instance")
+        if place["subnet"] is None or instance is None:
+            return []
+        found: list[dict] = []
+        for rule in self._firewalls.get(place["vpc_id"], []):
+            meta = rule["meta"]
+            if _text(meta.get("direction")).upper() != "INGRESS" or meta.get("disabled"):
+                continue
+            if not self._aims_at(meta, instance):
+                continue
+            denied = [e for e in meta.get("denied") or [] if isinstance(e, dict)]
+            entries = denied or [e for e in meta.get("allowed") or [] if isinstance(e, dict)]
+            traffic: list[tuple[str, int | None, int | None]] = []
+            for entry in entries:
+                name = _text(entry.get("protocol")).lower() or "all"
+                name = _PROTOCOL_NUMBERS.get(name, name)
+                traffic.extend((name, low, high) for low, high in _ports_of(entry.get("ports")))
+            found.append(
+                {
+                    "filter": f"firewall rules of {self._vpc_name(place['vpc_id'])}",
+                    "rule": f"rule {_text(rule.get('name')) or _short(rule['rid'])} (priority {_priority(meta.get('priority'))})",
+                    "rule_id": rule["rid"],
+                    "action": "deny" if denied else "allow",
+                    "sources": [_text(r) for r in meta.get("source_ranges") or [] if _text(r)],
+                    "traffic": traffic,
+                }
+            )
+        return found
+
+    def inbound_filters(self, place: dict, peer: dict, protocol: str, ports: tuple[int, int] | None) -> list[dict]:
+        """The filter steps traffic from ``peer`` meets entering ``place``:
+        the VPC firewall rules that apply to it."""
+        return self._firewall(place, peer, False, protocol, ports)
 
     # ── The check ──────────────────────────────────────────────────────────
 

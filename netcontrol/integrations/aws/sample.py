@@ -5,8 +5,9 @@ sample discovery exercises the same path to the Topology map as a live one:
 three VPCs in two regions, a transit gateway with its route table, a VPC
 peering, a firewall pair that forwards traffic (and a Palo Alto VM-Series
 firewall the Panorama sample manages), a site-to-site VPN with one
-tunnel down, a Direct Connect, and the network ACLs and security groups that
-decide what the database subnet accepts.
+tunnel down, a Direct Connect, the network ACLs and security groups that
+decide what the database subnet accepts, and a database server on a public
+address whose security group admits only two partner egress addresses.
 Addresses are from the documentation ranges.
 """
 
@@ -182,6 +183,7 @@ def build_sample() -> tuple[list[dict], list[dict]]:
     sg_edge = ("sg-0ed9e0f1", "edge-firewalls")
     sg_app = ("sg-0c0re0a1", "core-app")
     sg_db = ("sg-0c0re0d1", "core-db")
+    sg_sql = ("sg-0ed9e0s1", "sql-public")
     resources = [
         _res(f"vpc:{core}", "vpc", "prod-core-vpc", _R1, cidr="10.200.0.0/16", is_default=False),
         _res(f"vpc:{edge}", "vpc", "edge-security-vpc", _R1, cidr="10.210.0.0/16", is_default=False),
@@ -324,6 +326,18 @@ def build_sample() -> tuple[list[dict], list[dict]]:
             zone="us-east-1a",
             group=sg_edge,
         ),
+        # A database server on a public address that only partners' egress
+        # addresses may reach (the Cato sample's allocated IPs).
+        _instance(
+            "i-0d8b001",
+            "sql-public-1",
+            edge,
+            [("subnet-0ed9e0o", "10.210.0.40", "203.0.113.60")],
+            kind="m6i.large",
+            forwards=False,
+            zone="us-east-1a",
+            group=sg_sql,
+        ),
         _instance(
             "i-0a99001",
             "app-server-1",
@@ -399,6 +413,7 @@ def build_sample() -> tuple[list[dict], list[dict]]:
         _group(sg_app, core, [("tcp", "443", "10.0.0.0/8"), ("tcp", "22", "10.210.2.0/24")]),
         # Only the application servers reach the database.
         _group(sg_db, core, [("tcp", "5432", f"sg:{sg_app[0]}")]),
+        _group(sg_sql, edge, [("tcp", "1433", "192.0.2.101/32"), ("tcp", "1433", "192.0.2.102/32")]),
         _acl("acl-0c0re0001", "core-default", core, ["subnet-0c0re0a", "subnet-0c0re0b"]),
         _acl(
             "acl-0c0re0db1",
@@ -500,5 +515,6 @@ def build_sample() -> tuple[list[dict], list[dict]]:
         _conn(f"vpc:{edge}", f"sg:{sg_edge[0]}", "security_boundary", "enforced"),
         _conn(f"vpc:{core}", f"sg:{sg_app[0]}", "security_boundary", "enforced"),
         _conn(f"vpc:{core}", f"sg:{sg_db[0]}", "security_boundary", "enforced"),
+        _conn(f"vpc:{edge}", f"sg:{sg_sql[0]}", "security_boundary", "enforced"),
     ]
     return resources, connections

@@ -296,6 +296,7 @@ def test_snapshot_shows_only_instances_that_forward_traffic(snapshot):
         "ftdv-ravpn-1",
         "ftdv-ravpn-2",
         "pa-vm-edge-1",
+        "sql-public-1",
     ]
     ftd = _node(snapshot, "i:i-0f7d001")
     assert ftd["ip"] == "10.210.2.11" and "203.0.113.11" in ftd["alias_ips"]
@@ -341,7 +342,7 @@ def test_snapshot_instance_named_by_a_host_becomes_its_node():
 
 def test_snapshot_keeps_the_instances_that_are_not_nodes_aside(snapshot):
     latent = {n["id"]: n for n in snapshot["latent"]["nodes"]}
-    assert set(latent) == {"i:i-0f3c001", "i:i-0a99001", "i:i-0a99002"}
+    assert set(latent) == {"i:i-0f3c001", "i:i-0d8b001", "i:i-0a99001", "i:i-0a99002"}
     fmc = latent["i:i-0f3c001"]
     assert fmc["kind"] == "server" and "inventory" not in fmc and fmc["ip"] == "10.210.2.20"
     assert fmc["instance_id"] == "i-0f3c001" and fmc["subnet"] == "edge-mgmt-a (10.210.2.0/24)"
