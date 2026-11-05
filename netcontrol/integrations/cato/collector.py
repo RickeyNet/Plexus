@@ -315,8 +315,11 @@ _MACROS = {
         "containers { ipAddressRangeContainer @REF@ fqdnContainer @REF@ }"
     ),
     "@BYPASS_DEST@": "ip subnet ipRange @RANGE@ domain fqdn application @REF@ customApp @REF@ globalIpRange @REF@",
+    # ``globalIpRange`` and ``group`` (advanced groups, which replace custom
+    # categories) let a rule match on addresses: path tracing evaluates them.
     "@WAN_NETWORK_APP@": (
-        "domain fqdn application @REF@ appCategory @REF@ customApp @REF@ customCategory @REF@ @SERVICE_APP@"
+        "domain fqdn application @REF@ appCategory @REF@ customApp @REF@ customCategory @REF@ "
+        "globalIpRange @REF@ group @REF@ @SERVICE_APP@"
     ),
     "@TRANSPORT@": "transportType primaryInterfaceRole secondaryInterfaceRole",
     "@APP_CONTROL@": (
@@ -461,7 +464,9 @@ def _spec(key: str, field: str, label: str, rule: str, *, policy: str = "") -> P
 
 
 # Every policy of Cato's API (``type PolicyQueries``), in the order they are
-# read. The first three are evaluated by path tracing; the rest are listed.
+# read. The first three are evaluated by path tracing; the rest are listed,
+# and the INTERNET rules of ``wan_network`` (Network Rules) are evaluated
+# too (``network_rules``), read with this option.
 POLICIES: tuple[PolicySpec, ...] = (
     PolicySpec(
         "wan_firewall", "wanFirewall", "WAN firewall", WAN_FIREWALL_QUERY, WAN_FIREWALL_QUERY_BASIC, "include_firewall"
@@ -709,6 +714,21 @@ query plexusCustomApplications($accountId: ID!, $input: CustomApplicationListInp
           destination { domain fqdn destinationIp { ip subnet ipRange { from to } } }
         }
       }
+      paging { total }
+    }
+  }
+}
+"""
+
+# The account's allocated IPs (Network > IP Allocation): the public addresses
+# a network rule with route NAT leaves from, which a rule names by
+# ``AllocatedIpRef`` (id and name only). ``PopLocationAllocatedIpInput`` has
+# a filter and no paging: one query returns the list. A ``@beta`` field.
+ALLOCATED_IPS_QUERY = """
+query plexusAllocatedIps($accountId: ID!) {
+  popLocations(accountId: $accountId) {
+    allocatedIpList(input: {}) {
+      allocatedIp { id ip allocationType description subnet popLocation { id name } }
       paging { total }
     }
   }
@@ -1040,12 +1060,19 @@ async def _custom_applications(client: CatoClient, account_id: str, errors: list
     return scrub_secrets(items)
 
 
+async def _allocated_ips(client: CatoClient, account_id: str) -> list[dict]:
+    data = await client.query("plexusAllocatedIps", ALLOCATED_IPS_QUERY, {"accountId": account_id})
+    found = ((data.get("popLocations") or {}).get("allocatedIpList") or {}).get("allocatedIp") or []
+    return scrub_secrets([a for a in found if isinstance(a, dict)][:_MAX_OBJECTS])
+
+
 # The objects read with the policies: (payload key, query path).
 _OBJECTS: tuple[tuple[str, str], ...] = (
     ("groups", "groups.groupList"),
     ("user_groups", "user.usersGroupList"),
     ("containers", "container.list"),
     ("custom_applications", "customAppData.customApplicationList"),
+    ("allocated_ips", "popLocations.allocatedIpList"),
 )
 
 
@@ -1212,6 +1239,7 @@ async def collect_account(
             "user_groups": lambda: _users_groups(client, account_id, errors),
             "containers": lambda: _containers(client, account_id),
             "custom_applications": lambda: _custom_applications(client, account_id, errors),
+            "allocated_ips": lambda: _allocated_ips(client, account_id),
         }
         for key, path in _OBJECTS:
             report("cato objects")

@@ -133,9 +133,42 @@ lists 20 names at most and counts the rest (`… +5`). The account summary
 says which policies were **not collected** (refused by Cato), **not asked
 for** (their option is off) or **read with the reduced query**.
 
-The policies other than the two firewalls and the Split Tunnel policy are
-listed, not applied: path tracing does not evaluate them, and no route,
-rule or note comes of them.
+The policies other than the two firewalls, the Split Tunnel policy and the
+INTERNET rules of the WAN network policy (Network Rules) are listed, not
+applied: path tracing does not evaluate them, and no route, rule or note
+comes of them. The **Allocated IPs** table lists the account's allocated
+IPs (`popLocations.allocatedIpList`: address, PoP, type, description), the
+addresses a network rule with route NAT leaves from.
+
+### Network rules and the egress address
+
+A flow that leaves the Cato Cloud for the internet is routed by the first
+enabled INTERNET network rule that matches it on addresses: its source
+(sites, ranges, users, users groups, groups, resolved as the firewall rules
+are), its destination and the address part of its application field
+(global IP ranges, groups of addresses, custom services, custom applications
+defined by destination IP or port). An exception of the rule that matches
+excludes it. The path trace shows the rule at the Cato Cloud hop with the
+source it gives the flow: the allocated IP of a **NAT** rule (read from the
+allocated IP list, else from the allocated IP's name), several candidates
+when the rule names several (each is checked against the destination's
+security groups), or an unknown public address for **VIA**, **OPTIMIZED**,
+**NONE** (the PoP's shared address, which Cato does not report) and
+**BACKHAUL** (the site's own internet connection, not traced).
+
+Rules ahead of it that match only by name (domain, FQDN, application, app
+category, custom category, a custom application defined by domain) are
+listed with the route they would take: Cato matches them only when it
+identifies the traffic by its hostname (Cato DNS, TLS SNI) or application,
+which a connection made to a bare IP does not give it. This is the usual
+reason a partner's allow list sees the PoP's shared address instead of the
+allocated IP: the rule that NATs to the allocated IP names the service by
+domain or custom category, and the application connects by IP. A custom
+category's contents are not in Cato's API and are reported as *not
+collected*. When the WAN network policy is not collected (the **All
+policies** option is off, or Cato refused it) the network rule item is
+*unknown* and the flow leaves with an unknown public address. See
+[path-trace.md](path-trace.md#cato-network-rules-and-the-egress-address).
 
 With the **Site and network configuration** option the **Cato Cloud** node
 also lists the **Account** (name, plan, status, tenancy, time zone), the
@@ -326,7 +359,8 @@ both hold, or that sits inside a VPC, is listed under **Overlapping Ranges**
 | Split Tunnel policy (Access > Split Tunnel Policy), which needs the SDP Split Tunnel permission | `policy.splitTunnel` | Remote users |
 | Latest Client Connectivity Policy event of each user device, last 7 days (Split Tunnel configuration applied, Office Mode, Trusted Networks, public IP, PoP), which needs the View permission for events | `events` (`event_sub_type` *Client Connectivity Policy*) | Client connection reports (with Remote users) |
 | Global IP range objects the rules name (Networking > IP Ranges) | `object.globalIpRangeList` | Firewall rules, Remote users or All other policies |
-| WAN network rules (bandwidth priority, routing, transport) | `policy.wanNetwork` | All other policies |
+| WAN network rules (bandwidth priority, routing, transport; the INTERNET rules' source, destination, application, exceptions, route and allocated IPs are evaluated by path tracing) | `policy.wanNetwork` | All other policies |
+| Allocated IPs (address, PoP, type) that NAT network rules leave from | `popLocations.allocatedIpList` | All other policies |
 | Socket LAN, Socket bypass and site web proxy rules | `policy.socketLan`, `policy.socketBypass`, `policy.siteWebProxy` | All other policies |
 | TLS inspection, application control, app tenant restriction, anti-malware file hash rules | `policy.tlsInspect`, `policy.applicationControl`, `policy.appTenantRestriction`, `policy.antiMalwareFileHash` | All other policies |
 | Remote access: client connectivity, dynamic and SDP static IP allocation, private access, ZTNA always-on, terminal server rules | `policy.clientConnectivity`, `policy.dynamicIpAllocation`, `policy.sdpStaticIpAllocation`, `policy.privateAccess`, `policy.ztnaAlwaysOn`, `policy.terminalServer` | All other policies |

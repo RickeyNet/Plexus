@@ -883,3 +883,56 @@ export function useTopologyAvailabilityTransitions(f: TopologyAvailabilityFilter
     queryFn: () => apiRequest(`/availability/topology/transitions?${topologyAvailabilityQuery(f, 500)}`),
   });
 }
+
+// ── Cato egress vs cloud allow-lists ────────────────────────────────────────
+
+export interface CatoEgressFinding {
+  id: number;
+  finding_key: string;
+  cato_org_ref: number;
+  cato_org_name: string;
+  /** ``aws`` / ``azure`` / ``gcp``; empty for a note about the Cato account. */
+  provider: string;
+  resource_id: string;
+  resource_name: string;
+  public_ip: string;
+  private_ip: string;
+  protocol: string;
+  ports: string;
+  filter_name: string;
+  rule_name: string;
+  rule_id: string;
+  kind: string;
+  kind_label: string;
+  severity: 'warning' | 'info';
+  message: string;
+  detail: Record<string, unknown>;
+  status: 'open' | 'resolved';
+  first_seen: string;
+  last_seen: string;
+  resolved_at: string;
+}
+
+export interface CatoEgressRunResult {
+  ok: boolean;
+  error?: string;
+  findings: number;
+  warnings: number;
+  alerted: number;
+}
+
+export function useCatoEgressFindings(includeResolved = false) {
+  return useQuery<{ findings: CatoEgressFinding[] }>({
+    queryKey: ['cato-egress-findings', includeResolved],
+    queryFn: () => apiRequest(`/monitoring/cato-egress/findings?include_resolved=${includeResolved}`),
+  });
+}
+
+/** Run the Cato egress vs cloud allow-list check now. */
+export function useRunCatoEgressCheck() {
+  const qc = useQueryClient();
+  return useMutation<CatoEgressRunResult, Error, void>({
+    mutationFn: () => apiRequest('/monitoring/cato-egress/run', { method: 'POST' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['cato-egress-findings'] }),
+  });
+}
