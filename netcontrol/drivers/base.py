@@ -201,6 +201,17 @@ class Driver:
         """
         raise DriverCapabilityError(f"{type(self).__name__} does not implement capture_running_config_command()")
 
+    def capture_full_config_command(self) -> str:
+        """Return the show command that dumps the running config with
+        default values included.
+
+        Config Backups stores this form so a search finds settings left
+        at their default (``show running-config`` omits them).  Platforms
+        with no such form keep the plain capture command, which is what
+        this default returns.
+        """
+        return self.capture_running_config_command()
+
     def route_table_commands(self) -> RouteTableCommands:
         """Return the show commands that read the device's route table.
 
@@ -705,6 +716,36 @@ class Driver:
         unknown is logged as a warning and allowed through).
         """
         raise DriverCapabilityError(f"{type(self).__name__} does not implement parse_boot_mode()")
+
+    def upgrade_transfer_window_show_command(self) -> str:
+        """Return the command that reports the device's receive windows.
+
+        An SCP push is flow-controlled by the receiver: throughput is
+        capped at roughly window / round-trip time, so a small TCP or
+        SSH window on the device makes an image copy over a
+        high-latency path crawl no matter how fast the link is.  The
+        route reads this before the copy and warns the operator - it
+        never blocks and never changes device config.  Platforms
+        without the knobs leave this unimplemented and the route treats
+        ``DriverCapabilityError`` as "no check".
+        """
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement upgrade_transfer_window_show_command()")
+
+    def parse_transfer_window(self, output: str) -> dict:
+        """Parse ``upgrade_transfer_window_show_command()`` output.
+
+        Returns a dict with:
+
+        - ``tcp_window`` (int | None): configured TCP receive window in
+          bytes, ``None`` when the platform default is in effect
+        - ``ssh_window`` (int | None): configured SSH receive window in
+          bytes, ``None`` when unset
+        - ``ssh_bulk_mode`` (bool): SSH bulk-transfer mode is enabled
+        - ``problems`` (list[str]): one operator-facing phrase per
+          setting that will throttle the copy (empty when none)
+        - ``recommended`` (list[str]): config commands that fix them
+        """
+        raise DriverCapabilityError(f"{type(self).__name__} does not implement parse_transfer_window()")
 
     def upgrade_commit_command(self) -> str:
         """Return the command that makes the new image permanent.

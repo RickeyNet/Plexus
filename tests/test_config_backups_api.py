@@ -159,3 +159,40 @@ async def test_get_config_backup_diff_missing_previous_raises_404(monkeypatch):
         await config_backups_module.get_config_backup_diff(10)
     assert exc_info.value.status_code == 404
     assert "No previous successful backup" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_scheduled_backup_goes_through_the_shared_capture(monkeypatch):
+    """A policy run reads the device (no reuse window) through the capture
+    every feature shares, tagged with its policy; an unchanged config counts
+    as skipped, not backed up."""
+    from netcontrol.routes.device_config import DeviceConfig
+
+    db = config_backups_module.db
+    policy = {"id": 3, "group_id": 7, "credential_id": 5, "created_by": "admin", "retention_days": 30}
+    hosts = [
+        {"id": 11, "ip_address": "192.0.2.11", "device_type": "cisco_xe"},
+        {"id": 12, "ip_address": "192.0.2.12", "device_type": "cisco_xe"},
+    ]
+    monkeypatch.setattr(db, "get_config_backup_policies_due", AsyncMock(return_value=[policy]))
+    monkeypatch.setattr(db, "get_hosts_for_group", AsyncMock(return_value=hosts))
+    monkeypatch.setattr(db, "update_config_backup_policy_last_run", AsyncMock())
+    monkeypatch.setattr(db, "delete_old_config_backups", AsyncMock(return_value=0))
+    monkeypatch.setattr(config_backups_module, "require_credential_access", AsyncMock(return_value={"username": "u"}))
+
+    calls: list[tuple[int, dict]] = []
+
+    async def _fake_get(host, cred, **kwargs):
+        calls.append((host["id"], kwargs))
+        changed = host["id"] == 11
+        return DeviceConfig(host["id"], "hostname sw", "", created=changed, reused=False)
+
+    monkeypatch.setattr(config_backups_module, "get_device_config", _fake_get)
+
+    result = await config_backups_module._run_config_backups_once()
+
+    assert result == {"policies_run": 1, "hosts_backed_up": 1, "errors": 0}
+    assert sorted(calls, key=lambda c: c[0]) == [
+        (11, {"capture_method": "scheduled", "policy_id": 3}),
+        (12, {"capture_method": "scheduled", "policy_id": 3}),
+    ]

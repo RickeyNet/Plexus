@@ -95,6 +95,8 @@ __all__ = [
     "get_config_backup_policies_due",
     "update_config_backup_policy_last_run",
     "create_config_backup",
+    "get_newest_host_config_backup",
+    "mark_config_backup_checked",
     "get_latest_config_backup",
     "get_config_backups",
     "get_latest_config_backups_per_host",
@@ -2021,18 +2023,51 @@ async def create_config_backup(
     capture_method: str = "scheduled",
     status: str = "success",
     error_message: str = "",
+    config_text_full: str = "",
 ) -> int:
-    """Store a config backup record."""
+    """Store a config backup record. ``config_text_full`` is the config with
+    default settings included (``''``: the platform has no such form)."""
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
             """INSERT INTO config_backups
-               (policy_id, host_id, config_text, capture_method, status, error_message, captured_at)
-               VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
-            (policy_id, host_id, config_text, capture_method, status, error_message),
+               (policy_id, host_id, config_text, config_text_full, capture_method, status, error_message,
+                captured_at, checked_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
+            (policy_id, host_id, config_text, config_text_full, capture_method, status, error_message),
         )
         await db.commit()
         return cursor.lastrowid
+    finally:
+        await db.close()
+
+
+async def get_newest_host_config_backup(host_id: int, max_age_seconds: int | None = None) -> dict | None:
+    """The host's newest successful backup (``id``, ``config_text``,
+    ``config_text_full``, ``captured_at``, ``checked_at``), whoever captured
+    it. With ``max_age_seconds``, None unless the device confirmed it
+    (captured or re-read unchanged) within that many seconds; an older row
+    is never returned in its place."""
+    sql = """SELECT id, config_text, config_text_full, captured_at, checked_at FROM config_backups
+             WHERE id = (SELECT MAX(id) FROM config_backups WHERE host_id = ? AND status = 'success')"""
+    params: list = [host_id]
+    if max_age_seconds is not None:
+        sql += " AND COALESCE(checked_at, captured_at) >= datetime('now', ?)"
+        params.append(f"-{int(max_age_seconds)} seconds")
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(sql, tuple(params))
+        return row_to_dict(await cursor.fetchone())
+    finally:
+        await db.close()
+
+
+async def mark_config_backup_checked(backup_id: int) -> None:
+    """Record that the device just returned this backup's configuration again."""
+    db = await _dbcore.get_db()
+    try:
+        await db.execute("UPDATE config_backups SET checked_at = datetime('now') WHERE id = ?", (backup_id,))
+        await db.commit()
     finally:
         await db.close()
 
@@ -2204,9 +2239,13 @@ async def search_config_backups(
     if requested_mode == "regex":
         compiled_regex = _compile_config_backup_regex(query)
 
-    base_select = """
+    # The config with defaults included, so a search finds settings left at
+    # their default; the plain config for a row that has no such form. The
+    # same expression as the GIN index (migration 0079).
+    searched = "COALESCE(NULLIF(b.config_text_full, ''), b.config_text, '')"
+    base_select = f"""
         SELECT b.id, b.policy_id, b.host_id, b.capture_method, b.status,
-               b.error_message, b.captured_at, b.config_text,
+               b.error_message, b.captured_at, {searched} AS config_text,
                h.hostname, h.ip_address, h.device_type
         FROM config_backups b
         LEFT JOIN hosts h ON h.id = b.host_id
@@ -2218,7 +2257,7 @@ async def search_config_backups(
             cursor = await db.execute(
                 f"""{base_select}
                     WHERE b.status = 'success'
-                      AND to_tsvector('simple', COALESCE(b.config_text, ''))
+                      AND to_tsvector('simple', {searched})
                           @@ plainto_tsquery('simple', ?)
                     ORDER BY b.captured_at DESC, b.id DESC""",
                 (query,),
@@ -2228,7 +2267,7 @@ async def search_config_backups(
             cursor = await db.execute(
                 f"""{base_select}
                     WHERE b.status = 'success'
-                      AND POSITION(LOWER(?) IN LOWER(COALESCE(b.config_text, ''))) > 0
+                      AND POSITION(LOWER(?) IN LOWER({searched})) > 0
                     ORDER BY b.captured_at DESC, b.id DESC""",
                 (query,),
             )
@@ -2244,8 +2283,8 @@ async def search_config_backups(
             cursor = await db.execute(
                 f"""{base_select}
                     WHERE b.status = 'success'
-                      AND POSITION(? IN LOWER(COALESCE(b.config_text, ''))) > 0
-                      AND COALESCE(b.config_text, '') ~* ?
+                      AND POSITION(? IN LOWER({searched})) > 0
+                      AND {searched} ~* ?
                     ORDER BY b.captured_at DESC, b.id DESC""",
                 (literal, query),
             )
@@ -2338,8 +2377,12 @@ async def delete_old_config_backups(days: int = 30) -> int:
     """Delete backups older than N days (retention cleanup)."""
     db = await _dbcore.get_db()
     try:
+        # A host's newest successful backup is kept however old: it is the
+        # configuration the device still has (later captures matched it).
         cursor = await db.execute(
-            "DELETE FROM config_backups WHERE captured_at < datetime('now', ?)",
+            """DELETE FROM config_backups
+               WHERE captured_at < datetime('now', ?)
+                 AND id NOT IN (SELECT MAX(id) FROM config_backups WHERE status = 'success' GROUP BY host_id)""",
             (f"-{days} days",),
         )
         await db.commit()

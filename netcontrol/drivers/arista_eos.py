@@ -94,6 +94,9 @@ class AristaEOSDriver(CiscoStyleTables, Driver):
     def capture_running_config_command(self) -> str:
         return "show running-config"
 
+    def capture_full_config_command(self) -> str:
+        return "show running-config all"
+
     def save_config_commands(self) -> list[str]:
         # EOS accepts both ``write memory`` and ``copy running-config
         # startup-config``; the latter is Arista's documented form and

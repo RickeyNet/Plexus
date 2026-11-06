@@ -1002,3 +1002,57 @@ def test_aoscx_vlan_acl_decides_and_the_uplink_acl_lets_established_replies_in()
     gateway = tracer.trace("10.20.0.10", "10.1.10.1", protocol="icmp")
     route = next(i for i in gateway["request"]["hops"][-1]["items"] if i["stage"] == "route")
     assert route["text"] == "10.1.10.1 is an address of this device (vlan10 (Active gateway 10.1.10.1))."
+
+
+# Config Backups stores ``show running-config all``: the same configuration
+# with every default setting printed too.
+_IOS_PLAIN_CONFIG = """interface Vlan10
+ description users
+ ip address 192.0.2.1 255.255.255.0
+ ip access-group USERS-IN in
+ standby 1 ip 192.0.2.3
+!
+interface GigabitEthernet1/0/2
+ shutdown
+!
+ip route 198.51.100.0 255.255.255.0 192.0.2.254
+ip access-list extended USERS-IN
+ permit tcp 192.0.2.0 0.0.0.255 any eq 443
+ deny ip any any
+"""
+_IOS_CONFIG_WITH_DEFAULTS = """no service pad
+ip tcp window-size 4128
+ip ssh time-out 120
+ip ssh window-size 8192
+interface Vlan10
+ description users
+ ip address 192.0.2.1 255.255.255.0
+ ip access-group USERS-IN in
+ ip redirects
+ ip unreachables
+ ip proxy-arp
+ ip mtu 1500
+ no ip verify unicast source reachable-via
+ standby version 1
+ standby 1 ip 192.0.2.3
+ standby 1 timers 3 10
+ standby 1 priority 100
+ arp timeout 14400
+!
+interface GigabitEthernet1/0/2
+ no ip address
+ ip redirects
+ shutdown
+ snmp trap link-status
+!
+ip classless
+ip route 198.51.100.0 255.255.255.0 192.0.2.254
+ip access-list extended USERS-IN
+ permit tcp 192.0.2.0 0.0.0.255 any eq 443
+ deny ip any any
+"""
+
+
+def test_ios_config_with_default_lines_reads_the_same():
+    assert parse_config(_IOS_CONFIG_WITH_DEFAULTS) == parse_config(_IOS_PLAIN_CONFIG)
+    assert parse_config(_IOS_PLAIN_CONFIG).interfaces[0].access_groups

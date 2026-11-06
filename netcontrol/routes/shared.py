@@ -416,27 +416,75 @@ def _open_netmiko_session(host: dict, credentials: dict, *, autodetect: bool = T
     return net_connect, device["device_type"]
 
 
-async def _capture_running_config(host: dict, credentials: dict) -> str:
-    """SSH to a device and pull running-config via Netmiko.
+# Netmiko's default read timeout (10 s) is too short for a chassis to print
+# its configuration, and far too short with every default included.
+_CONFIG_READ_TIMEOUT_SECONDS = 120
+_FULL_CONFIG_READ_TIMEOUT_SECONDS = 180
 
-    The exact show-command comes from the driver registered for the
-    autodetected device_type, so non-Cisco vendors (Junos uses
-    ``show configuration | display set``) get the right syntax once a
-    driver ships.  Falls back to ``show running-config`` if the
-    resolved driver doesn't implement the capability - matches the
-    legacy behaviour and keeps backups working for vendors that share
-    the Cisco command.
-    """
+# What a device type without a capture command (no driver) is sent.
+_FALLBACK_CONFIG_COMMAND = "show running-config"
+
+
+def _config_capture_commands(device_type: str) -> tuple[str, str | None]:
+    """``(plain command, defaults-included command or None)`` for a device
+    type. The commands come from its driver, so Junos gets ``show
+    configuration | display set``; a type without a driver gets ``show
+    running-config``. The second is None when the platform has no separate
+    form that prints default settings."""
     from netcontrol.drivers import DriverCapabilityError, get_driver
+
+    driver = get_driver(device_type)
+    try:
+        plain = driver.capture_running_config_command()
+    except DriverCapabilityError:
+        return _FALLBACK_CONFIG_COMMAND, None
+    full = driver.capture_full_config_command()
+    return plain, (full if full != plain else None)
+
+
+def _read_device_configs(conn, device_type: str) -> tuple[str, str]:
+    """Blocking: read ``(plain config, config with defaults)`` over an open
+    session. The second is ``""`` when the platform has no such form or the
+    device did not print it in time; the plain config is what callers diff,
+    push and parse, so its failure raises and the other's does not."""
+    plain_cmd, full_cmd = _config_capture_commands(device_type)
+    plain = str(conn.send_command(plain_cmd, read_timeout=_CONFIG_READ_TIMEOUT_SECONDS) or "")
+    full = ""
+    if full_cmd:
+        try:
+            full = str(conn.send_command(full_cmd, read_timeout=_FULL_CONFIG_READ_TIMEOUT_SECONDS) or "")
+        except Exception as exc:  # noqa: BLE001 - the plain config is still usable
+            LOGGER.warning("config capture: %r not read: %s", full_cmd, exc)
+    return plain, full
+
+
+async def _capture_device_configs(host: dict, credentials: dict) -> tuple[str, str]:
+    """SSH to a device once and read ``(plain config, config with
+    defaults)`` (see ``_read_device_configs``)."""
 
     def _do_capture():
         conn, resolved_type = _open_netmiko_session(host, credentials)
         try:
-            try:
-                capture_cmd = get_driver(resolved_type).capture_running_config_command()
-            except DriverCapabilityError:
-                capture_cmd = "show running-config"
-            return conn.send_command(capture_cmd)
+            return _read_device_configs(conn, resolved_type)
+        finally:
+            conn.disconnect()
+
+    return await asyncio.to_thread(_do_capture)
+
+
+async def _capture_running_config(host: dict, credentials: dict) -> str:
+    """SSH to a device and read its plain running configuration only.
+
+    Inventory devices go through ``netcontrol.routes.device_config``, which
+    stores what it reads in Config Backups; this is for targets that are
+    not inventory hosts (lab runtime nodes).
+    """
+
+    def _do_capture():
+        conn, resolved_type = _open_netmiko_session(host, credentials)
+        try:
+            plain_cmd, _ = _config_capture_commands(resolved_type)
+            return conn.send_command(plain_cmd, read_timeout=_CONFIG_READ_TIMEOUT_SECONDS)
         finally:
             conn.disconnect()
 
