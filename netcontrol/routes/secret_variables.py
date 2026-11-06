@@ -14,6 +14,7 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from routes.crypto import encrypt
+from routes.secret_resolver import normalize_secret_name
 
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.telemetry import configure_logging
@@ -43,12 +44,14 @@ _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]{0,63}$")
 
 
 def _validate_name(name: str) -> str:
-    name = name.strip()
+    name = normalize_secret_name(name)
     if not _NAME_RE.fullmatch(name):
         raise HTTPException(
             400,
-            "Secret name must start with a letter or underscore, contain only "
-            "alphanumeric/underscore/hyphen, and be 1-64 characters.",
+            f"Invalid secret name '{name}'. Enter just the name (e.g. "
+            "snmp_v3_auth_key, not {{secret.snmp_v3_auth_key}}): it must start "
+            "with a letter or underscore, contain only letters, digits, "
+            "underscore or hyphen, and be 1-64 characters.",
         )
     return name
 

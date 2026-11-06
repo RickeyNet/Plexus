@@ -62,6 +62,17 @@ export function SecretVariablesList() {
   );
 }
 
+const SECRET_NAME_RE = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
+
+/** Reduce a pasted `{{secret.NAME}}` or `secret.NAME` reference to `NAME`.
+ *  Mirrors normalize_secret_name in routes/secret_resolver.py. */
+function normalizeSecretName(raw: string): string {
+  let name = raw.trim();
+  if (name.startsWith('{{') && name.endsWith('}}')) name = name.slice(2, -2).trim();
+  if (name.startsWith('secret.')) name = name.slice('secret.'.length);
+  return name.trim();
+}
+
 function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const { alert } = useDialogs();
   const createMut = useCreateSecretVariable();
@@ -69,14 +80,26 @@ function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =
   const [value, setValue] = useState('');
   const [description, setDescription] = useState('');
 
+  const normalized = normalizeSecretName(name);
+  const nameValid = SECRET_NAME_RE.test(normalized);
+
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!name.trim() || !value) {
+    if (!normalized || !value) {
       void alert('Name and value are required');
       return;
     }
+    if (!nameValid) {
+      void alert({
+        message:
+          `"${normalized}" is not a valid secret name. Use only letters, digits, underscore or hyphen, ` +
+          'starting with a letter or underscore (e.g. snmp_v3_auth_key).',
+        variant: 'error',
+      });
+      return;
+    }
     createMut.mutate(
-      { name: name.trim(), value, description: description.trim() },
+      { name: normalized, value, description: description.trim() },
       {
         onSuccess: () => { setName(''); setValue(''); setDescription(''); onClose(); },
         onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
@@ -93,16 +116,42 @@ function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =
             className="form-input"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            pattern="[A-Za-z_][A-Za-z0-9_-]*"
-            maxLength={64}
-            placeholder="e.g. snmp_community_ro"
+            onBlur={() => setName(normalizeSecretName(name))}
+            maxLength={80}
+            placeholder="e.g. snmp_v3_auth_key"
+            autoComplete="off"
             required
           />
-          <small className="text-muted">Letters, numbers, underscore, hyphen. Referenced as <code>{'{{secret.name}}'}</code></small>
+          <small className="text-muted" style={{ display: 'block', marginTop: '0.25rem' }}>
+            Enter only the name, not the template reference. For a template line containing{' '}
+            <code>{'{{secret.snmp_v3_auth_key}}'}</code>, the name is <code>snmp_v3_auth_key</code>.
+            Pasting the full reference is fine; the braces and <code>secret.</code> prefix are removed automatically.
+            Allowed: letters, digits, <code>_</code> and <code>-</code>, starting with a letter or <code>_</code>, up to 64 characters.
+          </small>
+          {normalized && (
+            <small style={{ display: 'block', marginTop: '0.25rem', color: nameValid ? undefined : 'var(--danger)' }}>
+              {nameValid ? (
+                <>Templates will reference this as <code>{`{{secret.${normalized}}}`}</code></>
+              ) : (
+                <>"{normalized}" is not a valid name: remove spaces, dots and other symbols.</>
+              )}
+            </small>
+          )}
+          <small className="text-muted" style={{ display: 'block', marginTop: '0.25rem' }}>
+            The built-in SNMPv3 templates expect <code>snmp_v3_auth_key</code> and <code>snmp_v3_priv_key</code>.
+          </small>
         </div>
         <div className="form-group">
           <label className="form-label">Value</label>
-          <input className="form-input" type="password" value={value} onChange={(e) => setValue(e.target.value)} required />
+          <input
+            className="form-input"
+            type="password"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            autoComplete="new-password"
+            required
+          />
+          <small className="text-muted">The secret itself (any characters). Encrypted at rest and never shown again.</small>
         </div>
         <div className="form-group">
           <label className="form-label">Description (optional)</label>
