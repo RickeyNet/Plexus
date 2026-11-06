@@ -1,12 +1,27 @@
-import type { DashboardAlert } from '@/api/dashboard';
+import { Link } from 'react-router';
+
+import type { DashboardAlert, TopologyProblem } from '@/api/dashboard';
+import { formatBackendDateTime } from '@/lib/datetime';
 
 import { timeAgo } from './helpers';
+import { TOPOLOGY_AVAILABILITY_LINK, describeProblem, problemLocation } from './sourceHealth';
 
-export function AlertsSection({ alerts }: { alerts: DashboardAlert[] }) {
+interface Props {
+  alerts: DashboardAlert[];
+  /** Down / degraded integration entities (worst first); absent without the monitoring feature. */
+  topologyProblems?: TopologyProblem[];
+  /** How many there are in all; `topologyProblems` may hold fewer. */
+  topologyProblemCount?: number;
+}
+
+const TOPOLOGY_ROWS = 20;
+
+export function AlertsSection({ alerts, topologyProblems = [], topologyProblemCount }: Props) {
+  const problemTotal = Math.max(topologyProblemCount ?? 0, topologyProblems.length);
   return (
     <div className="section">
       <h3>Active Alerts</h3>
-      {alerts.length === 0 ? (
+      {alerts.length === 0 && topologyProblems.length === 0 ? (
         <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)' }}>
           <svg
             width="40"
@@ -22,17 +37,61 @@ export function AlertsSection({ alerts }: { alerts: DashboardAlert[] }) {
           <p style={{ margin: 0 }}>No active alerts &mdash; all systems nominal</p>
         </div>
       ) : (
-        alerts.slice(0, 20).map((a, i) => {
-          const sev = (a.severity ?? 'info').toLowerCase();
-          return (
-            <div className="dashboard-alert-item" key={`${a.created_at ?? ''}-${i}`}>
-              <span className={`alert-severity-badge ${sev}`}>{sev}</span>
-              <span className="dashboard-alert-host">{a.hostname ?? '-'}</span>
-              <span className="dashboard-alert-msg">{a.message ?? a.metric ?? '-'}</span>
-              <span className="dashboard-alert-time">{a.created_at ? timeAgo(a.created_at) : ''}</span>
-            </div>
-          );
-        })
+        <>
+          {alerts.slice(0, 20).map((a, i) => {
+            const sev = (a.severity ?? 'info').toLowerCase();
+            return (
+              <div className="dashboard-alert-item" key={`${a.created_at ?? ''}-${i}`}>
+                <span className={`alert-severity-badge ${sev}`}>{sev}</span>
+                <span className="dashboard-alert-host">{a.hostname ?? '-'}</span>
+                <span className="dashboard-alert-msg">{a.message ?? a.metric ?? '-'}</span>
+                <span className="dashboard-alert-time">{a.created_at ? timeAgo(a.created_at) : ''}</span>
+              </div>
+            );
+          })}
+          {topologyProblems.length > 0 && (
+            <>
+              <h4 style={{ margin: '1rem 0 0.25rem', fontSize: '0.95em' }}>
+                Integrations and cloud{' '}
+                <span className="text-muted" style={{ fontWeight: 'normal', fontSize: '0.9em' }}>
+                  ({problemTotal} down or degraded)
+                </span>
+              </h4>
+              {topologyProblems.slice(0, TOPOLOGY_ROWS).map((p) => (
+                <div
+                  className="dashboard-alert-item"
+                  key={`${p.provider}:${p.org_ref}:${p.entity_type}:${p.entity_id}`}
+                  title={describeProblem(p)}
+                >
+                  <span className={`alert-severity-badge ${p.state === 'down' ? 'critical' : 'warning'}`}>
+                    {p.state}
+                  </span>
+                  <span className="dashboard-alert-host">
+                    {p.provider_label} {p.type_label}
+                  </span>
+                  <span className="dashboard-alert-msg">
+                    {p.name}
+                    {problemLocation(p) ? ` ${problemLocation(p)}` : ''}
+                    {p.raw_status && p.raw_status !== p.state ? ` - ${p.raw_status}` : ''}
+                  </span>
+                  <span
+                    className="dashboard-alert-time"
+                    title={p.since ? `${p.state} since ${formatBackendDateTime(p.since)}` : undefined}
+                  >
+                    {p.since ? timeAgo(p.since) : ''}
+                  </span>
+                </div>
+              ))}
+              {problemTotal > TOPOLOGY_ROWS && (
+                <div style={{ marginTop: '0.5rem', fontSize: '0.85em' }}>
+                  <Link to={TOPOLOGY_AVAILABILITY_LINK}>
+                    View all {problemTotal} in Monitoring &rarr; Availability
+                  </Link>
+                </div>
+              )}
+            </>
+          )}
+        </>
       )}
     </div>
   );

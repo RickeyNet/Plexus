@@ -290,6 +290,7 @@ from netcontrol.routes.topology import (
     admin_router as topology_admin_router,
     router as topology_router,
 )
+from netcontrol.routes.topology_availability import dashboard_topology_summary
 from netcontrol.routes.upgrades import (
     init_upgrades,
     rehydrate_scheduled_upgrades,
@@ -2084,8 +2085,24 @@ _dashboard_cache: dict = {"data": None, "expires": 0.0}
 _dashboard_cache_lock = asyncio.Lock()
 
 
-@app.get("/api/dashboard", dependencies=[Depends(require_auth), Depends(require_feature("dashboard"))])
-async def dashboard():
+# The dashboard's "topology" section (the state of the entities integrations
+# collect) is the data of /api/availability/topology/*, which the monitoring
+# feature gates, and its chips link to Monitoring -> Availability; a user
+# without that feature gets the dashboard without it.
+_DASHBOARD_TOPOLOGY_FEATURE = "monitoring"
+
+
+async def _has_feature(request: Request, feature_key: str) -> bool:
+    """Whether the caller passes ``require_feature(feature_key)``: admins and
+    API tokens always do."""
+    try:
+        await require_feature(feature_key)(request)
+    except HTTPException:
+        return False
+    return True
+
+
+async def _dashboard_data() -> dict:
     if _dashboard_cache["data"] is not None and time.monotonic() < _dashboard_cache["expires"]:
         return _dashboard_cache["data"]
     async with _dashboard_cache_lock:
@@ -2093,13 +2110,14 @@ async def dashboard():
         # this one waited on the lock.
         if _dashboard_cache["data"] is not None and time.monotonic() < _dashboard_cache["expires"]:
             return _dashboard_cache["data"]
-        stats, recent_jobs, groups, monitoring, latest_polls, alerts = await asyncio.gather(
+        stats, recent_jobs, groups, monitoring, latest_polls, alerts, topology = await asyncio.gather(
             db.get_dashboard_stats(),
             db.get_all_jobs(limit=5),
             db.get_all_groups(),
             db.get_monitoring_summary(),
             db.get_latest_monitoring_polls(),
             db.get_monitoring_alerts(acknowledged=False, limit=50),
+            dashboard_topology_summary(),
         )
         data = {
             "stats": stats,
@@ -2108,10 +2126,20 @@ async def dashboard():
             "monitoring": monitoring,
             "device_health": latest_polls,
             "open_alerts": alerts,
+            "topology": topology,
         }
         _dashboard_cache["data"] = data
         _dashboard_cache["expires"] = time.monotonic() + _DASHBOARD_CACHE_TTL_SECONDS
         return data
+
+
+@app.get("/api/dashboard", dependencies=[Depends(require_auth), Depends(require_feature("dashboard"))])
+async def dashboard(request: Request):
+    # The cache is shared by every user, so the per-user gate applies after it.
+    data = await _dashboard_data()
+    if await _has_feature(request, _DASHBOARD_TOPOLOGY_FEATURE):
+        return data
+    return {key: value for key, value in data.items() if key != "topology"}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
