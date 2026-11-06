@@ -1118,4 +1118,5 @@ def test_fortigate_policies_decide_translate_and_keep_state():
     fqdn = tracer.trace("10.1.10.0/24", "198.51.100.10", source_node=21, protocol="tcp", port=8443)
     assert fqdn["verdict"] == "unknown"
     unknown = next(i for i in fqdn["request"]["hops"][0]["items"] if i["status"] == "unknown")
-    assert unknown["where"] == FIREWALL_POLICIES and unknown["rule"] == 20 and "updates.example.com" in unknown["text"]
+    assert unknown["where"] == FIREWALL_POLICIES and unknown["rule"] == 20
+    assert "fqdn address updates.example.com (updates.example.com)" in unknown["text"]
