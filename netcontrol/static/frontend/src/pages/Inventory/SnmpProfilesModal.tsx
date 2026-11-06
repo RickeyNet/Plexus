@@ -269,14 +269,16 @@ function SnmpProfileFormModal({ profile, onBack, onClose }: FormProps) {
             />
           </div>
         </div>
-        <div className="form-group">
-          <label className="form-label">Community (v2c)</label>
-          <input
-            className="form-input"
-            value={community}
-            onChange={(e) => setCommunity(e.target.value)}
-          />
-        </div>
+        {version !== '3' && (
+          <div className="form-group">
+            <label className="form-label">Community (v2c)</label>
+            <input
+              className="form-input"
+              value={community}
+              onChange={(e) => setCommunity(e.target.value)}
+            />
+          </div>
+        )}
         <div className="form-group">
           <label className="form-label">Timeout Seconds</label>
           <input
