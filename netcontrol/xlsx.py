@@ -30,7 +30,7 @@ MIN_WIDTH = 6.0
 MAX_WIDTH = 80.0
 PADDING = 2.0
 # Characters XML 1.0 cannot carry (tab, newline and carriage return it can).
-_NOT_XML = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f￾￿]")
+_NOT_XML = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
 _SHEET_NAME_FORBIDDEN = re.compile(r"[\[\]:*?/\\]")
 _NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
