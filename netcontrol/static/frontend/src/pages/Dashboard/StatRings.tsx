@@ -1,5 +1,9 @@
 import { useEffect, useRef } from 'react';
 
+import type { TopologyStateCounts } from '@/api/dashboard';
+
+import type { SourceHealthSummary } from './sourceHealth';
+
 const RADIUS = 34;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
@@ -11,9 +15,12 @@ interface RingProps {
   label: string;
   value: number;
   max: number;
+  /** A second line under the label. */
+  detail?: string;
+  title?: string;
 }
 
-function Ring({ label, value, max }: RingProps) {
+function Ring({ label, value, max, detail, title }: RingProps) {
   const valueRef = useRef<HTMLDivElement>(null);
   const ringRef = useRef<SVGCircleElement>(null);
 
@@ -59,7 +66,7 @@ function Ring({ label, value, max }: RingProps) {
   }, [value, max]);
 
   return (
-    <div className="stat-card stat-card-ring">
+    <div className="stat-card stat-card-ring" title={title}>
       <div className="stat-ring-wrap">
         <svg className="stat-ring" viewBox="0 0 80 80">
           <circle className="stat-ring-bg" cx="40" cy="40" r={RADIUS} />
@@ -70,6 +77,11 @@ function Ring({ label, value, max }: RingProps) {
         </div>
       </div>
       <div className="stat-label">{label}</div>
+      {detail && (
+        <div className="text-muted" style={{ fontSize: '0.8rem', marginTop: '-0.75rem' }}>
+          {detail}
+        </div>
+      )}
     </div>
   );
 }
@@ -78,15 +90,42 @@ interface StatRingsProps {
   hosts: number;
   playbooks: number;
   jobs: number;
+  /** Topology sources by health; omitted for users without the topology feature. */
+  sources?: SourceHealthSummary;
+  /** Integration entities by state, summed over providers; omitted without the monitoring feature. */
+  entities?: TopologyStateCounts;
 }
 
-export function StatRings({ hosts, playbooks, jobs }: StatRingsProps) {
+export function StatRings({ hosts, playbooks, jobs, sources, entities }: StatRingsProps) {
   const max = Math.max(hosts, playbooks, jobs, 1);
+  const entityLine = entities
+    ? `Entities ${entities.up} up / ${entities.degraded} degraded / ${entities.down} down`
+    : undefined;
   return (
     <div className="stats-grid">
       <Ring label="Total Hosts" value={hosts} max={max} />
       <Ring label="Playbooks" value={playbooks} max={max} />
       <Ring label="Total Jobs" value={jobs} max={max} />
+      {sources && sources.total > 0 && (
+        // The ring fills with the healthy share of the sources.
+        <Ring
+          label="Sources Healthy"
+          value={sources.healthy}
+          max={sources.total}
+          detail={[`${sources.healthy} of ${sources.total}`, entityLine].filter(Boolean).join(' · ')}
+          title="Enabled topology sources (not demo) whose last collection succeeded, is recent and has no warnings"
+        />
+      )}
+      {(!sources || sources.total === 0) && entities && entities.up + entities.degraded + entities.down > 0 && (
+        // No sources to judge (or no topology feature): the entities alone.
+        <Ring
+          label="Entities Up"
+          value={entities.up}
+          max={entities.up + entities.degraded + entities.down}
+          detail={entityLine}
+          title="Devices, sites, uplinks, tunnels and cloud connections the integrations report"
+        />
+      )}
     </div>
   );
 }

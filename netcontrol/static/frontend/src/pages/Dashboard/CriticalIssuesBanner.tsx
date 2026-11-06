@@ -1,10 +1,19 @@
 import { useMemo } from 'react';
+import { useNavigate } from 'react-router';
 
 import { useLatestConfigBackupsPerHost } from '@/api/configuration';
-import type { DashboardAlert, DeviceHealth } from '@/api/dashboard';
+import type { DashboardAlert, DashboardTopology, DeviceHealth } from '@/api/dashboard';
+import type { TopologySource } from '@/api/meraki';
 
 import { rollUpBackups } from './backupRollup';
 import { ISSUE_ANCHORS, classifyDeviceHealth } from './helpers';
+import {
+  SOURCES_LINK,
+  TOPOLOGY_AVAILABILITY_LINK,
+  describeProblem,
+  sourceLabel,
+  summarizeSources,
+} from './sourceHealth';
 
 type IssueSeverity = 'critical' | 'warning';
 
@@ -14,7 +23,8 @@ interface Issue {
   label: string;
   detail: string;
   severity: IssueSeverity;
-  target: string;
+  /** A Dashboard panel anchor (ISSUE_ANCHORS) to scroll to, or `to` another page. */
+  target: string | { to: string };
 }
 
 const SEVERITY_COLORS: Record<IssueSeverity, string> = {
@@ -25,12 +35,16 @@ const SEVERITY_COLORS: Record<IssueSeverity, string> = {
 interface Props {
   devices: DeviceHealth[];
   alerts: DashboardAlert[];
+  /** Topology sources; empty for users without the topology feature. */
+  sources?: TopologySource[];
+  /** Absent for users without the monitoring feature. */
+  topology?: DashboardTopology;
 }
 
 // At-a-glance triage of everything currently wrong on the dashboard, so a burst
 // of errors can be sourced without scrolling and guessing. Each issue is a chip
 // that scrolls to the panel with the detail. Renders nothing when all clear.
-export function CriticalIssuesBanner({ devices, alerts }: Props) {
+export function CriticalIssuesBanner({ devices, alerts, sources = [], topology }: Props) {
   const backups = useLatestConfigBackupsPerHost();
 
   const issues = useMemo<Issue[]>(() => {
@@ -116,12 +130,53 @@ export function CriticalIssuesBanner({ devices, alerts }: Props) {
       });
     }
 
+    // ── Down / degraded integration entities ────────────────────────────────
+    // Most have no inventory host, so they are not among the alerts above.
+    const counts = topology?.entity_counts;
+    const problems = topology?.problems ?? [];
+    for (const state of ['down', 'degraded'] as const) {
+      const count = counts?.[state] ?? 0;
+      if (count === 0) continue;
+      const shown = problems.filter((p) => p.state === state).slice(0, 8);
+      const more = count - shown.length;
+      out.push({
+        key: `topology-${state}`,
+        count,
+        label: count === 1 ? `integration entity ${state}` : `integration entities ${state}`,
+        detail: [...shown.map(describeProblem), ...(more > 0 ? [`and ${more} more`] : [])].join('\n'),
+        severity: state === 'down' ? 'critical' : 'warning',
+        target: { to: TOPOLOGY_AVAILABILITY_LINK },
+      });
+    }
+
+    // ── Topology sources ────────────────────────────────────────────────────
+    const health = summarizeSources(sources);
+    const sourceIssues = [
+      { key: 'failed', list: health.failed, one: 'source collection failed', many: 'source collections failed', severity: 'critical' },
+      { key: 'partial', list: health.partial, one: 'source collected partially', many: 'sources collected partially', severity: 'warning' },
+      { key: 'stale', list: health.stale, one: 'source not collected recently', many: 'sources not collected recently', severity: 'warning' },
+      { key: 'warnings', list: health.warnings, one: 'source with collection warnings', many: 'sources with collection warnings', severity: 'warning' },
+    ] as const;
+    for (const { key, list, one, many, severity } of sourceIssues) {
+      if (list.length === 0) continue;
+      out.push({
+        key: `sources-${key}`,
+        count: list.length,
+        label: list.length === 1 ? one : many,
+        detail: list
+          .map((s) => (s.message ? `${sourceLabel(s)} - ${s.message}` : sourceLabel(s)))
+          .join('\n'),
+        severity,
+        target: { to: SOURCES_LINK },
+      });
+    }
+
     // Critical chips first, then by count descending.
     return out.sort((a, b) => {
       if (a.severity !== b.severity) return a.severity === 'critical' ? -1 : 1;
       return b.count - a.count;
     });
-  }, [devices, alerts, backups.data]);
+  }, [devices, alerts, backups.data, sources, topology]);
 
   if (issues.length === 0) return null;
 
@@ -154,12 +209,14 @@ export function CriticalIssuesBanner({ devices, alerts }: Props) {
 }
 
 function IssueChip({ issue }: { issue: Issue }) {
+  const navigate = useNavigate();
   const color = SEVERITY_COLORS[issue.severity];
+  const { target } = issue;
   return (
     <button
       type="button"
       title={issue.detail || undefined}
-      onClick={() => scrollToAnchor(issue.target)}
+      onClick={() => (typeof target === 'string' ? scrollToAnchor(target) : navigate(target.to))}
       style={{
         display: 'inline-flex',
         alignItems: 'center',

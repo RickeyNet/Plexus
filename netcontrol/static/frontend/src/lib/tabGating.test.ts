@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { AuthStatus } from '@/api/auth';
-import { resolveTab, visibleTabs, type GatedTab } from './tabGating';
+import { canUseFeature, resolveTab, visibleTabs, type GatedTab } from './tabGating';
 
 const TABS: GatedTab<'a' | 'b' | 'c'>[] = [
   { key: 'a', feature: 'alpha' },
@@ -40,5 +40,15 @@ describe('resolveTab', () => {
   });
   it('keeps the request when nothing is visible', () => {
     expect(resolveTab('a', [])).toBe('a');
+  });
+});
+
+describe('canUseFeature', () => {
+  it('follows the tab rules for one feature', () => {
+    expect(canUseFeature('topology', auth({ feature_access: ['topology'] }))).toBe(true);
+    expect(canUseFeature('topology', auth({ feature_access: ['dashboard'] }))).toBe(false);
+    expect(canUseFeature('topology', auth({ role: 'admin' }))).toBe(true);
+    expect(canUseFeature('topology', auth({ role: 'admin', feature_visibility_hidden: ['topology'] }))).toBe(false);
+    expect(canUseFeature('topology', undefined)).toBe(false);
   });
 });

@@ -44,6 +44,44 @@ export interface DashboardAlert {
   created_at?: string;
 }
 
+export interface TopologyStateCounts {
+  up: number;
+  degraded: number;
+  down: number;
+  unknown: number;
+}
+
+/** A down or degraded entity an integration collects (site, uplink, tunnel...). */
+export interface TopologyProblem {
+  provider: string;
+  provider_label: string;
+  org_ref: number;
+  org_name: string;
+  entity_type: string;
+  type_label: string;
+  entity_id: string;
+  name: string;
+  site: string;
+  host_id: number | null;
+  state: 'down' | 'degraded';
+  raw_status: string;
+  /** When it entered its current state (UTC, no zone). */
+  since: string | null;
+}
+
+/**
+ * Current state of what the integrations collect. Present only for users with
+ * the monitoring feature (it is the data of /api/availability/topology/*).
+ */
+export interface DashboardTopology {
+  entity_counts: TopologyStateCounts & { total: number };
+  by_provider: Record<string, TopologyStateCounts>;
+  /** Every down / degraded entity; `problems` holds at most 50 of them. */
+  problem_count: number;
+  /** Down first, then degraded; the most recent change first within each. */
+  problems: TopologyProblem[];
+}
+
 export interface DashboardResponse {
   stats?: DashboardStats;
   recent_jobs?: unknown[];
@@ -51,6 +89,7 @@ export interface DashboardResponse {
   monitoring?: DashboardMonitoring;
   device_health?: DeviceHealth[];
   open_alerts?: DashboardAlert[];
+  topology?: DashboardTopology;
 }
 
 export function useDashboard() {

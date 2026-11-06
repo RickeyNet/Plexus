@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router';
 import { DataSet, Network } from 'vis-network/standalone';
 import type { Edge as VisEdge, Node as VisNode } from 'vis-network';
 
@@ -182,7 +183,21 @@ export function Topology() {
   const [searchPanelOpen, setSearchPanelOpen] = useState(false);
   const [statusOverlay, setStatusOverlay] = useState(false);
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
-  const [sourcesOpen, setSourcesOpen] = useState(false);
+  // `?sources` (the Dashboard's source health chips) opens the Sources dialog.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [sourcesOpen, setSourcesOpen] = useState(() => searchParams.has('sources'));
+  const closeSources = useCallback(() => {
+    setSourcesOpen(false);
+    setSearchParams(
+      (current) => {
+        if (!current.has('sources')) return current;
+        const next = new URLSearchParams(current);
+        next.delete('sources');
+        return next;
+      },
+      { replace: true },
+    );
+  }, [setSearchParams]);
   const [debouncedSearch, setDebouncedSearch] = useState('');
   // Search text behind the current highlight / open details pane, so the
   // Meraki tabs can mark the rows that matched.
@@ -2488,7 +2503,7 @@ export function Topology() {
       />
       <SourcesModal
         isOpen={sourcesOpen}
-        onClose={() => setSourcesOpen(false)}
+        onClose={closeSources}
         onDiscoverNeighbors={() => setDiscoveryOpen(true)}
         groupId={groupId}
       />

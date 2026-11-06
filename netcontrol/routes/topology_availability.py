@@ -153,3 +153,52 @@ async def record_snapshot_states(
             alerted,
         )
     return {**result, "alerted": alerted}
+
+
+# ── Dashboard ────────────────────────────────────────────────────────────────
+
+# Most entities have no inventory host, so they never become a monitoring
+# alert; the Dashboard lists the worst of them next to the host alerts.
+DASHBOARD_PROBLEM_LIMIT = 50
+_COUNTED_STATES = ("up", "degraded", "down", "unknown")
+_PROBLEM_STATES = ("down", "degraded")
+
+
+def _state_counts() -> dict[str, int]:
+    return dict.fromkeys(_COUNTED_STATES, 0)
+
+
+async def dashboard_topology_summary(limit: int = DASHBOARD_PROBLEM_LIMIT) -> dict[str, Any]:
+    """The current state of every tracked entity, for ``GET /api/dashboard``:
+    counts in total and per provider, and the down / degraded entities
+    (down first, the most recent change first, at most ``limit``)."""
+    totals = _state_counts()
+    by_provider: dict[str, dict[str, int]] = {}
+    for row in await db.count_topology_entity_states():
+        state = row["state"] if row["state"] in totals else "unknown"
+        totals[state] += row["count"]
+        by_provider.setdefault(row["provider"], _state_counts())[state] += row["count"]
+    problems = await db.list_topology_entity_states(states=_PROBLEM_STATES, worst_first=True, limit=limit)
+    return {
+        "entity_counts": {**totals, "total": sum(totals.values())},
+        "by_provider": by_provider,
+        "problem_count": totals["down"] + totals["degraded"],
+        "problems": [
+            {
+                "provider": row["provider"],
+                "provider_label": PROVIDER_LABELS.get(row["provider"], row["provider"]),
+                "org_ref": row["org_ref"],
+                "org_name": row.get("org_name") or "",
+                "entity_type": row["entity_type"],
+                "type_label": TYPE_LABELS.get(row["entity_type"], row["entity_type"]),
+                "entity_id": row["entity_id"],
+                "name": row.get("name") or row["entity_id"],
+                "site": row.get("site") or "",
+                "host_id": row.get("host_id"),
+                "state": row["state"],
+                "raw_status": row.get("raw_status") or "",
+                "since": row.get("state_since") or None,
+            }
+            for row in problems
+        ],
+    }

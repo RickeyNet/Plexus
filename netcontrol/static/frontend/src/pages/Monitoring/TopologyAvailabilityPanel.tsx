@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useLocation } from 'react-router';
 
 import {
   useTopologyAvailabilityOutages,
@@ -7,6 +8,7 @@ import {
 } from '@/api/monitoring';
 import { TabBar } from '@/components/TabBar';
 import { availabilityBadgeClass } from '@/pages/Reports/helpers';
+import { TOPOLOGY_AVAILABILITY_ANCHOR } from '@/pages/Dashboard/sourceHealth';
 import { sourceTypeLabel } from '@/pages/Topology/merakiHelpers';
 
 import { formatTimestamp, formatUptime } from './helpers';
@@ -43,6 +45,12 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
   const [orgRef, setOrgRef] = useState<number | null>(null);
   const [entityType, setEntityType] = useState('');
   const [subTab, setSubTab] = useState<SubTab>('entities');
+  // The Dashboard links here (#topology-availability) from its down / degraded entity chips.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const { hash } = useLocation();
+  useEffect(() => {
+    if (hash === `#${TOPOLOGY_AVAILABILITY_ANCHOR}`) rootRef.current?.scrollIntoView({ block: 'start' });
+  }, [hash]);
 
   const filters = { provider: provider || null, orgRef, entityType: entityType || null, days };
   const summary = useTopologyAvailabilitySummary(filters);
@@ -62,7 +70,7 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
   ];
 
   return (
-    <div style={{ marginTop: '1.5rem' }}>
+    <div id={TOPOLOGY_AVAILABILITY_ANCHOR} ref={rootRef} style={{ marginTop: '1.5rem' }}>
       <h3 style={{ marginBottom: '0.5rem' }}>Integrations and cloud</h3>
       <p className="text-muted" style={{ marginTop: 0, fontSize: '0.85em' }}>
         Devices, sites, uplinks, tunnels and cloud connections reported by each collection of a Meraki, Cato, FMC,

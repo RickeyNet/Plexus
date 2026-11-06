@@ -19,6 +19,7 @@ Timestamps are UTC ``YYYY-MM-DD HH:MM:SS`` text.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -27,6 +28,7 @@ from routes.database import rows_to_list
 
 __all__ = [
     "apply_topology_entity_states",
+    "count_topology_entity_states",
     "list_topology_entity_states",
     "get_topology_availability_summary",
     "get_topology_outages",
@@ -101,16 +103,54 @@ async def list_topology_entity_states(
     provider: str | None = None,
     org_ref: int | None = None,
     entity_type: str | None = None,
+    *,
+    states: Sequence[str] | None = None,
+    worst_first: bool = False,
+    limit: int | None = None,
 ) -> list[dict]:
+    """The stored state of the tracked entities. ``states`` keeps only the
+    entities currently in one of those states; ``worst_first`` orders down,
+    then degraded, then the rest, the most recent change first within each;
+    ``limit`` caps the rows returned."""
+    clauses, params = _filters("s", provider, org_ref, entity_type)
+    if states is not None:
+        wanted = list(dict.fromkeys(str(state) for state in states))
+        if not wanted:
+            return []
+        clauses.append(f"s.state IN ({', '.join('?' for _ in wanted)})")
+        params.extend(wanted)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    order = "s.provider, s.org_ref, s.entity_type, s.name"
+    if worst_first:
+        order = f"CASE s.state WHEN 'down' THEN 0 WHEN 'degraded' THEN 1 ELSE 2 END, s.state_since DESC, {order}"
+    tail = ""
+    if limit is not None:
+        tail = " LIMIT ?"
+        params.append(max(0, int(limit)))
     db = await _dbcore.get_db(read_only=True)
     try:
-        clauses, params = _filters("s", provider, org_ref, entity_type)
-        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         cursor = await db.execute(
-            f"SELECT s.* FROM topology_entity_state s {where} ORDER BY s.provider, s.org_ref, s.entity_type, s.name",
+            f"SELECT s.* FROM topology_entity_state s {where} ORDER BY {order}{tail}",
             tuple(params),
         )
         return [_state_row(r) for r in rows_to_list(await cursor.fetchall())]
+    finally:
+        await db.close()
+
+
+async def count_topology_entity_states() -> list[dict]:
+    """How many tracked entities each provider has in each state, as
+    ``[{"provider", "state", "count"}]`` rows."""
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(
+            """SELECT provider, state, COUNT(*) AS count FROM topology_entity_state
+               GROUP BY provider, state ORDER BY provider, state"""
+        )
+        return [
+            {"provider": str(r["provider"]), "state": str(r["state"]), "count": int(r["count"])}
+            for r in rows_to_list(await cursor.fetchall())
+        ]
     finally:
         await db.close()
 
