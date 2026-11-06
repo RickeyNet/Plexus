@@ -526,6 +526,11 @@ comes from any of:
   FTD, FortiOS, PAN-OS) are read for routes and configuration only.
 - The **monitoring poll** (routes), with SSH polling and route collection on.
 - A **Config Backups** policy (configuration) that has run at least once.
+  Drift checks, compliance scans, risk analysis, deployments and the
+  upgrade Prestage store their captures there too. The trace reads the
+  plain `show running-config`; the copy with default settings included
+  (`show running-config all` on IOS, IOS-XE, NX-OS and EOS) is kept beside
+  it for backup search.
 
 A new capture or backup is read at the next trace. The device's type
 (Inventory, *Device type*) picks the reader: Cisco IOS and IOS-XE, NX-OS,

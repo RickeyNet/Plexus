@@ -396,11 +396,12 @@ async def test_collector_requires_the_inventory():
 @pytest.mark.asyncio
 async def test_host_scan_skips_meraki_rules(monkeypatch):
     import netcontrol.routes.compliance as compliance_module
+    from netcontrol.routes.device_config import DeviceConfig
 
-    async def _fake_capture(_host, _creds):
-        return "hostname sw1\nip dhcp snooping\n"
+    async def _fake_config(_host, _creds, **_kwargs):
+        return DeviceConfig(1, "hostname sw1\nip dhcp snooping\n", "", created=False, reused=True)
 
-    monkeypatch.setattr(compliance_module, "_capture_running_config", _fake_capture)
+    monkeypatch.setattr(compliance_module, "get_device_config", _fake_config)
     profile = {
         "rules": json.dumps(
             [

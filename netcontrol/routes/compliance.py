@@ -15,13 +15,13 @@ from pydantic import BaseModel
 
 import netcontrol.routes.state as state
 from netcontrol.integrations.meraki.compliance import is_meraki_rule
+from netcontrol.routes.device_config import ON_DEMAND_MAX_AGE_SECONDS, get_device_config
 from netcontrol.routes.meraki_compliance import (
     run_due_assignments as _run_due_meraki_assignments,
     validate_meraki_rules,
 )
 from netcontrol.routes.shared import (
     _audit,
-    _capture_running_config,
     _corr_id,
     _get_session,
     _push_config_to_device,
@@ -214,22 +214,35 @@ def _evaluate_rule(rule: dict, config_text: str) -> dict:
     return result
 
 
-# Maximum seconds to wait for a config capture before giving up.
-_SCAN_TIMEOUT_SECONDS = 120
+# Maximum seconds to wait for a config capture before giving up. A capture
+# reads the plain config and the one with defaults (Config Backups search
+# reads that), so a chassis can take a few minutes.
+_SCAN_TIMEOUT_SECONDS = 300
 
 
-async def _evaluate_host_compliance(host: dict, profile: dict, credentials: dict) -> dict:
+async def _evaluate_host_compliance(
+    host: dict,
+    profile: dict,
+    credentials: dict,
+    *,
+    max_age_seconds: int = ON_DEMAND_MAX_AGE_SECONDS,
+) -> dict:
     """Evaluate a host against a compliance profile's rules.
+
+    The config is a Config Backups record the device confirmed within
+    ``max_age_seconds`` when there is one, else read from the device
+    (``0``: always read - the scheduled scan, the re-scan after a fix).
 
     Returns {status, total_rules, passed_rules, failed_rules, findings, config_snippet}.
     """
     import asyncio as _aio
 
     try:
-        config_text = await _aio.wait_for(
-            _capture_running_config(host, credentials),
+        stored = await _aio.wait_for(
+            get_device_config(host, credentials, capture_method="compliance", max_age_seconds=max_age_seconds),
             timeout=_SCAN_TIMEOUT_SECONDS,
         )
+        config_text = stored.config_text
     except TimeoutError:
         return {
             "status": "error",
@@ -360,7 +373,7 @@ async def _run_compliance_check_once(*, force: bool = False) -> dict:
             async def _scan_host(h, prof, cred_data, asgn_id, prof_id):
                 async with sem:
                     try:
-                        result = await _evaluate_host_compliance(h, prof, cred_data)
+                        result = await _evaluate_host_compliance(h, prof, cred_data, max_age_seconds=0)
                         await db.create_compliance_scan_result(
                             assignment_id=asgn_id,
                             profile_id=prof_id,
@@ -1028,7 +1041,7 @@ async def remediate_compliance_finding(body: ComplianceRemediateRequest, request
     )
 
     # Re-scan the host to check if the fix worked
-    rescan = await _evaluate_host_compliance(host, profile, cred)
+    rescan = await _evaluate_host_compliance(host, profile, cred, max_age_seconds=0)
     rescan_id = await db.create_compliance_scan_result(
         assignment_id=None,
         profile_id=scan_result["profile_id"],

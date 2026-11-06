@@ -199,6 +199,27 @@ def test_cisco_ios_verify_command() -> None:
     assert get_driver("cisco_ios").netflow_verify_command() == "show ip flow export"
 
 
+@pytest.mark.parametrize(
+    ("device_type", "command"),
+    [
+        ("cisco_ios", "show running-config all"),
+        ("cisco_xe", "show running-config all"),
+        ("cisco_nxos", "show running-config all"),
+        ("arista_eos", "show running-config all"),
+        # No defaults form: the plain capture command is kept.
+        ("cisco_xr", "show running-config"),
+        ("juniper_junos", "show configuration | display set"),
+    ],
+)
+def test_full_config_capture_command(device_type: str, command: str) -> None:
+    assert get_driver(device_type).capture_full_config_command() == command
+
+
+def test_full_config_capture_needs_a_capture_command() -> None:
+    with pytest.raises(DriverCapabilityError):
+        get_driver("frobozz_os").capture_full_config_command()
+
+
 def test_cisco_ios_config_capture_and_save() -> None:
     drv = get_driver("cisco_ios")
     assert drv.capture_running_config_command() == "show running-config"
@@ -1562,7 +1583,7 @@ _XE_SHOW_VERSION_MODE_BUNDLE = _XE_SHOW_VERSION_MODE_INSTALL.replace("INSTALL", 
 
 def test_cisco_xe_boot_mode_parse() -> None:
     drv = get_driver("cisco_xe")
-    assert drv.upgrade_boot_mode_show_command() == "show version | include INSTALL|BUNDLE"
+    assert drv.upgrade_boot_mode_show_command() == "show version | include INSTALL|BUNDLE|System image file"
     assert drv.parse_boot_mode(_XE_SHOW_VERSION_MODE_INSTALL) == "install"
     assert drv.parse_boot_mode(_XE_SHOW_VERSION_MODE_BUNDLE) == "bundle"
     # Header row / prose must not register; empty output is "unknown".
@@ -1572,6 +1593,19 @@ def test_cisco_xe_boot_mode_parse() -> None:
     assert drv.parse_boot_mode(_XE_SHOW_VERSION_MODE_INSTALL + _XE_SHOW_VERSION_MODE_BUNDLE) == "bundle"
 
 
+def test_cisco_xe_boot_mode_from_system_image_file() -> None:
+    # A modular chassis (9400, 9600) prints no per-switch Mode table, so
+    # the only filtered line is the boot file.
+    drv = get_driver("cisco_xe")
+    assert drv.parse_boot_mode('System image file is "bootflash:packages.conf"\n') == "install"
+    assert drv.parse_boot_mode('System image file is "bootflash:cat9k_iosxe.17.12.04.SPA.bin"\n') == "bundle"
+    # A boot file that is neither stays unknown rather than guessed.
+    assert drv.parse_boot_mode('System image file is "tftp://192.0.2.10/image"\n') is None
+    # The Mode table wins when both are present.
+    both = 'System image file is "flash:packages.conf"\n' + _XE_SHOW_VERSION_MODE_BUNDLE
+    assert drv.parse_boot_mode(both) == "bundle"
+
+
 def test_non_xe_drivers_have_no_boot_mode_concept() -> None:
     for dt in ("cisco_nxos", "cisco_xr", "juniper_junos", "arista_eos", "cisco_ios"):
         drv = get_driver(dt)
@@ -1579,3 +1613,63 @@ def test_non_xe_drivers_have_no_boot_mode_concept() -> None:
             drv.upgrade_boot_mode_show_command()
         with pytest.raises(DriverCapabilityError):
             drv.parse_boot_mode("")
+
+
+# ── Transfer receive windows (SCP throughput) ────────────────────────────
+
+
+def test_cisco_xe_transfer_window_parse() -> None:
+    drv = get_driver("cisco_xe")
+    assert (
+        drv.upgrade_transfer_window_show_command()
+        == "show running-config all | include ^ip tcp window-size|^ip ssh window-size|^ip ssh bulk-mode"
+    )
+    assert drv.parse_transfer_window("ip tcp window-size 65536\nip ssh bulk-mode 131072\n") == {
+        "tcp_window": 65536,
+        "ssh_window": None,
+        "ssh_bulk_mode": True,
+        "problems": [],
+        "recommended": [],
+    }
+    # Nothing configured: the IOS default TCP window applies and the SSH window is untuned.
+    assert drv.parse_transfer_window("") == {
+        "tcp_window": None,
+        "ssh_window": None,
+        "ssh_bulk_mode": False,
+        "problems": ["TCP window 4128 bytes (default)", "SSH window at its default"],
+        "recommended": [
+            "ip tcp window-size 65536",
+            "ip ssh bulk-mode (or ip ssh window-size 65536 on releases without bulk mode)",
+        ],
+    }
+
+
+def test_cisco_xe_transfer_window_flags_only_the_small_setting() -> None:
+    drv = get_driver("cisco_xe")
+    # Bulk mode is configured without a size on some releases.
+    small_tcp = drv.parse_transfer_window("ip tcp window-size 8192\nip ssh bulk-mode\n")
+    assert small_tcp["problems"] == ["TCP window 8192 bytes"]
+    assert small_tcp["recommended"] == ["ip tcp window-size 65536"]
+    # A negated bulk-mode line is "off".
+    no_bulk = drv.parse_transfer_window("ip tcp window-size 131072\nno ip ssh bulk-mode\n")
+    assert no_bulk["tcp_window"] == 131072
+    assert no_bulk["problems"] == ["SSH window at its default"]
+
+
+def test_cisco_xe_transfer_window_accepts_ssh_window_size_without_bulk_mode() -> None:
+    drv = get_driver("cisco_xe")
+    tuned = drv.parse_transfer_window("ip tcp window-size 65535\nip ssh window-size 65536\n")
+    assert tuned["ssh_window"] == 65536
+    assert tuned["ssh_bulk_mode"] is False
+    assert tuned["problems"] == []
+    small_ssh = drv.parse_transfer_window("ip tcp window-size 65536\nip ssh window-size 16384\n")
+    assert small_ssh["problems"] == ["SSH window 16384 bytes"]
+
+
+def test_non_xe_drivers_have_no_transfer_window_check() -> None:
+    for dt in ("cisco_nxos", "cisco_xr", "juniper_junos", "arista_eos", "cisco_ios"):
+        drv = get_driver(dt)
+        with pytest.raises(DriverCapabilityError):
+            drv.upgrade_transfer_window_show_command()
+        with pytest.raises(DriverCapabilityError):
+            drv.parse_transfer_window("")

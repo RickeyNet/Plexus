@@ -117,3 +117,65 @@ async def test_get_previous_successful_config_backup(backup_search_db):
     assert previous is not None
     assert previous["id"] == backup_search_db["first_id"]
     assert previous["hostname"] == "sw-core-01"
+
+
+@pytest.mark.asyncio
+async def test_search_reads_the_config_with_defaults(backup_search_db):
+    """A setting left at its default is only in the config with defaults
+    included, and search finds it there; a row without one is searched by
+    its plain config."""
+    full_id = await db_module.create_config_backup(
+        policy_id=None,
+        host_id=200,
+        config_text="hostname r-edge-01\n",
+        config_text_full="hostname r-edge-01\nip ssh window-size 8192\n",
+    )
+    result = await db_module.search_config_backups("ip ssh window-size", mode="substring", limit=10)
+    assert [row["backup_id"] for row in result["results"]] == [full_id]
+    assert result["results"][0]["match_line"] == "ip ssh window-size 8192"
+
+    fulltext = await db_module.search_config_backups("window-size", mode="fulltext", limit=10)
+    assert [row["backup_id"] for row in fulltext["results"]] == [full_id]
+
+    plain = await db_module.search_config_backups("transport input ssh", mode="substring", limit=10)
+    assert [row["backup_id"] for row in plain["results"]] == [backup_search_db["first_id"]]
+
+
+@pytest.mark.asyncio
+async def test_newest_host_backup_honours_the_age_limit(backup_search_db):
+    """The newest successful backup of a host, optionally only when the
+    device confirmed it within the age limit (``checked_at``)."""
+    newest = await db_module.get_newest_host_config_backup(100)
+    assert newest["id"] == backup_search_db["third_id"]
+    assert await db_module.get_newest_host_config_backup(100, max_age_seconds=900) is not None
+
+    db = await db_module.get_db()
+    try:
+        await db.execute(
+            "UPDATE config_backups SET checked_at = datetime('now', '-1 hours') WHERE id = ?",
+            (backup_search_db["third_id"],),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    assert await db_module.get_newest_host_config_backup(100, max_age_seconds=900) is None
+
+    await db_module.mark_config_backup_checked(backup_search_db["third_id"])
+    fresh = await db_module.get_newest_host_config_backup(100, max_age_seconds=900)
+    assert fresh["id"] == backup_search_db["third_id"]
+
+
+@pytest.mark.asyncio
+async def test_retention_keeps_each_hosts_newest_backup(backup_search_db):
+    """Retention never deletes the configuration a host still has, however old."""
+    db = await db_module.get_db()
+    try:
+        await db.execute("UPDATE config_backups SET captured_at = datetime('now', '-90 days')")
+        await db.commit()
+    finally:
+        await db.close()
+    deleted = await db_module.delete_old_config_backups(30)
+    assert deleted == 1  # first_id: host 100 has a newer one
+    assert (await db_module.get_newest_host_config_backup(100))["id"] == backup_search_db["third_id"]
+    assert (await db_module.get_newest_host_config_backup(200))["id"] == backup_search_db["second_id"]
+    assert await db_module.get_config_backup(backup_search_db["first_id"]) is None

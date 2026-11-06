@@ -13,9 +13,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
 from pydantic import BaseModel
 
 import netcontrol.routes.state as state
+from netcontrol.routes.device_config import get_device_config
 from netcontrol.routes.shared import (
     _audit,
-    _capture_running_config,
     _compute_config_diff,
     _corr_id,
     _get_session,
@@ -226,7 +226,7 @@ async def _capture_job_body(
                 f"[{datetime.now(UTC).strftime('%H:%M:%S')}] ({idx}/{total}) Connecting to {hostname} ({ip})...\n",
             )
             try:
-                config_text = await _capture_running_config(h, credentials)
+                config_text = (await get_device_config(h, credentials, capture_method="drift")).config_text
                 sid = await db.create_config_snapshot(
                     host_id=h["id"],
                     config_text=config_text,
@@ -522,7 +522,7 @@ async def _run_revert_job(job_id: str, event: dict, host: dict, baseline: dict, 
         await _broadcast_revert_line(
             job_id, f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Re-capturing running config to verify...\n"
         )
-        new_config = await _capture_running_config(host, credentials)
+        new_config = (await get_device_config(host, credentials, capture_method="drift")).config_text
         sid = await db.create_config_snapshot(
             host_id=host["id"],
             config_text=new_config,
@@ -774,7 +774,7 @@ async def capture_config_snapshot(body: ConfigSnapshotCaptureRequest, request: R
         raise HTTPException(status_code=404, detail="Host not found")
     cred = await require_credential_access(body.credential_id, session=_get_session(request))
     try:
-        config_text = await _capture_running_config(host, cred)
+        config_text = (await get_device_config(host, cred, capture_method="drift")).config_text
     except Exception as exc:
         LOGGER.error("config-drift: capture failed for host %s: %s", host["ip_address"], exc)
         raise HTTPException(status_code=502, detail="SSH capture failed; see server logs")
@@ -808,7 +808,7 @@ async def capture_group_config_snapshots(body: ConfigGroupCaptureRequest, reques
     async def _capture_one(h):
         async with sem:
             try:
-                config_text = await _capture_running_config(h, cred)
+                config_text = (await get_device_config(h, cred, capture_method="drift")).config_text
                 sid = await db.create_config_snapshot(
                     host_id=h["id"],
                     config_text=config_text,
@@ -1303,7 +1303,7 @@ async def full_config_drift_check(body: ConfigDriftCheckRequest, request: Reques
         raise HTTPException(status_code=404, detail="Host not found")
     cred = await require_credential_access(body.credential_id, session=_get_session(request))
     try:
-        config_text = await _capture_running_config(host, cred)
+        config_text = (await get_device_config(host, cred, capture_method="drift")).config_text
     except Exception as exc:
         LOGGER.error("config-drift: capture failed for host %s: %s", host["ip_address"], exc)
         raise HTTPException(status_code=502, detail="SSH capture failed; see server logs")

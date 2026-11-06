@@ -374,3 +374,136 @@ async def test_transfer_image_without_campaign_skips_progress(monkeypatch: pytes
 
     assert ok is True
     assert seen["progress4"] is None
+    # _device_transfer verifies the MD5 itself; netmiko must not hash the
+    # image on the switch a second time.
+    assert seen["verify_file"] is False
+
+
+_WINDOW_CMD = "show running-config all | include ^ip tcp window-size|^ip ssh window-size|^ip ssh bulk-mode"
+
+
+async def _window_check(monkeypatch: pytest.MonkeyPatch, conn, device_type: str = "cisco_xe") -> list[tuple]:
+    events: list[tuple] = []
+
+    async def fake_emit(campaign_id, device_id, level, message, host=""):
+        events.append((level, message))
+
+    monkeypatch.setattr(upgrades, "_emit", fake_emit)
+    await upgrades._transfer_window_check(conn, 1, 5, "10.9.0.1", device_type)
+    return events
+
+
+@pytest.mark.asyncio
+async def test_transfer_window_check_warns_with_fix_commands(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = _VersionConn("")
+    events = await _window_check(monkeypatch, conn)
+    assert conn.commands == [_WINDOW_CMD]
+    [(level, message)] = events
+    assert level == "warn"
+    assert "TCP window 4128 bytes (default)" in message
+    assert "SSH window at its default" in message
+    assert "ip tcp window-size 65536; ip ssh bulk-mode (or ip ssh window-size 65536" in message
+
+
+@pytest.mark.asyncio
+async def test_transfer_window_check_reports_tuned_device(monkeypatch: pytest.MonkeyPatch) -> None:
+    events = await _window_check(monkeypatch, _VersionConn("ip tcp window-size 65535\nip ssh bulk-mode\n"))
+    assert events == [("info", "Transfer windows OK (TCP window 65535 bytes, SSH bulk mode on)")]
+
+
+@pytest.mark.asyncio
+async def test_transfer_window_check_accepts_ssh_window_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Releases without bulk mode are tuned through ``ip ssh window-size``."""
+    events = await _window_check(monkeypatch, _VersionConn("ip tcp window-size 65536\nip ssh window-size 65536\n"))
+    assert events == [("info", "Transfer windows OK (TCP window 65536 bytes, SSH window 65536 bytes)")]
+
+
+@pytest.mark.asyncio
+async def test_transfer_window_check_skips_platforms_without_the_knobs(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = _VersionConn("")
+    assert await _window_check(monkeypatch, conn, device_type="cisco_nxos") == []
+    assert conn.commands == []
+
+
+@pytest.mark.asyncio
+async def test_transfer_window_check_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Boom:
+        def send_command(self, *_a, **_k):
+            raise OSError("socket closed")
+
+    [(level, message)] = await _window_check(monkeypatch, _Boom())
+    assert level == "warn"
+    assert "continuing" in message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("on_flash", "checked"), [(False, True), (True, False)])
+async def test_transfer_checks_windows_only_before_a_real_copy(
+    monkeypatch: pytest.MonkeyPatch, on_flash: bool, checked: bool
+) -> None:
+    rec = _patch_check(monkeypatch, on_flash=on_flash)
+    conn = _FakeConn()
+
+    async def connect(*args, **kwargs):
+        return conn
+
+    async def flash_space(*args, **kwargs):
+        return True, 10**10
+
+    async def transfer_image(conn, *args, **kwargs):
+        conn.commands.append("SCP")
+        return True, None
+
+    async def prestage(*args, **kwargs):
+        return True, None
+
+    monkeypatch.setattr(upgrades, "_connect_device", connect)
+    monkeypatch.setattr(upgrades, "_check_flash_space", flash_space)
+    monkeypatch.setattr(upgrades, "_transfer_image", transfer_image)
+    monkeypatch.setattr(upgrades, "_run_install_add_prestage", prestage)
+
+    dev = {"id": 5, "ip_address": "10.9.0.1", "target_image": _TARGET}
+    await upgrades._device_transfer(1, dev, {}, [], {})
+
+    assert rec["updates"]["transfer_status"] == "completed"
+    assert (_WINDOW_CMD in conn.commands) is checked
+    if checked:
+        assert conn.commands.index(_WINDOW_CMD) < conn.commands.index("SCP")
+
+
+@pytest.mark.asyncio
+async def test_successful_transfer_clears_the_previous_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A retry that succeeds must not keep the earlier failure's text.
+
+    Check status marks a present-but-unexpanded image failed with a reason;
+    the Transfer that then finishes install add ends completed, so the
+    stored and broadcast error both have to be emptied.
+    """
+    rec = _patch_check(monkeypatch, on_flash=True)
+    rec["updates"]["error_message"] = "Image is on flash but not expanded (install add)"
+    statuses: list[dict] = []
+
+    async def connect(*args, **kwargs):
+        return _FakeConn()
+
+    async def prestage(*args, **kwargs):
+        return True, None
+
+    async def emit_status(campaign_id, dev_id, **fields):
+        statuses.append(fields)
+
+    async def flash_space(*args, **kwargs):
+        return True, 10**10
+
+    monkeypatch.setattr(upgrades, "_connect_device", connect)
+    monkeypatch.setattr(upgrades, "_check_flash_space", flash_space)
+    monkeypatch.setattr(upgrades, "_run_install_add_prestage", prestage)
+    monkeypatch.setattr(upgrades, "_emit_device_status", emit_status)
+
+    dev = {"id": 5, "ip_address": "10.9.0.1", "target_image": _TARGET}
+    await upgrades._device_transfer(1, dev, {}, [], {})
+
+    assert rec["updates"]["transfer_status"] == "completed"
+    assert rec["updates"]["error_message"] == ""
+    assert statuses[0] == {"transfer_status": "running", "error_message": ""}
+    assert statuses[-1]["transfer_status"] == "completed"

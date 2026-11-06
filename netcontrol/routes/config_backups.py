@@ -16,9 +16,9 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 import netcontrol.routes.state as state
+from netcontrol.routes.device_config import get_device_config
 from netcontrol.routes.shared import (
     _audit,
-    _capture_running_config,
     _compute_config_diff,
     _corr_id,
     _get_session,
@@ -416,20 +416,12 @@ async def run_config_backup_policy_now(policy_id: int, request: Request):
             nonlocal backed_up, skipped, errs
             async with sem:
                 try:
-                    config_text = await _capture_running_config(host, cred)
-                    # Deduplicate: skip if config is identical to the last backup
-                    last = await db.get_latest_config_backup(policy_id, host["id"])
-                    if last and last.get("config_text") == config_text:
+                    # An unchanged config writes no new row (the host's
+                    # newest backup is marked re-checked instead).
+                    stored = await get_device_config(host, cred, capture_method="manual", policy_id=policy_id)
+                    if not stored.created:
                         skipped += 1
                         return
-                    await db.create_config_backup(
-                        policy_id=policy_id,
-                        host_id=host["id"],
-                        config_text=config_text,
-                        capture_method="manual",
-                        status="success",
-                        error_message="",
-                    )
                     backed_up += 1
                 except Exception as exc:
                     await db.create_config_backup(
@@ -503,10 +495,10 @@ async def restore_config_from_backup(body: ConfigBackupRestoreRequest, request: 
     diff_text = ""
     lines_changed = 0
     try:
-        current_config = await _capture_running_config(host, cred)
+        current = await get_device_config(host, cred, capture_method="restore")
         diff_text, added, removed = _compute_config_diff(
             backup["config_text"],
-            current_config,
+            current.config_text,
             baseline_label="backup",
             actual_label="current",
         )
@@ -576,20 +568,10 @@ async def _run_config_backups_once() -> dict:
             async def _backup_host(host, cred_data, pol_id):
                 async with sem:
                     try:
-                        config_text = await _capture_running_config(host, cred_data)
-                        # Deduplicate: skip if config is identical to the last backup
-                        last = await db.get_latest_config_backup(pol_id, host["id"])
-                        if last and last.get("config_text") == config_text:
-                            return "skipped"
-                        await db.create_config_backup(
-                            policy_id=pol_id,
-                            host_id=host["id"],
-                            config_text=config_text,
-                            capture_method="scheduled",
-                            status="success",
-                            error_message="",
-                        )
-                        return True
+                        # An unchanged config writes no new row (the host's
+                        # newest backup is marked re-checked instead).
+                        stored = await get_device_config(host, cred_data, capture_method="scheduled", policy_id=pol_id)
+                        return True if stored.created else "skipped"
                     except Exception as exc:
                         await db.create_config_backup(
                             policy_id=pol_id,

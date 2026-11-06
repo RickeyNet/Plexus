@@ -36,6 +36,7 @@ class _FakeNetConnect:
         self.password = kwargs.get("password")
         self.secret = kwargs.get("secret", "")
         self.commands_run: list[str] = []
+        self.command_kwargs: list[dict] = []
         self.config_sets: list[list[str]] = []
         self.enable_called = 0
         self.disconnect_called = 0
@@ -46,6 +47,7 @@ class _FakeNetConnect:
 
     def send_command(self, cmd, *args, **kwargs):
         self.commands_run.append(cmd)
+        self.command_kwargs.append(kwargs)
         return f"<output of {cmd}>"
 
     def send_config_set(self, cmds, *args, **kwargs):
@@ -239,6 +241,75 @@ def test_capture_running_config_falls_back_for_unknown_vendor(fake_netmiko):
     conn = fake_netmiko["conn"]
     # Legacy default - the helper falls back rather than crashing.
     assert conn.commands_run == ["show running-config"]
+
+
+def test_capture_device_configs_reads_both_forms_in_one_session(fake_netmiko):
+    # One session reads the plain config and the form with defaults
+    # included. The latter is far larger, so it gets the longer timeout.
+    from netcontrol.routes.shared import (
+        _CONFIG_READ_TIMEOUT_SECONDS,
+        _FULL_CONFIG_READ_TIMEOUT_SECONDS,
+        _capture_device_configs,
+    )
+
+    host = {"ip_address": "192.0.2.1", "device_type": "cisco_xe"}
+    creds = {"username": "u", "password": "p", "secret": ""}
+
+    plain, full = asyncio.run(_capture_device_configs(host, creds))
+
+    conn = fake_netmiko["conn"]
+    assert conn.commands_run == ["show running-config", "show running-config all"]
+    assert conn.command_kwargs == [
+        {"read_timeout": _CONFIG_READ_TIMEOUT_SECONDS},
+        {"read_timeout": _FULL_CONFIG_READ_TIMEOUT_SECONDS},
+    ]
+    assert "show running-config" in plain and "show running-config all" in full
+    assert conn.disconnect_called == 1
+
+
+def test_capture_device_configs_has_no_defaults_form_for_unknown_vendor(fake_netmiko):
+    # No driver, so no known defaults form: only the legacy command is
+    # sent rather than an ``all`` keyword the device may reject.
+    from netcontrol.routes.shared import _capture_device_configs
+
+    _FakeSSHDetect.best = None
+    host = {"ip_address": "192.0.2.1", "device_type": "frobozz_os"}
+    creds = {"username": "u", "password": "p", "secret": ""}
+
+    plain, full = asyncio.run(_capture_device_configs(host, creds))
+
+    assert fake_netmiko["conn"].commands_run == ["show running-config"]
+    assert plain and full == ""
+
+
+def test_capture_device_configs_keeps_the_plain_config_when_defaults_fail(fake_netmiko):
+    # The plain config is what features diff and parse; a timeout on the
+    # far larger defaults form must not lose it.
+    from netcontrol.routes.shared import _capture_device_configs
+
+    captured: dict[str, _FakeNetConnect] = {}
+
+    def _connect(**kwargs):
+        conn = _FakeNetConnect(**kwargs)
+        plain_send = conn.send_command
+
+        def _send(cmd, *args, **kw):
+            if cmd.endswith(" all"):
+                raise TimeoutError("read timed out")
+            return plain_send(cmd, *args, **kw)
+
+        conn.send_command = _send  # type: ignore[assignment]
+        captured["conn"] = conn
+        return conn
+
+    sys.modules["netmiko"].ConnectHandler = _connect
+    host = {"ip_address": "192.0.2.1", "device_type": "cisco_xe"}
+    creds = {"username": "u", "password": "p", "secret": ""}
+
+    plain, full = asyncio.run(_capture_device_configs(host, creds))
+
+    assert "show running-config" in plain and full == ""
+    assert captured["conn"].disconnect_called == 1
 
 
 def test_capture_running_config_disconnects_on_command_error(fake_netmiko):

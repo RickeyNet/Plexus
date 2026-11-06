@@ -6,6 +6,15 @@ import re
 
 from netcontrol.drivers.base import CiscoStyleTables, Driver, NetflowConfig, RouteTableCommands, register_driver
 
+# Receive windows in bytes.  ``_DEFAULT_TCP_WINDOW`` is the IOS default
+# when ``ip tcp window-size`` is unset.  A TCP or SSH window below
+# ``_MIN_FAST_WINDOW`` leaves an SCP image copy over a high-latency path
+# window-bound; ``_RECOMMENDED_WINDOW`` is the value Cisco documents for
+# both knobs (larger SSH windows cost CPU on low-end switches).
+_DEFAULT_TCP_WINDOW = 4128
+_MIN_FAST_WINDOW = 65535
+_RECOMMENDED_WINDOW = 65536
+
 
 @register_driver
 class CiscoXEDriver(CiscoStyleTables, Driver):
@@ -64,6 +73,9 @@ class CiscoXEDriver(CiscoStyleTables, Driver):
 
     def capture_running_config_command(self) -> str:
         return "show running-config"
+
+    def capture_full_config_command(self) -> str:
+        return "show running-config all"
 
     def save_config_commands(self) -> list[str]:
         return ["write memory"]
@@ -197,16 +209,20 @@ class CiscoXEDriver(CiscoStyleTables, Driver):
         }
 
     def upgrade_boot_mode_show_command(self) -> str:
-        # ``show version`` on Catalyst 9k ends with a per-switch table
-        # whose last column is ``Mode`` (INSTALL / BUNDLE).  ``include``
-        # takes a regex on IOS-XE so a single filter catches either.
-        return "show version | include INSTALL|BUNDLE"
+        # ``show version`` on a stackable Catalyst 9k ends with a
+        # per-switch table whose last column is ``Mode`` (INSTALL /
+        # BUNDLE).  A modular chassis (9400, 9600) prints no such table,
+        # so the filter also keeps the ``System image file`` line, which
+        # every platform prints.  ``include`` takes a regex on IOS-XE so
+        # one filter catches all three.
+        return "show version | include INSTALL|BUNDLE|System image file"
 
     def parse_boot_mode(self, output: str) -> str | None:
         # Representative filtered lines:
         #
-        #   *    1 52    C9410R          17.12.04          CAT9K_IOSXE           INSTALL
-        #   *    1 52    C9410R          17.12.04          CAT9K_IOSXE           BUNDLE
+        #   System image file is "bootflash:packages.conf"
+        #   *    1 41    C9300-48P       17.12.04          CAT9K_IOSXE           INSTALL
+        #   *    1 41    C9300-48P       17.12.04          CAT9K_IOSXE           BUNDLE
         #
         # Case-sensitive whole-word match so the header row (``Mode``)
         # and prose like "installed" never register.  BUNDLE wins if
@@ -216,7 +232,64 @@ class CiscoXEDriver(CiscoStyleTables, Driver):
             return "bundle"
         if re.search(r"\bINSTALL\b", text):
             return "install"
+        # No mode table: the boot file tells the mode.  A provisioning
+        # file (packages.conf) is install mode, a monolithic .bin is
+        # bundle mode.
+        m = re.search(r'System image file is "([^"]+)"', text)
+        if m:
+            image = m.group(1).strip().lower()
+            if image.endswith(".conf"):
+                return "install"
+            if image.endswith(".bin"):
+                return "bundle"
         return None
+
+    def upgrade_transfer_window_show_command(self) -> str:
+        # The SSH window has two forms depending on release: bulk mode
+        # (on by default from 17.10, and not every release accepts a
+        # size argument) and the older ``ip ssh window-size``.  ``all``
+        # makes a default-on bulk mode visible, and the line-start
+        # anchor filters out a negated ``no ip ssh bulk-mode`` so it
+        # reads as "off".
+        return "show running-config all | include ^ip tcp window-size|^ip ssh window-size|^ip ssh bulk-mode"
+
+    def parse_transfer_window(self, output: str) -> dict:
+        # Representative filtered lines (any may be absent):
+        #
+        #   ip tcp window-size 65536
+        #   ip ssh window-size 65536
+        #   ip ssh bulk-mode 131072
+        #
+        # No TCP line means the IOS default window is in effect.  The
+        # SSH side is fine with either bulk mode or a large window-size.
+        text = output or ""
+
+        def _size(command: str) -> int | None:
+            m = re.search(rf"^{command} (\d+)", text, re.MULTILINE)
+            return int(m.group(1)) if m else None
+
+        tcp_window = _size("ip tcp window-size")
+        ssh_window = _size("ip ssh window-size")
+        ssh_bulk_mode = bool(re.search(r"^ip ssh bulk-mode\b", text, re.MULTILINE))
+
+        problems: list[str] = []
+        recommended: list[str] = []
+        if (tcp_window or _DEFAULT_TCP_WINDOW) < _MIN_FAST_WINDOW:
+            shown = f"{tcp_window} bytes" if tcp_window else f"{_DEFAULT_TCP_WINDOW} bytes (default)"
+            problems.append(f"TCP window {shown}")
+            recommended.append(f"ip tcp window-size {_RECOMMENDED_WINDOW}")
+        if not ssh_bulk_mode and (ssh_window or 0) < _MIN_FAST_WINDOW:
+            problems.append(f"SSH window {ssh_window} bytes" if ssh_window else "SSH window at its default")
+            recommended.append(
+                f"ip ssh bulk-mode (or ip ssh window-size {_RECOMMENDED_WINDOW} on releases without bulk mode)"
+            )
+        return {
+            "tcp_window": tcp_window,
+            "ssh_window": ssh_window,
+            "ssh_bulk_mode": ssh_bulk_mode,
+            "problems": problems,
+            "recommended": recommended,
+        }
 
     def upgrade_commit_command(self) -> str:
         # Without ``install commit`` an IOS-XE box auto-rolls-back to

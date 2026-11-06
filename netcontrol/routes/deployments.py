@@ -21,10 +21,10 @@ from routes.crypto import decrypt
 
 import netcontrol.routes.state as state
 from netcontrol.routes.config_drift import _analyze_drift_for_host
+from netcontrol.routes.device_config import get_device_config
 from netcontrol.routes.maintenance_windows import evaluate_change_gate
 from netcontrol.routes.shared import (
     _audit,
-    _capture_running_config,
     _compute_config_diff,
     _corr_id,
     _get_session,
@@ -444,7 +444,7 @@ async def _run_deployment_job(
                     job_id,
                     f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Capturing pre-deployment config for {hostname}...\n",
                 )
-                config_text = await _capture_running_config(host, credentials)
+                config_text = (await get_device_config(host, credentials, capture_method="deployment")).config_text
                 await db.create_deployment_snapshot(deployment_id, host["id"], "pre", config_text)
                 await db.update_deployment_checkpoint(cp_id, "passed", json.dumps({"config_length": len(config_text)}))
 
@@ -559,7 +559,7 @@ async def _run_deployment_job(
                     job_id,
                     f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Capturing post-deployment config for {hostname}...\n",
                 )
-                post_config = await _capture_running_config(host, credentials)
+                post_config = (await get_device_config(host, credentials, capture_method="deployment")).config_text
                 await db.create_deployment_snapshot(deployment_id, host["id"], "post", post_config)
 
                 # Get pre-snapshot for diff
@@ -698,7 +698,9 @@ async def _run_rollback_job(
                         job_id,
                         f"[{datetime.now(UTC).strftime('%H:%M:%S')}] Capturing current config for {hostname}...\n",
                     )
-                    current_config = await _capture_running_config(host, credentials)
+                    current_config = (
+                        await get_device_config(host, credentials, capture_method="deployment")
+                    ).config_text
 
                     diff_text, _, _ = _compute_config_diff(
                         snap["config_text"],
@@ -725,7 +727,9 @@ async def _run_rollback_job(
                     await _push_config_to_device(host, credentials, revert_commands)
 
                     # Verify rollback
-                    verify_config = await _capture_running_config(host, credentials)
+                    verify_config = (
+                        await get_device_config(host, credentials, capture_method="deployment")
+                    ).config_text
                     verify_diff, va, vr = _compute_config_diff(
                         snap["config_text"],
                         verify_config,

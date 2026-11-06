@@ -29,10 +29,12 @@ from routes.crypto import decrypt
 import netcontrol.routes.state as state
 from netcontrol.drivers import DriverCapabilityError, get_driver
 from netcontrol.drivers.show_version import classify_show_version_os, parse_show_version
+from netcontrol.routes.device_config import store_device_config
 from netcontrol.routes.shared import (
     _audit,
     _corr_id,
     _get_session,
+    _read_device_configs,
     require_credential_access,
     require_owner_or_admin,
     service_credential,
@@ -698,6 +700,17 @@ async def _emit_device_status(campaign_id: int, device_id: int, **statuses):
         **statuses,
     }
     await _broadcast_upgrade_event(campaign_id, event)
+
+
+async def _start_device_phase(campaign_id: int, device_id: int, status_key: str, **fields) -> None:
+    """Mark one device's phase as running and clear the error left by an earlier run.
+
+    ``error_message`` is a single per-device field shared by every phase,
+    so a phase that starts without clearing it would finish with a green
+    check beside the previous failure's text.
+    """
+    await db.update_upgrade_device(device_id, **{status_key: "running"}, error_message="", **fields)
+    await _emit_device_status(campaign_id, device_id, **{status_key: "running"}, error_message="")
 
 
 async def _mark_device_on_target_version(campaign_id: int, device_id: int, running_version: str) -> None:
@@ -1920,6 +1933,47 @@ async def _boot_mode_gate(conn, campaign_id, dev_id, ip, device_type) -> str | N
     return None
 
 
+async def _transfer_window_check(conn, campaign_id, dev_id, ip, device_type) -> None:
+    """Warn before the copy when the device's receive windows will throttle it.
+
+    SCP throughput is capped at roughly the receiver's window divided by
+    the round-trip time, so a switch on default windows copies an image
+    at tens of KB/s over a WAN path however fast the link is.  Advisory
+    only: it logs the settings and the commands that fix them, never
+    blocks the transfer, and never changes device config.  Platforms
+    whose driver has no window knobs, and a failed read, both proceed.
+    """
+    driver = get_driver(device_type)
+    try:
+        show_cmd = driver.upgrade_transfer_window_show_command()
+        output = await asyncio.to_thread(conn.send_command, show_cmd, read_timeout=120)
+        window = driver.parse_transfer_window(output or "")
+    except DriverCapabilityError:
+        return
+    except Exception as exc:
+        await _emit(campaign_id, dev_id, "warn", f"Transfer window check failed ({exc}) - continuing", host=ip)
+        return
+    if not window["problems"]:
+        ssh_state = "SSH bulk mode on" if window["ssh_bulk_mode"] else f"SSH window {window['ssh_window']} bytes"
+        await _emit(
+            campaign_id,
+            dev_id,
+            "info",
+            f"Transfer windows OK (TCP window {window['tcp_window']} bytes, {ssh_state})",
+            host=ip,
+        )
+        return
+    await _emit(
+        campaign_id,
+        dev_id,
+        "warn",
+        f"Small receive window on the switch ({', '.join(window['problems'])}) - the copy will be slow "
+        f"over a high-latency path. To speed up later transfers, configure: {'; '.join(window['recommended'])} "
+        "(applies to new SSH sessions)",
+        host=ip,
+    )
+
+
 async def _wait_for_standby_hot(conn, campaign_id, dev_id, ip, device_type, max_wait, check_interval):
     """Poll ``show redundancy`` until the peer reports STANDBY HOT.
 
@@ -2299,10 +2353,9 @@ async def _device_prestage(campaign_id, dev, credentials, image_map, options):
     dev_id = dev["id"]
     device_type = await _resolve_device_type(dev)
 
-    await db.update_upgrade_device(
-        dev_id, prestage_status="running", phase="prestage", started_at=datetime.now(UTC).isoformat()
+    await _start_device_phase(
+        campaign_id, dev_id, "prestage_status", phase="prestage", started_at=datetime.now(UTC).isoformat()
     )
-    await _emit_device_status(campaign_id, dev_id, prestage_status="running")
     await _emit(campaign_id, dev_id, "info", f"Connecting to {ip}...", host=ip)
 
     try:
@@ -2373,7 +2426,10 @@ async def _device_prestage(campaign_id, dev, credentials, image_map, options):
         if not options.get("skip_backup"):
             await _emit(campaign_id, dev_id, "info", "Backing up running-config...", host=ip)
             try:
-                config = await asyncio.to_thread(conn.send_command, "show running-config", read_timeout=120)
+                config, config_full = await asyncio.to_thread(_read_device_configs, conn, device_type)
+                if dev.get("host_id"):
+                    # The same record every other feature reads (Config Backups).
+                    await store_device_config(int(dev["host_id"]), config, config_full, capture_method="upgrade")
                 os.makedirs(BACKUPS_DIR, exist_ok=True)
                 hostname = dev.get("hostname") or ip
                 clean = re.sub(r"[^\w\-.]", "_", hostname)
@@ -2443,10 +2499,9 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
     # ``_install_add_timeout``); resolved after connect.
     install_add_timeout = _install_add_timeout(options, redundant=False)
 
-    await db.update_upgrade_device(
-        dev_id, transfer_status="running", phase="transfer", started_at=datetime.now(UTC).isoformat()
+    await _start_device_phase(
+        campaign_id, dev_id, "transfer_status", phase="transfer", started_at=datetime.now(UTC).isoformat()
     )
-    await _emit_device_status(campaign_id, dev_id, transfer_status="running")
     await _emit(campaign_id, dev_id, "info", f"Connecting to {ip}...", host=ip)
 
     try:
@@ -2643,6 +2698,7 @@ async def _device_transfer(campaign_id, dev, credentials, image_map, options):
                 return
 
         # Transfer via SCP
+        await _transfer_window_check(conn, campaign_id, dev_id, ip, device_type)
         await _emit(campaign_id, dev_id, "info", f"Starting SCP transfer of {image_name}...", host=ip)
         await _emit(campaign_id, dev_id, "info", "This may take 10-30 minutes for large images", host=ip)
 
@@ -2822,10 +2878,9 @@ async def _device_activate(campaign_id, dev, credentials, image_map, options):
     dest_path = options.get("dest_path", "flash:")
     device_type = await _resolve_device_type(dev)
 
-    await db.update_upgrade_device(
-        dev_id, activate_status="running", phase="activate", started_at=datetime.now(UTC).isoformat()
+    await _start_device_phase(
+        campaign_id, dev_id, "activate_status", phase="activate", started_at=datetime.now(UTC).isoformat()
     )
-    await _emit_device_status(campaign_id, dev_id, activate_status="running")
     await _emit(campaign_id, dev_id, "info", f"Connecting to {ip}...", host=ip)
 
     try:
@@ -3286,8 +3341,7 @@ async def _device_verify(campaign_id, dev, credentials, image_map, options):
     dev_id = dev["id"]
     device_type = await _resolve_device_type(dev)
 
-    await db.update_upgrade_device(dev_id, verify_status="running", phase="verify")
-    await _emit_device_status(campaign_id, dev_id, verify_status="running")
+    await _start_device_phase(campaign_id, dev_id, "verify_status", phase="verify")
     await _emit(campaign_id, dev_id, "info", f"Connecting to {ip}...", host=ip)
 
     try:
@@ -3442,13 +3496,13 @@ async def _device_verify_prestage(campaign_id, dev, credentials, image_map, opti
             previous_transfer, "error", f"Status check could not complete: {err_msg}", "Status check failed", err_msg
         )
 
-    await db.update_upgrade_device(
+    await _start_device_phase(
+        campaign_id,
         dev_id,
-        transfer_status="running",
+        "transfer_status",
         phase_detail="Checking image and running version",
         started_at=datetime.now(UTC).isoformat(),
     )
-    await _emit_device_status(campaign_id, dev_id, transfer_status="running")
     await _emit(campaign_id, dev_id, "info", f"Connecting to {ip} to check status...", host=ip)
 
     try:
@@ -3864,6 +3918,10 @@ async def _transfer_image(conn, image_path, image_name, dest_path, options, camp
                 file_system=dest_path.rstrip(":") + ":",
                 direction="put",
                 overwrite_file=True,
+                # The caller verifies the on-device MD5 itself (and honours
+                # skip_md5); netmiko's own check would hash the image on the
+                # switch a second time.
+                verify_file=False,
                 progress4=progress,
             )
         except Exception as e:

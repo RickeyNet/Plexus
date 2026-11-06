@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import {
@@ -125,6 +125,17 @@ function TransferProgressBar({ p }: { p: TransferProgress }) {
     </div>
   );
 }
+
+// Error text in a table cell: shown in full and wrapped. A truncated
+// message hid the part that says what to do next, and a hover tooltip is
+// not a reliable way to read the rest.
+const WRAPPED_ERROR_STYLE: CSSProperties = {
+  color: 'var(--danger)',
+  minWidth: 220,
+  maxWidth: 380,
+  whiteSpace: 'pre-wrap',
+  overflowWrap: 'anywhere',
+};
 
 type ColumnPhase = 'prestage' | 'transfer' | 'activate' | 'verify';
 const PHASE_COLUMNS: ColumnPhase[] = ['prestage', 'transfer', 'activate', 'verify'];
@@ -285,17 +296,7 @@ function OperationHistory({ operations }: { operations: UpgradeOperation[] }) {
                   )}
                 </span>
                 {op.error_message && (
-                  <div
-                    title={op.error_message}
-                    style={{
-                      color: 'var(--danger)',
-                      marginTop: '0.2rem',
-                      maxWidth: 340,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
+                  <div style={{ ...WRAPPED_ERROR_STYLE, marginTop: '0.2rem' }}>
                     {op.error_message}
                   </div>
                 )}
@@ -1108,17 +1109,9 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                           {progress ? (
                             <TransferProgressBar p={progress} />
                           ) : errMsg ? (
-                            <span
-                              title={errMsg}
-                              style={{
-                                color: 'var(--danger)',
-                                fontSize: '0.85em',
-                              }}
-                            >
-                              {errMsg.length > 40
-                                ? `${errMsg.slice(0, 40)}…`
-                                : errMsg}
-                            </span>
+                            <div style={{ ...WRAPPED_ERROR_STYLE, fontSize: '0.85em' }}>
+                              {errMsg}
+                            </div>
                           ) : (
                             <span style={{ opacity: 0.5 }}>
                               {d.phase || 'pending'}

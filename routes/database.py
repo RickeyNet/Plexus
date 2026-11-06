@@ -636,10 +636,12 @@ CREATE TABLE IF NOT EXISTS config_backups (
     policy_id       INTEGER REFERENCES config_backup_policies(id) ON DELETE SET NULL,
     host_id         INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
     config_text     TEXT    NOT NULL DEFAULT '',
+    config_text_full TEXT   NOT NULL DEFAULT '',
     capture_method  TEXT    NOT NULL DEFAULT 'scheduled',
     status          TEXT    NOT NULL DEFAULT 'success',
     error_message   TEXT    DEFAULT '',
-    captured_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+    captured_at     TEXT    NOT NULL DEFAULT (datetime('now')),
+    checked_at      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS compliance_profiles (
@@ -2220,14 +2222,8 @@ def _convert_sqlite_schema_to_postgres(sqlite_schema: str) -> str:
 POSTGRES_SCHEMA = _convert_sqlite_schema_to_postgres(SCHEMA)
 
 
-# ── Full-text search on config_backups ───────────────────────────────────────
-# `search_config_backups` queries with to_tsvector @@ plainto_tsquery; this GIN
-# index backs it. Applied alongside SCHEMA on init.
-
-POSTGRES_FTS_EXTRAS = """
-CREATE INDEX IF NOT EXISTS idx_config_backups_search_tsv
-    ON config_backups USING GIN (to_tsvector('simple', COALESCE(config_text, '')));
-"""
+# The GIN index behind config backup search is created by migration 0079
+# (it covers a column existing databases gain in that migration).
 
 
 _CREATE_TABLE_RE = re.compile(
@@ -2913,8 +2909,6 @@ async def _init_postgres(db) -> None:
         await db.execute(rewritten)
     for alter in deferred_alters:
         await db.execute(alter)
-    for stmt in _split_sql_statements(POSTGRES_FTS_EXTRAS):
-        await db.execute(stmt)
     await db.commit()
 
 
