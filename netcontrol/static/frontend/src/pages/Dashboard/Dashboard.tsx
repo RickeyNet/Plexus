@@ -1,6 +1,9 @@
 import { Suspense, lazy } from 'react';
 
+import { useAuthStatus } from '@/api/auth';
 import { useDashboard } from '@/api/dashboard';
+import { useTopologySources } from '@/api/meraki';
+import { canUseFeature } from '@/lib/tabGating';
 
 import { PageHelp } from '@/components/PageHelp';
 import { AlertsSection } from './AlertsSection';
@@ -11,6 +14,7 @@ import { GroupHealthPanel } from './GroupHealthPanel';
 import { HealthSection } from './HealthSection';
 import { DashboardSwitcher } from './DashboardSwitcher';
 import { StatRings } from './StatRings';
+import { summarizeSources } from './sourceHealth';
 
 // Chart panels pull in echarts (~606 KB). Deferring them keeps the home page
 // first paint light; each shows a skeleton until its chunk resolves.
@@ -37,6 +41,12 @@ const PanelSkeleton = () => <div className="skeleton skeleton-card" />;
 
 export function Dashboard() {
   const { data, isPending, error } = useDashboard();
+  // Topology sources are behind the topology feature: users without it never
+  // request them, and the banner and ring just leave them out.
+  const { data: auth } = useAuthStatus();
+  const canTopology = canUseFeature('topology', auth);
+  const sourcesQuery = useTopologySources(canTopology);
+  const sources = canTopology ? (sourcesQuery.data?.sources ?? []) : [];
 
   if (isPending) {
     return (
@@ -71,6 +81,8 @@ export function Dashboard() {
   const monitoring = data?.monitoring ?? {};
   const devices = data?.device_health ?? [];
   const alerts = data?.open_alerts ?? [];
+  // Absent for users without the monitoring feature.
+  const topology = data?.topology;
 
   return (
     <>
@@ -91,9 +103,9 @@ export function Dashboard() {
       <PageHelp
         pageKey="dashboard"
         title="Your Network at a Glance"
-        text="View device status, recent alerts, backup summaries, and quick stats. Use the dashboard switcher above to open or manage custom dashboards with your own metric panels."
+        text="View device status, recent alerts, backup summaries, and quick stats. The Needs attention banner gathers unreachable or critical devices, interfaces down, failed backups, critical alerts, down or degraded sites, uplinks, tunnels and cloud connections reported by the integrations, and topology sources whose last collection failed, was partial, is overdue or has warnings. Use the dashboard switcher above to open or manage custom dashboards with your own metric panels."
       />
-      <CriticalIssuesBanner devices={devices} alerts={alerts} />
+      <CriticalIssuesBanner devices={devices} alerts={alerts} sources={sources} topology={topology} />
       <Suspense fallback={<PanelSkeleton />}>
         <OverviewPanels devices={devices} />
       </Suspense>
@@ -122,10 +134,16 @@ export function Dashboard() {
         hosts={stats.total_hosts ?? 0}
         playbooks={stats.total_playbooks ?? 0}
         jobs={stats.total_jobs ?? 0}
+        sources={canTopology && sourcesQuery.data ? summarizeSources(sources) : undefined}
+        entities={topology?.entity_counts}
       />
       <HealthSection monitoring={monitoring} devices={devices} groups={groups} />
       <div id={ISSUE_ANCHORS.alerts}>
-        <AlertsSection alerts={alerts} />
+        <AlertsSection
+          alerts={alerts}
+          topologyProblems={topology?.problems}
+          topologyProblemCount={topology?.problem_count}
+        />
       </div>
     </>
   );
