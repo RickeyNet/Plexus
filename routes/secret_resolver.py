@@ -30,6 +30,22 @@ class SecretResolutionError(Exception):
         super().__init__(f"Unresolved secret variable(s): {', '.join(missing)}")
 
 
+def normalize_secret_name(name: str) -> str:
+    """Reduce a pasted reference to the bare secret name.
+
+    Users often paste the template reference (``{{secret.NAME}}``) or the
+    dotted form (``secret.NAME``) into the name field. Both are reduced to
+    ``NAME``; anything else is returned stripped and unchanged so the caller's
+    validation can reject it.
+    """
+    name = (name or "").strip()
+    if name.startswith("{{") and name.endswith("}}"):
+        name = name[2:-2].strip()
+    if name.startswith("secret."):
+        name = name[len("secret.") :]
+    return name.strip()
+
+
 def has_secret_references(text: str) -> bool:
     """Return True if *text* contains any {{secret.*}} placeholders."""
     if not text or len(text) > _MAX_SCAN_LEN:
