@@ -166,7 +166,7 @@ async def update_secret_variable(var_id: int, body: SecretVariableUpdate, reques
         detail=f"updated secret variable '{sv['name']}' ({', '.join(what)})",
         correlation_id=_corr_id(request),
     )
-    LOGGER.info("Secret variable updated: '%s' by %s", sv["name"], session["user"])
+    LOGGER.info("Secret variable %s updated by %s", var_id, session["user"])
     return {"ok": True}
 
 
@@ -186,5 +186,5 @@ async def delete_secret_variable(var_id: int, request: Request):
         detail=f"deleted secret variable '{sv['name']}'",
         correlation_id=_corr_id(request),
     )
-    LOGGER.info("Secret variable deleted: '%s' by %s", sv["name"], session["user"])
+    LOGGER.info("Secret variable %s deleted by %s", var_id, session["user"])
     return {"ok": True}
