@@ -13,9 +13,9 @@ from pydantic import BaseModel
 from routes.crypto import decrypt
 
 import netcontrol.routes.state as state
+from netcontrol.routes.device_config import ON_DEMAND_MAX_AGE_SECONDS, get_device_config
 from netcontrol.routes.shared import (
     _audit,
-    _capture_running_config,
     _compute_config_diff,
     _corr_id,
     _get_session,
@@ -250,7 +250,7 @@ async def _run_risk_analysis_for_host(
     """Run a full risk analysis for proposed commands against a single host.
 
     Steps:
-      1. Capture current running config
+      1. Current running config (a backup up to 15 minutes old, else read)
       2. Classify affected areas
       3. Simulate the config change
       4. Compute diff between current and simulated
@@ -262,7 +262,11 @@ async def _run_risk_analysis_for_host(
 
     # 1. Capture current config
     try:
-        current_config = await _capture_running_config(host, credentials)
+        current_config = (
+            await get_device_config(
+                host, credentials, capture_method="risk-analysis", max_age_seconds=ON_DEMAND_MAX_AGE_SECONDS
+            )
+        ).config_text
     except Exception as exc:
         return {
             "host_id": host["id"],

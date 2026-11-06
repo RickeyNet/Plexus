@@ -51,6 +51,7 @@ from netcontrol.drivers import Driver, DriverCapabilityError, GenericDriver, Rou
 from netcontrol.integrations.pathtrace.platforms import interface_addresses
 from netcontrol.integrations.pathtrace.route_tables import interface_key
 from netcontrol.routes import background_jobs
+from netcontrol.routes.device_config import store_device_config
 from netcontrol.routes.host_identity import interface_ip, is_placeholder_hostname
 from netcontrol.routes.ipam_push import push_inventory_host_allocation
 from netcontrol.routes.mac_tracking import mac_sightings_from_cli, store_mac_sightings
@@ -62,7 +63,9 @@ from netcontrol.routes.route_capture import (
     store_route_snapshot,
 )
 from netcontrol.routes.shared import (
+    _FULL_CONFIG_READ_TIMEOUT_SECONDS,
     _audit,
+    _config_capture_commands,
     _get_session,
     _open_netmiko_session,
     require_credential_access,
@@ -88,7 +91,6 @@ PARTS = ("routes", "configs", *TABLE_PARTS)
 
 _SSH_TIMEOUT_SECONDS = 180
 _READ_TIMEOUT_SECONDS = 60
-_FALLBACK_CONFIG_COMMAND = "show running-config"
 # The driver whose table commands a type without a driver gets.
 _FALLBACK_TABLE_TYPE = "cisco_ios"
 _MAX_MESSAGE_CHARS = 300
@@ -103,16 +105,13 @@ def _collectable(host: dict) -> bool:
     return str(host.get("device_type") or "") != "icmp_only"
 
 
-def _commands(device_type: str) -> tuple[RouteTableCommands, str]:
-    """The route table commands and the configuration command of a device
-    type: its driver's, or the Cisco IOS ones for a type without a driver
-    (Aruba, for one), which is what the monitoring poll and Config Backups
-    send such a device."""
-    try:
-        config = get_driver(device_type).capture_running_config_command()
-    except DriverCapabilityError:
-        config = _FALLBACK_CONFIG_COMMAND
-    return _route_table_commands(device_type), config
+def _commands(device_type: str) -> tuple[RouteTableCommands, str, str | None]:
+    """The route table commands and the configuration commands (plain, and
+    with defaults included or None) of a device type: its driver's, or the
+    Cisco IOS ones for a type without a driver (Aruba, for one), which is
+    what the monitoring poll and Config Backups send such a device."""
+    config, config_full = _config_capture_commands(device_type)
+    return _route_table_commands(device_type), config, config_full
 
 
 def _error_text(exc: BaseException) -> str:
@@ -255,18 +254,19 @@ def _capture_host(host: dict, credential: dict) -> dict[str, Any]:
     Each part is best effort.
 
     Returns ``{"skipped", "routes": (text, count) | None, "config": str | None,
+    "config_full": the configuration with defaults included or "",
     "vlans" | "interfaces" | "neighbors" | "macs": [row, ...] | None,
     "device_type": the type the session resolved, "errors": [message, ...]}``
     (``None``: not read; ``skipped`` is never set: every type gets commands,
     and it is kept so a caller reads one shape).
     """
-    outcome: dict[str, Any] = {"skipped": False, "routes": None, "config": None, "errors": []}
+    outcome: dict[str, Any] = {"skipped": False, "routes": None, "config": None, "config_full": "", "errors": []}
     outcome.update(dict.fromkeys(TABLE_PARTS))
     # The type may be autodetected on connect, so the commands follow the resolved one.
     conn, resolved_type = _open_netmiko_session(host, credential)
     outcome["device_type"] = resolved_type
     try:
-        route_commands, config_command = _commands(resolved_type)
+        route_commands, config_command, full_config_command = _commands(resolved_type)
         try:
             text, count = read_route_table(conn, route_commands, _READ_TIMEOUT_SECONDS)
             if _is_route_table(text):
@@ -284,6 +284,16 @@ def _capture_host(host: dict, credential: dict) -> dict[str, Any]:
                 outcome["errors"].append("Configuration not read: the device printed no configuration")
         except Exception as exc:  # noqa: BLE001 - recorded in the collection report
             outcome["errors"].append(f"Configuration not read ({_error_text(exc)})")
+        if outcome["config"] and full_config_command:
+            # The form Config Backups search reads; the plain one is stored without it.
+            try:
+                output = str(
+                    conn.send_command(full_config_command, read_timeout=_FULL_CONFIG_READ_TIMEOUT_SECONDS) or ""
+                )
+                if _is_route_table(output):
+                    outcome["config_full"] = output
+            except Exception as exc:  # noqa: BLE001 - the plain configuration is stored
+                outcome["errors"].append(f"Configuration with defaults not read ({_error_text(exc)})")
         driver = _table_driver(resolved_type)
         _read_part(outcome, "vlans", "VLAN table", lambda: _read_vlans(conn, driver, outcome["config"]))
         _read_part(outcome, "interfaces", "Port table", lambda: _read_interfaces(conn, driver))
@@ -370,12 +380,8 @@ async def _store_host(host: dict, outcome: dict[str, Any], rename_lock: asyncio.
         stored["routes"] = True
     config = outcome.get("config")
     if config:
-        latest = (await db.get_latest_config_texts_for_hosts([host_id])).get(host_id)
-        # An unchanged configuration writes nothing; the host still counts.
-        if latest is None or latest.get("config_text") != config:
-            await db.create_config_backup(
-                policy_id=None, host_id=host_id, config_text=config, capture_method="topology", status="success"
-            )
+        # An unchanged configuration writes no new backup; the host still counts.
+        await store_device_config(host_id, config, str(outcome.get("config_full") or ""), capture_method="topology")
         stored["configs"] = True
         device_type = str(outcome.get("device_type") or host.get("device_type") or "")
         await _store_identity(host, device_type, config, rename_lock)

@@ -69,6 +69,9 @@ class CiscoNXOSDriver(CiscoStyleTables, Driver):
     def capture_running_config_command(self) -> str:
         return "show running-config"
 
+    def capture_full_config_command(self) -> str:
+        return "show running-config all"
+
     def save_config_commands(self) -> list[str]:
         # NX-OS doesn't accept "write memory" - the canonical save command
         # is the explicit copy form.

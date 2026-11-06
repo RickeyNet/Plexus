@@ -146,7 +146,7 @@ Risk mitigations built into this procedure:
 - The software image is MD5-verified after transfer, so a corrupt image is never installed.
 - The unpacked packages are verified on flash after `install add`, and can be re-verified any time before the reload window.
 - On redundant chassis, the standby supervisor must be STANDBY HOT before both Transfer and Activate. A cold or absent standby blocks the operation.
-- Each switch's boot mode (INSTALL or BUNDLE) is read from `show version` in Prestage, before the Transfer copy, in Check status and in Activate, and shown in the campaign's **Mode** column. A bundle-mode switch is stopped before any image is copied. Install mode is required for every upgrade the tool runs, ISSU included.
+- Each switch's boot mode (INSTALL or BUNDLE) is read from `show version` in Prestage, before the Transfer copy, in Check status and in Activate, and shown in the campaign's **Mode** column. Stackable switches report it in the `show version` Mode table; a modular chassis (9400, 9600) has no such table, so the mode is taken from the `System image file` line (`packages.conf` is INSTALL, a `.bin` file is BUNDLE). A bundle-mode switch is stopped before any image is copied. Install mode is required for every upgrade the tool runs, ISSU included.
 - The switch is not rebooted until the image is re-verified on flash and the boot-mode and redundancy gates pass.
 - Post-upgrade verification confirms the running version, then runs `install commit`, then re-reads the version to confirm nothing rolled back.
 - Interactive confirmation is required before an immediate Activate.
@@ -222,7 +222,7 @@ Check each item off as it is completed. All items must be done before the mainte
 
 The Prestage phase does this automatically. For each switch it:
 
-1. Retrieves the full `show running-config` and saves it under the campaign's **Backups** tab as `backup_<hostname>_<timestamp>.txt`
+1. Retrieves the full `show running-config` and saves it under the campaign's **Backups** tab as `backup_<hostname>_<timestamp>.txt`. For a switch that is in the inventory, the same capture (with `show running-config all`) is also stored in **Config Backups**, where backup search finds it
 2. Runs `write memory` so the startup-config on the switch matches the running-config
 
 Confirm a backup file exists for every switch before proceeding by opening the **Backups** tab in the campaign.
@@ -286,7 +286,7 @@ Click **Run prestage**. On each device the tool:
 1. Connects and detects the model and running version, then resolves the target image from the image map.
 2. Reads the boot mode and shows it in the **Mode** column. A BUNDLE-mode switch fails Prestage here, because install-mode upgrades and ISSU cannot run on it.
 3. Runs a pre-flight health check (skippable). A failed check fails the device and stops it there.
-4. Backs up `show running-config` (downloadable later from the **Backups** tab).
+4. Backs up `show running-config` (downloadable later from the **Backups** tab, and stored in **Config Backups** for an inventory switch).
 5. Saves the config (`write memory`).
 6. Frees flash space with `install remove inactive`.
 
@@ -299,9 +299,10 @@ Click **Run prestage**. On each device the tool:
 Click **Run transfer**. On each device the tool:
 
 1. Checks free space on `flash:`.
-2. Copies the image via SCP (30 - 60 minutes per device is normal).
-3. Verifies the on-device MD5 against the uploaded image (skippable).
-4. Runs `install add` to unpack the image, and verifies the unpacked packages.
+2. Reads the switch's TCP and SSH receive windows and logs a warning when they will slow the copy (see Appendix B). The transfer continues either way and no configuration is changed.
+3. Copies the image via SCP (30 - 60 minutes per device is normal).
+4. Verifies the on-device MD5 against the uploaded image (skippable).
+5. Runs `install add` to unpack the image, and verifies the unpacked packages.
 
 **Dual-sup / StackWise Virtual:** before `install add`, the standby supervisor must be **STANDBY HOT**. If it isn't, the transfer is refused (with "Skip health check" enabled it is only a warning). This is because `install add` silently skips syncing packages to a cold or absent standby and the problem would otherwise only surface at Activate time. Timeouts are automatically widened for redundant chassis.
 
@@ -488,6 +489,21 @@ aaa authorization exec default local
 
 Confirm install mode with `show version` (look for "Installation mode is INSTALL").
 
+**Optional, for faster transfers.** An SCP copy can go no faster than the switch's receive window divided by the round-trip time to it. On the default 4128-byte TCP window a switch 50 ms away accepts about 80 KB/s, whatever the link speed. Raising the windows removes that cap:
+
+```
+ip tcp window-size 65536
+ip ssh bulk-mode
+```
+
+The SSH command depends on the release:
+
+- From IOS XE 17.10, SSH bulk mode is on by default and only the TCP window needs raising.
+- Some releases accept `ip ssh bulk-mode` only without a size. Use `ip ssh bulk-mode ?` to see what the switch takes.
+- Where bulk mode is not available, use `ip ssh window-size 65536` with the TCP window set to the same value.
+
+The switch warns that a larger SSH window can raise CPU load and should be used only for SCP. Try the settings on one switch before rolling them out, and remove them after the upgrade if CPU is a concern. They apply to SSH sessions opened after the change, so set them before starting Transfer. The Transfer phase reports the current values in each device log and warns when either window is small.
+
 ### Appendix C. Creating a campaign
 
 1. Go to **Network → Software → Upgrades → Campaigns** and create a new campaign.
@@ -520,6 +536,7 @@ The **Backups** tab lists every running-config capture taken during Prestage (`b
 |---|---|---|
 | Device shows "No image map match for model" | The model pattern on the image or in the campaign's image map does not match this device | Add or fix the model pattern on the image (Images tab) or in the campaign's image map |
 | Transfer refused: standby not STANDBY HOT | The standby supervisor is cold, absent, or not synced | Fix the standby sup (reseat, boot, sync) before transferring. Do not bypass unless you accept an unsynced standby |
+| "Small receive window on the switch" warning; transfer runs at tens of KB/s | The switch's TCP or SSH receive window is at its default, which caps SCP speed on a high-latency path | Apply the window settings in Appendix B, then cancel and re-run Transfer. The running copy keeps its old window |
 | Health check FAILED | Switch is not healthy enough to upgrade safely | Open the device log for the specific warnings. Fix and re-run Prestage |
 | "Device is booted in BUNDLE mode" (Prestage, Transfer, Check status or Activate); **Mode** shows BUNDLE | The switch boots the `.bin` directly, not `packages.conf` | Convert the switch to install mode first, then re-run the step. No image is copied while it is in bundle mode |
 | "ISSU not supported on this platform" | The device does not support in-service upgrade | Untick the ISSU option. The device will do a normal reload |
