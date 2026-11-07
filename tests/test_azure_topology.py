@@ -387,7 +387,7 @@ def test_live_collector_fails_when_a_base_section_cannot_be_read():
     with pytest.raises(collectors_module.CloudCollectorExecutionError, match="gateway_connections") as info:
         collectors_module._collect_azure_network(client, SUB)
     # The failed sections reach the UI, not only the log.
-    assert "gateway_connections" in info.value.user_message
+    assert "gateway_connections (_Denied)" in info.value.user_message
 
 
 # ── Snapshot ─────────────────────────────────────────────────────────────────
