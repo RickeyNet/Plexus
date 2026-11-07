@@ -1352,10 +1352,10 @@ async def validate_cloud_account_api(account_id: int, request: Request, body: Cl
             valid = False
             status = "auth_error"
             message = exc.user_message or "Live provider authentication/configuration failed"
-        except CloudCollectorExecutionError:
+        except CloudCollectorExecutionError as exc:
             valid = False
             status = "execution_error"
-            message = "Live provider validation failed"
+            message = exc.user_message or "Live provider validation failed"
         except Exception:
             valid = False
             status = "error"
@@ -1581,9 +1581,9 @@ async def discover_cloud_account_api(account_id: int, request: Request, body: Cl
                 sync_status = "error"
                 sync_message = exc.user_message or "Live discovery authentication/configuration failed"
                 failure_status_code = 400
-            except CloudCollectorExecutionError:
+            except CloudCollectorExecutionError as exc:
                 sync_status = "error"
-                sync_message = "Live provider discovery failed"
+                sync_message = exc.user_message or "Live provider discovery failed"
                 failure_status_code = 502
 
         if sync_status == "error":
