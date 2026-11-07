@@ -198,3 +198,4 @@ jobs:
           build-args: |
             PLEXUS_VERSION=${{ steps.meta.outputs.version }}
             PLEXUS_GIT_SHA=${{ github.sha }}
+            INSTALL_CLOUD_SDKS=true

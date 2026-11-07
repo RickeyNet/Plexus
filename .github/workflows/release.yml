@@ -91,6 +91,7 @@ jobs:
           build-args: |
             PLEXUS_VERSION=${{ steps.release.outputs.version }}
             PLEXUS_GIT_SHA=${{ steps.release.outputs.sha }}
+            INSTALL_CLOUD_SDKS=true
 
       - name: Scan image (trivy)
         uses: aquasecurity/trivy-action@0.36.0
@@ -113,3 +114,4 @@ jobs:
           build-args: |
             PLEXUS_VERSION=${{ steps.release.outputs.version }}
             PLEXUS_GIT_SHA=${{ steps.release.outputs.sha }}
+            INSTALL_CLOUD_SDKS=true

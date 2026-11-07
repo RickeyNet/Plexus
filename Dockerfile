@@ -52,9 +52,10 @@ COPY requirements.txt requirements-lock.txt requirements-cloud.txt ./
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir --require-hashes -r requirements-lock.txt
 
-# Cloud Visibility provider SDKs (AWS/Azure/GCP). Off by default to keep the
-# base image small; build with --build-arg INSTALL_CLOUD_SDKS=true to enable
-# live cloud collection.
+# Cloud Visibility provider SDKs (AWS/Azure/GCP). Off by default for bare
+# `docker build`; docker-compose.yml and the CI-published images (edge,
+# releases) pass INSTALL_CLOUD_SDKS=true so live cloud collection works.
+# Set it to false for a smaller image that never attaches cloud accounts.
 ARG INSTALL_CLOUD_SDKS=false
 RUN if [ "$INSTALL_CLOUD_SDKS" = "true" ]; then \
         pip install --no-cache-dir -r requirements-cloud.txt; \
