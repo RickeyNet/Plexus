@@ -27,9 +27,10 @@ VALID_PROVIDERS = {"aws", "azure", "gcp"}
 class CloudCollectorError(RuntimeError):
     """Base class for collector failures.
 
-    ``user_message`` is set when Plexus can say exactly what is wrong; it is
-    fixed text written here (plus section and region names from the account's
-    own settings), never the provider's error message, so it is safe to show.
+    ``user_message`` is what the UI shows: fixed text written here, the
+    account's own section and region names, and the provider's error code
+    and message (``provider_error_detail``, never a traceback). Discovery and
+    validation are admin-only and describe the admin's own cloud account.
     """
 
     def __init__(self, message: str, *, user_message: str = "") -> None:
@@ -87,18 +88,49 @@ class CloudCollectorExecutionError(CloudCollectorError):
     """Raised for provider API/runtime execution failures."""
 
 
-def _partial_discovery_error(section_errors: list[str]) -> CloudCollectorExecutionError:
-    """The error for a discovery where some sections failed. The section
-    labels are fixed names plus the account's own region names, so they go
-    into ``user_message``; the provider's errors are only logged."""
-    sections = ", ".join(sorted(set(section_errors)))
+_DETAIL_MAX_CHARS = 400
+
+
+def provider_error_detail(exc: BaseException) -> str:
+    """The provider's error code and message, for an admin to act on.
+
+    AWS (botocore ``ClientError``) gives ``Code: Message``, e.g.
+    ``AccessDeniedException: User ... is not authorized to perform:
+    directconnect:DescribeConnections``. Azure and Google SDK errors give
+    their first line. Anything else gives its class name and first line.
+    Never the traceback; whitespace is collapsed and the text is capped.
+    """
+    response = getattr(exc, "response", None)
+    error = response.get("Error") if isinstance(response, dict) else None
+    if isinstance(error, dict) and (error.get("Code") or error.get("Message")):
+        text = ": ".join(str(part) for part in (error.get("Code"), error.get("Message")) if part)
+    else:
+        first_line = next((line for line in str(exc).splitlines() if line.strip()), "")
+        text = f"{type(exc).__name__}: {first_line}" if first_line else type(exc).__name__
+    text = " ".join(text.split())
+    if len(text) > _DETAIL_MAX_CHARS:
+        text = text[: _DETAIL_MAX_CHARS - 3] + "..."
+    return text
+
+
+def _partial_discovery_error(section_errors: list[tuple[str, str]]) -> CloudCollectorExecutionError:
+    """The error for a discovery where some sections failed.
+
+    ``section_errors`` holds ``(label, provider_error_detail)`` pairs. Labels
+    that failed with the same error (one permission missing in every region)
+    are grouped, so the message names each distinct problem once.
+    """
+    by_detail: dict[str, set[str]] = {}
+    for label, detail in section_errors:
+        by_detail.setdefault(detail, set()).add(label)
+    labels = sorted({label for label, _detail in section_errors})
+    problems = "; ".join(
+        f"{', '.join(sorted(group))} ({detail})"
+        for detail, group in sorted(by_detail.items(), key=lambda kv: sorted(kv[1]))
+    )
     return CloudCollectorExecutionError(
-        "Partial provider discovery; failed sections: " + sections,
-        user_message=(
-            f"Live provider discovery failed reading: {sections}. "
-            "Check that the credentials are allowed to read these and that the regions are enabled; "
-            "the server log has the provider's error."
-        ),
+        "Partial provider discovery; failed sections: " + ", ".join(labels),
+        user_message=f"Live provider discovery failed reading: {problems}",
     )
 
 
@@ -533,7 +565,10 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
     try:
         session = boto3.Session(**session_kwargs)
     except Exception as exc:
-        raise CloudCollectorAuthError("Failed to initialize AWS session") from exc
+        raise CloudCollectorAuthError(
+            "Failed to initialize AWS session",
+            user_message=f"Could not set up the AWS session: {provider_error_detail(exc)}",
+        ) from exc
 
     _cfg = Config(connect_timeout=10, read_timeout=60, retries={"max_attempts": 4, "mode": "adaptive"})
 
@@ -556,7 +591,9 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
             )
         except Exception as exc:
             raise CloudCollectorAuthError(
-                "Failed to assume AWS IAM role", user_message=aws_credential_message(exc)
+                "Failed to assume AWS IAM role",
+                user_message=aws_credential_message(exc)
+                or f"Could not assume the IAM role: {provider_error_detail(exc)}",
             ) from exc
 
     # Validate credentials early.
@@ -564,10 +601,14 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
         session.client("sts", config=_cfg).get_caller_identity()
     except (BotoCoreError, ClientError) as exc:
         raise CloudCollectorAuthError(
-            "AWS credentials are invalid or unauthorized", user_message=aws_credential_message(exc)
+            "AWS credentials are invalid or unauthorized",
+            user_message=aws_credential_message(exc) or f"AWS rejected the credentials: {provider_error_detail(exc)}",
         ) from exc
     except Exception as exc:
-        raise CloudCollectorExecutionError("Failed to validate AWS credentials") from exc
+        raise CloudCollectorExecutionError(
+            "Failed to validate AWS credentials",
+            user_message=f"Could not check the AWS credentials: {provider_error_detail(exc)}",
+        ) from exc
 
     region_scope = str(account.get("region_scope") or "")
     if _is_all_regions(region_scope):
@@ -576,7 +617,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
         except Exception as exc:
             raise CloudCollectorExecutionError(
                 "Failed to list the AWS regions (ec2:DescribeRegions)",
-                user_message="Could not list the AWS regions: the credentials need ec2:DescribeRegions for All regions.",
+                user_message=f"Could not list the AWS regions for All regions: {provider_error_detail(exc)}",
             ) from exc
         if not regions:
             raise CloudCollectorExecutionError(
@@ -587,7 +628,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
 
     resources: list[dict] = []
     connections: list[dict] = []
-    section_errors: list[str] = []
+    section_errors: list[tuple[str, str]] = []
 
     for region in regions:
         ec2 = session.client("ec2", region_name=region, config=_cfg)
@@ -609,9 +650,9 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         metadata={"is_default": bool(vpc.get("IsDefault", False))},
                     )
                 )
-        except BotoCoreError, ClientError:
+        except (BotoCoreError, ClientError) as exc:
             LOGGER.warning("aws collector: failed vpc list region=%s", region, exc_info=True)
-            section_errors.append(f"vpcs:{region}")
+            section_errors.append((f"vpcs:{region}", provider_error_detail(exc)))
 
         try:
             igws = _aws_list_all(ec2, "describe_internet_gateways", "InternetGateways")
@@ -650,9 +691,9 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                             state=str(attachment.get("State") or "attached"),
                         )
                     )
-        except BotoCoreError, ClientError:
+        except (BotoCoreError, ClientError) as exc:
             LOGGER.warning("aws collector: failed internet gateway list region=%s", region, exc_info=True)
-            section_errors.append(f"internet_gateways:{region}")
+            section_errors.append((f"internet_gateways:{region}", provider_error_detail(exc)))
 
         try:
             nat_gateways = _aws_list_all(ec2, "describe_nat_gateways", "NatGateways")
@@ -687,9 +728,9 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                             state=str(gateway.get("State") or ""),
                         )
                     )
-        except BotoCoreError, ClientError:
+        except (BotoCoreError, ClientError) as exc:
             LOGGER.warning("aws collector: failed nat gateway list region=%s", region, exc_info=True)
-            section_errors.append(f"nat_gateways:{region}")
+            section_errors.append((f"nat_gateways:{region}", provider_error_detail(exc)))
 
         try:
             sec_groups = _aws_list_all(ec2, "describe_security_groups", "SecurityGroups")
@@ -711,9 +752,9 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         },
                     )
                 )
-        except BotoCoreError, ClientError:
+        except (BotoCoreError, ClientError) as exc:
             LOGGER.warning("aws collector: failed security group list region=%s", region, exc_info=True)
-            section_errors.append(f"security_groups:{region}")
+            section_errors.append((f"security_groups:{region}", provider_error_detail(exc)))
 
         try:
             tgws = _aws_list_all(ec2, "describe_transit_gateways", "TransitGateways")
@@ -735,9 +776,9 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         },
                     )
                 )
-        except BotoCoreError, ClientError:
+        except (BotoCoreError, ClientError) as exc:
             LOGGER.warning("aws collector: failed tgw list region=%s", region, exc_info=True)
-            section_errors.append(f"transit_gateways:{region}")
+            section_errors.append((f"transit_gateways:{region}", provider_error_detail(exc)))
 
         try:
             attachments = _aws_list_all(ec2, "describe_transit_gateway_attachments", "TransitGatewayAttachments")
@@ -768,9 +809,9 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         },
                     )
                 )
-        except BotoCoreError, ClientError:
+        except (BotoCoreError, ClientError) as exc:
             LOGGER.warning("aws collector: failed tgw attachment list region=%s", region, exc_info=True)
-            section_errors.append(f"transit_gateway_attachments:{region}")
+            section_errors.append((f"transit_gateway_attachments:{region}", provider_error_detail(exc)))
 
         try:
             peerings = _aws_list_all(ec2, "describe_vpc_peering_connections", "VpcPeeringConnections")
@@ -801,9 +842,9 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         },
                     )
                 )
-        except BotoCoreError, ClientError:
+        except (BotoCoreError, ClientError) as exc:
             LOGGER.warning("aws collector: failed vpc peering list region=%s", region, exc_info=True)
-            section_errors.append(f"vpc_peering_connections:{region}")
+            section_errors.append((f"vpc_peering_connections:{region}", provider_error_detail(exc)))
 
         try:
             vpn_gateways = _aws_list_all(ec2, "describe_vpn_gateways", "VpnGateways")
@@ -843,9 +884,9 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                             state=str(attachment.get("State") or gateway.get("State") or ""),
                         )
                     )
-        except BotoCoreError, ClientError:
+        except (BotoCoreError, ClientError) as exc:
             LOGGER.warning("aws collector: failed vpn gateway list region=%s", region, exc_info=True)
-            section_errors.append(f"vpn_gateways:{region}")
+            section_errors.append((f"vpn_gateways:{region}", provider_error_detail(exc)))
 
         try:
             route_tables = _aws_list_all(ec2, "describe_route_tables", "RouteTables")
@@ -906,9 +947,9 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                             },
                         )
                     )
-        except BotoCoreError, ClientError:
+        except (BotoCoreError, ClientError) as exc:
             LOGGER.warning("aws collector: failed route table list region=%s", region, exc_info=True)
-            section_errors.append(f"route_tables:{region}")
+            section_errors.append((f"route_tables:{region}", provider_error_detail(exc)))
 
         try:
             vpns = _aws_list_all(ec2, "describe_vpn_connections", "VpnConnections")
@@ -961,9 +1002,9 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                             state=str(vpn.get("State") or ""),
                         )
                     )
-        except BotoCoreError, ClientError:
+        except (BotoCoreError, ClientError) as exc:
             LOGGER.warning("aws collector: failed vpn list region=%s", region, exc_info=True)
-            section_errors.append(f"vpn_connections:{region}")
+            section_errors.append((f"vpn_connections:{region}", provider_error_detail(exc)))
 
         # Direct Connect is region-bound; query every configured region.
         try:
@@ -984,9 +1025,9 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
                         metadata={"bandwidth": str(dx_conn.get("bandwidth") or "")},
                     )
                 )
-        except Exception:
+        except Exception as exc:
             LOGGER.warning("aws collector: failed direct connect list region=%s", region, exc_info=True)
-            section_errors.append(f"direct_connect:{region}")
+            section_errors.append((f"direct_connect:{region}", provider_error_detail(exc)))
 
         _collect_aws_map_detail(session, ec2, region, _cfg, resources, connections)
 
@@ -1018,7 +1059,9 @@ def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
     auth = _parse_auth_config(account)
     subscription_id = str(auth.get("subscription_id") or account.get("account_identifier") or "").strip()
     if not subscription_id:
-        raise CloudCollectorAuthError("Azure subscription_id is required")
+        raise CloudCollectorAuthError(
+            "Azure subscription_id is required", user_message="Azure subscription_id is required"
+        )
 
     tenant_id = str(auth.get("tenant_id") or "").strip()
     client_id = str(auth.get("client_id") or "").strip()
@@ -1031,7 +1074,10 @@ def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
             credential = DefaultAzureCredential(exclude_interactive_browser_credential=True)
         network_client = NetworkManagementClient(credential, subscription_id)
     except Exception as exc:
-        raise CloudCollectorAuthError("Failed to initialize Azure credentials") from exc
+        raise CloudCollectorAuthError(
+            "Failed to initialize Azure credentials",
+            user_message=f"Could not set up the Azure credentials: {provider_error_detail(exc)}",
+        ) from exc
 
     # The Network API lists gateways and connections per resource group only.
     # azure-mgmt-resource (optional) names every group of the subscription;
@@ -1095,7 +1141,7 @@ def _collect_azure_network(
     """
     resources: list[dict] = []
     connections: list[dict] = []
-    section_errors: list[str] = []
+    section_errors: list[tuple[str, str]] = []
     public_ips: dict[str, str] = {}
 
     def optional(section: str, read) -> None:
@@ -1127,20 +1173,23 @@ def _collect_azure_network(
                         conn = azure_detail.peering_connection(resource["resource_uid"], peering, subscription_id)
                         if conn:
                             connections.append(conn)
-            except Exception:
+            except Exception as exc:
                 LOGGER.warning("azure collector: failed to list peerings for vnet=%s", name, exc_info=True)
-                section_errors.append("vnet_peerings")
+                section_errors.append(("vnet_peerings", provider_error_detail(exc)))
     except Exception as exc:
-        raise CloudCollectorAuthError("Azure network API access failed") from exc
+        raise CloudCollectorAuthError(
+            "Azure network API access failed",
+            user_message=f"Azure refused the network read: {provider_error_detail(exc)}",
+        ) from exc
 
     try:
         for circuit in network_client.express_route_circuits.list_all():
             resource = azure_detail.express_route_resource(circuit, subscription_id)
             if resource:
                 resources.append(resource)
-    except Exception:
+    except Exception as exc:
         LOGGER.warning("azure collector: failed to list expressroute circuits", exc_info=True)
-        section_errors.append("expressroute_circuits")
+        section_errors.append(("expressroute_circuits", provider_error_detail(exc)))
 
     try:
         for route_table in network_client.route_tables.list_all():
@@ -1149,18 +1198,18 @@ def _collect_azure_network(
                 continue
             resources.append(resource)
             connections.extend(azure_detail.route_table_associations(resource))
-    except Exception:
+    except Exception as exc:
         LOGGER.warning("azure collector: failed to list route tables", exc_info=True)
-        section_errors.append("route_tables")
+        section_errors.append(("route_tables", provider_error_detail(exc)))
 
     try:
         for nsg in network_client.network_security_groups.list_all():
             resource = azure_detail.nsg_resource(nsg, subscription_id)
             if resource:
                 resources.append(resource)
-    except Exception:
+    except Exception as exc:
         LOGGER.warning("azure collector: failed to list nsgs", exc_info=True)
-        section_errors.append("network_security_groups")
+        section_errors.append(("network_security_groups", provider_error_detail(exc)))
 
     # Gateways and connections are listed per resource group; the Network API
     # has no list_all for them.
@@ -1176,9 +1225,9 @@ def _collect_azure_network(
                 attachment = azure_detail.gateway_attachment(resource)
                 if attachment:
                     connections.append(attachment)
-    except Exception:
+    except Exception as exc:
         LOGGER.warning("azure collector: failed to list virtual network gateways", exc_info=True)
-        section_errors.append("virtual_network_gateways")
+        section_errors.append(("virtual_network_gateways", provider_error_detail(exc)))
 
     try:
         for group in groups:
@@ -1186,9 +1235,9 @@ def _collect_azure_network(
                 resource = azure_detail.local_network_gateway_resource(gateway, subscription_id)
                 if resource:
                     resources.append(resource)
-    except Exception:
+    except Exception as exc:
         LOGGER.warning("azure collector: failed to list local network gateways", exc_info=True)
-        section_errors.append("local_network_gateways")
+        section_errors.append(("local_network_gateways", provider_error_detail(exc)))
 
     try:
         for group in groups:
@@ -1196,9 +1245,9 @@ def _collect_azure_network(
                 record = azure_detail.gateway_connection(conn, subscription_id)
                 if record:
                     connections.append(record)
-    except Exception:
+    except Exception as exc:
         LOGGER.warning("azure collector: failed to list gateway connections", exc_info=True)
-        section_errors.append("gateway_connections")
+        section_errors.append(("gateway_connections", provider_error_detail(exc)))
 
     def nat_gateways() -> None:
         for gateway in network_client.nat_gateways.list_all():
@@ -1246,7 +1295,7 @@ def _collect_gcp(account: dict) -> tuple[list[dict], list[dict]]:
     auth = _parse_auth_config(account)
     project_id = str(auth.get("project_id") or account.get("account_identifier") or "").strip()
     if not project_id:
-        raise CloudCollectorAuthError("GCP project_id is required")
+        raise CloudCollectorAuthError("GCP project_id is required", user_message="GCP project_id is required")
 
     credentials = None
     try:
@@ -1275,15 +1324,21 @@ def _collect_gcp(account: dict) -> tuple[list[dict], list[dict]]:
             if not project_id and default_project:
                 project_id = str(default_project)
     except Exception as exc:
-        raise CloudCollectorAuthError("Failed to initialize GCP credentials") from exc
+        raise CloudCollectorAuthError(
+            "Failed to initialize GCP credentials",
+            user_message=f"Could not set up the GCP credentials: {provider_error_detail(exc)}",
+        ) from exc
 
     if not project_id:
-        raise CloudCollectorAuthError("GCP project_id is required")
+        raise CloudCollectorAuthError("GCP project_id is required", user_message="GCP project_id is required")
 
     try:
         compute = build("compute", "v1", credentials=credentials, cache_discovery=False)
     except Exception as exc:
-        raise CloudCollectorExecutionError("Failed to initialize GCP compute client") from exc
+        raise CloudCollectorExecutionError(
+            "Failed to initialize GCP compute client",
+            user_message=f"Could not set up the GCP compute client: {provider_error_detail(exc)}",
+        ) from exc
 
     return _collect_gcp_compute(compute, project_id)
 
@@ -1327,7 +1382,7 @@ def _collect_gcp_compute(compute, project_id: str) -> tuple[list[dict], list[dic
     """
     sections: dict[str, Any] = {}
     warnings: list[dict] = []
-    section_errors: list[str] = []
+    section_errors: list[tuple[str, str]] = []
 
     def optional(section: str, read) -> None:
         try:
@@ -1339,7 +1394,10 @@ def _collect_gcp_compute(compute, project_id: str) -> tuple[list[dict], list[dic
     try:
         sections["networks"] = _gcp_list(compute, "networks", project_id)
     except Exception as exc:
-        raise CloudCollectorAuthError("GCP network API access failed") from exc
+        raise CloudCollectorAuthError(
+            "GCP network API access failed",
+            user_message=f"GCP refused the network read: {provider_error_detail(exc)}",
+        ) from exc
 
     for section, read in (
         ("subnetworks", lambda: _gcp_aggregated(compute, "subnetworks", project_id)),
@@ -1348,9 +1406,9 @@ def _collect_gcp_compute(compute, project_id: str) -> tuple[list[dict], list[dic
     ):
         try:
             sections[section] = read()
-        except Exception:
+        except Exception as exc:
             LOGGER.warning("gcp collector: failed %s list", section, exc_info=True)
-            section_errors.append(section)
+            section_errors.append((section, provider_error_detail(exc)))
 
     def routers() -> list[tuple[dict, dict | None]]:
         found = _gcp_aggregated(compute, "routers", project_id)

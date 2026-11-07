@@ -95,11 +95,54 @@ class _RegionSession:
         return _RegionEc2()
 
 
-def test_partial_discovery_error_names_the_failed_sections_for_the_user():
-    err = collectors_mod._partial_discovery_error(["direct_connect:us-east-1", "vpcs:us-east-1", "vpcs:us-east-1"])
+class _ClientError(Exception):
+    """The shape of botocore's ClientError: the error sits in ``response``."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(f"An error occurred ({code}) when calling the operation: {message}")
+        self.response = {"Error": {"Code": code, "Message": message}}
+
+
+DENIED = (
+    "User: arn:aws:iam::111122223333:user/example is not authorized to perform: "
+    "directconnect:DescribeConnections because no identity-based policy allows the "
+    "directconnect:DescribeConnections action"
+)
+
+
+def test_provider_error_detail_gives_code_and_message_not_the_traceback():
+    detail = collectors_mod.provider_error_detail(_ClientError("AccessDeniedException", DENIED))
+    assert detail == f"AccessDeniedException: {DENIED}"
+
+    # Azure / Google / anything else: class name and the first non-empty line.
+    other = RuntimeError("\n(AuthorizationFailed) The client may not read.\nCode: AuthorizationFailed")
+    assert collectors_mod.provider_error_detail(other) == "RuntimeError: (AuthorizationFailed) The client may not read."
+    assert collectors_mod.provider_error_detail(TimeoutError()) == "TimeoutError"
+
+    long = collectors_mod.provider_error_detail(RuntimeError("x" * 2000))
+    assert len(long) == 400 and long.endswith("...")
+
+
+def test_partial_discovery_error_shows_each_distinct_provider_error_once():
+    denied = f"AccessDeniedException: {DENIED}"
+    err = collectors_mod._partial_discovery_error(
+        [
+            ("direct_connect:eu-west-2", denied),
+            ("direct_connect:ap-south-1", denied),
+            ("vpcs:us-east-1", "EndpointConnectionError: Could not connect to the endpoint URL"),
+            ("vpcs:us-east-1", "EndpointConnectionError: Could not connect to the endpoint URL"),
+        ]
+    )
     assert isinstance(err, collectors_mod.CloudCollectorExecutionError)
-    assert "direct_connect:us-east-1, vpcs:us-east-1." in err.user_message
-    assert "server log" in err.user_message
+    assert str(err) == (
+        "Partial provider discovery; failed sections: direct_connect:ap-south-1, direct_connect:eu-west-2, vpcs:us-east-1"
+    )
+    assert err.user_message == (
+        "Live provider discovery failed reading: "
+        f"direct_connect:ap-south-1, direct_connect:eu-west-2 ({denied}); "
+        "vpcs:us-east-1 (EndpointConnectionError: Could not connect to the endpoint URL)"
+    )
+    assert err.user_message.count("directconnect:DescribeConnections because") == 1
 
 
 def test_peering_cidrs_lists_every_range_of_an_end_once():
