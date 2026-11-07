@@ -136,7 +136,8 @@ async def create_secret_variable(body: SecretVariableCreate, request: Request):
         detail=f"created secret variable '{name}'",
         correlation_id=_corr_id(request),
     )
-    LOGGER.info("Secret variable created: '%s' by %s", name, session["user"])
+    # Log the id only (matches update/delete); the name is in the audit row.
+    LOGGER.info("Secret variable %s created by %s", var_id, session["user"])
     return {"id": var_id, "name": name}
 
 
