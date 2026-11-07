@@ -27,6 +27,8 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from routes.user_regex import UserRegex, compile_user_regex
+
 from netcontrol.integrations.pathtrace.engine import PROTOCOLS, Tracer
 from netcontrol.integrations.pathtrace.model import (
     ALLOWED,
@@ -58,10 +60,11 @@ _FALSE = ("0", "false", "no", "n")
 @dataclass(frozen=True)
 class Terms:
     """Comma-separated match terms: each a case-insensitive substring, or a
-    regular expression when wrapped in ``/.../``. Any term matching is a match."""
+    regular expression when wrapped in ``/.../`` (RE2 syntax: linear-time,
+    no lookarounds or backreferences). Any term matching is a match."""
 
     raw: tuple[str, ...] = ()
-    patterns: tuple[re.Pattern[str], ...] = ()
+    patterns: tuple[UserRegex, ...] = ()
 
     def __bool__(self) -> bool:
         return bool(self.patterns)
@@ -119,12 +122,12 @@ def _terms(text: str | None, what: str) -> Terms:
             term = term.strip()
         if term:
             raw.append(term)
-    patterns: list[re.Pattern[str]] = []
+    patterns: list[UserRegex] = []
     for term in raw:
         if len(term) >= 2 and term.startswith("/") and term.endswith("/"):
             try:
-                patterns.append(re.compile(term[1:-1], re.IGNORECASE))
-            except re.error as exc:
+                patterns.append(compile_user_regex(term[1:-1]))
+            except ValueError as exc:
                 raise ValueError(f"{what}: {term} is not a valid regular expression ({exc})") from exc
         else:
             patterns.append(re.compile(re.escape(term), re.IGNORECASE))

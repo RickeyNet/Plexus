@@ -7,7 +7,22 @@ built-in profiles into existing installations on demand.
 Each profile is a tuple of (name, description, severity, rules).
 Rules include optional 'remediation' lists of IOS commands.
 Rules with remediation=None require manual/environment-specific fixes.
+
+regex_match patterns run through RE2 (routes.user_regex), which has no
+lookarounds or backreferences, so negative checks are spelled out below.
 """
+
+# A trunk native VLAN other than exactly VLAN 1.
+NATIVE_VLAN_NOT_1 = r"switchport trunk native vlan\s+(?:[02-9]|1\d)\d*"
+
+# A hostname that does not start with the IOS defaults "Router" or "Switch"
+# (case-insensitive at match time). Each branch matches a prefix of one of
+# the words that then ends (\b) or diverges from it.
+HOSTNAME_NOT_DEFAULT = (
+    r"hostname\s+(?:[^\srs]\S*"
+    r"|r(?:\b|[^\so]\S*|o(?:\b|[^\su]\S*|u(?:\b|[^\st]\S*|t(?:\b|[^\se]\S*|e(?:\b|[^\sr]\S*)))))"
+    r"|s(?:\b|[^\sw]\S*|w(?:\b|[^\si]\S*|i(?:\b|[^\st]\S*|t(?:\b|[^\sc]\S*|c(?:\b|[^\sh]\S*))))))"
+)
 
 BUILTIN_PROFILES = [
     # ── CIS Cisco IOS Benchmark (essential subset) ───────────────
@@ -292,7 +307,8 @@ BUILTIN_PROFILES = [
             {
                 "name": "Native VLAN is not VLAN 1",
                 "type": "regex_match",
-                "pattern": r"switchport trunk native vlan\s+(?!1\b)\d+",
+                # RE2 (no lookarounds): a VLAN number other than exactly 1.
+                "pattern": NATIVE_VLAN_NOT_1,
                 "remediation": None,
             },
             {
@@ -528,7 +544,7 @@ BUILTIN_PROFILES = [
             {
                 "name": "Hostname configured (not default)",
                 "type": "regex_match",
-                "pattern": r"hostname\s+(?!Router|Switch)\S+",
+                "pattern": HOSTNAME_NOT_DEFAULT,
                 "remediation": None,
             },
             {

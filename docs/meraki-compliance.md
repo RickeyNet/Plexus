@@ -40,8 +40,11 @@ Scheduled scans run from the same compliance scheduler as host scans
 A profile may mix two kinds of rules. Config rules (`must_contain`,
 `must_not_contain`, `regex_match`) are evaluated by host scans over SSH and
 skipped by Meraki scans; Meraki rules are evaluated by Meraki scans and
-skipped by host scans. A Meraki rule names a check and, optionally, its
-parameters:
+skipped by host scans. A `regex_match` pattern is RE2 syntax, matched
+without regard to case with `^` and `$` at each line: lookarounds
+(`(?!...)`) and backreferences (`\1`) are not supported, and saving a
+profile with one is refused (HTTP 400). A Meraki rule names a check and,
+optionally, its parameters:
 
 ```json
 {"name": "Access ports use an access policy", "type": "meraki",

@@ -7,11 +7,11 @@ from __future__ import annotations
 
 import functools
 import json
-import re
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
+from routes.user_regex import UserRegex, compile_user_regex
 
 import netcontrol.routes.state as state
 from netcontrol.integrations.meraki.compliance import is_meraki_rule
@@ -137,11 +137,34 @@ def _config_has_directive(config_text: str, pattern: str) -> bool:
 
 
 @functools.lru_cache(maxsize=512)
-def _compile_rule_regex(pattern: str) -> re.Pattern:
+def _compile_rule_regex(pattern: str) -> UserRegex:
     """Compile (and cache) a compliance regex. A bulk scan evaluates the same
     rule against every host, so caching avoids recompiling the pattern per host.
-    Raises re.error for invalid patterns (not cached); callers handle it."""
-    return re.compile(pattern, re.MULTILINE | re.IGNORECASE)
+    Rules are user-written, so this is RE2 (linear-time matching, no
+    lookarounds or backreferences). Raises ValueError for invalid patterns
+    (not cached); callers handle it."""
+    return compile_user_regex(pattern, multiline=True)
+
+
+def validate_regex_rules(rules: object) -> str | None:
+    """The first ``regex_match`` rule whose pattern does not compile, as an
+    error message for the API, or None when every pattern is valid."""
+    if not isinstance(rules, list):
+        return None
+    for rule in rules:
+        if not isinstance(rule, dict) or rule.get("type") != "regex_match":
+            continue
+        pattern = rule.get("pattern") or ""
+        if not isinstance(pattern, str):
+            return f"Rule {rule.get('name') or '(unnamed)'}: pattern must be text"
+        try:
+            _compile_rule_regex(pattern)
+        except ValueError as exc:
+            return (
+                f"Rule {rule.get('name') or pattern[:60]}: invalid regex ({exc}). "
+                "Lookarounds and backreferences are not supported."
+            )
+    return None
 
 
 def _evaluate_rule(rule: dict, config_text: str) -> dict:
@@ -155,8 +178,6 @@ def _evaluate_rule(rule: dict, config_text: str) -> dict:
         (see netcontrol.routes.meraki_compliance); filtered out before this
         function is reached by host scans.
     """
-    _re = re
-
     rule_type = rule.get("type", "must_contain")
     pattern = rule.get("pattern", "")
     name = rule.get("name", pattern[:60])
@@ -186,9 +207,8 @@ def _evaluate_rule(rule: dict, config_text: str) -> dict:
     elif rule_type == "regex_match":
         try:
             compiled = _compile_rule_regex(pattern)
-            # Guard against catastrophic backtracking by capping the searched
-            # length. 2MB comfortably covers large chassis configs while still
-            # bounding worst-case regex cost.
+            # RE2 is linear-time; the cap still bounds the work per rule.
+            # 2MB comfortably covers large chassis configs.
             _MAX_SEARCH = 2_000_000
             search_text = config_text[:_MAX_SEARCH]
             truncated = len(config_text) > _MAX_SEARCH
@@ -204,9 +224,9 @@ def _evaluate_rule(rule: dict, config_text: str) -> dict:
                 )
             else:
                 result["detail"] = f"Regex not matched: {pattern}"
-        except _re.error as e:
+        except ValueError as e:
             result["passed"] = False
-            result["detail"] = f"Invalid regex: {e}"
+            result["detail"] = f"Invalid regex: {e} (lookarounds and backreferences are not supported)"
     else:
         result["passed"] = False
         result["detail"] = f"Unknown rule type: {rule_type}"
@@ -479,7 +499,7 @@ async def list_compliance_profiles():
 async def create_compliance_profile(body: ComplianceProfileCreate, request: Request):
     if body.severity not in ("low", "medium", "high", "critical"):
         raise HTTPException(status_code=400, detail="Severity must be low, medium, high, or critical")
-    rule_error = validate_meraki_rules(body.rules)
+    rule_error = validate_meraki_rules(body.rules) or validate_regex_rules(body.rules)
     if rule_error:
         raise HTTPException(status_code=400, detail=rule_error)
     session = _get_session(request)
@@ -519,7 +539,7 @@ async def update_compliance_profile(profile_id: int, body: ComplianceProfileUpda
     if body.description is not None:
         updates["description"] = body.description
     if body.rules is not None:
-        rule_error = validate_meraki_rules(body.rules)
+        rule_error = validate_meraki_rules(body.rules) or validate_regex_rules(body.rules)
         if rule_error:
             raise HTTPException(status_code=400, detail=rule_error)
         updates["rules"] = json.dumps(body.rules)

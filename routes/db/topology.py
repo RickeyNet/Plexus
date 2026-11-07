@@ -13,9 +13,6 @@ import json
 import os
 import re
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
-
-import re2
 
 import routes.database as _dbcore
 from routes.database import (
@@ -25,6 +22,7 @@ from routes.database import (
     row_to_dict,
     rows_to_list,
 )
+from routes.user_regex import UserRegex, compile_user_regex
 
 __all__ = [
     "upsert_topology_link",
@@ -1856,32 +1854,24 @@ def _has_redos_shape(pattern: str) -> bool:
     return False
 
 
-class _LineMatcher(Protocol):
-    def search(self, text: str) -> object: ...
-
-
-def _compile_config_backup_regex(pattern: str) -> _LineMatcher:
+def _compile_config_backup_regex(pattern: str) -> UserRegex:
     """Compile a user-supplied regex with bounds, raising ValueError('invalid_regex') on failure.
 
     Any user with the config-backups feature can submit a pattern, so it is
-    compiled with RE2 rather than ``re``: RE2 matches in linear time, which
-    rules out ReDoS no matter what shape the pattern has (``_has_redos_shape``
-    misses polynomial shapes such as ``a*a*a*a*b``). RE2 also rejects
-    backreferences and lookarounds, which keeps the same pattern cheap for
-    the server-side ``~*`` filter. The length and shape checks stay as a
-    bound on what reaches PostgreSQL.
+    compiled with RE2 (``compile_user_regex``), which matches in linear time
+    whatever the pattern's shape (``_has_redos_shape`` misses polynomial
+    shapes such as ``a*a*a*a*b``). RE2 also rejects backreferences and
+    lookarounds, which keeps the same pattern cheap for the server-side
+    ``~*`` filter. The length and shape checks stay as a bound on what
+    reaches PostgreSQL.
     """
     if pattern is None or len(pattern) > _CONFIG_BACKUP_REGEX_MAX_LEN:
         raise ValueError("invalid_regex")
     if _has_redos_shape(pattern):
         raise ValueError("invalid_regex")
-    options = re2.Options()
-    options.case_sensitive = False
-    # RE2 otherwise writes every rejected pattern to stderr.
-    options.log_errors = False
     try:
-        return re2.compile(pattern, options)
-    except re2.error as exc:
+        return compile_user_regex(pattern)
+    except ValueError as exc:
         raise ValueError("invalid_regex") from exc
 
 
@@ -1972,7 +1962,7 @@ def _extract_config_backup_match_context(
     *,
     mode: str,
     context_lines: int = 1,
-    compiled_regex: _LineMatcher | None = None,
+    compiled_regex: UserRegex | None = None,
 ) -> dict | None:
     lines = (config_text or "").splitlines()
     if not lines:

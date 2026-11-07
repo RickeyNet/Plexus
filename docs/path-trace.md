@@ -737,8 +737,9 @@ the same list Path Mode picks subnets from, the VLANs and connected networks of
 inventory devices included (their site is the device's inventory group). The filters combine: a network is
 swept only when it passes all of them. In the list filters, terms are
 comma-separated and any one matching is enough; a term wrapped in slashes,
-such as `/^VLAN 1\d\d /`, is a regular expression; names and sites match
-without regard to case.
+such as `/^VLAN 1\d\d /`, is a regular expression (RE2 syntax: no
+lookarounds or backreferences); names and sites match without regard to
+case.
 
 | Filter | Query parameter | Keeps |
 |---|---|---|

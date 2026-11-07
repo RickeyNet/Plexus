@@ -82,6 +82,91 @@ def test_regex_match_and_invalid_regex():
     assert "Invalid regex" in bad["detail"]
 
 
+def test_regex_match_runs_on_re2():
+    """Rule patterns are RE2: lookarounds are reported as invalid, and a
+    polynomial-backtracking pattern over a long line finishes at once."""
+    import time
+
+    look = _evaluate_rule({"type": "regex_match", "pattern": r"hostname (?!sw)\S+"}, CONFIG_ENABLED)
+    assert look["passed"] is False
+    assert "Invalid regex" in look["detail"] and "lookarounds" in look["detail"]
+
+    start = time.monotonic()
+    slow = _evaluate_rule({"type": "regex_match", "pattern": "a*a*a*a*a*a*b"}, "a" * 5000)
+    assert slow["passed"] is False
+    assert time.monotonic() - start < 1.0
+
+    # Multiline: ^ anchors at each line, as with re.MULTILINE before.
+    assert _evaluate_rule({"type": "regex_match", "pattern": r"^ip ssh version 2$"}, CONFIG_ENABLED)["passed"]
+
+
+def test_validate_regex_rules():
+    from netcontrol.routes.compliance import validate_regex_rules
+
+    assert validate_regex_rules([{"type": "regex_match", "pattern": r"ip ssh time-out\s+\d+"}]) is None
+    assert validate_regex_rules([{"type": "must_contain", "pattern": "("}]) is None
+    err = validate_regex_rules([{"name": "No default", "type": "regex_match", "pattern": r"(?!x)y"}])
+    assert err is not None and err.startswith("Rule No default: invalid regex")
+
+
+def test_builtin_regex_rules_compile_on_re2():
+    from netcontrol.routes.compliance import validate_regex_rules
+    from routes.builtin_compliance_profiles import BUILTIN_PROFILES
+
+    for name, _description, _severity, rules in BUILTIN_PROFILES:
+        assert validate_regex_rules(rules) is None, name
+
+
+def test_builtin_native_vlan_and_hostname_rules():
+    """The RE2 rewrites of the two built-in lookahead rules keep their meaning."""
+    from routes.builtin_compliance_profiles import HOSTNAME_NOT_DEFAULT, NATIVE_VLAN_NOT_1
+
+    def passes(pattern: str, config: str) -> bool:
+        return _evaluate_rule({"type": "regex_match", "pattern": pattern}, config)["passed"]
+
+    for vlan, ok in (("1", False), ("10", True), ("2", True), ("100", True), ("999", True)):
+        assert passes(NATIVE_VLAN_NOT_1, f" switchport trunk native vlan {vlan}\n") is ok, vlan
+
+    for host, ok in (
+        ("Router", False),
+        ("switch", False),
+        ("Router1", False),
+        ("Switch-01", False),
+        ("core-sw1", True),
+        ("Rout", True),
+        ("Swatch", True),
+        ("s1", True),
+        ("r-edge-01", True),
+    ):
+        assert passes(HOSTNAME_NOT_DEFAULT, f"version 17\nhostname {host}\n") is ok, host
+
+
+def test_migration_0080_rewrites_only_builtin_patterns():
+    import importlib
+    import json
+
+    from routes.builtin_compliance_profiles import HOSTNAME_NOT_DEFAULT, NATIVE_VLAN_NOT_1
+
+    mod = importlib.import_module("routes.migrations.0080_compliance_builtin_patterns_re2")
+    stored = json.dumps(
+        [
+            {"name": "a", "type": "regex_match", "pattern": r"hostname\s+(?!Router|Switch)\S+"},
+            {"name": "b", "type": "regex_match", "pattern": r"switchport trunk native vlan\s+(?!1\b)\d+"},
+            {"name": "c", "type": "regex_match", "pattern": r"hostname (?!lab)\S+"},
+            {"name": "d", "type": "must_contain", "pattern": r"hostname\s+(?!Router|Switch)\S+"},
+        ]
+    )
+    rules = json.loads(mod._rewrite(stored))
+    assert [r["pattern"] for r in rules] == [
+        HOSTNAME_NOT_DEFAULT,
+        NATIVE_VLAN_NOT_1,
+        r"hostname (?!lab)\S+",
+        r"hostname\s+(?!Router|Switch)\S+",
+    ]
+    assert mod._rewrite(json.dumps([{"type": "regex_match", "pattern": "x"}])) is None
+    assert mod._rewrite("not json") is None
+
+
 def test_unknown_rule_type_fails_closed():
     result = _evaluate_rule({"type": "sorcery", "pattern": "x"}, "x")
     assert result["passed"] is False

@@ -2440,6 +2440,7 @@ def test_sweep_overlaps_filter_keeps_every_network_that_shares_an_address():
         {"vlans": "5000"},
         {"name": "/(/"},
         {"exclude": "/[a/"},
+        {"name": "/(?!guest)wlan/"},
         {"kinds": "vlan,tunnel"},
         {"within": "10.0.0.0/33"},
         {"overlaps": "ten.0.0.0/8"},
