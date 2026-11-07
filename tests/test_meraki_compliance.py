@@ -513,6 +513,19 @@ def test_api_profile_validation_rejects_unknown_meraki_check(api):
     assert worse.status_code == 400
 
 
+def test_api_profile_validation_rejects_regex_re2_cannot_compile(api):
+    lookahead = [{"name": "No default", "type": "regex_match", "pattern": r"hostname (?!Router)\S+"}]
+    bad = api.post("/api/compliance/profiles", json={"name": "Look", "rules": lookahead})
+    assert bad.status_code == 400 and "invalid regex" in bad.text
+    ok = api.post(
+        "/api/compliance/profiles",
+        json={"name": "Plain", "rules": [{"name": "ssh", "type": "regex_match", "pattern": r"ip ssh version \d"}]},
+    )
+    assert ok.status_code == 201
+    worse = api.put(f"/api/compliance/profiles/{ok.json()['id']}", json={"rules": lookahead})
+    assert worse.status_code == 400
+
+
 def test_api_assignment_crud_and_scan_of_the_demo_organization(api):
     org_ref = api.post("/api/sources/sample").json()["org_ref"]
     profile_id = _meraki_profile_id(api, "Meraki Switch Security Baseline")

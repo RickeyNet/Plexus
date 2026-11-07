@@ -23,7 +23,8 @@ const RULES_PLACEHOLDER =
 const RULES_HELP = (
   <>
     Rule types: <code>must_contain</code>, <code>must_not_contain</code>,{' '}
-    <code>regex_match</code> (running config), <code>meraki</code> (Dashboard API check)
+    <code>regex_match</code> (running config; RE2 syntax, no lookarounds or backreferences),{' '}
+    <code>meraki</code> (Dashboard API check)
     <br />
     Config rule: <code>{'{"name": "...", "type": "...", "pattern": "..."}'}</code>
     <br />

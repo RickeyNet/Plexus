@@ -22,7 +22,7 @@ const MODE_HINTS: Record<Mode, { placeholder: string; example: string }> = {
   },
   regex: {
     placeholder: 'e.g. ^snmp-server community\\s+\\w+\\s+RO$',
-    example: 'Example regex: ^snmp-server community\\s+\\w+\\s+RO$',
+    example: 'Example regex: ^snmp-server community\\s+\\w+\\s+RO$ (RE2 syntax: no lookarounds or backreferences)',
   },
 };
 
