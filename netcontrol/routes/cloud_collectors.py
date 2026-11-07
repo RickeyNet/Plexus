@@ -25,7 +25,16 @@ VALID_PROVIDERS = {"aws", "azure", "gcp"}
 
 
 class CloudCollectorError(RuntimeError):
-    """Base class for collector failures."""
+    """Base class for collector failures.
+
+    ``user_message`` is set when Plexus can say exactly what is wrong; it is
+    fixed text written here (plus section and region names from the account's
+    own settings), never the provider's error message, so it is safe to show.
+    """
+
+    def __init__(self, message: str, *, user_message: str = "") -> None:
+        super().__init__(message)
+        self.user_message = user_message
 
 
 class CloudCollectorUnavailable(CloudCollectorError):
@@ -33,16 +42,8 @@ class CloudCollectorUnavailable(CloudCollectorError):
 
 
 class CloudCollectorAuthError(CloudCollectorError):
-    """Raised for provider authentication/authorization failures.
-
-    ``user_message`` is set when Plexus can say exactly what is wrong (an
-    expired session token, no credentials on the server); it is fixed text
-    written here, never the provider's error message, so it is safe to show.
-    """
-
-    def __init__(self, message: str, *, user_message: str = "") -> None:
-        super().__init__(message)
-        self.user_message = user_message
+    """Raised for provider authentication/authorization failures, e.g. an
+    expired session token or no credentials on the server."""
 
 
 # AWS error codes for temporary credentials past their expiry.
@@ -84,6 +85,21 @@ def aws_credential_message(exc: BaseException) -> str:
 
 class CloudCollectorExecutionError(CloudCollectorError):
     """Raised for provider API/runtime execution failures."""
+
+
+def _partial_discovery_error(section_errors: list[str]) -> CloudCollectorExecutionError:
+    """The error for a discovery where some sections failed. The section
+    labels are fixed names plus the account's own region names, so they go
+    into ``user_message``; the provider's errors are only logged."""
+    sections = ", ".join(sorted(set(section_errors)))
+    return CloudCollectorExecutionError(
+        "Partial provider discovery; failed sections: " + sections,
+        user_message=(
+            f"Live provider discovery failed reading: {sections}. "
+            "Check that the credentials are allowed to read these and that the regions are enabled; "
+            "the server log has the provider's error."
+        ),
+    )
 
 
 def _parse_auth_config(account: dict) -> dict:
@@ -558,9 +574,14 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
         try:
             regions = _aws_enabled_regions(session, _cfg)
         except Exception as exc:
-            raise CloudCollectorExecutionError("Failed to list the AWS regions (ec2:DescribeRegions)") from exc
+            raise CloudCollectorExecutionError(
+                "Failed to list the AWS regions (ec2:DescribeRegions)",
+                user_message="Could not list the AWS regions: the credentials need ec2:DescribeRegions for All regions.",
+            ) from exc
         if not regions:
-            raise CloudCollectorExecutionError("AWS returned no enabled regions")
+            raise CloudCollectorExecutionError(
+                "AWS returned no enabled regions", user_message="AWS returned no enabled regions for this account."
+            )
     else:
         regions = _parse_region_scope(region_scope) or ["us-east-1"]
 
@@ -972,9 +993,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
     # A partial snapshot must not silently replace the last known-good one; the
     # discover endpoint keeps the previous snapshot and surfaces this message on failure.
     if section_errors:
-        raise CloudCollectorExecutionError(
-            "Partial provider discovery; failed sections: " + ", ".join(sorted(set(section_errors)))
-        )
+        raise _partial_discovery_error(section_errors)
 
     return _dedupe_resources(resources), _dedupe_connections(connections)
 
@@ -1205,9 +1224,7 @@ def _collect_azure_network(
     # A partial snapshot must not silently replace the last known-good one; the
     # discover endpoint keeps the previous snapshot and surfaces this message on failure.
     if section_errors:
-        raise CloudCollectorExecutionError(
-            "Partial provider discovery; failed sections: " + ", ".join(sorted(set(section_errors)))
-        )
+        raise _partial_discovery_error(section_errors)
 
     return _dedupe_resources(resources), _dedupe_connections(connections)
 
@@ -1374,9 +1391,7 @@ def _collect_gcp_compute(compute, project_id: str) -> tuple[list[dict], list[dic
     # A partial snapshot must not silently replace the last known-good one; the
     # discover endpoint keeps the previous snapshot and surfaces this message on failure.
     if section_errors:
-        raise CloudCollectorExecutionError(
-            "Partial provider discovery; failed sections: " + ", ".join(sorted(set(section_errors)))
-        )
+        raise _partial_discovery_error(section_errors)
 
     resources, connections = gcp_detail.assemble(project_id, **sections)
     return _dedupe_resources(resources + warnings), _dedupe_connections(connections)

@@ -95,6 +95,13 @@ class _RegionSession:
         return _RegionEc2()
 
 
+def test_partial_discovery_error_names_the_failed_sections_for_the_user():
+    err = collectors_mod._partial_discovery_error(["direct_connect:us-east-1", "vpcs:us-east-1", "vpcs:us-east-1"])
+    assert isinstance(err, collectors_mod.CloudCollectorExecutionError)
+    assert "direct_connect:us-east-1, vpcs:us-east-1." in err.user_message
+    assert "server log" in err.user_message
+
+
 def test_peering_cidrs_lists_every_range_of_an_end_once():
     end = {
         "CidrBlock": "10.7.1.0/24",
