@@ -13,6 +13,9 @@ import json
 import os
 import re
 from datetime import UTC, datetime, timedelta
+from typing import Protocol
+
+import re2
 
 import routes.database as _dbcore
 from routes.database import (
@@ -1853,19 +1856,32 @@ def _has_redos_shape(pattern: str) -> bool:
     return False
 
 
-def _compile_config_backup_regex(pattern: str) -> re.Pattern:
-    """Compile a user-supplied regex with bounds, raising ValueError('invalid_regex') on failure."""
+class _LineMatcher(Protocol):
+    def search(self, text: str) -> object: ...
+
+
+def _compile_config_backup_regex(pattern: str) -> _LineMatcher:
+    """Compile a user-supplied regex with bounds, raising ValueError('invalid_regex') on failure.
+
+    Any user with the config-backups feature can submit a pattern, so it is
+    compiled with RE2 rather than ``re``: RE2 matches in linear time, which
+    rules out ReDoS no matter what shape the pattern has (``_has_redos_shape``
+    misses polynomial shapes such as ``a*a*a*a*b``). RE2 also rejects
+    backreferences and lookarounds, which keeps the same pattern cheap for
+    the server-side ``~*`` filter. The length and shape checks stay as a
+    bound on what reaches PostgreSQL.
+    """
     if pattern is None or len(pattern) > _CONFIG_BACKUP_REGEX_MAX_LEN:
         raise ValueError("invalid_regex")
     if _has_redos_shape(pattern):
         raise ValueError("invalid_regex")
+    options = re2.Options()
+    options.case_sensitive = False
+    # RE2 otherwise writes every rejected pattern to stderr.
+    options.log_errors = False
     try:
-        # Safe despite py/regex-injection: pattern is length-bounded, screened
-        # for catastrophic-backtracking shapes, and only reachable by admins.
-        # The CodeQL alert is dismissed ("won't fix") in the Security tab -
-        # inline comments do not suppress GitHub code scanning alerts.
-        return re.compile(pattern, re.IGNORECASE)
-    except re.error as exc:
+        return re2.compile(pattern, options)
+    except re2.error as exc:
         raise ValueError("invalid_regex") from exc
 
 
@@ -1956,7 +1972,7 @@ def _extract_config_backup_match_context(
     *,
     mode: str,
     context_lines: int = 1,
-    compiled_regex: re.Pattern | None = None,
+    compiled_regex: _LineMatcher | None = None,
 ) -> dict | None:
     lines = (config_text or "").splitlines()
     if not lines:

@@ -110,6 +110,25 @@ def test_regex_required_literal_extraction():
     assert lit(r"[Pp]ermit any") == "ermit any"
 
 
+def test_config_backup_regex_is_linear_time():
+    """Patterns run through RE2: a polynomial-backtracking shape that the
+    shape screen does not catch finishes immediately, matching is
+    case-insensitive, and RE2-unsupported syntax is rejected as invalid."""
+    import time
+
+    from routes.db.topology import _compile_config_backup_regex as compile_regex
+
+    evil = compile_regex("a*a*a*a*a*a*b")
+    start = time.monotonic()
+    assert evil.search("a" * 5000) is None
+    assert time.monotonic() - start < 1.0
+
+    assert compile_regex(r"snmp-server .*PUBLIC").search("snmp-server community public RO")
+    for unsupported in (r"(?=x)abc", r"(abc)\1"):
+        with pytest.raises(ValueError, match="invalid_regex"):
+            compile_regex(unsupported)
+
+
 @pytest.mark.asyncio
 async def test_get_previous_successful_config_backup(backup_search_db):
     """Previous-backup helper should return the prior successful backup for host."""
