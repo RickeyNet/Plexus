@@ -136,8 +136,10 @@ async def create_secret_variable(body: SecretVariableCreate, request: Request):
         detail=f"created secret variable '{name}'",
         correlation_id=_corr_id(request),
     )
-    # Log the id only (matches update/delete); the name is in the audit row.
-    LOGGER.info("Secret variable %s created by %s", var_id, session["user"])
+    # Log neither the name nor the id: CodeQL treats anything returned by
+    # create_secret_variable as secret (py/clear-text-logging-sensitive-data).
+    # The audit row above records which variable was created.
+    LOGGER.info("Secret variable created by %s", session["user"])
     return {"id": var_id, "name": name}
 
 
