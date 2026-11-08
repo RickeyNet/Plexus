@@ -5,6 +5,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { apiRequest } from './client';
+import type { CollectionProgress } from './meraki';
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -463,6 +464,24 @@ export function useDiscoverCloudAccount() {
       qc.invalidateQueries({ queryKey: ['cloud-policy-effective'] });
       qc.invalidateQueries({ queryKey: ['cloud-policy-rules'] });
     },
+  });
+}
+
+export interface CloudDiscoveryProgress {
+  /** False once the discovery has finished (or before it started on this server). */
+  running: boolean;
+  progress: CollectionProgress;
+}
+
+/** How far the running discovery of one account is; mount it only while its discover request is in flight. */
+export function useCloudDiscoveryProgress(id: number) {
+  return useQuery({
+    queryKey: ['cloud-discovery-progress', id],
+    queryFn: () =>
+      apiRequest<CloudDiscoveryProgress>(`/cloud/accounts/${id}/discover/progress`),
+    refetchInterval: 1000,
+    gcTime: 0,
+    retry: false,
   });
 }
 

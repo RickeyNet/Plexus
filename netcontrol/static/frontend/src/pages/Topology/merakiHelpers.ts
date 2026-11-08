@@ -445,6 +445,9 @@ const PHASE_LABELS: Record<string, string> = {
   "appgate sessions": "Reading per-user access",
   "building map": "Building the map",
   saving: "Saving snapshot",
+  "aws login": "Signing in to AWS",
+  "aws regions": "Listing the enabled AWS regions",
+  "hybrid links": "Linking cloud gateways to inventory devices",
 };
 
 /**
@@ -453,11 +456,21 @@ const PHASE_LABELS: Record<string, string> = {
  * tables and configurations over SSH) rather than an organization build.
  */
 export function describeProgress(
-  job: MerakiBuildJob | undefined,
+  job: Pick<MerakiBuildJob, "progress"> | undefined,
   source?: string,
 ): { label: string; percent: number | null } {
   const progress = job?.progress ?? {};
   const phase = progress.phase ?? "starting";
+  if (phase === "aws region" && progress.steps_total) {
+    const done = progress.steps_done ?? 0;
+    const where = progress.regions_total
+      ? ` (region ${(progress.regions_done ?? 0) + 1} of ${progress.regions_total})`
+      : "";
+    return {
+      label: `Reading ${progress.section ?? "resources"} in ${progress.region ?? "AWS"}${where}`,
+      percent: Math.min(100, Math.round((done / progress.steps_total) * 100)),
+    };
+  }
   if (phase === "collecting" && progress.hosts_total) {
     const done = progress.hosts_done ?? 0;
     const host = progress.host ? `: ${progress.host}` : "";

@@ -860,3 +860,34 @@ describe("next collection", () => {
     );
   });
 });
+
+describe("aws discovery progress", () => {
+  it("names the region and section and counts every section of every region", () => {
+    expect(
+      describeProgress({
+        progress: {
+          phase: "aws region",
+          region: "us-west-2",
+          section: "route tables",
+          regions_done: 1,
+          regions_total: 2,
+          steps_done: 18,
+          steps_total: 24,
+        },
+      }),
+    ).toEqual({
+      label: "Reading route tables in us-west-2 (region 2 of 2)",
+      percent: 75,
+    });
+  });
+
+  it("labels the phases before and after the regions, without a percent", () => {
+    expect(describeProgress({ progress: { phase: "aws login" } })).toEqual({
+      label: "Signing in to AWS",
+      percent: null,
+    });
+    expect(
+      describeProgress({ progress: { phase: "hybrid links" } }).label,
+    ).toBe("Linking cloud gateways to inventory devices");
+  });
+});

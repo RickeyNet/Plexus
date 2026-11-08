@@ -252,20 +252,31 @@ export function isInventoryCollectionResult(
   return result != null && "routes" in result && "configs" in result;
 }
 
+/** How far a collection is: an organization build, an inventory collection or a cloud discovery. */
+export interface CollectionProgress {
+  phase?: string;
+  calls_done?: number;
+  calls_total?: number;
+  networks?: number;
+  devices?: number;
+  hosts_done?: number;
+  hosts_total?: number;
+  /** Inventory collection: the hostname just finished. */
+  host?: string;
+  /** AWS discovery: the region and section being read. */
+  region?: string;
+  section?: string;
+  regions_done?: number;
+  regions_total?: number;
+  /** AWS discovery: sections read, over every section of every region. */
+  steps_done?: number;
+  steps_total?: number;
+}
+
 export interface MerakiBuildJob {
   job_id: string;
   status: "running" | "completed" | "partial" | "failed";
-  progress: {
-    phase?: string;
-    calls_done?: number;
-    calls_total?: number;
-    networks?: number;
-    devices?: number;
-    hosts_done?: number;
-    hosts_total?: number;
-    /** Inventory collection: the hostname just finished. */
-    host?: string;
-  };
+  progress: CollectionProgress;
   result: MerakiBuildResult | InventoryCollectionResult | null;
   error: string | null;
 }
