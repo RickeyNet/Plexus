@@ -28,6 +28,7 @@ from netcontrol.routes.cloud_collectors import (
     CloudCollectorError,
     CloudCollectorExecutionError,
     CloudCollectorUnavailable,
+    ProgressCallback,
     collect_provider_snapshot,
     get_provider_capabilities,
 )
@@ -42,6 +43,11 @@ LOGGER = configure_logging("plexus.cloud_visibility")
 _BACKGROUND_PULL_TASKS: set[asyncio.Task] = set()
 
 _require_admin = None
+
+# Progress of the discoveries running in this process, by account id, for the
+# map's progress bar. The collector writes it from a worker thread; each write
+# replaces the whole entry, so a reader never sees a half-updated one.
+_DISCOVERY_PROGRESS: dict[int, dict[str, Any]] = {}
 
 _VALID_PROVIDERS = {"aws", "azure", "gcp"}
 _VALID_FLOW_INGEST_FORMATS = {"normalized", "aws", "azure", "gcp"}
@@ -1127,10 +1133,13 @@ async def _build_live_discovery_snapshot(
     account: dict,
     connect_host_ids: list[int],
     include_hybrid_links: bool,
+    progress: ProgressCallback | None = None,
 ) -> tuple[list[dict], list[dict], list[dict]]:
-    resources, connections = await asyncio.to_thread(collect_provider_snapshot, account)
+    resources, connections = await asyncio.to_thread(collect_provider_snapshot, account, progress)
     if not include_hybrid_links:
         return resources, connections, []
+    if progress is not None:
+        progress({"phase": "hybrid links"})
     hybrid_links = await _build_hybrid_links(account, resources, connect_host_ids, source="live")
     return resources, connections, hybrid_links
 
@@ -1538,8 +1547,32 @@ async def ingest_cloud_traffic_metrics_api(account_id: int, request: Request, bo
     }
 
 
+@router.get("/api/cloud/accounts/{account_id}/discover/progress", dependencies=[Depends(_require_admin_dep)])
+async def cloud_discovery_progress_api(account_id: int):
+    """How far the running discovery of this account is, polled while the discover request is in flight."""
+    progress = _DISCOVERY_PROGRESS.get(account_id)
+    return {"running": progress is not None, "progress": dict(progress or {})}
+
+
 @router.post("/api/cloud/accounts/{account_id}/discover", dependencies=[Depends(_require_admin_dep)])
 async def discover_cloud_account_api(account_id: int, request: Request, body: CloudDiscoveryRequest | None = None):
+    _DISCOVERY_PROGRESS[account_id] = {"phase": "starting"}
+
+    def _progress(fields: dict[str, Any]) -> None:
+        _DISCOVERY_PROGRESS[account_id] = dict(fields)
+
+    try:
+        return await _discover_cloud_account(account_id, request, body, _progress)
+    finally:
+        _DISCOVERY_PROGRESS.pop(account_id, None)
+
+
+async def _discover_cloud_account(
+    account_id: int,
+    request: Request,
+    body: CloudDiscoveryRequest | None,
+    progress: ProgressCallback,
+) -> dict[str, Any]:
     account = await db.get_cloud_account(account_id)
     if not account:
         raise HTTPException(status_code=404, detail="Cloud account not found")
@@ -1570,6 +1603,7 @@ async def discover_cloud_account_api(account_id: int, request: Request, body: Cl
                     account,
                     payload.connect_host_ids,
                     payload.include_hybrid_links,
+                    progress,
                 )
                 effective_mode = "live"
                 sync_message = "Live provider discovery snapshot refreshed"
@@ -1623,6 +1657,7 @@ async def discover_cloud_account_api(account_id: int, request: Request, body: Cl
                 "summary": None,
             }
 
+        progress({"phase": "saving"})
         summary = await db.replace_cloud_discovery_snapshot(
             account_id,
             resources=resources,

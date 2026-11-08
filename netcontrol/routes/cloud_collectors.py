@@ -12,6 +12,7 @@ If SDK dependencies are unavailable, callers can fall back to sample mode.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
 
 from netcontrol.integrations.aws import collect as aws_detail
@@ -22,6 +23,20 @@ from netcontrol.telemetry import configure_logging
 LOGGER = configure_logging("plexus.cloud_collectors")
 
 VALID_PROVIDERS = {"aws", "azure", "gcp"}
+
+# Receives progress fields (``phase`` and phase-specific counts) while a collector runs.
+# Collectors run in a worker thread, so the callback must be thread-safe.
+ProgressCallback = Callable[[dict[str, Any]], None]
+
+
+def _report(progress: ProgressCallback | None, **fields: Any) -> None:
+    """Send progress fields to the callback; a failing callback never stops discovery."""
+    if progress is None:
+        return
+    try:
+        progress(fields)
+    except Exception:
+        LOGGER.debug("cloud discovery progress callback failed", exc_info=True)
 
 
 class CloudCollectorError(RuntimeError):
@@ -543,7 +558,11 @@ def _collect_aws_map_detail(session, ec2, region: str, cfg, resources: list[dict
     optional("transit_gateway_route_tables", transit_gateway_route_tables)
 
 
-def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
+# The sections _collect_aws reads per region (one _step each), for the progress total.
+_AWS_SECTIONS_PER_REGION = 12
+
+
+def _collect_aws(account: dict, progress: ProgressCallback | None = None) -> tuple[list[dict], list[dict]]:
     try:
         import boto3
         from botocore.config import Config
@@ -597,6 +616,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
             ) from exc
 
     # Validate credentials early.
+    _report(progress, phase="aws login")
     try:
         session.client("sts", config=_cfg).get_caller_identity()
     except (BotoCoreError, ClientError) as exc:
@@ -612,6 +632,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
 
     region_scope = str(account.get("region_scope") or "")
     if _is_all_regions(region_scope):
+        _report(progress, phase="aws regions")
         try:
             regions = _aws_enabled_regions(session, _cfg)
         except Exception as exc:
@@ -630,8 +651,27 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
     connections: list[dict] = []
     section_errors: list[tuple[str, str]] = []
 
-    for region in regions:
+    steps_total = len(regions) * _AWS_SECTIONS_PER_REGION
+    steps_done = 0
+
+    def _step(region: str, section: str) -> None:
+        nonlocal steps_done
+        _report(
+            progress,
+            phase="aws region",
+            region=region,
+            section=section,
+            regions_done=region_index,
+            regions_total=len(regions),
+            steps_done=steps_done,
+            steps_total=steps_total,
+        )
+        steps_done += 1
+
+    region_index = 0
+    for region_index, region in enumerate(regions):
         ec2 = session.client("ec2", region_name=region, config=_cfg)
+        _step(region, "VPCs")
         try:
             vpcs = _aws_list_all(ec2, "describe_vpcs", "Vpcs")
             for vpc in vpcs:
@@ -654,6 +694,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
             LOGGER.warning("aws collector: failed vpc list region=%s", region, exc_info=True)
             section_errors.append((f"vpcs:{region}", provider_error_detail(exc)))
 
+        _step(region, "internet gateways")
         try:
             igws = _aws_list_all(ec2, "describe_internet_gateways", "InternetGateways")
             for gateway in igws:
@@ -695,6 +736,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
             LOGGER.warning("aws collector: failed internet gateway list region=%s", region, exc_info=True)
             section_errors.append((f"internet_gateways:{region}", provider_error_detail(exc)))
 
+        _step(region, "NAT gateways")
         try:
             nat_gateways = _aws_list_all(ec2, "describe_nat_gateways", "NatGateways")
             for gateway in nat_gateways:
@@ -732,6 +774,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
             LOGGER.warning("aws collector: failed nat gateway list region=%s", region, exc_info=True)
             section_errors.append((f"nat_gateways:{region}", provider_error_detail(exc)))
 
+        _step(region, "security groups")
         try:
             sec_groups = _aws_list_all(ec2, "describe_security_groups", "SecurityGroups")
             for group in sec_groups:
@@ -756,6 +799,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
             LOGGER.warning("aws collector: failed security group list region=%s", region, exc_info=True)
             section_errors.append((f"security_groups:{region}", provider_error_detail(exc)))
 
+        _step(region, "transit gateways")
         try:
             tgws = _aws_list_all(ec2, "describe_transit_gateways", "TransitGateways")
             for tgw in tgws:
@@ -780,6 +824,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
             LOGGER.warning("aws collector: failed tgw list region=%s", region, exc_info=True)
             section_errors.append((f"transit_gateways:{region}", provider_error_detail(exc)))
 
+        _step(region, "transit gateway attachments")
         try:
             attachments = _aws_list_all(ec2, "describe_transit_gateway_attachments", "TransitGatewayAttachments")
             for attachment in attachments:
@@ -813,6 +858,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
             LOGGER.warning("aws collector: failed tgw attachment list region=%s", region, exc_info=True)
             section_errors.append((f"transit_gateway_attachments:{region}", provider_error_detail(exc)))
 
+        _step(region, "VPC peerings")
         try:
             peerings = _aws_list_all(ec2, "describe_vpc_peering_connections", "VpcPeeringConnections")
             for peering in peerings:
@@ -846,6 +892,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
             LOGGER.warning("aws collector: failed vpc peering list region=%s", region, exc_info=True)
             section_errors.append((f"vpc_peering_connections:{region}", provider_error_detail(exc)))
 
+        _step(region, "VPN gateways")
         try:
             vpn_gateways = _aws_list_all(ec2, "describe_vpn_gateways", "VpnGateways")
             for gateway in vpn_gateways:
@@ -888,6 +935,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
             LOGGER.warning("aws collector: failed vpn gateway list region=%s", region, exc_info=True)
             section_errors.append((f"vpn_gateways:{region}", provider_error_detail(exc)))
 
+        _step(region, "route tables")
         try:
             route_tables = _aws_list_all(ec2, "describe_route_tables", "RouteTables")
             for route_table in route_tables:
@@ -951,6 +999,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
             LOGGER.warning("aws collector: failed route table list region=%s", region, exc_info=True)
             section_errors.append((f"route_tables:{region}", provider_error_detail(exc)))
 
+        _step(region, "VPN connections")
         try:
             vpns = _aws_list_all(ec2, "describe_vpn_connections", "VpnConnections")
             for vpn in vpns:
@@ -1007,6 +1056,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
             section_errors.append((f"vpn_connections:{region}", provider_error_detail(exc)))
 
         # Direct Connect is region-bound; query every configured region.
+        _step(region, "Direct Connect")
         try:
             dx = session.client("directconnect", region_name=region, config=_cfg)
             dx_connections = _aws_list_all(dx, "describe_connections", "connections")
@@ -1029,6 +1079,7 @@ def _collect_aws(account: dict) -> tuple[list[dict], list[dict]]:
             LOGGER.warning("aws collector: failed direct connect list region=%s", region, exc_info=True)
             section_errors.append((f"direct_connect:{region}", provider_error_detail(exc)))
 
+        _step(region, "subnets, instances and network ACLs")
         _collect_aws_map_detail(session, ec2, region, _cfg, resources, connections)
 
     # A partial snapshot must not silently replace the last known-good one; the
@@ -1455,12 +1506,13 @@ def _collect_gcp_compute(compute, project_id: str) -> tuple[list[dict], list[dic
     return _dedupe_resources(resources + warnings), _dedupe_connections(connections)
 
 
-def collect_provider_snapshot(account: dict) -> tuple[list[dict], list[dict]]:
+def collect_provider_snapshot(account: dict, progress: ProgressCallback | None = None) -> tuple[list[dict], list[dict]]:
+    """Discover one cloud account. ``progress`` receives AWS progress fields as the regions are read."""
     provider = str(account.get("provider") or "").strip().lower()
     if provider not in VALID_PROVIDERS:
         raise CloudCollectorExecutionError("Unsupported cloud provider")
     if provider == "aws":
-        return _collect_aws(account)
+        return _collect_aws(account, progress)
     if provider == "azure":
         return _collect_azure(account)
     return _collect_gcp(account)

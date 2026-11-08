@@ -1296,6 +1296,35 @@ def _install_fake_boto3(monkeypatch):
         monkeypatch.setitem(sys.modules, name, module)
 
 
+def test_live_collector_reports_progress_per_region(monkeypatch):
+    """The map's progress bar: every section of every region is one step, ending at the total."""
+    _install_fake_boto3(monkeypatch)
+    events: list[dict] = []
+    collectors_module.collect_provider_snapshot(
+        {"provider": "aws", "region_scope": "us-east-1,us-west-2", "auth_config_json": "{}"},
+        events.append,
+    )
+    assert events[0] == {"phase": "aws login"}
+    steps = [e for e in events if e["phase"] == "aws region"]
+    total = 2 * collectors_module._AWS_SECTIONS_PER_REGION
+    assert [e["steps_done"] for e in steps] == list(range(total))
+    assert {e["steps_total"] for e in steps} == {total}
+    assert [e["region"] for e in steps[:: collectors_module._AWS_SECTIONS_PER_REGION]] == ["us-east-1", "us-west-2"]
+    assert steps[-1]["regions_done"] == 1 and steps[-1]["regions_total"] == 2
+
+
+def test_live_collector_survives_a_failing_progress_callback(monkeypatch):
+    _install_fake_boto3(monkeypatch)
+
+    def _broken(_fields):
+        raise RuntimeError("progress sink gone")
+
+    resources, _connections = collectors_module.collect_provider_snapshot(
+        {"provider": "aws", "region_scope": "us-east-1", "auth_config_json": "{}"}, _broken
+    )
+    assert resources
+
+
 def test_live_collector_output_builds_the_map(monkeypatch):
     _install_fake_boto3(monkeypatch)
     resources, connections = collectors_module.collect_provider_snapshot(
