@@ -1,5 +1,6 @@
 """Tests for cloud visibility account and topology foundation."""
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import netcontrol.routes.cloud_visibility as cloud_visibility_module
@@ -171,6 +172,41 @@ async def test_sample_discovery_snapshot_builds_hybrid_links():
 
 
 @pytest.mark.asyncio
+async def test_discover_progress_is_readable_while_running_and_cleared_after(monkeypatch):
+    """The Map Sources progress bar polls this while the discover request is in flight."""
+    await _init()
+    account = await db_module.create_cloud_account(provider="aws", name="AWS Progress")
+    assert account is not None
+    account_id = int(account["id"])
+    seen: list[dict] = []
+
+    def _collector(_account, progress=None):
+        assert progress is not None
+        progress({"phase": "aws region", "region": "us-east-1", "steps_done": 3, "steps_total": 12})
+        # The collector runs in a worker thread; the endpoint must see the latest fields.
+        seen.append(asyncio.run(cloud_visibility_module.cloud_discovery_progress_api(account_id)))
+        return ([], [])
+
+    monkeypatch.setattr(cloud_visibility_module, "collect_provider_snapshot", _collector)
+    result = await cloud_visibility_module.discover_cloud_account_api(
+        account_id,
+        _DummyRequest(),
+        CloudDiscoveryRequest(mode="live", include_hybrid_links=False),
+    )
+    assert result["ok"] is True
+    assert seen == [
+        {
+            "running": True,
+            "progress": {"phase": "aws region", "region": "us-east-1", "steps_done": 3, "steps_total": 12},
+        }
+    ]
+    assert await cloud_visibility_module.cloud_discovery_progress_api(account_id) == {
+        "running": False,
+        "progress": {},
+    }
+
+
+@pytest.mark.asyncio
 async def test_discover_auto_keeps_snapshot_when_live_fails(monkeypatch):
     """Auto mode must never replace real topology with fabricated sample data."""
     await _init()
@@ -179,7 +215,7 @@ async def test_discover_auto_keeps_snapshot_when_live_fails(monkeypatch):
     assert account is not None
     account_id = int(account["id"])
 
-    def _collector(_account):
+    def _collector(_account, _progress=None):
         return (
             [
                 {
@@ -202,7 +238,7 @@ async def test_discover_auto_keeps_snapshot_when_live_fails(monkeypatch):
     )
     assert seeded["ok"] is True
 
-    def _raise_unavailable(_account):
+    def _raise_unavailable(_account, _progress=None):
         raise cloud_visibility_module.CloudCollectorUnavailable("missing")
 
     monkeypatch.setattr(cloud_visibility_module, "collect_provider_snapshot", _raise_unavailable)
@@ -253,7 +289,7 @@ async def test_discover_live_uses_collector_snapshot(monkeypatch):
     account = await db_module.create_cloud_account(provider="aws", name="AWS Live")
     assert account is not None
 
-    def _collector(_account):
+    def _collector(_account, _progress=None):
         return (
             [
                 {
@@ -310,7 +346,7 @@ async def test_discover_live_persists_cloud_policy_rules(monkeypatch):
     account = await db_module.create_cloud_account(provider="aws", name="AWS Policy Live")
     assert account is not None
 
-    def _collector(_account):
+    def _collector(_account, _progress=None):
         return (
             [
                 {
@@ -380,7 +416,7 @@ async def test_discover_live_unavailable_raises_503(monkeypatch):
     account = await db_module.create_cloud_account(provider="azure", name="Azure Live")
     assert account is not None
 
-    def _raise_unavailable(_account):
+    def _raise_unavailable(_account, _progress=None):
         raise cloud_visibility_module.CloudCollectorUnavailable("missing")
 
     monkeypatch.setattr(cloud_visibility_module, "collect_provider_snapshot", _raise_unavailable)
@@ -400,7 +436,7 @@ async def test_validate_live_returns_ready_when_collector_succeeds(monkeypatch):
     account = await db_module.create_cloud_account(provider="gcp", name="GCP Validate")
     assert account is not None
 
-    def _collector(_account):
+    def _collector(_account, _progress=None):
         return (
             [
                 {
@@ -436,7 +472,7 @@ async def test_validate_live_returns_unavailable_when_deps_missing(monkeypatch):
     account = await db_module.create_cloud_account(provider="aws", name="AWS Validate")
     assert account is not None
 
-    def _raise_unavailable(_account):
+    def _raise_unavailable(_account, _progress=None):
         raise cloud_visibility_module.CloudCollectorUnavailable("missing")
 
     monkeypatch.setattr(cloud_visibility_module, "collect_provider_snapshot", _raise_unavailable)

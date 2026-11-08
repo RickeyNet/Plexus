@@ -3,7 +3,10 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router";
 
 import { useAuthStatus } from "@/api/auth";
-import { useDiscoverCloudAccount } from "@/api/cloud";
+import {
+  useCloudDiscoveryProgress,
+  useDiscoverCloudAccount,
+} from "@/api/cloud";
 import {
   CloudAccountProvider,
   CloudProvider,
@@ -364,9 +367,9 @@ export function SourcesModal({
         SDP collectives, AWS accounts, Azure subscriptions and GCP projects are
         read from their APIs. All other devices, the ones in the inventory, are
         scanned over SNMP for their CDP and LLDP neighbors, and read over SSH
-        for their route tables and running configurations (which the path
-        trace uses), VLANs, ports, neighbors and MAC tables. Collect again
-        whenever you want a fresh picture.
+        for their route tables and running configurations (which the path trace
+        uses), VLANs, ports, neighbors and MAC tables. Collect again whenever
+        you want a fresh picture.
       </p>
 
       {isAdmin && <SourceScheduleBar />}
@@ -616,6 +619,11 @@ export function SourcesModal({
         </div>
       )}
       {isJobRunning && <BuildProgress job={job.data} provider={jobProvider} />}
+      {rows
+        .filter((s) => isCloudSource(s) && cloudBusy.includes(s.id as number))
+        .map((s) => (
+          <CloudDiscoveryProgress key={s.key} source={s} />
+        ))}
       {isJobSettled && (
         <BuildOutcome
           job={job.data}
@@ -942,22 +950,21 @@ function SourceRow({
   );
 }
 
-function BuildProgress({
-  job,
-  provider,
+/** A running collection: what it is doing, a bar (full and dimmed when the total is unknown) and a note. */
+function ProgressCard({
+  title,
+  label,
+  percent,
+  note,
 }: {
-  job: MerakiBuildJob | undefined;
-  provider: TopologySourceType;
+  title: string;
+  label: string;
+  percent: number | null;
+  note: string;
 }) {
-  const { label, percent } = describeProgress(job, provider);
-  const isInventory = provider === PROVIDER_INVENTORY;
   return (
     <div className="card" style={{ marginTop: "1rem", padding: "1rem" }}>
-      <strong>
-        {isInventory
-          ? "Collecting from inventory devices…"
-          : `Collecting from ${providerLabel(provider)}…`}
-      </strong>
+      <strong>{title}</strong>
       <div className="text-muted" style={{ margin: "0.35rem 0" }}>
         {label}
       </div>
@@ -987,20 +994,63 @@ function BuildProgress({
         className="text-muted"
         style={{ fontSize: "0.85em", marginTop: "0.35rem" }}
       >
-        {isInventory
-          ? "One SSH session per device, a few at a time. The path trace uses the new route tables and configurations at the next trace."
-          : provider === "cato"
-            ? "A Cato account takes a few queries, sent slowly to stay inside the Cato API rate limits."
-            : provider === "fmc"
-              ? "An FMC takes several requests per device (interfaces, routing, NAT, policies), sent slowly to stay inside the FMC limit of 120 requests per minute."
-              : provider === "panorama"
-                ? "A Panorama takes a few requests per device group and template, plus a few per firewall when device state is collected."
-                : provider === "appgate"
-                  ? "An Appgate collective takes one query per connected user for the access details; large user counts take a while."
-                  : "Large organizations take several minutes: Meraki limits the API to 10 requests per second."}{" "}
-        You can close this dialog; the map updates when collection finishes.
+        {note}
       </div>
     </div>
+  );
+}
+
+function BuildProgress({
+  job,
+  provider,
+}: {
+  job: MerakiBuildJob | undefined;
+  provider: TopologySourceType;
+}) {
+  const { label, percent } = describeProgress(job, provider);
+  const isInventory = provider === PROVIDER_INVENTORY;
+  const note = `${
+    isInventory
+      ? "One SSH session per device, a few at a time. The path trace uses the new route tables and configurations at the next trace."
+      : provider === "cato"
+        ? "A Cato account takes a few queries, sent slowly to stay inside the Cato API rate limits."
+        : provider === "fmc"
+          ? "An FMC takes several requests per device (interfaces, routing, NAT, policies), sent slowly to stay inside the FMC limit of 120 requests per minute."
+          : provider === "panorama"
+            ? "A Panorama takes a few requests per device group and template, plus a few per firewall when device state is collected."
+            : provider === "appgate"
+              ? "An Appgate collective takes one query per connected user for the access details; large user counts take a while."
+              : "Large organizations take several minutes: Meraki limits the API to 10 requests per second."
+  } You can close this dialog; the map updates when collection finishes.`;
+  return (
+    <ProgressCard
+      title={
+        isInventory
+          ? "Collecting from inventory devices…"
+          : `Collecting from ${providerLabel(provider)}…`
+      }
+      label={label}
+      percent={percent}
+      note={note}
+    />
+  );
+}
+
+/** A cloud account discovery in flight: polls its progress until the discover request returns. */
+function CloudDiscoveryProgress({ source }: { source: TopologySource }) {
+  const progress = useCloudDiscoveryProgress(source.id as number);
+  const { label, percent } = describeProgress(progress.data);
+  return (
+    <ProgressCard
+      title={`Discovering ${source.name} (${providerLabel(source.type)})…`}
+      label={label}
+      percent={percent}
+      note={
+        source.type === "aws"
+          ? "An AWS account takes about a dozen requests per region; All regions reads every region the account has enabled. The map updates when discovery finishes."
+          : "The map updates when discovery finishes."
+      }
+    />
   );
 }
 
