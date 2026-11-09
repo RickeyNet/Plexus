@@ -182,12 +182,12 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
       {job && (
         <>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
-            <span className="badge" style={{ background: isDry ? 'var(--warning)' : 'var(--danger, #dc3545)', color: isDry ? '#000' : '#fff', fontWeight: 600 }}>
+            <span className="badge" style={{ background: isDry ? 'var(--warning)' : 'var(--danger)', color: 'var(--on-primary)', fontWeight: 600 }}>
               {isDry ? 'DRY RUN' : 'LIVE'}
             </span>
             <span className={`status-badge status-${effectiveStatus}`}>{effectiveStatus}</span>
             {job.priority != null && job.priority !== 2 && (
-              <span className="badge" style={{ background: `var(--${priorityColor(job.priority)})`, color: '#fff' }}>
+              <span className="badge" style={{ background: `var(--${priorityColor(job.priority)})`, color: 'var(--on-primary)' }}>
                 {priorityLabel(job.priority)}
               </span>
             )}

@@ -106,11 +106,11 @@ export function IdleTimeoutWatcher() {
         maxWidth: '22rem',
         padding: '0.75rem 1rem',
         border: '1px solid var(--border)',
-        borderLeft: '4px solid var(--warning, #d97706)',
+        borderLeft: '4px solid var(--warning)',
         borderRadius: '0.375rem',
-        background: 'var(--surface, #1f2937)',
+        background: 'var(--card-bg)',
         boxShadow: '0 6px 24px rgba(0,0,0,0.35)',
-        color: 'var(--text, #f3f4f6)',
+        color: 'var(--text)',
       }}
     >
       <div

@@ -339,7 +339,7 @@ function DeploymentRow({
             className="badge"
             style={{
               background: `var(--${color})`,
-              color: 'white',
+              color: 'var(--on-primary)',
               fontSize: '0.8em',
               padding: '3px 10px',
               borderRadius: 4,

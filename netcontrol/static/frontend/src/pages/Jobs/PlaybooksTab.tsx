@@ -88,7 +88,7 @@ function PlaybookRow({ pb, onEdit, onDelete }: { pb: Playbook; onEdit: () => voi
     <div className="card" style={{ padding: '0.75rem 1rem', display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center' }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <span className="badge" style={{ background: isAnsible ? 'var(--info)' : 'var(--primary)', color: '#fff' }}>
+          <span className="badge" style={{ background: isAnsible ? 'var(--info)' : 'var(--primary)', color: 'var(--on-primary)' }}>
             {isAnsible ? 'Ansible' : 'Python'}
           </span>
           <span style={{ fontWeight: 600 }}>{pb.name}</span>

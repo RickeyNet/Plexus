@@ -4,15 +4,7 @@ import { Link } from 'react-router';
 import type { DeviceHealth } from '@/api/dashboard';
 import { SegmentedControl } from '@/components/SegmentedControl';
 
-import { classifyDeviceHealth, type HealthStatus } from './helpers';
-
-const HEALTH_COLORS: Record<HealthStatus, string> = {
-  healthy: '#4caf50',
-  warning: '#ff9800',
-  critical: '#f44336',
-  down: '#b71c1c',
-  unknown: '#9e9e9e',
-};
+import { HEALTH_COLORS, classifyDeviceHealth, type HealthStatus } from './helpers';
 
 const HEALTH_LABELS: Record<HealthStatus, string> = {
   healthy: 'Healthy',

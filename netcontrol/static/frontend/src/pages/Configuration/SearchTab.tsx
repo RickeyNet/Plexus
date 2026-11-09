@@ -264,7 +264,7 @@ function Results({
               overflow: 'auto',
               marginTop: '0.75rem',
               padding: '0.5rem',
-              background: 'var(--bg-primary)',
+              background: 'var(--bg)',
               border: '1px solid var(--border)',
               borderRadius: '0.375rem',
               fontSize: '0.8rem',

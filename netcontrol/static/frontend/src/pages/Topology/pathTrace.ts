@@ -107,10 +107,10 @@ export function stageLabel(stage: PathItemStage | string): string {
   return STAGES[stage as PathItemStage] ?? stage;
 }
 
-const SUCCESS = 'var(--success, #2f9e44)';
+const SUCCESS = 'var(--success)';
 const DANGER = 'var(--danger)';
-const WARNING = 'var(--warning, #f59f00)';
-const MUTED = 'var(--text-muted, #868e96)';
+const WARNING = 'var(--warning)';
+const MUTED = 'var(--text-muted)';
 
 const MARKS: Record<ReachabilityStatus, { mark: string; color: string }> = {
   ok: { mark: '✓', color: SUCCESS },

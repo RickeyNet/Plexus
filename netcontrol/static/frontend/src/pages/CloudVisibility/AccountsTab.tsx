@@ -541,7 +541,7 @@ function AccountFormModal({ account, provider: providerProp, providerOptions, on
         )}
 
         {!replaceAuth && (
-          <div className="card" style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.04)' }}>
+          <div className="card" style={{ padding: '0.75rem', background: 'rgba(from var(--text) r g b / 0.04)' }}>
             <div style={{ fontWeight: 600, marginBottom: '0.35rem' }}>Sign-in and sync settings</div>
             <div className="text-muted" style={{ fontSize: '0.9em', marginBottom: '0.5rem' }}>
               {account?.has_auth_config

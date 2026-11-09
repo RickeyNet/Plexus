@@ -985,7 +985,7 @@ function ProgressCard({
             height: "100%",
             width: `${percent ?? 100}%`,
             opacity: percent === null ? 0.35 : 1,
-            background: "var(--primary, var(--success))",
+            background: "var(--primary)",
             transition: "width 0.4s ease",
           }}
         />

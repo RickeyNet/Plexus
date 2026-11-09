@@ -759,7 +759,7 @@ function GroupCard({
                     position: 'sticky',
                     top: 0,
                     zIndex: 1,
-                    background: 'var(--card-bg, var(--bg-secondary))',
+                    background: 'var(--card-bg)',
                   }}
                 >
                   <tr>
@@ -797,7 +797,7 @@ function GroupCard({
                               ref={rowVirtualizer.measureElement}
                               style={{
                                 background: isMatch
-                                  ? 'var(--highlight-bg, rgba(59,130,246,0.08))'
+                                  ? 'var(--primary-soft)'
                                   : undefined,
                               }}
                             >

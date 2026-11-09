@@ -385,10 +385,10 @@ function TabBar(props: {
               padding: '0.2rem 0.55rem',
               border: '1px solid transparent',
               borderBottom: isActive
-                ? '2px solid var(--accent, #4d9bff)'
+                ? '2px solid var(--primary)'
                 : '2px solid transparent',
               background: isActive
-                ? 'var(--surface-hover, rgba(255,255,255,0.04))'
+                ? 'var(--primary-soft)'
                 : 'transparent',
               color: disabled ? 'var(--text-muted)' : 'inherit',
               cursor: disabled ? 'not-allowed' : 'pointer',
@@ -396,7 +396,7 @@ function TabBar(props: {
             }}
           >
             {t.label}
-            {t.matched && <span style={{ color: '#ffc400', marginLeft: '0.25rem' }}>●</span>}
+            {t.matched && <span style={{ color: 'var(--warning)', marginLeft: '0.25rem' }}>●</span>}
           </button>
         );
       })}
@@ -574,16 +574,16 @@ function OverviewTab(props: {
                         display: 'inline-block',
                         background:
                           util.utilization_pct > 75
-                            ? 'rgba(244,67,54,0.2)'
+                            ? 'rgba(from var(--danger) r g b / 0.2)'
                             : util.utilization_pct > 50
-                            ? 'rgba(255,235,59,0.15)'
-                            : 'rgba(76,175,80,0.15)',
+                            ? 'rgba(from var(--warning) r g b / 0.15)'
+                            : 'rgba(from var(--success) r g b / 0.15)',
                         color:
                           util.utilization_pct > 75
-                            ? '#ef5350'
+                            ? 'var(--danger)'
                             : util.utilization_pct > 50
-                            ? '#fdd835'
-                            : '#66bb6a',
+                            ? 'var(--warning)'
+                            : 'var(--success)',
                       }}
                     >
                       {util.utilization_pct}% ({formatBps(util.in_bps)} in /{' '}
@@ -596,8 +596,8 @@ function OverviewTab(props: {
                         fontSize: '0.7rem',
                         marginTop: '0.25rem',
                         padding: '0.1rem 0.35rem',
-                        background: 'rgba(67,160,71,0.14)',
-                        color: '#81c784',
+                        background: 'rgba(from var(--success) r g b / 0.14)',
+                        color: 'var(--success)',
                         borderRadius: '0.2rem',
                         display: 'inline-block',
                       }}
@@ -778,7 +778,7 @@ function ConfigTab({ hostId }: { hostId: number }) {
       ) : (
         <pre
           style={{
-            background: 'var(--bg, #0d1117)',
+            background: 'var(--bg)',
             border: '1px solid var(--border)',
             borderRadius: '0.35rem',
             padding: '0.5rem',
@@ -804,7 +804,7 @@ function ConfigTab({ hostId }: { hostId: number }) {
       >
         <pre
           style={{
-            background: 'var(--bg, #0d1117)',
+            background: 'var(--bg)',
             border: '1px solid var(--border)',
             borderRadius: '0.35rem',
             padding: '0.75rem',

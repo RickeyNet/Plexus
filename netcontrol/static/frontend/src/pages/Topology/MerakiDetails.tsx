@@ -144,7 +144,7 @@ function Section({ section, filterTerms, highlightTerms }: SectionProps) {
         <summary style={{ cursor: 'pointer', padding: '0.4rem 0', fontSize: '0.8rem', fontWeight: 600 }}>{section.title}</summary>
         <pre
           style={{
-            background: 'var(--bg, #0d1117)',
+            background: 'var(--bg)',
             border: '1px solid var(--border)',
             borderRadius: '0.35rem',
             padding: '0.5rem',
@@ -190,7 +190,7 @@ function Section({ section, filterTerms, highlightTerms }: SectionProps) {
             {visible.map((row, i) => (
               <tr
                 key={i}
-                style={rowMatches(row, highlightTerms) ? { background: 'rgba(255, 196, 0, 0.18)' } : undefined}
+                style={rowMatches(row, highlightTerms) ? { background: 'rgba(from var(--warning) r g b / 0.18)' } : undefined}
               >
                 {row.map((cell, j) => (
                   <td

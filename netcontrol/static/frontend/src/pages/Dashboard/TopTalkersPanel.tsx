@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { echarts } from '@/lib/echart-core';
+import { resolveThemeVars, useThemeName } from '@/lib/themeColors';
 
 import { useFlowStatus, useFlowTopTalkers } from '@/api/networkTools';
 import { SegmentedControl } from '@/components/SegmentedControl';
@@ -77,6 +78,7 @@ export function TopTalkersPanel() {
 
 function TalkersBars({ rows }: { rows: { ip: string; total_bytes: number; flow_count: number }[] }) {
   const ref = useRef<HTMLDivElement>(null);
+  const theme = useThemeName();
 
   // Sort ascending so the largest talker renders at the top of a horizontal
   // bar chart (echarts draws the first category at the bottom).
@@ -89,7 +91,7 @@ function TalkersBars({ rows }: { rows: { ip: string; total_bytes: number; flow_c
     if (!ref.current) return;
     const chart = echarts.init(ref.current, undefined, { renderer: 'canvas' });
 
-    chart.setOption({
+    chart.setOption(resolveThemeVars({
       animation: false,
       tooltip: {
         trigger: 'axis',
@@ -127,7 +129,7 @@ function TalkersBars({ rows }: { rows: { ip: string; total_bytes: number; flow_c
             value: r.total_bytes,
             flows: r.flow_count,
           })),
-          itemStyle: { color: '#3b82f6', borderRadius: [0, 3, 3, 0] },
+          itemStyle: { color: 'var(--info)', borderRadius: [0, 3, 3, 0] },
           label: {
             show: true,
             position: 'right',
@@ -138,7 +140,7 @@ function TalkersBars({ rows }: { rows: { ip: string; total_bytes: number; flow_c
           barMaxWidth: 18,
         },
       ],
-    });
+    }));
 
     const onResize = () => chart.resize();
     window.addEventListener('resize', onResize);
@@ -146,7 +148,7 @@ function TalkersBars({ rows }: { rows: { ip: string; total_bytes: number; flow_c
       window.removeEventListener('resize', onResize);
       chart.dispose();
     };
-  }, [sorted]);
+  }, [sorted, theme]);
 
   return <div ref={ref} style={{ width: '100%', height: 260 }} />;
 }

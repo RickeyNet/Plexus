@@ -68,7 +68,7 @@ export function RulesTab() {
                   <div>
                     <span
                       className="badge"
-                      style={{ background: `var(--${sev})`, color: 'white', fontSize: '0.75em', padding: '2px 8px', borderRadius: 3, textTransform: 'uppercase' }}
+                      style={{ background: `var(--${sev})`, color: 'var(--on-primary)', fontSize: '0.75em', padding: '2px 8px', borderRadius: 3, textTransform: 'uppercase' }}
                     >
                       {r.severity}
                     </span>

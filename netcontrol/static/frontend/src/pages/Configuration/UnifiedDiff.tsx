@@ -17,7 +17,7 @@ export function UnifiedDiff({ diffText, className, style }: Props) {
         maxHeight: 400,
         overflow: 'auto',
         padding: '0.75rem',
-        background: 'var(--bg-primary)',
+        background: 'var(--bg)',
         border: '1px solid var(--border)',
         borderRadius: '0.375rem',
         fontSize: '0.8rem',

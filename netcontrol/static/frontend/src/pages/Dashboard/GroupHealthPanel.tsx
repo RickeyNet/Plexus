@@ -2,15 +2,9 @@ import { useMemo } from 'react';
 
 import type { DashboardGroup, DeviceHealth } from '@/api/dashboard';
 
-import { classifyDeviceHealth, type HealthStatus } from './helpers';
+import { HEALTH_COLORS, classifyDeviceHealth } from './helpers';
 
-const TILE_COLORS: Record<HealthStatus, string> = {
-  healthy: '#4caf50',
-  warning: '#ff9800',
-  critical: '#f44336',
-  down: '#b71c1c',
-  unknown: '#9e9e9e',
-};
+const TILE_COLORS = HEALTH_COLORS;
 
 interface GroupRollup {
   id: number | string;
@@ -123,7 +117,7 @@ function GroupTile({ rollup }: { rollup: GroupRollup }) {
         borderLeft: `3px solid ${accent}`,
         borderRadius: 6,
         padding: '10px 12px',
-        background: 'var(--bg-secondary, transparent)',
+        background: 'var(--bg-secondary)',
       }}
     >
       <div
@@ -158,7 +152,7 @@ function GroupTile({ rollup }: { rollup: GroupRollup }) {
           height: 6,
           borderRadius: 3,
           overflow: 'hidden',
-          background: 'var(--border-light, var(--border))',
+          background: 'var(--border-light)',
           marginBottom: 8,
         }}
         aria-label={`${okPct.toFixed(0)}% healthy`}

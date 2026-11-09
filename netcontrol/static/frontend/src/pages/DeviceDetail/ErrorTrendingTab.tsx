@@ -187,7 +187,7 @@ function ErrorSummaryTable({
     const d = entry.metrics?.[key];
     if (!d || d.max_value == null) return <span className="text-muted">0</span>;
     const val = d.max_value;
-    const color = val > 100 ? 'var(--danger)' : val > 0 ? 'var(--warning)' : 'var(--text-secondary)';
+    const color = val > 100 ? 'var(--danger)' : val > 0 ? 'var(--warning)' : 'var(--text-light)';
     return (
       <span style={{ color, fontWeight: val > 0 ? 600 : 400 }}>{val.toLocaleString()}</span>
     );

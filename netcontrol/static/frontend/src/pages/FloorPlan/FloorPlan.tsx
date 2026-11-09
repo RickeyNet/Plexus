@@ -227,13 +227,13 @@ function SitesPanel({
             >
               {floors} floor{floors !== 1 ? 's' : ''} · {placed} pinned
               {online > 0 && (
-                <span style={{ color: '#4caf50', marginLeft: 4 }}>● {online}</span>
+                <span style={{ color: 'var(--success)', marginLeft: 4 }}>● {online}</span>
               )}
               {offline > 0 && (
-                <span style={{ color: '#f44336', marginLeft: 4 }}>● {offline}</span>
+                <span style={{ color: 'var(--danger)', marginLeft: 4 }}>● {offline}</span>
               )}
               {unknown > 0 && (
-                <span style={{ color: '#9e9e9e', marginLeft: 4 }}>● {unknown}</span>
+                <span style={{ color: 'var(--text-muted)', marginLeft: 4 }}>● {unknown}</span>
               )}
             </div>
             {isActive && (

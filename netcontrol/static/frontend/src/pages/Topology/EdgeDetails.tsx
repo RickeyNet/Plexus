@@ -104,10 +104,10 @@ export function EdgeDetails({ edge, fromNode, toNode, onClose }: Props) {
             borderRadius: '0.3rem',
             background:
               util.utilization_pct > 75
-                ? 'rgba(244,67,54,0.15)'
+                ? 'rgba(from var(--danger) r g b / 0.15)'
                 : util.utilization_pct > 50
-                ? 'rgba(255,235,59,0.12)'
-                : 'rgba(76,175,80,0.12)',
+                ? 'rgba(from var(--warning) r g b / 0.12)'
+                : 'rgba(from var(--success) r g b / 0.12)',
           }}
         >
           Utilization {util.utilization_pct}% - {formatBps(util.in_bps)} in /{' '}
@@ -297,8 +297,8 @@ function MismatchSummary({
       style={{
         marginTop: '0.7rem',
         padding: '0.45rem 0.6rem',
-        background: 'rgba(255,193,7,0.1)',
-        border: '1px solid rgba(255,193,7,0.35)',
+        background: 'rgba(from var(--warning) r g b / 0.1)',
+        border: '1px solid rgba(from var(--warning) r g b / 0.35)',
         borderRadius: '0.3rem',
         fontSize: '0.72rem',
       }}

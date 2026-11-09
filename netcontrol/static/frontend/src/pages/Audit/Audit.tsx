@@ -155,7 +155,7 @@ export function AuditContent() {
                     cursor: 'pointer',
                     background:
                       selectedRunId === r.id
-                        ? 'var(--surface-hover, rgba(255,255,255,0.04))'
+                        ? 'var(--primary-soft)'
                         : undefined,
                   }}
                   onClick={() => setSelectedRunId(r.id)}
@@ -402,7 +402,7 @@ function FilterChip(props: {
       style={{
         cursor: 'pointer',
         border: props.active
-          ? '1px solid var(--accent, #4d9bff)'
+          ? '1px solid var(--primary)'
           : '1px solid transparent',
         opacity: props.active ? 1 : 0.7,
         textTransform: 'capitalize',
@@ -437,7 +437,7 @@ function CategorySection(props: {
   return (
     <div
       style={{
-        border: '1px solid var(--border, rgba(255,255,255,0.1))',
+        border: '1px solid var(--border)',
         borderRadius: '4px',
       }}
     >
@@ -449,10 +449,10 @@ function CategorySection(props: {
           alignItems: 'center',
           gap: '0.75rem',
           cursor: 'pointer',
-          background: 'var(--surface-hover, rgba(255,255,255,0.03))',
+          background: 'rgba(from var(--text) r g b / 0.04)',
           borderBottom: collapsed
             ? 'none'
-            : '1px solid var(--border, rgba(255,255,255,0.1))',
+            : '1px solid var(--border)',
         }}
       >
         <span style={{ fontFamily: 'monospace', width: '1rem' }}>

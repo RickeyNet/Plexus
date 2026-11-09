@@ -184,16 +184,16 @@ function VersionsTab() {
     {
       label: 'Behind Newest Seen',
       value: summary?.behind_newest ?? 0,
-      color: (summary?.behind_newest ?? 0) > 0 ? 'var(--warning-color)' : undefined,
+      color: (summary?.behind_newest ?? 0) > 0 ? 'var(--warning)' : undefined,
     },
     {
       label: 'Open Alerts',
       value: summary?.open_alerts ?? 0,
       color:
         (summary?.critical_alerts ?? 0) > 0
-          ? 'var(--danger-color)'
+          ? 'var(--danger)'
           : (summary?.open_alerts ?? 0) > 0
-            ? 'var(--warning-color)'
+            ? 'var(--warning)'
             : undefined,
     },
     { label: 'Advisories', value: summary?.advisories ?? 0 },
@@ -487,7 +487,7 @@ function SpreadCard({ spread }: { spread: SoftwarePlatformSpread[] }) {
         spread.map((p) => {
           const max = Math.max(...p.versions.map((v) => v.count));
           return (
-            <div key={p.platform} style={{ padding: '0.6rem 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+            <div key={p.platform} style={{ padding: '0.6rem 0', borderBottom: '1px solid var(--border)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', alignItems: 'baseline' }}>
                 <strong>{p.label}</strong>
                 <span className="text-muted" style={{ fontSize: '0.85em' }}>
@@ -500,7 +500,7 @@ function SpreadCard({ spread }: { spread: SoftwarePlatformSpread[] }) {
                 {p.versions.map((v) => (
                   <div key={v.version} style={{ display: 'grid', gridTemplateColumns: '120px 1fr 40px', gap: '0.5rem' }}>
                     <span style={{ fontWeight: v.behind_newest ? 400 : 600, fontSize: '0.9em' }}>{v.version}</span>
-                    <div style={{ background: 'rgba(255,255,255,0.06)', borderRadius: 3, height: 10, alignSelf: 'center' }}>
+                    <div style={{ background: 'rgba(from var(--text) r g b / 0.08)', borderRadius: 3, height: 10, alignSelf: 'center' }}>
                       <div
                         style={{
                           width: `${barWidth(v.count, max)}%`,
@@ -545,7 +545,7 @@ function AlertsCard({ alerts, canWrite, onAcknowledge }: AlertsCardProps) {
             {alerts.length} open alert{alerts.length === 1 ? '' : 's'}, {open} unacknowledged
           </div>
           {alerts.map((a) => (
-            <div key={a.id} style={{ padding: '0.7rem 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+            <div key={a.id} style={{ padding: '0.7rem 0', borderBottom: '1px solid var(--border)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'flex-start' }}>
                 <div>
                   <span className={severityBadgeClass(a.severity)} style={{ marginRight: '0.4rem' }}>
@@ -618,7 +618,7 @@ function AdvisoriesCard({ advisories, canWrite, platformLabel, onAdd, onImport, 
         </p>
       ) : (
         advisories.map((adv) => (
-          <div key={adv.advisory_id} style={{ padding: '0.6rem 0', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+          <div key={adv.advisory_id} style={{ padding: '0.6rem 0', borderBottom: '1px solid var(--border)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', alignItems: 'flex-start' }}>
               <div style={{ minWidth: 0 }}>
                 <span className={severityBadgeClass(adv.severity)} style={{ marginRight: '0.4rem' }}>

@@ -133,9 +133,9 @@ export function PolicyTab({ filter }: Props) {
                       const highlighted = Number(row.public_ingress_count ?? 0) > 0 || Number(row.open_egress_count ?? 0) > 0;
                       const selected = selectedUid && row.resource_uid === selectedUid;
                       const bg = selected
-                        ? 'rgba(25,118,210,0.14)'
+                        ? 'var(--primary-soft)'
                         : highlighted
-                          ? 'rgba(255,145,0,0.12)'
+                          ? 'rgba(from var(--warning) r g b / 0.12)'
                           : undefined;
                       return (
                         <tr key={row.resource_uid} style={bg ? { background: bg } : undefined}>
@@ -184,7 +184,7 @@ export function PolicyTab({ filter }: Props) {
                   {rules.map((row, i) => {
                     const highlighted = isPublicRule(row);
                     return (
-                      <tr key={i} style={highlighted ? { background: 'rgba(255,145,0,0.12)' } : undefined}>
+                      <tr key={i} style={highlighted ? { background: 'rgba(from var(--warning) r g b / 0.12)' } : undefined}>
                         <td>
                           {row.resource_name || row.resource_uid || '-'}
                           <div className="text-muted" style={{ fontSize: '0.75rem' }}>{providerLabel(row.provider)}</div>

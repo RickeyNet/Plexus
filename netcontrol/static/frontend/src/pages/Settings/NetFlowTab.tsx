@@ -72,8 +72,8 @@ export function NetFlowTab() {
           <span
             className="badge"
             style={{
-              background: running ? 'var(--success-bg, #1f6f3f)' : 'var(--muted-bg, #444)',
-              color: '#fff',
+              background: running ? 'var(--success)' : 'var(--text-muted)',
+              color: 'var(--on-primary)',
               padding: '0.15rem 0.5rem',
               borderRadius: '999px',
               fontSize: '0.78rem',
@@ -84,8 +84,8 @@ export function NetFlowTab() {
           <span
             className="badge"
             style={{
-              background: sflowRunning ? 'var(--success-bg, #1f6f3f)' : 'var(--muted-bg, #444)',
-              color: '#fff',
+              background: sflowRunning ? 'var(--success)' : 'var(--text-muted)',
+              color: 'var(--on-primary)',
               padding: '0.15rem 0.5rem',
               borderRadius: '999px',
               fontSize: '0.78rem',

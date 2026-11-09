@@ -33,7 +33,7 @@ export function ResponseTimePanel() {
     const max = values.length ? Math.max(...values) : 0;
 
     return {
-      series: [{ name: 'Response time (ms)', data: points, color: '#3b82f6' }],
+      series: [{ name: 'Response time (ms)', data: points, color: 'var(--info)' }],
       avgMs: avg,
       maxMs: max,
     };

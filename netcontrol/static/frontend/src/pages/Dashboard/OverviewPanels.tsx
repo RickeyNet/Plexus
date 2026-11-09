@@ -1,17 +1,10 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { echarts } from '@/lib/echart-core';
+import { resolveThemeVars, useThemeName } from '@/lib/themeColors';
 
 import type { DeviceHealth } from '@/api/dashboard';
 
-import { classifyDeviceHealth, type HealthStatus } from './helpers';
-
-const HEALTH_COLORS: Record<HealthStatus, string> = {
-  healthy: '#4caf50',
-  warning: '#ff9800',
-  critical: '#f44336',
-  down: '#b71c1c',
-  unknown: '#9e9e9e',
-};
+import { HEALTH_COLORS, classifyDeviceHealth, type HealthStatus } from './helpers';
 
 const HEALTH_LABELS: Record<HealthStatus, string> = {
   healthy: 'Good',
@@ -34,6 +27,7 @@ export function OverviewPanels({ devices }: { devices: DeviceHealth[] }) {
 
 function HealthDonut({ devices }: { devices: DeviceHealth[] }) {
   const ref = useRef<HTMLDivElement>(null);
+  const theme = useThemeName();
 
   const buckets = useMemo(() => {
     const counts: Record<HealthStatus, number> = {
@@ -64,7 +58,7 @@ function HealthDonut({ devices }: { devices: DeviceHealth[] }) {
     ];
     const hasData = slices.some((s) => s.value > 0);
 
-    chart.setOption({
+    chart.setOption(resolveThemeVars({
       animation: false,
       tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
       legend: {
@@ -97,7 +91,7 @@ function HealthDonut({ devices }: { devices: DeviceHealth[] }) {
           silent: !hasData,
         },
       ],
-    });
+    }));
 
     const onResize = () => chart.resize();
     window.addEventListener('resize', onResize);
@@ -105,7 +99,7 @@ function HealthDonut({ devices }: { devices: DeviceHealth[] }) {
       window.removeEventListener('resize', onResize);
       chart.dispose();
     };
-  }, [buckets, total]);
+  }, [buckets, total, theme]);
 
   return <div ref={ref} style={{ width: '100%', height: 240 }} />;
 }

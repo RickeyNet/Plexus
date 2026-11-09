@@ -9,10 +9,10 @@ const METRIC_LABELS: Record<string, string> = {
 };
 
 const METRIC_COLORS: Record<string, string> = {
-  if_in_errors_rate: '#EF4444',
-  if_out_errors_rate: '#F97316',
-  if_in_discards_rate: '#A855F7',
-  if_out_discards_rate: '#EC4899',
+  if_in_errors_rate: 'var(--danger)',
+  if_out_errors_rate: 'var(--warning)',
+  if_in_discards_rate: 'var(--violet)',
+  if_out_discards_rate: 'var(--info)',
 };
 
 export function ErrorChart({ hostId, ifIndex }: { hostId: number; ifIndex: number }) {

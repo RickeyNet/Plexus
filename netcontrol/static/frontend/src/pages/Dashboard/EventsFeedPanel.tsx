@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 
 import { useAnnotations, type Annotation } from '@/api/dashboard';
 import { SegmentedControl } from '@/components/SegmentedControl';
+import { EVENT_CATEGORY_COLORS } from '@/lib/themeColors';
 import { useTimeRange } from '@/lib/timeRange-context';
 
 import { timeAgo } from './helpers';
@@ -9,11 +10,7 @@ import { timeAgo } from './helpers';
 type Category = 'deployment' | 'config' | 'alert';
 type Filter = 'all' | Category;
 
-const CATEGORY_COLORS: Record<Category, string> = {
-  deployment: '#3b82f6',
-  config: '#f59e0b',
-  alert: '#ef4444',
-};
+const CATEGORY_COLORS: Record<Category, string> = EVENT_CATEGORY_COLORS;
 
 const CATEGORY_LABELS: Record<Category, string> = {
   deployment: 'Deploy',

@@ -28,8 +28,8 @@ interface Issue {
 }
 
 const SEVERITY_COLORS: Record<IssueSeverity, string> = {
-  critical: '#f44336',
-  warning: '#ff9800',
+  critical: 'var(--danger)',
+  warning: 'var(--warning)',
 };
 
 interface Props {

@@ -150,7 +150,7 @@ function SetupInstructions() {
         border: '1px solid var(--border)',
         borderRadius: 'var(--radius, 6px)',
         padding: '0.5rem 0.75rem',
-        background: 'var(--surface-2, rgba(255,255,255,0.02))',
+        background: 'rgba(from var(--text) r g b / 0.04)',
       }}
     >
       <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
@@ -364,7 +364,7 @@ export function NotificationsTab() {
                       style={{
                         fontFamily: 'monospace',
                         fontSize: '0.78rem',
-                        color: result && result.ok ? 'var(--success, green)' : 'var(--text-muted)',
+                        color: result && result.ok ? 'var(--success)' : 'var(--text-muted)',
                         maxWidth: '220px',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
@@ -441,7 +441,7 @@ function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }
         padding: '0.75rem',
         border: '1px solid var(--border)',
         borderRadius: 'var(--radius, 6px)',
-        background: 'var(--surface-2, rgba(255,255,255,0.02))',
+        background: 'rgba(from var(--text) r g b / 0.04)',
       }}
     >
       <h4 style={{ marginTop: 0 }}>{isEdit ? 'Edit Channel' : 'New Channel'}</h4>

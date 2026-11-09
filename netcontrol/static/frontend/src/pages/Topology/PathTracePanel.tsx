@@ -16,8 +16,8 @@ import {
   type TraceHighlight,
 } from './pathTrace';
 
-const MUTED = 'var(--text-muted, #868e96)';
-const WARNING = 'var(--warning, #f59f00)';
+const MUTED = 'var(--text-muted)';
+const WARNING = 'var(--warning)';
 
 type TraceQuery = ReturnType<typeof usePathTrace>;
 

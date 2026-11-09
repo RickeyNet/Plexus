@@ -54,7 +54,7 @@ function CorrelationBody({
         <span style={{ marginLeft: '1rem' }}>Events: {events.length}</span>
       </div>
       <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.8em' }}>
-        <span style={{ color: '#3b82f6' }}>● Deployment</span>
+        <span style={{ color: 'var(--info)' }}>● Deployment</span>
         <span style={{ color: 'var(--warning)' }}>● Drift</span>
         <span style={{ color: 'var(--danger)' }}>● Alert</span>
         <span style={{ color: 'var(--text-muted)' }}>● Audit</span>

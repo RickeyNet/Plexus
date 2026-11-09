@@ -234,7 +234,7 @@ function Pin({
           left: '50%',
           transform: 'translateX(-50%)',
           fontSize: 9,
-          color: '#fff',
+          color: 'var(--on-primary)',
           fontWeight: 700,
           textShadow: '0 0 2px rgba(0,0,0,0.7)',
           width: 22,

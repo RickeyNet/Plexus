@@ -105,7 +105,7 @@ export function Ipam() {
     {
       label: 'Duplicate IPs',
       value: summary.duplicate_ip_count ?? 0,
-      color: 'var(--danger-color)',
+      color: 'var(--danger)',
     },
     { label: 'Inventory Subnets', value: summary.inventory_subnets ?? 0 },
     { label: 'Local Subnets', value: summary.local_subnets ?? 0 },
@@ -113,12 +113,12 @@ export function Ipam() {
     {
       label: 'Inventory / Cloud Overlaps',
       value: summary.exact_source_overlap_count ?? 0,
-      color: 'var(--warning-color)',
+      color: 'var(--warning)',
     },
     {
       label: 'Overlapping Ranges',
       value: summary.overlap_count ?? 0,
-      color: (summary.vpn_overlap_count ?? 0) > 0 ? 'var(--danger-color)' : 'var(--warning-color)',
+      color: (summary.vpn_overlap_count ?? 0) > 0 ? 'var(--danger)' : 'var(--warning)',
     },
   ];
 
@@ -298,7 +298,7 @@ export function Ipam() {
                       key={item.subnet}
                       style={
                         isSelected
-                          ? { background: 'rgba(255,255,255,0.04)' }
+                          ? { background: 'rgba(from var(--text) r g b / 0.04)' }
                           : undefined
                       }
                     >
@@ -323,8 +323,8 @@ export function Ipam() {
                               <span
                                 className="badge"
                                 style={{
-                                  background: 'rgba(99,102,241,0.18)',
-                                  color: '#a5b4fc',
+                                  background: 'rgba(from var(--violet) r g b / 0.15)',
+                                  color: 'var(--violet)',
                                   fontSize: '0.7em',
                                   marginRight: '0.3rem',
                                 }}
@@ -337,8 +337,8 @@ export function Ipam() {
                                 key={String(v)}
                                 className="badge"
                                 style={{
-                                  background: 'rgba(34,197,94,0.18)',
-                                  color: '#86efac',
+                                  background: 'rgba(from var(--success) r g b / 0.15)',
+                                  color: 'var(--success)',
                                   fontSize: '0.7em',
                                   marginRight: '0.3rem',
                                 }}
@@ -484,7 +484,7 @@ export function Ipam() {
                   key={`${item.ip_address}-${item.vrf_name ?? ''}`}
                   style={{
                     padding: '0.8rem 0',
-                    borderBottom: '1px solid rgba(255,255,255,0.08)',
+                    borderBottom: '1px solid var(--border)',
                   }}
                 >
                   <div
@@ -499,7 +499,7 @@ export function Ipam() {
                       <div
                         style={{
                           fontWeight: 600,
-                          color: 'var(--danger-color)',
+                          color: 'var(--danger)',
                         }}
                       >
                         {item.ip_address || ''}
@@ -507,8 +507,8 @@ export function Ipam() {
                           <span
                             className="badge"
                             style={{
-                              background: 'rgba(99,102,241,0.18)',
-                              color: '#a5b4fc',
+                              background: 'rgba(from var(--violet) r g b / 0.15)',
+                              color: 'var(--violet)',
                               fontSize: '0.7em',
                               marginLeft: '0.4rem',
                             }}
@@ -537,7 +537,7 @@ export function Ipam() {
                         className="text-muted"
                         style={{ lineHeight: 1.45 }}
                       >
-                        <strong style={{ color: 'var(--text-primary)' }}>
+                        <strong style={{ color: 'var(--text)' }}>
                           {host.hostname || 'Unknown host'}
                         </strong>
                         <span> in {host.group_name || 'Unknown group'}</span>
@@ -621,7 +621,7 @@ function OverlapSide({ side }: { side: IpamOverlapSide }) {
   const where = side.source === 'cloud' ? cloudNetwork : 'site';
   return (
     <div style={{ lineHeight: 1.45 }}>
-      <strong style={{ color: 'var(--text-primary)' }}>{side.subnet}</strong>
+      <strong style={{ color: 'var(--text)' }}>{side.subnet}</strong>
       <span className="text-muted">
         {' '}
         {side.name ? `${side.name} at ` : `${where} `}
@@ -657,7 +657,7 @@ function OverlapsCard({ overlaps, total, vpnTotal, includeTopology }: OverlapsCa
               key={`${pair.a.subnet}-${pair.a.owner}-${pair.b.subnet}-${pair.b.owner}-${i}`}
               style={{
                 padding: '0.8rem 0',
-                borderBottom: '1px solid rgba(255,255,255,0.08)',
+                borderBottom: '1px solid var(--border)',
               }}
             >
               <div
@@ -723,7 +723,7 @@ function SyncScheduleBar({ config }: { config: IpamSyncConfig }) {
         gap: '0.75rem',
         flexWrap: 'wrap',
         padding: '0.6rem 0.75rem',
-        background: 'rgba(255,255,255,0.03)',
+        background: 'rgba(from var(--text) r g b / 0.04)',
         borderRadius: 8,
         marginBottom: '0.75rem',
       }}
@@ -856,7 +856,7 @@ function SourcesCard({
             key={src.id}
             style={{
               padding: '0.75rem 0',
-              borderBottom: '1px solid rgba(255,255,255,0.08)',
+              borderBottom: '1px solid var(--border)',
             }}
           >
             <div
@@ -1317,8 +1317,8 @@ function DhcpCard({
                     <span
                       style={{
                         color: s.exhausted
-                          ? 'var(--danger-color)'
-                          : 'var(--warning-color)',
+                          ? 'var(--danger)'
+                          : 'var(--warning)',
                         fontWeight: 600,
                       }}
                     >

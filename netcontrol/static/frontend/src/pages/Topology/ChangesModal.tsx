@@ -118,7 +118,7 @@ export function ChangesModal({ isOpen, onClose, onAcknowledged }: Props) {
                         marginLeft: '0.4rem',
                         fontSize: '0.7rem',
                         padding: '0.1rem 0.35rem',
-                        background: 'rgba(255,255,255,0.07)',
+                        background: 'rgba(from var(--text) r g b / 0.07)',
                         borderRadius: '0.2rem',
                       }}>{proto}</span>
                     )}

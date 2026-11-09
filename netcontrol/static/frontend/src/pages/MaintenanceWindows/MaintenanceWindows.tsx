@@ -128,7 +128,7 @@ export function MaintenanceWindows() {
           </thead>
           <tbody>
             {sorted.map((w) => (
-              <tr key={w.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+              <tr key={w.id} style={{ borderBottom: '1px solid var(--border)' }}>
                 <td style={{ padding: '6px 8px' }}>
                   <strong>{w.name}</strong>
                   {w.description && (

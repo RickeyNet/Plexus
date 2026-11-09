@@ -818,9 +818,9 @@ function RuntimeCard({ deviceId }: { deviceId: number }) {
       {status.isPending && <Loading label="Checking runtime…" />}
       {status.data && !status.data.available && (
         <div style={{
-          background: 'rgba(245, 158, 11, 0.1)',
+          background: 'rgba(from var(--warning) r g b / 0.1)',
           color: 'var(--warning)',
-          border: '1px solid rgba(245, 158, 11, 0.25)',
+          border: '1px solid rgba(from var(--warning) r g b / 0.25)',
           padding: '0.75rem 1rem',
           borderRadius: '0.375rem',
           marginBottom: '1rem',

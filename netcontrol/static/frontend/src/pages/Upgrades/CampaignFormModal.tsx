@@ -313,7 +313,7 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
 
           <fieldset
             style={{
-              border: '1px solid var(--glass-border)',
+              border: '1px solid var(--border)',
               borderRadius: 8,
               padding: '1rem',
               marginBottom: '1rem',
@@ -398,7 +398,7 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
 
           <fieldset
             style={{
-              border: '1px solid var(--glass-border)',
+              border: '1px solid var(--border)',
               borderRadius: 8,
               padding: '1rem',
               marginBottom: '1rem',
@@ -487,7 +487,7 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
 
           <fieldset
             style={{
-              border: '1px solid var(--glass-border)',
+              border: '1px solid var(--border)',
               borderRadius: 8,
               padding: '1rem',
               marginBottom: '1rem',

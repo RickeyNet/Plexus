@@ -71,24 +71,24 @@ export function DiscoveryProgressModal({ isOpen, groupId, onClose, onComplete }:
         setLinks(runningLinks);
         setStep(`Walked ${event.hostname}`);
         if (event.ok) {
-          const color = (event.neighbors ?? 0) > 0 ? 'var(--success, #22c55e)' : 'var(--text-muted)';
+          const color = (event.neighbors ?? 0) > 0 ? 'var(--success)' : 'var(--text-muted)';
           const icon = (event.neighbors ?? 0) > 0 ? '✓' : '–';
           append({ text: `  ${icon} ${event.hostname} (${event.ip}) - ${event.neighbors} neighbor(s)`, color });
         } else {
-          append({ text: `  ✗ ${event.hostname} (${event.ip}) - failed`, color: 'var(--danger, #ef4444)' });
+          append({ text: `  ✗ ${event.hostname} (${event.ip}) - failed`, color: 'var(--danger)' });
         }
       } else if (event.type === 'db_write_start') {
         setStep(`Saving results for ${event.group}...`);
         append({ text: `  Saving topology data for "${event.group}"...`, color: 'var(--text-muted)' });
       } else if (event.type === 'group_done') {
-        append({ text: `✔ Group "${event.group}" complete - ${event.links} link(s)`, color: 'var(--success, #22c55e)' });
+        append({ text: `✔ Group "${event.group}" complete - ${event.links} link(s)`, color: 'var(--success)' });
       } else if (event.type === 'resolving') {
         setStep('Resolving neighbor identities...');
         append({ text: 'Resolving neighbor host IDs against inventory...', color: 'var(--text-muted)' });
       } else if (event.type === 'done') {
         finalResult = event;
       } else if (event.type === 'error') {
-        append({ text: `Error: ${event.message}`, color: 'var(--danger, #ef4444)' });
+        append({ text: `Error: ${event.message}`, color: 'var(--danger)' });
       }
     }, controller.signal)
       .then(() => {
@@ -104,7 +104,7 @@ export function DiscoveryProgressModal({ isOpen, groupId, onClose, onComplete }:
       })
       .catch((err: Error) => {
         if (err.name === 'AbortError') return;
-        append({ text: `Error: ${err.message}`, color: 'var(--danger, #ef4444)' });
+        append({ text: `Error: ${err.message}`, color: 'var(--danger)' });
       })
       .finally(() => {
         clearInterval(elapsedTimer);
@@ -148,7 +148,7 @@ export function DiscoveryProgressModal({ isOpen, groupId, onClose, onComplete }:
       </div>
       <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: '0.5rem', padding: '0.4rem 0.6rem', fontSize: '0.8rem', fontFamily: 'monospace', background: 'var(--bg-secondary)' }}>
         {feed.map((entry, i) => (
-          <div key={i} style={{ padding: '0.15rem 0', borderBottom: '1px solid var(--border)', color: entry.color || 'var(--text-primary)' }}>
+          <div key={i} style={{ padding: '0.15rem 0', borderBottom: '1px solid var(--border)', color: entry.color || 'var(--text)' }}>
             {entry.text}
           </div>
         ))}

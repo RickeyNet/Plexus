@@ -189,12 +189,12 @@ function AlertRow({
           )}
           <span
             className="badge"
-            style={{ background: `var(--${sev})`, color: 'white', fontSize: '0.75em', padding: '2px 8px', borderRadius: 3, textTransform: 'uppercase' }}
+            style={{ background: `var(--${sev})`, color: 'var(--on-primary)', fontSize: '0.75em', padding: '2px 8px', borderRadius: 3, textTransform: 'uppercase' }}
           >
             {alert.severity}
           </span>
           {alert.escalated && (
-            <span style={{ background: 'var(--danger)', color: 'white', fontSize: '0.7em', padding: '2px 6px', borderRadius: 3 }}>
+            <span style={{ background: 'var(--danger)', color: 'var(--on-primary)', fontSize: '0.7em', padding: '2px 6px', borderRadius: 3 }}>
               ESCALATED
             </span>
           )}
