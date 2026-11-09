@@ -80,7 +80,7 @@ export function CapacityTab() {
               <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>Threshold Estimates</div>
               <table style={{ width: '100%', fontSize: '0.9em', borderCollapse: 'collapse' }}>
                 <thead>
-                  <tr style={{ borderBottom: '2px solid var(--border-color)' }}>
+                  <tr style={{ borderBottom: '2px solid var(--border)' }}>
                     <th style={{ textAlign: 'left', padding: '6px 12px' }}>Threshold</th>
                     <th style={{ textAlign: 'left', padding: '6px 12px' }}>Days Until</th>
                     <th style={{ textAlign: 'left', padding: '6px 12px' }}>Est. Date</th>
@@ -91,7 +91,7 @@ export function CapacityTab() {
                     const days = info.days_until;
                     const color = days != null && days <= 30 ? 'danger' : days != null && days <= 90 ? 'warning' : 'success';
                     return (
-                      <tr key={thresh} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                      <tr key={thresh} style={{ borderBottom: '1px solid var(--border)' }}>
                         <td style={{ padding: '6px 12px' }}>{thresh}%</td>
                         <td style={{ padding: '6px 12px', color: `var(--${color})`, fontWeight: 600 }}>
                           {days != null ? `${days} days` : 'N/A'}
@@ -144,7 +144,7 @@ function CapacityChart({ points, projection }: { points: CapacityPlanningPoint[]
     const val = yMax - (i / 4) * yRange;
     gridLines.push(
       <g key={i}>
-        <line x1={PAD_L} y1={y} x2={W - PAD_R} y2={y} stroke="var(--border-color)" strokeDasharray="2,2" />
+        <line x1={PAD_L} y1={y} x2={W - PAD_R} y2={y} stroke="var(--border)" strokeDasharray="2,2" />
         <text x={PAD_L - 8} y={y + 3} textAnchor="end" fill="var(--text-muted)" fontSize="10">
           {val.toFixed(val < 10 ? 1 : 0)}
         </text>

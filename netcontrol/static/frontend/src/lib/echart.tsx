@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { echarts, type ECharts } from './echart-core';
+import { EVENT_CATEGORY_COLORS, SERIES_COLORS, resolveThemeVars, useThemeName } from './themeColors';
 
 export interface TimeSeriesPoint {
   time: string;
@@ -19,13 +20,7 @@ export interface ChartAnnotation {
   action?: string;
 }
 
-// Matches the legacy PlexusChart.addAnnotations() palette (app.js).
-const ANNOTATION_COLORS: Record<string, string> = {
-  deployment: '#3b82f6',
-  config: '#f59e0b',
-  alert: '#ef4444',
-  default: '#8b5cf6',
-};
+const ANNOTATION_COLORS: Record<string, string> = EVENT_CATEGORY_COLORS;
 
 interface TimeSeriesChartProps {
   series: TimeSeries[];
@@ -39,6 +34,10 @@ interface TimeSeriesChartProps {
 
 const DEFAULT_HEIGHT = 240;
 
+// Options are written with theme tokens and resolved to concrete colors by
+// resolveThemeVars() just before setOption: the canvas renderer ignores a
+// color it cannot parse, and it cannot parse var(). Each chart re-applies its
+// option when the theme changes (useThemeName in the effect dependencies).
 const TEXT_COLOR = 'var(--text)';
 const AXIS_COLOR = 'var(--text-muted)';
 const SPLIT_COLOR = 'var(--border)';
@@ -63,6 +62,7 @@ export function TimeSeriesChart({
 }: TimeSeriesChartProps) {
   const ref = useRef<HTMLDivElement>(null);
   const chartRef = useRef<ECharts | null>(null);
+  const theme = useThemeName();
 
   // Mount-only: create the instance once, wire resize, dispose on unmount.
   useEffect(() => {
@@ -105,8 +105,9 @@ export function TimeSeriesChart({
       });
 
     chart.setOption(
-      {
+      resolveThemeVars({
         animation: false,
+        color: SERIES_COLORS,
         tooltip: {
           trigger: 'axis',
           axisPointer: { type: 'cross' },
@@ -155,12 +156,12 @@ export function TimeSeriesChart({
               ? { silent: true, symbol: 'none', data: markLineData }
               : undefined,
         })),
-      },
+      }),
       // Fully replace: series/legend count varies with input, so a merge
       // would leave stale series/legend entries behind.
       { notMerge: true },
     );
-  }, [series, area, yAxisName, yMin, yMax, annotations]);
+  }, [series, area, yAxisName, yMin, yMax, annotations, theme]);
 
   return <div ref={ref} style={{ width: '100%', height }} />;
 }
@@ -176,6 +177,7 @@ interface GaugeChartProps {
 export function GaugeChart({ value, title, min = 0, max = 100, height = DEFAULT_HEIGHT }: GaugeChartProps) {
   const ref = useRef<HTMLDivElement>(null);
   const chartRef = useRef<ECharts | null>(null);
+  const theme = useThemeName();
 
   // Mount-only: create the instance once, wire resize, dispose on unmount.
   useEffect(() => {
@@ -198,8 +200,9 @@ export function GaugeChart({ value, title, min = 0, max = 100, height = DEFAULT_
     if (!chart) return;
 
     chart.setOption(
-      {
+      resolveThemeVars({
         animation: false,
+        color: SERIES_COLORS,
         series: [
           {
             type: 'gauge',
@@ -227,10 +230,10 @@ export function GaugeChart({ value, title, min = 0, max = 100, height = DEFAULT_
             data: [{ value: Math.round(value * 10) / 10, name: title ?? '' }],
           },
         ],
-      },
+      }),
       { notMerge: true },
     );
-  }, [value, title, min, max]);
+  }, [value, title, min, max, theme]);
 
   return <div ref={ref} style={{ width: '100%', height }} />;
 }
@@ -245,6 +248,7 @@ interface HeatmapChartProps {
 export function HeatmapChart({ xLabels, yLabels, data, height = DEFAULT_HEIGHT }: HeatmapChartProps) {
   const ref = useRef<HTMLDivElement>(null);
   const chartRef = useRef<ECharts | null>(null);
+  const theme = useThemeName();
 
   // Mount-only: create the instance once, wire resize, dispose on unmount.
   useEffect(() => {
@@ -271,8 +275,9 @@ export function HeatmapChart({ xLabels, yLabels, data, height = DEFAULT_HEIGHT }
     const dataMax = values.length ? Math.max(...values) : 1;
 
     chart.setOption(
-      {
+      resolveThemeVars({
         animation: false,
+        color: SERIES_COLORS,
         tooltip: { position: 'top' },
         grid: { left: 60, right: 16, top: 24, bottom: 60, containLabel: true },
         xAxis: {
@@ -297,7 +302,7 @@ export function HeatmapChart({ xLabels, yLabels, data, height = DEFAULT_HEIGHT }
           left: 'center',
           bottom: 0,
           textStyle: { color: AXIS_COLOR },
-          inRange: { color: ['#1e3a8a', '#3b82f6', '#fbbf24', '#ef4444'] },
+          inRange: { color: ['var(--border)', 'var(--info)', 'var(--warning)', 'var(--danger)'] },
         },
         series: [
           {
@@ -307,10 +312,10 @@ export function HeatmapChart({ xLabels, yLabels, data, height = DEFAULT_HEIGHT }
             label: { show: false },
           },
         ],
-      },
+      }),
       { notMerge: true },
     );
-  }, [xLabels, yLabels, data]);
+  }, [xLabels, yLabels, data, theme]);
 
   return <div ref={ref} style={{ width: '100%', height }} />;
 }
@@ -330,6 +335,7 @@ export function BarChart({
 }: BarChartProps) {
   const ref = useRef<HTMLDivElement>(null);
   const chartRef = useRef<ECharts | null>(null);
+  const theme = useThemeName();
 
   // Mount-only: create the instance once, wire resize, dispose on unmount.
   useEffect(() => {
@@ -352,8 +358,9 @@ export function BarChart({
     if (!chart) return;
 
     chart.setOption(
-      {
+      resolveThemeVars({
         animation: false,
+        color: SERIES_COLORS,
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
         grid: { left: 40, right: 16, top: 16, bottom: rotateLabels ? 60 : 30, containLabel: true },
         xAxis: {
@@ -375,13 +382,13 @@ export function BarChart({
           {
             type: 'bar',
             data: values,
-            itemStyle: { color: '#3b82f6' },
+            itemStyle: { color: 'var(--info)' },
           },
         ],
-      },
+      }),
       { notMerge: true },
     );
-  }, [categories, values, rotateLabels]);
+  }, [categories, values, rotateLabels, theme]);
 
   return <div ref={ref} style={{ width: '100%', height }} />;
 }

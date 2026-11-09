@@ -1,5 +1,6 @@
 import type { TopologyData, TopologyEdge, TopologyNode } from '@/api/topology';
 import { cloudProviderTerms } from '@/lib/cloudProviderTerms';
+import { mixColors, themeColorReader, withAlpha } from '@/lib/themeColors';
 
 // ── Theme Colors ──────────────────────────────────────────────────────────
 
@@ -29,6 +30,17 @@ export interface TopoThemeColors {
   pathGlow: string;
   dimColor: { background: string; border: string };
   dimEdge: EdgeColor;
+  status: TopoStatusColors;
+}
+
+/** The theme's status colors, concrete for the canvas: each reads on the map background. */
+export interface TopoStatusColors {
+  success: string;
+  warning: string;
+  danger: string;
+  info: string;
+  violet: string;
+  muted: string;
 }
 
 export interface VendorColor {
@@ -46,17 +58,25 @@ export interface EdgeColor {
 }
 
 export function getTopoThemeColors(): TopoThemeColors {
-  const style = getComputedStyle(document.documentElement);
   const theme = document.documentElement.getAttribute('data-theme') || 'forest';
   const isDark = !['light', 'sandstone'].includes(theme);
-  const hasLightTopoNodes = ['light', 'sandstone'].includes(theme);
-  const v = (prop: string, fallback: string) =>
-    style.getPropertyValue(prop).trim() || fallback;
+  const v = themeColorReader();
+  // The vis canvas cannot read var(); every color here is concrete. The
+  // fallbacks only apply while a token is missing.
+  const status: TopoStatusColors = {
+    success: v('--success', '#4caf50'),
+    warning: v('--warning', '#ff9800'),
+    danger: v('--danger', '#f44336'),
+    info: v('--info', '#29b6f6'),
+    violet: v('--violet', '#ba68c8'),
+    muted: v('--text-muted', '#9e9e9e'),
+  };
   return {
-    nodeFont: hasLightTopoNodes ? '#2a1818' : v('--text', '#c8d4c8'),
-    nodeFontStroke: hasLightTopoNodes ? 'rgba(255,255,255,0.7)' : 'rgba(0,0,0,0.6)',
-    edgeFont: hasLightTopoNodes ? '#4a3030' : v('--text-muted', '#7a8a7a'),
-    edgeFontStroke: hasLightTopoNodes ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.5)',
+    // Labels sit on the map background, which is roughly --bg in every theme.
+    nodeFont: v('--text', '#c8d4c8'),
+    nodeFontStroke: isDark ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.7)',
+    edgeFont: v('--text-light', '#9fb09f'),
+    edgeFontStroke: isDark ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.6)',
     externalBg: isDark ? '#263238' : v('--bg-secondary', '#edf2ea'),
     externalBorder: isDark ? '#546e7a' : v('--border', '#d1d9d1'),
     externalHighlightBg: isDark ? '#37474f' : v('--card-bg-hover', '#f2f5ef'),
@@ -70,11 +90,20 @@ export function getTopoThemeColors(): TopoThemeColors {
     edgeLldp: edge(v, 'lldp', '#00e676', '#69f0ae', 0.8),
     edgeOspf: edge(v, 'ospf', '#ffab40', '#ffd180', 0.8),
     edgeBgp: edge(v, 'bgp', '#e040fb', '#ea80fc', 0.8),
-    edgeInferred: edge(v, 'inferred', '#9e9e9e', '#bdbdbd', 0.65),
-    meraki: vendor(v, 'meraki', '#33691e', '#8bc34a', '#558b2f', '#c5e1a5'),
-    edgeVpn: edge(v, 'vpn', '#ba68c8', '#ce93d8', 0.6),
-    edgeWan: edge(v, 'wan', '#4fc3f7', '#81d4fa', 0.8),
-    edgeCloud: edge(v, 'cloud', '#ff9800', '#ffb74d', 0.8),
+    // No per-theme --topo-* tokens for these: derive them from the status
+    // tokens, which every theme tunes to read on its background.
+    edgeInferred: edge(v, 'inferred', status.muted, status.muted, 0.65),
+    meraki: vendor(
+      v,
+      'meraki',
+      isDark ? '#33691e' : '#c8e0b8',
+      status.success,
+      isDark ? '#558b2f' : '#b8d4a6',
+      status.success,
+    ),
+    edgeVpn: edge(v, 'vpn', status.violet, status.violet, 0.6),
+    edgeWan: edge(v, 'wan', status.info, status.info, 0.8),
+    edgeCloud: edge(v, 'cloud', status.warning, status.warning, 0.8),
     pathGlow: v('--topo-path-glow', 'rgba(255,255,255,0.6)'),
     dimColor: {
       background: v('--topo-dim-bg', 'rgba(40,50,60,0.4)'),
@@ -86,6 +115,7 @@ export function getTopoThemeColors(): TopoThemeColors {
       hover: v('--topo-dim-edge-hi', 'rgba(80,90,100,0.3)'),
       opacity: 0.2,
     },
+    status,
   };
 }
 
@@ -281,11 +311,6 @@ export function merakiNodeShape(node: TopologyNode): string {
   return 'square';
 }
 
-const MERAKI_STATUS_BORDER: Record<string, string> = {
-  offline: '#f44336',
-  alerting: '#ffb300',
-};
-
 export function nodeShape(deviceType?: string | null): string {
   if (deviceType && FIREWALL_DEVICE_TYPES.has(deviceType)) return 'triangle';
   if (deviceType && ['cisco_ios', 'juniper_junos', 'arista_eos'].includes(deviceType)) {
@@ -297,7 +322,8 @@ export function nodeShape(deviceType?: string | null): string {
 export function nodeColor(node: TopologyNode, tc: TopoThemeColors): VendorColor {
   if (node.source === 'meraki') {
     // Meraki reports device health; surface a problem as the node border.
-    const border = MERAKI_STATUS_BORDER[node.meraki?.status ?? ''];
+    const meraki = node.meraki?.status;
+    const border = meraki === 'offline' ? tc.status.danger : meraki === 'alerting' ? tc.status.warning : '';
     if (!border) return tc.meraki;
     return {
       ...tc.meraki,
@@ -347,27 +373,18 @@ export function isEdgeDown(edge: TopologyEdge): boolean {
 
 // ── Utilization color ramp ────────────────────────────────────────────────
 
-export function utilColor(pct: number): EdgeColor {
-  let r: number, g: number, b: number;
-  if (pct <= 50) {
-    const t = pct / 50;
-    r = Math.round(76 + (255 - 76) * t);
-    g = Math.round(175 + (235 - 175) * t);
-    b = Math.round(80 + (59 - 80) * t);
-  } else {
-    const t = (pct - 50) / 50;
-    r = Math.round(255 + (244 - 255) * t);
-    g = Math.round(235 - 235 * t * 0.85);
-    b = Math.round(59 + (67 - 59) * t);
-  }
-  const hex = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+/** Utilization ramp: the theme's success color at 0%, warning at 50%, danger at 100%. */
+export function utilColor(pct: number, status: TopoStatusColors): EdgeColor {
+  const hex = pct <= 50
+    ? mixColors(status.success, status.warning, pct / 50)
+    : mixColors(status.warning, status.danger, (pct - 50) / 50);
   return { color: hex, highlight: hex, hover: hex, opacity: 0.9 };
 }
 
-export function utilShadow(pct: number): string {
-  if (pct > 75) return 'rgba(244,67,54,0.4)';
-  if (pct > 50) return 'rgba(255,235,59,0.3)';
-  return 'rgba(76,175,80,0.3)';
+export function utilShadow(pct: number, status: TopoStatusColors): string {
+  if (pct > 75) return withAlpha(status.danger, 0.4);
+  if (pct > 50) return withAlpha(status.warning, 0.3);
+  return withAlpha(status.success, 0.3);
 }
 
 export function formatBps(bps?: number | null): string {
@@ -420,30 +437,34 @@ export interface StpStyle {
   shadow: string;
 }
 
-export function stpStyle(state?: string | null): StpStyle | null {
+function solidEdge(color: string, opacity: number): EdgeColor {
+  return { color, highlight: color, hover: color, opacity };
+}
+
+export function stpStyle(state: string | null | undefined, status: TopoStatusColors): StpStyle | null {
   const s = String(state || '').toLowerCase();
   if (s === 'forwarding') {
     return {
-      color: { color: '#43a047', highlight: '#66bb6a', hover: '#66bb6a', opacity: 0.9 },
+      color: solidEdge(status.success, 0.9),
       width: 4,
       dashes: false,
-      shadow: 'rgba(67,160,71,0.35)',
+      shadow: withAlpha(status.success, 0.35),
     };
   }
   if (s === 'learning' || s === 'listening') {
     return {
-      color: { color: '#f9a825', highlight: '#fbc02d', hover: '#fbc02d', opacity: 0.95 },
+      color: solidEdge(status.warning, 0.95),
       width: 4,
       dashes: [6, 4],
-      shadow: 'rgba(249,168,37,0.35)',
+      shadow: withAlpha(status.warning, 0.35),
     };
   }
   if (s === 'blocking' || s === 'discarding' || s === 'disabled' || s === 'broken') {
     return {
-      color: { color: '#e53935', highlight: '#ef5350', hover: '#ef5350', opacity: 0.95 },
+      color: solidEdge(status.danger, 0.95),
       width: 6,
       dashes: [4, 3],
-      shadow: 'rgba(229,57,53,0.45)',
+      shadow: withAlpha(status.danger, 0.45),
     };
   }
   return null;

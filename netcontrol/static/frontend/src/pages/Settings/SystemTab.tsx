@@ -397,7 +397,7 @@ function CheckResultBox({
   }
 
   const newer = last.is_newer;
-  const tone = newer ? 'var(--accent, #4a9eff)' : 'var(--text-muted)';
+  const tone = newer ? 'var(--primary)' : 'var(--text-muted)';
   const headline = newer
     ? `Update available: ${last.latest_version}`
     : `Up to date (latest: ${last.latest_version ?? currentVersion})`;
@@ -509,7 +509,7 @@ function UpdateProgressPanel({
     statusLine = 'No update has been run from the UI yet.';
   }
   const tone =
-    busy ? 'var(--accent, #4a9eff)' : result?.status === 'failed' ? 'var(--danger)' : 'var(--border)';
+    busy ? 'var(--primary)' : result?.status === 'failed' ? 'var(--danger)' : 'var(--border)';
   const started = formatTime(result?.started_at);
   const finished = formatTime(result?.finished_at);
 
@@ -557,7 +557,7 @@ function UpdateProgressPanel({
               maxHeight: 320,
               overflow: 'auto',
               padding: '0.5rem',
-              background: 'var(--bg-secondary, rgba(0,0,0,0.2))',
+              background: 'var(--bg-secondary)',
               borderRadius: 4,
             }}
           >

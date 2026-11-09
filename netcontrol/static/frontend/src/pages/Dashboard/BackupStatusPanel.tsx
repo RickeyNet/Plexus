@@ -11,10 +11,10 @@ import { type BackupState, type HostRollup, rollUpBackups } from './backupRollup
 import { timeAgo } from './helpers';
 
 const STATE_COLORS: Record<BackupState, string> = {
-  success: '#4caf50',
-  stale: '#ff9800',
-  failed: '#f44336',
-  never: '#9e9e9e',
+  success: 'var(--success)',
+  stale: 'var(--warning)',
+  failed: 'var(--danger)',
+  never: 'var(--text-muted)',
 };
 
 const STATE_LABELS: Record<BackupState, string> = {
@@ -156,7 +156,7 @@ function ProblemRow({ rollup }: { rollup: HostRollup }) {
         gap: 10,
         padding: '4px 6px',
         borderLeft: `3px solid ${color}`,
-        background: 'var(--bg-secondary, transparent)',
+        background: 'var(--bg-secondary)',
         borderRadius: 4,
       }}
     >

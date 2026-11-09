@@ -159,7 +159,7 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
             <label className="form-label">Type</label>
             {mode === 'edit' ? (
               <div>
-                <span className="badge" style={{ background: type === 'ansible' ? 'var(--info)' : 'var(--primary)', color: '#fff' }}>
+                <span className="badge" style={{ background: type === 'ansible' ? 'var(--info)' : 'var(--primary)', color: 'var(--on-primary)' }}>
                   {type === 'ansible' ? 'Ansible' : 'Python'}
                 </span>
               </div>
@@ -202,7 +202,7 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
                 indentOnInput: true,
                 tabSize: 4,
               }}
-              style={{ fontSize: '0.85rem', border: '1px solid var(--border, #444)', borderRadius: 4 }}
+              style={{ fontSize: '0.85rem', border: '1px solid var(--border)', borderRadius: 4 }}
               className="playbook-code-editor"
             />
           </div>

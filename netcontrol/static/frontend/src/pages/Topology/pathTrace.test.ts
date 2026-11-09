@@ -103,7 +103,7 @@ describe('path trace display', () => {
     ]);
     expect(['ok', 'blocked', 'partial', 'unknown', 'info'].map((s) => statusMark(s).mark)).toEqual(['✓', '✕', '◐', '?', 'i']);
     expect(statusMark('blocked').color).toBe('var(--danger)');
-    expect(statusMark('info').color).toBe('var(--text-muted, #868e96)');
+    expect(statusMark('info').color).toBe('var(--text-muted)');
     expect(['allowed', 'blocked', 'unreachable', 'partial', 'unknown'].map((v) => verdictLabel(v).label)).toEqual([
       'Allowed',
       'Blocked',
@@ -111,7 +111,7 @@ describe('path trace display', () => {
       'Allowed in part',
       'Check incomplete',
     ]);
-    expect(verdictLabel('allowed').color).toBe('var(--success, #2f9e44)');
+    expect(verdictLabel('allowed').color).toBe('var(--success)');
   });
 
   it('lists the hops of a direction on one line, marking those not ok', () => {

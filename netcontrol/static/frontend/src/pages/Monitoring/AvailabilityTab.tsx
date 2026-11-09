@@ -133,7 +133,7 @@ export function AvailabilityTab() {
           <div style={{ maxHeight: 480, overflow: 'auto' }}>
             <table style={{ width: '100%', fontSize: '0.85em', borderCollapse: 'collapse' }}>
               <thead>
-                <tr style={{ borderBottom: '2px solid var(--border-color)' }}>
+                <tr style={{ borderBottom: '2px solid var(--border)' }}>
                   <th style={{ textAlign: 'left', padding: '4px 8px' }}>Time</th>
                   <th style={{ textAlign: 'left', padding: '4px 8px' }}>Host</th>
                   <th style={{ textAlign: 'left', padding: '4px 8px' }}>Entity</th>
@@ -146,7 +146,7 @@ export function AvailabilityTab() {
                   const fromColor = t.old_state === 'up' ? 'success' : t.old_state === 'down' ? 'danger' : 'text-muted';
                   const toColor = t.new_state === 'up' ? 'success' : t.new_state === 'down' ? 'danger' : 'text-muted';
                   return (
-                    <tr key={t.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                    <tr key={t.id} style={{ borderBottom: '1px solid var(--border)' }}>
                       <td style={{ padding: '4px 8px' }}>{formatTimestamp(t.changed_at)}</td>
                       <td style={{ padding: '4px 8px' }}>{t.hostname}</td>
                       <td style={{ padding: '4px 8px' }}>{t.entity_type ?? 'host'}{t.entity_id ? ` ${t.entity_id}` : ''}</td>

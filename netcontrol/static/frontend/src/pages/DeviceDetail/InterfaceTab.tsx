@@ -125,19 +125,19 @@ export function InterfaceTab({ ifData, latestPoll }: Props) {
           {adminDownCount > 0 && (
             <span className="badge badge-secondary">{adminDownCount} Admin Down</span>
           )}
-          <span style={{ color: 'var(--text-secondary)' }}>|</span>
-          <span style={{ color: 'var(--text-secondary)' }}>{physicals.length} Physical</span>
+          <span style={{ color: 'var(--text-light)' }}>|</span>
+          <span style={{ color: 'var(--text-light)' }}>{physicals.length} Physical</span>
           {portChannels.length > 0 && (
-            <span style={{ color: 'var(--text-secondary)' }}>
+            <span style={{ color: 'var(--text-light)' }}>
               {portChannels.length} Port-Channel
             </span>
           )}
-          <span style={{ color: 'var(--text-secondary)' }}>{vlans.length} VLAN</span>
+          <span style={{ color: 'var(--text-light)' }}>{vlans.length} VLAN</span>
           {tunnels.length > 0 && (
-            <span style={{ color: 'var(--text-secondary)' }}>{tunnels.length} Tunnel</span>
+            <span style={{ color: 'var(--text-light)' }}>{tunnels.length} Tunnel</span>
           )}
           {other.length > 0 && (
-            <span style={{ color: 'var(--text-secondary)' }}>{other.length} Other</span>
+            <span style={{ color: 'var(--text-light)' }}>{other.length} Other</span>
           )}
         </div>
       </div>
@@ -231,12 +231,12 @@ export function InterfaceTab({ ifData, latestPoll }: Props) {
                     {
                       name: 'In (bps)',
                       data: data.map((d) => ({ time: d.sampled_at, value: d.in_rate_bps || 0 })),
-                      color: '#3b82f6',
+                      color: 'var(--info)',
                     },
                     {
                       name: 'Out (bps)',
                       data: data.map((d) => ({ time: d.sampled_at, value: d.out_rate_bps || 0 })),
-                      color: '#f59e0b',
+                      color: 'var(--warning)',
                     },
                   ]}
                 />

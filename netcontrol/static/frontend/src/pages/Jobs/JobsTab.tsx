@@ -149,7 +149,7 @@ function QueuePanel({ data }: { data: ReturnType<typeof useJobQueue>['data'] }) 
               key={j.id}
               className={`status-badge`}
               title={`${j.playbook_name ?? ''} - ${priorityLabel(j.priority)}`}
-              style={{ background: isRunning ? 'var(--success)' : 'var(--bg-secondary)', color: isRunning ? '#fff' : 'inherit' }}
+              style={{ background: isRunning ? 'var(--success)' : 'var(--bg-secondary)', color: isRunning ? 'var(--on-primary)' : 'inherit' }}
             >
               {(j.playbook_name ?? 'Job').substring(0, 20)}
               {!isRunning && ` - ${priorityLabel(j.priority)}`}
@@ -172,7 +172,7 @@ function JobRow({ job, onView, onCancel, onRetry }: { job: Job; onView: () => vo
         <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
           {job.playbook_name || 'Unknown'}
           {showPri && (
-            <span className="badge" style={{ background: `var(--${priorityColor(job.priority)})`, color: '#fff' }}>
+            <span className="badge" style={{ background: `var(--${priorityColor(job.priority)})`, color: 'var(--on-primary)' }}>
               {priorityLabel(job.priority)}
             </span>
           )}
