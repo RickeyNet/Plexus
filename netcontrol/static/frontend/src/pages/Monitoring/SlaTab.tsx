@@ -187,7 +187,7 @@ function SlaHostsList({
         return (
           <div
             key={h.host_id}
-            style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr', padding: '0.5rem 1rem', borderTop: '1px solid var(--border-color)', cursor: 'pointer', fontSize: '0.9em' }}
+            style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr', padding: '0.5rem 1rem', borderTop: '1px solid var(--border)', cursor: 'pointer', fontSize: '0.9em' }}
             onClick={() => onSelect(h.host_id)}
           >
             <div>
@@ -307,7 +307,7 @@ function SlaChart({
     const val = yMax - (i / 4) * yRange;
     gridLines.push(
       <g key={i}>
-        <line x1={PAD_L} y1={y} x2={W - PAD_R} y2={y} stroke="var(--border-color)" strokeDasharray="2,2" />
+        <line x1={PAD_L} y1={y} x2={W - PAD_R} y2={y} stroke="var(--border)" strokeDasharray="2,2" />
         <text x={PAD_L - 8} y={y + 3} textAnchor="end" fill="var(--text-muted)" fontSize="10">
           {val.toFixed(val < 10 ? 1 : 0)}
         </text>
@@ -335,7 +335,7 @@ function SlaChart({
         <path d={areaPath} fill={color} opacity="0.15" />
         <path d={linePath} fill="none" stroke={color} strokeWidth="2" />
         {points.map((p, i) => (
-          <circle key={i} cx={p.x} cy={p.y} r="3" fill="white" stroke={color} strokeWidth="2">
+          <circle key={i} cx={p.x} cy={p.y} r="3" fill="var(--card-bg)" stroke={color} strokeWidth="2">
             <title>{`${p.day}: ${p.v.toFixed(2)}`}</title>
           </circle>
         ))}

@@ -213,7 +213,7 @@ function HostHistoryModal({ hostId, hostname, onClose }: { hostId: number; hostn
         <div style={{ maxHeight: 400, overflow: 'auto' }}>
           <table style={{ width: '100%', fontSize: '0.85em', borderCollapse: 'collapse' }}>
             <thead>
-              <tr style={{ borderBottom: '2px solid var(--border-color)' }}>
+              <tr style={{ borderBottom: '2px solid var(--border)' }}>
                 <th style={{ textAlign: 'left', padding: '4px 8px' }}>Time</th>
                 <th style={{ textAlign: 'right', padding: '4px 8px' }}>CPU</th>
                 <th style={{ textAlign: 'right', padding: '4px 8px' }}>Memory</th>
@@ -225,7 +225,7 @@ function HostHistoryModal({ hostId, hostname, onClose }: { hostId: number; hostn
             </thead>
             <tbody>
               {history.data.map((p, idx) => (
-                <tr key={idx} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                <tr key={idx} style={{ borderBottom: '1px solid var(--border)' }}>
                   <td style={{ padding: '4px 8px' }}>{formatTimestamp(p.polled_at)}</td>
                   <td style={{ padding: '4px 8px', textAlign: 'right' }}>{p.cpu_percent != null ? `${p.cpu_percent}%` : '-'}</td>
                   <td style={{ padding: '4px 8px', textAlign: 'right' }}>{p.memory_percent != null ? `${p.memory_percent}%` : '-'}</td>

@@ -15,6 +15,15 @@ export const ISSUE_ANCHORS = {
 
 export type HealthStatus = 'healthy' | 'warning' | 'critical' | 'down' | 'unknown';
 
+/** Theme token for each health status (dashboard tiles, rollups, donut). */
+export const HEALTH_COLORS: Record<HealthStatus, string> = {
+  healthy: 'var(--success)',
+  warning: 'var(--warning)',
+  critical: 'var(--danger)',
+  down: 'var(--danger)',
+  unknown: 'var(--text-muted)',
+};
+
 export function classifyDeviceHealth(poll: DeviceHealth | undefined | null): HealthStatus {
   if (!poll) return 'unknown';
   if (poll.poll_status === 'error') return 'down';

@@ -103,7 +103,7 @@ function TransferProgressBar({ p }: { p: TransferProgress }) {
             flex: 1,
             height: 8,
             borderRadius: 4,
-            background: 'var(--glass-border)',
+            background: 'var(--border)',
             overflow: 'hidden',
           }}
         >
@@ -357,7 +357,7 @@ function PhaseStep({
       style={{
         flex: '1 1 210px',
         minWidth: 190,
-        border: '1px solid var(--glass-border)',
+        border: '1px solid var(--border)',
         borderRadius: 8,
         padding: '0.7rem',
         background: 'var(--bg-secondary)',
@@ -374,7 +374,7 @@ function PhaseStep({
             height: 22,
             borderRadius: '50%',
             background: 'var(--info)',
-            color: '#fff',
+            color: 'var(--on-primary)',
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -790,8 +790,8 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                   marginBottom: '1rem',
                   padding: '0.75rem 1rem',
                   borderRadius: 8,
-                  background: 'rgba(245, 158, 11, 0.12)',
-                  border: '1px solid rgba(245, 158, 11, 0.35)',
+                  background: 'rgba(from var(--warning) r g b / 0.12)',
+                  border: '1px solid rgba(from var(--warning) r g b / 0.35)',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '0.75rem',

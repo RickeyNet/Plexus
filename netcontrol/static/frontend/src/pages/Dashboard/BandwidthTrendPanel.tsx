@@ -3,15 +3,15 @@ import { useMemo } from 'react';
 import { useTopInterfaces, type TopInterface } from '@/api/dashboard';
 import { ClampedRangeHint } from '@/components/TimeRangeBar';
 import { TimeSeriesChart, type TimeSeries } from '@/lib/echart';
+import { SERIES_COLORS } from '@/lib/themeColors';
 import { useTimeRange } from '@/lib/timeRange-context';
 import { clampPreset } from '@/lib/timeRangeMap';
 
 // /api/dashboard/top-interfaces only knows 1h..7d and falls back to 6h otherwise.
 const TOP_INTERFACE_RANGES = ['1h', '6h', '24h', '7d'] as const;
 
-// Distinct line colors for up to 5 interfaces. Picked to stay legible in both
-// light and dark themes.
-const LINE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#a855f7', '#ef4444'];
+// Distinct line colors for up to 5 interfaces, from the theme's series palette.
+const LINE_COLORS = SERIES_COLORS.slice(0, 5);
 
 export function BandwidthTrendPanel() {
   const { range: globalRange } = useTimeRange();

@@ -262,7 +262,7 @@ export function CampaignsTab() {
                     marginTop: '0.5rem',
                     height: 6,
                     borderRadius: 3,
-                    background: 'var(--glass-border)',
+                    background: 'var(--border)',
                     overflow: 'hidden',
                   }}
                 >
@@ -281,7 +281,7 @@ export function CampaignsTab() {
                       marginTop: '0.5rem',
                       padding: '0.4rem 0.6rem',
                       borderRadius: 6,
-                      background: 'rgba(245, 158, 11, 0.12)',
+                      background: 'rgba(from var(--warning) r g b / 0.12)',
                       color: 'var(--warning)',
                       fontSize: '0.85em',
                       display: 'flex',

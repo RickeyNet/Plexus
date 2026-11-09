@@ -29,6 +29,7 @@ import { groupLabel } from '@/api/inventory';
 import { topologyExportUrl, useMerakiSubnets, useTopologyDeepSearch, type MerakiSubnet, type TopologyExportPath } from '@/api/meraki';
 import { Menu, MenuCheckboxItem, MenuItem, MenuSeparator } from '@/components/Menu';
 import { PageHelp } from '@/components/PageHelp';
+import { mixColors, withAlpha } from '@/lib/themeColors';
 import { AddToInventoryModal } from './AddToInventoryModal';
 import { BulkAddToInventoryModal } from './BulkAddToInventoryModal';
 import { buildInventoryAddRows } from './inventoryAdd';
@@ -104,7 +105,6 @@ interface SearchResult {
   snippet?: string;
 }
 
-const DOWN_EDGE_COLOR = { color: '#f44336', highlight: '#ef5350', hover: '#ef5350', opacity: 0.9 };
 const MAX_SEARCH_RESULTS = 40;
 // Site frame padding: roomy for free-form layouts, snug for the tidy tree,
 // whose rows leave just enough space between sites for a frame and its title.
@@ -625,7 +625,7 @@ export function Topology() {
     // and the borders/shadows already encode the same dimension.
     if (hasIpamUtil) {
       const pct = Math.max(0, Math.min(100, Number(pctRaw)));
-      const utilHex = utilColor(pct).color;
+      const utilHex = utilColor(pct, tc.status).color;
       return {
         color: {
           ...baseColor,
@@ -634,14 +634,14 @@ export function Topology() {
           hover: { ...baseColor.hover, border: utilHex },
         },
         borderWidth: n.in_inventory ? 5 : 3,
-        shadowColor: utilShadow(pct),
+        shadowColor: utilShadow(pct, tc.status),
         shadowSize: n.in_inventory ? 22 : 12,
       };
     }
 
     if (statusOverlay && typeof n.id === 'number') {
       const status = statusByHostRef.current.get(n.id);
-      const badge = statusBadge(status);
+      const badge = statusBadge(status, tc.status);
       if (badge) {
         return {
           color: {
@@ -668,34 +668,35 @@ export function Topology() {
   // Pick a single worst-severity color for a host. critical/high/audit-critical
   // dominate; medium and warning give a softer amber; low/info still light up
   // so operators can see the device "has something" without it screaming.
-  function statusBadge(s: TopologyHostStatus | undefined) {
+  function statusBadge(s: TopologyHostStatus | undefined, colors: TopoThemeColors['status']) {
     if (!s) return null;
     const audit: AuditSeverity | null = s.audit_worst;
     const err: ErrorSeverity | null = s.errors_worst;
     const hasDrift = s.drift_open > 0;
     if (audit === 'critical' || err === 'critical') {
-      return { color: '#f44336', shadow: 'rgba(244,67,54,0.5)', tier: 'critical' as const };
+      return { color: colors.danger, shadow: withAlpha(colors.danger, 0.5), tier: 'critical' as const };
     }
     if (audit === 'high' || err === 'high') {
-      return { color: '#ff7043', shadow: 'rgba(255,112,67,0.45)', tier: 'high' as const };
+      const high = mixColors(colors.danger, colors.warning, 0.5);
+      return { color: high, shadow: withAlpha(high, 0.45), tier: 'high' as const };
     }
     if (audit === 'medium' || err === 'warning' || hasDrift) {
-      return { color: '#ffc107', shadow: 'rgba(255,193,7,0.4)', tier: 'medium' as const };
+      return { color: colors.warning, shadow: withAlpha(colors.warning, 0.4), tier: 'medium' as const };
     }
     if (audit === 'low' || audit === 'info' || err === 'info') {
-      return { color: '#29b6f6', shadow: 'rgba(41,182,246,0.35)', tier: 'low' as const };
+      return { color: colors.info, shadow: withAlpha(colors.info, 0.35), tier: 'low' as const };
     }
     return null;
   }
 
   // Worst-of-endpoints status color for an edge -- so a link to/from a
   // device with active errors lights up too.
-  function edgeStatusColor(e: TopologyEdge): string | null {
+  function edgeStatusColor(e: TopologyEdge, colors: TopoThemeColors['status']): string | null {
     if (!statusOverlay) return null;
     const fromId = typeof e.from === 'number' ? e.from : null;
     const toId = typeof e.to === 'number' ? e.to : null;
-    const fromBadge = fromId != null ? statusBadge(statusByHostRef.current.get(fromId)) : null;
-    const toBadge = toId != null ? statusBadge(statusByHostRef.current.get(toId)) : null;
+    const fromBadge = fromId != null ? statusBadge(statusByHostRef.current.get(fromId), colors) : null;
+    const toBadge = toId != null ? statusBadge(statusByHostRef.current.get(toId), colors) : null;
     const rank = { critical: 0, high: 1, medium: 2, low: 3 } as const;
     const candidates = [fromBadge, toBadge].filter(Boolean) as NonNullable<typeof fromBadge>[];
     if (!candidates.length) return null;
@@ -709,11 +710,11 @@ export function Topology() {
     const hasUtil = utilOverlay && util && util.utilization_pct != null;
     const utilPct = hasUtil && util ? util.utilization_pct : 0;
     const utilWidth = hasUtil && util ? (util.width ?? (2 + (utilPct / 100) * 6)) : 2;
-    const utilColorOverride = hasUtil && util ? (util.color ?? utilColor(utilPct)) : null;
+    const utilColorOverride = hasUtil && util ? (util.color ?? utilColor(utilPct, tc.status)) : null;
     const stp = stpOverlay && edge.from_host_id && edge.source_interface
       ? stpStateRef.current.get(stpPortKey(edge.from_host_id, edge.source_interface))
       : null;
-    const stpStl = stp ? stpStyle(stp.port_state) : null;
+    const stpStl = stp ? stpStyle(stp.port_state, tc.status) : null;
     const srcIface = abbreviateInterface(edge.source_interface);
     const tgtIface = abbreviateInterface(edge.target_interface);
     let label = [srcIface, tgtIface].filter(Boolean).join(' → ') || '';
@@ -722,13 +723,8 @@ export function Topology() {
       const role = stp.port_role ? `/${stp.port_role}` : '';
       label = `${label ? label + ' ' : ''}[STP:${stp.port_state}${role}]`;
     }
-    const protoShadow: Record<string, string> = {
-      lldp: 'rgba(0,230,118,0.3)',
-      ospf: 'rgba(255,171,64,0.3)',
-      bgp: 'rgba(224,64,251,0.3)',
-      'inferred-fdb': 'rgba(158,158,158,0.25)',
-    };
-    const baseProtocolShadow = protoShadow[edge.protocol ?? ''] ?? 'rgba(0,176,255,0.3)';
+    const protocolColor = edgeProtocolColor(edge.protocol, tc);
+    const baseProtocolShadow = withAlpha(protocolColor.color, edge.protocol === 'inferred-fdb' ? 0.25 : 0.3);
     const protoDash: false | number[] = stpStl ? stpStl.dashes
       : edge.protocol === 'lldp' ? [8, 5]
       : edge.protocol === 'ospf' ? [12, 4, 4, 4]
@@ -740,32 +736,28 @@ export function Topology() {
       : edge.protocol === 'management' ? [2, 4]
       : false;
     // A Meraki VPN tunnel / WAN uplink the Dashboard reports as down.
-    const downColor = isEdgeDown(edge) ? DOWN_EDGE_COLOR : null;
+    const downColor = isEdgeDown(edge)
+      ? { color: tc.status.danger, highlight: tc.status.danger, hover: tc.status.danger, opacity: 0.9 }
+      : null;
     const baseWidth = edge.protocol === 'stack' ? Math.max(utilWidth, 4) : utilWidth;
     // Status overlay paints the edge with the worst-endpoint badge color
     // *only* when neither STP nor live-util is overriding (those are more
     // semantically loaded and the operator is already getting a heatmap
     // signal on the endpoints).
-    const statusHex = !stpStl && !hasUtil ? edgeStatusColor(edge) : null;
-    const statusShadow = statusHex ? hexToRgba(statusHex, 0.4) : null;
+    const statusHex = !stpStl && !hasUtil ? edgeStatusColor(edge, tc.status) : null;
+    const statusShadow = statusHex ? withAlpha(statusHex, 0.4) : null;
 
     return {
       label,
       color: stpStl
         ? stpStl.color
-        : (utilColorOverride || (statusHex ? { color: statusHex, highlight: statusHex, hover: statusHex, opacity: 0.9 } : (downColor ?? edgeProtocolColor(edge.protocol, tc)))),
+        : (utilColorOverride || (statusHex ? { color: statusHex, highlight: statusHex, hover: statusHex, opacity: 0.9 } : (downColor ?? protocolColor))),
       width: stpStl ? Math.max(utilWidth, stpStl.width) : (statusHex ? Math.max(utilWidth, 3) : baseWidth),
       dashes: protoDash,
       shadowColor: stpStl
         ? stpStl.shadow
-        : (hasUtil ? utilShadow(utilPct) : (statusShadow ?? baseProtocolShadow)),
+        : (hasUtil ? utilShadow(utilPct, tc.status) : (statusShadow ?? baseProtocolShadow)),
     };
-  }
-
-  function hexToRgba(hex: string, alpha: number): string {
-    const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-    if (!m) return hex;
-    return `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${alpha})`;
   }
 
   function buildVisEdge(e: TopologyEdge, roundness: number): VisEdge {
@@ -1174,8 +1166,8 @@ export function Topology() {
       const y = region.y0 - SOURCE_FRAME.padY;
       const w = region.x1 - region.x0 + SOURCE_FRAME.padX * 2;
       const h = region.y1 - region.y0 + SOURCE_FRAME.padY * 2;
-      ctx.fillStyle = 'rgba(66,165,245,0.04)';
-      ctx.strokeStyle = 'rgba(66,165,245,0.4)';
+      ctx.fillStyle = withAlpha(tc.status.info, 0.04);
+      ctx.strokeStyle = withAlpha(tc.status.info, 0.4);
       ctx.setLineDash([14, 10]);
       ctx.beginPath();
       ctx.rect(x, y, w, h);
@@ -1202,8 +1194,8 @@ export function Topology() {
       const y = box.y0 - frame.padY;
       const w = box.x1 - box.x0 + frame.padX * 2;
       const h = box.y1 - box.y0 + frame.padY * 2;
-      ctx.fillStyle = 'rgba(139,195,74,0.05)';
-      ctx.strokeStyle = 'rgba(139,195,74,0.45)';
+      ctx.fillStyle = withAlpha(tc.status.success, 0.05);
+      ctx.strokeStyle = withAlpha(tc.status.success, 0.45);
       ctx.beginPath();
       ctx.rect(x, y, w, h);
       ctx.fill();
@@ -1250,7 +1242,7 @@ export function Topology() {
       const selected = selectedRouteRef.current === id || selectedNodes.has(raw.from) || selectedNodes.has(raw.to);
       const color = item.color;
       ctx.strokeStyle =
-        typeof color === 'string' ? color : (selected ? color?.highlight : undefined) ?? color?.color ?? '#808080';
+        typeof color === 'string' ? color : (selected ? color?.highlight : undefined) ?? color?.color ?? tc.status.muted;
       ctx.globalAlpha = item.opacity ?? (typeof color === 'object' ? color.opacity : undefined) ?? 1;
       ctx.lineWidth = Math.max((item.width ?? 1) + (selected ? 1 : 0), 0.3 / scale);
       ctx.setLineDash(Array.isArray(item.dashes) ? item.dashes : item.dashes ? [5, 5] : []);
@@ -2262,7 +2254,7 @@ export function Topology() {
             <button type="button" className="btn btn-sm btn-secondary" onClick={() => { setPathPicks([]); setPathNote(''); setPathSubnetChoices([]); }} disabled={!pathPicks.length}>Clear</button>
           </div>
           {pathNote && (
-            <div role="status" style={{ marginTop: '0.45rem', color: 'var(--warning, #f59f00)' }}>{pathNote}</div>
+            <div role="status" style={{ marginTop: '0.45rem', color: 'var(--warning)' }}>{pathNote}</div>
           )}
           {pathPicks.length === 1 && (
             <div className="text-muted" style={{ marginTop: '0.45rem' }}>Add one more to see the path.</div>
@@ -2295,7 +2287,7 @@ export function Topology() {
                 </span>
               )}
               {leg.notes.map((note) => (
-                <div key={note} style={{ color: 'var(--warning, #f59f00)' }}>⚠ {note}</div>
+                <div key={note} style={{ color: 'var(--warning)' }}>⚠ {note}</div>
               ))}
               {(() => {
                 const key = legKey(leg);
@@ -2396,12 +2388,12 @@ export function Topology() {
           <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-bgp" /> BGP</span>
           {hasMeraki && activeFilter !== 'inventory' && (
             <>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#8bc34a' }} /> Meraki / Cato / Cisco FMC / Panorama / Appgate / AWS / Azure / GCP</span>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#ba68c8' }} /> VPN Tunnel</span>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#ff9800' }} /> Cloud Attachment</span>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#4fc3f7' }} /> WAN Uplink</span>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#9e9e9e' }} /> Managed by FMC / Panorama</span>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#f44336' }} /> Offline / Unreachable</span>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'var(--success)' }} /> Meraki / Cato / Cisco FMC / Panorama / Appgate / AWS / Azure / GCP</span>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'var(--violet)' }} /> VPN Tunnel</span>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'var(--warning)' }} /> Cloud Attachment</span>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'var(--info)' }} /> WAN Uplink</span>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'var(--text-muted)' }} /> Managed by FMC / Panorama</span>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'var(--danger)' }} /> Offline / Unreachable</span>
             </>
           )}
           {utilOverlay && (
@@ -2418,10 +2410,10 @@ export function Topology() {
           )}
           {statusOverlay && (
             <>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#f44336' }} /> Critical</span>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#ff7043' }} /> High</span>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#ffc107' }} /> Medium / Drift</span>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: '#29b6f6' }} /> Low / Info</span>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'var(--danger)' }} /> Critical</span>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'color-mix(in srgb, var(--danger), var(--warning))' }} /> High</span>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'var(--warning)' }} /> Medium / Drift</span>
+              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'var(--info)' }} /> Low / Info</span>
               {overlayStatusQuery.isPending && (
                 <span className="text-muted" style={{ marginLeft: 'auto', fontSize: '0.8rem' }}>
                   Loading status…

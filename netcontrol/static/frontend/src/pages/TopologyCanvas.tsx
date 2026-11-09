@@ -56,16 +56,16 @@ function circularLayout(
 function statusColor(status: string | undefined): string {
   switch (status) {
     case 'running':
-      return '#3e8635';
+      return 'var(--success)';
     case 'provisioning':
-      return '#06c';
+      return 'var(--info)';
     case 'stopped':
     case 'destroyed':
-      return '#6a6e73';
+      return 'var(--text-muted)';
     case 'error':
-      return '#c9190b';
+      return 'var(--danger)';
     default:
-      return '#8a8d90';
+      return 'var(--text-muted)';
   }
 }
 
@@ -172,7 +172,7 @@ export function TopologyCanvas({
                 y1={a.y}
                 x2={b.x}
                 y2={b.y}
-                stroke="#6a6e73"
+                stroke="var(--text-muted)"
                 strokeWidth={2}
               />
               <text
@@ -225,7 +225,7 @@ export function TopologyCanvas({
               />
               <text
                 fontSize={11}
-                fill="#fff"
+                fill="var(--on-primary)"
                 textAnchor="middle"
                 dominantBaseline="central"
                 style={{ pointerEvents: 'none', fontWeight: 600 }}
@@ -253,7 +253,7 @@ export function TopologyCanvas({
             top: 8,
             left: 8,
             background: 'var(--primary)',
-            color: '#fff',
+            color: 'var(--on-primary)',
             padding: '4px 10px',
             borderRadius: 4,
             fontSize: '0.85em',

@@ -237,8 +237,14 @@ Common classes:
 
 When you need a value (color, spacing) reach for the CSS custom
 properties first: `var(--success)`, `var(--danger)`, `var(--warning)`,
-`var(--text-muted)`, `var(--border)`, `var(--bg-secondary)`. Hard-coded
-hex values should be rare and justified.
+`var(--info)`, `var(--violet)`, `var(--text-muted)`, `var(--border)`,
+`var(--bg-secondary)`. Text on a filled `--primary` or status background
+uses `var(--on-primary)`; a tint is `rgba(from var(--danger) r g b / 0.15)`.
+Hard-coded hex values should be rare and justified: every token is tuned
+per theme for contrast (text 4.5:1 on each surface), and a literal that
+reads well on a dark theme is usually unreadable on Light or Sandstone.
+A canvas (vis-network, ECharts) cannot resolve `var()`; read the token
+through the helper in `src/lib/themeColors.ts`.
 
 ### When the legacy class doesn't fit
 

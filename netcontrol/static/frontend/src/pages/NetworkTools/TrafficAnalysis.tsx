@@ -327,7 +327,7 @@ function TimelineView({ hours, hostId }: { hours: number; hostId: number | null 
   const series = [
     {
       name: 'Traffic',
-      color: '#3b82f6',
+      color: 'var(--info)',
       data: points
         .filter((p: FlowTimelinePoint) => p.bucket)
         .map((p: FlowTimelinePoint) => ({

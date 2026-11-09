@@ -66,7 +66,7 @@ export function StpEventsModal({ isOpen, onClose, onAcknowledged }: Props) {
           <div style={{ maxHeight: '420px', overflowY: 'auto' }}>
             {events.map((ev, i) => {
               const sev = String(ev.severity ?? 'warning').toLowerCase();
-              const sevColor = sev === 'critical' ? '#ef5350' : '#ffb300';
+              const sevColor = sev === 'critical' ? 'var(--danger)' : 'var(--warning)';
               return (
                 <div
                   key={i}

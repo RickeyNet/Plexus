@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import type { DashboardGroup, DashboardMonitoring, DeviceHealth } from '@/api/dashboard';
 
 import {
+  HEALTH_COLORS,
   classifyDeviceHealth,
   formatUptime,
   type HealthStatus,
@@ -79,20 +80,20 @@ function HealthSummaryTiles({ monitoring, devices }: { monitoring: DashboardMoni
 
   return (
     <div className="health-summary-tiles">
-      <Tile iconClass="healthy" valueColor="#4caf50" value={counts.healthy} label="Healthy">
+      <Tile iconClass="healthy" valueColor={HEALTH_COLORS.healthy} value={counts.healthy} label="Healthy">
         <polyline points="20 6 9 17 4 12" />
       </Tile>
-      <Tile iconClass="warning" valueColor="#ff9800" value={counts.warning} label="Warning">
+      <Tile iconClass="warning" valueColor={HEALTH_COLORS.warning} value={counts.warning} label="Warning">
         <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
         <line x1="12" y1="9" x2="12" y2="13" />
         <line x1="12" y1="17" x2="12.01" y2="17" />
       </Tile>
-      <Tile iconClass="critical" valueColor="#f44336" value={counts.critical + counts.down} label="Critical / Down">
+      <Tile iconClass="critical" valueColor={HEALTH_COLORS.critical} value={counts.critical + counts.down} label="Critical / Down">
         <circle cx="12" cy="12" r="10" />
         <line x1="15" y1="9" x2="9" y2="15" />
         <line x1="9" y1="9" x2="15" y2="15" />
       </Tile>
-      <Tile iconClass="unknown" valueColor="#9e9e9e" value={counts.unknown} label="Unknown">
+      <Tile iconClass="unknown" valueColor={HEALTH_COLORS.unknown} value={counts.unknown} label="Unknown">
         <circle cx="12" cy="12" r="10" />
         <path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3" />
         <line x1="12" y1="17" x2="12.01" y2="17" />
@@ -104,7 +105,7 @@ function HealthSummaryTiles({ monitoring, devices }: { monitoring: DashboardMoni
       </Tile>
       <Tile
         iconClass={openAlerts > 0 ? 'critical' : 'healthy'}
-        valueColor={openAlerts > 0 ? '#f44336' : '#4caf50'}
+        valueColor={openAlerts > 0 ? HEALTH_COLORS.critical : HEALTH_COLORS.healthy}
         value={openAlerts}
         label="Open Alerts"
       >
@@ -217,9 +218,9 @@ function DeviceHealthTable({ devices }: { devices: DeviceHealth[] }) {
               <td>
                 {d.if_up_count != null ? (
                   <>
-                    <span style={{ color: '#4caf50' }}>{d.if_up_count}▲</span>
+                    <span style={{ color: 'var(--success)' }}>{d.if_up_count}▲</span>
                     {' / '}
-                    <span style={{ color: '#f44336' }}>{d.if_down_count ?? 0}▼</span>
+                    <span style={{ color: 'var(--danger)' }}>{d.if_down_count ?? 0}▼</span>
                   </>
                 ) : (
                   '-'

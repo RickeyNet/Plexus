@@ -56,7 +56,7 @@ export class ErrorBoundary extends Component<Props, State> {
           <h2 className="gradient-text" style={{ marginTop: 0 }}>
             {chunkError ? 'A new version is available' : 'Something went wrong'}
           </h2>
-          <p style={{ color: 'var(--text-secondary)' }}>
+          <p style={{ color: 'var(--text-light)' }}>
             {chunkError
               ? 'This page could not load because the app was updated since you opened it. Reload to get the latest version.'
               : 'An unexpected error occurred while rendering this page. Try reloading, or return to the dashboard.'}
@@ -66,7 +66,7 @@ export class ErrorBoundary extends Component<Props, State> {
               style={{
                 whiteSpace: 'pre-wrap',
                 wordBreak: 'break-word',
-                background: 'var(--bg-elevated, rgba(0,0,0,0.25))',
+                background: 'var(--bg-secondary)',
                 padding: '0.75rem',
                 borderRadius: 8,
                 fontSize: '0.8rem',

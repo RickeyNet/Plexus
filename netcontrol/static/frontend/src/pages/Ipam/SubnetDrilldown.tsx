@@ -202,7 +202,7 @@ function ReservationsSection({
             key={item.id}
             style={{
               padding: '0.5rem 0',
-              borderBottom: '1px solid rgba(255,255,255,0.08)',
+              borderBottom: '1px solid var(--border)',
             }}
           >
             <div
@@ -399,7 +399,7 @@ function AllocationsSection({
               key={`${item.allocation_id ?? i}-${item.ip_address}`}
               style={{
                 padding: '0.6rem 0.7rem',
-                border: '1px solid rgba(255,255,255,0.08)',
+                border: '1px solid var(--border)',
                 borderRadius: 10,
               }}
             >
@@ -460,7 +460,7 @@ function AllocationsSection({
                       style={{
                         padding: '0.15rem 0.45rem',
                         fontSize: '0.78em',
-                        color: 'var(--danger-color)',
+                        color: 'var(--danger)',
                       }}
                       title="Remove local allocation"
                       onClick={() => handleDelete(item.allocation_id!)}

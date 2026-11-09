@@ -354,7 +354,7 @@ function IpamContext({
         {(s.vrf_name || vrf) && (
           <span
             className="badge"
-            style={{ background: 'rgba(99,102,241,0.18)', color: '#a5b4fc' }}
+            style={{ background: 'rgba(from var(--violet) r g b / 0.15)', color: 'var(--violet)' }}
           >
             VRF: {s.vrf_name || vrf}
           </span>
