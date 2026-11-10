@@ -127,6 +127,21 @@ export function emptyFilters(): SweepFilters {
   };
 }
 
+/**
+ * How many filters of a block differ from its defaults, for the count on a
+ * collapsed block: hidden filters are never applied without a sign of them.
+ */
+export function activeFilterCount(filters: SweepFilters): number {
+  const texts = [filters.vlans, filters.name, filters.exclude, filters.sites, filters.within, filters.overlaps];
+  return (
+    (filters.sources.length ? 1 : 0) +
+    (filters.providers.length ? 1 : 0) +
+    (sameSet(filters.kinds, DEFAULT_SWEEP_KINDS) ? 0 : 1) +
+    texts.filter((t) => t.trim()).length +
+    (filters.inVpn ? 1 : 0)
+  );
+}
+
 export function emptyForm(): ReachabilityForm {
   return { source: '', destination: '', traffic: 'tcp/445', ...emptyFilters(), to: emptyFilters() };
 }

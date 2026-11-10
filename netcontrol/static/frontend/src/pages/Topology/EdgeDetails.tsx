@@ -3,7 +3,7 @@ import {
   type InterfaceInventoryRow,
   useHostInterfaceInventory,
 } from '@/api/host-details';
-import { abbreviateInterface, edgeProtocolLabel, formatBps, isEdgeDown } from './helpers';
+import { MAP_PANEL_MAX_WIDTH, abbreviateInterface, edgeProtocolLabel, formatBps, isEdgeDown } from './helpers';
 
 interface Props {
   edge: TopologyEdge;
@@ -37,6 +37,7 @@ export function EdgeDetails({ edge, fromNode, toNode, onClose }: Props) {
         top: '0.75rem',
         right: '0.75rem',
         width: 480,
+        maxWidth: MAP_PANEL_MAX_WIDTH,
         maxHeight: 'calc(100% - 1.5rem)',
         background: 'var(--card-bg)',
         border: '1px solid var(--border)',

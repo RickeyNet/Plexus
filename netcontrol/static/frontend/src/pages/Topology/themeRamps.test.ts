@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { stpStyle, utilColor, utilShadow, type TopoStatusColors } from './helpers';
+import { stpStyle, stpTone, utilColor, utilShadow, type TopoStatusColors } from './helpers';
 
 const STATUS: TopoStatusColors = {
   success: '#008000',
@@ -25,6 +25,17 @@ describe('utilShadow', () => {
     expect(utilShadow(10, STATUS)).toBe('rgba(0,128,0,0.3)');
     expect(utilShadow(60, STATUS)).toBe('rgba(255,128,0,0.3)');
     expect(utilShadow(90, STATUS)).toBe('rgba(255,0,0,0.4)');
+  });
+});
+
+describe('stpTone', () => {
+  it('maps port states to a status tone', () => {
+    expect(stpTone('forwarding')).toBe('success');
+    expect(stpTone('Listening')).toBe('warning');
+    expect(stpTone('blocking')).toBe('danger');
+    expect(stpTone('discarding')).toBe('danger');
+    expect(stpTone(null)).toBeNull();
+    expect(stpTone('unknown')).toBeNull();
   });
 });
 

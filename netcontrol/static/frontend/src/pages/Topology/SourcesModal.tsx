@@ -534,7 +534,9 @@ export function SourcesModal({
                   disabled={buildSample.isPending}
                   onClick={() => handleSample(provider)}
                 >
-                  {buildSample.isPending ? "Building…" : providerLabel(provider)}
+                  {buildSample.isPending && buildSample.variables === provider
+                    ? "Building…"
+                    : providerLabel(provider)}
                 </button>
               ))}
             </div>
@@ -548,6 +550,34 @@ export function SourcesModal({
           </div>
         )}
 
+        {/* Above the table so a running collection is visible without scrolling. */}
+        <div style={{ marginBottom: "var(--space-4)" }}>
+          {allNote && (
+            <div
+              className={allNote.failed ? "error" : "card"}
+              style={{
+                marginTop: "1rem",
+                padding: "0.75rem 1rem",
+                whiteSpace: "pre-line",
+              }}
+            >
+              {allNote.text}
+            </div>
+          )}
+          {isJobRunning && <BuildProgress job={job.data} provider={jobProvider} />}
+          {rows
+            .filter((s) => isCloudSource(s) && cloudBusy.includes(s.id as number))
+            .map((s) => (
+              <CloudDiscoveryProgress key={s.key} source={s} />
+            ))}
+          {isJobSettled && (
+            <BuildOutcome
+              job={job.data}
+              onDismiss={() => setJobId(null)}
+              onShowWarnings={setWarningsFor}
+            />
+          )}
+        </div>
         {sources.error && !sources.data ? (
           <QueryError what="sources" query={sources} />
         ) : (
@@ -578,7 +608,7 @@ export function SourcesModal({
                   canCollect={
                     canCollect(source) &&
                     !allBusy &&
-                    // One tracked collection (organization or inventory) at a time, as its progress is shown below.
+                    // One tracked collection (organization or inventory) at a time, as its progress is shown above the table.
                     !(
                       (isOrgSource(source) || isInventorySource(source)) &&
                       (isJobRunning ||
@@ -608,31 +638,6 @@ export function SourcesModal({
         )}
       </div>
 
-      {allNote && (
-        <div
-          className={allNote.failed ? "error" : "card"}
-          style={{
-            marginTop: "1rem",
-            padding: "0.75rem 1rem",
-            whiteSpace: "pre-line",
-          }}
-        >
-          {allNote.text}
-        </div>
-      )}
-      {isJobRunning && <BuildProgress job={job.data} provider={jobProvider} />}
-      {rows
-        .filter((s) => isCloudSource(s) && cloudBusy.includes(s.id as number))
-        .map((s) => (
-          <CloudDiscoveryProgress key={s.key} source={s} />
-        ))}
-      {isJobSettled && (
-        <BuildOutcome
-          job={job.data}
-          onDismiss={() => setJobId(null)}
-          onShowWarnings={setWarningsFor}
-        />
-      )}
 
       <h4 style={{ margin: "1.25rem 0 0.5rem" }}>
         Collection history (Meraki, Cato, Cisco FMC, Palo Alto Panorama and
