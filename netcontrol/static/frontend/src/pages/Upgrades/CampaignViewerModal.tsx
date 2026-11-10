@@ -14,6 +14,7 @@ import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { AlertDialog } from '@/components/AlertDialog';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { clickableProps } from '@/lib/clickable';
 import { formatBackendDateTime, formatBackendTimestamp } from '@/lib/datetime';
 
 import { DeviceUpgradeLogModal } from './DeviceUpgradeLogModal';
@@ -981,6 +982,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                 </button>
                 <select
                   className="form-select form-select-sm"
+                  aria-label="Select devices by status"
                   value=""
                   disabled={selectableGroups.length === 0}
                   onChange={(e) => {
@@ -1041,9 +1043,10 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                       <tr
                         key={d.id}
                         style={{ cursor: 'pointer' }}
-                        onClick={() =>
-                          setDeviceLog({ deviceId: d.id, ip: d.ip_address })
-                        }
+                        {...clickableProps(
+                          () => setDeviceLog({ deviceId: d.id, ip: d.ip_address }),
+                          { role: null },
+                        )}
                       >
                         <td
                           style={{ textAlign: 'center' }}
@@ -1053,6 +1056,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                             type="checkbox"
                             checked={selectedIds.has(d.id)}
                             onChange={(e) => toggleSelect(d.id, e.target.checked)}
+                            aria-label={`Select ${d.hostname || d.ip_address}`}
                           />
                         </td>
                         <td>

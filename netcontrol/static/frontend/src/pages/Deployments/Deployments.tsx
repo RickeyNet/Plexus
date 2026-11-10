@@ -104,6 +104,7 @@ export function Deployments() {
         >
           <select
             className="form-select form-select-sm"
+            aria-label="Filter by status"
             value={status}
             onChange={(e) => setStatus(e.target.value)}
             style={{ maxWidth: 200 }}
@@ -117,6 +118,7 @@ export function Deployments() {
           <input
             className="form-input form-input-sm"
             placeholder="Search name, group, or description…"
+            aria-label="Search deployments"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             style={{ marginLeft: 'auto', maxWidth: 320 }}

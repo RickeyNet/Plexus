@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import {
   billingExportUrl,
@@ -22,6 +22,7 @@ import { BillingPeriodModal } from './BillingPeriodModal';
 import { formatBps } from './helpers';
 
 export function BillingTab() {
+  const fid = useId();
   const { confirm, alert } = useDialogs();
   const [customer, setCustomer] = useState('');
   const [editingId, setEditingId] = useState<number | null | 'new'>(null);
@@ -55,8 +56,8 @@ export function BillingTab() {
     <div>
       <div className="toolbar" style={{ alignItems: 'flex-end' }}>
         <div className="form-group" style={{ marginBottom: 0 }}>
-          <label className="form-label">Customer</label>
-          <select className="form-select" value={customer} onChange={(e) => setCustomer(e.target.value)}>
+          <label className="form-label" htmlFor={`${fid}-customer`}>Customer</label>
+          <select id={`${fid}-customer`} className="form-select" value={customer} onChange={(e) => setCustomer(e.target.value)}>
             <option value="">All Customers</option>
             {(customersQuery.data?.customers ?? []).map((c) => <option key={c} value={c}>{c}</option>)}
           </select>

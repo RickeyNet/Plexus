@@ -173,8 +173,9 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
       <form id={formId} onSubmit={(e) => void handleSubmit(e)}>
         {launchError && <Callout tone="danger">{launchError}</Callout>}
         <div className="form-group">
-          <label className="form-label">Playbook</label>
+          <label className="form-label" htmlFor={`${formId}-playbook`}>Playbook</label>
           <select
+            id={`${formId}-playbook`}
             className="form-select"
             value={playbookId}
             onChange={(e) => { setPlaybookId(e.target.value); setPlaybookError(null); }}
@@ -196,8 +197,8 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
         </div>
 
         <div className="form-group">
-          <label className="form-label">Select Targets</label>
-          <div style={{ background: 'var(--bg-secondary)', padding: '1rem', borderRadius: 6, maxHeight: 320, overflowY: 'auto', border: '1px solid var(--border)' }}>
+          <span className="form-label" id={`${formId}-targets`}>Select Targets</span>
+          <div role="group" aria-labelledby={`${formId}-targets`} style={{ background: 'var(--bg-secondary)', padding: '1rem', borderRadius: 6, maxHeight: 320, overflowY: 'auto', border: '1px solid var(--border)' }}>
             {(groupsQuery.data ?? []).length === 0 ? (
               <div className="empty-state">
                 {groupsQuery.isError ? 'Inventory could not be loaded. Enter ad-hoc IPs below.' : 'No inventory groups available'}
@@ -240,8 +241,9 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
         </div>
 
         <div className="form-group">
-          <label className="form-label">Ad-Hoc IP Addresses</label>
+          <label className="form-label" htmlFor={`${formId}-adhoc-ips`}>Ad-Hoc IP Addresses</label>
           <textarea
+            id={`${formId}-adhoc-ips`}
             className="form-input"
             rows={3}
             value={adHocIps}
@@ -255,8 +257,8 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
         </div>
 
         <div className="form-group">
-          <label className="form-label">Credential (optional)</label>
-          <select className="form-select" value={credentialId} onChange={(e) => setCredentialId(e.target.value)} disabled={credsQuery.isError}>
+          <label className="form-label" htmlFor={`${formId}-credential`}>Credential (optional)</label>
+          <select id={`${formId}-credential`} className="form-select" value={credentialId} onChange={(e) => setCredentialId(e.target.value)} disabled={credsQuery.isError}>
             <option value="">None</option>
             {(credsQuery.data ?? []).map((c) => (
               <option key={c.id} value={c.id}>{c.name}</option>
@@ -269,8 +271,8 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
 
         {!isAnsible && (
           <div className="form-group">
-            <label className="form-label">Template (optional)</label>
-            <select className="form-select" value={templateId} onChange={(e) => setTemplateId(e.target.value)} disabled={tplQuery.isError}>
+            <label className="form-label" htmlFor={`${formId}-template`}>Template (optional)</label>
+            <select id={`${formId}-template`} className="form-select" value={templateId} onChange={(e) => setTemplateId(e.target.value)} disabled={tplQuery.isError}>
               <option value="">None</option>
               {(tplQuery.data ?? []).map((t) => (
                 <option key={t.id} value={t.id}>{t.name}</option>
@@ -330,8 +332,8 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
 
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
           <div className="form-group" style={{ flex: 1, minWidth: 140 }}>
-            <label className="form-label">Priority</label>
-            <select className="form-select" value={priority} onChange={(e) => setPriority(e.target.value)}>
+            <label className="form-label" htmlFor={`${formId}-priority`}>Priority</label>
+            <select id={`${formId}-priority`} className="form-select" value={priority} onChange={(e) => setPriority(e.target.value)}>
               <option value="0">Low</option>
               <option value="1">Below Normal</option>
               <option value="2">Normal</option>
@@ -340,8 +342,9 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
             </select>
           </div>
           <div className="form-group" style={{ flex: 1, minWidth: 140 }}>
-            <label className="form-label">Depends On (Job IDs)</label>
+            <label className="form-label" htmlFor={`${formId}-depends-on`}>Depends On (Job IDs)</label>
             <input
+              id={`${formId}-depends-on`}
               className="form-input"
               value={dependsOn}
               onChange={(e) => setDependsOn(e.target.value)}

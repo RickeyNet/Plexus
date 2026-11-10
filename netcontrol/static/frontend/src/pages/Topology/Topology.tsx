@@ -1934,7 +1934,7 @@ export function Topology() {
         )}
 
         <div className="card card-sm toolbar">
-          <select className="form-select form-select-sm" style={{ minWidth: 160 }} value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)}>
+          <select aria-label="Filter by inventory group" className="form-select form-select-sm" style={{ minWidth: 160 }} value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)}>
             <option value="">All Groups</option>
             {groupsQuery.data?.map((g) => (
               <option key={g.id} value={g.id}>{groupLabel(g)}</option>
@@ -1942,6 +1942,7 @@ export function Topology() {
           </select>
           {hasMeraki && (
             <select
+              aria-label="Filter by source"
               className="form-select form-select-sm"
               style={{ minWidth: 150 }}
               value={activeFilter}
@@ -1959,6 +1960,7 @@ export function Topology() {
 
           <div style={{ position: 'relative' }} className="topology-search-wrap">
             <input
+              aria-label="Search topology"
               type="text"
               className="form-input form-input-sm"
               placeholder={hasMeraki ? 'Search devices, IPs, VLANs, subnets, routes…' : 'Search nodes...'}
@@ -2274,7 +2276,7 @@ export function Topology() {
             {pathPicks.length > 0 && (
               <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.45rem' }}>
                 {pathPicks.map((pick) => (
-                  <button key={pick.key} type="button" className="btn btn-sm btn-secondary" onClick={() => togglePathPick(pick)} title="Remove from the path">
+                  <button key={pick.key} type="button" className="btn btn-sm btn-secondary" onClick={() => togglePathPick(pick)} title="Remove from the path" aria-label={`Remove ${pick.label} from the path`}>
                     {pick.label} ×
                   </button>
                 ))}

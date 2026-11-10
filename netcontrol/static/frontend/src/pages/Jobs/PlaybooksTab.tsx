@@ -62,6 +62,7 @@ export function PlaybooksTab() {
         <input
           className="form-input"
           placeholder="Search playbooks…"
+          aria-label="Search playbooks"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           style={{ width: 240 }}

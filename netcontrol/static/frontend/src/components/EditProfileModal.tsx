@@ -61,8 +61,9 @@ export function EditProfileModal({ isOpen, onClose, username, initialDisplayName
     >
       <form id={formId} onSubmit={onSubmit}>
         <div className="form-group">
-          <label className="form-label">Username</label>
+          <label className="form-label" htmlFor={`${formId}-username`}>Username</label>
           <input
+            id={`${formId}-username`}
             type="text"
             className="form-input"
             value={username}

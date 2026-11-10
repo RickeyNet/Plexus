@@ -88,8 +88,9 @@ export function GroupModal({ group, isCreate, groups, defaultParentId = null, on
       <form id={formId} onSubmit={submit}>
         {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
-          <label className="form-label">Group Name</label>
+          <label className="form-label" htmlFor={`${formId}-name`}>Group Name</label>
           <input
+            id={`${formId}-name`}
             className="form-input"
             value={name}
             onChange={(e) => {
@@ -119,8 +120,9 @@ export function GroupModal({ group, isCreate, groups, defaultParentId = null, on
           </select>
         </div>
         <div className="form-group">
-          <label className="form-label">Description</label>
+          <label className="form-label" htmlFor={`${formId}-description`}>Description</label>
           <textarea
+            id={`${formId}-description`}
             className="form-textarea"
             value={description ?? ''}
             onChange={(e) => setDescription(e.target.value)}

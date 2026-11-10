@@ -141,8 +141,9 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
           <QueryError what="risk analyses" query={riskAnalyses} />
         )}
         <div className="form-group">
-          <label className="form-label">Name</label>
+          <label className="form-label" htmlFor={`${formId}-name`}>Name</label>
           <input
+            id={`${formId}-name`}
             className="form-input"
             value={name}
             onChange={(e) => {
@@ -155,8 +156,9 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
           <FieldError>{errors.name}</FieldError>
         </div>
         <div className="form-group">
-          <label className="form-label">Description</label>
+          <label className="form-label" htmlFor={`${formId}-description`}>Description</label>
           <input
+            id={`${formId}-description`}
             className="form-input"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
@@ -164,8 +166,9 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
           />
         </div>
         <div className="form-group">
-          <label className="form-label">Inventory Group</label>
+          <label className="form-label" htmlFor={`${formId}-group`}>Inventory Group</label>
           <select
+            id={`${formId}-group`}
             className="form-select"
             value={groupId}
             onChange={(e) => {
@@ -184,8 +187,9 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
           <FieldError>{errors.group}</FieldError>
         </div>
         <div className="form-group">
-          <label className="form-label">Credential</label>
+          <label className="form-label" htmlFor={`${formId}-credential`}>Credential</label>
           <select
+            id={`${formId}-credential`}
             className="form-select"
             value={credentialId}
             onChange={(e) => {
@@ -204,8 +208,9 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
           <FieldError>{errors.credential}</FieldError>
         </div>
         <div className="form-group">
-          <label className="form-label">Change Type</label>
+          <label className="form-label" htmlFor={`${formId}-change-type`}>Change Type</label>
           <select
+            id={`${formId}-change-type`}
             className="form-select"
             value={changeType}
             onChange={(e) => setChangeType(e.target.value)}
@@ -218,8 +223,9 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
           </select>
         </div>
         <div className="form-group">
-          <label className="form-label">Template (optional)</label>
+          <label className="form-label" htmlFor={`${formId}-template`}>Template (optional)</label>
           <select
+            id={`${formId}-template`}
             className="form-select"
             value={templateId}
             onChange={(e) => {
@@ -236,8 +242,9 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
           </select>
         </div>
         <div className="form-group">
-          <label className="form-label">Linked Risk Analysis (optional)</label>
+          <label className="form-label" htmlFor={`${formId}-risk-analysis`}>Linked Risk Analysis (optional)</label>
           <select
+            id={`${formId}-risk-analysis`}
             className="form-select"
             value={riskAnalysisId}
             onChange={(e) => setRiskAnalysisId(e.target.value)}
@@ -251,10 +258,11 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
           </select>
         </div>
         <div className="form-group">
-          <label className="form-label">
+          <label className="form-label" htmlFor={`${formId}-commands`}>
             Proposed Commands (one per line, or leave empty if using template)
           </label>
           <textarea
+            id={`${formId}-commands`}
             className="form-input"
             rows={5}
             value={commands}

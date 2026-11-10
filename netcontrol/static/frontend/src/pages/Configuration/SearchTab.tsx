@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import {
   type ConfigBackupSearchResult,
@@ -29,6 +29,7 @@ const MODE_HINTS: Record<Mode, { placeholder: string; example: string }> = {
 };
 
 export function SearchTab() {
+  const fid = useId();
   const [query, setQuery] = useState('');
   const [queryError, setQueryError] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>('fulltext');
@@ -54,8 +55,9 @@ export function SearchTab() {
     <>
       <div className="toolbar" style={{ alignItems: 'flex-end' }}>
         <div style={{ flex: '1 1 280px', minWidth: 240 }}>
-          <label className="form-label">Search</label>
+          <label className="form-label" htmlFor={`${fid}-query`}>Search</label>
           <input
+            id={`${fid}-query`}
             className="form-input"
             style={{ width: '100%' }}
             value={query}
@@ -75,8 +77,9 @@ export function SearchTab() {
           <FieldError>{queryError}</FieldError>
         </div>
         <div>
-          <label className="form-label">Mode</label>
+          <label className="form-label" htmlFor={`${fid}-mode`}>Mode</label>
           <select
+            id={`${fid}-mode`}
             className="form-select"
             value={mode}
             onChange={(e) => setMode(e.target.value as Mode)}
@@ -87,8 +90,9 @@ export function SearchTab() {
           </select>
         </div>
         <div>
-          <label className="form-label">Limit</label>
+          <label className="form-label" htmlFor={`${fid}-limit`}>Limit</label>
           <input
+            id={`${fid}-limit`}
             className="form-input"
             type="number"
             min={1}

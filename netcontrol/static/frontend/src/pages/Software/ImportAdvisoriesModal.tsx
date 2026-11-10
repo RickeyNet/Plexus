@@ -91,6 +91,7 @@ export function ImportAdvisoriesModal({ onClose }: Props) {
         </p>
         <div className="form-group">
           <textarea
+            aria-label="Advisories JSON"
             className="form-textarea"
             rows={14}
             value={text}

@@ -134,8 +134,9 @@ export function PanelModal({ isOpen, onClose, dashboardId, panel }: Props) {
       <form id={formId} onSubmit={handleSubmit}>
         {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
-          <label className="form-label">Panel Title</label>
+          <label className="form-label" htmlFor={`${formId}-title`}>Panel Title</label>
           <input
+            id={`${formId}-title`}
             type="text"
             className="form-input"
             value={title}
@@ -144,8 +145,9 @@ export function PanelModal({ isOpen, onClose, dashboardId, panel }: Props) {
           />
         </div>
         <div className="form-group">
-          <label className="form-label">Chart Type</label>
+          <label className="form-label" htmlFor={`${formId}-chart-type`}>Chart Type</label>
           <select
+            id={`${formId}-chart-type`}
             className="form-select"
             value={chartType}
             onChange={(e) => setChartType(e.target.value)}
@@ -158,8 +160,9 @@ export function PanelModal({ isOpen, onClose, dashboardId, panel }: Props) {
           </select>
         </div>
         <div className="form-group">
-          <label className="form-label">Metric</label>
+          <label className="form-label" htmlFor={`${formId}-metric`}>Metric</label>
           <input
+            id={`${formId}-metric`}
             type="text"
             className="form-input"
             value={metric}
@@ -168,8 +171,9 @@ export function PanelModal({ isOpen, onClose, dashboardId, panel }: Props) {
           />
         </div>
         <div className="form-group">
-          <label className="form-label">Host (ID, &quot;*&quot;, or &quot;$host&quot;)</label>
+          <label className="form-label" htmlFor={`${formId}-host`}>Host (ID, &quot;*&quot;, or &quot;$host&quot;)</label>
           <input
+            id={`${formId}-host`}
             type="text"
             className="form-input"
             value={host}
@@ -178,8 +182,9 @@ export function PanelModal({ isOpen, onClose, dashboardId, panel }: Props) {
         </div>
         <div className="form-group" style={{ display: 'flex', gap: '1rem' }}>
           <div style={{ flex: 1 }}>
-            <label className="form-label">Width (1-12)</label>
+            <label className="form-label" htmlFor={`${formId}-width`}>Width (1-12)</label>
             <input
+              id={`${formId}-width`}
               type="number"
               className="form-input"
               min={1}
@@ -189,8 +194,9 @@ export function PanelModal({ isOpen, onClose, dashboardId, panel }: Props) {
             />
           </div>
           <div style={{ flex: 1 }}>
-            <label className="form-label">Height (rows)</label>
+            <label className="form-label" htmlFor={`${formId}-height`}>Height (rows)</label>
             <input
+              id={`${formId}-height`}
               type="number"
               className="form-input"
               min={1}

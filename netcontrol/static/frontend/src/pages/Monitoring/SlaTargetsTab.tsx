@@ -216,8 +216,9 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
       <form id={formId} onSubmit={handleSubmit}>
         {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
-          <label className="form-label">Name</label>
+          <label className="form-label" htmlFor={`${formId}-name`}>Name</label>
           <input
+            id={`${formId}-name`}
             className="form-input"
             value={name}
             onChange={(e) => { setName(e.target.value); setNameError(''); }}
@@ -227,8 +228,8 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
           <FieldError>{nameError}</FieldError>
         </div>
         <div className="form-group">
-          <label className="form-label">Metric</label>
-          <select className="form-select" value={metric} onChange={(e) => setMetric(e.target.value)}>
+          <label className="form-label" htmlFor={`${formId}-metric`}>Metric</label>
+          <select id={`${formId}-metric`} className="form-select" value={metric} onChange={(e) => setMetric(e.target.value)}>
             <option value="uptime">Uptime %</option>
             <option value="latency">Latency (ms)</option>
             <option value="jitter">Jitter (ms)</option>
@@ -237,16 +238,17 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <div className="form-group" style={{ flex: 1 }}>
-            <label className="form-label">Target</label>
-            <input className="form-input" type="number" step="0.01" value={targetValue} onChange={(e) => setTargetValue(e.target.value)} />
+            <label className="form-label" htmlFor={`${formId}-target`}>Target</label>
+            <input id={`${formId}-target`} className="form-input" type="number" step="0.01" value={targetValue} onChange={(e) => setTargetValue(e.target.value)} />
           </div>
           <div className="form-group" style={{ flex: 1 }}>
-            <label className="form-label">Warning</label>
-            <input className="form-input" type="number" step="0.01" value={warningValue} onChange={(e) => setWarningValue(e.target.value)} />
+            <label className="form-label" htmlFor={`${formId}-warning`}>Warning</label>
+            <input id={`${formId}-warning`} className="form-input" type="number" step="0.01" value={warningValue} onChange={(e) => setWarningValue(e.target.value)} />
           </div>
           <div className="form-group" style={{ flex: 1 }}>
-            <label className="form-label">Window (days)</label>
+            <label className="form-label" htmlFor={`${formId}-window`}>Window (days)</label>
             <input
+              id={`${formId}-window`}
               className="form-input"
               type="number"
               min={1}
@@ -265,8 +267,8 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
             : 'Met at or below Target, Warning at or below Warning, Breach above it.'}
         </div>
         <div className="form-group">
-          <label className="form-label">Scope</label>
-          <select className="form-select" value={scope} onChange={(e) => setScope(e.target.value as 'global' | 'group' | 'host')}>
+          <label className="form-label" htmlFor={`${formId}-scope`}>Scope</label>
+          <select id={`${formId}-scope`} className="form-select" value={scope} onChange={(e) => setScope(e.target.value as 'global' | 'group' | 'host')}>
             <option value="global">Global (all hosts)</option>
             <option value="group">Group</option>
             <option value="host">Host</option>
@@ -274,8 +276,8 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
         </div>
         {scope === 'group' && (
           <div className="form-group">
-            <label className="form-label">Group</label>
-            <select className="form-select" value={groupId} onChange={(e) => setGroupId(e.target.value)}>
+            <label className="form-label" htmlFor={`${formId}-group`}>Group</label>
+            <select id={`${formId}-group`} className="form-select" value={groupId} onChange={(e) => setGroupId(e.target.value)}>
               <option value="">Select group…</option>
               {(groups.data ?? []).map((g) => (
                 <option key={g.id} value={g.id}>{groupLabel(g)}</option>
@@ -285,8 +287,8 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
         )}
         {scope === 'host' && (
           <div className="form-group">
-            <label className="form-label">Host</label>
-            <select className="form-select" value={hostId} onChange={(e) => setHostId(e.target.value)}>
+            <label className="form-label" htmlFor={`${formId}-host`}>Host</label>
+            <select id={`${formId}-host`} className="form-select" value={hostId} onChange={(e) => setHostId(e.target.value)}>
               <option value="">Select host…</option>
               {allHosts.map((h) => (
                 <option key={h.id} value={h.id}>{h.hostname} ({h.group_name})</option>

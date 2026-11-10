@@ -154,6 +154,7 @@ export function TopologySearchPanel({ onHighlight, resolveMeraki, onClose }: Pro
         <button
           type="button"
           className="modal-close"
+          aria-label="Close search"
           onClick={onClose}
           style={{ fontSize: '1.2rem' }}
         >
@@ -163,6 +164,7 @@ export function TopologySearchPanel({ onHighlight, resolveMeraki, onClose }: Pro
 
       <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.5rem' }}>
         <input
+          aria-label="Search value"
           type="text"
           className="form-input"
           autoFocus
@@ -175,6 +177,7 @@ export function TopologySearchPanel({ onHighlight, resolveMeraki, onClose }: Pro
           style={{ flex: 1 }}
         />
         <select
+          aria-label="Search type"
           className="form-select"
           value={kind}
           onChange={(e) => setKind(e.target.value as SearchKind)}

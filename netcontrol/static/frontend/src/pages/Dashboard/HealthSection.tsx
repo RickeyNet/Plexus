@@ -35,6 +35,7 @@ export function HealthSection({ monitoring, devices, groups }: HealthSectionProp
         <select
           className="form-select form-select-sm"
           style={{ minWidth: '160px' }}
+          aria-label="Filter by group"
           value={groupFilter}
           onChange={(e) => setGroupFilter(e.target.value)}
         >
@@ -48,6 +49,7 @@ export function HealthSection({ monitoring, devices, groups }: HealthSectionProp
         <select
           className="form-select form-select-sm"
           style={{ minWidth: '140px' }}
+          aria-label="Sort devices"
           value={sortBy}
           onChange={(e) => setSortBy(e.target.value as SortBy)}
         >

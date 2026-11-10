@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import { Callout } from '@/components/Callout';
 import { FieldError } from '@/components/FieldError';
@@ -17,10 +17,12 @@ function GroupCheckboxes({
   groups,
   selected,
   onChange,
+  labelledBy,
 }: {
   groups: AccessGroup[];
   selected: number[];
   onChange: (next: number[]) => void;
+  labelledBy: string;
 }) {
   if (groups.length === 0) {
     return <span className="card-description">Create access groups first.</span>;
@@ -28,6 +30,8 @@ function GroupCheckboxes({
   const set = new Set(selected);
   return (
     <div
+      role="group"
+      aria-labelledby={labelledBy}
       style={{
         display: 'grid',
         gap: '0.35rem',
@@ -69,6 +73,7 @@ export function CreateUserModal({
 }) {
   const create = useCreateAdminUser();
   const setGroups = useSetAdminUserGroups();
+  const fid = useId();
 
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -129,8 +134,9 @@ export function CreateUserModal({
       }
     >
       <div className="form-group">
-        <label className="form-label">Username</label>
+        <label className="form-label" htmlFor={`${fid}-username`}>Username</label>
         <input
+          id={`${fid}-username`}
           className="form-input"
           value={username}
           onChange={(e) => setUsername(e.target.value)}
@@ -138,16 +144,18 @@ export function CreateUserModal({
         />
       </div>
       <div className="form-group">
-        <label className="form-label">Display Name</label>
+        <label className="form-label" htmlFor={`${fid}-display-name`}>Display Name</label>
         <input
+          id={`${fid}-display-name`}
           className="form-input"
           value={displayName}
           onChange={(e) => setDisplayName(e.target.value)}
         />
       </div>
       <div className="form-group">
-        <label className="form-label">Password</label>
+        <label className="form-label" htmlFor={`${fid}-password`}>Password</label>
         <input
+          id={`${fid}-password`}
           type={showPasswords ? 'text' : 'password'}
           className="form-input"
           value={password}
@@ -156,8 +164,9 @@ export function CreateUserModal({
         />
       </div>
       <div className="form-group">
-        <label className="form-label">Confirm Password</label>
+        <label className="form-label" htmlFor={`${fid}-confirm-password`}>Confirm Password</label>
         <input
+          id={`${fid}-confirm-password`}
           type={showPasswords ? 'text' : 'password'}
           className="form-input"
           value={confirm}
@@ -178,8 +187,9 @@ export function CreateUserModal({
         </label>
       </div>
       <div className="form-group">
-        <label className="form-label">Role</label>
+        <label className="form-label" htmlFor={`${fid}-role`}>Role</label>
         <select
+          id={`${fid}-role`}
           className="form-select"
           value={role}
           onChange={(e) => setRole(e.target.value as 'admin' | 'user')}
@@ -189,8 +199,13 @@ export function CreateUserModal({
         </select>
       </div>
       <div className="form-group">
-        <label className="form-label">Access Groups</label>
-        <GroupCheckboxes groups={groups} selected={groupIds} onChange={setGroupIds} />
+        <span className="form-label" id={`${fid}-groups`}>Access Groups</span>
+        <GroupCheckboxes
+          groups={groups}
+          selected={groupIds}
+          onChange={setGroupIds}
+          labelledBy={`${fid}-groups`}
+        />
       </div>
       {error && <Callout tone="danger">{error}</Callout>}
     </Modal>
@@ -208,6 +223,7 @@ export function EditUserModal({
 }) {
   const update = useUpdateAdminUser();
   const setGroups = useSetAdminUserGroups();
+  const fid = useId();
 
   const [username, setUsername] = useState(user.username);
   const [displayName, setDisplayName] = useState(user.display_name || '');
@@ -264,8 +280,9 @@ export function EditUserModal({
       }
     >
       <div className="form-group">
-        <label className="form-label">Username</label>
+        <label className="form-label" htmlFor={`${fid}-username`}>Username</label>
         <input
+          id={`${fid}-username`}
           className="form-input"
           value={username}
           onChange={(e) => setUsername(e.target.value)}
@@ -273,16 +290,18 @@ export function EditUserModal({
         />
       </div>
       <div className="form-group">
-        <label className="form-label">Display Name</label>
+        <label className="form-label" htmlFor={`${fid}-display-name`}>Display Name</label>
         <input
+          id={`${fid}-display-name`}
           className="form-input"
           value={displayName}
           onChange={(e) => setDisplayName(e.target.value)}
         />
       </div>
       <div className="form-group">
-        <label className="form-label">Role</label>
+        <label className="form-label" htmlFor={`${fid}-role`}>Role</label>
         <select
+          id={`${fid}-role`}
           className="form-select"
           value={role}
           onChange={(e) => setRole(e.target.value as 'admin' | 'user')}
@@ -292,8 +311,13 @@ export function EditUserModal({
         </select>
       </div>
       <div className="form-group">
-        <label className="form-label">Access Groups</label>
-        <GroupCheckboxes groups={groups} selected={groupIds} onChange={setGroupIds} />
+        <span className="form-label" id={`${fid}-groups`}>Access Groups</span>
+        <GroupCheckboxes
+          groups={groups}
+          selected={groupIds}
+          onChange={setGroupIds}
+          labelledBy={`${fid}-groups`}
+        />
       </div>
       <div className="form-group">
         <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
@@ -322,6 +346,7 @@ export function ResetPasswordModal({
   onClose: () => void;
 }) {
   const reset = useResetAdminUserPassword();
+  const fid = useId();
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
 
@@ -357,8 +382,9 @@ export function ResetPasswordModal({
         Set a new login password for @{user.username}.
       </p>
       <div className="form-group">
-        <label className="form-label">New Password</label>
+        <label className="form-label" htmlFor={`${fid}-new-password`}>New Password</label>
         <input
+          id={`${fid}-new-password`}
           type="password"
           className="form-input"
           value={password}

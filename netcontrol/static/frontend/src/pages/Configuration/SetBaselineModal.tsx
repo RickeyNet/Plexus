@@ -112,8 +112,9 @@ export function SetBaselineModal({ onClose }: Props) {
           <QueryError what="inventory groups" query={groups} />
         )}
         <div className="form-group">
-          <label className="form-label">Host</label>
+          <label className="form-label" htmlFor={`${formId}-host`}>Host</label>
           <select
+            id={`${formId}-host`}
             className="form-select"
             value={hostId ?? ''}
             onChange={(e) => {
@@ -133,8 +134,9 @@ export function SetBaselineModal({ onClose }: Props) {
           <FieldError>{hostError}</FieldError>
         </div>
         <div className="form-group">
-          <label className="form-label">Baseline Name</label>
+          <label className="form-label" htmlFor={`${formId}-name`}>Baseline Name</label>
           <input
+            id={`${formId}-name`}
             type="text"
             className="form-input"
             placeholder="e.g. Golden Config v1.0"
@@ -143,8 +145,9 @@ export function SetBaselineModal({ onClose }: Props) {
           />
         </div>
         <div className="form-group">
-          <label className="form-label">Intended Configuration</label>
+          <label className="form-label" htmlFor={`${formId}-config`}>Intended Configuration</label>
           <textarea
+            id={`${formId}-config`}
             className="form-textarea drift-baseline-textarea"
             placeholder="Paste the intended/golden running-config here…"
             value={configText}

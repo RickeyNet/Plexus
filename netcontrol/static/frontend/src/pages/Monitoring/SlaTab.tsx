@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import { DataTable } from '@/components/DataTable';
 import { EmptyState } from '@/components/EmptyState';
@@ -15,6 +15,7 @@ import {
   type SlaDailyPoint,
   type SlaHostSummary,
 } from '@/api/monitoring';
+import { clickableProps } from '@/lib/clickable';
 import { formatBackendDateTime } from '@/lib/datetime';
 import { formatMinutes, slaStatusBadge } from './helpers';
 
@@ -26,6 +27,7 @@ const SUB_TABS: { key: SubTab; label: string }[] = [
 ];
 
 export function SlaTab() {
+  const fid = useId();
   const [days, setDays] = useState(30);
   const [subTab, setSubTab] = useState<SubTab>('hosts');
   const summary = useSlaSummary(days);
@@ -35,8 +37,8 @@ export function SlaTab() {
   return (
     <div className="stack stack-sm">
       <div className="toolbar">
-        <label className="text-muted">Period:</label>
-        <select className="form-select" value={days} onChange={(e) => setDays(parseInt(e.target.value, 10))}>
+        <label className="text-muted" htmlFor={`${fid}-period`}>Period:</label>
+        <select id={`${fid}-period`} className="form-select" value={days} onChange={(e) => setDays(parseInt(e.target.value, 10))}>
           <option value={7}>Last 7 days</option>
           <option value={30}>Last 30 days</option>
           <option value={90}>Last 90 days</option>
@@ -63,6 +65,7 @@ export function SlaTab() {
           <input
             className="form-input"
             placeholder="Search hosts…"
+            aria-label="Search hosts"
             value={hostQuery}
             onChange={(e) => setHostQuery(e.target.value)}
           />
@@ -200,7 +203,11 @@ function SlaHostsList({
         const uptimeColor = (h.uptime_pct ?? 0) >= 99.9 ? 'success' : (h.uptime_pct ?? 0) >= 99 ? 'warning' : 'danger';
         const badge = slaStatusBadge(h.sla_status);
         return (
-          <tr key={h.host_id} className="row-clickable" onClick={() => onSelect(h.host_id)}>
+          <tr
+            key={h.host_id}
+            className="row-clickable"
+            {...clickableProps(() => onSelect(h.host_id), { role: null })}
+          >
             <td>
               <strong>{h.hostname}</strong>
               <span className="text-muted" style={{ fontSize: '0.8em', marginLeft: '0.4rem' }}>{h.ip_address}</span>

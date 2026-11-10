@@ -94,8 +94,9 @@ export function DhcpServerModal({ server, onClose }: Props) {
       <form id={formId} onSubmit={submit}>
         {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
-          <label className="form-label">Provider</label>
+          <label className="form-label" htmlFor={`${formId}-provider`}>Provider</label>
           <select
+            id={`${formId}-provider`}
             className="form-select"
             value={provider}
             onChange={(e) => {
@@ -118,8 +119,9 @@ export function DhcpServerModal({ server, onClose }: Props) {
           )}
         </div>
         <div className="form-group">
-          <label className="form-label">Name</label>
+          <label className="form-label" htmlFor={`${formId}-name`}>Name</label>
           <input
+            id={`${formId}-name`}
             className="form-input"
             value={name}
             onChange={(e) => {
@@ -134,8 +136,9 @@ export function DhcpServerModal({ server, onClose }: Props) {
           <FieldError>{errors.name}</FieldError>
         </div>
         <div className="form-group">
-          <label className="form-label">Base URL</label>
+          <label className="form-label" htmlFor={`${formId}-base-url`}>Base URL</label>
           <input
+            id={`${formId}-base-url`}
             className="form-input"
             type="url"
             value={baseUrl}
@@ -150,8 +153,9 @@ export function DhcpServerModal({ server, onClose }: Props) {
           <FieldError>{errors.baseUrl}</FieldError>
         </div>
         <div className="form-group">
-          <label className="form-label">Auth Type</label>
+          <label className="form-label" htmlFor={`${formId}-auth-type`}>Auth Type</label>
           <select
+            id={`${formId}-auth-type`}
             className="form-select"
             value={authType}
             onChange={(e) => setAuthType(e.target.value)}
@@ -163,8 +167,9 @@ export function DhcpServerModal({ server, onClose }: Props) {
         </div>
         {authType !== 'none' && (
           <div className="form-group">
-            <label className="form-label">Token / Password</label>
+            <label className="form-label" htmlFor={`${formId}-token-password`}>Token / Password</label>
             <input
+              id={`${formId}-token-password`}
               className="form-input"
               type="password"
               value={token}
@@ -176,8 +181,9 @@ export function DhcpServerModal({ server, onClose }: Props) {
         )}
         {authType === 'basic' && (
           <div className="form-group">
-            <label className="form-label">Username</label>
+            <label className="form-label" htmlFor={`${formId}-username`}>Username</label>
             <input
+              id={`${formId}-username`}
               className="form-input"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
@@ -186,8 +192,9 @@ export function DhcpServerModal({ server, onClose }: Props) {
           </div>
         )}
         <div className="form-group">
-          <label className="form-label">Notes</label>
+          <label className="form-label" htmlFor={`${formId}-notes`}>Notes</label>
           <input
+            id={`${formId}-notes`}
             className="form-input"
             value={notes}
             onChange={(e) => setNotes(e.target.value)}

@@ -89,6 +89,7 @@ export function CustomDashboards() {
                 <button
                   className="btn btn-sm btn-danger"
                   title="Delete"
+                  aria-label={`Delete dashboard ${d.name}`}
                   onClick={async (e) => {
                     e.preventDefault();
                     e.stopPropagation();

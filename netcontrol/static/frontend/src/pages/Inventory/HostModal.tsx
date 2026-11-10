@@ -105,8 +105,9 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
       <form id={formId} onSubmit={submit}>
         {errors.save && <Callout tone="danger">{errors.save}</Callout>}
         <div className="form-group">
-          <label className="form-label">Hostname</label>
+          <label className="form-label" htmlFor={`${formId}-hostname`}>Hostname</label>
           <input
+            id={`${formId}-hostname`}
             className="form-input"
             value={hostname}
             onChange={(e) => {
@@ -120,8 +121,9 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
           <FieldError>{errors.hostname}</FieldError>
         </div>
         <div className="form-group">
-          <label className="form-label">IP Address</label>
+          <label className="form-label" htmlFor={`${formId}-ip`}>IP Address</label>
           <input
+            id={`${formId}-ip`}
             className="form-input"
             value={ipAddress}
             onChange={(e) => {
@@ -134,8 +136,9 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
           <FieldError>{errors.ip}</FieldError>
         </div>
         <div className="form-group">
-          <label className="form-label">Device Type</label>
+          <label className="form-label" htmlFor={`${formId}-device-type`}>Device Type</label>
           <select
+            id={`${formId}-device-type`}
             className="form-select"
             value={deviceType ?? DEFAULT_DEVICE_TYPE}
             onChange={(e) => setDeviceType(e.target.value)}
@@ -148,8 +151,9 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
           </select>
         </div>
         <div className="form-group">
-          <label className="form-label">AWS instance ID</label>
+          <label className="form-label" htmlFor={`${formId}-aws-instance`}>AWS instance ID</label>
           <input
+            id={`${formId}-aws-instance`}
             className="form-input"
             value={awsInstanceId}
             onChange={(e) => {
@@ -172,8 +176,9 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
         </div>
         {isEdit && (
           <div className="form-group">
-            <label className="form-label">Group</label>
+            <label className="form-label" htmlFor={`${formId}-group`}>Group</label>
             <select
+              id={`${formId}-group`}
               className="form-select"
               value={String(selectedGroupId)}
               onChange={(e) => setSelectedGroupId(Number(e.target.value))}

@@ -69,6 +69,7 @@ export function TemplatesTab() {
         <input
           className="form-input"
           placeholder="Search templates…"
+          aria-label="Search templates"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           style={{ width: 240 }}

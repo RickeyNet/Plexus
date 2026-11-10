@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import { useCloudAccounts, useCloudProviders } from '@/api/cloud';
 import { PageHeader } from '@/components/PageHeader';
@@ -67,6 +67,7 @@ export interface CloudFilterState {
 }
 
 export function CloudVisibility() {
+  const fid = useId();
   const [tab, selectTab] = usePathTab('/cloud-visibility', TAB_KEYS, 'accounts');
   const [filter, setFilter] = useState<CloudFilterState>({ provider: '', accountId: null });
 
@@ -129,8 +130,9 @@ export function CloudVisibility() {
 
         {/* Provider + Account filters (apply to most tabs) */}
         <div className="card card-sm toolbar">
-          <label className="text-muted">Provider:</label>
+          <label className="text-muted" htmlFor={`${fid}-provider`}>Provider:</label>
           <select
+            id={`${fid}-provider`}
             className="form-select"
             value={filter.provider}
             onChange={(e) => setFilter({ provider: e.target.value, accountId: null })}
@@ -140,8 +142,11 @@ export function CloudVisibility() {
               <option key={p} value={p}>{providerLabel(p)}</option>
             ))}
           </select>
-          <label className="text-muted">{filterTerms.id ? `${capitalize(filterTerms.scopeTitle)}:` : 'Account:'}</label>
+          <label className="text-muted" htmlFor={`${fid}-account`}>
+            {filterTerms.id ? `${capitalize(filterTerms.scopeTitle)}:` : 'Account:'}
+          </label>
           <select
+            id={`${fid}-account`}
             className="form-select"
             value={filter.accountId ?? ''}
             onChange={(e) =>

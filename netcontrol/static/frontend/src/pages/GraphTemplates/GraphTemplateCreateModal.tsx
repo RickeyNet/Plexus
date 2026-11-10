@@ -81,8 +81,9 @@ export function GraphTemplateCreateModal({ isOpen, onClose }: Props) {
       <form id={formId} onSubmit={handleSubmit}>
         {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
-          <label className="form-label">Name</label>
+          <label className="form-label" htmlFor={`${formId}-name`}>Name</label>
           <input
+            id={`${formId}-name`}
             className="form-input"
             value={name}
             onChange={(e) => {
@@ -96,13 +97,13 @@ export function GraphTemplateCreateModal({ isOpen, onClose }: Props) {
           <FieldError>{nameError}</FieldError>
         </div>
         <div className="form-group">
-          <label className="form-label">Description</label>
-          <input className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional description" />
+          <label className="form-label" htmlFor={`${formId}-description`}>Description</label>
+          <input id={`${formId}-description`} className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional description" />
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
           <div className="form-group">
-            <label className="form-label">Graph Type</label>
-            <select className="form-select" value={graphType} onChange={(e) => setGraphType(e.target.value)}>
+            <label className="form-label" htmlFor={`${formId}-graph-type`}>Graph Type</label>
+            <select id={`${formId}-graph-type`} className="form-select" value={graphType} onChange={(e) => setGraphType(e.target.value)}>
               <option value="line">Line</option>
               <option value="bar">Bar</option>
               <option value="gauge">Gauge</option>
@@ -110,15 +111,15 @@ export function GraphTemplateCreateModal({ isOpen, onClose }: Props) {
             </select>
           </div>
           <div className="form-group">
-            <label className="form-label">Scope</label>
-            <select className="form-select" value={scope} onChange={(e) => setScope(e.target.value)}>
+            <label className="form-label" htmlFor={`${formId}-scope`}>Scope</label>
+            <select id={`${formId}-scope`} className="form-select" value={scope} onChange={(e) => setScope(e.target.value)}>
               <option value="device">Device</option>
               <option value="interface">Interface</option>
             </select>
           </div>
           <div className="form-group">
-            <label className="form-label">Category</label>
-            <select className="form-select" value={category} onChange={(e) => setCategory(e.target.value)}>
+            <label className="form-label" htmlFor={`${formId}-category`}>Category</label>
+            <select id={`${formId}-category`} className="form-select" value={category} onChange={(e) => setCategory(e.target.value)}>
               <option value="system">System</option>
               <option value="traffic">Traffic</option>
               <option value="availability">Availability</option>
@@ -126,12 +127,12 @@ export function GraphTemplateCreateModal({ isOpen, onClose }: Props) {
             </select>
           </div>
           <div className="form-group">
-            <label className="form-label">Title Format</label>
-            <input className="form-input" value={titleFormat} onChange={(e) => setTitleFormat(e.target.value)} placeholder="$interface Traffic" />
+            <label className="form-label" htmlFor={`${formId}-title-format`}>Title Format</label>
+            <input id={`${formId}-title-format`} className="form-input" value={titleFormat} onChange={(e) => setTitleFormat(e.target.value)} placeholder="$interface Traffic" />
           </div>
           <div className="form-group">
-            <label className="form-label">Y-Axis Label</label>
-            <input className="form-input" value={yAxisLabel} onChange={(e) => setYAxisLabel(e.target.value)} placeholder="e.g. Bits/sec" />
+            <label className="form-label" htmlFor={`${formId}-y-axis-label`}>Y-Axis Label</label>
+            <input id={`${formId}-y-axis-label`} className="form-input" value={yAxisLabel} onChange={(e) => setYAxisLabel(e.target.value)} placeholder="e.g. Bits/sec" />
           </div>
           <div className="form-group" style={{ display: 'flex', gap: '1rem', alignItems: 'center', paddingTop: '1.5rem' }}>
             <label><input type="checkbox" checked={stacked} onChange={(e) => setStacked(e.target.checked)} /> Stacked</label>

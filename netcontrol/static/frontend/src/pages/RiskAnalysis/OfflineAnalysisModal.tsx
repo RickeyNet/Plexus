@@ -83,8 +83,9 @@ export function OfflineAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
           Analyze risk without connecting to devices. Paste the current config and proposed commands.
         </p>
         <div className="form-group">
-          <label className="form-label">Change Type</label>
+          <label className="form-label" htmlFor={`${formId}-change-type`}>Change Type</label>
           <select
+            id={`${formId}-change-type`}
             className="form-select"
             value={changeType}
             onChange={(e) => setChangeType(e.target.value)}
@@ -97,8 +98,9 @@ export function OfflineAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
           </select>
         </div>
         <div className="form-group">
-          <label className="form-label">Current Running Config</label>
+          <label className="form-label" htmlFor={`${formId}-current-running-config`}>Current Running Config</label>
           <textarea
+            id={`${formId}-current-running-config`}
             className="form-input"
             rows={8}
             value={config}
@@ -112,8 +114,9 @@ export function OfflineAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
           <FieldError>{errors.config}</FieldError>
         </div>
         <div className="form-group">
-          <label className="form-label">Proposed Commands (one per line)</label>
+          <label className="form-label" htmlFor={`${formId}-proposed-commands`}>Proposed Commands (one per line)</label>
           <textarea
+            id={`${formId}-proposed-commands`}
             className="form-input"
             rows={6}
             value={commands}

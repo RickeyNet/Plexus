@@ -405,6 +405,33 @@ a double-click cannot fire it twice. Use `<BusyButton busy>` from
 
 ---
 
+## Accessibility
+
+- **Every control has a name.** A visible `<label className="form-label">`
+  is tied to its control with `htmlFor` / `id`. Take one `const fid = useId()`
+  per component and suffix it per field (`${fid}-hostname`); never a
+  hard-coded global id. A label that titles a group of controls gets an
+  `id`, and the wrapper gets `role="group"` and `aria-labelledby`. A
+  toolbar search box or filter with no visible label takes an `aria-label`;
+  a placeholder is not a label.
+- **Icon-only buttons take an `aria-label`** that names the action and its
+  object ("Remove condition"). `title` alone is not enough.
+- **Anything clickable works from the keyboard.** Use a `<button>` where
+  you can. A clickable card, header strip or table row spreads
+  `clickableProps(onActivate)` from `@/lib/clickable` (focusable, Enter and
+  Space); pass `{ role: null }` on a `<tr>`. Add `aria-expanded` when it
+  opens and closes something. Do not hand-write the `onKeyDown`.
+- **Focus is visible.** The stylesheet draws one `:focus-visible` ring on
+  every focusable element; do not set `outline: none` without drawing a
+  replacement.
+- **Targets are at least 28px** (`--target-min`). `btn-xs`, `segmented-xs`,
+  the kebab and the help toggle already are; do not shrink a control with
+  inline `padding`, `height` or `fontSize`.
+- **No `aria-live` on a container that polls.** Announce a specific result
+  with a `role="status"` or `role="alert"` element instead.
+
+---
+
 ## Forms
 
 - Plain `useState` + native HTML elements. No form library.
@@ -626,3 +653,7 @@ Append a one-liner each time you change a rule here.
 - 2026-11-09 - Added the state rules: error before loading with
   `<QueryError>`, `<BusyButton>` and `usePendingKeys` for async buttons,
   and when a confirm is required.
+- 2026-11-09 - Added the Accessibility section: `useId` label links,
+  `aria-label` on icon buttons and toolbar filters, `clickableProps` for
+  clickable rows and cards, the shared `:focus-visible` ring and the 28px
+  `--target-min`.

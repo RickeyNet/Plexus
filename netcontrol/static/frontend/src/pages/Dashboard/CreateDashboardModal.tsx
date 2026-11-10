@@ -80,8 +80,9 @@ export function CreateDashboardModal({ isOpen, onClose }: Props) {
       <form id={formId} onSubmit={handleSubmit}>
         {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
-          <label className="form-label">Name</label>
+          <label className="form-label" htmlFor={`${formId}-name`}>Name</label>
           <input
+            id={`${formId}-name`}
             type="text"
             className="form-input"
             value={name}
@@ -91,8 +92,9 @@ export function CreateDashboardModal({ isOpen, onClose }: Props) {
           />
         </div>
         <div className="form-group">
-          <label className="form-label">Description</label>
+          <label className="form-label" htmlFor={`${formId}-description`}>Description</label>
           <input
+            id={`${formId}-description`}
             type="text"
             className="form-input"
             value={description}
@@ -100,8 +102,8 @@ export function CreateDashboardModal({ isOpen, onClose }: Props) {
           />
         </div>
         <div className="form-group">
-          <label className="form-label">Template Variables</label>
-          <div style={{ display: 'flex', gap: '1rem' }}>
+          <span className="form-label" id={`${formId}-vars`}>Template Variables</span>
+          <div role="group" aria-labelledby={`${formId}-vars`} style={{ display: 'flex', gap: '1rem' }}>
             <label>
               <input type="checkbox" checked={varGroup} onChange={(e) => setVarGroup(e.target.checked)} /> $group
             </label>
