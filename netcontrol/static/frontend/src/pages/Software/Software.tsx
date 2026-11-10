@@ -3,10 +3,12 @@ import { useQueryClient } from '@tanstack/react-query';
 
 import { SeverityBadge } from '@/components/Badge';
 import { BusyButton } from '@/components/BusyButton';
+import { DataTable } from '@/components/DataTable';
 import { DeleteButton } from '@/components/DeleteButton';
 import { LoadingState } from '@/components/LoadingState';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
+import { ProgressBar } from '@/components/ProgressBar';
 import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { TabBar } from '@/components/TabBar';
@@ -209,50 +211,51 @@ function VersionsTab() {
   return (
     <div>
       <div className="toolbar">
-        <div className="text-muted" style={{ fontSize: '0.88em' }}>
-          Last refresh: {formatBackendDateTime(summary?.last_refresh_at, 'Never')}
-          {settings?.psirt_last_sync_at ? ` · Cisco PSIRT sync: ${formatBackendDateTime(settings.psirt_last_sync_at, 'Never')}` : ''}
-        </div>
-        <span className="toolbar-spacer" />
-        <label>
-          Platform{' '}
-          <select className="form-select" value={platform} onChange={(e) => setPlatform(e.target.value)}>
-            <option value="">All platforms</option>
-            {spread.map((p) => (
-              <option key={p.platform} value={p.platform}>
-                {p.label} ({p.device_count})
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Source{' '}
-          <select className="form-select" value={source} onChange={(e) => setSource(e.target.value)}>
-            <option value="">All sources</option>
-            {sources.map((s) => (
-              <option key={s} value={s}>
-                {sourceLabel(s)} ({summary?.sources[s] ?? 0})
-              </option>
-            ))}
-          </select>
-        </label>
         <input
+          type="search"
           aria-label="Search devices"
-          className="form-input"
+          className="form-input form-input-sm"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search name, model, serial, site, version"
-          style={{ width: 260 }}
+          style={{ flex: '1 1 220px', maxWidth: 320 }}
         />
+        <select
+          aria-label="Platform"
+          className="form-select form-select-sm"
+          value={platform}
+          onChange={(e) => setPlatform(e.target.value)}
+        >
+          <option value="">All platforms</option>
+          {spread.map((p) => (
+            <option key={p.platform} value={p.platform}>
+              {p.label} ({p.device_count})
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="Source"
+          className="form-select form-select-sm"
+          value={source}
+          onChange={(e) => setSource(e.target.value)}
+        >
+          <option value="">All sources</option>
+          {sources.map((s) => (
+            <option key={s} value={s}>
+              {sourceLabel(s)} ({summary?.sources[s] ?? 0})
+            </option>
+          ))}
+        </select>
+        <span className="toolbar-spacer" />
         {canWrite && (
-          <button type="button" className="btn btn-secondary" onClick={handleRefresh} disabled={refresh.isPending}>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={handleRefresh} disabled={refresh.isPending}>
             {refresh.isPending ? 'Refreshing…' : 'Refresh'}
           </button>
         )}
         {isAdmin && (
           <button
             type="button"
-            className="btn btn-secondary"
+            className="btn btn-secondary btn-sm"
             onClick={handleSync}
             disabled={startSync.isPending || jobStatus === 'running' || !settings?.has_psirt_secret}
             title={
@@ -265,10 +268,15 @@ function VersionsTab() {
           </button>
         )}
         {isAdmin && (
-          <button type="button" className="btn btn-secondary" onClick={() => setModal({ kind: 'settings' })}>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => setModal({ kind: 'settings' })}>
             Settings
           </button>
         )}
+        {/* Own row under the controls, so it never competes with them for width. */}
+        <div className="text-muted" style={{ flexBasis: '100%', fontSize: '0.85em' }}>
+          Last refresh: {formatBackendDateTime(summary?.last_refresh_at, 'Never')}
+          {settings?.psirt_last_sync_at ? ` · Cisco PSIRT sync: ${formatBackendDateTime(settings.psirt_last_sync_at, 'Never')}` : ''}
+        </div>
       </div>
 
       <PageHelp
@@ -331,15 +339,8 @@ function VersionsTab() {
               ))}
             </div>
 
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'minmax(0, 2fr) minmax(340px, 1fr)',
-                gap: '1rem',
-                alignItems: 'start',
-              }}
-            >
-              <div style={{ display: 'grid', gap: '1rem' }}>
+            <div className="software-layout">
+              <div className="software-layout-col">
                 <DevicesCard
                   devices={devices}
                   loading={overview.isPending}
@@ -353,7 +354,7 @@ function VersionsTab() {
                   isAcknowledging={acknowledging.isPending}
                 />
               </div>
-              <div style={{ display: 'grid', gap: '1rem' }}>
+              <div className="software-layout-col">
                 <SpreadCard spread={spread} />
                 <AdvisoriesCard
                   advisories={advisories}
@@ -401,7 +402,7 @@ interface DevicesCardProps {
 
 function DevicesCard({ devices, loading, filtered, onHistory }: DevicesCardProps) {
   return (
-    <div className="card" style={{ overflow: 'auto' }}>
+    <div className="card">
       <div style={{ marginBottom: '0.75rem' }}>
         <h3 style={{ margin: 0 }}>Devices</h3>
         <div className="text-muted" style={{ fontSize: '0.88em', marginTop: '0.2rem' }}>
@@ -420,7 +421,7 @@ function DevicesCard({ devices, loading, filtered, onHistory }: DevicesCardProps
           </p>
         </div>
       ) : (
-        <table className="data-table">
+        <DataTable>
           <thead>
             <tr>
               <th>Device</th>
@@ -481,7 +482,7 @@ function DevicesCard({ devices, loading, filtered, onHistory }: DevicesCardProps
               </tr>
             ))}
           </tbody>
-        </table>
+        </DataTable>
       )}
     </div>
   );
@@ -512,16 +513,11 @@ function SpreadCard({ spread }: { spread: SoftwarePlatformSpread[] }) {
                 {p.versions.map((v) => (
                   <div key={v.version} style={{ display: 'grid', gridTemplateColumns: '120px 1fr 40px', gap: '0.5rem' }}>
                     <span style={{ fontWeight: v.behind_newest ? 400 : 600, fontSize: '0.9em' }}>{v.version}</span>
-                    <div style={{ background: 'rgba(from var(--text) r g b / 0.08)', borderRadius: 3, height: 10, alignSelf: 'center' }}>
-                      <div
-                        style={{
-                          width: `${barWidth(v.count, max)}%`,
-                          height: '100%',
-                          borderRadius: 3,
-                          background: v.behind_newest ? 'var(--warning)' : 'var(--success)',
-                        }}
-                      />
-                    </div>
+                    <ProgressBar
+                      value={barWidth(v.count, max)}
+                      tone={v.behind_newest ? 'warning' : 'success'}
+                      style={{ alignSelf: 'center' }}
+                    />
                     <span className="text-muted" style={{ fontSize: '0.85em', textAlign: 'right' }}>
                       {v.count}
                     </span>
@@ -689,7 +685,7 @@ function ChangesCard({ changes, platformLabel }: { changes: SoftwareVersionChang
           No upgrade or downgrade has been seen yet.
         </p>
       ) : (
-        <table className="data-table">
+        <DataTable>
           <thead>
             <tr>
               <th>Device</th>
@@ -714,7 +710,7 @@ function ChangesCard({ changes, platformLabel }: { changes: SoftwareVersionChang
               </tr>
             ))}
           </tbody>
-        </table>
+        </DataTable>
       )}
     </div>
   );

@@ -3,6 +3,7 @@ import { useEffect, useId, useState } from 'react';
 import { useUploadUpgradeImage } from '@/api/upgrades';
 import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
+import { ProgressBar } from '@/components/ProgressBar';
 
 interface Props {
   isOpen: boolean;
@@ -97,23 +98,7 @@ export function NewImageModal({ isOpen, onClose }: Props) {
         </p>
         {progress !== null && (
           <div style={{ marginTop: '0.75rem' }}>
-            <div
-              style={{
-                height: '6px',
-                borderRadius: '3px',
-                background: 'var(--border-light)',
-                overflow: 'hidden',
-              }}
-            >
-              <div
-                style={{
-                  height: '100%',
-                  width: `${progress}%`,
-                  background: 'var(--primary)',
-                  transition: 'width 0.2s ease',
-                }}
-              />
-            </div>
+            <ProgressBar value={progress} size="sm" label="Image upload" />
             <p style={{ fontSize: '0.85em', marginTop: '0.35rem', opacity: 0.8 }}>
               Uploading… {progress}%
             </p>

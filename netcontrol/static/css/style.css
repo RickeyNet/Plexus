@@ -4028,6 +4028,66 @@ code {
     }
 }
 
+/* Progress and share-of-total bars (ProgressBar component): a track and a
+   fill whose width is the percentage. .progress-bar-<tone> colours the fill;
+   .progress-bar-sm is the thin one for list rows. */
+.progress-bar {
+    height: 8px;
+    min-width: 0;
+    border-radius: 999px;
+    background: rgba(from var(--text) r g b / 0.1);
+    overflow: hidden;
+}
+
+.progress-bar-sm {
+    height: 6px;
+}
+
+.progress-bar-fill {
+    height: 100%;
+    border-radius: inherit;
+    background: var(--primary);
+    transition: width 0.3s ease;
+}
+
+.progress-bar-success > .progress-bar-fill { background: var(--success); }
+.progress-bar-warning > .progress-bar-fill { background: var(--warning); }
+.progress-bar-danger > .progress-bar-fill { background: var(--danger); }
+.progress-bar-info > .progress-bar-fill { background: var(--info); }
+
+/* Total unknown: a full, dimmed bar. */
+.progress-bar-indeterminate > .progress-bar-fill {
+    opacity: 0.35;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .progress-bar-fill {
+        transition: none;
+    }
+}
+
+/* Software > Versions: device and alert cards beside the spread, advisory
+   and change cards. One column once the main column is too narrow to give
+   the devices table a usable width next to a 340px side column. */
+.software-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(340px, 1fr);
+    gap: var(--space-4);
+    align-items: start;
+}
+
+.software-layout-col {
+    display: grid;
+    gap: var(--space-4);
+    min-width: 0;
+}
+
+@media (max-width: 1400px) {
+    .software-layout {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
 /* Badges. .badge + .badge-<tone> is the one pill (Badge component); tones
    come from src/lib/severity.ts. A bare .badge is neutral. */
 .badge {

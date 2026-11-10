@@ -7,8 +7,24 @@ import {
   formatBytes,
   formatEta,
   formatScheduledTime,
+  liveStreamStatus,
   phaseLabel,
 } from './helpers';
+
+describe('liveStreamStatus', () => {
+  it('names each socket state for the operator', () => {
+    expect(liveStreamStatus('open')).toMatchObject({ label: 'Live', tone: 'success', live: true });
+    expect(liveStreamStatus('connecting')).toMatchObject({ label: 'Connecting…', tone: 'info', live: false });
+    expect(liveStreamStatus('closed')).toMatchObject({ label: 'Disconnected', tone: 'neutral', live: false });
+    expect(liveStreamStatus('error')).toMatchObject({ label: 'Not connected', tone: 'danger', live: false });
+  });
+
+  it('never shows the raw state token', () => {
+    for (const state of ['open', 'connecting', 'closed', 'error'] as const) {
+      expect(liveStreamStatus(state).label.toLowerCase()).not.toBe(state);
+    }
+  });
+});
 
 describe('bootModeDisplay', () => {
   it('labels install, bundle and unread modes', () => {

@@ -1,4 +1,4 @@
-import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type ReactNode, useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import {
@@ -9,9 +9,12 @@ import {
   useCancelUpgradeDevices,
   useUpgradeCampaign,
 } from '@/api/upgrades';
+import { Badge } from '@/components/Badge';
 import { Callout } from '@/components/Callout';
+import { DataTable } from '@/components/DataTable';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { ProgressBar } from '@/components/ProgressBar';
 import { AlertDialog } from '@/components/AlertDialog';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { clickableProps } from '@/lib/clickable';
@@ -26,6 +29,8 @@ import {
   formatBytes,
   formatEta,
   formatScheduledTime,
+  type LiveStreamState,
+  liveStreamStatus,
   phaseLabel,
 } from './helpers';
 
@@ -95,29 +100,12 @@ function TransferProgressBar({ p }: { p: TransferProgress }) {
       title={`${p.sent.toLocaleString()} of ${p.total.toLocaleString()} bytes`}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-        <div
-          role="progressbar"
-          aria-label="Image transfer"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.round(pct)}
-          style={{
-            flex: 1,
-            height: 8,
-            borderRadius: 4,
-            background: 'var(--border)',
-            overflow: 'hidden',
-          }}
-        >
-          <div
-            style={{
-              width: `${pct}%`,
-              height: '100%',
-              background: done ? 'var(--success)' : 'var(--info)',
-              transition: 'width 0.4s linear',
-            }}
-          />
-        </div>
+        <ProgressBar
+          value={pct}
+          tone={done ? 'success' : 'info'}
+          label="Image transfer"
+          style={{ flex: 1 }}
+        />
         <span style={{ minWidth: '3.2em', textAlign: 'right' }}>{Math.floor(pct)}%</span>
       </div>
       <div style={{ opacity: 0.7, whiteSpace: 'nowrap' }}>
@@ -138,6 +126,10 @@ const WRAPPED_ERROR_STYLE: CSSProperties = {
   whiteSpace: 'pre-wrap',
   overflowWrap: 'anywhere',
 };
+
+// Live output shows its newest lines and grows with them; the modal body is
+// the only scroll container. The full log is one click away.
+const LIVE_TAIL_LINES = 12;
 
 type ColumnPhase = 'prestage' | 'transfer' | 'activate' | 'verify';
 const PHASE_COLUMNS: ColumnPhase[] = ['prestage', 'transfer', 'activate', 'verify'];
@@ -262,53 +254,51 @@ function OperationHistory({ operations }: { operations: UpgradeOperation[] }) {
   }
 
   return (
-    <div style={{ overflowX: 'auto' }}>
-      <table className="data-table table-sm">
-        <thead>
-          <tr>
-            <th>Operation</th>
-            <th>Status</th>
-            <th>Scheduled</th>
-            <th>Started</th>
-            <th>Completed</th>
-            <th>Result</th>
-            <th>Requested By</th>
-          </tr>
-        </thead>
-        <tbody>
-          {operations.map((op) => (
-            <tr key={op.id}>
-              <td>{phaseLabel(op.phase)}</td>
-              <td>
-                <span className={`badge ${operationBadgeClass(op.status)}`}>
-                  {operationStatusLabel(op.status)}
-                </span>
-              </td>
-              <td>{formatBackendDateTime(op.scheduled_at)}</td>
-              <td>{formatBackendDateTime(op.started_at)}</td>
-              <td>{formatBackendDateTime(op.completed_at)}</td>
-              <td>
-                <span style={{ display: 'inline-flex', gap: '0.35rem', flexWrap: 'wrap' }}>
-                  <span>{op.succeeded}/{op.device_count} ok</span>
-                  {op.failed > 0 && (
-                    <span style={{ color: 'var(--danger)' }}>{op.failed} failed</span>
-                  )}
-                  {op.cancelled > 0 && (
-                    <span className="text-muted">{op.cancelled} cancelled</span>
-                  )}
-                </span>
-                {op.error_message && (
-                  <div style={{ ...WRAPPED_ERROR_STYLE, marginTop: '0.2rem' }}>
-                    {op.error_message}
-                  </div>
+    <DataTable compact>
+      <thead>
+        <tr>
+          <th>Operation</th>
+          <th>Status</th>
+          <th>Scheduled</th>
+          <th>Started</th>
+          <th>Completed</th>
+          <th>Result</th>
+          <th>Requested By</th>
+        </tr>
+      </thead>
+      <tbody>
+        {operations.map((op) => (
+          <tr key={op.id}>
+            <td>{phaseLabel(op.phase)}</td>
+            <td>
+              <span className={`badge ${operationBadgeClass(op.status)}`}>
+                {operationStatusLabel(op.status)}
+              </span>
+            </td>
+            <td>{formatBackendDateTime(op.scheduled_at)}</td>
+            <td>{formatBackendDateTime(op.started_at)}</td>
+            <td>{formatBackendDateTime(op.completed_at)}</td>
+            <td>
+              <span style={{ display: 'inline-flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                <span>{op.succeeded}/{op.device_count} ok</span>
+                {op.failed > 0 && (
+                  <span style={{ color: 'var(--danger)' }}>{op.failed} failed</span>
                 )}
-              </td>
-              <td>{op.requested_by || '-'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+                {op.cancelled > 0 && (
+                  <span className="text-muted">{op.cancelled} cancelled</span>
+                )}
+              </span>
+              {op.error_message && (
+                <div style={{ ...WRAPPED_ERROR_STYLE, marginTop: '0.2rem' }}>
+                  {op.error_message}
+                </div>
+              )}
+            </td>
+            <td>{op.requested_by || '-'}</td>
+          </tr>
+        ))}
+      </tbody>
+    </DataTable>
   );
 }
 
@@ -417,15 +407,13 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
   const [transferProgress, setTransferProgress] = useState<
     Record<number, TransferProgress>
   >({});
-  const [wsState, setWsState] = useState<'connecting' | 'open' | 'closed' | 'error'>(
-    'connecting',
-  );
+  const [wsState, setWsState] = useState<LiveStreamState>('connecting');
+  const [showAllOutput, setShowAllOutput] = useState(false);
   const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
   const [confirmDeviceCancelOpen, setConfirmDeviceCancelOpen] = useState(false);
   const [alert, setAlert] = useState<{ title: string; message: string } | null>(
     null,
   );
-  const outputRef = useRef<HTMLPreElement | null>(null);
 
   const campaign = query.data;
   const devices = useMemo<UpgradeDevice[]>(
@@ -517,6 +505,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
     setLiveLines([]);
     setLiveStatuses({});
     setTransferProgress({});
+    setShowAllOutput(false);
   }
 
   // WebSocket for live events
@@ -617,12 +606,6 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
       }
     };
   }, [campaignId, qc]);
-
-  // Auto-scroll live output
-  useEffect(() => {
-    const el = outputRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [liveLines]);
 
   const toggleSelect = (id: number, checked: boolean) => {
     setSelectedIds((prev) => {
@@ -750,6 +733,8 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
     selectedCount > 0
       ? `${selectedCount} selected device${selectedCount === 1 ? '' : 's'}`
       : `all ${devices.length} devices`;
+  const stream = liveStreamStatus(wsState);
+  const shownLines = showAllOutput ? liveLines : liveLines.slice(-LIVE_TAIL_LINES);
 
   return (
     <>
@@ -832,9 +817,50 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
               </div>
             )}
 
-            <div style={{ marginBottom: '1rem' }}>
-              <h4 style={{ margin: '0 0 0.5rem' }}>Operation history</h4>
-              <OperationHistory operations={operations} />
+            <div className="toolbar" style={{ fontSize: '0.85em' }}>
+              <span className="text-muted">Steps and cancel apply to:</span>
+              <strong>{targetText}</strong>
+              <span
+                style={{
+                  display: 'inline-flex',
+                  gap: '0.4rem',
+                  flexWrap: 'wrap',
+                  marginLeft: '0.5rem',
+                }}
+              >
+                <button
+                  className="btn btn-sm btn-secondary"
+                  onClick={() => selectAll(!allSelected)}
+                  disabled={devices.length === 0}
+                >
+                  {allSelected ? 'Deselect all' : 'Select all'}
+                </button>
+                <select
+                  className="form-select form-select-sm"
+                  aria-label="Select devices by status"
+                  value=""
+                  disabled={selectableGroups.length === 0}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (!val) return;
+                    const [phase, status] = val.split(':') as [
+                      ColumnPhase,
+                      string,
+                    ];
+                    selectByPhaseStatus(phase, status);
+                  }}
+                >
+                  <option value="">Select by status…</option>
+                  {selectableGroups.map((g) => (
+                    <option
+                      key={`${g.phase}:${g.status}`}
+                      value={`${g.phase}:${g.status}`}
+                    >
+                      {phaseLabel(g.phase)} · {statusLabel(g.status)} ({g.count})
+                    </option>
+                  ))}
+                </select>
+              </span>
             </div>
 
             <div style={{ marginBottom: '1rem' }}>
@@ -849,7 +875,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
               >
                 <h4 style={{ margin: 0 }}>Upgrade steps</h4>
                 <span className="text-muted" style={{ fontSize: '0.82em' }}>
-                  Run in order. Each step acts on <strong>{targetText}</strong>.
+                  Run in order.
                 </span>
                 <button
                   className="btn btn-sm btn-secondary"
@@ -962,55 +988,9 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
               </div>
             </div>
 
-            <div className="toolbar" style={{ fontSize: '0.85em' }}>
-              <span className="text-muted">Steps apply to:</span>
-              <strong>{targetText}</strong>
-              <span
-                style={{
-                  display: 'inline-flex',
-                  gap: '0.4rem',
-                  flexWrap: 'wrap',
-                  marginLeft: '0.5rem',
-                }}
-              >
-                <button
-                  className="btn btn-sm btn-secondary"
-                  onClick={() => selectAll(!allSelected)}
-                  disabled={devices.length === 0}
-                >
-                  {allSelected ? 'Deselect all' : 'Select all'}
-                </button>
-                <select
-                  className="form-select form-select-sm"
-                  aria-label="Select devices by status"
-                  value=""
-                  disabled={selectableGroups.length === 0}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    if (!val) return;
-                    const [phase, status] = val.split(':') as [
-                      ColumnPhase,
-                      string,
-                    ];
-                    selectByPhaseStatus(phase, status);
-                  }}
-                >
-                  <option value="">Select by status…</option>
-                  {selectableGroups.map((g) => (
-                    <option
-                      key={`${g.phase}:${g.status}`}
-                      value={`${g.phase}:${g.status}`}
-                    >
-                      {phaseLabel(g.phase)} · {statusLabel(g.status)} ({g.count})
-                    </option>
-                  ))}
-                </select>
-              </span>
-            </div>
-
             <PhaseIconLegend />
 
-            <div style={{ overflowX: 'auto' }}>
+            <div className="table-scroll">
               <table
                 className="data-table"
                 style={{ fontSize: '0.85em' }}
@@ -1121,29 +1101,41 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
             </div>
 
             <div style={{ marginTop: '1rem' }}>
-              <h4 style={{ margin: '0 0 0.5rem' }}>
-                Live Output{' '}
-                <span
-                  style={{
-                    fontSize: '0.75em',
-                    opacity: 0.6,
-                    fontWeight: 400,
-                  }}
-                >
-                  ({wsState})
-                </span>
-              </h4>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  flexWrap: 'wrap',
+                  marginBottom: '0.5rem',
+                }}
+              >
+                <h4 style={{ margin: 0 }}>Live output</h4>
+                <Badge tone={stream.tone} size="sm" live={stream.live} title={stream.title}>
+                  {stream.label}
+                </Badge>
+                {liveLines.length > LIVE_TAIL_LINES && (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-secondary"
+                    style={{ marginLeft: 'auto' }}
+                    onClick={() => setShowAllOutput((v) => !v)}
+                  >
+                    {showAllOutput
+                      ? `Show latest ${LIVE_TAIL_LINES} only`
+                      : `Show all ${liveLines.length} lines`}
+                  </button>
+                )}
+              </div>
               <pre
-                ref={outputRef}
                 style={{
                   background: 'var(--bg-secondary)',
                   padding: '1rem',
                   borderRadius: 8,
-                  maxHeight: 280,
-                  overflowY: 'auto',
                   fontFamily: 'var(--font-mono)',
                   fontSize: '0.82rem',
                   whiteSpace: 'pre-wrap',
+                  overflowWrap: 'anywhere',
                   lineHeight: 1.5,
                   margin: 0,
                 }}
@@ -1152,8 +1144,13 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                   ? wsState === 'connecting'
                     ? 'Connecting…'
                     : 'No events yet.'
-                  : liveLines.join('\n')}
+                  : shownLines.join('\n')}
               </pre>
+            </div>
+
+            <div style={{ marginTop: '1rem' }}>
+              <h4 style={{ margin: '0 0 0.5rem' }}>Operation history</h4>
+              <OperationHistory operations={operations} />
             </div>
           </div>
         ) : null}
