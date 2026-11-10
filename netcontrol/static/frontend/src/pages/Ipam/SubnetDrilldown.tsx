@@ -1,7 +1,9 @@
 import { FormEvent, useState } from 'react';
 
+import { Callout } from '@/components/Callout';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { FieldError } from '@/components/FieldError';
 import {
   type IpamSubnetDetail,
   useCreateIpamAllocation,
@@ -144,11 +146,14 @@ function ReservationsSection({
   const [startIp, setStartIp] = useState('');
   const [endIp, setEndIp] = useState('');
   const [reason, setReason] = useState('');
+  const [startIpError, setStartIpError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    setSaveError(null);
     if (!startIp.trim()) {
-      void alert('Start IP is required.');
+      setStartIpError('Start IP is required.');
       return;
     }
     try {
@@ -165,13 +170,20 @@ function ReservationsSection({
       setReason('');
       onChanged();
     } catch (err) {
-      void alert({ message: (err as Error).message, variant: 'error' });
+      setSaveError((err as Error).message);
     }
   };
 
-  const handleDelete = async (id: number) => {
-    if (!(await confirm('Delete this reserved range?'))) return;
-    remove.mutate(id, {
+  const handleDelete = async (item: NonNullable<IpamSubnetDetail['reservations']>[number]) => {
+    if (
+      !(await confirm({
+        title: 'Delete reserved range',
+        message: `Delete reserved range ${item.start_ip || ''} to ${item.end_ip || ''}?`,
+        confirmLabel: 'Delete',
+      }))
+    )
+      return;
+    remove.mutate(item.id, {
       onSuccess: () => onChanged(),
       onError: (e) => {
         void alert({ message: (e as Error).message, variant: 'error' });
@@ -220,7 +232,7 @@ function ReservationsSection({
                   {item.kind || 'reserved'}
                 </span>
                 {item.kind === 'custom' && (
-                  <DeleteButton size="xs" onClick={() => handleDelete(item.id)} />
+                  <DeleteButton size="xs" onClick={() => handleDelete(item)} />
                 )}
               </div>
             </div>
@@ -243,6 +255,7 @@ function ReservationsSection({
           onSubmit={submit}
           style={{ display: 'grid', gap: '0.6rem', marginTop: '0.65rem' }}
         >
+          {saveError && <Callout tone="danger">{saveError}</Callout>}
           <div
             style={{
               display: 'grid',
@@ -255,10 +268,15 @@ function ReservationsSection({
               <input
                 className="form-input"
                 value={startIp}
-                onChange={(e) => setStartIp(e.target.value)}
+                onChange={(e) => {
+                  setStartIp(e.target.value);
+                  setStartIpError(null);
+                }}
                 required
                 placeholder="10.0.0.10"
+                aria-invalid={!!startIpError}
               />
+              <FieldError>{startIpError}</FieldError>
             </div>
             <div>
               <label className="form-label">
@@ -331,11 +349,14 @@ function AllocationsSection({
   const [address, setAddress] = useState('');
   const [hostname, setHostname] = useState('');
   const [description, setDescription] = useState('');
+  const [addressError, setAddressError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    setSaveError(null);
     if (!address.trim()) {
-      void alert('IP address is required.');
+      setAddressError('IP address is required.');
       return;
     }
     try {
@@ -352,12 +373,19 @@ function AllocationsSection({
       setDescription('');
       onChanged();
     } catch (err) {
-      void alert({ message: (err as Error).message, variant: 'error' });
+      setSaveError((err as Error).message);
     }
   };
 
-  const handleDelete = async (id: number) => {
-    if (!(await confirm('Remove this local allocation?'))) return;
+  const handleDelete = async (id: number, ip: string | undefined) => {
+    if (
+      !(await confirm({
+        title: 'Remove local allocation',
+        message: `Remove local allocation ${ip || ''}?`,
+        confirmLabel: 'Remove',
+      }))
+    )
+      return;
     remove.mutate(id, {
       onSuccess: () => onChanged(),
       onError: (e) => {
@@ -442,7 +470,7 @@ function AllocationsSection({
                         color: 'var(--danger)',
                       }}
                       title="Remove local allocation"
-                      onClick={() => handleDelete(item.allocation_id!)}
+                      onClick={() => handleDelete(item.allocation_id!, item.ip_address)}
                     >
                       ✕
                     </button>
@@ -462,15 +490,21 @@ function AllocationsSection({
           onSubmit={submit}
           style={{ display: 'grid', gap: '0.6rem', marginTop: '0.65rem' }}
         >
+          {saveError && <Callout tone="danger">{saveError}</Callout>}
           <div>
             <label className="form-label">IP Address</label>
             <input
               className="form-input"
               value={address}
-              onChange={(e) => setAddress(e.target.value)}
+              onChange={(e) => {
+                setAddress(e.target.value);
+                setAddressError(null);
+              }}
               required
               placeholder="10.0.0.50"
+              aria-invalid={!!addressError}
             />
+            <FieldError>{addressError}</FieldError>
           </div>
           <div>
             <label className="form-label">

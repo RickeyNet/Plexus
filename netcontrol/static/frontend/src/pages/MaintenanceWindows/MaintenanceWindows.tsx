@@ -60,7 +60,11 @@ export function MaintenanceWindows() {
   }, [windows.data]);
 
   const handleDelete = async (w: MaintenanceWindow) => {
-    if (!(await confirm(`Delete maintenance window "${w.name}"?`))) return;
+    if (!(await confirm({
+      title: 'Delete maintenance window',
+      message: `Delete maintenance window "${w.name}"?`,
+      confirmLabel: 'Delete',
+    }))) return;
     deleteMut.mutate(w.id, {
       onError: (e) => void alert({ message: (e as Error).message, variant: 'error' }),
     });

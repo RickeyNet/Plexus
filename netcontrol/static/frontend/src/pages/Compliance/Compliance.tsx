@@ -355,9 +355,8 @@ function ProfilesTab({
                   onClick={async () => {
                     if (
                       await confirm({
-                        title: 'Delete profile?',
-                        message:
-                          'Delete this compliance profile and all its assignments and scan results?',
+                        title: 'Delete compliance profile',
+                        message: `Delete compliance profile "${p.name}" and all its assignments and scan results?`,
                         confirmLabel: 'Delete',
                       })
                     ) {
@@ -468,9 +467,8 @@ function AssignmentsTab({
                   onClick={async () => {
                     if (
                       await confirm({
-                        title: 'Scan now?',
-                        message:
-                          'Scan all hosts in this assignment immediately? This may take a moment.',
+                        title: 'Run compliance scan',
+                        message: `Scan all hosts in group "${a.group_name || '?'}" against profile "${a.profile_name || '?'}" immediately? This may take a moment.`,
                         confirmLabel: 'Scan now',
                         confirmVariant: 'primary',
                       })
@@ -529,8 +527,8 @@ function AssignmentsTab({
                   onClick={async () => {
                     if (
                       await confirm({
-                        title: 'Delete assignment?',
-                        message: 'Delete this compliance assignment?',
+                        title: 'Delete compliance assignment',
+                        message: `Delete the assignment of profile "${a.profile_name || '?'}" to group "${a.group_name || '?'}"?`,
                         confirmLabel: 'Delete',
                       })
                     ) {

@@ -1,7 +1,8 @@
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useId, useMemo, useState } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
-import { useDialogs } from '@/components/DialogProvider-context';
 import {
   groupLabel,
   type InventoryGroupFull,
@@ -22,7 +23,7 @@ interface Props {
 }
 
 export function GroupModal({ group, isCreate, groups, defaultParentId = null, onClose }: Props) {
-  const { alert } = useDialogs();
+  const formId = useId();
   const create = useCreateInventoryGroup();
   const update = useUpdateInventoryGroup();
   const [name, setName] = useState(group?.name ?? '');
@@ -30,6 +31,8 @@ export function GroupModal({ group, isCreate, groups, defaultParentId = null, on
   const [parentId, setParentId] = useState<number | null>(
     group ? (group.parent_id ?? null) : defaultParentId,
   );
+  const [nameError, setNameError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // A group cannot be its own parent or move under one of its sub-groups.
   const parentChoices = useMemo(() => {
@@ -43,9 +46,10 @@ export function GroupModal({ group, isCreate, groups, defaultParentId = null, on
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    setSaveError(null);
     const trimmedName = name.trim();
     if (!trimmedName) {
-      void alert('Group name is required.');
+      setNameError('Group name is required.');
       return;
     }
     try {
@@ -61,7 +65,7 @@ export function GroupModal({ group, isCreate, groups, defaultParentId = null, on
       }
       onClose();
     } catch (err) {
-      void alert({ message: (err as Error).message, variant: 'error' });
+      setSaveError((err as Error).message);
     }
   };
 
@@ -70,17 +74,33 @@ export function GroupModal({ group, isCreate, groups, defaultParentId = null, on
       isOpen
       onClose={onClose}
       title={isCreate ? 'Create Inventory Group' : 'Edit Inventory Group'}
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={isPending}>
+            {isPending ? 'Saving…' : isCreate ? 'Create' : 'Save'}
+          </button>
+        </>
+      }
     >
-      <form onSubmit={submit}>
+      <form id={formId} onSubmit={submit}>
+        {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
           <label className="form-label">Group Name</label>
           <input
             className="form-input"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => {
+              setName(e.target.value);
+              setNameError(null);
+            }}
             required
             autoFocus
+            aria-invalid={!!nameError}
           />
+          <FieldError>{nameError}</FieldError>
         </div>
         <div className="form-group">
           <label className="form-label" htmlFor="inventory-group-parent">Parent group</label>
@@ -105,21 +125,6 @@ export function GroupModal({ group, isCreate, groups, defaultParentId = null, on
             value={description ?? ''}
             onChange={(e) => setDescription(e.target.value)}
           />
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            gap: '0.5rem',
-            justifyContent: 'flex-end',
-            marginTop: '1rem',
-          }}
-        >
-          <button type="button" className="btn btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="btn btn-primary" disabled={isPending}>
-            {isPending ? 'Saving…' : isCreate ? 'Create' : 'Save'}
-          </button>
         </div>
       </form>
     </Modal>

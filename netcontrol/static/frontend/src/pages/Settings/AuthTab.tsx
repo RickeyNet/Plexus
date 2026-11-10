@@ -861,7 +861,11 @@ function ServiceCredentialsSection() {
   };
 
   const onDelete = async (cred: CredentialSummary) => {
-    if (!(await confirm(`Delete service credential “${cred.name}”?`))) return;
+    if (!(await confirm({
+      title: 'Delete service credential',
+      message: `Delete service credential “${cred.name}”?`,
+      confirmLabel: 'Delete',
+    }))) return;
     remove.mutate(cred.id, {
       onSuccess: () =>
         setStatus({ kind: 'success', message: `Service credential “${cred.name}” deleted` }),

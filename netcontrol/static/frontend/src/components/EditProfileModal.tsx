@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import { useUpdateProfile } from '@/api/auth';
+import { FieldError } from './FieldError';
 import { Modal } from './Modal';
 
 interface Props {
@@ -39,9 +40,26 @@ export function EditProfileModal({ isOpen, onClose, username, initialDisplayName
     }
   }
 
+  const formId = useId();
+
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Edit Profile">
-      <form onSubmit={onSubmit}>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Edit Profile"
+      size="small"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose} disabled={update.isPending}>
+            Cancel
+          </button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={update.isPending}>
+            {update.isPending ? 'Saving…' : 'Save'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={onSubmit}>
         <div className="form-group">
           <label className="form-label">Username</label>
           <input
@@ -64,17 +82,7 @@ export function EditProfileModal({ isOpen, onClose, username, initialDisplayName
             required
           />
         </div>
-        {error && (
-          <div style={{ color: 'var(--danger)', fontSize: '0.85rem', marginBottom: '0.5rem' }}>{error}</div>
-        )}
-        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
-          <button type="button" className="btn btn-secondary" onClick={onClose} disabled={update.isPending}>
-            Cancel
-          </button>
-          <button type="submit" className="btn btn-primary" disabled={update.isPending}>
-            {update.isPending ? 'Saving…' : 'Save'}
-          </button>
-        </div>
+        <FieldError>{error}</FieldError>
       </form>
     </Modal>
   );

@@ -93,7 +93,7 @@ export function BackupsTab() {
     </table>
     <ConfirmDialog
       isOpen={deleteTarget !== null}
-      title="Delete backup file?"
+      title="Delete backup file"
       message={
         <>
           Delete <code>{deleteTarget?.filename}</code>? This cannot be undone.

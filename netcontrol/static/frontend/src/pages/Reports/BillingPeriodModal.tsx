@@ -35,7 +35,13 @@ export function BillingPeriodModal({ periodId, onClose }: Props) {
   }, [query.data]);
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Billing Period Detail" size="large">
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Billing Period Detail"
+      size="medium"
+      footer={<button type="button" className="btn btn-secondary" onClick={onClose}>Close</button>}
+    >
       {query.isPending && <LoadingState />}
       {query.error && <Callout tone="danger">Failed: {(query.error as Error).message}</Callout>}
       {query.data && (() => {
@@ -75,9 +81,6 @@ export function BillingPeriodModal({ periodId, onClose }: Props) {
           </>
         );
       })()}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
-        <button className="btn btn-secondary" onClick={onClose}>Close</button>
-      </div>
     </Modal>
   );
 }

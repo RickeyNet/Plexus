@@ -5,6 +5,7 @@ import {
   driftLabel,
   formatSubnetPreview,
   providerLabel,
+  validateConnectionForm,
 } from './helpers';
 
 describe('formatSubnetPreview', () => {
@@ -83,3 +84,18 @@ describe('driftBadgeClass', () => {
   });
 });
 
+describe('validateConnectionForm', () => {
+  it('accepts a complete form', () => {
+    expect(
+      validateConnectionForm({ provider: 'netbox', name: 'Lab', baseUrl: 'https://ipam.example.com' }),
+    ).toEqual({});
+  });
+
+  it('flags each missing field', () => {
+    expect(validateConnectionForm({ provider: '', name: ' ', baseUrl: '' })).toEqual({
+      provider: 'Select a provider.',
+      name: 'Name is required.',
+      baseUrl: 'Base URL is required.',
+    });
+  });
+});

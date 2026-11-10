@@ -23,7 +23,17 @@ export function DriftEventLogModal({ eventId, onClose }: Props) {
   const entries = history.data || [];
 
   return (
-    <Modal isOpen={eventId != null} onClose={onClose} title={title} size="large">
+    <Modal
+      isOpen={eventId != null}
+      onClose={onClose}
+      title={title}
+      size="large"
+      footer={
+        <button type="button" className="btn btn-secondary" onClick={onClose}>
+          Close
+        </button>
+      }
+    >
       {isPending && <LoadingState />}
       {ev.data && (
         <>
@@ -95,17 +105,6 @@ export function DriftEventLogModal({ eventId, onClose }: Props) {
           </div>
         </>
       )}
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'flex-end',
-          marginTop: '0.75rem',
-        }}
-      >
-        <button type="button" className="btn btn-secondary" onClick={onClose}>
-          Close
-        </button>
-      </div>
     </Modal>
   );
 }

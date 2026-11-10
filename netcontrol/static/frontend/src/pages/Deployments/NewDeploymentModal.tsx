@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 
 import { useCreateDeployment } from '@/api/deployments';
 import {
@@ -7,8 +7,9 @@ import {
   useRiskInventoryGroups,
   useRiskTemplates,
 } from '@/api/riskAnalysis';
+import { Callout } from '@/components/Callout';
+import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
-import { useDialogs } from '@/components/DialogProvider-context';
 
 interface Props {
   isOpen: boolean;
@@ -25,7 +26,7 @@ const CHANGE_TYPES = [
 ];
 
 export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
-  const { alert } = useDialogs();
+  const formId = useId();
   const groups = useRiskInventoryGroups();
   const credentials = useRiskCredentials();
   const templates = useRiskTemplates();
@@ -40,6 +41,16 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
   const [templateId, setTemplateId] = useState<string>('');
   const [riskAnalysisId, setRiskAnalysisId] = useState<string>('');
   const [commands, setCommands] = useState('');
+  const [errors, setErrors] = useState<{
+    name?: string;
+    group?: string;
+    credential?: string;
+    commands?: string;
+  }>({});
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const clearError = (field: keyof typeof errors) =>
+    setErrors((prev) => ({ ...prev, [field]: undefined }));
 
   const approvedAnalyses = useMemo(
     () => (riskAnalyses.data || []).filter((r) => r.approved),
@@ -55,28 +66,24 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
     setTemplateId('');
     setRiskAnalysisId('');
     setCommands('');
+    setErrors({});
+    setSaveError(null);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    setSaveError(null);
     const trimmedName = name.trim();
-    if (!trimmedName) {
-      void alert('Deployment name is required');
-      return;
-    }
-    if (!groupId) {
-      void alert('Inventory group is required');
-      return;
-    }
-    if (!credentialId) {
-      void alert('Credential is required');
-      return;
-    }
     const cmdLines = commands.split('\n').filter((l) => l.trim());
-    if (!templateId && !cmdLines.length) {
-      void alert('Provide proposed commands or select a template');
-      return;
-    }
+    const nextErrors = {
+      name: trimmedName ? undefined : 'Deployment name is required',
+      group: groupId ? undefined : 'Inventory group is required',
+      credential: credentialId ? undefined : 'Credential is required',
+      commands:
+        templateId || cmdLines.length ? undefined : 'Provide proposed commands or select a template',
+    };
+    setErrors(nextErrors);
+    if (nextErrors.name || nextErrors.group || nextErrors.credential || nextErrors.commands) return;
 
     create.mutate(
       {
@@ -96,26 +103,43 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
           onCreated(result.id);
         },
         onError: (err) => {
-          void alert({
-            message: `Create deployment failed: ${(err as Error).message}`,
-            variant: 'error',
-          });
+          setSaveError(`Create deployment failed: ${(err as Error).message}`);
         },
       },
     );
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="New Deployment">
-      <form onSubmit={handleSubmit}>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="New Deployment"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={create.isPending}>
+            {create.isPending ? 'Creating…' : 'Create Deployment'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={handleSubmit}>
+        {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
           <label className="form-label">Name</label>
           <input
             className="form-input"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => {
+              setName(e.target.value);
+              clearError('name');
+            }}
+            aria-invalid={!!errors.name}
             placeholder="e.g. ACL Update Production"
           />
+          <FieldError>{errors.name}</FieldError>
         </div>
         <div className="form-group">
           <label className="form-label">Description</label>
@@ -131,7 +155,11 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
           <select
             className="form-select"
             value={groupId}
-            onChange={(e) => setGroupId(e.target.value)}
+            onChange={(e) => {
+              setGroupId(e.target.value);
+              clearError('group');
+            }}
+            aria-invalid={!!errors.group}
           >
             <option value="">- Select -</option>
             {(groups.data || []).map((g) => (
@@ -140,13 +168,18 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
               </option>
             ))}
           </select>
+          <FieldError>{errors.group}</FieldError>
         </div>
         <div className="form-group">
           <label className="form-label">Credential</label>
           <select
             className="form-select"
             value={credentialId}
-            onChange={(e) => setCredentialId(e.target.value)}
+            onChange={(e) => {
+              setCredentialId(e.target.value);
+              clearError('credential');
+            }}
+            aria-invalid={!!errors.credential}
           >
             <option value="">- Select -</option>
             {(credentials.data || []).map((c) => (
@@ -155,6 +188,7 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
               </option>
             ))}
           </select>
+          <FieldError>{errors.credential}</FieldError>
         </div>
         <div className="form-group">
           <label className="form-label">Change Type</label>
@@ -175,7 +209,10 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
           <select
             className="form-select"
             value={templateId}
-            onChange={(e) => setTemplateId(e.target.value)}
+            onChange={(e) => {
+              setTemplateId(e.target.value);
+              clearError('commands');
+            }}
           >
             <option value="">- None (manual commands) -</option>
             {(templates.data || []).map((t) => (
@@ -208,18 +245,15 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
             className="form-input"
             rows={5}
             value={commands}
-            onChange={(e) => setCommands(e.target.value)}
+            onChange={(e) => {
+              setCommands(e.target.value);
+              clearError('commands');
+            }}
+            aria-invalid={!!errors.commands}
             style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem' }}
             placeholder={'interface GigabitEthernet0/1\n no shutdown'}
           />
-        </div>
-        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-          <button type="button" className="btn btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="btn btn-primary" disabled={create.isPending}>
-            {create.isPending ? 'Creating…' : 'Create Deployment'}
-          </button>
+          <FieldError>{errors.commands}</FieldError>
         </div>
       </form>
     </Modal>

@@ -57,6 +57,37 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
       isOpen
       onClose={props.onClose}
       title={isEdit ? 'Edit Access Group' : 'Create Access Group'}
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={props.onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={submitDisabled}
+            onClick={() => {
+              setError(null);
+              const payload = {
+                name: name.trim(),
+                description: description.trim(),
+                feature_keys: featureKeys,
+              };
+              const opts = {
+                onSuccess: () => props.onClose(),
+                onError: (e: unknown) => setError((e as Error).message),
+              };
+              if (isEdit) {
+                update.mutate({ id: props.group.id, data: payload }, opts);
+              } else {
+                create.mutate(payload, opts);
+              }
+            }}
+          >
+            {pending ? 'Saving…' : isEdit ? 'Save' : 'Create Group'}
+          </button>
+        </>
+      }
     >
       <div className="form-group">
         <label className="form-label">Group Name</label>
@@ -133,42 +164,6 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
         </div>
       </div>
       {error && <Callout tone="danger">{error}</Callout>}
-      <div
-        style={{
-          display: 'flex',
-          gap: '0.5rem',
-          justifyContent: 'flex-end',
-          marginTop: '1rem',
-        }}
-      >
-        <button type="button" className="btn btn-secondary" onClick={props.onClose}>
-          Cancel
-        </button>
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={submitDisabled}
-          onClick={() => {
-            setError(null);
-            const payload = {
-              name: name.trim(),
-              description: description.trim(),
-              feature_keys: featureKeys,
-            };
-            const opts = {
-              onSuccess: () => props.onClose(),
-              onError: (e: unknown) => setError((e as Error).message),
-            };
-            if (isEdit) {
-              update.mutate({ id: props.group.id, data: payload }, opts);
-            } else {
-              create.mutate(payload, opts);
-            }
-          }}
-        >
-          {pending ? 'Saving…' : isEdit ? 'Save' : 'Create Group'}
-        </button>
-      </div>
     </Modal>
   );
 }

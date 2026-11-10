@@ -350,7 +350,7 @@ function SlaChart({
 function SlaHostDetailModal({ hostId, days, onClose }: { hostId: number; days: number; onClose: () => void }) {
   const detail = useSlaHostDetail(hostId, days);
   return (
-    <Modal isOpen onClose={onClose} title={`SLA Detail: ${detail.data?.hostname ?? `Host #${hostId}`}`} size="large">
+    <Modal isOpen onClose={onClose} title={`SLA Detail: ${detail.data?.hostname ?? `Host #${hostId}`}`} size="medium">
       {detail.isPending && <LoadingState />}
       {detail.error && <div style={{ color: 'var(--danger)' }}>Error: {(detail.error as Error).message}</div>}
       {detail.data && (

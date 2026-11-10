@@ -39,9 +39,9 @@ export function OidProfilesTab() {
     return [...set];
   }, [profiles]);
 
-  async function handleDelete(id: number) {
-    if (!(await confirm('Delete this OID profile?'))) return;
-    del.mutate(id, {
+  async function handleDelete(p: OidProfile) {
+    if (!(await confirm({ title: 'Delete OID profile', message: `Delete OID profile "${p.name}"?`, confirmLabel: 'Delete' }))) return;
+    del.mutate(p.id, {
       onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
     });
   }
@@ -79,7 +79,7 @@ export function OidProfilesTab() {
                   </div>
                   <div style={{ display: 'flex', gap: '0.5rem' }}>
                     <button className="btn btn-sm btn-secondary" onClick={() => setModalId(p.id)}>Edit</button>
-                    <DeleteButton onClick={() => handleDelete(p.id)} />
+                    <DeleteButton onClick={() => handleDelete(p)} />
                   </div>
                 </div>
                 <div className="text-muted" style={{ fontSize: '0.85em', marginTop: '0.25rem' }}>

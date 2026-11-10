@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react';
+import { useId, useMemo, useState, type FormEvent } from 'react';
 
 import CodeMirror from '@uiw/react-codemirror';
 import { python } from '@codemirror/lang-python';
@@ -6,9 +6,10 @@ import { yaml } from '@codemirror/lang-yaml';
 import { dracula } from '@uiw/codemirror-theme-dracula';
 
 import { Badge } from '@/components/Badge';
+import { Callout } from '@/components/Callout';
+import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
-import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useCreatePlaybook,
   usePlaybook,
@@ -76,7 +77,7 @@ const ANSIBLE_DEFAULT = `---
 `;
 
 export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
-  const { alert } = useDialogs();
+  const formId = useId();
   const isOpen = mode != null;
   const detailQuery = usePlaybook(mode === 'edit' ? playbookId : null);
   const createMut = useCreatePlaybook();
@@ -89,6 +90,8 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
   const [tagsStr, setTagsStr] = useState('');
   const [content, setContent] = useState(PYTHON_DEFAULT);
   const [contentDirty, setContentDirty] = useState(false);
+  const [errors, setErrors] = useState<{ name?: string; filename?: string; content?: string }>({});
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const editorExtensions = useMemo(() => [type === 'ansible' ? yaml() : python()], [type]);
 
@@ -97,6 +100,8 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
   if (mode !== prevMode || detailQuery.data !== prevData) {
     setPrevMode(mode);
     setPrevData(detailQuery.data);
+    setErrors({});
+    setSaveError(null);
     if (mode === 'create') {
       setType('python'); setName(''); setFilename(''); setDescription('');
       setTagsStr(''); setContent(PYTHON_DEFAULT); setContentDirty(false);
@@ -121,10 +126,14 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!name.trim() || !filename.trim() || !content.trim()) {
-      void alert('Name, filename, and content are required');
-      return;
-    }
+    setSaveError(null);
+    const nextErrors = {
+      name: name.trim() ? undefined : 'Name is required',
+      filename: filename.trim() ? undefined : 'Filename is required',
+      content: content.trim() ? undefined : 'Content is required',
+    };
+    setErrors(nextErrors);
+    if (nextErrors.name || nextErrors.filename || nextErrors.content) return;
     let fname = filename.trim();
     if (type === 'ansible') {
       if (!/\.(yml|yaml)$/i.test(fname)) fname += '.yml';
@@ -140,7 +149,7 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
       content,
       type,
     };
-    const onError = (err: unknown) => { void alert({ message: (err as Error).message, variant: 'error' }); };
+    const onError = (err: unknown) => { setSaveError((err as Error).message); };
     if (mode === 'edit' && playbookId != null) {
       updateMut.mutate({ id: playbookId, data }, { onSuccess: onClose, onError });
     } else {
@@ -151,12 +160,30 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
   const pending = createMut.isPending || updateMut.isPending;
   const extHint = type === 'ansible' ? 'Must end with .yml or .yaml' : 'Must end with .py';
 
+  const loading = mode === 'edit' && detailQuery.isPending;
+
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={mode === 'edit' ? 'Edit Playbook' : 'New Playbook'} size="large">
-      {mode === 'edit' && detailQuery.isPending ? (
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={mode === 'edit' ? 'Edit Playbook' : 'New Playbook'}
+      size="medium"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          {!loading && (
+            <button type="submit" form={formId} className="btn btn-primary" disabled={pending}>
+              {pending ? 'Saving…' : mode === 'edit' ? 'Save' : 'Create'}
+            </button>
+          )}
+        </>
+      }
+    >
+      {loading ? (
         <LoadingState />
       ) : (
-        <form onSubmit={handleSubmit}>
+        <form id={formId} onSubmit={handleSubmit}>
+          {saveError && <Callout tone="danger">{saveError}</Callout>}
           <div className="form-group">
             <label className="form-label">Type</label>
             {mode === 'edit' ? (
@@ -172,12 +199,26 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
           </div>
           <div className="form-group">
             <label className="form-label">Name</label>
-            <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} required />
+            <input
+              className="form-input"
+              value={name}
+              onChange={(e) => { setName(e.target.value); setErrors((p) => ({ ...p, name: undefined })); }}
+              aria-invalid={!!errors.name}
+              required
+            />
+            <FieldError>{errors.name}</FieldError>
           </div>
           <div className="form-group">
             <label className="form-label">Filename</label>
-            <input className="form-input" value={filename} onChange={(e) => setFilename(e.target.value)} required />
+            <input
+              className="form-input"
+              value={filename}
+              onChange={(e) => { setFilename(e.target.value); setErrors((p) => ({ ...p, filename: undefined })); }}
+              aria-invalid={!!errors.filename}
+              required
+            />
             <small className="text-muted">{extHint}</small>
+            <FieldError>{errors.filename}</FieldError>
           </div>
           <div className="form-group">
             <label className="form-label">Description</label>
@@ -193,7 +234,11 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
               value={content}
               theme={dracula}
               extensions={editorExtensions}
-              onChange={(value) => { setContent(value); setContentDirty(true); }}
+              onChange={(value) => {
+                setContent(value);
+                setContentDirty(true);
+                setErrors((p) => ({ ...p, content: undefined }));
+              }}
               basicSetup={{
                 lineNumbers: true,
                 highlightActiveLine: true,
@@ -205,12 +250,7 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
               style={{ fontSize: '0.85rem', border: '1px solid var(--border)', borderRadius: 4 }}
               className="playbook-code-editor"
             />
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
-            <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={pending}>
-              {pending ? 'Saving…' : mode === 'edit' ? 'Save' : 'Create'}
-            </button>
+            <FieldError>{errors.content}</FieldError>
           </div>
         </form>
       )}

@@ -23,9 +23,16 @@ export function GraphTreesTab() {
 
   const items: GraphTree[] = query.data?.graph_trees ?? [];
 
-  async function handleDelete(id: number) {
-    if (!(await confirm('Delete this graph tree and all its nodes?'))) return;
-    deleteMut.mutate(id, {
+  async function handleDelete(tree: GraphTree) {
+    if (
+      !(await confirm({
+        title: 'Delete graph tree',
+        message: `Delete graph tree "${tree.name}" and all its nodes?`,
+        confirmLabel: 'Delete',
+      }))
+    )
+      return;
+    deleteMut.mutate(tree.id, {
       onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
     });
   }
@@ -56,7 +63,7 @@ export function GraphTreesTab() {
               </button>
               <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
                 <button className="btn btn-sm btn-secondary" onClick={() => setFormMode({ mode: 'edit', treeId: tree.id })}>Edit</button>
-                <DeleteButton onClick={() => handleDelete(tree.id)} />
+                <DeleteButton onClick={() => handleDelete(tree)} />
               </div>
             </div>
           ))}

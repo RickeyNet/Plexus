@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import {
   type DashboardPanel,
@@ -6,8 +6,8 @@ import {
   useCreatePanel,
   useUpdatePanel,
 } from '@/api/dashboard';
+import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
-import { useDialogs } from '@/components/DialogProvider-context';
 
 interface PanelMetricQuery {
   metric?: string;
@@ -44,7 +44,7 @@ function parseQuery(json: string | undefined): PanelMetricQuery {
 }
 
 export function PanelModal({ isOpen, onClose, dashboardId, panel }: Props) {
-  const { alert } = useDialogs();
+  const formId = useId();
   const create = useCreatePanel(dashboardId);
   const update = useUpdatePanel(dashboardId);
   const editing = panel != null;
@@ -55,6 +55,7 @@ export function PanelModal({ isOpen, onClose, dashboardId, panel }: Props) {
   const [host, setHost] = useState('*');
   const [gridW, setGridW] = useState(6);
   const [gridH, setGridH] = useState(4);
+  const [saveError, setSaveError] = useState('');
 
   // Seed form fields when the modal opens or the edited panel changes.
   const [prevSeed, setPrevSeed] = useState<{ isOpen: boolean; panel?: DashboardPanel | null }>({
@@ -63,6 +64,7 @@ export function PanelModal({ isOpen, onClose, dashboardId, panel }: Props) {
   });
   if (prevSeed.isOpen !== isOpen || prevSeed.panel !== panel) {
     setPrevSeed({ isOpen, panel });
+    setSaveError('');
     if (isOpen) {
       if (panel) {
         const q = parseQuery(panel.metric_query_json);
@@ -85,6 +87,7 @@ export function PanelModal({ isOpen, onClose, dashboardId, panel }: Props) {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    setSaveError('');
     const payload: PanelPayload = {
       ...DEFAULTS,
       title: title.trim() || 'Untitled',
@@ -98,7 +101,7 @@ export function PanelModal({ isOpen, onClose, dashboardId, panel }: Props) {
     };
 
     const onError = (err: unknown) => {
-      void alert({ message: (err as Error).message, variant: 'error' });
+      setSaveError((err as Error).message);
     };
     if (editing && panel) {
       update.mutate(
@@ -113,8 +116,23 @@ export function PanelModal({ isOpen, onClose, dashboardId, panel }: Props) {
   const pending = create.isPending || update.isPending;
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={editing ? 'Edit Panel' : 'Add Panel'}>
-      <form onSubmit={handleSubmit}>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={editing ? 'Edit Panel' : 'Add Panel'}
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={pending}>
+            {pending ? 'Saving…' : editing ? 'Save' : 'Add Panel'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={handleSubmit}>
+        {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
           <label className="form-label">Panel Title</label>
           <input
@@ -181,14 +199,6 @@ export function PanelModal({ isOpen, onClose, dashboardId, panel }: Props) {
               onChange={(e) => setGridH(parseInt(e.target.value, 10) || 4)}
             />
           </div>
-        </div>
-        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-          <button type="button" className="btn btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="btn btn-primary" disabled={pending}>
-            {pending ? 'Saving…' : editing ? 'Save' : 'Add Panel'}
-          </button>
         </div>
       </form>
     </Modal>

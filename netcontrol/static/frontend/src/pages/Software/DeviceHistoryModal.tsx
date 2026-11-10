@@ -15,7 +15,16 @@ export function DeviceHistoryModal({ device, onClose }: Props) {
   const history = useSoftwareHistory(device.device_key);
   const rows = history.data?.history ?? [];
   return (
-    <Modal isOpen onClose={onClose} title={`${device.name} - version history`}>
+    <Modal
+      isOpen
+      onClose={onClose}
+      title={`${device.name} - version history`}
+      footer={
+        <button type="button" className="btn btn-secondary" onClick={onClose}>
+          Close
+        </button>
+      }
+    >
       <div className="text-muted" style={{ fontSize: '0.9em', marginBottom: '0.75rem' }}>
         {device.platform_label ?? device.platform} · {device.model || 'unknown model'} ·{' '}
         {sourceLabel(device.source)}
@@ -53,11 +62,6 @@ export function DeviceHistoryModal({ device, onClose }: Props) {
           </tbody>
         </table>
       )}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
-        <button type="button" className="btn btn-secondary" onClick={onClose}>
-          Close
-        </button>
-      </div>
     </Modal>
   );
 }

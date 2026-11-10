@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useNavigate } from 'react-router';
 
 import { useCreateCustomDashboard, type DashboardVariable } from '@/api/dashboard';
+import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
-import { useDialogs } from '@/components/DialogProvider-context';
 
 interface Props {
   isOpen: boolean;
@@ -11,19 +11,21 @@ interface Props {
 }
 
 export function CreateDashboardModal({ isOpen, onClose }: Props) {
-  const { alert } = useDialogs();
+  const formId = useId();
   const create = useCreateCustomDashboard();
   const navigate = useNavigate();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [varGroup, setVarGroup] = useState(false);
   const [varHost, setVarHost] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   const reset = () => {
     setName('');
     setDescription('');
     setVarGroup(false);
     setVarHost(false);
+    setSaveError('');
   };
 
   const handleClose = () => {
@@ -35,6 +37,7 @@ export function CreateDashboardModal({ isOpen, onClose }: Props) {
     e.preventDefault();
     const trimmed = name.trim();
     if (!trimmed) return;
+    setSaveError('');
     const variables: DashboardVariable[] = [];
     if (varGroup) variables.push({ name: 'group', type: 'group', default: '*' });
     if (varHost) variables.push({ name: 'host', type: 'host', default: '*' });
@@ -51,15 +54,31 @@ export function CreateDashboardModal({ isOpen, onClose }: Props) {
           if (created?.id) navigate(`/dashboards/${created.id}`);
         },
         onError: (err) => {
-          void alert({ message: (err as Error).message, variant: 'error' });
+          setSaveError((err as Error).message);
         },
       },
     );
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title="Create Dashboard">
-      <form onSubmit={handleSubmit}>
+    <Modal
+      isOpen={isOpen}
+      onClose={handleClose}
+      title="Create Dashboard"
+      size="small"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={handleClose}>
+            Cancel
+          </button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={create.isPending || !name.trim()}>
+            {create.isPending ? 'Creating…' : 'Create'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={handleSubmit}>
+        {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
           <label className="form-label">Name</label>
           <input
@@ -90,14 +109,6 @@ export function CreateDashboardModal({ isOpen, onClose }: Props) {
               <input type="checkbox" checked={varHost} onChange={(e) => setVarHost(e.target.checked)} /> $host
             </label>
           </div>
-        </div>
-        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-          <button type="button" className="btn btn-secondary" onClick={handleClose}>
-            Cancel
-          </button>
-          <button type="submit" className="btn btn-primary" disabled={create.isPending || !name.trim()}>
-            {create.isPending ? 'Creating…' : 'Create'}
-          </button>
         </div>
       </form>
     </Modal>

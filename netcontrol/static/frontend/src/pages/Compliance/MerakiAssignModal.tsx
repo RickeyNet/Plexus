@@ -53,7 +53,48 @@ export function MerakiAssignModal({
   const orgList = orgs.data || [];
 
   return (
-    <Modal isOpen onClose={onClose} title="Assign Profile to Meraki Organizations">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Assign Profile to Meraki Organizations"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={profileId == null || selected.size === 0 || create.isPending}
+            onClick={async () => {
+              setError(null);
+              if (profileId == null) return;
+              let failed = 0;
+              let lastError = '';
+              for (const orgRef of [...selected]) {
+                try {
+                  await create.mutateAsync({
+                    profile_id: profileId,
+                    org_ref: orgRef,
+                    interval_seconds: hours * 3600,
+                  });
+                } catch (e) {
+                  failed++;
+                  lastError = (e as Error).message;
+                }
+              }
+              if (failed > 0) {
+                setError(`${failed} assignment(s) failed: ${lastError}`);
+                return;
+              }
+              onClose();
+            }}
+          >
+            {create.isPending ? 'Assigning…' : 'Assign'}
+          </button>
+        </>
+      }
+    >
       <div className="form-group">
         <label className="form-label">Compliance Profile (with Meraki rules)</label>
         <select
@@ -146,41 +187,6 @@ export function MerakiAssignModal({
         />
       </div>
       {error && <Callout tone="danger">{error}</Callout>}
-      <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
-        <button type="button" className="btn btn-secondary" onClick={onClose}>
-          Cancel
-        </button>
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={profileId == null || selected.size === 0 || create.isPending}
-          onClick={async () => {
-            setError(null);
-            if (profileId == null) return;
-            let failed = 0;
-            let lastError = '';
-            for (const orgRef of [...selected]) {
-              try {
-                await create.mutateAsync({
-                  profile_id: profileId,
-                  org_ref: orgRef,
-                  interval_seconds: hours * 3600,
-                });
-              } catch (e) {
-                failed++;
-                lastError = (e as Error).message;
-              }
-            }
-            if (failed > 0) {
-              setError(`${failed} assignment(s) failed: ${lastError}`);
-              return;
-            }
-            onClose();
-          }}
-        >
-          {create.isPending ? 'Assigning…' : 'Assign'}
-        </button>
-      </div>
     </Modal>
   );
 }

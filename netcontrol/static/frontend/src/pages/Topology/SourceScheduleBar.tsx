@@ -1,8 +1,6 @@
 import { useState } from "react";
 
 import { useSourceSchedule, useUpdateSourceSchedule } from "@/api/meraki";
-import { useDialogs } from "@/components/DialogProvider-context";
-
 import { Callout } from "@/components/Callout";
 
 /**
@@ -11,7 +9,6 @@ import { Callout } from "@/components/Callout";
  * source can opt out or set its own interval in its edit form.
  */
 export function SourceScheduleBar() {
-  const { alert } = useDialogs();
   const schedule = useSourceSchedule(true);
   const save = useUpdateSourceSchedule();
   const config = schedule.data?.config ?? null;
@@ -24,6 +21,7 @@ export function SourceScheduleBar() {
 
   const [enabled, setEnabled] = useState(true);
   const [minutes, setMinutes] = useState(60);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [prevConfig, setPrevConfig] = useState(config);
   // Re-seed the editable fields when the stored schedule loads or changes.
   if (config !== prevConfig) {
@@ -37,13 +35,13 @@ export function SourceScheduleBar() {
     (enabled !== config.enabled || minutes * 60 !== config.interval_seconds);
 
   const handleSave = async () => {
+    setSaveError(null);
     try {
       await save.mutateAsync({ enabled, interval_seconds: minutes * 60 });
     } catch (err) {
-      void alert({
-        message: `Could not save the schedule: ${err instanceof Error ? err.message : String(err)}`,
-        variant: "error",
-      });
+      setSaveError(
+        `Could not save the schedule: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   };
 
@@ -114,6 +112,7 @@ export function SourceScheduleBar() {
           {save.isPending ? "Saving…" : "Save Schedule"}
         </button>
       </div>
+      {saveError && <Callout tone="danger">{saveError}</Callout>}
       <div
         className="text-muted"
         style={{ fontSize: "0.85em", marginTop: "0.4rem" }}

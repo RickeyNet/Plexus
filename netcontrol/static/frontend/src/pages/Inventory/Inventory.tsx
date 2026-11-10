@@ -176,9 +176,11 @@ export function Inventory() {
 
   const handleDeleteGroup = async (g: InventoryGroupFull) => {
     if (
-      !(await confirm(
-        `Delete group "${groupLabel(g)}"? This will remove the group and all its hosts. This cannot be undone.`,
-      ))
+      !(await confirm({
+        title: 'Delete group',
+        message: `Delete group "${groupLabel(g)}"? This will remove the group and all its hosts. This cannot be undone.`,
+        confirmLabel: 'Delete',
+      }))
     )
       return;
     deleteGroup.mutate(g.id, {
@@ -190,9 +192,11 @@ export function Inventory() {
 
   const handleDeleteHost = async (host: InventoryHost) => {
     if (
-      !(await confirm(
-        `Delete host "${host.hostname}"? This will permanently remove this host from the inventory.`,
-      ))
+      !(await confirm({
+        title: 'Delete host',
+        message: `Delete host "${host.hostname}"? This will permanently remove this host from the inventory.`,
+        confirmLabel: 'Delete',
+      }))
     )
       return;
     deleteHost.mutate(host.id, {
@@ -206,9 +210,11 @@ export function Inventory() {
     const ids = Array.from(selectedHosts.get(groupId) ?? []);
     if (!ids.length) return;
     if (
-      !(await confirm(
-        `Delete ${ids.length} host(s)? This cannot be undone.`,
-      ))
+      !(await confirm({
+        title: 'Delete hosts',
+        message: `Delete ${ids.length} host(s)? This cannot be undone.`,
+        confirmLabel: 'Delete',
+      }))
     )
       return;
     bulkDelete.mutate(ids, {

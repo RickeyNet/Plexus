@@ -26,25 +26,29 @@ export function DeploymentCorrelationModal({ isOpen, onClose, deploymentId }: Pr
   const query = useDeploymentCorrelation(isOpen ? deploymentId : null);
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Deployment Correlation" size="large">
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Deployment Correlation"
+      size="medium"
+      footer={
+        <button type="button" className="btn btn-secondary" onClick={onClose}>
+          Close
+        </button>
+      }
+    >
       {query.isPending && <LoadingState />}
       {query.error && (
         <Callout tone="danger">
           Failed to load: {(query.error as Error).message}
         </Callout>
       )}
-      {query.data && <CorrelationBody data={query.data} onClose={onClose} />}
+      {query.data && <CorrelationBody data={query.data} />}
     </Modal>
   );
 }
 
-function CorrelationBody({
-  data,
-  onClose,
-}: {
-  data: DeploymentCorrelation;
-  onClose: () => void;
-}) {
+function CorrelationBody({ data }: { data: DeploymentCorrelation }) {
   const events = useMemo(() => buildTimeline(data), [data]);
   const windowStart = formatBackendDateTime(data.time_window?.start, '') || '?';
   const windowEnd = formatBackendDateTime(data.time_window?.end, '') || '?';
@@ -77,11 +81,6 @@ function CorrelationBody({
             No correlated events found in the time window.
           </div>
         )}
-      </div>
-      <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-        <button type="button" className="btn btn-secondary" onClick={onClose}>
-          Close
-        </button>
       </div>
     </div>
   );

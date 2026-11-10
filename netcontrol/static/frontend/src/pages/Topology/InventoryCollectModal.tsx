@@ -3,6 +3,7 @@ import { useState } from "react";
 import { groupLabel } from "@/api/inventory";
 import type { InventoryCollectRequest } from "@/api/meraki";
 import { useInventoryGroupsLite } from "@/api/topology";
+import { Callout } from "@/components/Callout";
 import { CredentialSelect } from "@/components/CredentialSelect";
 import { Modal } from "@/components/Modal";
 import { credentialIdFromChoice } from "@/lib/credentialChoice";
@@ -15,9 +16,11 @@ interface Props {
   serviceCredentialId: number | null;
   /** An administrator sees every service credential, not only the one Settings names. */
   isAdmin: boolean;
-  /** Starts the collection (and reports a failure to start). */
+  /** Starts the collection; a failure to start comes back as `error`. */
   onCollect: (body: InventoryCollectRequest) => void;
   isPending: boolean;
+  /** Why the last Collect could not start the collection. */
+  error?: string | null;
   onClose: () => void;
 }
 
@@ -33,6 +36,7 @@ export function InventoryCollectModal({
   isAdmin,
   onCollect,
   isPending,
+  error,
   onClose,
 }: Props) {
   const groups = useInventoryGroupsLite();
@@ -49,7 +53,27 @@ export function InventoryCollectModal({
     });
 
   return (
-    <Modal isOpen onClose={onClose} title="Collect from all other devices (SSH)">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Collect from all other devices (SSH)"
+      size="small"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={isPending || !credential}
+            onClick={handleCollect}
+          >
+            {isPending ? "Starting…" : "Collect"}
+          </button>
+        </>
+      }
+    >
       <p className="text-muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
         Opens one read-only SSH session per device and stores its route table
         and running configuration for the path trace, and its VLANs, ports, CDP
@@ -85,25 +109,7 @@ export function InventoryCollectModal({
           isAdmin={isAdmin}
         />
       </div>
-      <div
-        style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}
-      >
-        <button
-          type="button"
-          className="btn btn-sm btn-secondary"
-          onClick={onClose}
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          className="btn btn-sm btn-primary"
-          disabled={isPending || !credential}
-          onClick={handleCollect}
-        >
-          {isPending ? "Starting…" : "Collect"}
-        </button>
-      </div>
+      {error && <Callout tone="danger">{error}</Callout>}
     </Modal>
   );
 }

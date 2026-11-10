@@ -1,7 +1,9 @@
-import { useMemo, useState, type FormEvent } from 'react';
+import { useId, useMemo, useState, type FormEvent } from 'react';
 
+import { Callout } from '@/components/Callout';
 import { DeleteButton } from '@/components/DeleteButton';
 import { EmptyState } from '@/components/EmptyState';
+import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { useAuthStatus } from '@/api/auth';
@@ -50,7 +52,7 @@ export function SlaTargetsTab() {
   }
 
   async function handleDelete(t: SlaTarget) {
-    if (!(await confirm(`Delete SLA target '${t.name}'?`))) return;
+    if (!(await confirm({ title: 'Delete SLA target', message: `Delete SLA target '${t.name}'?`, confirmLabel: 'Delete' }))) return;
     deleteMut.mutate(t.id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
   }
 
@@ -105,7 +107,7 @@ export function SlaTargetsTab() {
 }
 
 function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget | null; isCreate: boolean; onClose: () => void }) {
-  const { alert } = useDialogs();
+  const formId = useId();
   const isOpen = isCreate || target != null;
   const createMut = useCreateSlaTarget();
   const updateMut = useUpdateSlaTarget();
@@ -123,12 +125,16 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
   const [scope, setScope] = useState<'global' | 'group' | 'host'>('global');
   const [groupId, setGroupId] = useState('');
   const [hostId, setHostId] = useState('');
+  const [nameError, setNameError] = useState('');
+  const [windowError, setWindowError] = useState('');
+  const [saveError, setSaveError] = useState('');
 
   const [prevTarget, setPrevTarget] = useState(target);
   const [prevIsCreate, setPrevIsCreate] = useState(isCreate);
   if (target !== prevTarget || isCreate !== prevIsCreate) {
     setPrevTarget(target);
     setPrevIsCreate(isCreate);
+    setNameError(''); setWindowError(''); setSaveError('');
     if (target) {
       setName(target.name);
       setMetric(target.metric);
@@ -147,9 +153,13 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!name.trim()) { void alert('Name is required'); return; }
+    setSaveError('');
     const days = parseInt(windowDays, 10);
-    if (!Number.isFinite(days) || days < 1 || days > 365) { void alert('Window must be 1 to 365 days'); return; }
+    const nameErr = name.trim() ? '' : 'Name is required';
+    const windowErr = !Number.isFinite(days) || days < 1 || days > 365 ? 'Window must be 1 to 365 days' : '';
+    setNameError(nameErr);
+    setWindowError(windowErr);
+    if (nameErr || windowErr) return;
     const data: SlaTargetCreate = {
       name: name.trim(),
       metric,
@@ -162,12 +172,12 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
     if (target) {
       updateMut.mutate({ id: target.id, data }, {
         onSuccess: onClose,
-        onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
+        onError: (e) => { setSaveError((e as Error).message); },
       });
     } else {
       createMut.mutate(data, {
         onSuccess: onClose,
-        onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
+        onError: (e) => { setSaveError((e as Error).message); },
       });
     }
   }
@@ -175,11 +185,31 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
   const pending = createMut.isPending || updateMut.isPending;
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={target ? 'Edit SLA Target' : 'New SLA Target'}>
-      <form onSubmit={handleSubmit}>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={target ? 'Edit SLA Target' : 'New SLA Target'}
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={pending}>
+            {pending ? 'Saving…' : 'Save'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={handleSubmit}>
+        {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
           <label className="form-label">Name</label>
-          <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} required />
+          <input
+            className="form-input"
+            value={name}
+            onChange={(e) => { setName(e.target.value); setNameError(''); }}
+            aria-invalid={!!nameError}
+            required
+          />
+          <FieldError>{nameError}</FieldError>
         </div>
         <div className="form-group">
           <label className="form-label">Metric</label>
@@ -201,7 +231,17 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
           </div>
           <div className="form-group" style={{ flex: 1 }}>
             <label className="form-label">Window (days)</label>
-            <input className="form-input" type="number" min={1} max={365} step={1} value={windowDays} onChange={(e) => setWindowDays(e.target.value)} />
+            <input
+              className="form-input"
+              type="number"
+              min={1}
+              max={365}
+              step={1}
+              value={windowDays}
+              onChange={(e) => { setWindowDays(e.target.value); setWindowError(''); }}
+              aria-invalid={!!windowError}
+            />
+            <FieldError>{windowError}</FieldError>
           </div>
         </div>
         <div className="text-muted" style={{ fontSize: '0.8em', marginTop: '-0.5rem', marginBottom: '0.75rem' }}>
@@ -239,12 +279,6 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
             </select>
           </div>
         )}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={pending}>
-            {pending ? 'Saving…' : 'Save'}
-          </button>
-        </div>
       </form>
     </Modal>
   );

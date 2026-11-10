@@ -92,7 +92,14 @@ export function CustomDashboards() {
                   onClick={async (e) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    if (!(await confirm(`Delete "${d.name}"? All panels will be removed.`))) return;
+                    if (
+                      !(await confirm({
+                        title: 'Delete dashboard',
+                        message: `Delete dashboard "${d.name}"? All panels will be removed.`,
+                        confirmLabel: 'Delete',
+                      }))
+                    )
+                      return;
                     deleteMutation.mutate(d.id);
                   }}
                 >

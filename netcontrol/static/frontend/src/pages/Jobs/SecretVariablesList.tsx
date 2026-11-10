@@ -1,8 +1,9 @@
-import { useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent } from 'react';
 
 import { Callout } from '@/components/Callout';
 import { DeleteButton } from '@/components/DeleteButton';
 import { EmptyState } from '@/components/EmptyState';
+import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -22,7 +23,12 @@ export function SecretVariablesList() {
   const [editing, setEditing] = useState<SecretVariable | null>(null);
 
   async function handleDelete(v: SecretVariable) {
-    if (!(await confirm(`Delete secret '${v.name}'? Templates referencing {{secret.${v.name}}} will fail.`))) return;
+    const ok = await confirm({
+      title: 'Delete secret variable',
+      message: `Delete secret '${v.name}'? Templates referencing {{secret.${v.name}}} will fail.`,
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
     deleteMut.mutate(v.id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
   }
 
@@ -79,48 +85,63 @@ function normalizeSecretName(raw: string): string {
 }
 
 function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
-  const { alert } = useDialogs();
   const createMut = useCreateSecretVariable();
+  const formId = useId();
   const [name, setName] = useState('');
   const [value, setValue] = useState('');
   const [description, setDescription] = useState('');
+  const [errors, setErrors] = useState<{ name?: string; value?: string }>({});
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const normalized = normalizeSecretName(name);
   const nameValid = SECRET_NAME_RE.test(normalized);
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!normalized || !value) {
-      void alert('Name and value are required');
-      return;
-    }
-    if (!nameValid) {
-      void alert({
-        message:
-          `"${normalized}" is not a valid secret name. Use only letters, digits, underscore or hyphen, ` +
-          'starting with a letter or underscore (e.g. snmp_v3_auth_key).',
-        variant: 'error',
-      });
-      return;
-    }
+    setSaveError(null);
+    const nextErrors = {
+      name: !normalized
+        ? 'Name is required'
+        : !nameValid
+          ? `"${normalized}" is not a valid secret name. Use only letters, digits, underscore or hyphen, ` +
+            'starting with a letter or underscore (e.g. snmp_v3_auth_key).'
+          : undefined,
+      value: value ? undefined : 'Value is required',
+    };
+    setErrors(nextErrors);
+    if (nextErrors.name || nextErrors.value) return;
     createMut.mutate(
       { name: normalized, value, description: description.trim() },
       {
         onSuccess: () => { setName(''); setValue(''); setDescription(''); onClose(); },
-        onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
+        onError: (e) => { setSaveError((e as Error).message); },
       },
     );
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Create Secret Variable">
-      <form onSubmit={handleSubmit}>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Create Secret Variable"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={createMut.isPending}>
+            {createMut.isPending ? 'Creating…' : 'Create'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={handleSubmit}>
+        {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
           <label className="form-label">Name</label>
           <input
             className="form-input"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => { setName(e.target.value); setErrors((p) => ({ ...p, name: undefined })); }}
+            aria-invalid={!!errors.name}
             onBlur={() => setName(normalizeSecretName(name))}
             maxLength={80}
             placeholder="e.g. snmp_v3_auth_key"
@@ -145,6 +166,7 @@ function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =
           <small className="text-muted" style={{ display: 'block', marginTop: '0.25rem' }}>
             The built-in SNMPv3 templates expect <code>snmp_v3_auth_key</code> and <code>snmp_v3_priv_key</code>.
           </small>
+          <FieldError>{errors.name}</FieldError>
         </div>
         <div className="form-group">
           <label className="form-label">Value</label>
@@ -152,21 +174,17 @@ function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =
             className="form-input"
             type="password"
             value={value}
-            onChange={(e) => setValue(e.target.value)}
+            onChange={(e) => { setValue(e.target.value); setErrors((p) => ({ ...p, value: undefined })); }}
+            aria-invalid={!!errors.value}
             autoComplete="new-password"
             required
           />
           <small className="text-muted">The secret itself (any characters). Encrypted at rest and never shown again.</small>
+          <FieldError>{errors.value}</FieldError>
         </div>
         <div className="form-group">
           <label className="form-label">Description (optional)</label>
           <input className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} />
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={createMut.isPending}>
-            {createMut.isPending ? 'Creating…' : 'Create'}
-          </button>
         </div>
       </form>
     </Modal>
@@ -174,10 +192,11 @@ function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =
 }
 
 function EditSecretModal({ secret, onClose }: { secret: SecretVariable | null; onClose: () => void }) {
-  const { alert } = useDialogs();
   const updateMut = useUpdateSecretVariable();
+  const formId = useId();
   const [value, setValue] = useState('');
   const [description, setDescription] = useState('');
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const [prevSecret, setPrevSecret] = useState(secret);
   if (secret !== prevSecret) {
@@ -185,23 +204,38 @@ function EditSecretModal({ secret, onClose }: { secret: SecretVariable | null; o
     if (secret) {
       setValue('');
       setDescription(secret.description ?? '');
+      setSaveError(null);
     }
   }
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!secret) return;
+    setSaveError(null);
     const data: { value?: string; description?: string } = { description: description.trim() };
     if (value) data.value = value;
     updateMut.mutate({ id: secret.id, data }, {
       onSuccess: () => { setValue(''); setDescription(''); onClose(); },
-      onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
+      onError: (e) => { setSaveError((e as Error).message); },
     });
   }
 
   return (
-    <Modal isOpen={secret != null} onClose={() => { setValue(''); setDescription(''); onClose(); }} title={secret ? `Edit Secret: ${secret.name}` : ''}>
-      <form onSubmit={handleSubmit}>
+    <Modal
+      isOpen={secret != null}
+      onClose={() => { setValue(''); setDescription(''); onClose(); }}
+      title={secret ? `Edit Secret: ${secret.name}` : ''}
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={updateMut.isPending}>
+            {updateMut.isPending ? 'Saving…' : 'Save'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={handleSubmit}>
+        {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
           <label className="form-label">Name</label>
           <input className="form-input" value={secret?.name ?? ''} disabled />
@@ -213,12 +247,6 @@ function EditSecretModal({ secret, onClose }: { secret: SecretVariable | null; o
         <div className="form-group">
           <label className="form-label">Description</label>
           <input className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} />
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={updateMut.isPending}>
-            {updateMut.isPending ? 'Saving…' : 'Save'}
-          </button>
         </div>
       </form>
     </Modal>

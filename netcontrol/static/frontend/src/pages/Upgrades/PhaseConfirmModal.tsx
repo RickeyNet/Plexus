@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 
 import {
   type UpgradePhase,
   useExecuteUpgradePhase,
 } from '@/api/upgrades';
+import { Callout } from '@/components/Callout';
+import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
 import { toLocalInputValue } from '@/lib/datetime';
 
@@ -44,6 +46,9 @@ export function PhaseConfirmModal({
   const initialSchedule = useMemo(() => defaultScheduleValue(), []);
   const [scheduledAt, setScheduledAt] = useState(initialSchedule.value);
   const [error, setError] = useState<string | null>(null);
+  const [timeError, setTimeError] = useState<string | null>(null);
+  const formId = useId();
+  const timeErrorId = useId();
   const timezone =
     Intl.DateTimeFormat().resolvedOptions().timeZone || 'local timezone';
 
@@ -88,16 +93,17 @@ export function PhaseConfirmModal({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setTimeError(null);
 
     let scheduledIso: string | undefined;
     if (schedule) {
       const when = new Date(scheduledAt);
       if (!scheduledAt || Number.isNaN(when.getTime())) {
-        setError('Choose a valid schedule time');
+        setTimeError('Choose a valid schedule time');
         return;
       }
       if (when <= new Date()) {
-        setError('Schedule time must be in the future');
+        setTimeError('Schedule time must be in the future');
         return;
       }
       scheduledIso = when.toISOString();
@@ -120,36 +126,13 @@ export function PhaseConfirmModal({
   };
 
   return (
-    <Modal isOpen onClose={onClose} title={title}>
-      <form onSubmit={handleSubmit}>
-        <p style={{ margin: '0 0 0.75rem', opacity: 0.85 }}>{body}</p>
-        {schedule && (
-          <div className="form-group">
-            <label className="form-label">Run At ({timezone})</label>
-            <input
-              type="datetime-local"
-              className="form-input"
-              required
-              min={initialSchedule.min}
-              value={scheduledAt}
-              onChange={(e) => setScheduledAt(e.target.value)}
-            />
-            <p style={{ fontSize: '0.85em', opacity: 0.75, marginTop: '0.5rem' }}>
-              Devices will reload at this time, which can cause downtime.
-            </p>
-          </div>
-        )}
-        {error && (
-          <p style={{ color: 'var(--danger)', marginTop: '0.5rem' }}>{error}</p>
-        )}
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'flex-end',
-            gap: '0.5rem',
-            marginTop: '1rem',
-          }}
-        >
+    <Modal
+      isOpen
+      onClose={onClose}
+      title={title}
+      size="small"
+      footer={
+        <>
           <button
             type="button"
             className="btn btn-secondary"
@@ -160,12 +143,40 @@ export function PhaseConfirmModal({
           </button>
           <button
             type="submit"
+            form={formId}
             className={`btn ${confirmClass}`}
             disabled={execute.isPending}
           >
             {execute.isPending ? 'Working…' : confirmText}
           </button>
-        </div>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={handleSubmit}>
+        <p style={{ margin: '0 0 0.75rem', opacity: 0.85 }}>{body}</p>
+        {schedule && (
+          <div className="form-group">
+            <label className="form-label">Run At ({timezone})</label>
+            <input
+              type="datetime-local"
+              className="form-input"
+              required
+              min={initialSchedule.min}
+              value={scheduledAt}
+              aria-invalid={!!timeError}
+              aria-describedby={timeError ? timeErrorId : undefined}
+              onChange={(e) => {
+                setScheduledAt(e.target.value);
+                setTimeError(null);
+              }}
+            />
+            <FieldError id={timeErrorId}>{timeError}</FieldError>
+            <p style={{ fontSize: '0.85em', opacity: 0.75, marginTop: '0.5rem' }}>
+              Devices will reload at this time, which can cause downtime.
+            </p>
+          </div>
+        )}
+        {error && <Callout tone="danger">{error}</Callout>}
       </form>
     </Modal>
   );

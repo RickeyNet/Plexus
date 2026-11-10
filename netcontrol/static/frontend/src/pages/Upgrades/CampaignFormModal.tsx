@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 import { groupLabel } from '@/api/inventory';
@@ -14,6 +14,8 @@ import {
   useUpgradeCampaign,
   useUpgradeImages,
 } from '@/api/upgrades';
+import { Callout } from '@/components/Callout';
+import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { parseBoundedInt } from '@/lib/numberInput';
@@ -109,6 +111,9 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
   const [parallelText, setParallelText] = useState(String(DEFAULT_OPTIONS.parallel));
   const [retriesText, setRetriesText] = useState(String(DEFAULT_OPTIONS.retries));
   const [error, setError] = useState<string | null>(null);
+  const [mapError, setMapError] = useState<string | null>(null);
+  const [targetError, setTargetError] = useState<string | null>(null);
+  const formId = useId();
   const [hydrated, setHydrated] = useState(false);
 
   const lockedIps = useMemo(() => {
@@ -182,6 +187,7 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
   }
 
   const setRow = (i: number, patch: Partial<ImageMapRow>) => {
+    setMapError(null);
     setImageMapRows((rows) =>
       rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)),
     );
@@ -199,6 +205,7 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
   };
 
   const toggleHost = (id: number, checked: boolean) => {
+    setTargetError(null);
     setHostIds((prev) => {
       const next = new Set(prev);
       if (checked) next.add(id);
@@ -211,6 +218,7 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
     const editableHosts = (group.hosts || []).filter(
       (h) => !lockedIps.has(h.ip_address),
     );
+    setTargetError(null);
     setHostIds((prev) => {
       const next = new Set(prev);
       for (const h of editableHosts) {
@@ -235,6 +243,8 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setMapError(null);
+    setTargetError(null);
 
     const map: Record<string, string> = {};
     for (const r of imageMapRows) {
@@ -242,7 +252,7 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
       if (p && r.image) map[p] = r.image;
     }
     if (Object.keys(map).length === 0) {
-      setError('Add at least one image mapping');
+      setMapError('Add at least one image mapping');
       return;
     }
     const ips = adHocIps
@@ -250,7 +260,7 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
       .map((s) => s.trim())
       .filter(Boolean);
     if (hostIds.size === 0 && ips.length === 0) {
-      setError('Select at least one device or enter ad-hoc IPs');
+      setTargetError('Select at least one device or enter ad-hoc IPs');
       return;
     }
 
@@ -286,11 +296,41 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
   const title = isEdit ? 'Edit Campaign' : 'Create Upgrade Campaign';
 
   return (
-    <Modal isOpen onClose={onClose} title={title} size="large">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title={title}
+      footer={
+        <>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={onClose}
+            disabled={isSubmitting}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            form={formId}
+            className="btn btn-primary"
+            disabled={isSubmitting || isPending}
+          >
+            {isSubmitting
+              ? isEdit
+                ? 'Saving…'
+                : 'Creating…'
+              : isEdit
+                ? 'Save Changes'
+                : 'Create Campaign'}
+          </button>
+        </>
+      }
+    >
       {isPending ? (
         <LoadingState />
       ) : (
-        <form onSubmit={handleSubmit}>
+        <form id={formId} onSubmit={handleSubmit}>
           <div className="form-group">
             <label className="form-label">Campaign Name</label>
             <input
@@ -373,6 +413,7 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
             >
               + Add Mapping
             </button>
+            <FieldError>{mapError}</FieldError>
           </fieldset>
 
           <div className="form-group">
@@ -480,10 +521,14 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
                 className="form-input"
                 rows={2}
                 value={adHocIps}
-                onChange={(e) => setAdHocIps(e.target.value)}
-                placeholder={'10.0.1.1\n10.0.1.2'}
+                onChange={(e) => {
+                  setAdHocIps(e.target.value);
+                  setTargetError(null);
+                }}
+                placeholder={'192.0.2.1\n192.0.2.2'}
               />
             </div>
+            <FieldError>{targetError}</FieldError>
           </fieldset>
 
           <fieldset
@@ -560,39 +605,7 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
             </div>
           </fieldset>
 
-          {error && (
-            <p style={{ color: 'var(--danger)', marginTop: '0.5rem' }}>{error}</p>
-          )}
-
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'flex-end',
-              gap: '0.5rem',
-            }}
-          >
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={onClose}
-              disabled={isSubmitting}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={isSubmitting}
-            >
-              {isSubmitting
-                ? isEdit
-                  ? 'Saving…'
-                  : 'Creating…'
-                : isEdit
-                  ? 'Save Changes'
-                  : 'Create Campaign'}
-            </button>
-          </div>
+          {error && <Callout tone="danger">{error}</Callout>}
         </form>
       )}
     </Modal>

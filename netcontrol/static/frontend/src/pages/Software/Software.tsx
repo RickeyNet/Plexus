@@ -166,6 +166,7 @@ function VersionsTab() {
 
   const handleDelete = async (adv: SoftwareAdvisory) => {
     const ok = await confirm({
+      title: 'Delete advisory',
       message: `Delete advisory ${adv.advisory_id}? Its alerts are removed as well.`,
       confirmLabel: 'Delete',
       confirmVariant: 'danger',

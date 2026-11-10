@@ -225,8 +225,8 @@ function AssignmentsView({
                   onClick={async () => {
                     if (
                       await confirm({
-                        title: 'Delete assignment?',
-                        message: 'Delete this Meraki compliance assignment? Past results are kept.',
+                        title: 'Delete Meraki assignment',
+                        message: `Delete the assignment of profile "${a.profile_name || '?'}" to organization "${a.org_name || '?'}"? Past results are kept.`,
                         confirmLabel: 'Delete',
                       })
                     ) {

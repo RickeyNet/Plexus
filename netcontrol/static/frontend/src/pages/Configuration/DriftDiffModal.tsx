@@ -30,7 +30,71 @@ export function DriftDiffModal({
     : 'Configuration Diff';
 
   return (
-    <Modal isOpen={eventId != null} onClose={onClose} title={title} size="large">
+    <Modal
+      isOpen={eventId != null}
+      onClose={onClose}
+      title={title}
+      size="large"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Close
+          </button>
+          {ev && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                onClose();
+                onShowHistory(ev.id);
+              }}
+            >
+              Event Log
+            </button>
+          )}
+          {ev?.status === 'open' && (
+            <>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={update.isPending}
+                onClick={() => {
+                  update.mutate(
+                    { id: ev.id, status: 'resolved' },
+                    { onSuccess: onClose },
+                  );
+                }}
+              >
+                Resolve
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={() => {
+                  onClose();
+                  onShowRevert(ev.id);
+                }}
+              >
+                Revert
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={update.isPending}
+                onClick={() => {
+                  update.mutate(
+                    { id: ev.id, status: 'accepted' },
+                    { onSuccess: onClose },
+                  );
+                }}
+              >
+                Accept
+              </button>
+            </>
+          )}
+        </>
+      }
+    >
       {query.isPending && <LoadingState />}
       {query.error && (
         <Callout tone="danger">
@@ -59,73 +123,6 @@ export function DriftDiffModal({
             </span>
           </div>
           <UnifiedDiff diffText={ev.diff_text} />
-          <div
-            style={{
-              display: 'flex',
-              gap: '0.5rem',
-              justifyContent: 'flex-end',
-              marginTop: '1rem',
-              flexWrap: 'wrap',
-            }}
-          >
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={onClose}
-            >
-              Close
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => {
-                onClose();
-                onShowHistory(ev.id);
-              }}
-            >
-              Event Log
-            </button>
-            {ev.status === 'open' && (
-              <>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  disabled={update.isPending}
-                  onClick={() => {
-                    update.mutate(
-                      { id: ev.id, status: 'accepted' },
-                      { onSuccess: onClose },
-                    );
-                  }}
-                >
-                  Accept
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-danger"
-                  onClick={() => {
-                    onClose();
-                    onShowRevert(ev.id);
-                  }}
-                >
-                  Revert
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  disabled={update.isPending}
-                  onClick={() => {
-                    update.mutate(
-                      { id: ev.id, status: 'resolved' },
-                      { onSuccess: onClose },
-                    );
-                  }}
-                >
-                  Resolve
-                </button>
-              </>
-            )}
-          </div>
         </>
       )}
     </Modal>

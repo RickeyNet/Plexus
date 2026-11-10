@@ -181,7 +181,31 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={`Job #${jobId ?? ''}`} size="large">
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={`Job #${jobId ?? ''}`}
+      size="large"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Close</button>
+          {job && (
+            <>
+              <button type="button" className="btn btn-secondary" onClick={handleCopyOutput}>Copy Output</button>
+              {!isFinished && (
+                <button type="button" className="btn btn-danger" onClick={handleCancel}>Cancel Job</button>
+              )}
+              {(effectiveStatus === 'failed' || effectiveStatus === 'cancelled') && (
+                <button type="button" className="btn btn-primary" onClick={handleRetry}>Retry</button>
+              )}
+              {isFinished && isDry && (
+                <button type="button" className="btn btn-danger" onClick={handleRunLive}>Run Live</button>
+              )}
+            </>
+          )}
+        </>
+      }
+    >
       {jobQuery.isPending && <LoadingState />}
       {jobQuery.error && <Callout tone="danger">Failed: {(jobQuery.error as Error).message}</Callout>}
       {job && (
@@ -233,78 +257,70 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
               <EmptyState compact message="No output yet…" />
             )}
           </div>
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
-            <button className="btn btn-sm btn-secondary" onClick={handleCopyOutput}>Copy Output</button>
-            {!isFinished && (
-              <button className="btn btn-sm btn-danger" onClick={handleCancel}>Cancel Job</button>
-            )}
-            {(effectiveStatus === 'failed' || effectiveStatus === 'cancelled') && (
-              <button className="btn btn-sm btn-primary" onClick={handleRetry}>Retry</button>
-            )}
-            {isFinished && isDry && (
-              <button className="btn btn-sm btn-danger" onClick={handleRunLive}>Run Live</button>
-            )}
-            <button className="btn btn-sm btn-secondary" onClick={onClose}>Close</button>
-          </div>
         </>
       )}
       <Modal
         isOpen={confirmRunLive}
         onClose={() => { if (!rerunMut.isPending) setConfirmRunLive(false); }}
-        title="Run Live?"
+        title="Run job live"
+        size="small"
+        footer={
+          <>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setConfirmRunLive(false)}
+              disabled={rerunMut.isPending}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger"
+              onClick={confirmRunLiveJob}
+              disabled={rerunMut.isPending}
+              autoFocus
+            >
+              {rerunMut.isPending ? 'Starting…' : 'Run Live'}
+            </button>
+          </>
+        }
       >
         <p style={{ margin: '0 0 0.5rem' }}>
-          This will re-run the same job with dry run disabled.
+          This will re-run job #{jobId} with dry run disabled.
         </p>
-        <p style={{ margin: '0 0 1rem', color: 'var(--danger)', fontWeight: 600 }}>
+        <p style={{ margin: 0, color: 'var(--danger)', fontWeight: 600 }}>
           Changes will be applied to devices.
         </p>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => setConfirmRunLive(false)}
-            disabled={rerunMut.isPending}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="btn btn-danger"
-            onClick={confirmRunLiveJob}
-            disabled={rerunMut.isPending}
-            autoFocus
-          >
-            {rerunMut.isPending ? 'Starting…' : 'Run Live'}
-          </button>
-        </div>
       </Modal>
       <Modal
         isOpen={confirmCancel}
         onClose={() => { if (!cancelMut.isPending) setConfirmCancel(false); }}
-        title="Cancel Job?"
+        title="Cancel job"
+        size="small"
+        footer={
+          <>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setConfirmCancel(false)}
+              disabled={cancelMut.isPending}
+            >
+              Keep Running
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger"
+              onClick={confirmCancelJob}
+              disabled={cancelMut.isPending}
+              autoFocus
+            >
+              {cancelMut.isPending ? 'Cancelling…' : 'Cancel Job'}
+            </button>
+          </>
+        }
       >
-        <p style={{ margin: '0 0 1rem' }}>Cancel this job?</p>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => setConfirmCancel(false)}
-            disabled={cancelMut.isPending}
-          >
-            Keep Running
-          </button>
-          <button
-            type="button"
-            className="btn btn-danger"
-            onClick={confirmCancelJob}
-            disabled={cancelMut.isPending}
-            autoFocus
-          >
-            {cancelMut.isPending ? 'Cancelling…' : 'Cancel Job'}
-          </button>
-        </div>
+        <p style={{ margin: 0 }}>Cancel job #{jobId}?</p>
       </Modal>
     </Modal>
   );

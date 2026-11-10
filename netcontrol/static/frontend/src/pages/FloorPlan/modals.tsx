@@ -2,6 +2,7 @@ import { useState, useRef } from 'react';
 
 import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
+import { ModalActions } from '@/components/ModalActions';
 import {
   GeoFloor,
   useCreateGeoFloor,
@@ -21,7 +22,36 @@ export function AddSiteModal({ onClose }: { onClose: () => void }) {
   const create = useCreateGeoSite();
 
   return (
-    <Modal isOpen onClose={onClose} title="Add Site">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Add Site"
+      footer={
+        <ModalActions
+          onClose={onClose}
+          primaryLabel="Create Site"
+          primaryDisabled={!name.trim() || create.isPending}
+          onPrimary={async () => {
+            setErr(null);
+            if (!name.trim()) {
+              setErr('Site name is required');
+              return;
+            }
+            try {
+              await create.mutateAsync({
+                name: name.trim(),
+                address: address.trim() || undefined,
+                lat: lat ? parseFloat(lat) : null,
+                lng: lng ? parseFloat(lng) : null,
+              });
+              onClose();
+            } catch (e) {
+              setErr(e instanceof Error ? e.message : String(e));
+            }
+          }}
+        />
+      }
+    >
       <FieldRow label="Name *" htmlFor="geo-site-name">
         <input
           id="geo-site-name"
@@ -66,29 +96,6 @@ export function AddSiteModal({ onClose }: { onClose: () => void }) {
         </FieldRow>
       </div>
       {err && <ErrorBox message={err} />}
-      <ModalActions
-        onClose={onClose}
-        primaryLabel="Create Site"
-        primaryDisabled={!name.trim() || create.isPending}
-        onPrimary={async () => {
-          setErr(null);
-          if (!name.trim()) {
-            setErr('Site name is required');
-            return;
-          }
-          try {
-            await create.mutateAsync({
-              name: name.trim(),
-              address: address.trim() || undefined,
-              lat: lat ? parseFloat(lat) : null,
-              lng: lng ? parseFloat(lng) : null,
-            });
-            onClose();
-          } catch (e) {
-            setErr(e instanceof Error ? e.message : String(e));
-          }
-        }}
-      />
     </Modal>
   );
 }
@@ -108,7 +115,35 @@ export function AddFloorModal({
   const create = useCreateGeoFloor(siteId);
 
   return (
-    <Modal isOpen onClose={onClose} title="Add Floor">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Add Floor"
+      size="small"
+      footer={
+        <ModalActions
+          onClose={onClose}
+          primaryLabel="Add Floor"
+          primaryDisabled={!name.trim() || create.isPending}
+          onPrimary={async () => {
+            setErr(null);
+            if (!name.trim()) {
+              setErr('Floor name is required');
+              return;
+            }
+            try {
+              await create.mutateAsync({
+                name: name.trim(),
+                floor_number: parseInt(floorNumber, 10) || 0,
+              });
+              onClose();
+            } catch (e) {
+              setErr(e instanceof Error ? e.message : String(e));
+            }
+          }}
+        />
+      }
+    >
       <FieldRow label="Floor Name *" htmlFor="geo-floor-name">
         <input
           id="geo-floor-name"
@@ -130,27 +165,6 @@ export function AddFloorModal({
         />
       </FieldRow>
       {err && <ErrorBox message={err} />}
-      <ModalActions
-        onClose={onClose}
-        primaryLabel="Add Floor"
-        primaryDisabled={!name.trim() || create.isPending}
-        onPrimary={async () => {
-          setErr(null);
-          if (!name.trim()) {
-            setErr('Floor name is required');
-            return;
-          }
-          try {
-            await create.mutateAsync({
-              name: name.trim(),
-              floor_number: parseInt(floorNumber, 10) || 0,
-            });
-            onClose();
-          } catch (e) {
-            setErr(e instanceof Error ? e.message : String(e));
-          }
-        }}
-      />
     </Modal>
   );
 }
@@ -170,7 +184,38 @@ export function EditFloorModal({
   const update = useUpdateGeoFloor();
 
   return (
-    <Modal isOpen onClose={onClose} title="Edit Floor">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Edit Floor"
+      size="small"
+      footer={
+        <ModalActions
+          onClose={onClose}
+          primaryLabel="Save"
+          primaryDisabled={!name.trim() || update.isPending}
+          onPrimary={async () => {
+            setErr(null);
+            if (!name.trim()) {
+              setErr('Floor name is required');
+              return;
+            }
+            try {
+              await update.mutateAsync({
+                floorId: floor.id,
+                body: {
+                  name: name.trim(),
+                  floor_number: parseInt(floorNumber, 10) || 0,
+                },
+              });
+              onClose();
+            } catch (e) {
+              setErr(e instanceof Error ? e.message : String(e));
+            }
+          }}
+        />
+      }
+    >
       <FieldRow label="Floor Name *" htmlFor="geo-edit-floor-name">
         <input
           id="geo-edit-floor-name"
@@ -190,30 +235,6 @@ export function EditFloorModal({
         />
       </FieldRow>
       {err && <ErrorBox message={err} />}
-      <ModalActions
-        onClose={onClose}
-        primaryLabel="Save"
-        primaryDisabled={!name.trim() || update.isPending}
-        onPrimary={async () => {
-          setErr(null);
-          if (!name.trim()) {
-            setErr('Floor name is required');
-            return;
-          }
-          try {
-            await update.mutateAsync({
-              floorId: floor.id,
-              body: {
-                name: name.trim(),
-                floor_number: parseInt(floorNumber, 10) || 0,
-              },
-            });
-            onClose();
-          } catch (e) {
-            setErr(e instanceof Error ? e.message : String(e));
-          }
-        }}
-      />
     </Modal>
   );
 }
@@ -232,7 +253,33 @@ export function UploadImageModal({
   const upload = useUploadFloorImage();
 
   return (
-    <Modal isOpen onClose={onClose} title="Upload Floor Plan Image">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Upload Floor Plan Image"
+      size="small"
+      footer={
+        <ModalActions
+          onClose={onClose}
+          primaryLabel="Upload"
+          primaryDisabled={upload.isPending}
+          onPrimary={async () => {
+            setErr(null);
+            const file = fileRef.current?.files?.[0];
+            if (!file) {
+              setErr('Please select an image file');
+              return;
+            }
+            try {
+              await upload.mutateAsync({ floorId, file });
+              onClose();
+            } catch (e) {
+              setErr(e instanceof Error ? e.message : String(e));
+            }
+          }}
+        />
+      }
+    >
       <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
         Upload a JPEG, PNG, GIF, WebP, or SVG image of the floor plan. Max 20 MB.
       </p>
@@ -246,25 +293,6 @@ export function UploadImageModal({
         />
       </FieldRow>
       {err && <ErrorBox message={err} />}
-      <ModalActions
-        onClose={onClose}
-        primaryLabel="Upload"
-        primaryDisabled={upload.isPending}
-        onPrimary={async () => {
-          setErr(null);
-          const file = fileRef.current?.files?.[0];
-          if (!file) {
-            setErr('Please select an image file');
-            return;
-          }
-          try {
-            await upload.mutateAsync({ floorId, file });
-            onClose();
-          } catch (e) {
-            setErr(e instanceof Error ? e.message : String(e));
-          }
-        }}
-      />
     </Modal>
   );
 }
@@ -290,39 +318,4 @@ function FieldRow({
 
 function ErrorBox({ message }: { message: string }) {
   return <Callout tone="danger">{message}</Callout>;
-}
-
-function ModalActions({
-  onClose,
-  primaryLabel,
-  primaryDisabled,
-  onPrimary,
-}: {
-  onClose: () => void;
-  primaryLabel: string;
-  primaryDisabled: boolean;
-  onPrimary: () => void;
-}) {
-  return (
-    <div
-      style={{
-        display: 'flex',
-        gap: '0.5rem',
-        justifyContent: 'flex-end',
-        marginTop: '1rem',
-      }}
-    >
-      <button type="button" className="btn btn-secondary" onClick={onClose}>
-        Cancel
-      </button>
-      <button
-        type="button"
-        className="btn btn-primary"
-        disabled={primaryDisabled}
-        onClick={onPrimary}
-      >
-        {primaryLabel}
-      </button>
-    </div>
-  );
 }

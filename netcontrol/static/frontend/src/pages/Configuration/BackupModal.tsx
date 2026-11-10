@@ -27,6 +27,11 @@ export function BackupModal({ backupId, view, onViewChange, onClose }: Props) {
       onClose={onClose}
       title={host ? `Backup - ${host}` : 'Backup'}
       size="large"
+      footer={
+        <button type="button" className="btn btn-secondary" onClick={onClose}>
+          Close
+        </button>
+      }
     >
       <SegmentedControl
         aria-label="Backup view"
@@ -48,11 +53,6 @@ export function BackupModal({ backupId, view, onViewChange, onClose }: Props) {
         ) : (
           <ConfigView query={detail} />
         )}
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
-        <button type="button" className="btn btn-secondary" onClick={onClose}>
-          Close
-        </button>
       </div>
     </Modal>
   );

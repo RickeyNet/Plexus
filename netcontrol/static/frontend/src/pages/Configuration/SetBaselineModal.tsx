@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 
 import { useInventoryGroups } from '@/api/compliance';
 import {
@@ -6,20 +6,23 @@ import {
   useCreateConfigBaseline,
 } from '@/api/configuration';
 import { apiRequest } from '@/api/client';
+import { Callout } from '@/components/Callout';
+import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
-import { useDialogs } from '@/components/DialogProvider-context';
 
 interface Props {
   onClose: () => void;
 }
 
 export function SetBaselineModal({ onClose }: Props) {
-  const { alert } = useDialogs();
   const groups = useInventoryGroups(true);
   const create = useCreateConfigBaseline();
   const [hostId, setHostId] = useState<number | null>(null);
   const [name, setName] = useState('');
   const [configText, setConfigText] = useState('');
+  const [hostError, setHostError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const formId = useId();
 
   const hosts = useMemo(() => {
     const list: { id: number; hostname: string; ip_address: string }[] = [];
@@ -33,8 +36,10 @@ export function SetBaselineModal({ onClose }: Props) {
   const [fillingSnapshot, setFillingSnapshot] = useState(false);
 
   const handleFillSnapshot = async () => {
+    setHostError(null);
+    setFormError(null);
     if (!hostId) {
-      await alert('Please select a host first');
+      setHostError('Please select a host first');
       return;
     }
     setFillingSnapshot(true);
@@ -43,7 +48,7 @@ export function SetBaselineModal({ onClose }: Props) {
         `/config-drift/snapshots?host_id=${hostId}&limit=1`,
       );
       if (!snapshots.length) {
-        await alert('No snapshots available for this host. Capture a config first.');
+        setHostError('No snapshots available for this host. Capture a config first.');
         return;
       }
       const snap = await apiRequest<ConfigSnapshot>(
@@ -51,7 +56,7 @@ export function SetBaselineModal({ onClose }: Props) {
       );
       if (snap.config_text) setConfigText(snap.config_text);
     } catch (e) {
-      void alert({ message: 'Failed to load snapshot: ' + (e as Error).message, variant: 'error' });
+      setFormError('Failed to load snapshot: ' + (e as Error).message);
     } finally {
       setFillingSnapshot(false);
     }
@@ -60,28 +65,58 @@ export function SetBaselineModal({ onClose }: Props) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!hostId || !configText.trim()) return;
+    setFormError(null);
     create.mutate(
       { host_id: hostId, name, config_text: configText },
       {
         onSuccess: () => onClose(),
-        onError: (err) => {
-          void alert({ message: (err as Error).message, variant: 'error' });
-        },
+        onError: (err) => setFormError((err as Error).message),
       },
     );
   };
 
   return (
-    <Modal isOpen onClose={onClose} title="Set Configuration Baseline">
-      <form onSubmit={handleSubmit}>
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Set Configuration Baseline"
+      size="medium"
+      footer={
+        <>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm modal-footer-start"
+            disabled={fillingSnapshot}
+            onClick={handleFillSnapshot}
+          >
+            {fillingSnapshot ? 'Loading…' : 'Use Latest Snapshot'}
+          </button>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="submit"
+            form={formId}
+            className="btn btn-primary"
+            disabled={create.isPending}
+          >
+            {create.isPending ? 'Saving…' : 'Save Baseline'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={handleSubmit}>
+        {formError && <Callout tone="danger">{formError}</Callout>}
         <div className="form-group">
           <label className="form-label">Host</label>
           <select
             className="form-select"
             value={hostId ?? ''}
-            onChange={(e) =>
-              setHostId(e.target.value ? Number(e.target.value) : null)
-            }
+            onChange={(e) => {
+              setHostId(e.target.value ? Number(e.target.value) : null);
+              setHostError(null);
+            }}
+            aria-invalid={!!hostError}
             required
           >
             <option value="">Select a host…</option>
@@ -91,6 +126,7 @@ export function SetBaselineModal({ onClose }: Props) {
               </option>
             ))}
           </select>
+          <FieldError>{hostError}</FieldError>
         </div>
         <div className="form-group">
           <label className="form-label">Baseline Name</label>
@@ -113,40 +149,6 @@ export function SetBaselineModal({ onClose }: Props) {
             rows={12}
             style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem' }}
           />
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            gap: '0.5rem',
-            justifyContent: 'space-between',
-            marginTop: '1rem',
-            flexWrap: 'wrap',
-          }}
-        >
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            disabled={fillingSnapshot}
-            onClick={handleFillSnapshot}
-          >
-            {fillingSnapshot ? 'Loading…' : 'Use Latest Snapshot'}
-          </button>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={onClose}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={create.isPending}
-            >
-              {create.isPending ? 'Saving…' : 'Save Baseline'}
-            </button>
-          </div>
         </div>
       </form>
     </Modal>

@@ -24,7 +24,9 @@ import {
   canExecute,
   canRollback,
   commandCount,
+  executeConfirmOptions,
   isApprovalBlocking,
+  rollbackConfirmOptions,
 } from './helpers';
 
 interface Props {
@@ -59,7 +61,27 @@ export function DeploymentDetailModal({
   const query = useDeployment(isOpen ? deploymentId : null);
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Deployment Details" size="large">
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Deployment Details"
+      size="medium"
+      footer={
+        query.data ? (
+          <DetailActions
+            deployment={query.data}
+            onClose={onClose}
+            onExecuted={onExecuted}
+            onRolledBack={onRolledBack}
+            onShowCorrelation={onShowCorrelation}
+          />
+        ) : (
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Close
+          </button>
+        )
+      }
+    >
       {query.isPending && <LoadingState />}
       {query.error && (
         <Callout tone="danger">
@@ -67,19 +89,14 @@ export function DeploymentDetailModal({
         </Callout>
       )}
       {query.data && (
-        <DetailBody
-          deployment={query.data}
-          onClose={onClose}
-          onExecuted={onExecuted}
-          onRolledBack={onRolledBack}
-          onShowCorrelation={onShowCorrelation}
-        />
+        <DetailBody deployment={query.data} />
       )}
     </Modal>
   );
 }
 
-function DetailBody({
+/** Footer actions: Close, Correlation, Rollback, then Execute. */
+function DetailActions({
   deployment,
   onClose,
   onExecuted,
@@ -95,6 +112,74 @@ function DetailBody({
   const { confirm, alert } = useDialogs();
   const execute = useExecuteDeployment();
   const rollback = useRollbackDeployment();
+  const approvalBlocking = isApprovalBlocking(deployment);
+
+  const handleExecute = async () => {
+    if (approvalBlocking) {
+      void alert('This deployment is awaiting approval and cannot be executed.');
+      return;
+    }
+    if (!(await confirm(executeConfirmOptions(deployment.name)))) return;
+    execute.mutate(deployment.id, {
+      onSuccess: onExecuted,
+      onError: (e) => {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      },
+    });
+  };
+
+  const handleRollback = async () => {
+    if (!(await confirm(rollbackConfirmOptions(deployment.name)))) return;
+    rollback.mutate(deployment.id, {
+      onSuccess: onRolledBack,
+      onError: (e) => {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      },
+    });
+  };
+
+  return (
+    <>
+      <button type="button" className="btn btn-secondary" onClick={onClose}>
+        Close
+      </button>
+      {deployment.started_at && (
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={() => onShowCorrelation(deployment.id)}
+        >
+          Correlation
+        </button>
+      )}
+      {canRollback(deployment.status) && (
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{ border: '1px solid var(--warning)', color: 'var(--warning)' }}
+          disabled={rollback.isPending}
+          onClick={handleRollback}
+        >
+          {rollback.isPending ? 'Starting…' : 'Rollback'}
+        </button>
+      )}
+      {canExecute(deployment.status) && (
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={execute.isPending || approvalBlocking}
+          title={approvalBlocking ? 'Waiting on approval' : undefined}
+          onClick={handleExecute}
+        >
+          {execute.isPending ? 'Starting…' : 'Execute'}
+        </button>
+      )}
+    </>
+  );
+}
+
+function DetailBody({ deployment }: { deployment: DeploymentDetail }) {
+  const { confirm, alert } = useDialogs();
   const approve = useApproveDeployment();
   const reject = useRejectDeployment();
   const requestApproval = useRequestDeploymentApproval();
@@ -103,7 +188,6 @@ function DetailBody({
 
   const requiresApproval = !!deployment.requires_approval;
   const approvalStatus = deployment.approval_status || 'not_required';
-  const approvalBlocking = isApprovalBlocking(deployment);
   const isApprover =
     !!auth?.username &&
     auth.username !== (deployment.created_by || '');
@@ -115,40 +199,6 @@ function DetailBody({
   const verifyChecks = checkpoints.filter((c) => c.phase === 'verify');
   const preSnaps = snapshots.filter((s) => s.phase === 'pre');
   const postSnaps = snapshots.filter((s) => s.phase === 'post');
-
-  const handleExecute = async () => {
-    if (approvalBlocking) {
-      void alert('This deployment is awaiting approval and cannot be executed.');
-      return;
-    }
-    if (
-      !(await confirm(
-        'Execute this deployment? Pre-deployment snapshots will be captured before pushing config changes.',
-      ))
-    )
-      return;
-    execute.mutate(deployment.id, {
-      onSuccess: onExecuted,
-      onError: (e) => {
-        void alert({ message: (e as Error).message, variant: 'error' });
-      },
-    });
-  };
-
-  const handleRollback = async () => {
-    if (
-      !(await confirm(
-        'Roll back this deployment? Pre-deployment config snapshots will be restored to all hosts.',
-      ))
-    )
-      return;
-    rollback.mutate(deployment.id, {
-      onSuccess: onRolledBack,
-      onError: (e) => {
-        void alert({ message: (e as Error).message, variant: 'error' });
-      },
-    });
-  };
 
   return (
     <>
@@ -213,8 +263,12 @@ function DetailBody({
               )
             }
             onReject={async () => {
-              if (!(await confirm('Reject this deployment? It will need a fresh approval request.')))
-                return;
+              const ok = await confirm({
+                title: 'Reject deployment',
+                message: `Reject deployment "${deployment.name}"? It will need a fresh approval request.`,
+                confirmLabel: 'Reject',
+              });
+              if (!ok) return;
               reject.mutate(
                 { id: deployment.id, comment: approvalComment },
                 {
@@ -282,43 +336,6 @@ function DetailBody({
         <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.85em', color: 'var(--text-muted)' }}>
           <span>Pre-snapshots: {preSnaps.length}</span>
           <span>Post-snapshots: {postSnaps.length}</span>
-        </div>
-
-        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-          {canExecute(deployment.status) && (
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={execute.isPending || approvalBlocking}
-              title={approvalBlocking ? 'Waiting on approval' : undefined}
-              onClick={handleExecute}
-            >
-              {execute.isPending ? 'Starting…' : 'Execute'}
-            </button>
-          )}
-          {canRollback(deployment.status) && (
-            <button
-              type="button"
-              className="btn btn-secondary"
-              style={{ border: '1px solid var(--warning)', color: 'var(--warning)' }}
-              disabled={rollback.isPending}
-              onClick={handleRollback}
-            >
-              {rollback.isPending ? 'Starting…' : 'Rollback'}
-            </button>
-          )}
-          {deployment.started_at && (
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => onShowCorrelation(deployment.id)}
-            >
-              Correlation
-            </button>
-          )}
-          <button type="button" className="btn btn-secondary" onClick={onClose}>
-            Close
-          </button>
         </div>
       </div>
     </>

@@ -90,7 +90,14 @@ export function DashboardViewer() {
 
   const handleDeleteDashboard = async () => {
     if (!dashboardId) return;
-    if (!(await confirm('Delete this dashboard? All panels will be removed. This action cannot be undone.'))) return;
+    if (
+      !(await confirm({
+        title: 'Delete dashboard',
+        message: `Delete dashboard "${dashboard.name}"? All panels will be removed. This action cannot be undone.`,
+        confirmLabel: 'Delete',
+      }))
+    )
+      return;
     deleteDashboard.mutate(dashboardId, {
       onSuccess: () => navigate('/dashboards'),
       onError: (e) => {
@@ -100,7 +107,14 @@ export function DashboardViewer() {
   };
 
   const handleDeletePanel = async (panel: DashboardPanel) => {
-    if (!(await confirm('Delete this panel?'))) return;
+    if (
+      !(await confirm({
+        title: 'Delete panel',
+        message: `Delete panel "${panel.title || 'Untitled'}"?`,
+        confirmLabel: 'Delete',
+      }))
+    )
+      return;
     deletePanel.mutate(panel.id, {
       onError: (e) => {
         void alert({ message: (e as Error).message, variant: 'error' });

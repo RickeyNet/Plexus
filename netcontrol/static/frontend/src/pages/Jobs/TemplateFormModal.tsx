@@ -1,8 +1,9 @@
-import { useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
-import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useCreateTemplate,
   useTemplate,
@@ -35,7 +36,7 @@ interface Props {
 }
 
 export function TemplateFormModal({ mode, templateId, onClose }: Props) {
-  const { alert } = useDialogs();
+  const formId = useId();
   const isOpen = mode != null;
   const detailQuery = useTemplate(mode === 'edit' ? templateId : null);
   const createMut = useCreateTemplate();
@@ -45,12 +46,16 @@ export function TemplateFormModal({ mode, templateId, onClose }: Props) {
   const [description, setDescription] = useState('');
   const [content, setContent] = useState('');
   const [deviceType, setDeviceType] = useState('');
+  const [errors, setErrors] = useState<{ name?: string; content?: string }>({});
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const [prevMode, setPrevMode] = useState(mode);
   const [prevData, setPrevData] = useState(detailQuery.data);
   if (mode !== prevMode || detailQuery.data !== prevData) {
     setPrevMode(mode);
     setPrevData(detailQuery.data);
+    setErrors({});
+    setSaveError(null);
     if (mode === 'create') {
       setName(''); setDescription(''); setContent(''); setDeviceType('');
     } else if (mode === 'edit' && detailQuery.data) {
@@ -63,17 +68,20 @@ export function TemplateFormModal({ mode, templateId, onClose }: Props) {
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!name.trim() || !content.trim()) {
-      void alert('Name and content are required');
-      return;
-    }
+    setSaveError(null);
+    const nextErrors = {
+      name: name.trim() ? undefined : 'Name is required',
+      content: content.trim() ? undefined : 'Content is required',
+    };
+    setErrors(nextErrors);
+    if (nextErrors.name || nextErrors.content) return;
     const data = {
       name: name.trim(),
       content,
       description: description.trim(),
       device_type: deviceType,
     };
-    const onError = (err: unknown) => { void alert({ message: (err as Error).message, variant: 'error' }); };
+    const onError = (err: unknown) => { setSaveError((err as Error).message); };
     if (mode === 'edit' && templateId != null) {
       updateMut.mutate({ id: templateId, data }, { onSuccess: onClose, onError });
     } else {
@@ -82,16 +90,40 @@ export function TemplateFormModal({ mode, templateId, onClose }: Props) {
   }
 
   const pending = createMut.isPending || updateMut.isPending;
+  const loading = mode === 'edit' && detailQuery.isPending;
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={mode === 'edit' ? 'Edit Template' : 'New Template'} size="large">
-      {mode === 'edit' && detailQuery.isPending ? (
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={mode === 'edit' ? 'Edit Template' : 'New Template'}
+      size="medium"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          {!loading && (
+            <button type="submit" form={formId} className="btn btn-primary" disabled={pending}>
+              {pending ? 'Saving…' : mode === 'edit' ? 'Save' : 'Create'}
+            </button>
+          )}
+        </>
+      }
+    >
+      {loading ? (
         <LoadingState />
       ) : (
-        <form onSubmit={handleSubmit}>
+        <form id={formId} onSubmit={handleSubmit}>
+          {saveError && <Callout tone="danger">{saveError}</Callout>}
           <div className="form-group">
             <label className="form-label">Name</label>
-            <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} required />
+            <input
+              className="form-input"
+              value={name}
+              onChange={(e) => { setName(e.target.value); setErrors((p) => ({ ...p, name: undefined })); }}
+              aria-invalid={!!errors.name}
+              required
+            />
+            <FieldError>{errors.name}</FieldError>
           </div>
           <div className="form-group">
             <label className="form-label">Description</label>
@@ -119,18 +151,14 @@ export function TemplateFormModal({ mode, templateId, onClose }: Props) {
             <textarea
               className="form-input"
               value={content}
-              onChange={(e) => setContent(e.target.value)}
+              onChange={(e) => { setContent(e.target.value); setErrors((p) => ({ ...p, content: undefined })); }}
+              aria-invalid={!!errors.content}
               spellCheck={false}
               wrap="off"
               required
               style={{ minHeight: 280, fontFamily: 'monospace', fontSize: '0.85rem' }}
             />
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
-            <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={pending}>
-              {pending ? 'Saving…' : mode === 'edit' ? 'Save' : 'Create'}
-            </button>
+            <FieldError>{errors.content}</FieldError>
           </div>
         </form>
       )}

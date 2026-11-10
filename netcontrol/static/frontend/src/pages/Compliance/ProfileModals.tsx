@@ -4,6 +4,7 @@ import { groupLabel } from '@/api/inventory';
 import { Callout } from '@/components/Callout';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { ModalActions } from '@/components/ModalActions';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
   MerakiCheck,
@@ -44,7 +45,38 @@ export function NewProfileModal({ onClose }: { onClose: () => void }) {
   const create = useCreateProfile();
 
   return (
-    <Modal isOpen onClose={onClose} title="Create Compliance Profile">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Create Compliance Profile"
+      footer={
+        <ModalActions
+          onClose={onClose}
+          primaryLabel="Create"
+          primaryDisabled={!name.trim() || create.isPending}
+          onPrimary={() => {
+            setError(null);
+            const parsed = parseRules(rulesText);
+            if (parsed.error) {
+              setError(parsed.error);
+              return;
+            }
+            create.mutate(
+              {
+                name: name.trim(),
+                description: description.trim(),
+                severity,
+                rules: parsed.rules,
+              } as ProfilePayload,
+              {
+                onSuccess: () => onClose(),
+                onError: (e) => setError((e as Error).message),
+              },
+            );
+          }}
+        />
+      }
+    >
       <FormBody
         name={name}
         setName={setName}
@@ -56,31 +88,6 @@ export function NewProfileModal({ onClose }: { onClose: () => void }) {
         setRulesText={setRulesText}
       />
       {error && <Callout tone="danger">{error}</Callout>}
-      <ModalActions
-        onClose={onClose}
-        primaryLabel="Create"
-        primaryDisabled={!name.trim() || create.isPending}
-        onPrimary={() => {
-          setError(null);
-          const parsed = parseRules(rulesText);
-          if (parsed.error) {
-            setError(parsed.error);
-            return;
-          }
-          create.mutate(
-            {
-              name: name.trim(),
-              description: description.trim(),
-              severity,
-              rules: parsed.rules,
-            } as ProfilePayload,
-            {
-              onSuccess: () => onClose(),
-              onError: (e) => setError((e as Error).message),
-            },
-          );
-        }}
-      />
     </Modal>
   );
 }
@@ -118,7 +125,41 @@ export function EditProfileModal({
   }
 
   return (
-    <Modal isOpen onClose={onClose} title="Edit Compliance Profile">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Edit Compliance Profile"
+      footer={
+        <ModalActions
+          onClose={onClose}
+          primaryLabel="Save"
+          primaryDisabled={!name.trim() || update.isPending || !hydrated}
+          onPrimary={() => {
+            setError(null);
+            const parsed = parseRules(rulesText);
+            if (parsed.error) {
+              setError(parsed.error);
+              return;
+            }
+            update.mutate(
+              {
+                id: profileId,
+                data: {
+                  name: name.trim(),
+                  description: description.trim(),
+                  severity,
+                  rules: parsed.rules,
+                },
+              },
+              {
+                onSuccess: () => onClose(),
+                onError: (e) => setError((e as Error).message),
+              },
+            );
+          }}
+        />
+      }
+    >
       {isLoading || !hydrated ? (
         <LoadingState />
       ) : (
@@ -134,34 +175,6 @@ export function EditProfileModal({
         />
       )}
       {error && <Callout tone="danger">{error}</Callout>}
-      <ModalActions
-        onClose={onClose}
-        primaryLabel="Save"
-        primaryDisabled={!name.trim() || update.isPending || !hydrated}
-        onPrimary={() => {
-          setError(null);
-          const parsed = parseRules(rulesText);
-          if (parsed.error) {
-            setError(parsed.error);
-            return;
-          }
-          update.mutate(
-            {
-              id: profileId,
-              data: {
-                name: name.trim(),
-                description: description.trim(),
-                severity,
-                rules: parsed.rules,
-              },
-            },
-            {
-              onSuccess: () => onClose(),
-              onError: (e) => setError((e as Error).message),
-            },
-          );
-        }}
-      />
     </Modal>
   );
 }
@@ -205,7 +218,51 @@ export function AssignProfileModal({
   }
 
   return (
-    <Modal isOpen onClose={onClose} title="Assign Profile to Groups">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Assign Profile to Groups"
+      footer={
+        <ModalActions
+          onClose={onClose}
+          primaryLabel="Assign"
+          primaryDisabled={selectedGroups.size === 0 || credentialId == null}
+          onPrimary={async () => {
+            setError(null);
+            if (credentialId == null) {
+              setError('Credential is required');
+              return;
+            }
+            const ids = [...selectedGroups];
+            let success = 0;
+            let failed = 0;
+            for (const groupId of ids) {
+              try {
+                await create.mutateAsync({
+                  profile_id: profileId,
+                  group_id: groupId,
+                  credential_id: credentialId,
+                  interval_seconds: hours * 3600,
+                });
+                success++;
+              } catch {
+                failed++;
+              }
+            }
+            if (failed === 0) {
+              await alert({
+                title: 'Profile assigned',
+                message: `Profile assigned to ${success} group(s).`,
+              });
+            } else {
+              setError(`Assigned to ${success} group(s), ${failed} failed.`);
+              return;
+            }
+            onClose();
+          }}
+        />
+      }
+    >
       <div className="form-group">
         <label className="form-label">Inventory Groups</label>
         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
@@ -308,44 +365,6 @@ export function AssignProfileModal({
         />
       </div>
       {error && <Callout tone="danger">{error}</Callout>}
-      <ModalActions
-        onClose={onClose}
-        primaryLabel="Assign"
-        primaryDisabled={selectedGroups.size === 0 || credentialId == null}
-        onPrimary={async () => {
-          setError(null);
-          if (credentialId == null) {
-            setError('Credential is required');
-            return;
-          }
-          const ids = [...selectedGroups];
-          let success = 0;
-          let failed = 0;
-          for (const groupId of ids) {
-            try {
-              await create.mutateAsync({
-                profile_id: profileId,
-                group_id: groupId,
-                credential_id: credentialId,
-                interval_seconds: hours * 3600,
-              });
-              success++;
-            } catch {
-              failed++;
-            }
-          }
-          if (failed === 0) {
-            await alert({
-              title: 'Profile assigned',
-              message: `Profile assigned to ${success} group(s).`,
-            });
-          } else {
-            setError(`Assigned to ${success} group(s), ${failed} failed.`);
-            return;
-          }
-          onClose();
-        }}
-      />
     </Modal>
   );
 }
@@ -541,41 +560,6 @@ function MerakiCheckPicker({
         </div>
       )}
       {error && <div className="error" style={{ marginTop: '0.4rem' }}>{error}</div>}
-    </div>
-  );
-}
-
-function ModalActions({
-  onClose,
-  primaryLabel,
-  primaryDisabled,
-  onPrimary,
-}: {
-  onClose: () => void;
-  primaryLabel: string;
-  primaryDisabled: boolean;
-  onPrimary: () => void;
-}) {
-  return (
-    <div
-      style={{
-        display: 'flex',
-        gap: '0.5rem',
-        justifyContent: 'flex-end',
-        marginTop: '1rem',
-      }}
-    >
-      <button type="button" className="btn btn-secondary" onClick={onClose}>
-        Cancel
-      </button>
-      <button
-        type="button"
-        className="btn btn-primary"
-        disabled={primaryDisabled}
-        onClick={onPrimary}
-      >
-        {primaryLabel}
-      </button>
     </div>
   );
 }

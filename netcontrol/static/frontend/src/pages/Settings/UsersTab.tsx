@@ -94,7 +94,7 @@ export function UsersTab() {
               </button>
               <DeleteButton
                 onClick={async () => {
-                  if (!(await confirm(`Delete @${u.username}?`))) return;
+                  if (!(await confirm({ title: 'Delete user account', message: `Delete @${u.username}?`, confirmLabel: 'Delete' }))) return;
                   remove.mutate(u.id, {
                     onError: (e) => {
                       void alert({ message: `Failed to delete user: ${(e as Error).message}`, variant: 'error' });

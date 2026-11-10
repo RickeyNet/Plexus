@@ -210,7 +210,7 @@ function PollRow({ poll, onDetail, onHistory }: { poll: MonitoringPoll; onDetail
 function HostHistoryModal({ hostId, hostname, onClose }: { hostId: number; hostname: string; onClose: () => void }) {
   const history = useMonitoringPollHistory(hostId, 50);
   return (
-    <Modal isOpen onClose={onClose} title={`${hostname} - Poll History`} size="large">
+    <Modal isOpen onClose={onClose} title={`${hostname} - Poll History`} size="medium">
       {history.isPending && <LoadingState />}
       {history.error && <div style={{ color: 'var(--danger)' }}>Error: {(history.error as Error).message}</div>}
       {history.data && (history.data.length === 0 ? (

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 
 import { useAddHost, useInventoryGroupsLite } from '@/api/topology';
+import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
 
 import { InventoryGroupPicker } from './InventoryGroupPicker';
@@ -42,29 +43,38 @@ export function AddToInventoryModal({ isOpen, hostname, ip, extNodeId, onClose, 
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Add to Inventory">
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Add to Inventory"
+      size="small"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={handleConfirm}
+            disabled={addHost.isPending || selectedGroupId == null}
+          >
+            {addHost.isPending ? 'Adding…' : 'Add to Group'}
+          </button>
+        </>
+      }
+    >
       <div style={{ padding: '0.5rem' }}>
         <p style={{ marginBottom: '1rem', color: 'var(--text-muted)' }}>
           Adding <strong>{hostname}</strong> ({ip})
         </p>
-        <div style={{ marginBottom: '1rem' }}>
-          <InventoryGroupPicker
-            groups={groups}
-            value={selectedGroupId}
-            onChange={setPickedGroupId}
-            onError={setError}
-          />
-        </div>
-        {error && <div style={{ color: 'var(--danger)', marginBottom: '0.75rem' }}>{error}</div>}
-        <button
-          type="button"
-          className="btn btn-primary"
-          style={{ width: '100%' }}
-          onClick={handleConfirm}
-          disabled={addHost.isPending || selectedGroupId == null}
-        >
-          {addHost.isPending ? 'Adding…' : 'Add to Group'}
-        </button>
+        <InventoryGroupPicker
+          groups={groups}
+          value={selectedGroupId}
+          onChange={setPickedGroupId}
+          onError={setError}
+        />
+        <FieldError>{error}</FieldError>
       </div>
     </Modal>
   );

@@ -27,8 +27,10 @@ import {
   canDelete,
   canExecute,
   canRollback,
+  executeConfirmOptions,
   filterDeployments,
   isApprovalBlocking,
+  rollbackConfirmOptions,
 } from './helpers';
 
 const STATUS_FILTERS = [
@@ -255,12 +257,7 @@ function DeploymentRow({
   const showDelete = canDelete(deployment.status);
 
   const handleExecute = async () => {
-    if (
-      !(await confirm(
-        'Execute this deployment? Pre-deployment snapshots will be captured before pushing config changes.',
-      ))
-    )
-      return;
+    if (!(await confirm(executeConfirmOptions(deployment.name)))) return;
     execute.mutate(deployment.id, {
       onSuccess: onExecuted,
       onError: (e) => {
@@ -270,12 +267,7 @@ function DeploymentRow({
   };
 
   const handleRollback = async () => {
-    if (
-      !(await confirm(
-        'Roll back this deployment? Pre-deployment config snapshots will be restored to all hosts.',
-      ))
-    )
-      return;
+    if (!(await confirm(rollbackConfirmOptions(deployment.name)))) return;
     rollback.mutate(deployment.id, {
       onSuccess: onRolledBack,
       onError: (e) => {
@@ -285,7 +277,12 @@ function DeploymentRow({
   };
 
   const handleDelete = async () => {
-    if (!(await confirm('Delete this deployment and all its checkpoints/snapshots?'))) return;
+    const ok = await confirm({
+      title: 'Delete deployment',
+      message: `Delete deployment "${deployment.name}" and all its checkpoints/snapshots?`,
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
     remove.mutate(deployment.id, {
       onError: (e) => {
         void alert({ message: (e as Error).message, variant: 'error' });

@@ -1,7 +1,9 @@
 import { useState } from 'react';
 
 import { Callout } from '@/components/Callout';
+import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
+import { ModalActions } from '@/components/ModalActions';
 import {
   AccessGroup,
   AdminUser,
@@ -58,41 +60,6 @@ function GroupCheckboxes({
   );
 }
 
-function ModalActions({
-  onClose,
-  primaryLabel,
-  primaryDisabled,
-  onPrimary,
-}: {
-  onClose: () => void;
-  primaryLabel: string;
-  primaryDisabled?: boolean;
-  onPrimary: () => void;
-}) {
-  return (
-    <div
-      style={{
-        display: 'flex',
-        gap: '0.5rem',
-        justifyContent: 'flex-end',
-        marginTop: '1rem',
-      }}
-    >
-      <button type="button" className="btn btn-secondary" onClick={onClose}>
-        Cancel
-      </button>
-      <button
-        type="button"
-        className="btn btn-primary"
-        disabled={primaryDisabled}
-        onClick={onPrimary}
-      >
-        {primaryLabel}
-      </button>
-    </div>
-  );
-}
-
 export function CreateUserModal({
   groups,
   onClose,
@@ -121,7 +88,43 @@ export function CreateUserModal({
     create.isPending;
 
   return (
-    <Modal isOpen onClose={onClose} title="Create User Account">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Create User Account"
+      footer={
+        <ModalActions
+          onClose={onClose}
+          primaryLabel={create.isPending ? 'Creating…' : 'Create'}
+          primaryDisabled={submitDisabled}
+          onPrimary={() => {
+            setError(null);
+            create.mutate(
+              {
+                username: username.trim(),
+                password,
+                display_name: displayName.trim(),
+                role,
+                group_ids: groupIds,
+              },
+              {
+                onSuccess: (created) => {
+                  if (groupIds.length > 0 && created?.id != null) {
+                    setGroups.mutate(
+                      { id: created.id, groupIds },
+                      { onSettled: () => onClose() },
+                    );
+                  } else {
+                    onClose();
+                  }
+                },
+                onError: (e) => setError((e as Error).message),
+              },
+            );
+          }}
+        />
+      }
+    >
       <div className="form-group">
         <label className="form-label">Username</label>
         <input
@@ -157,12 +160,9 @@ export function CreateUserModal({
           value={confirm}
           onChange={(e) => setConfirm(e.target.value)}
           minLength={8}
+          aria-invalid={!!confirm && !passwordsMatch}
         />
-        {confirm && !passwordsMatch && (
-          <div className="error" style={{ marginTop: '0.25rem' }}>
-            Passwords do not match
-          </div>
-        )}
+        <FieldError>{confirm && !passwordsMatch && 'Passwords do not match'}</FieldError>
       </div>
       <div className="form-group">
         <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
@@ -190,36 +190,6 @@ export function CreateUserModal({
         <GroupCheckboxes groups={groups} selected={groupIds} onChange={setGroupIds} />
       </div>
       {error && <Callout tone="danger">{error}</Callout>}
-      <ModalActions
-        onClose={onClose}
-        primaryLabel={create.isPending ? 'Creating…' : 'Create'}
-        primaryDisabled={submitDisabled}
-        onPrimary={() => {
-          setError(null);
-          create.mutate(
-            {
-              username: username.trim(),
-              password,
-              display_name: displayName.trim(),
-              role,
-              group_ids: groupIds,
-            },
-            {
-              onSuccess: (created) => {
-                if (groupIds.length > 0 && created?.id != null) {
-                  setGroups.mutate(
-                    { id: created.id, groupIds },
-                    { onSettled: () => onClose() },
-                  );
-                } else {
-                  onClose();
-                }
-              },
-              onError: (e) => setError((e as Error).message),
-            },
-          );
-        }}
-      />
     </Modal>
   );
 }
@@ -249,7 +219,44 @@ export function EditUserModal({
     !username.trim() || username.trim().length < 3 || update.isPending;
 
   return (
-    <Modal isOpen onClose={onClose} title="Edit User Account">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Edit User Account"
+      footer={
+        <ModalActions
+          onClose={onClose}
+          primaryLabel={update.isPending ? 'Saving…' : 'Save'}
+          primaryDisabled={submitDisabled}
+          onPrimary={() => {
+            setError(null);
+            update.mutate(
+              {
+                id: user.id,
+                data: {
+                  username: username.trim(),
+                  display_name: displayName.trim(),
+                  role,
+                  session_never_expires: neverExpires,
+                },
+              },
+              {
+                onSuccess: () => {
+                  setGroups.mutate(
+                    { id: user.id, groupIds },
+                    {
+                      onSuccess: () => onClose(),
+                      onError: (e) => setError((e as Error).message),
+                    },
+                  );
+                },
+                onError: (e) => setError((e as Error).message),
+              },
+            );
+          }}
+        />
+      }
+    >
       <div className="form-group">
         <label className="form-label">Username</label>
         <input
@@ -297,37 +304,6 @@ export function EditUserModal({
         </div>
       </div>
       {error && <Callout tone="danger">{error}</Callout>}
-      <ModalActions
-        onClose={onClose}
-        primaryLabel={update.isPending ? 'Saving…' : 'Save'}
-        primaryDisabled={submitDisabled}
-        onPrimary={() => {
-          setError(null);
-          update.mutate(
-            {
-              id: user.id,
-              data: {
-                username: username.trim(),
-                display_name: displayName.trim(),
-                role,
-                session_never_expires: neverExpires,
-              },
-            },
-            {
-              onSuccess: () => {
-                setGroups.mutate(
-                  { id: user.id, groupIds },
-                  {
-                    onSuccess: () => onClose(),
-                    onError: (e) => setError((e as Error).message),
-                  },
-                );
-              },
-              onError: (e) => setError((e as Error).message),
-            },
-          );
-        }}
-      />
     </Modal>
   );
 }
@@ -346,7 +322,29 @@ export function ResetPasswordModal({
   const submitDisabled = password.length < 8 || reset.isPending;
 
   return (
-    <Modal isOpen onClose={onClose} title="Reset User Password">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Reset User Password"
+      size="small"
+      footer={
+        <ModalActions
+          onClose={onClose}
+          primaryLabel={reset.isPending ? 'Resetting…' : 'Reset Password'}
+          primaryDisabled={submitDisabled}
+          onPrimary={() => {
+            setError(null);
+            reset.mutate(
+              { id: user.id, newPassword: password },
+              {
+                onSuccess: () => onClose(),
+                onError: (e) => setError((e as Error).message),
+              },
+            );
+          }}
+        />
+      }
+    >
       <p className="card-description" style={{ marginBottom: '0.75rem' }}>
         Set a new login password for @{user.username}.
       </p>
@@ -361,21 +359,6 @@ export function ResetPasswordModal({
         />
       </div>
       {error && <Callout tone="danger">{error}</Callout>}
-      <ModalActions
-        onClose={onClose}
-        primaryLabel={reset.isPending ? 'Resetting…' : 'Reset Password'}
-        primaryDisabled={submitDisabled}
-        onPrimary={() => {
-          setError(null);
-          reset.mutate(
-            { id: user.id, newPassword: password },
-            {
-              onSuccess: () => onClose(),
-              onError: (e) => setError((e as Error).message),
-            },
-          );
-        }}
-      />
     </Modal>
   );
 }

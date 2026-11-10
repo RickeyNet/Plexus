@@ -33,9 +33,14 @@ export function TemplatesTab() {
     );
   }, [query.data, search]);
 
-  async function handleDelete(id: number) {
-    if (!(await confirm('Delete this template?'))) return;
-    deleteMut.mutate(id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
+  async function handleDelete(t: ConfigTemplate) {
+    const ok = await confirm({
+      title: 'Delete template',
+      message: `Delete template "${t.name}"?`,
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
+    deleteMut.mutate(t.id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
   }
 
   function copyContent(content: string) {
@@ -78,7 +83,7 @@ export function TemplatesTab() {
               onToggle={() => toggleExpand(t.id)}
               onCopy={() => copyContent(t.content)}
               onEdit={() => setEditing({ mode: 'edit', id: t.id })}
-              onDelete={() => handleDelete(t.id)}
+              onDelete={() => handleDelete(t)}
             />
           ))}
         </div>

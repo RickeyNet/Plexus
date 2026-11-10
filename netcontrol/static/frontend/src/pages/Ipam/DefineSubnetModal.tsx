@@ -1,7 +1,8 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useId, useState } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
-import { useDialogs } from '@/components/DialogProvider-context';
 import { useCreateIpamPrefix } from '@/api/ipam';
 
 interface Props {
@@ -9,16 +10,19 @@ interface Props {
 }
 
 export function DefineSubnetModal({ onClose }: Props) {
-  const { alert } = useDialogs();
+  const formId = useId();
   const create = useCreateIpamPrefix();
   const [subnet, setSubnet] = useState('');
   const [description, setDescription] = useState('');
   const [vrf, setVrf] = useState('');
+  const [subnetError, setSubnetError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    setSaveError(null);
     if (!subnet.trim()) {
-      void alert('Subnet CIDR is required.');
+      setSubnetError('Subnet CIDR is required.');
       return;
     }
     try {
@@ -29,13 +33,28 @@ export function DefineSubnetModal({ onClose }: Props) {
       });
       onClose();
     } catch (err) {
-      void alert({ message: (err as Error).message, variant: 'error' });
+      setSaveError((err as Error).message);
     }
   };
 
   return (
-    <Modal isOpen onClose={onClose} title="Define a Subnet">
-      <form onSubmit={submit}>
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Define a Subnet"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={create.isPending}>
+            {create.isPending ? 'Saving…' : 'Add Subnet'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={submit}>
+        {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
           <label className="form-label">
             CIDR <span className="text-muted">(e.g. 192.168.10.0/24)</span>
@@ -43,10 +62,15 @@ export function DefineSubnetModal({ onClose }: Props) {
           <input
             className="form-input"
             value={subnet}
-            onChange={(e) => setSubnet(e.target.value)}
+            onChange={(e) => {
+              setSubnet(e.target.value);
+              setSubnetError(null);
+            }}
             required
             placeholder="10.0.0.0/24"
+            aria-invalid={!!subnetError}
           />
+          <FieldError>{subnetError}</FieldError>
         </div>
         <div className="form-group">
           <label className="form-label">
@@ -71,21 +95,6 @@ export function DefineSubnetModal({ onClose }: Props) {
             maxLength={120}
             placeholder="global"
           />
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            gap: '0.5rem',
-            justifyContent: 'flex-end',
-            marginTop: '1rem',
-          }}
-        >
-          <button type="button" className="btn btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="btn btn-primary" disabled={create.isPending}>
-            {create.isPending ? 'Saving…' : 'Add Subnet'}
-          </button>
         </div>
       </form>
     </Modal>

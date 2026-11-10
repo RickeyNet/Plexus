@@ -30,7 +30,17 @@ export function AlertCorrelationModal({ isOpen, onClose, alertId }: Props) {
 
   return (
     <>
-      <Modal isOpen={isOpen} onClose={onClose} title={title} size="large">
+      <Modal
+        isOpen={isOpen}
+        onClose={onClose}
+        title={title}
+        size="medium"
+        footer={
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Close
+          </button>
+        }
+      >
         {query.isPending && <LoadingState />}
         {query.error && (
           <Callout tone="danger">
@@ -40,7 +50,6 @@ export function AlertCorrelationModal({ isOpen, onClose, alertId }: Props) {
         {query.data && (
           <Body
             data={query.data}
-            onClose={onClose}
             onOpenDeployment={(id) => setDeploymentId(id)}
           />
         )}
@@ -56,11 +65,9 @@ export function AlertCorrelationModal({ isOpen, onClose, alertId }: Props) {
 
 function Body({
   data,
-  onClose,
   onOpenDeployment,
 }: {
   data: AlertCorrelation;
-  onClose: () => void;
   onOpenDeployment: (id: number) => void;
 }) {
   const { alert, related_deployments, related_drift_events } = data;
@@ -170,12 +177,6 @@ function Body({
             </div>
           ))
         )}
-      </div>
-
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <button type="button" className="btn btn-secondary" onClick={onClose}>
-          Close
-        </button>
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
-import { useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent } from 'react';
 
+import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { useBillingCircuits, useGenerateBilling } from '@/api/reports';
@@ -11,6 +12,8 @@ interface Props {
 
 export function GenerateBillingModal({ isOpen, onClose }: Props) {
   const { alert } = useDialogs();
+  const formId = useId();
+  const [saveError, setSaveError] = useState('');
   const circuitsQuery = useBillingCircuits(undefined, true);
   const generateMut = useGenerateBilling();
 
@@ -20,6 +23,7 @@ export function GenerateBillingModal({ isOpen, onClose }: Props) {
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    setSaveError('');
     const payload: Parameters<typeof generateMut.mutate>[0] = {};
     if (circuitId) payload.circuit_id = parseInt(circuitId, 10);
     if (start) payload.period_start = `${start}T00:00:00Z`;
@@ -32,14 +36,27 @@ export function GenerateBillingModal({ isOpen, onClose }: Props) {
         onClose();
       },
       onError: (err) => {
-        void alert({ message: (err as Error).message, variant: 'error' });
+        setSaveError((err as Error).message);
       },
     });
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Generate 95th Percentile Billing">
-      <form onSubmit={handleSubmit}>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Generate 95th Percentile Billing"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={generateMut.isPending}>
+            {generateMut.isPending ? 'Generating…' : 'Generate'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={handleSubmit}>
+        {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
           <label className="form-label">Circuit (optional - leave blank for all)</label>
           <select className="form-select" value={circuitId} onChange={(e) => setCircuitId(e.target.value)}>
@@ -62,12 +79,6 @@ export function GenerateBillingModal({ isOpen, onClose }: Props) {
         <p className="text-muted" style={{ fontSize: '0.85rem' }}>
           Leave dates blank to auto-calculate the most recent completed billing cycle.
         </p>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={generateMut.isPending}>
-            {generateMut.isPending ? 'Generating…' : 'Generate'}
-          </button>
-        </div>
       </form>
     </Modal>
   );

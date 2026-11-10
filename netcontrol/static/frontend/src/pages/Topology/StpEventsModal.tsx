@@ -5,6 +5,7 @@ import {
   useAcknowledgeStpEvents,
   type StpEvent,
 } from '@/api/topology';
+import { Callout } from '@/components/Callout';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
@@ -52,9 +53,9 @@ export function StpEventsModal({ isOpen, onClose, onAcknowledged }: Props) {
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="STP Topology Events" size="large">
+    <Modal isOpen={isOpen} onClose={onClose} title="STP Topology Events">
       {loading && <LoadingState />}
-      {error && <div style={{ color: 'var(--danger)' }}>Error: {error}</div>}
+      {error && <Callout tone="danger">Error: {error}</Callout>}
       {!loading && !events.length && <EmptyState compact message="No unacknowledged STP events." />}
       {!loading && events.length > 0 && (
         <>

@@ -21,9 +21,16 @@ export function HostTemplatesTab() {
 
   const items: HostTemplate[] = query.data?.host_templates ?? [];
 
-  async function handleDelete(id: number) {
-    if (!(await confirm('Delete this host template?'))) return;
-    deleteMut.mutate(id, {
+  async function handleDelete(ht: HostTemplate) {
+    if (
+      !(await confirm({
+        title: 'Delete host template',
+        message: `Delete host template "${ht.name}"?`,
+        confirmLabel: 'Delete',
+      }))
+    )
+      return;
+    deleteMut.mutate(ht.id, {
       onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
     });
   }
@@ -74,7 +81,7 @@ export function HostTemplatesTab() {
                 )}
                 <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
                   <button className="btn btn-sm btn-secondary" onClick={() => setModalId(ht.id)}>Edit</button>
-                  <DeleteButton onClick={() => handleDelete(ht.id)} />
+                  <DeleteButton onClick={() => handleDelete(ht)} />
                 </div>
               </div>
             );

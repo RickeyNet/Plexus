@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 
 import { type UpgradeImage, useUpdateUpgradeImage } from '@/api/upgrades';
+import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
 
 interface Props {
@@ -15,6 +16,7 @@ export function EditImageModal({ image, onClose }: Props) {
   const [notes, setNotes] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [prevImage, setPrevImage] = useState(image);
+  const formId = useId();
 
   // Re-seed the form when a different image is opened. Adjusting state during
   // render (guarded by the previous value) is React's recommended alternative
@@ -59,8 +61,32 @@ export function EditImageModal({ image, onClose }: Props) {
   };
 
   return (
-    <Modal isOpen onClose={onClose} title="Edit Image">
-      <form onSubmit={handleSubmit}>
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Edit Image"
+      footer={
+        <>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={onClose}
+            disabled={update.isPending}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            form={formId}
+            className="btn btn-primary"
+            disabled={update.isPending}
+          >
+            {update.isPending ? 'Saving…' : 'Save'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={handleSubmit}>
         <div className="form-group">
           <label className="form-label">Filename</label>
           <input className="form-input" value={image.filename} disabled />
@@ -92,33 +118,7 @@ export function EditImageModal({ image, onClose }: Props) {
             onChange={(e) => setNotes(e.target.value)}
           />
         </div>
-        {error && (
-          <p style={{ color: 'var(--danger)', marginTop: '0.5rem' }}>{error}</p>
-        )}
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'flex-end',
-            gap: '0.5rem',
-            marginTop: '1rem',
-          }}
-        >
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={onClose}
-            disabled={update.isPending}
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            className="btn btn-primary"
-            disabled={update.isPending}
-          >
-            {update.isPending ? 'Saving…' : 'Save'}
-          </button>
-        </div>
+        {error && <Callout tone="danger">{error}</Callout>}
       </form>
     </Modal>
   );

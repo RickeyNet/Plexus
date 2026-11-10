@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import { useChangePassword } from '@/api/auth';
+import { FieldError } from './FieldError';
 import { Modal } from './Modal';
 
 interface Props {
@@ -55,17 +56,35 @@ export function ChangePasswordModal({ isOpen, onClose, onSuccess, forced = false
     }
   }
 
-  // When forced, intercept onClose so backdrop/Esc don't dismiss.
-  const handleClose = forced ? () => {} : onClose;
+  const formId = useId();
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title={forced ? 'Password Change Required' : 'Change Password'}>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      // When forced there is no way out but a successful change: no ×, and
+      // Escape and backdrop clicks do nothing.
+      dismissible={!forced}
+      title={forced ? 'Password Change Required' : 'Change Password'}
+      footer={
+        <>
+          {!forced && (
+            <button type="button" className="btn btn-secondary" onClick={onClose} disabled={change.isPending}>
+              Cancel
+            </button>
+          )}
+          <button type="submit" form={formId} className="btn btn-primary" disabled={change.isPending}>
+            {change.isPending ? 'Changing…' : 'Change Password'}
+          </button>
+        </>
+      }
+    >
       {forced && (
         <p style={{ color: 'var(--text-muted)', marginTop: 0, marginBottom: '1rem' }}>
           You must change the default password before continuing.
         </p>
       )}
-      <form onSubmit={onSubmit}>
+      <form id={formId} onSubmit={onSubmit}>
         <div className="form-group">
           <label className="form-label" htmlFor="cp-current">Current Password</label>
           <input
@@ -104,19 +123,7 @@ export function ChangePasswordModal({ isOpen, onClose, onSuccess, forced = false
             autoComplete="new-password"
           />
         </div>
-        {error && (
-          <div style={{ color: 'var(--danger)', fontSize: '0.85rem', marginBottom: '0.5rem' }}>{error}</div>
-        )}
-        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
-          {!forced && (
-            <button type="button" className="btn btn-secondary" onClick={onClose} disabled={change.isPending}>
-              Cancel
-            </button>
-          )}
-          <button type="submit" className="btn btn-primary" disabled={change.isPending}>
-            {change.isPending ? 'Changing…' : 'Change Password'}
-          </button>
-        </div>
+        <FieldError>{error}</FieldError>
       </form>
     </Modal>
   );

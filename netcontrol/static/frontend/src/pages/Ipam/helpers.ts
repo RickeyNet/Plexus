@@ -91,3 +91,24 @@ export function driftBadgeClass(driftType: string): string {
   }
 }
 
+export interface ConnectionFieldErrors {
+  provider?: string;
+  name?: string;
+  baseUrl?: string;
+}
+
+/**
+ * Required-field check shared by the IPAM source and DHCP server forms.
+ * Returns one message per missing field; an empty object means valid.
+ */
+export function validateConnectionForm(values: {
+  provider: string;
+  name: string;
+  baseUrl: string;
+}): ConnectionFieldErrors {
+  const errors: ConnectionFieldErrors = {};
+  if (!values.provider) errors.provider = 'Select a provider.';
+  if (!values.name.trim()) errors.name = 'Name is required.';
+  if (!values.baseUrl.trim()) errors.baseUrl = 'Base URL is required.';
+  return errors;
+}

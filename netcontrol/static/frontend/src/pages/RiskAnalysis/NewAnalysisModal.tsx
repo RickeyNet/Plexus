@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import {
   type RiskAnalysisRunResult,
@@ -7,8 +7,9 @@ import {
   useRiskTemplates,
   useRunRiskAnalysis,
 } from '@/api/riskAnalysis';
+import { Callout } from '@/components/Callout';
+import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
-import { useDialogs } from '@/components/DialogProvider-context';
 
 interface Props {
   isOpen: boolean;
@@ -25,7 +26,7 @@ const CHANGE_TYPES = [
 ];
 
 export function NewAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
-  const { alert } = useDialogs();
+  const formId = useId();
   const groups = useRiskInventoryGroups();
   const creds = useRiskCredentials();
   const templates = useRiskTemplates();
@@ -36,24 +37,22 @@ export function NewAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
   const [credentialId, setCredentialId] = useState<string>('');
   const [templateId, setTemplateId] = useState<string>('');
   const [commands, setCommands] = useState('');
+  const [errors, setErrors] = useState<{ credential?: string; commands?: string }>({});
+  const [runError, setRunError] = useState<string | null>(null);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    setRunError(null);
     const credId = parseInt(credentialId, 10);
-    if (!credId) {
-      void alert('Credential is required');
-      return;
-    }
     const tplId = templateId ? parseInt(templateId, 10) : undefined;
-    let proposed: string[] = [];
-    if (!tplId) {
-      const text = commands.trim();
-      if (!text) {
-        void alert('Enter proposed commands or select a template');
-        return;
-      }
-      proposed = text.split('\n').filter((l) => l.trim());
-    }
+    const text = commands.trim();
+    const nextErrors = {
+      credential: credId ? undefined : 'Credential is required',
+      commands: tplId || text ? undefined : 'Enter proposed commands or select a template',
+    };
+    setErrors(nextErrors);
+    if (nextErrors.credential || nextErrors.commands) return;
+    const proposed = tplId ? [] : text.split('\n').filter((l) => l.trim());
     run.mutate(
       {
         change_type: changeType,
@@ -70,18 +69,30 @@ export function NewAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
           onAnalyzed(result);
         },
         onError: (err) => {
-          void alert({
-            message: `Risk analysis failed: ${(err as Error).message}`,
-            variant: 'error',
-          });
+          setRunError(`Risk analysis failed: ${(err as Error).message}`);
         },
       },
     );
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Pre-Change Risk Analysis">
-      <form onSubmit={handleSubmit}>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Pre-Change Risk Analysis"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={run.isPending}>
+            {run.isPending ? 'Analyzing…' : 'Analyze Risk'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={handleSubmit}>
+        {runError && <Callout tone="danger">{runError}</Callout>}
         <div className="form-group">
           <label className="form-label">Change Type</label>
           <select
@@ -116,7 +127,11 @@ export function NewAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
           <select
             className="form-select"
             value={credentialId}
-            onChange={(e) => setCredentialId(e.target.value)}
+            onChange={(e) => {
+              setCredentialId(e.target.value);
+              setErrors((p) => ({ ...p, credential: undefined }));
+            }}
+            aria-invalid={!!errors.credential}
             required
           >
             <option value="">- Select a credential -</option>
@@ -126,13 +141,17 @@ export function NewAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
               </option>
             ))}
           </select>
+          <FieldError>{errors.credential}</FieldError>
         </div>
         <div className="form-group">
           <label className="form-label">Source</label>
           <select
             className="form-select"
             value={templateId}
-            onChange={(e) => setTemplateId(e.target.value)}
+            onChange={(e) => {
+              setTemplateId(e.target.value);
+              setErrors((p) => ({ ...p, commands: undefined }));
+            }}
           >
             <option value="">- Enter commands manually -</option>
             {(templates.data || []).map((t) => (
@@ -149,21 +168,18 @@ export function NewAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
               className="form-input"
               rows={8}
               value={commands}
-              onChange={(e) => setCommands(e.target.value)}
+              onChange={(e) => {
+                setCommands(e.target.value);
+                setErrors((p) => ({ ...p, commands: undefined }));
+              }}
+              aria-invalid={!!errors.commands}
               placeholder={
                 'ip route 10.0.0.0 255.0.0.0 192.168.1.1\naccess-list 101 permit ip any 10.0.0.0 0.255.255.255\nip nat inside source list 1 interface GigabitEthernet0/1 overload'
               }
             />
+            <FieldError>{errors.commands}</FieldError>
           </div>
         )}
-        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-          <button type="button" className="btn btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="btn btn-primary" disabled={run.isPending}>
-            {run.isPending ? 'Analyzing…' : 'Analyze Risk'}
-          </button>
-        </div>
       </form>
     </Modal>
   );

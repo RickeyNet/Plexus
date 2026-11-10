@@ -54,44 +54,49 @@ export function AnalysisDetailModal({ isOpen, onClose, analysisId }: Props) {
   const approve = useApproveRiskAnalysis();
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Risk Analysis Details" size="large">
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Risk Analysis Details"
+      size="medium"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Close
+          </button>
+          {query.data && !query.data.approved && (
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={approve.isPending}
+              onClick={() => {
+                if (!query.data) return;
+                approve.mutate(query.data.id, {
+                  onSuccess: () => onClose(),
+                  onError: (e) => {
+                    void alert({ message: (e as Error).message, variant: 'error' });
+                  },
+                });
+              }}
+            >
+              {approve.isPending ? 'Approving…' : 'Approve Change'}
+            </button>
+          )}
+        </>
+      }
+    >
       {query.isPending && <LoadingState />}
       {query.error && (
         <Callout tone="danger">
           Failed to load: {(query.error as Error).message}
         </Callout>
       )}
-      {query.data && (
-        <DetailBody
-          analysis={query.data}
-          approving={approve.isPending}
-          onApprove={() => {
-            if (!query.data) return;
-            approve.mutate(query.data.id, {
-              onSuccess: () => onClose(),
-              onError: (e) => {
-                void alert({ message: (e as Error).message, variant: 'error' });
-              },
-            });
-          }}
-          onClose={onClose}
-        />
-      )}
+      {query.data && <DetailBody analysis={query.data} />}
     </Modal>
   );
 }
 
-function DetailBody({
-  analysis,
-  approving,
-  onApprove,
-  onClose,
-}: {
-  analysis: RiskAnalysis;
-  approving: boolean;
-  onApprove: () => void;
-  onClose: () => void;
-}) {
+function DetailBody({ analysis }: { analysis: RiskAnalysis }) {
   const color = toneColor(severityTone(analysis.risk_level));
   const percent = scorePercent(analysis.risk_score);
   const analysisObj = parseJsonObject<AnalysisJson>(analysis.analysis);
@@ -292,22 +297,6 @@ function DetailBody({
           </pre>
         </details>
       )}
-
-      <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-        {!isApproved && (
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={approving}
-            onClick={onApprove}
-          >
-            {approving ? 'Approving…' : 'Approve Change'}
-          </button>
-        )}
-        <button type="button" className="btn btn-secondary" onClick={onClose}>
-          Close
-        </button>
-      </div>
     </>
   );
 }

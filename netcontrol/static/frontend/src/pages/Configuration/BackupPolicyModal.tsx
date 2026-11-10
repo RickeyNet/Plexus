@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import { groupLabel } from '@/api/inventory';
 import { useAuthStatus } from '@/api/auth';
@@ -9,8 +9,9 @@ import {
   useUpdateBackupPolicy,
 } from '@/api/configuration';
 import { useServiceCredentialsList } from '@/api/settings';
+import { Callout } from '@/components/Callout';
+import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
-import { useDialogs } from '@/components/DialogProvider-context';
 
 interface Props {
   policy: ConfigBackupPolicy | null; // null = create mode
@@ -18,7 +19,6 @@ interface Props {
 }
 
 export function BackupPolicyModal({ policy, onClose }: Props) {
-  const { alert } = useDialogs();
   const isEdit = policy != null;
   const groups = useInventoryGroups();
   const creds = useCredentials();
@@ -41,6 +41,10 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
     policy ? Math.round(policy.interval_seconds / 3600) : 24,
   );
   const [retentionDays, setRetentionDays] = useState(policy?.retention_days ?? 30);
+  const [nameError, setNameError] = useState<string | null>(null);
+  const [credError, setCredError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const formId = useId();
 
   // Seed default selections from server data when it arrives (create mode only).
   const [prevGroups, setPrevGroups] = useState(groups.data);
@@ -81,14 +85,17 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    setNameError(null);
+    setCredError(null);
+    setSaveError(null);
     if (!name.trim()) {
-      void alert('Name is required');
+      setNameError('Name is required');
       return;
     }
     const interval_seconds = Math.max(1, hours) * 3600;
     if (isEdit) {
       if (!credId || staleCred) {
-        void alert('Choose a credential for this policy');
+        setCredError('Choose a credential for this policy');
         return;
       }
       update.mutate(
@@ -104,9 +111,7 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
         },
         {
           onSuccess: () => onClose(),
-          onError: (err) => {
-            void alert({ message: (err as Error).message, variant: 'error' });
-          },
+          onError: (err) => setSaveError((err as Error).message),
         },
       );
     } else {
@@ -121,9 +126,7 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
         },
         {
           onSuccess: () => onClose(),
-          onError: (err) => {
-            void alert({ message: (err as Error).message, variant: 'error' });
-          },
+          onError: (err) => setSaveError((err as Error).message),
         },
       );
     }
@@ -134,16 +137,32 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
       isOpen
       onClose={onClose}
       title={isEdit ? 'Edit Backup Policy' : 'Create Backup Policy'}
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={isPending}>
+            {isPending ? 'Saving…' : isEdit ? 'Save' : 'Create'}
+          </button>
+        </>
+      }
     >
-      <form onSubmit={handleSubmit}>
+      <form id={formId} onSubmit={handleSubmit}>
+        {saveError && <Callout tone="danger">{saveError}</Callout>}
         <label className="form-label">Policy Name</label>
         <input
           className="form-input"
           placeholder="Daily backup"
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={(e) => {
+            setName(e.target.value);
+            setNameError(null);
+          }}
+          aria-invalid={!!nameError}
           required
         />
+        <FieldError>{nameError}</FieldError>
         {isEdit ? (
           <>
             <label className="form-label" style={{ marginTop: '0.75rem' }}>
@@ -185,9 +204,11 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
         <select
           className="form-select"
           value={staleCred ? '' : (credId ?? '')}
-          onChange={(e) =>
-            setCredId(e.target.value ? Number(e.target.value) : null)
-          }
+          onChange={(e) => {
+            setCredId(e.target.value ? Number(e.target.value) : null);
+            setCredError(null);
+          }}
+          aria-invalid={!!credError}
           required
         >
           {(staleCred || credId == null) && (
@@ -220,6 +241,7 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
             ))
           )}
         </select>
+        <FieldError>{credError}</FieldError>
         {staleCred && (
           <p
             style={{
@@ -255,21 +277,6 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
           value={retentionDays}
           onChange={(e) => setRetentionDays(Number(e.target.value || '30'))}
         />
-        <div
-          style={{
-            marginTop: '1rem',
-            display: 'flex',
-            justifyContent: 'flex-end',
-            gap: '0.5rem',
-          }}
-        >
-          <button type="button" className="btn btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="btn btn-primary" disabled={isPending}>
-            {isPending ? 'Saving…' : isEdit ? 'Save' : 'Create'}
-          </button>
-        </div>
       </form>
     </Modal>
   );

@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 
 import { useUploadUpgradeImage } from '@/api/upgrades';
+import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
 
 interface Props {
@@ -13,6 +14,7 @@ export function NewImageModal({ isOpen, onClose }: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
+  const formId = useId();
 
   const [prevOpen, setPrevOpen] = useState(isOpen);
   if (isOpen !== prevOpen) {
@@ -50,8 +52,33 @@ export function NewImageModal({ isOpen, onClose }: Props) {
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Upload Software Image">
-      <form onSubmit={handleSubmit}>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Upload Software Image"
+      size="small"
+      footer={
+        <>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={onClose}
+            disabled={upload.isPending}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            form={formId}
+            className="btn btn-primary"
+            disabled={!file || upload.isPending}
+          >
+            {upload.isPending ? 'Uploading…' : 'Upload'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={handleSubmit}>
         <div className="form-group">
           <label className="form-label">IOS-XE Image File (.bin)</label>
           <input
@@ -91,33 +118,7 @@ export function NewImageModal({ isOpen, onClose }: Props) {
             </p>
           </div>
         )}
-        {error && (
-          <p style={{ color: 'var(--danger)', marginTop: '0.5rem' }}>{error}</p>
-        )}
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'flex-end',
-            gap: '0.5rem',
-            marginTop: '1rem',
-          }}
-        >
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={onClose}
-            disabled={upload.isPending}
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            className="btn btn-primary"
-            disabled={!file || upload.isPending}
-          >
-            {upload.isPending ? 'Uploading…' : 'Upload'}
-          </button>
-        </div>
+        {error && <Callout tone="danger">{error}</Callout>}
       </form>
     </Modal>
   );

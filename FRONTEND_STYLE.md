@@ -28,9 +28,9 @@ decision log in `docs/FRONTEND_MIGRATION.md` (archived migration plan).
 | Server state | TanStack Query v5 |
 | Charts | ECharts (wrapped in `src/lib/echart.tsx`) |
 | Styling | Legacy stylesheet `netcontrol/static/css/style.css` - no PatternFly, no Tailwind, no CSS-in-JS framework |
-| Modals | `<Modal>` in `src/components/Modal.tsx` (portal + Escape-to-close) |
+| Modals | `<Modal>` in `src/components/Modal.tsx` (portal, pinned header/footer, focus trap) |
 | Forms | Plain `useState` + native HTML `<input>/<select>/<textarea>` |
-| Confirm dialogs | Native `confirm()` |
+| Confirm dialogs | `confirm()` / `alert()` from `useDialogs()` (`src/components/DialogProvider-context.ts`) |
 
 ### Installed but currently unused
 
@@ -319,16 +319,45 @@ a new CSS rule.
 
 ### Modals
 
-Use `<Modal isOpen onClose title size?>` from `@/components/Modal`. Do
-not build a new modal primitive. `size="large"` for detail/correlation
-modals; default for create/edit forms.
+Use `<Modal isOpen onClose title size? footer?>` from `@/components/Modal`.
+Do not build a new modal primitive or a hand-rolled overlay.
+
+- **Footer.** Action buttons go in the `footer` prop, never in a flex row
+  at the end of the body: the header and footer stay put and only the body
+  scrolls. Order is Cancel/Close first (`btn btn-secondary`), secondary
+  actions next, the primary action (`btn btn-primary` or `btn btn-danger`)
+  last. An item that belongs on the left (Delete, a status line) takes
+  `modal-footer-start`. For a plain Cancel + primary pair use
+  `<ModalActions>` from `@/components/ModalActions`.
+- **Forms.** A submit button in the footer sits outside the `<form>`, so
+  give the form `id={useId()}` and the button `form={formId}`.
+- **Sizes.** `small` (480px) confirms and one- or two-field prompts;
+  default (700px) single-column forms; `medium` (1000px) two-column forms,
+  embedded editors and modest tables; `large` (1600px) only wide tables,
+  diffs and log viewers.
+- **Must-complete modals.** `dismissible={false}` removes the × and turns
+  off Escape and backdrop close.
+
+### Validation and errors in forms
+
+Do not report something the user can fix in the open form through
+`alert()`. Put `<FieldError>` (`@/components/FieldError`) under the field
+with `aria-invalid` on the input, and clear it when the field changes. A
+failed save, or a message not tied to one field, is a
+`<Callout tone="danger">` at the top of the form. `alert()` is for the
+result of an action with no form open (a row action, a background task).
 
 ### Confirm dialogs
 
-`window.confirm()` (or just `confirm()`) is the current pattern for
-destructive/expensive actions. See
-`DeploymentDetailModal.tsx:99-106` for the canonical shape. Replace
-with a real dialog only if a module specifically needs richer copy.
+`const { confirm } = useDialogs()` then
+`await confirm({ title, message, confirmLabel })`; all three are required.
+The title names the action and object type ("Delete template"), the
+message names the specific object and its consequences, the label is the
+verb ("Delete"). Pass `confirmVariant: 'primary'` when the action is not
+destructive. When the action is itself a cancellation, set `cancelLabel`
+("Keep running") so the dialog never shows "Cancel" beside "Cancel job".
+Line breaks (`\n`) in a string message are kept. Never use
+`window.confirm()` or `window.alert()`.
 
 ### Conditional rendering
 

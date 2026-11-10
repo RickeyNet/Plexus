@@ -1,8 +1,9 @@
-import { useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
-import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useCreateOidProfile,
   useOidProfile,
@@ -18,7 +19,6 @@ interface Props {
 const DEFAULT_OIDS = '[\n  {"oid": "", "metric_name": "", "label": "", "type": "gauge"}\n]';
 
 export function OidProfileModal({ mode, profileId, onClose }: Props) {
-  const { alert } = useDialogs();
   const isOpen = mode != null;
   const profileQuery = useOidProfile(mode === 'edit' ? profileId : null);
   const createMut = useCreateOidProfile();
@@ -29,12 +29,17 @@ export function OidProfileModal({ mode, profileId, onClose }: Props) {
   const [deviceType, setDeviceType] = useState('');
   const [description, setDescription] = useState('');
   const [oidsJson, setOidsJson] = useState(DEFAULT_OIDS);
+  const [nameError, setNameError] = useState('');
+  const [jsonError, setJsonError] = useState('');
+  const [saveError, setSaveError] = useState('');
+  const formId = useId();
 
   const [prevMode, setPrevMode] = useState(mode);
   const [prevData, setPrevData] = useState(profileQuery.data);
   if (mode !== prevMode || profileQuery.data !== prevData) {
     setPrevMode(mode);
     setPrevData(profileQuery.data);
+    setNameError(''); setJsonError(''); setSaveError('');
     if (mode === 'create') {
       setName(''); setVendor(''); setDeviceType(''); setDescription(''); setOidsJson(DEFAULT_OIDS);
     } else if (mode === 'edit' && profileQuery.data) {
@@ -49,16 +54,17 @@ export function OidProfileModal({ mode, profileId, onClose }: Props) {
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!name.trim()) {
-      void alert('Profile name is required');
-      return;
-    }
+    setSaveError('');
+    const nameErr = name.trim() ? '' : 'Profile name is required';
+    let jsonErr = '';
     try {
       JSON.parse(oidsJson);
     } catch {
-      void alert('Invalid OID JSON');
-      return;
+      jsonErr = 'Invalid OID JSON';
     }
+    setNameError(nameErr);
+    setJsonError(jsonErr);
+    if (nameErr || jsonErr) return;
     const data = {
       name: name.trim(),
       vendor: vendor.trim(),
@@ -66,7 +72,7 @@ export function OidProfileModal({ mode, profileId, onClose }: Props) {
       description: description.trim(),
       oids_json: oidsJson.trim(),
     };
-    const onError = (err: unknown) => { void alert({ message: (err as Error).message, variant: 'error' }); };
+    const onError = (err: unknown) => { setSaveError((err as Error).message); };
     if (mode === 'edit' && profileId != null) {
       updateMut.mutate({ id: profileId, data }, { onSuccess: onClose, onError });
     } else {
@@ -77,14 +83,40 @@ export function OidProfileModal({ mode, profileId, onClose }: Props) {
   const pending = createMut.isPending || updateMut.isPending;
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={mode === 'edit' ? 'Edit OID Profile' : 'New OID Profile'} size="large">
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={mode === 'edit' ? 'Edit OID Profile' : 'New OID Profile'}
+      size="medium"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button
+            type="submit"
+            form={formId}
+            className="btn btn-primary"
+            disabled={pending || (mode === 'edit' && profileQuery.isPending)}
+          >
+            {pending ? 'Saving…' : mode === 'edit' ? 'Save' : 'Create'}
+          </button>
+        </>
+      }
+    >
       {mode === 'edit' && profileQuery.isPending ? (
         <LoadingState />
       ) : (
-        <form onSubmit={handleSubmit}>
+        <form id={formId} onSubmit={handleSubmit}>
+          {saveError && <Callout tone="danger">{saveError}</Callout>}
           <div className="form-group">
             <label className="form-label">Name</label>
-            <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} required />
+            <input
+              className="form-input"
+              value={name}
+              onChange={(e) => { setName(e.target.value); setNameError(''); }}
+              aria-invalid={!!nameError}
+              required
+            />
+            <FieldError>{nameError}</FieldError>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
             <div className="form-group">
@@ -106,15 +138,11 @@ export function OidProfileModal({ mode, profileId, onClose }: Props) {
               className="form-textarea"
               rows={10}
               value={oidsJson}
-              onChange={(e) => setOidsJson(e.target.value)}
+              onChange={(e) => { setOidsJson(e.target.value); setJsonError(''); }}
+              aria-invalid={!!jsonError}
               style={{ fontFamily: 'monospace', fontSize: '0.85rem' }}
             />
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
-            <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={pending}>
-              {pending ? 'Saving…' : mode === 'edit' ? 'Save' : 'Create'}
-            </button>
+            <FieldError>{jsonError}</FieldError>
           </div>
         </form>
       )}
