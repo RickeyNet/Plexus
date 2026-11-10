@@ -118,7 +118,7 @@ export function ChangesModal({ isOpen, onClose, onAcknowledged }: Props) {
                 <div
                   key={i}
                   style={{
-                    background: `${color}14`,
+                    background: `color-mix(in srgb, ${color} 8%, transparent)`,
                     borderLeft: `3px solid ${color}`,
                     padding: '0.5rem 0.75rem',
                     marginBottom: '0.4rem',

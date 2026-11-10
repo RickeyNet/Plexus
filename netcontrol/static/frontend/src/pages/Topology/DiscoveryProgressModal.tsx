@@ -25,6 +25,7 @@ export function DiscoveryProgressModal({ isOpen, groupId, onClose, onComplete }:
   const [elapsed, setElapsed] = useState(0);
   const [feed, setFeed] = useState<FeedEntry[]>([]);
   const [running, setRunning] = useState(false);
+  const [failed, setFailed] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const startedRef = useRef(false);
 
@@ -45,6 +46,7 @@ export function DiscoveryProgressModal({ isOpen, groupId, onClose, onComplete }:
     setStep('Waiting for stream...');
     setScanned(0); setTotal(null); setLinks(0); setElapsed(0); setFeed([]);
     setRunning(true);
+    setFailed(false);
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -55,6 +57,7 @@ export function DiscoveryProgressModal({ isOpen, groupId, onClose, onComplete }:
 
     let runningLinks = 0;
     let finalResult: DiscoveryStreamEvent | null = null;
+    let streamError = false;
 
     discoverTopologyStream(groupId, (event) => {
       if (event.type === 'start') {
@@ -88,6 +91,7 @@ export function DiscoveryProgressModal({ isOpen, groupId, onClose, onComplete }:
       } else if (event.type === 'done') {
         finalResult = event;
       } else if (event.type === 'error') {
+        streamError = true;
         append({ text: `Error: ${event.message}`, color: 'var(--danger)' });
       }
     }, controller.signal)
@@ -96,6 +100,11 @@ export function DiscoveryProgressModal({ isOpen, groupId, onClose, onComplete }:
           setTitle('Discovery Complete');
           setStep(`${finalResult.links_discovered} links from ${finalResult.hosts_scanned} hosts`);
           append({ text: `── Done: ${finalResult.links_discovered} links, ${finalResult.hosts_scanned} hosts scanned, ${finalResult.errors} error(s)`, color: 'var(--primary-light)' });
+        } else if (streamError) {
+          setFailed(true);
+          setTitle('Discovery failed');
+          setSubtitle('The scan stopped on an error; see the log below');
+          setStep('Stopped on an error');
         } else {
           setTitle('Discovery Finished');
           setStep('No results received');
@@ -104,6 +113,10 @@ export function DiscoveryProgressModal({ isOpen, groupId, onClose, onComplete }:
       })
       .catch((err: Error) => {
         if (err.name === 'AbortError') return;
+        setFailed(true);
+        setTitle('Discovery failed');
+        setSubtitle('The scan stopped on an error; see the log below');
+        setStep('Stopped on an error');
         append({ text: `Error: ${err.message}`, color: 'var(--danger)' });
       })
       .finally(() => {
@@ -122,15 +135,39 @@ export function DiscoveryProgressModal({ isOpen, groupId, onClose, onComplete }:
     onClose();
   }
 
+  // Closing the stream cancels the scan on the server: the discovery runs
+  // inside the response, so nothing is walked after the request is dropped.
+  // Groups already saved stay saved, so the map is reloaded.
+  function handleStop() {
+    abortRef.current?.abort();
+    setTitle('Discovery stopped');
+    setSubtitle('Groups saved before the stop are kept');
+    setStep(`Stopped after ${scanned} host(s)`);
+    append({ text: '── Stopped by user', color: 'var(--warning)' });
+    onComplete();
+  }
+
   const elapsedStr = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`;
   const pct = total ? Math.round((scanned / total) * 100) : 0;
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title="Neighbor Discovery" size="medium">
+    <Modal
+      isOpen={isOpen}
+      onClose={handleClose}
+      title="Neighbor Discovery"
+      size="medium"
+      footer={
+        running ? (
+          <button type="button" className="btn btn-danger" onClick={handleStop}>Stop</button>
+        ) : (
+          <button type="button" className="btn btn-secondary" onClick={handleClose}>Close</button>
+        )
+      }
+    >
       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
         {running && <div className="discovery-spinner" />}
         <div>
-          <div style={{ fontSize: '1rem', fontWeight: 600 }}>{title}</div>
+          <div style={{ fontSize: '1rem', fontWeight: 600, color: failed ? 'var(--danger)' : undefined }}>{title}</div>
           <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>{subtitle}</div>
         </div>
       </div>

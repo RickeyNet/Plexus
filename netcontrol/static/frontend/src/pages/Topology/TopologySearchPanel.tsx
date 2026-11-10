@@ -10,6 +10,8 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { useMacSearch, type MacEntry } from '@/api/networkTools';
 import { useHostsByVlan, type VlanHostRole } from '@/api/host-details';
+import { EmptyState } from '@/components/EmptyState';
+import { MAP_PANEL_MAX_WIDTH } from './helpers';
 
 export type SearchKind = 'auto' | 'mac' | 'ip' | 'vlan';
 
@@ -25,6 +27,8 @@ interface Props {
   /** Map node of a Meraki device, for clients seen on Meraki devices. */
   resolveMeraki?: (orgRef: number, nodeId: string) => number | string | undefined;
   onClose: () => void;
+  /** Keep the panel mounted (results and highlight stay) but out of view. */
+  hidden?: boolean;
 }
 
 const MAC_RE = /^[0-9a-f]{2}([:.-]?[0-9a-f]{2}){5}$/i;
@@ -41,7 +45,7 @@ function detectKind(q: string): Exclude<SearchKind, 'auto'> {
   return 'mac';
 }
 
-export function TopologySearchPanel({ onHighlight, resolveMeraki, onClose }: Props) {
+export function TopologySearchPanel({ onHighlight, resolveMeraki, onClose, hidden = false }: Props) {
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState<SearchKind>('auto');
   const [debounced, setDebounced] = useState('');
@@ -132,7 +136,10 @@ export function TopologySearchPanel({ onHighlight, resolveMeraki, onClose }: Pro
         top: '0.75rem',
         left: '0.75rem',
         width: 380,
-        maxHeight: 'calc(100% - 1.5rem)',
+        maxWidth: MAP_PANEL_MAX_WIDTH,
+        // Stops above the zoom buttons in the map's bottom left corner.
+        maxHeight: 'calc(100% - 4.5rem)',
+        display: hidden ? 'none' : undefined,
         background: 'var(--card-bg)',
         border: '1px solid var(--border)',
         borderRadius: '0.5rem',
@@ -244,21 +251,22 @@ function ResultList({
     }
     return (
       <div>
-        <Heading>{vlanRows.length} device(s)</Heading>
-        <table className="data-table table-sm">
+        <Heading>{vlanRows.length} device{vlanRows.length === 1 ? '' : 's'}</Heading>
+        <table className="data-table table-sm topology-search-table">
           <thead>
             <tr>
               <th>Host</th>
-              <th>Role</th>
               <th>Ports</th>
             </tr>
           </thead>
           <tbody>
             {vlanRows.map((h) => (
               <tr key={h.host_id}>
-                <td>{h.hostname || `#${h.host_id}`}</td>
-                <td>{h.roles.join(', ')}</td>
                 <td>
+                  <div>{h.hostname || `#${h.host_id}`}</div>
+                  <div className="topology-search-sub">{h.roles.join(', ') || '-'}</div>
+                </td>
+                <td title={h.ports.map((p) => p.name).join(', ') || undefined}>
                   {h.ports.length
                     ? h.ports
                         .slice(0, 4)
@@ -280,29 +288,28 @@ function ResultList({
   }
   return (
     <div>
-      <Heading>{macRows.length} entry(s)</Heading>
-      <table className="data-table table-sm">
+      <Heading>{macRows.length === 1 ? '1 entry' : `${macRows.length} entries`}</Heading>
+      <table className="data-table table-sm topology-search-table">
         <thead>
           <tr>
-            <th>MAC</th>
-            <th>IP</th>
-            <th>Host</th>
-            <th>Port</th>
-            <th>VLAN</th>
+            <th>MAC / IP</th>
+            <th>Host / port / VLAN</th>
           </tr>
         </thead>
         <tbody>
           {macRows.map((r) => (
             <tr key={`${r.source ?? 'host'}-${r.host_id ?? r.org_ref}-${r.network_name ?? ''}-${r.mac_address}-${r.vlan}-${r.port_name}`}>
-              <td style={{ fontFamily: 'monospace', fontSize: '0.72rem' }} title={r.description || undefined}>
-                {r.mac_address}
+              <td title={r.description || undefined}>
+                <div style={{ fontFamily: 'monospace' }}>{r.mac_address}</div>
+                <div className="topology-search-sub">{r.ip_address || 'no IP'}</div>
               </td>
-              <td>{r.ip_address || '-'}</td>
               <td title={r.source === 'meraki' ? `Meraki${r.network_name ? ` · ${r.network_name}` : ''}` : undefined}>
-                {r.hostname || (r.host_id != null ? `#${r.host_id}` : '-')}
+                <div>{r.hostname || (r.host_id != null ? `#${r.host_id}` : '-')}</div>
+                <div className="topology-search-sub">
+                  {r.port_name || (r.ssid ? `SSID ${r.ssid}` : 'no port')}
+                  {r.vlan ? ` · VLAN ${r.vlan}` : ''}
+                </div>
               </td>
-              <td>{r.port_name || (r.ssid ? `SSID ${r.ssid}` : '-')}</td>
-              <td>{r.vlan || '-'}</td>
             </tr>
           ))}
         </tbody>
@@ -326,5 +333,5 @@ function Heading({ children }: { children: React.ReactNode }) {
 }
 
 function Empty({ msg }: { msg: string }) {
-  return <p className="text-muted" style={{ fontSize: '0.78rem' }}>{msg}</p>;
+  return <EmptyState compact message={msg} />;
 }

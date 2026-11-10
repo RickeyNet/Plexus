@@ -33,11 +33,13 @@ import {
   draggedPanelWidth,
   edgeProtocolLabel,
   formatBps,
+  MAP_PANEL_MAX_WIDTH,
   providerLabel,
   providerScopeName,
   providerSourceName,
   SCROLL_X_STYLE,
   stpPortKey,
+  stpTone,
 } from './helpers';
 import { MerakiDetails } from './MerakiDetails';
 import {
@@ -241,8 +243,9 @@ export function NodeDetails({
         top: '0.75rem',
         right: '0.75rem',
         width: panelWidth,
-        // A remembered width never pushes the panel past the map's left edge.
-        maxWidth: 'calc(100% - 1.5rem)',
+        // A remembered width never pushes the panel past the map's left edge;
+        // a default width also leaves part of a narrow map in view.
+        maxWidth: customWidth != null ? 'calc(100% - 1.5rem)' : MAP_PANEL_MAX_WIDTH,
         maxHeight: 'calc(100% - 1.5rem)',
         display: 'flex',
         flexDirection: 'column',
@@ -283,11 +286,12 @@ export function NodeDetails({
           style={{
             display: 'flex',
             justifyContent: 'space-between',
-            alignItems: 'center',
+            alignItems: 'flex-start',
+            gap: '0.5rem',
             marginBottom: '0.5rem',
           }}
         >
-          <h4 style={{ margin: 0 }}>{node.label || 'Unknown'}</h4>
+          <h4 style={{ margin: 0, minWidth: 0, overflowWrap: 'anywhere' }}>{node.label || 'Unknown'}</h4>
           <button
             type="button"
             className="modal-close"
@@ -551,19 +555,11 @@ function OverviewTab(props: {
                     </div>
                   )}
                   {stp && (
-                    <div
-                      style={{
-                        fontSize: '0.7rem',
-                        marginTop: '0.25rem',
-                        padding: '0.1rem 0.35rem',
-                        background: 'rgba(from var(--success) r g b / 0.14)',
-                        color: 'var(--success)',
-                        borderRadius: '0.2rem',
-                        display: 'inline-block',
-                      }}
-                    >
-                      STP {stp.port_state ?? 'unknown'}
-                      {stp.port_role ? '/' + stp.port_role : ''} VLAN {stp.vlan_id ?? ''}
+                    <div style={{ marginTop: '0.25rem' }}>
+                      <span className={`badge badge-${stpTone(stp.port_state) ?? 'secondary'}`}>
+                        STP {stp.port_state ?? 'unknown'}
+                        {stp.port_role ? '/' + stp.port_role : ''} VLAN {stp.vlan_id ?? ''}
+                      </span>
                     </div>
                   )}
                 </div>

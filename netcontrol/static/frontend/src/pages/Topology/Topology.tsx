@@ -51,6 +51,9 @@ import {
   isManagedNode,
   isMerakiEndpointNode,
   isRemoteUserNode,
+  MAP_MIN_HEIGHT,
+  mapFillHeight,
+  mapPanelsCollide,
   merakiNodeIndex,
   merakiNodeKey,
   merakiNodeShape,
@@ -1464,6 +1467,12 @@ export function Topology() {
     networkRef.current?.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
   }
 
+  function handleZoom(factor: number) {
+    const network = networkRef.current;
+    if (!network) return;
+    network.moveTo({ scale: network.getScale() * factor, animation: { duration: 200, easingFunction: 'easeInOutQuad' } });
+  }
+
   async function handleResetPositions() {
     const saved = Object.keys(savedPositionsRef.current).length;
     const ok = await confirm({
@@ -1918,6 +1927,42 @@ export function Topology() {
     }
   }
 
+  const hasMap = !!data && data.nodes.length > 0;
+  const showIntegrationLegend = hasMeraki && activeFilter !== 'inventory';
+
+  // The map ends at the bottom of the window whatever is above it (a wrapped
+  // toolbar, the path card, the STP bar), so it is measured rather than given
+  // a fixed offset. Its width decides whether two panels fit side by side.
+  const mapBoxRef = useRef<HTMLDivElement | null>(null);
+  const legendRef = useRef<HTMLDivElement | null>(null);
+  const [mapHeight, setMapHeight] = useState<number | null>(null);
+  const [mapWidth, setMapWidth] = useState(0);
+  useEffect(() => {
+    const box = mapBoxRef.current;
+    if (!box || !hasMap) return;
+    const measure = () => {
+      // Top edge in the page, not in the viewport: scrolling must not resize the map.
+      const top = box.getBoundingClientRect().top + window.scrollY;
+      const legend = legendRef.current;
+      // The legend with its margin, and the page's bottom padding.
+      const below = (legend ? legend.offsetHeight + 12 : 0) + 24;
+      setMapHeight(mapFillHeight(window.innerHeight, top, below));
+      setMapWidth(box.clientWidth);
+    };
+    const frame = requestAnimationFrame(measure);
+    window.addEventListener('resize', measure);
+    // The cards above the map and the legend change height as they wrap, open and close.
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    if (box.parentElement) observer?.observe(box.parentElement);
+    if (legendRef.current) observer?.observe(legendRef.current);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener('resize', measure);
+      observer?.disconnect();
+    };
+  }, [hasMap]);
+  const panelsCollide = mapPanelsCollide(mapWidth);
+
   return (
     <div style={{ position: 'relative' }}>
       <PageHelp
@@ -1927,13 +1972,10 @@ export function Topology() {
       />
 
       <div className="stack stack-sm">
-        {actionMsg && (
-          <div className="card card-sm" style={{ borderLeft: '3px solid var(--success)' }}>
-            {actionMsg}
-          </div>
-        )}
-
-        <div className="card card-sm toolbar">
+        {/* The toolbar sits above the cards and the map below it, so its search
+            results are not painted under them (each blurred card is its own
+            stacking context). */}
+        <div className="card card-sm toolbar topology-toolbar">
           <select aria-label="Filter by inventory group" className="form-select form-select-sm" style={{ minWidth: 160 }} value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)}>
             <option value="">All Groups</option>
             {groupsQuery.data?.map((g) => (
@@ -2023,10 +2065,27 @@ export function Topology() {
             )}
           </div>
 
-          <button className="btn btn-primary btn-sm" onClick={() => setSourcesOpen(true)} title="Everything that feeds the map - neighbor discovery, Meraki, Cato, Cisco FMC, Palo Alto Panorama, Appgate SDP, AWS, Azure, GCP: add, collect, history">Sources</button>
-          <button className="btn btn-secondary btn-sm" onClick={handleRefresh}>Refresh</button>
-          <button className={`btn btn-sm ${pathMode ? 'btn-primary' : 'btn-secondary'}`} onClick={togglePathMode} title="Pick devices or sites and see how they reach one another">{pathMode ? 'Exit Path' : 'Path Mode'}</button>
-          <button className={`btn btn-sm ${searchPanelOpen ? 'btn-primary' : 'btn-secondary'}`} onClick={toggleSearchPanel}>{searchPanelOpen ? 'Close Search' : 'Find MAC/IP/VLAN'}</button>
+          {/* Next to the search box: the box searches what is on the map, this
+              looks an address up in the collected MAC / ARP tables. The labels
+              of both toggles stay the same, the pressed state shows which is on. */}
+          <button
+            type="button"
+            className={`btn btn-sm ${searchPanelOpen ? 'btn-primary' : 'btn-secondary'}`}
+            aria-pressed={searchPanelOpen}
+            onClick={toggleSearchPanel}
+            title="Look a MAC address, IP address or VLAN up in the collected MAC / ARP tables and highlight the devices and ports it is seen on"
+          >
+            MAC / ARP lookup
+          </button>
+          <button
+            type="button"
+            className={`btn btn-sm ${pathMode ? 'btn-primary' : 'btn-secondary'}`}
+            aria-pressed={pathMode}
+            onClick={togglePathMode}
+            title="Pick devices or sites and see how they reach one another"
+          >
+            Path Mode
+          </button>
           <button
             type="button"
             className="btn btn-sm btn-secondary"
@@ -2137,6 +2196,9 @@ export function Topology() {
             htmlOpenUrl={topologyExportUrl(groupId, false, exportPath)}
             withPath={exportPath !== null}
           />
+          <span className="toolbar-spacer" />
+          <button type="button" className="btn btn-secondary btn-sm" onClick={handleRefresh}>Refresh</button>
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => setSourcesOpen(true)} title="Everything that feeds the map - neighbor discovery, Meraki, Cato, Cisco FMC, Palo Alto Panorama, Appgate SDP, AWS, Azure, GCP: add, collect, history">Sources</button>
         </div>
 
         {highlightCount > 0 && (
@@ -2187,7 +2249,7 @@ export function Topology() {
         )}
 
         {pathMode && (
-          <div className="card card-sm" style={{ borderLeft: '3px solid var(--primary)', fontSize: '0.85rem' }}>
+          <div className="card card-sm topology-path-card" style={{ borderLeft: '3px solid var(--primary)', fontSize: '0.85rem' }}>
             <div className="toolbar" style={{ marginBottom: 0 }}>
               <strong>Path</strong>
               {!pathSiteInput && !pathSubnetInput && (
@@ -2333,6 +2395,13 @@ export function Topology() {
           </div>
         )}
 
+        {/* With a map the message floats over it; without one there is nothing to float over. */}
+        {actionMsg && !hasMap && (
+          <div className="card card-sm" role="status" style={{ borderLeft: '3px solid var(--success)' }}>
+            {actionMsg}
+          </div>
+        )}
+
         {topologyQuery.error && !rawData ? (
           <QueryError what="topology" query={topologyQuery} />
         ) : positionsQuery.error && !positions ? (
@@ -2348,13 +2417,28 @@ export function Topology() {
           </div>
         )}
 
-        <div style={{ position: 'relative', height: 'calc(100vh - 280px)', minHeight: 460, border: '1px solid var(--border)', borderRadius: '0.5rem', overflow: 'hidden', display: data && data.nodes.length ? 'block' : 'none' }}>
+        <div
+          ref={mapBoxRef}
+          className="topology-map-box"
+          style={{ height: mapHeight ?? 'calc(100vh - 280px)', minHeight: MAP_MIN_HEIGHT, display: hasMap ? 'block' : 'none' }}
+        >
           <div ref={containerRef} id="topology-canvas" style={{ width: '100%', height: '100%' }} />
+          {actionMsg && (
+            <div className="topology-flash" role="status">{actionMsg}</div>
+          )}
+          <div className="topology-zoom" role="group" aria-label="Map zoom">
+            <button type="button" className="btn btn-secondary btn-sm" aria-label="Zoom in" title="Zoom in" onClick={() => handleZoom(1.3)}>+</button>
+            <button type="button" className="btn btn-secondary btn-sm" aria-label="Zoom out" title="Zoom out" onClick={() => handleZoom(1 / 1.3)}>−</button>
+            <button type="button" className="btn btn-secondary btn-sm" title="Fit the whole map in view" onClick={handleFit}>Fit</button>
+          </div>
           {searchPanelOpen && (
             <TopologySearchPanel
               onHighlight={stableApplySearchHighlight}
               resolveMeraki={resolveMerakiNode}
               onClose={() => setSearchPanelOpen(false)}
+              // On a narrow map the lookup steps aside for the details panel
+              // (it stays mounted, so its results and highlight are kept).
+              hidden={panelsCollide && (detailsNode != null || detailsEdge != null)}
             />
           )}
           {detailsEdge && data && !detailsNode && (
@@ -2399,41 +2483,61 @@ export function Topology() {
       </div>
 
       {data && data.nodes.length > 0 && (
-        <div className="topology-legend">
-          <span className="topology-legend-item"><span className="topology-legend-dot topology-legend-dot-inventory" /> Inventory Device</span>
-          <span className="topology-legend-item"><span className="topology-legend-dot topology-legend-dot-dashed" /> External Neighbor</span>
-          <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-cdp" /> CDP</span>
-          <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-lldp" /> LLDP</span>
-          <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-ospf" /> OSPF</span>
-          <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-bgp" /> BGP</span>
-          {hasMeraki && activeFilter !== 'inventory' && (
-            <>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'var(--success)' }} /> Meraki / Cato / Cisco FMC / Panorama / Appgate / AWS / Azure / GCP</span>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'var(--violet)' }} /> VPN Tunnel</span>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'var(--warning)' }} /> Cloud Attachment</span>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'var(--info)' }} /> WAN Uplink</span>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'var(--text-muted)' }} /> Managed by FMC / Panorama</span>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'var(--danger)' }} /> Offline / Unreachable</span>
-            </>
-          )}
+        <div className="topology-legend" ref={legendRef}>
+          {/* One group per meaning: a colour is used once inside a group, and
+              the group name says what it stands for there. Devices are dots,
+              links are lines. */}
+          <span className="topology-legend-group">
+            <span className="topology-legend-title">Devices</span>
+            <span className="topology-legend-item"><span className="topology-legend-dot topology-legend-dot-inventory" /> Inventory</span>
+            <span className="topology-legend-item"><span className="topology-legend-dot topology-legend-dot-dashed" /> External neighbor</span>
+            {showIntegrationLegend && (
+              <>
+                <span className="topology-legend-item" title="Meraki, Cato, Cisco FMC, Panorama, Appgate, AWS, Azure and GCP devices"><span className="topology-legend-dot" style={{ background: 'var(--success)' }} /> Integration</span>
+                <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'var(--text-muted)' }} /> Managed by FMC / Panorama</span>
+                <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'var(--danger)' }} /> Offline / unreachable</span>
+              </>
+            )}
+          </span>
+          <span className="topology-legend-group">
+            <span className="topology-legend-title">Links</span>
+            <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-cdp" /> CDP</span>
+            <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-lldp" /> LLDP</span>
+            <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-ospf" /> OSPF</span>
+            <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-bgp" /> BGP</span>
+            {showIntegrationLegend && (
+              <>
+                <span className="topology-legend-item"><span className="topology-legend-line" style={{ background: 'var(--violet)', color: 'var(--violet)' }} /> VPN tunnel</span>
+                <span className="topology-legend-item"><span className="topology-legend-line" style={{ background: 'var(--warning)', color: 'var(--warning)' }} /> Cloud attachment</span>
+                <span className="topology-legend-item"><span className="topology-legend-line" style={{ background: 'var(--info)', color: 'var(--info)' }} /> WAN uplink</span>
+              </>
+            )}
+          </span>
           {utilOverlay && (
-            <span className="topology-legend-item">
-              <span className="topology-legend-gradient" /> Utilization (links + IPAM nodes, 0–100%)
+            <span className="topology-legend-group">
+              <span className="topology-legend-title">Utilization</span>
+              <span className="topology-legend-item">
+                <span className="topology-legend-gradient" /> Links and IPAM nodes, 0–100%
+              </span>
             </span>
           )}
           {stpOverlay && (
-            <>
-              <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-stp-fwd" /> STP Forwarding</span>
-              <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-stp-learn" /> STP Learning</span>
-              <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-stp-block" /> STP Blocked</span>
-            </>
+            <span className="topology-legend-group">
+              <span className="topology-legend-title">STP port state</span>
+              <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-stp-fwd" /> Forwarding</span>
+              <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-stp-learn" /> Learning</span>
+              <span className="topology-legend-item"><span className="topology-legend-line topology-legend-line-stp-block" /> Blocked</span>
+            </span>
           )}
           {statusOverlay && (
             <>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'var(--danger)' }} /> Critical</span>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'color-mix(in srgb, var(--danger), var(--warning))' }} /> High</span>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'var(--warning)' }} /> Medium / Drift</span>
-              <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'var(--info)' }} /> Low / Info</span>
+              <span className="topology-legend-group">
+                <span className="topology-legend-title">Status ring</span>
+                <span className="topology-legend-item"><span className="topology-legend-ring" style={{ borderColor: 'var(--danger)' }} /> Critical</span>
+                <span className="topology-legend-item"><span className="topology-legend-ring" style={{ borderColor: 'color-mix(in srgb, var(--danger), var(--warning))' }} /> High</span>
+                <span className="topology-legend-item"><span className="topology-legend-ring" style={{ borderColor: 'var(--warning)' }} /> Medium / drift</span>
+                <span className="topology-legend-item"><span className="topology-legend-ring" style={{ borderColor: 'var(--info)' }} /> Low / info</span>
+              </span>
               {overlayStatusQuery.isPending && (
                 <span className="text-muted" style={{ marginLeft: 'auto', fontSize: '0.8rem' }}>
                   Loading status…

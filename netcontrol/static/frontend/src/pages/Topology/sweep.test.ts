@@ -9,6 +9,7 @@ import type {
 } from "@/api/meraki";
 
 import {
+  activeFilterCount,
   buildListQuery,
   buildReachabilityQuery,
   cloudsToMerakiForm,
@@ -926,5 +927,30 @@ describe("list networks", () => {
         },
       },
     ]);
+  });
+});
+
+describe("activeFilterCount", () => {
+  it("is zero for the default filters", () => {
+    expect(activeFilterCount(emptyFilters())).toBe(0);
+  });
+
+  it("counts each filter that narrows the networks once", () => {
+    expect(
+      activeFilterCount({
+        ...emptyFilters(),
+        sources: [1, 2],
+        providers: ["aws"],
+        vlans: "100, 110-120",
+        name: "  ",
+        within: "192.0.2.0/24",
+        inVpn: "1",
+      }),
+    ).toBe(5);
+  });
+
+  it("counts the kinds only when they differ from the defaults", () => {
+    expect(activeFilterCount({ ...emptyFilters(), kinds: [...DEFAULT_SWEEP_KINDS].reverse() })).toBe(0);
+    expect(activeFilterCount({ ...emptyFilters(), kinds: ["vlan"] })).toBe(1);
   });
 });

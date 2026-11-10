@@ -3630,6 +3630,96 @@ code {
     color: var(--danger);
 }
 
+.topology-legend-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+}
+
+.topology-legend-title {
+    font-weight: 600;
+    color: var(--text-light);
+}
+
+/* The status overlay colours a device's border, so its swatch is a ring. */
+.topology-legend-ring {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    border: 2px solid var(--text-muted);
+}
+
+/* The toolbar's search results drop over the cards and the map below it. */
+.topology-toolbar {
+    position: relative;
+    z-index: 20;
+}
+
+.topology-path-card {
+    max-height: 38vh;
+    overflow-y: auto;
+}
+
+/* The map and what floats over it (panels, zoom buttons, messages) are one
+   stacking context, so none of it paints over the toolbar's dropdowns. */
+.topology-map-box {
+    position: relative;
+    isolation: isolate;
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    overflow: hidden;
+}
+
+.topology-zoom {
+    position: absolute;
+    left: 0.75rem;
+    bottom: 0.75rem;
+    z-index: 4;
+    display: flex;
+    gap: var(--space-1);
+}
+
+.topology-zoom .btn {
+    min-width: var(--control-h-sm);
+    background: var(--card-bg);
+}
+
+/* Action feedback: over the map, so the toolbar does not move. */
+.topology-flash {
+    position: absolute;
+    left: 50%;
+    bottom: 0.75rem;
+    transform: translateX(-50%);
+    z-index: 6;
+    max-width: calc(100% - 12rem);
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-sm);
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--success);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+/* Lookup results in the 380px search panel: two columns, each a value with
+   its secondary value under it. */
+.topology-search-table {
+    table-layout: fixed;
+}
+
+.topology-search-table th,
+.topology-search-table td {
+    overflow-wrap: anywhere;
+    vertical-align: top;
+}
+
+.topology-search-sub {
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+}
+
 /* Topology search box */
 .topology-search-wrap {
     position: relative;
