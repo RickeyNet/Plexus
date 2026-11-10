@@ -323,13 +323,25 @@ interface BarChartProps {
   values: number[];
   rotateLabels?: number;
   height?: number | string;
+  /**
+   * Bars run left to right with the categories down the side, first category
+   * on top. For ranked lists with long names, which rotated labels squash.
+   */
+  horizontal?: boolean;
+  /** Formats the value axis ticks and the tooltip value ("1.2 GB", "42%"). */
+  valueFormatter?: (value: number) => string;
 }
+
+// Widest category label of a horizontal bar chart before it is truncated.
+const HORIZONTAL_LABEL_WIDTH = 200;
 
 export function BarChart({
   categories,
   values,
   rotateLabels = 0,
   height = DEFAULT_HEIGHT,
+  horizontal = false,
+  valueFormatter,
 }: BarChartProps) {
   const ref = useRef<HTMLDivElement>(null);
   // One instance per mount, resized with its container, disposed on unmount.
@@ -341,27 +353,42 @@ export function BarChart({
     const chart = chartRef.current;
     if (!chart) return;
 
+    const categoryAxis = {
+      type: 'category' as const,
+      data: categories,
+      inverse: horizontal,
+      axisLabel: horizontal
+        ? {
+            color: AXIS_COLOR,
+            interval: 0,
+            width: HORIZONTAL_LABEL_WIDTH,
+            overflow: 'truncate' as const,
+          }
+        : { color: AXIS_COLOR, rotate: rotateLabels, interval: 0 },
+      axisLine: { lineStyle: { color: SPLIT_COLOR } },
+    };
+    const valueAxis = {
+      type: 'value' as const,
+      axisLabel: { color: AXIS_COLOR, formatter: valueFormatter },
+      splitLine: { lineStyle: { color: SPLIT_COLOR } },
+    };
+
     chart.setOption(
       resolveThemeVars({
         animation: false,
         color: SERIES_COLORS,
-        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-        grid: { left: 40, right: 16, top: 16, bottom: rotateLabels ? 60 : 30, containLabel: true },
-        xAxis: {
-          type: 'category',
-          data: categories,
-          axisLabel: {
-            color: AXIS_COLOR,
-            rotate: rotateLabels,
-            interval: 0,
-          },
-          axisLine: { lineStyle: { color: SPLIT_COLOR } },
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          valueFormatter: valueFormatter
+            ? (value: unknown) => (value == null ? '-' : valueFormatter(Number(value)))
+            : undefined,
         },
-        yAxis: {
-          type: 'value',
-          axisLabel: { color: AXIS_COLOR },
-          splitLine: { lineStyle: { color: SPLIT_COLOR } },
-        },
+        grid: horizontal
+          ? { left: 16, right: 24, top: 8, bottom: 8, containLabel: true }
+          : { left: 40, right: 16, top: 16, bottom: rotateLabels ? 60 : 30, containLabel: true },
+        xAxis: horizontal ? valueAxis : categoryAxis,
+        yAxis: horizontal ? categoryAxis : valueAxis,
         series: [
           {
             type: 'bar',
@@ -372,7 +399,7 @@ export function BarChart({
       }),
       { notMerge: true },
     );
-  }, [chartRef, categories, values, rotateLabels, theme]);
+  }, [chartRef, categories, values, rotateLabels, horizontal, valueFormatter, theme]);
 
   return <div ref={ref} style={{ width: '100%', height }} />;
 }

@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 
 import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { TimeSeriesChart, BarChart } from '@/lib/echart';
 import {
   InterfaceTimeSeriesEntry,
@@ -34,9 +35,22 @@ interface MergedInterface {
 interface Props {
   ifData: InterfaceTimeSeriesResult | undefined;
   latestPoll: MonitoringPoll | null;
+  /** The interface time series is still being fetched. */
+  loading?: boolean;
 }
 
-export function InterfaceTab({ ifData, latestPoll }: Props) {
+// Narrowest column a table card may take before the grid drops to one column.
+// Sized so the two-up layout only appears where both tables fit: at 1280 and
+// 1024 viewports the cards stack instead of overflowing the page.
+const WIDE_TABLE_MIN = 520;
+const COMPACT_TABLE_MIN = 380;
+
+// Pixel height of one bar row in the Top Interfaces chart.
+const SUMMARY_BAR_HEIGHT = 24;
+
+const formatPercent = (v: number) => `${v}%`;
+
+export function InterfaceTab({ ifData, latestPoll, loading = false }: Props) {
   const merged = useMemo(() => mergeInterfaces(ifData, latestPoll), [ifData, latestPoll]);
   const tsInterfaces = useMemo(
     () => ifData?.data || ifData?.interfaces || [],
@@ -81,6 +95,7 @@ export function InterfaceTab({ ifData, latestPoll }: Props) {
   }, [tsInterfaces]);
 
   if (!merged.length && !tsInterfaces.length) {
+    if (loading) return <LoadingState text="Loading interfaces…" />;
     return (
       <EmptyState compact message="No interface data available. Ensure SNMP is configured and at least one poll has
         completed." />
@@ -146,10 +161,11 @@ export function InterfaceTab({ ifData, latestPoll }: Props) {
             Top Interfaces by Utilization (%)
           </h4>
           <BarChart
+            horizontal
             categories={summaryData.map((d) => d.if_name || `idx-${d.if_index}`)}
             values={summaryData.map((d) => Math.round((d.utilization_pct || 0) * 10) / 10)}
-            rotateLabels={45}
-            height={240}
+            valueFormatter={formatPercent}
+            height={summaryData.length * SUMMARY_BAR_HEIGHT + 40}
           />
         </div>
       )}
@@ -157,7 +173,7 @@ export function InterfaceTab({ ifData, latestPoll }: Props) {
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
+          gridTemplateColumns: `repeat(auto-fit, minmax(min(100%, ${WIDE_TABLE_MIN}px), 1fr))`,
           gap: 'var(--space-4)',
         }}
       >
@@ -173,11 +189,7 @@ export function InterfaceTab({ ifData, latestPoll }: Props) {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: `repeat(${[
-              portChannels.length,
-              tunnels.length,
-              other.length,
-            ].filter((n) => n > 0).length}, 1fr)`,
+            gridTemplateColumns: `repeat(auto-fit, minmax(min(100%, ${COMPACT_TABLE_MIN}px), 1fr))`,
             gap: 'var(--space-4)',
           }}
         >
@@ -238,6 +250,8 @@ export function InterfaceTab({ ifData, latestPoll }: Props) {
             ))}
           </div>
         </div>
+      ) : loading ? (
+        <LoadingState text="Loading traffic charts…" />
       ) : (
         <p className="text-muted" style={{ margin: 0 }}>
           Traffic charts will appear after two or more polling cycles collect rate data.
@@ -286,7 +300,9 @@ function UtilBar({ pct }: { pct: number | null }) {
 
 function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="card-inset">
+    // minWidth 0: a grid item defaults to its content width, so a wide table
+    // would push the card past its column instead of scrolling inside it.
+    <div className="card-inset" style={{ minWidth: 0 }}>
       <h4 style={{ margin: '0 0 var(--space-2)', fontSize: '0.95rem' }}>{title}</h4>
       {children}
     </div>
@@ -358,7 +374,7 @@ function VlanTable({ interfaces }: { interfaces: MergedInterface[] }) {
         <span className="badge badge-success">{vlanUp} up</span>
         {vlanDown > 0 && <span className="badge badge-danger">{vlanDown} down</span>}
       </div>
-      <div style={{ overflowY: 'auto', maxHeight: 400 }}>
+      <div style={{ overflow: 'auto', maxHeight: 400 }}>
         <table className="data-table table-sm">
           <thead>
             <tr>
