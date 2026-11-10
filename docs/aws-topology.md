@@ -94,30 +94,166 @@ across accounts.
 
 ### Permissions
 
-Discovery is read-only: it calls `Describe*` operations and one search
-(`ec2:SearchTransitGatewayRoutes`). The AWS-managed policies
-**AmazonEC2ReadOnlyAccess** and **AWSDirectConnectReadOnlyAccess** cover the
-`Describe*` calls. For a custom policy:
+Discovery is read-only: it calls `Describe*`, `List*` and `Get*`
+operations and one search (`ec2:SearchTransitGatewayRoutes`). Only the base
+EC2 and Direct Connect reads are required. Everything else is optional:
+Plexus collects whatever the account's policy allows, and a call AWS
+refuses skips only the piece that needs it.
 
-| Needed | Actions |
-|---|---|
-| Always (discovery fails without them) | `ec2:DescribeVpcs`, `ec2:DescribeInternetGateways`, `ec2:DescribeNatGateways`, `ec2:DescribeSecurityGroups`, `ec2:DescribeTransitGateways`, `ec2:DescribeTransitGatewayAttachments`, `ec2:DescribeVpcPeeringConnections`, `ec2:DescribeVpnGateways`, `ec2:DescribeRouteTables`, `ec2:DescribeVpnConnections`, `directconnect:DescribeConnections` |
-| With **All regions** (discovery fails without it) | `ec2:DescribeRegions` |
-| For the map (skipped when denied) | `ec2:DescribeSubnets`, `ec2:DescribeInstances`, `ec2:DescribeCustomerGateways`, `directconnect:DescribeVirtualInterfaces`, `directconnect:DescribeDirectConnectGateways`, `directconnect:DescribeDirectConnectGatewayAssociations` |
-| For the Path Mode check (skipped when denied) | `ec2:DescribeNetworkAcls`, `ec2:DescribeTransitGatewayRouteTables`, `ec2:SearchTransitGatewayRoutes` |
+| Service | IAM action | Required | Without it |
+|---|---|---|---|
+| EC2 / VPC | `ec2:DescribeVpcs`, `ec2:DescribeInternetGateways`, `ec2:DescribeNatGateways`, `ec2:DescribeSecurityGroups`, `ec2:DescribeTransitGateways`, `ec2:DescribeTransitGatewayAttachments`, `ec2:DescribeVpcPeeringConnections`, `ec2:DescribeVpnGateways`, `ec2:DescribeRouteTables`, `ec2:DescribeVpnConnections` | Required | Discovery fails and the previous snapshot is kept |
+| Direct Connect | `directconnect:DescribeConnections` | Required | Discovery fails and the previous snapshot is kept |
+| EC2 | `ec2:DescribeRegions` | Required | Needed only with **All regions**: discovery fails without it |
+| EC2 | `ec2:DescribeSubnets` | Optional | No subnets: Path Mode and the subnet search know only the VPC ranges |
+| EC2 | `ec2:DescribeInstances` | Optional | No instances: no forwarding appliances on the map, no instance search |
+| EC2 | `ec2:DescribeCustomerGateways` | Optional | VPN far ends are unnamed peers |
+| Direct Connect | `directconnect:DescribeVirtualInterfaces`, `directconnect:DescribeDirectConnectGateways`, `directconnect:DescribeDirectConnectGatewayAssociations` | Optional | Direct Connect stops at the connection |
+| EC2 | `ec2:DescribeNetworkAcls` | Optional | The AWS check of a path reports the ACLs as not collected |
+| EC2 | `ec2:DescribeTransitGatewayRouteTables`, `ec2:SearchTransitGatewayRoutes` | Optional | The AWS check of a path reports the transit gateway routes as not collected |
+| EC2 | `ec2:DescribeNetworkInterfaces` | Optional | FSx (Lustre, Windows), load balancers and VPC endpoints are listed without their private addresses |
+| EC2 | `ec2:DescribeVpcEndpoints` | Optional | No VPC endpoints |
+| FSx | `fsx:DescribeFileSystems` | Optional | No FSx file systems |
+| FSx | `fsx:DescribeStorageVirtualMachines` | Optional | No ONTAP storage virtual machines |
+| RDS (also Aurora, Neptune, DocumentDB) | `rds:DescribeDBInstances` | Optional | No DB instances; clusters then need `rds:DescribeDBSubnetGroups` for their VPC |
+| RDS | `rds:DescribeDBClusters` | Optional | No cluster writer, reader and custom endpoints |
+| RDS | `rds:DescribeDBSubnetGroups` | Optional | Called only for a cluster none of whose instances was read; without it that cluster is not placed in a VPC |
+| RDS | `rds:DescribeDBProxies` | Optional | No RDS proxies |
+| Elastic Load Balancing | `elasticloadbalancing:DescribeLoadBalancers` | Optional | No Application, Network, Gateway or Classic Load Balancers |
+| EFS | `elasticfilesystem:DescribeFileSystems` | Optional | No EFS file systems |
+| EFS | `elasticfilesystem:DescribeMountTargets` | Optional | EFS file systems without mount targets: no addresses, and not placed in a VPC |
+| ElastiCache | `elasticache:DescribeCacheClusters` | Optional | No cache nodes or engine versions; replication groups are not placed in a VPC |
+| ElastiCache | `elasticache:DescribeReplicationGroups` | Optional | No replication group primary, reader or configuration endpoints |
+| ElastiCache | `elasticache:DescribeCacheSubnetGroups` | Optional | Clusters are not placed in a VPC |
+| ElastiCache | `elasticache:DescribeServerlessCaches` | Optional | No serverless caches |
+| OpenSearch Service | `es:ListDomainNames`, `es:DescribeDomains` | Optional | No OpenSearch domains |
+| MSK | `kafka:ListClustersV2` | Optional | No MSK clusters |
+| MSK | `kafka:GetBootstrapBrokers` | Optional | No bootstrap broker endpoints |
+| MSK | `kafka:ListNodes` | Optional | No broker addresses |
+| Redshift | `redshift:DescribeClusters` | Optional | No provisioned Redshift clusters |
+| Redshift Serverless | `redshift-serverless:ListWorkgroups` | Optional | No Redshift Serverless workgroups |
 
-`ec2:SearchTransitGatewayRoutes` is not a `Describe*` action. Check that the
-policy in use grants it; without it the transit gateway part of a path check
-reports *not collected*.
+The AWS managed read-only policies that cover them:
+**AmazonEC2ReadOnlyAccess** (EC2, VPC endpoints, network interfaces and
+Elastic Load Balancing), **AWSDirectConnectReadOnlyAccess**,
+**AmazonFSxReadOnlyAccess**, **AmazonRDSReadOnlyAccess**,
+**ElasticLoadBalancingReadOnly** (load balancers alone),
+**AmazonElasticFileSystemReadOnlyAccess**,
+**AmazonElastiCacheReadOnlyAccess**,
+**AmazonOpenSearchServiceReadOnlyAccess**, **AmazonMSKReadOnlyAccess** and
+**AmazonRedshiftReadOnlyAccess** (Redshift and Redshift Serverless). Check
+the version of a managed policy in your account if a call is still refused:
+AWS adds actions to them over time. `ec2:SearchTransitGatewayRoutes` is not
+a `Describe*` action; check that the policy in use grants it.
 
-A map section that AWS denies is skipped, not fatal: discovery still
-succeeds, the map is built without that detail, and the skipped section is
-listed with the AWS error code under **Report** in the HTML map and as a
-`collection_warning` row among the account's resources.
+A minimal custom policy with exactly the actions discovery calls (drop the
+optional ones you do not want collected):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PlexusTopologyReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeVpcs",
+        "ec2:DescribeInternetGateways",
+        "ec2:DescribeNatGateways",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeTransitGateways",
+        "ec2:DescribeTransitGatewayAttachments",
+        "ec2:DescribeVpcPeeringConnections",
+        "ec2:DescribeVpnGateways",
+        "ec2:DescribeRouteTables",
+        "ec2:DescribeVpnConnections",
+        "ec2:DescribeRegions",
+        "directconnect:DescribeConnections",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeInstances",
+        "ec2:DescribeCustomerGateways",
+        "ec2:DescribeNetworkAcls",
+        "ec2:DescribeTransitGatewayRouteTables",
+        "ec2:SearchTransitGatewayRoutes",
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:DescribeVpcEndpoints",
+        "directconnect:DescribeVirtualInterfaces",
+        "directconnect:DescribeDirectConnectGateways",
+        "directconnect:DescribeDirectConnectGatewayAssociations",
+        "fsx:DescribeFileSystems",
+        "fsx:DescribeStorageVirtualMachines",
+        "rds:DescribeDBInstances",
+        "rds:DescribeDBClusters",
+        "rds:DescribeDBSubnetGroups",
+        "rds:DescribeDBProxies",
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticfilesystem:DescribeFileSystems",
+        "elasticfilesystem:DescribeMountTargets",
+        "elasticache:DescribeCacheClusters",
+        "elasticache:DescribeReplicationGroups",
+        "elasticache:DescribeCacheSubnetGroups",
+        "elasticache:DescribeServerlessCaches",
+        "es:ListDomainNames",
+        "es:DescribeDomains",
+        "kafka:ListClustersV2",
+        "kafka:GetBootstrapBrokers",
+        "kafka:ListNodes",
+        "redshift:DescribeClusters",
+        "redshift-serverless:ListWorkgroups"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+An IAM role that Plexus assumes also needs `sts:AssumeRole` on it for the
+caller, and the role's trust policy must allow the caller (with the external
+ID when one is set).
+
+#### What Plexus reports when a call is refused
+
+An optional call that fails never fails discovery. Discovery still
+succeeds, the map is built without that piece, and:
+
+- the result of **Discover** (Cloud Visibility) and **Collect Now**
+  (Sources dialog), the account row and the Sources dialog say which
+  sections were skipped and the IAM actions to add, for example
+  *Live provider discovery snapshot refreshed. Collected with 3 sections
+  skipped for missing permissions: kafka:ListClustersV2,
+  rds:DescribeDBInstances, redshift:DescribeClusters.*
+- the map's report (**Report** in the HTML export) has one entry per
+  problem, listing the regions instead of repeating it per region, e.g.
+  *RDS and Aurora DB instances in eu-west-1, us-east-1: not collected, AWS
+  denied the call (AccessDenied). Add rds:DescribeDBInstances to the IAM
+  policy of the account; the rest of the discovery is complete.*
+- each skipped section is a `collection_warning` row among the account's
+  resources, with the AWS error code (never AWS's message, which can quote
+  the request), why it failed (`permission`, `unavailable` or `error`) and
+  the IAM actions it needs.
+
+A service that does not exist or is not enabled in a region (an opt-in
+region, a service not launched there) or that the AWS SDK on the server is
+too old to know is reported as *not available there*, once, in the map's
+report only; it is not a permission problem and the discovery message
+leaves it out. Throttling, timeouts and AWS-side errors are reported as
+failed: run discovery again.
+
+The base sections (VPCs, internet and NAT gateways, security groups,
+transit gateways and their attachments, VPC peerings, VPN gateways, route
+tables, VPN connections, Direct Connect connections) are not optional: when
+one fails, the discovery fails with what was refused, and the last complete
+snapshot stays on the map rather than being replaced by a partial one.
 
 AWS returns the pre-shared keys of a site-to-site VPN inside
 `DescribeVpnConnections`. Plexus does not read or store them: only the
-tunnel addresses, status, routes and inside CIDRs are kept.
+tunnel addresses, status, routes and inside CIDRs are kept. Likewise the
+Active Directory service account of an FSx file system or storage virtual
+machine, the ONTAP `fsxadmin` password and the KMS key are never read, nor
+the master user name or password, auth tokens, Secrets Manager ARNs, KMS
+keys and access policies of an RDS, ElastiCache, OpenSearch, MSK or
+Redshift resource, nor the policy document of a VPC endpoint. Only named
+fields are copied.
 
 ## On the map
 
@@ -138,6 +274,31 @@ inventory host. Every other instance is listed in its VPC's details (name,
 ID, private and public IP, type, state, subnet) and found by the search box,
 and its private address is in the subnet picker of Path Mode: typing the
 address picks the VPC, even when another site declares the same range.
+Amazon FSx file systems (Windows File Server, Lustre, NetApp ONTAP and
+OpenZFS) and the storage virtual machines (SVMs) of an ONTAP file system are
+not nodes either: their VPC lists them, with every endpoint AWS reports
+(the file server, remote administration and DNS aliases of a Windows file
+system, the management and intercluster endpoints of ONTAP, the NFS, SMB,
+iSCSI and management endpoints of each SVM, the mount endpoint of Lustre and
+OpenZFS) and the addresses of the file system's network interfaces. Each
+address is in the subnet picker of Path Mode like an instance's.
+The same goes for the services whose endpoints have DNS names: RDS and
+Aurora DB instances, clusters and proxies (Neptune and DocumentDB too,
+named by their engine), Application, Network, Gateway and Classic Load
+Balancers, VPC endpoints, EFS file systems, ElastiCache replication groups,
+clusters and serverless caches, OpenSearch domains, MSK clusters, Redshift
+clusters and Redshift Serverless workgroups. Each service has a table in
+its VPC's details (name, ID or ARN, kind, engine, version, state, endpoints
+as `host:port`, addresses, subnets, security groups) and every endpoint is
+a row of the **Service endpoints** table with its DNS name, port and
+address; each private address is in the subnet picker like an instance's.
+A public address (an NLB's Elastic IP, a Redshift node's public IP) is
+listed in the service's table but is not made a host of the VPC. A
+resource that names only its subnets (MSK, Redshift Serverless,
+ElastiCache serverless) is placed in the VPC of those subnets. One whose
+VPC was not collected, or that has none (a public OpenSearch domain), is
+left off the map; Cloud Visibility still lists it among the account's
+resources. They are not nodes and take no part in path tracing.
 An instance that becomes an inventory host later - a host added to the
 inventory, or given its instance ID, after the last discovery - is drawn as
 soon as the map is next loaded; no new discovery is needed.
@@ -219,7 +380,11 @@ repeat from site to site and identify nothing on their own.
 
 Click a VPC for its tabs:
 
-- **Device**: the VPC overview and the list of instances
+- **Device**: the VPC overview, the list of instances, the FSx file
+  systems, storage virtual machines and endpoints (DNS name and address),
+  a table per service (RDS and Aurora databases, Load balancers, VPC
+  endpoints, EFS file systems, ElastiCache, OpenSearch domains, MSK
+  clusters, Redshift) and the Service endpoints table
 - **VLANs**: the subnets (CIDR, name, availability zone, route table, where
   the default route goes, free addresses, network ACL)
 - **Routing**: every route of every route table of the VPC
@@ -235,9 +400,16 @@ the instance ID and subnet on its Overview tab and tooltip too.
 
 ### Search and Path Mode
 
-The toolbar search covers everything collected: VPC, subnet and instance
-names, IDs (`vpc-…`, `subnet-…`, `i-…`, `tgw-…`), CIDRs, private and public
-IPs, route targets and security group rules.
+The toolbar search covers everything collected: VPC, subnet, instance,
+FSx and service names, IDs and ARNs (`vpc-…`, `subnet-…`, `i-…`, `tgw-…`,
+`fs-…`, `svm-…`, `vpce-…`), the DNS name of every FSx and service endpoint
+(whole or in part), CIDRs, private and public IPs, route targets and
+security group rules. An endpoint found by name or address selects its VPC.
+A pasted URL, UNC path, NFS mount, JDBC URL or `host:port` endpoint searches
+for its host: `https://files.example.com:443/share`,
+`\\files.example.com\share` and `files.example.com:/fsx` all search for
+`files.example.com`, and `jdbc:redshift://dw.example.com:5439/dev` and
+`dw.example.com:5439` search for `dw.example.com`.
 
 In **Path Mode** a VPC or one of its subnets can be picked like a Meraki
 site; typing an IP address picks the subnet that contains it. A path between
@@ -346,10 +518,23 @@ check.
 | Transit gateway route tables with their active and blackhole routes (up to 1000 per table) and the table each attachment is associated with | `DescribeTransitGatewayRouteTables`, `SearchTransitGatewayRoutes`, `DescribeTransitGatewayAttachments` |
 | Instances and their network interfaces | `DescribeInstances` |
 | Customer gateways | `DescribeCustomerGateways` |
+| Amazon FSx file systems and ONTAP storage virtual machines with their endpoints, and the addresses of the file systems' network interfaces | `fsx:DescribeFileSystems`, `fsx:DescribeStorageVirtualMachines`, `ec2:DescribeNetworkInterfaces` |
+| RDS / Aurora DB instances (endpoint and port, subnet group, engine and version, Multi-AZ, public access, cluster), clusters (writer, reader and custom endpoints) and proxies | `rds:DescribeDBInstances`, `rds:DescribeDBClusters`, `rds:DescribeDBSubnetGroups` (only for a cluster with no instance read), `rds:DescribeDBProxies` |
+| Application, Network, Gateway and Classic Load Balancers (DNS name, scheme, subnets, security groups, NLB addresses), with the private addresses of their network interfaces (found by their description, `ELB app/…`, `ELB net/…`, `ELB <name>`) | `elasticloadbalancing:DescribeLoadBalancers`, `ec2:DescribeNetworkInterfaces` |
+| VPC endpoints (DNS entries, service, subnets, security groups) and the addresses of their network interfaces; gateway endpoints are listed without | `ec2:DescribeVpcEndpoints`, `ec2:DescribeNetworkInterfaces` |
+| EFS file systems and their mount targets (address, subnet, zone). AWS returns no DNS name: `<fs-id>.efs.<region>.amazonaws.com` and `<zone>.<fs-id>.efs.<region>.amazonaws.com` are built (`amazonaws.com.cn` in the China regions) | `elasticfilesystem:DescribeFileSystems`, `elasticfilesystem:DescribeMountTargets` (one call per file system that has mount targets) |
+| ElastiCache replication groups (configuration, primary and reader endpoints), cache clusters and their nodes, subnet groups (for the VPC), serverless caches | `elasticache:DescribeReplicationGroups`, `elasticache:DescribeCacheClusters`, `elasticache:DescribeCacheSubnetGroups`, `elasticache:DescribeServerlessCaches` |
+| OpenSearch Service domains (public, VPC, dual-stack and custom endpoints, VPC options, engine version; of fine-grained access control only whether it is on) | `es:ListDomainNames`, `es:DescribeDomains` (five domains a call) |
+| MSK clusters (client subnets, security groups, Kafka version), their bootstrap brokers and their broker endpoints and addresses | `kafka:ListClustersV2`, `kafka:GetBootstrapBrokers` and `kafka:ListNodes` (one call each per active cluster) |
+| Redshift clusters (endpoint, managed VPC endpoints, node addresses, version) and Redshift Serverless workgroups (endpoint, VPC endpoint addresses) | `redshift:DescribeClusters`, `redshift-serverless:ListWorkgroups` |
 | Direct Connect connections, virtual interfaces, gateways | `DescribeConnections`, `DescribeVirtualInterfaces`, `DescribeDirectConnectGateways`, `DescribeDirectConnectGatewayAssociations` |
 
-Not collected: prefix lists, load balancers,
-VPC endpoints, Client VPN endpoints, and the on-premises router behind a
+Not collected: prefix lists, load balancer listeners and target groups,
+Client VPN endpoints, the addresses behind an RDS, ElastiCache or
+OpenSearch DNS name (AWS reports none; the DNS name is searchable), FSx
+volumes, the availability of FSx file systems and of the services above
+(their state is shown, not tracked), their software versions in the
+software tracker (the version is shown in the service's table), and the on-premises router behind a
 Direct Connect (a Direct Connect is the edge of the map). The subnets also
 appear in IPAM's cloud CIDR view, where each VPC's range is checked against
 the ranges of every Meraki, Cato and Cisco FMC site under **Overlapping
