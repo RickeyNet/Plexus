@@ -17,6 +17,8 @@ import {
   useUpsertStpRootPolicy,
 } from '@/api/settings';
 
+import { SectionCard } from './SectionCard';
+
 function StatusLine({
   status,
 }: {
@@ -425,7 +427,7 @@ function StpRootPoliciesSection() {
         <StatusLine status={status} />
       </form>
 
-      <div style={{ marginTop: '1rem' }}>
+      <div className="stack stack-sm" style={{ marginTop: 'var(--space-4)' }}>
         {policies.isLoading && <p className="text-muted">Loading policies…</p>}
         {policies.isError && (
           <div className="error">
@@ -439,8 +441,7 @@ function StpRootPoliciesSection() {
         {(policies.data?.policies || []).map((p) => (
           <div
             key={p.id}
-            className="card"
-            style={{ marginBottom: '0.55rem', padding: '0.65rem 0.8rem' }}
+            style={{ paddingTop: 'var(--space-3)', borderTop: '1px solid var(--border)' }}
           >
             <div
               style={{
@@ -502,27 +503,9 @@ function StpRootPoliciesSection() {
   );
 }
 
-function SectionCard({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      className="card"
-      style={{ padding: '1rem', marginBottom: '1.5rem' }}
-    >
-      <h3 style={{ margin: '0 0 0.75rem 0' }}>{title}</h3>
-      {children}
-    </div>
-  );
-}
-
 export function DiscoveryTab() {
   return (
-    <div>
+    <div className="stack">
       <SectionCard title="Topology Discovery">
         <TopologyDiscoverySection />
       </SectionCard>

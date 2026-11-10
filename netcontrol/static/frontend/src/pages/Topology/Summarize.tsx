@@ -57,83 +57,85 @@ export function Summarize() {
         text="Find the fewest routes that cover a list of IP addresses, for example the Meraki hosts an Azure route table must reach, and check each route against the networks collected from every source. Roll up to / widens each address to that prefix first (a /24 per address, say); At most N routes then merges the neighbouring routes that add the fewest addresses until no more than N of each IP version are left. Each route lists the collected networks it overlaps: inside the route, equal to it, or containing it. Untick Meraki (or press Not Meraki) to see only the routes that would also catch another source's network. Copy the routes from the box above the table."
       />
 
-      <div className="card" style={{ padding: '0.75rem', marginBottom: '0.75rem' }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'flex-end' }}>
-          <label style={{ ...FIELD_STYLE, flex: '1 1 320px' }}>
-            <span className="form-label">Addresses</span>
-            <textarea
-              className="form-input"
-              rows={6}
-              placeholder="One IP address or network per line, or comma-separated"
-              value={form.addresses}
-              onChange={(e) => update({ addresses: e.target.value })}
-              spellCheck={false}
-              style={{ fontFamily: 'monospace', resize: 'vertical' }}
-            />
-          </label>
-          <label style={{ ...FIELD_STYLE, minWidth: 110 }}>
-            <span className="form-label">Roll up to /</span>
-            <input
-              className="form-input"
-              type="number"
-              min={0}
-              max={128}
-              placeholder="exact"
-              value={form.prefix}
-              onChange={(e) => update({ prefix: e.target.value })}
-              title="Widen each address to this prefix length first; empty: exact"
-            />
-          </label>
-          <label style={{ ...FIELD_STYLE, minWidth: 130 }}>
-            <span className="form-label">At most N routes</span>
-            <input
-              className="form-input"
-              type="number"
-              min={1}
-              placeholder="no limit"
-              value={form.maxRoutes}
-              onChange={(e) => update({ maxRoutes: e.target.value })}
-              title="Merge neighbouring routes until no more than this many of each IP version are left; empty: no limit"
-            />
-          </label>
-          <button type="button" className="btn btn-sm btn-primary" onClick={run} disabled={summarize.isPending}>
-            {summarize.isPending ? 'Summarizing…' : 'Summarize'}
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm btn-secondary"
-            onClick={() => setForm((f) => notMerakiForm(f, providers))}
-            title="Check against every provider but Meraki, every kind of network"
-          >
-            Not Meraki
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm btn-secondary"
-            onClick={() => { setForm(emptySummarizeForm()); setFormError(null); }}
-          >
-            Reset
-          </button>
+      <div className="stack stack-sm">
+        <div className="card card-sm">
+          <div className="toolbar" style={{ alignItems: 'flex-end', marginBottom: 0 }}>
+            <label style={{ ...FIELD_STYLE, flex: '1 1 320px' }}>
+              <span className="form-label">Addresses</span>
+              <textarea
+                className="form-input"
+                rows={6}
+                placeholder="One IP address or network per line, or comma-separated"
+                value={form.addresses}
+                onChange={(e) => update({ addresses: e.target.value })}
+                spellCheck={false}
+                style={{ fontFamily: 'monospace', resize: 'vertical' }}
+              />
+            </label>
+            <label style={{ ...FIELD_STYLE, minWidth: 110 }}>
+              <span className="form-label">Roll up to /</span>
+              <input
+                className="form-input form-input-sm"
+                type="number"
+                min={0}
+                max={128}
+                placeholder="exact"
+                value={form.prefix}
+                onChange={(e) => update({ prefix: e.target.value })}
+                title="Widen each address to this prefix length first; empty: exact"
+              />
+            </label>
+            <label style={{ ...FIELD_STYLE, minWidth: 130 }}>
+              <span className="form-label">At most N routes</span>
+              <input
+                className="form-input form-input-sm"
+                type="number"
+                min={1}
+                placeholder="no limit"
+                value={form.maxRoutes}
+                onChange={(e) => update({ maxRoutes: e.target.value })}
+                title="Merge neighbouring routes until no more than this many of each IP version are left; empty: no limit"
+              />
+            </label>
+            <button type="button" className="btn btn-sm btn-primary" onClick={run} disabled={summarize.isPending}>
+              {summarize.isPending ? 'Summarizing…' : 'Summarize'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-secondary"
+              onClick={() => setForm((f) => notMerakiForm(f, providers))}
+              title="Check against every provider but Meraki, every kind of network"
+            >
+              Not Meraki
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-secondary"
+              onClick={() => { setForm(emptySummarizeForm()); setFormError(null); }}
+            >
+              Reset
+            </button>
+          </div>
+
+          <FilterFields
+            title="Check overlaps against"
+            idPrefix="summarize-against"
+            filters={form}
+            onChange={update}
+            sources={sources}
+            providers={providers}
+            note="The collected networks each route is checked against; untick Meraki to find overlaps with other sources."
+          />
+          {formError && <div style={{ color: 'var(--danger)', marginTop: '0.5rem' }}>{formError}</div>}
         </div>
 
-        <FilterFields
-          title="Check overlaps against"
-          idPrefix="summarize-against"
-          filters={form}
-          onChange={update}
-          sources={sources}
-          providers={providers}
-          note="The collected networks each route is checked against; untick Meraki to find overlaps with other sources."
-        />
-        {formError && <div style={{ color: 'var(--danger)', marginTop: '0.5rem' }}>{formError}</div>}
+        {summarize.error && (
+          <div className="card card-sm" style={{ borderLeft: '3px solid var(--danger)' }}>
+            Summary failed: {summarize.error.message.replace(/^\d{3} /, '')}
+          </div>
+        )}
+        {summarize.data && <Results report={summarize.data} />}
       </div>
-
-      {summarize.error && (
-        <div className="card" style={{ padding: '0.6rem 0.85rem', borderLeft: '3px solid var(--danger)' }}>
-          Summary failed: {summarize.error.message.replace(/^\d{3} /, '')}
-        </div>
-      )}
-      {summarize.data && <Results report={summarize.data} />}
     </div>
   );
 }
@@ -150,7 +152,7 @@ function Results({ report }: { report: SummarizeReport }) {
   }
 
   return (
-    <div className="card" style={{ padding: '0.75rem' }}>
+    <div className="card card-sm">
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'baseline' }}>
         <strong>{summaryHeading(report)}</strong>
         <span className="text-muted" style={NOTE_STYLE}>

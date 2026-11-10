@@ -181,10 +181,7 @@ export function CriticalIssuesBanner({ devices, alerts, sources = [], topology }
   if (issues.length === 0) return null;
 
   return (
-    <div
-      className="glass-card card"
-      style={{ borderColor: 'var(--danger)', marginBottom: '1rem' }}
-    >
+    <div className="glass-card card" style={{ borderColor: 'var(--danger)' }}>
       <div
         style={{
           display: 'flex',

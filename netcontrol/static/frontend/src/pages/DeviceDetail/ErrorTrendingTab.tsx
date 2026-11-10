@@ -45,49 +45,42 @@ export function ErrorTrendingTab({ hostId, range }: { hostId: number; range: Tim
     .slice(0, 8);
 
   return (
-    <div>
+    <div className="stack">
       {activeEvents.length > 0 && (
-        <div
-          className="card"
-          style={{ borderLeft: '3px solid var(--danger)', marginBottom: '1rem' }}
-        >
-          <div className="card-body" style={{ padding: '0.75rem' }}>
-            <h4 style={{ margin: '0 0 0.5rem', color: 'var(--danger)' }}>
-              {activeEvents.length} Active Error Event{activeEvents.length > 1 ? 's' : ''}
-            </h4>
-            <ActiveEventsTable
-              events={activeEvents}
-              onAck={(id) => ack.mutate(id)}
-              onResolve={(id) => resolve.mutate(id)}
-            />
-          </div>
+        <div className="card-inset" style={{ borderLeft: '3px solid var(--danger)' }}>
+          <h4 style={{ margin: '0 0 var(--space-2)', color: 'var(--danger)' }}>
+            {activeEvents.length} Active Error Event{activeEvents.length > 1 ? 's' : ''}
+          </h4>
+          <ActiveEventsTable
+            events={activeEvents}
+            onAck={(id) => ack.mutate(id)}
+            onResolve={(id) => resolve.mutate(id)}
+          />
         </div>
       )}
 
       {interfaces.length > 0 && (
-        <div className="card" style={{ marginBottom: '1rem' }}>
-          <div className="card-body" style={{ padding: '0.75rem' }}>
-            <h4 style={{ margin: '0 0 0.5rem' }}>Interface Error Summary (Last {days === 1 ? '24h' : `${days}d`})</h4>
-            <ErrorSummaryTable interfaces={interfaces} />
-          </div>
+        <div className="card-inset">
+          <h4 style={{ margin: '0 0 var(--space-2)' }}>Interface Error Summary (Last {days === 1 ? '24h' : `${days}d`})</h4>
+          <ErrorSummaryTable interfaces={interfaces} />
         </div>
       )}
 
       {withErrors.length > 0 && (
-        <>
-          <h4 style={{ margin: '1rem 0 0.5rem' }}>Error Trending Charts</h4>
+        <div>
+          <h4 style={{ margin: '0 0 var(--space-2)' }}>Error Trending Charts</h4>
           <div
             style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))',
-              gap: '0.75rem',
+              gap: 'var(--space-3)',
             }}
           >
             {withErrors.map((iface) => (
-              <div key={iface.if_index} className="card" style={{ marginBottom: 0 }}>
+              <div key={iface.if_index} className="card-inset">
                 <div
                   className="card-title"
-                  style={{ fontSize: '0.85rem', padding: '0.5rem 0.75rem' }}
+                  style={{ fontSize: 'var(--text-base)', marginBottom: 'var(--space-2)' }}
                 >
                   {iface.if_name || `idx-${iface.if_index}`} - Errors
                 </div>
@@ -95,15 +88,13 @@ export function ErrorTrendingTab({ hostId, range }: { hostId: number; range: Tim
               </div>
             ))}
           </div>
-        </>
+        </div>
       )}
 
       {resolvedEvents.length > 0 && (
-        <div className="card" style={{ marginTop: '1rem' }}>
-          <div className="card-body" style={{ padding: '0.75rem' }}>
-            <h4 style={{ margin: '0 0 0.5rem' }}>Recent Error Events</h4>
-            <ResolvedEventsTable events={resolvedEvents.slice(0, 20)} />
-          </div>
+        <div className="card-inset">
+          <h4 style={{ margin: '0 0 var(--space-2)' }}>Recent Error Events</h4>
+          <ResolvedEventsTable events={resolvedEvents.slice(0, 20)} />
         </div>
       )}
     </div>

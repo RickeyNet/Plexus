@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { UntestedBanner } from '@/components/UntestedBanner';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -25,8 +26,7 @@ export function Federation() {
 
   return (
     <>
-      <div className="page-header">
-        <h2>Federation Overview</h2>
+      <PageHeader title="Federation Overview">
         <button
           type="button"
           className="btn btn-primary"
@@ -34,7 +34,7 @@ export function Federation() {
         >
           Add Peer
         </button>
-      </div>
+      </PageHeader>
 
       <UntestedBanner feature="Federation" />
 

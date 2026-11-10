@@ -66,8 +66,8 @@ function Body({
     alert.severity === 'critical' ? 'var(--danger)' : 'var(--warning)';
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-      <div className="card" style={{ padding: '1rem' }}>
+    <div className="stack">
+      <div className="card">
         <div
           style={{
             display: 'flex',

@@ -58,7 +58,7 @@ export function MerakiTab({ query }: { query: string }) {
   const results = useMerakiResults(500);
 
   return (
-    <div>
+    <div className="stack stack-sm">
       <TabBar
         size="sm"
         tabs={VIEWS}
@@ -167,7 +167,7 @@ function AssignmentsView({
                 ? 'warning'
                 : 'text-muted';
         return (
-          <div key={a.id} className="card" style={{ marginBottom: '0.75rem', padding: '1rem' }}>
+          <div key={a.id} className="card">
             <div
               style={{
                 display: 'flex',
@@ -331,7 +331,7 @@ function StatusView({
 
   return (
     <>
-      <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85em', marginBottom: '0.5rem' }}>
+      <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85em' }}>
         <input type="checkbox" checked={onlyFailing} onChange={(e) => setOnlyFailing(e.target.checked)} />
         Only non-compliant or unreadable
       </label>
@@ -339,7 +339,7 @@ function StatusView({
       {filtered.map((r) => {
         const color = statusColor(r.status);
         return (
-          <div key={r.id} className="card" style={{ marginBottom: '0.5rem', padding: '0.75rem 1rem' }}>
+          <div key={r.id} className="card card-sm">
             <div
               style={{
                 display: 'flex',
@@ -405,7 +405,7 @@ function ResultsView({
   return (
     <>
       {scanFilter && (
-        <div style={{ fontSize: '0.85em', marginBottom: '0.5rem', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+        <div style={{ fontSize: '0.85em', display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
           Showing one scan ({filtered.length} target(s)).
           <button className="btn btn-sm btn-ghost" onClick={onClearScanFilter}>
             Show all
@@ -416,7 +416,7 @@ function ResultsView({
       {filtered.map((r) => {
         const color = statusColor(r.status);
         return (
-          <div key={r.id} className="card" style={{ marginBottom: '0.5rem', padding: '0.75rem 1rem' }}>
+          <div key={r.id} className="card card-sm">
             <div
               style={{
                 display: 'flex',

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 
 import { useAuthStatus } from '@/api/auth';
+import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { TabBar } from '@/components/TabBar';
 import { resolveTab, visibleTabs } from '@/lib/tabGating';
@@ -91,9 +92,7 @@ export function Jobs() {
 
   return (
     <div className="page">
-      <div className="page-header">
-        <h2>Delegator</h2>
-      </div>
+      <PageHeader title="Delegator" />
 
       <PageHelp
         pageKey="delegator"

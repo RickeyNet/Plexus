@@ -960,16 +960,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
               </div>
             </div>
 
-            <div
-              style={{
-                display: 'flex',
-                gap: '0.5rem',
-                marginBottom: '0.5rem',
-                flexWrap: 'wrap',
-                alignItems: 'center',
-                fontSize: '0.85em',
-              }}
-            >
+            <div className="toolbar" style={{ fontSize: '0.85em' }}>
               <span className="text-muted">Steps apply to:</span>
               <strong>{targetText}</strong>
               <span
@@ -988,8 +979,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                   {allSelected ? 'Deselect all' : 'Select all'}
                 </button>
                 <select
-                  className="form-select"
-                  style={{ width: 'auto', padding: '0.25rem 0.5rem', fontSize: '0.85em' }}
+                  className="form-select form-select-sm"
                   value=""
                   disabled={selectableGroups.length === 0}
                   onChange={(e) => {

@@ -107,15 +107,14 @@ export function InterfaceTab({ ifData, latestPoll }: Props) {
   const adminDownCount = merged.filter((i) => i.status === 'admin_down').length;
 
   return (
-    <div>
+    <div className="stack">
       <div
         style={{
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          marginBottom: '0.75rem',
           flexWrap: 'wrap',
-          gap: '0.5rem',
+          gap: 'var(--space-2)',
         }}
       >
         <h4 style={{ margin: 0 }}>{merged.length} Interfaces</h4>
@@ -143,18 +142,16 @@ export function InterfaceTab({ ifData, latestPoll }: Props) {
       </div>
 
       {summaryData.length > 0 && (
-        <div className="card" style={{ marginBottom: '1rem' }}>
-          <div className="card-body" style={{ padding: '0.75rem' }}>
-            <h4 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem' }}>
-              Top Interfaces by Utilization (%)
-            </h4>
-            <BarChart
-              categories={summaryData.map((d) => d.if_name || `idx-${d.if_index}`)}
-              values={summaryData.map((d) => Math.round((d.utilization_pct || 0) * 10) / 10)}
-              rotateLabels={45}
-              height={240}
-            />
-          </div>
+        <div className="card-inset">
+          <h4 style={{ margin: '0 0 var(--space-2)', fontSize: '0.95rem' }}>
+            Top Interfaces by Utilization (%)
+          </h4>
+          <BarChart
+            categories={summaryData.map((d) => d.if_name || `idx-${d.if_index}`)}
+            values={summaryData.map((d) => Math.round((d.utilization_pct || 0) * 10) / 10)}
+            rotateLabels={45}
+            height={240}
+          />
         </div>
       )}
 
@@ -162,8 +159,7 @@ export function InterfaceTab({ ifData, latestPoll }: Props) {
         style={{
           display: 'grid',
           gridTemplateColumns: '1fr 1fr',
-          gap: '1rem',
-          marginBottom: '1rem',
+          gap: 'var(--space-4)',
         }}
       >
         <SectionCard title={`Physical Interfaces (${physicals.length})`}>
@@ -183,8 +179,7 @@ export function InterfaceTab({ ifData, latestPoll }: Props) {
               tunnels.length,
               other.length,
             ].filter((n) => n > 0).length}, 1fr)`,
-            gap: '1rem',
-            marginBottom: '1rem',
+            gap: 'var(--space-4)',
           }}
         >
           {portChannels.length > 0 && (
@@ -206,20 +201,20 @@ export function InterfaceTab({ ifData, latestPoll }: Props) {
       )}
 
       {trafficCharts.length > 0 ? (
-        <>
-          <h4 style={{ margin: '1.25rem 0 0.5rem' }}>Traffic Charts (Top 12 by Activity)</h4>
+        <div>
+          <h4 style={{ margin: '0 0 var(--space-2)' }}>Traffic Charts (Top 12 by Activity)</h4>
           <div
             style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))',
-              gap: '0.75rem',
+              gap: 'var(--space-3)',
             }}
           >
             {trafficCharts.map(({ name, data }) => (
-              <div key={name} className="card" style={{ marginBottom: 0 }}>
+              <div key={name} className="card-inset">
                 <div
                   className="card-title"
-                  style={{ fontSize: '0.85rem', padding: '0.5rem 0.75rem' }}
+                  style={{ fontSize: 'var(--text-base)', marginBottom: 'var(--space-2)' }}
                 >
                   {name}
                 </div>
@@ -243,9 +238,9 @@ export function InterfaceTab({ ifData, latestPoll }: Props) {
               </div>
             ))}
           </div>
-        </>
+        </div>
       ) : (
-        <p className="text-muted" style={{ marginTop: '1rem' }}>
+        <p className="text-muted" style={{ margin: 0 }}>
           Traffic charts will appear after two or more polling cycles collect rate data.
         </p>
       )}
@@ -292,11 +287,9 @@ function UtilBar({ pct }: { pct: number | null }) {
 
 function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="card">
-      <div className="card-body" style={{ padding: '0.75rem' }}>
-        <h4 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem' }}>{title}</h4>
-        {children}
-      </div>
+    <div className="card-inset">
+      <h4 style={{ margin: '0 0 var(--space-2)', fontSize: '0.95rem' }}>{title}</h4>
+      {children}
     </div>
   );
 }

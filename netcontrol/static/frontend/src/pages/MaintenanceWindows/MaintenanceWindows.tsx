@@ -84,11 +84,11 @@ export function MaintenanceWindows() {
           justifyContent: 'space-between',
           alignItems: 'center',
           flexWrap: 'wrap',
-          gap: '0.5rem',
-          marginBottom: '0.75rem',
+          gap: 'var(--space-2)',
+          marginBottom: 'var(--space-3)',
         }}
       >
-        <h2 style={{ margin: 0 }}>Maintenance Windows</h2>
+        <h3 style={{ margin: 0 }}>Maintenance Windows</h3>
         <button
           type="button"
           className="btn btn-primary btn-sm"

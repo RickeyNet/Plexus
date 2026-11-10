@@ -57,7 +57,7 @@ export function GenerateReportTab() {
 
   return (
     <div>
-      <form onSubmit={handleSubmit} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'flex-end' }}>
+      <form onSubmit={handleSubmit} className="toolbar" style={{ alignItems: 'flex-end' }}>
         <div className="form-group" style={{ marginBottom: 0 }}>
           <label className="form-label">Report Type</label>
           <select className="form-select" value={reportType} onChange={(e) => setReportType(e.target.value as ReportType)}>
@@ -93,9 +93,9 @@ export function GenerateReportTab() {
         </button>
       </form>
 
-      <div style={{ marginTop: '1rem' }}>
-        {error && <div className="card" style={{ color: 'var(--danger)', padding: '1rem' }}>Error: {error}</div>}
-        {generate.isPending && <div className="card" style={{ padding: '1.5rem' }}>Generating report…</div>}
+      <div>
+        {error && <div className="card-inset" style={{ color: 'var(--danger)' }}>Error: {error}</div>}
+        {generate.isPending && <div className="card-inset">Generating report…</div>}
         {result && <ResultBlock reportType={reportType} groupId={groupId} result={result} />}
       </div>
     </div>
@@ -113,7 +113,7 @@ function ResultBlock({ reportType, groupId, result }: ResultBlockProps) {
   const rows = result.rows ?? [];
   if (!rows.length) {
     return (
-      <div className="card" style={{ padding: '1.5rem' }}>
+      <div className="card-inset">
         <p className="text-muted">Report generated with 0 rows. No data found for the selected criteria.</p>
       </div>
     );

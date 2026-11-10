@@ -44,8 +44,8 @@ export function OidProfilesTab() {
   }
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '0.75rem', marginBottom: '0.75rem' }}>
+    <div className="stack">
+      <div className="toolbar" style={{ justifyContent: 'space-between', alignItems: 'flex-end' }}>
         <div className="form-group" style={{ marginBottom: 0 }}>
           <label className="form-label">Vendor</label>
           <select className="form-select" value={vendor} onChange={(e) => setVendor(e.target.value)}>
@@ -66,7 +66,7 @@ export function OidProfilesTab() {
             let oidCount = 0;
             try { oidCount = JSON.parse(p.oids_json || '[]').length; } catch { /* ignore */ }
             return (
-              <div key={p.id} className="card" style={{ padding: '1rem' }}>
+              <div key={p.id} className="card">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
                     <strong>{p.name}</strong>
@@ -88,7 +88,7 @@ export function OidProfilesTab() {
         </div>
       ))}
 
-      <div className="card" style={{ padding: '1rem', marginTop: '1rem' }}>
+      <div className="card">
         <h4 style={{ marginTop: 0 }}>Built-in Vendor OIDs</h4>
         <p className="text-muted" style={{ marginBottom: '0.75rem' }}>These OIDs are polled automatically based on device type detection.</p>
         <table className="data-table">

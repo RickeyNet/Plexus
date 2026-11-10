@@ -38,7 +38,7 @@ export function DashboardSwitcher({ current }: Props) {
         ))}
         <option value={MANAGE}>Manage dashboards…</option>
       </select>
-      <Link to="/dashboards" className="btn btn-sm btn-secondary">
+      <Link to="/dashboards" className="btn btn-secondary">
         Manage
       </Link>
     </div>

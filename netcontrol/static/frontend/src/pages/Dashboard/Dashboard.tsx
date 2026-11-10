@@ -5,6 +5,7 @@ import { useDashboard } from '@/api/dashboard';
 import { useTopologySources } from '@/api/meraki';
 import { canUseFeature } from '@/lib/tabGating';
 
+import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { AlertsSection } from './AlertsSection';
 import { CriticalIssuesBanner } from './CriticalIssuesBanner';
@@ -51,7 +52,7 @@ export function Dashboard() {
   if (isPending) {
     return (
       <>
-        <h2>Dashboard</h2>
+        <PageHeader title="Dashboard" />
         <div className="stats-grid">
           <div className="skeleton skeleton-card" />
           <div className="skeleton skeleton-card" />
@@ -68,7 +69,7 @@ export function Dashboard() {
   if (error) {
     return (
       <>
-        <h2>Dashboard</h2>
+        <PageHeader title="Dashboard" />
         <div className="glass-card card" style={{ borderColor: 'var(--danger)' }}>
           <strong>Failed to load dashboard:</strong> {(error as Error).message}
         </div>
@@ -86,64 +87,55 @@ export function Dashboard() {
 
   return (
     <>
-      <div
-        className="page-header"
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: '0.5rem',
-          marginBottom: '0.75rem',
-        }}
-      >
-        <h2 style={{ margin: 0 }}>Dashboard</h2>
+      <PageHeader title="Dashboard">
         <DashboardSwitcher current={null} />
-      </div>
+      </PageHeader>
       <PageHelp
         pageKey="dashboard"
         title="Your Network at a Glance"
         text="View device status, recent alerts, backup summaries, and quick stats. The Needs attention banner gathers unreachable or critical devices, interfaces down, failed backups, critical alerts, down or degraded sites, uplinks, tunnels and cloud connections reported by the integrations, and topology sources whose last collection failed, was partial, is overdue or has warnings. Use the dashboard switcher above to open or manage custom dashboards with your own metric panels."
       />
-      <CriticalIssuesBanner devices={devices} alerts={alerts} sources={sources} topology={topology} />
-      <Suspense fallback={<PanelSkeleton />}>
-        <OverviewPanels devices={devices} />
-      </Suspense>
-      <GroupHealthPanel groups={groups} devices={devices} />
-      <Suspense fallback={<PanelSkeleton />}>
-        <ResponseTimePanel />
-      </Suspense>
-      <Suspense fallback={<PanelSkeleton />}>
-        <BandwidthTrendPanel />
-      </Suspense>
-      <Suspense fallback={<PanelSkeleton />}>
-        <TopTalkersPanel />
-      </Suspense>
-      <div id={ISSUE_ANCHORS.devices}>
-        <DevicesGridPanel devices={devices} />
-      </div>
-      <div id={ISSUE_ANCHORS.backups}>
+      <div className="stack">
+        <CriticalIssuesBanner devices={devices} alerts={alerts} sources={sources} topology={topology} />
         <Suspense fallback={<PanelSkeleton />}>
-          <BackupStatusPanel devices={devices} />
+          <OverviewPanels devices={devices} />
         </Suspense>
-      </div>
-      <Suspense fallback={<PanelSkeleton />}>
-        <EventsFeedPanel />
-      </Suspense>
-      <StatRings
-        hosts={stats.total_hosts ?? 0}
-        playbooks={stats.total_playbooks ?? 0}
-        jobs={stats.total_jobs ?? 0}
-        sources={canTopology && sourcesQuery.data ? summarizeSources(sources) : undefined}
-        entities={topology?.entity_counts}
-      />
-      <HealthSection monitoring={monitoring} devices={devices} groups={groups} />
-      <div id={ISSUE_ANCHORS.alerts}>
-        <AlertsSection
-          alerts={alerts}
-          topologyProblems={topology?.problems}
-          topologyProblemCount={topology?.problem_count}
+        <GroupHealthPanel groups={groups} devices={devices} />
+        <Suspense fallback={<PanelSkeleton />}>
+          <ResponseTimePanel />
+        </Suspense>
+        <Suspense fallback={<PanelSkeleton />}>
+          <BandwidthTrendPanel />
+        </Suspense>
+        <Suspense fallback={<PanelSkeleton />}>
+          <TopTalkersPanel />
+        </Suspense>
+        <div id={ISSUE_ANCHORS.devices}>
+          <DevicesGridPanel devices={devices} />
+        </div>
+        <div id={ISSUE_ANCHORS.backups}>
+          <Suspense fallback={<PanelSkeleton />}>
+            <BackupStatusPanel devices={devices} />
+          </Suspense>
+        </div>
+        <Suspense fallback={<PanelSkeleton />}>
+          <EventsFeedPanel />
+        </Suspense>
+        <StatRings
+          hosts={stats.total_hosts ?? 0}
+          playbooks={stats.total_playbooks ?? 0}
+          jobs={stats.total_jobs ?? 0}
+          sources={canTopology && sourcesQuery.data ? summarizeSources(sources) : undefined}
+          entities={topology?.entity_counts}
         />
+        <HealthSection monitoring={monitoring} devices={devices} groups={groups} />
+        <div id={ISSUE_ANCHORS.alerts}>
+          <AlertsSection
+            alerts={alerts}
+            topologyProblems={topology?.problems}
+            topologyProblemCount={topology?.problem_count}
+          />
+        </div>
       </div>
     </>
   );

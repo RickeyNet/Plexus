@@ -150,8 +150,8 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
   }
 
   return (
-    <div>
-      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+    <div className="stack">
+      <div className="toolbar">
         {providers.map((p) => (
           <button
             key={p}
@@ -167,14 +167,12 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
 
       {actionMsg && (
         <div
-          className="card"
+          className="card card-sm"
           style={{
-            padding: '0.6rem 0.85rem',
-            marginBottom: '0.6rem',
             borderLeft: `3px solid var(--${actionMsg.kind === 'success' ? 'success' : 'danger'})`,
             display: 'flex',
             alignItems: 'flex-start',
-            gap: '0.5rem',
+            gap: 'var(--space-2)',
           }}
         >
           <span style={{ flex: 1 }}>{actionMsg.text}</span>
@@ -187,7 +185,7 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
       {isLoading && <div className="text-muted">Loading…</div>}
 
       {!isLoading && accounts.length === 0 && (
-        <div className="card" style={{ padding: '1.25rem' }}>
+        <div className="card">
           <p className="text-muted" style={{ margin: 0 }}>
             No cloud accounts yet. Add {joinOr(providers.map((p) => withArticle(cloudProviderTerms(p).scopeTitle)))} to start.
           </p>
@@ -541,7 +539,7 @@ function AccountFormModal({ account, provider: providerProp, providerOptions, on
         )}
 
         {!replaceAuth && (
-          <div className="card" style={{ padding: '0.75rem', background: 'rgba(from var(--text) r g b / 0.04)' }}>
+          <div className="card-inset">
             <div style={{ fontWeight: 600, marginBottom: '0.35rem' }}>Sign-in and sync settings</div>
             <div className="text-muted" style={{ fontSize: '0.9em', marginBottom: '0.5rem' }}>
               {account?.has_auth_config

@@ -71,30 +71,29 @@ export function JobsTab() {
   }
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <input className="form-input" placeholder="Search jobs…" value={query} onChange={(e) => setQuery(e.target.value)} style={{ width: 220 }} />
-          <select className="form-select" value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)}>
-            <option value="all">All Statuses</option>
-            <option value="queued">Queued</option>
-            <option value="running">Running</option>
-            <option value="completed">Completed</option>
-            <option value="failed">Failed</option>
-            <option value="cancelled">Cancelled</option>
-          </select>
-          <select className="form-select" value={dryRun} onChange={(e) => setDryRun(e.target.value as DryRunFilter)}>
-            <option value="all">Dry+Live</option>
-            <option value="yes">Dry Run only</option>
-            <option value="no">Live only</option>
-          </select>
-          <select className="form-select" value={dateRange} onChange={(e) => setDateRange(e.target.value as DateRange)}>
-            <option value="all">All time</option>
-            <option value="today">Today</option>
-            <option value="7d">Last 7 days</option>
-            <option value="30d">Last 30 days</option>
-          </select>
-        </div>
+    <div className="stack">
+      <div className="toolbar">
+        <input className="form-input" placeholder="Search jobs…" value={query} onChange={(e) => setQuery(e.target.value)} style={{ width: 220 }} />
+        <select className="form-select" value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)}>
+          <option value="all">All Statuses</option>
+          <option value="queued">Queued</option>
+          <option value="running">Running</option>
+          <option value="completed">Completed</option>
+          <option value="failed">Failed</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+        <select className="form-select" value={dryRun} onChange={(e) => setDryRun(e.target.value as DryRunFilter)}>
+          <option value="all">Dry+Live</option>
+          <option value="yes">Dry Run only</option>
+          <option value="no">Live only</option>
+        </select>
+        <select className="form-select" value={dateRange} onChange={(e) => setDateRange(e.target.value as DateRange)}>
+          <option value="all">All time</option>
+          <option value="today">Today</option>
+          <option value="7d">Last 7 days</option>
+          <option value="30d">Last 30 days</option>
+        </select>
+        <span className="toolbar-spacer" />
         <button className="btn btn-primary" onClick={() => setShowLaunch(true)}>+ Launch Job</button>
       </div>
 
@@ -136,7 +135,7 @@ function QueuePanel({ data }: { data: ReturnType<typeof useJobQueue>['data'] }) 
   if (!data) return null;
   if (data.running === 0 && data.queued === 0) return null;
   return (
-    <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+    <div className="card card-sm" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)', flexWrap: 'wrap' }}>
       <div style={{ fontWeight: 600 }}>
         Queue: <span style={{ color: 'var(--success)' }}>{data.running}</span>/{data.max_concurrent} running
         {data.queued > 0 && <> • <span>{data.queued} queued</span></>}
@@ -167,7 +166,7 @@ function JobRow({ job, onView, onCancel, onRetry }: { job: Job; onView: () => vo
   const timeLabel = job.started_at ? `Started: ${formatTimestamp(job.started_at)}` :
     job.queued_at ? `Queued: ${formatTimestamp(job.queued_at)}` : '';
   return (
-    <div className="card" style={{ padding: '0.75rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
+    <div className="card card-sm" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 'var(--space-4)' }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
           {job.playbook_name || 'Unknown'}

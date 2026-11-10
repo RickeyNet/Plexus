@@ -58,7 +58,7 @@ export function BillingPeriodModal({ periodId, onClose }: Props) {
               <Stat label="Commit Rate" value={formatBps(p.commit_rate_bps)} />
             </div>
             {isOverage && (
-              <div className="card" style={{ padding: '0.75rem', background: 'rgba(from var(--danger) r g b / 0.1)', marginBottom: '1rem' }}>
+              <div className="card card-sm" style={{ background: 'rgba(from var(--danger) r g b / 0.1)', marginBottom: 'var(--space-4)' }}>
                 <strong style={{ color: 'var(--danger)' }}>Overage Detected:</strong>{' '}
                 {formatBps(p.overage_bps)} over commit - Cost: ${(p.overage_cost ?? 0).toLocaleString()}
               </div>
@@ -80,7 +80,7 @@ export function BillingPeriodModal({ periodId, onClose }: Props) {
 
 function Stat({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
-    <div className="card stat-card" style={{ padding: '0.75rem', textAlign: 'center' }}>
+    <div className="card card-sm stat-card" style={{ textAlign: 'center' }}>
       <div className="stat-value" style={{ fontSize: '1.1rem', ...(color ? { color } : null) }}>{value}</div>
       <div className="stat-label">{label}</div>
     </div>

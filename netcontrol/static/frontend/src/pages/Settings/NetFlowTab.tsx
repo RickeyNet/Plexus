@@ -56,7 +56,7 @@ export function NetFlowTab() {
   const sflowRunning = query.data?.sflow_running ?? false;
 
   return (
-    <div className="card" style={{ padding: '1rem' }}>
+    <div>
       <div
         style={{
           display: 'flex',

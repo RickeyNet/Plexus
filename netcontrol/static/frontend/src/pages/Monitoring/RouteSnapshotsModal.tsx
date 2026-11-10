@@ -23,7 +23,7 @@ export function RouteSnapshotsModal({ hostId, hostname, onClose }: { hostId: num
             const prev = snapshots.data?.[i + 1];
             const delta = prev ? s.route_count - prev.route_count : 0;
             return (
-              <div key={s.id} className="card" style={{ padding: '0.5rem 0.75rem' }}>
+              <div key={s.id} className="card card-sm">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
                     <span className="text-muted" style={{ fontSize: '0.85em' }}>{formatTimestamp(s.captured_at)}</span>

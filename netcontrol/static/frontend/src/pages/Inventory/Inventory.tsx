@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
+import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
@@ -229,41 +230,38 @@ export function Inventory() {
 
   return (
     <div>
-      <div className="page-header" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-        <h2 style={{ margin: 0, flex: '0 0 auto' }}>Inventory</h2>
-        <div style={{ display: 'flex', gap: '0.4rem', marginLeft: 'auto', flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            className="btn btn-sm btn-secondary"
-            onClick={() => setModal({ kind: 'snmp-profiles' })}
-          >
-            SNMP Profiles
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm btn-secondary"
-            onClick={() =>
-              setModal({ kind: 'discovery', mode: 'global', group: null })
-            }
-          >
-            Discover Devices
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm btn-secondary"
-            onClick={exportCsv}
-          >
-            Export CSV
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm btn-primary"
-            onClick={() => setModal({ kind: 'create-group', parentId: null })}
-          >
-            + New Group
-          </button>
-        </div>
-      </div>
+      <PageHeader title="Inventory">
+        <button
+          type="button"
+          className="btn btn-sm btn-secondary"
+          onClick={() => setModal({ kind: 'snmp-profiles' })}
+        >
+          SNMP Profiles
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm btn-secondary"
+          onClick={() =>
+            setModal({ kind: 'discovery', mode: 'global', group: null })
+          }
+        >
+          Discover Devices
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm btn-secondary"
+          onClick={exportCsv}
+        >
+          Export CSV
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm btn-primary"
+          onClick={() => setModal({ kind: 'create-group', parentId: null })}
+        >
+          + New Group
+        </button>
+      </PageHeader>
 
       <PageHelp
         pageKey="inventory"
@@ -271,26 +269,16 @@ export function Inventory() {
         text="Add, edit, and organize network devices into groups. Devices added here are used across monitoring, backups, compliance, and automation features."
       />
 
-      <div
-        className="card"
-        style={{
-          padding: '0.75rem',
-          marginBottom: '0.75rem',
-          display: 'flex',
-          gap: '0.5rem',
-          flexWrap: 'wrap',
-          alignItems: 'center',
-        }}
-      >
+      <div className="card card-sm toolbar">
         <input
-          className="form-input"
+          className="form-input form-input-sm"
           placeholder="Search groups, hosts, IPs…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           style={{ maxWidth: 280, flex: '1 1 200px' }}
         />
         <select
-          className="form-select"
+          className="form-select form-select-sm"
           value={sort}
           onChange={(e) => setSort(e.target.value as InventorySort)}
           style={{ maxWidth: 200 }}
@@ -325,87 +313,89 @@ export function Inventory() {
           Error loading inventory: {(groupsQ.error as Error).message}
         </p>
       )}
-      {!groupsQ.isPending && filtered.length === 0 && (
-        <div
-          className="card"
-          style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-muted)' }}
-        >
-          {query ? 'No groups match your search.' : 'No inventory groups. Click "+ New Group" to create one.'}
-        </div>
-      )}
+      <div className="stack stack-sm">
+        {!groupsQ.isPending && filtered.length === 0 && (
+          <div
+            className="card"
+            style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-muted)' }}
+          >
+            {query ? 'No groups match your search.' : 'No inventory groups. Click "+ New Group" to create one.'}
+          </div>
+        )}
 
-      {visible.map((group) => (
-        <GroupCard
-          key={group.id}
-          group={group}
-          subGroupCount={subGroupCounts.get(group.id) ?? 0}
-          query={query}
-          compact={compact}
-          collapsed={collapsed.has(group.id)}
-          draggable={isCustomOrder}
-          selectedSet={selectedHosts.get(group.id) ?? new Set()}
-          assignedProfileId={assignmentsQ.data?.[group.id] ?? ''}
-          snmpProfiles={profilesQ.data ?? []}
-          onAssignProfile={(profileId) =>
-            assignProfile.mutate(
-              { groupId: group.id, profileId },
-              {
-                onError: (e) => {
-                  void alert({ message: (e as Error).message, variant: 'error' });
+        {visible.map((group) => (
+          <GroupCard
+            key={group.id}
+            group={group}
+            subGroupCount={subGroupCounts.get(group.id) ?? 0}
+            query={query}
+            compact={compact}
+            collapsed={collapsed.has(group.id)}
+            draggable={isCustomOrder}
+            selectedSet={selectedHosts.get(group.id) ?? new Set()}
+            assignedProfileId={assignmentsQ.data?.[group.id] ?? ''}
+            snmpProfiles={profilesQ.data ?? []}
+            onAssignProfile={(profileId) =>
+              assignProfile.mutate(
+                { groupId: group.id, profileId },
+                {
+                  onError: (e) => {
+                    void alert({ message: (e as Error).message, variant: 'error' });
+                  },
                 },
-              },
-            )
-          }
-          onToggleCollapse={() => toggleCollapsed(group.id)}
-          onDragStart={() => onDragStart(group.id)}
-          onDragOver={(e) => onDragOver(e, group.id)}
-          onDrop={() => onDrop(group.id)}
-          onSelectionChange={(set) =>
-            setSelectedHosts((prev) => {
-              const next = new Map(prev);
-              if (set.size === 0) next.delete(group.id);
-              else next.set(group.id, set);
-              return next;
-            })
-          }
-          onEditGroup={() => setModal({ kind: 'edit-group', group })}
-          onAddSubGroup={() => setModal({ kind: 'create-group', parentId: group.id })}
-          onDeleteGroup={() => handleDeleteGroup(group)}
-          onSyncDiscovery={() =>
-            setModal({ kind: 'discovery', mode: 'sync', group })
-          }
-          onBulkSerial={() =>
-            setModal({
-              kind: 'serial',
-              target: { mode: 'bulk', groupId: group.id, groupName: groupLabel(group) },
-            })
-          }
-          onAddHost={() => setModal({ kind: 'add-host', groupId: group.id })}
-          onEditHost={(host) =>
-            setModal({
-              kind: 'edit-host',
-              host: { ...host, group_id: group.id },
-            })
-          }
-          onDeleteHost={handleDeleteHost}
-          onFetchSerial={(host) =>
-            setModal({
-              kind: 'serial',
-              target: { mode: 'single', hostId: host.id, hostname: host.hostname },
-            })
-          }
-          onBulkMove={() => {
-            const ids = Array.from(selectedHosts.get(group.id) ?? []);
-            if (!ids.length) return;
-            setModal({
-              kind: 'bulk-move',
-              sourceGroupId: group.id,
-              hostIds: ids,
-            });
-          }}
-          onBulkDelete={() => handleBulkDelete(group.id)}
-        />
-      ))}
+              )
+            }
+            onToggleCollapse={() => toggleCollapsed(group.id)}
+            onDragStart={() => onDragStart(group.id)}
+            onDragOver={(e) => onDragOver(e, group.id)}
+            onDrop={() => onDrop(group.id)}
+            onSelectionChange={(set) =>
+              setSelectedHosts((prev) => {
+                const next = new Map(prev);
+                if (set.size === 0) next.delete(group.id);
+                else next.set(group.id, set);
+                return next;
+              })
+            }
+            onEditGroup={() => setModal({ kind: 'edit-group', group })}
+            onAddSubGroup={() => setModal({ kind: 'create-group', parentId: group.id })}
+            onDeleteGroup={() => handleDeleteGroup(group)}
+            onSyncDiscovery={() =>
+              setModal({ kind: 'discovery', mode: 'sync', group })
+            }
+            onBulkSerial={() =>
+              setModal({
+                kind: 'serial',
+                target: { mode: 'bulk', groupId: group.id, groupName: groupLabel(group) },
+              })
+            }
+            onAddHost={() => setModal({ kind: 'add-host', groupId: group.id })}
+            onEditHost={(host) =>
+              setModal({
+                kind: 'edit-host',
+                host: { ...host, group_id: group.id },
+              })
+            }
+            onDeleteHost={handleDeleteHost}
+            onFetchSerial={(host) =>
+              setModal({
+                kind: 'serial',
+                target: { mode: 'single', hostId: host.id, hostname: host.hostname },
+              })
+            }
+            onBulkMove={() => {
+              const ids = Array.from(selectedHosts.get(group.id) ?? []);
+              if (!ids.length) return;
+              setModal({
+                kind: 'bulk-move',
+                sourceGroupId: group.id,
+                hostIds: ids,
+              });
+            }}
+            onBulkDelete={() => handleBulkDelete(group.id)}
+          />
+        ))}
+      </div>
 
       {modal.kind === 'create-group' && (
         <GroupModal group={null} isCreate groups={groups} defaultParentId={modal.parentId} onClose={closeModal} />
@@ -560,7 +550,7 @@ function GroupCard({
 
   return (
     <div
-      className="card"
+      className="card card-sm"
       draggable={draggable}
       onDragStart={onDragStart}
       onDragOver={onDragOver}
@@ -569,9 +559,8 @@ function GroupCard({
         onDrop();
       }}
       style={{
-        marginBottom: '0.75rem',
         marginLeft: `${(group.depth ?? 0) * GROUP_INDENT_REM}rem`,
-        padding: compact ? '0.5rem 0.75rem' : '0.75rem 1rem',
+        padding: compact ? 'var(--space-2) var(--space-3)' : undefined,
         opacity: collapsed ? 0.95 : 1,
       }}
     >
@@ -634,21 +623,12 @@ function GroupCard({
           </div>
         </div>
         <div
-          style={{
-            display: 'flex',
-            gap: '0.25rem',
-            alignItems: 'center',
-            flexShrink: 0,
-          }}
+          className="toolbar"
+          style={{ gap: 'var(--space-1)', marginBottom: 0, flexShrink: 0 }}
         >
           <select
-            className="form-select"
-            style={{
-              fontSize: '0.75rem',
-              padding: '0.2rem 0.4rem',
-              height: 'auto',
-              minWidth: 130,
-            }}
+            className="form-select form-select-sm"
+            style={{ minWidth: 130 }}
             value={assignedProfileId}
             onChange={(e) => onAssignProfile(e.target.value)}
             title="SNMP Profile"

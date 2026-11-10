@@ -13,7 +13,7 @@ export function HistoryTab() {
 
   if (query.isPending) return <p className="text-muted">Loading…</p>;
   if (query.error) {
-    return <div className="card" style={{ color: 'var(--danger)', padding: '1rem' }}>Error loading reports: {(query.error as Error).message}</div>;
+    return <div className="card-inset" style={{ color: 'var(--danger)' }}>Error loading reports: {(query.error as Error).message}</div>;
   }
 
   const data = query.data;
@@ -21,7 +21,7 @@ export function HistoryTab() {
 
   if (!runs.length) {
     return (
-      <div className="card" style={{ padding: '1.5rem' }}>
+      <div className="card-inset">
         <p className="text-muted">No reports generated yet.</p>
       </div>
     );
