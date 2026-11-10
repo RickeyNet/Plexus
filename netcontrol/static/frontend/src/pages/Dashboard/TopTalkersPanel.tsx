@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { echarts } from '@/lib/echart-core';
+import { observeChartResize } from '@/lib/useEChart';
 import { resolveThemeVars, useThemeName } from '@/lib/themeColors';
 
 import { useFlowStatus, useFlowTopTalkers } from '@/api/networkTools';
@@ -9,6 +10,8 @@ import { ClampedRangeHint } from '@/components/TimeRangeBar';
 import { useTimeRange } from '@/lib/timeRange-context';
 import { clampPreset, toHours } from '@/lib/timeRangeMap';
 import { formatBytes } from '@/pages/NetworkTools/formatting';
+
+import { PANEL_BODY_HEIGHT, PANEL_BODY_STYLE } from './helpers';
 
 type Direction = 'src' | 'dst';
 
@@ -47,7 +50,7 @@ export function TopTalkersPanel() {
       </div>
 
       {status.isPending ? (
-        <div className="skeleton skeleton-card" style={{ height: 260 }} />
+        <div className="skeleton skeleton-card" style={PANEL_BODY_STYLE} />
       ) : collectorOff ? (
         <div className="dashboard-response-empty" style={{ flexDirection: 'column', gap: '0.5rem' }}>
           <p style={{ margin: 0, color: 'var(--text-muted)' }}>
@@ -58,11 +61,13 @@ export function TopTalkersPanel() {
           </Link>
         </div>
       ) : talkers.isPending ? (
-        <div className="skeleton skeleton-card" style={{ height: 260 }} />
+        <div className="skeleton skeleton-card" style={PANEL_BODY_STYLE} />
       ) : talkers.error ? (
-        <p style={{ color: 'var(--danger)', margin: 0 }}>
-          Failed to load: {(talkers.error as Error).message}
-        </p>
+        <div className="dashboard-response-empty">
+          <p style={{ color: 'var(--danger)', margin: 0 }}>
+            Failed to load: {(talkers.error as Error).message}
+          </p>
+        </div>
       ) : !talkers.data || talkers.data.length === 0 ? (
         <div className="dashboard-response-empty">
           <p style={{ margin: 0, color: 'var(--text-muted)' }}>
@@ -142,13 +147,12 @@ function TalkersBars({ rows }: { rows: { ip: string; total_bytes: number; flow_c
       ],
     }));
 
-    const onResize = () => chart.resize();
-    window.addEventListener('resize', onResize);
+    const stopObserving = observeChartResize(chart, ref.current);
     return () => {
-      window.removeEventListener('resize', onResize);
+      stopObserving();
       chart.dispose();
     };
   }, [sorted, theme]);
 
-  return <div ref={ref} style={{ width: '100%', height: 260 }} />;
+  return <div ref={ref} style={{ width: '100%', height: PANEL_BODY_HEIGHT }} />;
 }

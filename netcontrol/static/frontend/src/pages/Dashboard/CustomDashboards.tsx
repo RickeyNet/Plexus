@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 
 import { useCustomDashboards, useDeleteCustomDashboard } from '@/api/dashboard';
+import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { PageHeader } from '@/components/PageHeader';
 import { formatBackendDate } from '@/lib/datetime';
@@ -10,7 +11,7 @@ import { CreateDashboardModal } from './CreateDashboardModal';
 import { DashboardSwitcher } from './DashboardSwitcher';
 
 export function CustomDashboards() {
-  const { confirm } = useDialogs();
+  const { confirm, alert } = useDialogs();
   const { data: dashboards = [], isPending, error } = useCustomDashboards();
   const deleteMutation = useDeleteCustomDashboard();
   const [showCreate, setShowCreate] = useState(false);
@@ -65,34 +66,23 @@ export function CustomDashboards() {
       {dashboards.length > 0 && (
         <div className="dashboards-card-grid">
           {dashboards.map((d) => (
-            <Link
-              key={d.id}
-              to={`/dashboards/${d.id}`}
-              className="card card-clickable dashboard-card"
-              style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}
-            >
-              <div className="card-title">{d.name}</div>
+            <div key={d.id} className="card card-clickable dashboard-card">
+              <div className="card-title">
+                <Link to={`/dashboards/${d.id}`} className="dashboard-card-link">
+                  {d.name}
+                </Link>
+              </div>
               <p className="text-muted" style={{ fontSize: '0.85rem', margin: '0.25rem 0' }}>
                 {d.description || 'No description'}
               </p>
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  marginTop: '0.5rem',
-                }}
-              >
+              <div className="dashboard-card-footer">
                 <span className="text-muted" style={{ fontSize: '0.75rem' }}>
                   {d.updated_at ? formatBackendDate(d.updated_at) : ''}
                 </span>
-                <button
-                  className="btn btn-sm btn-danger"
-                  title="Delete"
+                <DeleteButton
                   aria-label={`Delete dashboard ${d.name}`}
-                  onClick={async (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
+                  busy={deleteMutation.isPending && deleteMutation.variables === d.id}
+                  onClick={async () => {
                     if (
                       !(await confirm({
                         title: 'Delete dashboard',
@@ -101,13 +91,15 @@ export function CustomDashboards() {
                       }))
                     )
                       return;
-                    deleteMutation.mutate(d.id);
+                    deleteMutation.mutate(d.id, {
+                      onError: (e) => {
+                        void alert({ message: (e as Error).message, variant: 'error' });
+                      },
+                    });
                   }}
-                >
-                  ×
-                </button>
+                />
               </div>
-            </Link>
+            </div>
           ))}
         </div>
       )}

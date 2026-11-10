@@ -11,6 +11,7 @@ const METRIC_QUERY_KEYS = [
   'capacity-planning',
   'flows',
   'dashboard',
+  'custom-dashboard',
   'monitoring-poll-history',
   'monitoring-polls',
   'monitoring-summary',

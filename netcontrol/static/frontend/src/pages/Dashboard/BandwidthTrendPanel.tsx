@@ -7,6 +7,8 @@ import { SERIES_COLORS } from '@/lib/themeColors';
 import { useTimeRange } from '@/lib/timeRange-context';
 import { clampPreset } from '@/lib/timeRangeMap';
 
+import { PANEL_BODY_HEIGHT, PANEL_BODY_STYLE } from './helpers';
+
 // /api/dashboard/top-interfaces only knows 1h..7d and falls back to 6h otherwise.
 const TOP_INTERFACE_RANGES = ['1h', '6h', '24h', '7d'] as const;
 
@@ -44,11 +46,13 @@ export function BandwidthTrendPanel() {
       </div>
 
       {isPending ? (
-        <div className="skeleton skeleton-card" style={{ height: 240 }} />
+        <div className="skeleton skeleton-card" style={PANEL_BODY_STYLE} />
       ) : error ? (
-        <p style={{ color: 'var(--danger)', margin: 0 }}>
-          Failed to load: {(error as Error).message}
-        </p>
+        <div className="dashboard-response-empty">
+          <p style={{ color: 'var(--danger)', margin: 0 }}>
+            Failed to load: {(error as Error).message}
+          </p>
+        </div>
       ) : !hasData ? (
         <div className="dashboard-response-empty">
           <p style={{ margin: 0, color: 'var(--text-muted)' }}>
@@ -56,7 +60,7 @@ export function BandwidthTrendPanel() {
           </p>
         </div>
       ) : (
-        <TimeSeriesChart series={series} area yAxisName="bps" height={240} />
+        <TimeSeriesChart series={series} area yAxisName="bps" height={PANEL_BODY_HEIGHT} />
       )}
     </div>
   );

@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router';
 
 import {
@@ -15,7 +14,6 @@ import { groupLabel } from '@/api/inventory';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { PageHeader } from '@/components/PageHeader';
-import { invalidateMetricQueries } from '@/lib/invalidateMetricQueries';
 import { useTimeRange } from '@/lib/timeRange-context';
 
 import { DashboardSwitcher } from './DashboardSwitcher';
@@ -34,7 +32,6 @@ function parseVariables(json: string | undefined): DashboardVariable[] {
 
 export function DashboardViewer() {
   const { confirm, alert } = useDialogs();
-  const qc = useQueryClient();
   const { range } = useTimeRange();
   const { id } = useParams<{ id: string }>();
   const dashboardId =
@@ -61,7 +58,7 @@ export function DashboardViewer() {
     return (
       <>
         <PageHeader title="Dashboard" />
-        <div className="skeleton skeleton-card" style={{ height: 200 }} />
+        <div className="skeleton skeleton-card" style={{ height: 288 }} />
       </>
     );
   }
@@ -132,24 +129,21 @@ export function DashboardViewer() {
           onChange={setVariableValues}
           groups={groupsQuery.data ?? []}
         />
+        {editing && (
+          <>
+            <button type="button" className="btn btn-primary" onClick={() => setShowAddPanel(true)}>
+              + Add Panel
+            </button>
+            <DeleteButton size="md" label="Delete Dashboard" onClick={handleDeleteDashboard} />
+          </>
+        )}
         <button
+          type="button"
           className={editing ? 'btn btn-primary' : 'btn btn-secondary'}
           onClick={() => setEditing((v) => !v)}
         >
           {editing ? 'Done' : 'Edit'}
         </button>
-        <button
-          className="btn btn-secondary"
-          onClick={() => {
-            void dashQuery.refetch();
-            invalidateMetricQueries(qc);
-          }}
-        >
-          Refresh
-        </button>
-        {editing && (
-          <DeleteButton size="md" onClick={handleDeleteDashboard} />
-        )}
       </PageHeader>
 
       {panels.length === 0 ? (
@@ -187,14 +181,6 @@ export function DashboardViewer() {
               onDelete={handleDeletePanel}
             />
           ))}
-        </div>
-      )}
-
-      {editing && (
-        <div style={{ marginTop: '1rem' }}>
-          <button className="btn btn-primary" onClick={() => setShowAddPanel(true)}>
-            + Add Panel
-          </button>
         </div>
       )}
 
