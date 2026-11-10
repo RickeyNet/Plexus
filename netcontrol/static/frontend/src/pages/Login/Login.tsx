@@ -13,13 +13,13 @@ function errorMessage(err: unknown, fallback: string): string {
 }
 
 interface Props {
-  // Whether self-registration is allowed (server-side flag). Off in most
-  // deployments; the legacy app simply showed the link unconditionally and
-  // let the API reject if disabled, so we mirror that.
+  // Whether the server accepts self-registration (APP_ALLOW_SELF_REGISTER,
+  // reported by /auth/status). Off in most deployments, so the Register
+  // link is hidden unless the server says it is on.
   allowRegister?: boolean;
 }
 
-export function Login({ allowRegister = true }: Props) {
+export function Login({ allowRegister = false }: Props) {
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -174,7 +174,7 @@ export function Login({ allowRegister = true }: Props) {
         )}
 
         {allowRegister && (
-          <div style={{ marginTop: '1rem', textAlign: 'center' }}>
+          <div className="login-switch">
             {mode === 'login' ? (
               <>
                 <span style={{ color: 'var(--text-muted)' }}>Don't have an account?</span>

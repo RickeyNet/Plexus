@@ -1191,6 +1191,18 @@ async def heartbeat(request: Request, response: Response):
     }
 
 
+def _logged_out_status() -> dict:
+    """Status body for a request with no valid session.
+
+    allow_self_register lets the login screen offer the Register link only
+    when /api/auth/register would accept the request.
+    """
+    return {
+        "authenticated": False,
+        "allow_self_register": _env_flag("APP_ALLOW_SELF_REGISTER", False),
+    }
+
+
 @router.get("/api/auth/status")
 async def auth_status(request: Request, response: Response):
     _app = _app_module()
@@ -1198,10 +1210,10 @@ async def auth_status(request: Request, response: Response):
 
     session = _get_session(request)
     if not session:
-        return {"authenticated": False}
+        return _logged_out_status()
     user = await db.get_user_by_id(session["user_id"])
     if not user:
-        return {"authenticated": False}
+        return _logged_out_status()
 
     # Mirror the idle-timeout enforcement done by require_auth so that a stale
     # cookie can't make the SPA think it's still logged in. Kiosk accounts
@@ -1220,7 +1232,7 @@ async def auth_status(request: Request, response: Response):
                     detail=f"idle={elapsed}s threshold={idle_timeout}s path=/api/auth/status",
                     correlation_id=_corr_id(request),
                 )
-                return {"authenticated": False}
+                return _logged_out_status()
 
     never_expires = bool(user.get("session_never_expires"))
     idle_timeout = int(state.LOGIN_RULES.get("session_idle_timeout", 1800))

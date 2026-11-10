@@ -15,6 +15,8 @@ export interface AuthStatus {
   session_last_activity?: number;
   session_never_expires?: boolean;
   server_time?: number;
+  /** Sent with a logged-out status: whether the server accepts /auth/register. */
+  allow_self_register?: boolean;
 }
 
 export interface LoginResponse {

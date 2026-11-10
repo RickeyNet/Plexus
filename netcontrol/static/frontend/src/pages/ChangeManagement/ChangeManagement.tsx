@@ -32,12 +32,7 @@ export function ChangeManagement() {
     <div>
       <PageHeader title="Change Management" />
 
-      <PageHelp
-        pageKey="change-management"
-        title="Plan, Analyze & Deploy Changes"
-        text="Assess risk before pushing changes, deploy with staged rollouts, and roll back if needed. The full change lifecycle in one place."
-      />
-
+      {/* One help banner per tab, under the tabs (Maintenance renders its own). */}
       <TabBar tabs={shownTabs} active={tab} onChange={selectTab} aria-label="Change management sections" />
 
       {tab === 'risk' && (
