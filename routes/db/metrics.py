@@ -1432,7 +1432,12 @@ async def get_availability_transitions(
     start: str | None = None,
     end: str | None = None,
     limit: int = 500,
+    group_id: int | None = None,
+    days: int | None = None,
 ) -> list[dict]:
+    """State transitions, newest first. ``group_id`` keeps the hosts of one
+    inventory group and ``days`` the last N days, the same filters as
+    ``get_outage_history``."""
     db = await _dbcore.get_db(read_only=True)
     try:
         clauses = ["1=1"]
@@ -1440,6 +1445,12 @@ async def get_availability_transitions(
         if host_id is not None:
             clauses.append("a.host_id = ?")
             params.append(host_id)
+        if group_id is not None:
+            clauses.append("h.group_id = ?")
+            params.append(group_id)
+        if days is not None:
+            clauses.append("a.transition_at >= datetime('now', '-' || ? || ' days')")
+            params.append(days)
         if entity_type:
             clauses.append("a.entity_type = ?")
             params.append(entity_type)

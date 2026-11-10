@@ -123,6 +123,7 @@ const STATUS_TONE: Record<string, Tone> = {
   approved: 'success',
   synced: 'success',
   up: 'success',
+  online: 'success',
 
   failed: 'danger',
   failure: 'danger',
@@ -133,6 +134,8 @@ const STATUS_TONE: Record<string, Tone> = {
   'timed-out': 'danger',
   timeout: 'danger',
   down: 'danger',
+  offline: 'danger',
+  unreachable: 'danger',
 
   partial: 'warning',
   warning: 'warning',

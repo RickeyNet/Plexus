@@ -4,7 +4,7 @@
  * /api/availability, /api/metrics/capacity-planning, /api/metrics/events,
  * /api/oid-profiles.
  */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { apiRequest, getCsrfToken } from './client';
 
@@ -234,13 +234,15 @@ export interface AvailabilityHost {
   hostname?: string | null;
   ip_address?: string | null;
   uptime_pct?: number | null;
+  /** The host's inventory status (online, offline, unreachable, unknown, ...). */
   current_state?: string;
+  outage_count?: number;
 }
 
 export interface AvailabilitySummary {
-  total_hosts?: number;
-  hosts_up?: number;
-  hosts_down?: number;
+  period_days?: number;
+  host_count?: number;
+  currently_down?: number;
   avg_uptime_pct?: number | null;
   total_outages?: number;
   hosts?: AvailabilityHost[];
@@ -252,8 +254,9 @@ export interface AvailabilityOutage {
   hostname?: string;
   entity_type?: string;
   entity_id?: string;
-  started_at?: string | null;
-  ended_at?: string | null;
+  /** When the entity went down, and when it next came back up (null while it is still down). */
+  down_at?: string | null;
+  up_at?: string | null;
   duration_seconds?: number | null;
 }
 
@@ -265,19 +268,34 @@ export interface AvailabilityTransition {
   entity_id?: string;
   old_state?: string;
   new_state?: string;
-  changed_at?: string | null;
+  transition_at?: string | null;
 }
 
-export interface CapacityPlanningPoint {
-  timestamp?: string;
-  day?: string;
-  value: number;
+/** One daily rollup of one host. */
+export interface CapacityRollupRow {
+  host_id: number;
+  hostname?: string | null;
+  period_start: string;
+  val_avg?: number | null;
+}
+
+/** The linear trend of one host, projected forward. */
+export interface CapacityHostResult {
+  hostname: string;
+  trend: { slope: number; intercept: number } | null;
+  projection: { date: string; value: number }[];
+  /** Set when the host is below the threshold and rising toward it; `date` and `days_until` are null past ~100 years. */
+  threshold_eta: { date: string | null; days_until: number | null; current_value: number } | null;
 }
 
 export interface CapacityPlanningResponse {
-  data_points?: CapacityPlanningPoint[];
-  projection?: CapacityPlanningPoint[];
-  threshold_estimates?: Record<string, { days_until?: number | null; estimated_date?: string | null }>;
+  metric: string;
+  range: string;
+  threshold?: number;
+  projection_days?: number;
+  count: number;
+  data: CapacityRollupRow[];
+  per_host: CapacityHostResult[];
 }
 
 export interface PollNowEvent {
@@ -425,10 +443,14 @@ export function useAvailabilityOutages(params: { groupId?: number | null; days?:
   });
 }
 
-export function useAvailabilityTransitions(limit = 500) {
+export function useAvailabilityTransitions(params: { groupId?: number | null; days?: number; limit?: number } = {}) {
+  const qs = new URLSearchParams();
+  if (params.groupId) qs.set('group_id', String(params.groupId));
+  if (params.days) qs.set('days', String(params.days));
+  qs.set('limit', String(params.limit ?? 500));
   return useQuery<{ transitions: AvailabilityTransition[] }>({
-    queryKey: ['availability-transitions', limit],
-    queryFn: () => apiRequest(`/availability/transitions?limit=${limit}`),
+    queryKey: ['availability-transitions', params.groupId ?? null, params.days ?? null, params.limit ?? 500],
+    queryFn: () => apiRequest(`/availability/transitions?${qs}`),
   });
 }
 
@@ -437,17 +459,20 @@ export function useCapacityPlanning(params: {
   range: string;
   group?: number | null;
   projectionDays?: number;
-  threshold?: number;
+  /** Value to estimate a time-to-reach for; omit when the metric has no meaningful limit. */
+  threshold?: number | null;
 }) {
   const qs = new URLSearchParams();
   qs.set('metric', params.metric);
   qs.set('range', params.range);
   if (params.group) qs.set('group', String(params.group));
   qs.set('projection_days', String(params.projectionDays ?? 90));
-  qs.set('threshold', String(params.threshold ?? 80));
+  if (params.threshold != null) qs.set('threshold', String(params.threshold));
   return useQuery<CapacityPlanningResponse>({
-    queryKey: ['capacity-planning', params.metric, params.range, params.group ?? null, params.projectionDays ?? 90, params.threshold ?? 80],
+    queryKey: ['capacity-planning', params.metric, params.range, params.group ?? null, params.projectionDays ?? 90, params.threshold ?? null],
     queryFn: () => apiRequest(`/metrics/capacity-planning?${qs}`),
+    // Keep the chart on screen while a new threshold or filter loads.
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -489,8 +514,9 @@ export interface AlertRuleCreate {
   escalate_after_minutes: number;
   escalate_to?: string;
   description?: string;
-  host_id?: number;
-  group_id?: number;
+  /** null clears the scope when a rule is edited. */
+  host_id?: number | null;
+  group_id?: number | null;
   channel_ids?: string[];
 }
 

@@ -7,6 +7,8 @@ import {
   useTopologyAvailabilityTransitions,
 } from '@/api/monitoring';
 import { StatusBadge } from '@/components/Badge';
+import { DataTable } from '@/components/DataTable';
+import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
 import { StatGrid, StatTile } from '@/components/StatTile';
@@ -16,7 +18,7 @@ import { TOPOLOGY_AVAILABILITY_ANCHOR } from '@/pages/Dashboard/sourceHealth';
 import { sourceTypeLabel } from '@/pages/Topology/merakiHelpers';
 import { formatBackendDateTime } from '@/lib/datetime';
 
-import { formatUptime } from './helpers';
+import { AVAILABILITY_TABLE_MAX_HEIGHT, countTone, formatUptime, formatUptimePct } from './helpers';
 
 type SubTab = 'entities' | 'outages' | 'transitions';
 
@@ -67,10 +69,10 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
   const providers = [...new Set(orgs.map((o) => o.provider))];
   const cards: { label: string; value: string | number; tone?: Tone }[] = [
     { label: 'Entities Tracked', value: s?.entity_count ?? '-' },
-    { label: 'Up', value: s?.up ?? '-', tone: 'success' },
-    { label: 'Degraded', value: s?.degraded ?? '-', tone: 'warning' },
-    { label: 'Down', value: s?.down ?? '-', tone: 'danger' },
-    { label: 'Avg Uptime', value: s?.avg_uptime_pct != null ? `${s.avg_uptime_pct.toFixed(2)}%` : '-' },
+    { label: 'Up', value: s?.up ?? '-', tone: countTone(s?.up, 'success') },
+    { label: 'Degraded', value: s?.degraded ?? '-', tone: countTone(s?.degraded, 'warning') },
+    { label: 'Down', value: s?.down ?? '-', tone: countTone(s?.down, 'danger') },
+    { label: 'Avg Uptime', value: formatUptimePct(s?.avg_uptime_pct) },
     { label: `Outages (${days}d)`, value: s?.total_outages ?? '-' },
   ];
 
@@ -142,10 +144,9 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
         ) : summary.isPending ? (
           <LoadingState />
         ) : !s?.entities.length ? (
-          <div className="empty-state">Nothing tracked yet - collect a topology source or run a cloud discovery.</div>
+          <EmptyState message="Nothing tracked yet - collect a topology source or run a cloud discovery." />
         ) : (
-          <div style={{ maxHeight: 520, overflow: 'auto' }}>
-            <table className="data-table">
+          <DataTable stickyHeader maxHeight={AVAILABILITY_TABLE_MAX_HEIGHT}>
               <thead>
                 <tr>
                   <th>Name</th>
@@ -172,14 +173,13 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
                       <StatusBadge status={e.current_state} />
                       {e.missing && <span className="text-muted" style={{ fontSize: '0.8em', marginLeft: '0.3rem' }}>not in last collection</span>}
                     </td>
-                    <td style={{ textAlign: 'right' }}>{e.uptime_pct != null ? `${e.uptime_pct.toFixed(2)}%` : '-'}</td>
+                    <td style={{ textAlign: 'right' }}>{formatUptimePct(e.uptime_pct)}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>{formatBackendDateTime(e.last_change)}</td>
                     <td style={{ textAlign: 'right' }}>{e.outage_count}</td>
                   </tr>
                 ))}
               </tbody>
-            </table>
-          </div>
+          </DataTable>
         )
       )}
 
@@ -189,10 +189,9 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
         ) : outages.isPending ? (
           <LoadingState />
         ) : !outages.data?.outages.length ? (
-          <div className="empty-state">No outages recorded in the last {days} days.</div>
+          <EmptyState message={`No outages recorded in the last ${days} days.`} />
         ) : (
-          <div style={{ maxHeight: 520, overflow: 'auto' }}>
-            <table className="data-table">
+          <DataTable stickyHeader maxHeight={AVAILABILITY_TABLE_MAX_HEIGHT}>
               <thead>
                 <tr>
                   <th>Name</th>
@@ -217,8 +216,7 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
                   </tr>
                 ))}
               </tbody>
-            </table>
-          </div>
+          </DataTable>
         )
       )}
 
@@ -228,10 +226,9 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
         ) : transitions.isPending ? (
           <LoadingState />
         ) : !transitions.data?.transitions.length ? (
-          <div className="empty-state">No state changes recorded in the last {days} days.</div>
+          <EmptyState message={`No state changes recorded in the last ${days} days.`} />
         ) : (
-          <div style={{ maxHeight: 520, overflow: 'auto' }}>
-            <table className="data-table">
+          <DataTable stickyHeader maxHeight={AVAILABILITY_TABLE_MAX_HEIGHT}>
               <thead>
                 <tr>
                   <th>Time</th>
@@ -254,8 +251,7 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
                   </tr>
                 ))}
               </tbody>
-            </table>
-          </div>
+          </DataTable>
         )
       )}
     </div>

@@ -21,6 +21,22 @@ import {
 import { useNotificationChannels } from '@/api/settings';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 
+import { INACTIVE_OPACITY } from './helpers';
+
+const METRIC_OPTIONS: { value: string; label: string }[] = [
+  { value: 'cpu', label: 'CPU %' },
+  { value: 'memory', label: 'Memory %' },
+  { value: 'interface_down', label: 'Interfaces Down' },
+  { value: 'vpn_down', label: 'VPN Tunnels Down' },
+  { value: 'route_count', label: 'Route Count' },
+  { value: 'uptime', label: 'Uptime (seconds)' },
+];
+const OPERATOR_OPTIONS = ['>=', '>', '<=', '<', '==', '!='];
+const SEVERITY_OPTIONS: { value: string; label: string }[] = [
+  { value: 'warning', label: 'Warning' },
+  { value: 'critical', label: 'Critical' },
+];
+
 function parseChannelIds(raw?: string | null): string[] {
   if (!raw) return [];
   try {
@@ -41,7 +57,8 @@ export function RulesTab() {
   const channelName = new Map<string, string>(
     (channelsQuery.data?.channels ?? []).map((c) => [c.id, c.name || c.id]),
   );
-  const [showCreate, setShowCreate] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<AlertRule | null>(null);
   const toggling = usePendingKeys<number>();
   const deleting = usePendingKeys<number>();
 
@@ -69,7 +86,7 @@ export function RulesTab() {
   return (
     <div>
       <div className="toolbar" style={{ justifyContent: 'flex-end' }}>
-        <button className="btn btn-primary" onClick={() => setShowCreate(true)}>+ New Rule</button>
+        <button className="btn btn-primary" onClick={() => setCreating(true)}>+ New Rule</button>
       </div>
 
       {rules.error && !rules.data ? (
@@ -83,10 +100,12 @@ export function RulesTab() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
           {rules.data.map((r) => {
             const scope = r.hostname ? `Host: ${r.hostname}` : r.group_name ? `Group: ${r.group_name}` : 'All hosts';
+            // Only the description of a disabled rule is dimmed; its buttons stay full strength.
+            const dim = r.enabled ? 1 : INACTIVE_OPACITY;
             return (
-              <div key={r.id} className="card card-sm" style={{ opacity: r.enabled ? 1 : 0.5 }}>
+              <div key={r.id} className="card card-sm">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
-                  <div>
+                  <div style={{ opacity: dim }}>
                     <SeverityBadge severity={r.severity} />
                     <strong style={{ marginLeft: '0.4rem' }}>{r.name || 'Unnamed'}</strong>
                     <span className="text-muted" style={{ fontSize: '0.85em', marginLeft: '0.5rem' }}>
@@ -95,13 +114,14 @@ export function RulesTab() {
                     {!r.enabled && <span className="text-muted" style={{ fontSize: '0.75em', marginLeft: '0.3rem' }}>(disabled)</span>}
                   </div>
                   <div style={{ display: 'flex', gap: '0.4rem' }}>
+                    <button className="btn btn-sm btn-secondary" onClick={() => setEditing(r)}>Edit</button>
                     <BusyButton className="btn btn-sm btn-secondary" busy={toggling.isPending(r.id)} onClick={() => void toggleEnabled(r)}>
                       {r.enabled ? 'Disable' : 'Enable'}
                     </BusyButton>
                     <DeleteButton busy={deleting.isPending(r.id)} onClick={() => void handleDelete(r)} />
                   </div>
                 </div>
-                <div className="text-muted" style={{ marginTop: '0.3rem', fontSize: '0.85em' }}>
+                <div className="text-muted" style={{ marginTop: '0.3rem', fontSize: '0.85em', opacity: dim }}>
                   {scope} · Cooldown: {r.cooldown_minutes}m
                   {r.escalate_after_minutes > 0 && ` · Escalate to ${r.escalate_to} after ${r.escalate_after_minutes}m`}
                   {(() => {
@@ -117,15 +137,22 @@ export function RulesTab() {
         </div>
       ))}
 
-      <CreateRuleModal isOpen={showCreate} onClose={() => setShowCreate(false)} />
+      <RuleFormModal
+        rule={editing}
+        isCreate={creating}
+        onClose={() => { setEditing(null); setCreating(false); }}
+      />
     </div>
   );
 }
 
-function CreateRuleModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+// Create (rule == null, isCreate) or edit (rule set) an alert rule.
+function RuleFormModal({ rule, isCreate, onClose }: { rule: AlertRule | null; isCreate: boolean; onClose: () => void }) {
   const formId = useId();
+  const isOpen = isCreate || rule != null;
   const [saveError, setSaveError] = useState('');
   const createMut = useCreateAlertRule();
+  const updateMut = useUpdateAlertRule();
   const groups = useInventoryGroupsFull(true);
   const channelsQuery = useNotificationChannels();
   const channels = channelsQuery.data?.channels ?? [];
@@ -143,6 +170,41 @@ function CreateRuleModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
 
   const allHosts = (groups.data ?? []).flatMap((g) => (g.hosts ?? []).map((h) => ({ ...h, group_name: groupLabel(g) })));
 
+  // Load the form when the modal opens for another rule (or for a new one).
+  const [prevRule, setPrevRule] = useState(rule);
+  const [prevIsCreate, setPrevIsCreate] = useState(isCreate);
+  if (rule !== prevRule || isCreate !== prevIsCreate) {
+    setPrevRule(rule);
+    setPrevIsCreate(isCreate);
+    setSaveError('');
+    if (rule) {
+      setName(rule.name);
+      setMetric(rule.metric);
+      setOperator(rule.operator);
+      setValue(String(rule.value));
+      setSeverity(rule.severity);
+      setCooldown(String(rule.cooldown_minutes));
+      setEscalateAfter(String(rule.escalate_after_minutes));
+      setHostId(rule.host_id != null ? String(rule.host_id) : '');
+      setGroupId(rule.host_id == null && rule.group_id != null ? String(rule.group_id) : '');
+      setDescription(rule.description ?? '');
+      setChannelIds(parseChannelIds(rule.channel_ids));
+    } else if (isCreate) {
+      setName(''); setMetric('cpu'); setOperator('>='); setValue('90'); setSeverity('warning');
+      setCooldown('15'); setEscalateAfter('0'); setHostId(''); setGroupId(''); setDescription('');
+      setChannelIds([]);
+    }
+  }
+
+  // A rule made through the API can carry a value the lists below do not offer; keep it selectable.
+  const metricOptions = METRIC_OPTIONS.some((o) => o.value === metric)
+    ? METRIC_OPTIONS
+    : [...METRIC_OPTIONS, { value: metric, label: metric }];
+  const severityOptions = SEVERITY_OPTIONS.some((o) => o.value === severity)
+    ? SEVERITY_OPTIONS
+    : [...SEVERITY_OPTIONS, { value: severity, label: severity }];
+  const operatorOptions = OPERATOR_OPTIONS.includes(operator) ? OPERATOR_OPTIONS : [...OPERATOR_OPTIONS, operator];
+
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setSaveError('');
@@ -154,32 +216,36 @@ function CreateRuleModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
       severity,
       cooldown_minutes: parseInt(cooldown, 10) || 15,
       escalate_after_minutes: parseInt(escalateAfter, 10) || 0,
-      escalate_to: 'critical',
+      escalate_to: rule?.escalate_to || 'critical',
       description: description.trim(),
     };
+    const onError = (err: Error) => { setSaveError(err.message); };
+    if (rule) {
+      // An edit sends every field, so a cleared scope or channel list is saved too.
+      data.host_id = hostId ? parseInt(hostId, 10) : null;
+      data.group_id = !hostId && groupId ? parseInt(groupId, 10) : null;
+      data.channel_ids = channelIds;
+      updateMut.mutate({ id: rule.id, data }, { onSuccess: onClose, onError });
+      return;
+    }
     if (hostId) data.host_id = parseInt(hostId, 10);
     else if (groupId) data.group_id = parseInt(groupId, 10);
     if (channelIds.length) data.channel_ids = channelIds;
-
-    createMut.mutate(data, {
-      onSuccess: () => {
-        setName(''); setValue('90'); setDescription(''); setHostId(''); setGroupId(''); setChannelIds([]);
-        onClose();
-      },
-      onError: (e) => { setSaveError((e as Error).message); },
-    });
+    createMut.mutate(data, { onSuccess: onClose, onError });
   }
+
+  const pending = createMut.isPending || updateMut.isPending;
 
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Create Alert Rule"
+      title={rule ? 'Edit Alert Rule' : 'Create Alert Rule'}
       footer={
         <>
           <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" form={formId} className="btn btn-primary" disabled={createMut.isPending}>
-            {createMut.isPending ? 'Creating…' : 'Create'}
+          <button type="submit" form={formId} className="btn btn-primary" disabled={pending}>
+            {pending ? 'Saving…' : rule ? 'Save' : 'Create'}
           </button>
         </>
       }
@@ -193,22 +259,14 @@ function CreateRuleModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
         <div className="form-group">
           <label className="form-label" htmlFor={`${formId}-metric`}>Metric</label>
           <select id={`${formId}-metric`} className="form-select" value={metric} onChange={(e) => setMetric(e.target.value)}>
-            <option value="cpu">CPU %</option>
-            <option value="memory">Memory %</option>
-            <option value="interface_down">Interfaces Down</option>
-            <option value="vpn_down">VPN Tunnels Down</option>
-            <option value="route_count">Route Count</option>
-            <option value="uptime">Uptime (seconds)</option>
+            {metricOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <div className="form-group" style={{ flex: 1 }}>
             <label className="form-label" htmlFor={`${formId}-operator`}>Operator</label>
             <select id={`${formId}-operator`} className="form-select" value={operator} onChange={(e) => setOperator(e.target.value)}>
-              <option value=">=">{'>='}</option>
-              <option value=">">{'>'}</option>
-              <option value="<=">{'<='}</option>
-              <option value="<">{'<'}</option>
+              {operatorOptions.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
           </div>
           <div className="form-group" style={{ flex: 1 }}>
@@ -219,8 +277,7 @@ function CreateRuleModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
         <div className="form-group">
           <label className="form-label" htmlFor={`${formId}-severity`}>Severity</label>
           <select id={`${formId}-severity`} className="form-select" value={severity} onChange={(e) => setSeverity(e.target.value)}>
-            <option value="warning">Warning</option>
-            <option value="critical">Critical</option>
+            {severityOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>

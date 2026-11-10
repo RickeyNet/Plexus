@@ -8,6 +8,8 @@ import { QueryError } from '@/components/QueryError';
 import { StatGrid, StatTile } from '@/components/StatTile';
 import { formatBackendTimestamp } from '@/lib/datetime';
 
+import { countTone } from './helpers';
+
 const SEVERITIES = [
   { value: '', label: 'All severities' },
   { value: 'emergency', label: 'Emergency' },
@@ -53,6 +55,8 @@ export function EventsTab() {
   const critCount = items.filter((e) => ['emergency', 'alert', 'critical'].includes(e.severity || '')).length;
   const errCount = items.filter((e) => e.severity === 'error').length;
   const warnCount = items.filter((e) => e.severity === 'warning').length;
+  const typeLabel = TYPES.find((t) => t.value === eventType)?.label ?? eventType;
+  const filtered = !!severity || !!search;
 
   return (
     <div>
@@ -77,9 +81,9 @@ export function EventsTab() {
 
       <StatGrid compact>
         <StatTile label="Total Events" value={String(total)} />
-        <StatTile label="Critical+" value={String(critCount)} tone="danger" />
-        <StatTile label="Errors" value={String(errCount)} tone="danger" />
-        <StatTile label="Warnings" value={String(warnCount)} tone="warning" />
+        <StatTile label="Critical+" value={String(critCount)} tone={countTone(critCount, 'danger')} />
+        <StatTile label="Errors" value={String(errCount)} tone={countTone(errCount, 'danger')} />
+        <StatTile label="Warnings" value={String(warnCount)} tone={countTone(warnCount, 'warning')} />
       </StatGrid>
 
       {query.error && !query.data ? (
@@ -94,18 +98,31 @@ export function EventsTab() {
               <tr><th>Time</th><th>Host</th><th>Severity</th><th>Type</th><th>Message</th></tr>
             </thead>
             <tbody>
-              {items.map((e, i) => (
+              {items.map((e, i) => {
+                const message = e.message || e.event_data || '';
+                return (
                 <tr key={i}>
                   <td style={{ whiteSpace: 'nowrap' }}>{formatBackendTimestamp(e.received_at)}</td>
                   <td>{e.hostname || e.host_id || '-'}</td>
                   <td><SeverityBadge severity={e.severity} /></td>
                   <td>{e.event_type || '-'}</td>
-                  <td style={{ maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.message || e.event_data || '-'}</td>
+                  <td
+                    title={message || undefined}
+                    style={{ maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  >
+                    {message || '-'}
+                  </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
-        ) : <EmptyState message="No syslog events found." />
+        ) : (
+          <EmptyState
+            message={`No ${typeLabel} events found.`}
+            description={filtered ? 'No event matches the severity and search filters.' : undefined}
+          />
+        )
       )}
     </div>
   );

@@ -19,6 +19,8 @@ import {
 import { formatBackendDateTime, parseBackendDate, toLocalInputValue } from '@/lib/datetime';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 
+import { INACTIVE_OPACITY } from './helpers';
+
 export function SuppressionsTab() {
   const { confirm, alert } = useDialogs();
   const suppressions = useAlertSuppressions();
@@ -59,11 +61,13 @@ export function SuppressionsTab() {
             const isActive = ends > now && starts <= now;
             const status = isActive ? 'Active' : ends <= now ? 'Expired' : 'Scheduled';
             const statusColor = isActive ? 'success' : 'text-muted';
+            // Only the description of an inactive window is dimmed; its Delete button stays full strength.
+            const dim = isActive ? 1 : INACTIVE_OPACITY;
             const scope = s.hostname ? `Host: ${s.hostname}` : s.group_name ? `Group: ${s.group_name}` : 'Global';
             return (
-              <div key={s.id} className="card card-sm" style={{ opacity: isActive ? 1 : 0.5 }}>
+              <div key={s.id} className="card card-sm">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
-                  <div>
+                  <div style={{ opacity: dim }}>
                     <span style={{ color: `var(--${statusColor})`, fontSize: '0.8em', fontWeight: 600, textTransform: 'uppercase' }}>{status}</span>
                     <strong style={{ marginLeft: '0.4rem' }}>{s.name || 'Unnamed'}</strong>
                     <span className="text-muted" style={{ fontSize: '0.85em', marginLeft: '0.5rem' }}>
@@ -72,7 +76,7 @@ export function SuppressionsTab() {
                   </div>
                   <DeleteButton busy={deleting.isPending(s.id)} onClick={() => void handleDelete(s)} />
                 </div>
-                <div className="text-muted" style={{ marginTop: '0.3rem', fontSize: '0.85em' }}>
+                <div className="text-muted" style={{ marginTop: '0.3rem', fontSize: '0.85em', opacity: dim }}>
                   {formatBackendDateTime(s.starts_at)} - {formatBackendDateTime(s.ends_at)}
                   {s.reason && ` · Reason: ${s.reason}`}
                   {s.created_by && ` · By ${s.created_by}`}
@@ -112,7 +116,13 @@ function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
     const startsDate = new Date(starts);
     const endsDate = new Date(ends);
     const startsErr = !starts ? 'Start time is required' : Number.isNaN(startsDate.getTime()) ? 'Invalid start time' : '';
-    const endsErr = !ends ? 'End time is required' : Number.isNaN(endsDate.getTime()) ? 'Invalid end time' : '';
+    const endsErr = !ends
+      ? 'End time is required'
+      : Number.isNaN(endsDate.getTime())
+        ? 'Invalid end time'
+        : !startsErr && endsDate <= startsDate
+          ? 'End time must be after the start time'
+          : '';
     setStartsError(startsErr);
     setEndsError(endsErr);
     if (startsErr || endsErr) return;
@@ -163,7 +173,7 @@ function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
               className="form-input"
               type="datetime-local"
               value={starts}
-              onChange={(e) => { setStarts(e.target.value); setStartsError(''); }}
+              onChange={(e) => { setStarts(e.target.value); setStartsError(''); setEndsError(''); }}
               aria-invalid={!!startsError}
             />
             <FieldError>{startsError}</FieldError>
@@ -175,6 +185,7 @@ function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
               className="form-input"
               type="datetime-local"
               value={ends}
+              min={starts || undefined}
               onChange={(e) => { setEnds(e.target.value); setEndsError(''); }}
               aria-invalid={!!endsError}
               required
