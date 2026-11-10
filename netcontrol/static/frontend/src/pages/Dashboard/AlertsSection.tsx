@@ -19,8 +19,8 @@ const TOPOLOGY_ROWS = 20;
 export function AlertsSection({ alerts, topologyProblems = [], topologyProblemCount }: Props) {
   const problemTotal = Math.max(topologyProblemCount ?? 0, topologyProblems.length);
   return (
-    <div className="section">
-      <h3>Active Alerts</h3>
+    <div className="glass-card card dashboard-overview-card">
+      <h3 className="dashboard-overview-title">Active Alerts</h3>
       {alerts.length === 0 && topologyProblems.length === 0 ? (
         <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-muted)' }}>
           <svg

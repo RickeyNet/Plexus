@@ -2,7 +2,13 @@ import { useMemo } from 'react';
 
 import type { DashboardGroup, DeviceHealth } from '@/api/dashboard';
 
-import { HEALTH_COLORS, classifyDeviceHealth } from './helpers';
+import {
+  CRITICAL_DOWN_LABEL,
+  HEALTH_COLORS,
+  HEALTH_LABELS,
+  PANEL_BODY_STYLE,
+  countDeviceHealth,
+} from './helpers';
 
 const TILE_COLORS = HEALTH_COLORS;
 
@@ -23,19 +29,8 @@ interface GroupHealthPanelProps {
 
 export function GroupHealthPanel({ groups, devices }: GroupHealthPanelProps) {
   const rollups = useMemo<GroupRollup[]>(() => {
-    const byGroup = new Map<number | string, GroupRollup>();
-
-    for (const g of groups) {
-      byGroup.set(g.id, {
-        id: g.id,
-        name: g.name,
-        total: 0,
-        healthy: 0,
-        warning: 0,
-        bad: 0,
-        unknown: 0,
-      });
-    }
+    const byGroup = new Map<number | string, { name: string; devices: DeviceHealth[] }>();
+    for (const g of groups) byGroup.set(g.id, { name: g.name, devices: [] });
 
     const UNGROUPED_KEY = '__ungrouped__';
 
@@ -44,25 +39,26 @@ export function GroupHealthPanel({ groups, devices }: GroupHealthPanelProps) {
       let bucket = byGroup.get(key);
       if (!bucket) {
         bucket = {
-          id: key,
           name: d.group_name || (key === UNGROUPED_KEY ? 'Ungrouped' : `Group ${key}`),
-          total: 0,
-          healthy: 0,
-          warning: 0,
-          bad: 0,
-          unknown: 0,
+          devices: [],
         };
         byGroup.set(key, bucket);
       }
-      bucket.total += 1;
-      const status = classifyDeviceHealth(d);
-      if (status === 'healthy') bucket.healthy += 1;
-      else if (status === 'warning') bucket.warning += 1;
-      else if (status === 'critical' || status === 'down') bucket.bad += 1;
-      else bucket.unknown += 1;
+      bucket.devices.push(d);
     }
 
-    return Array.from(byGroup.values())
+    return Array.from(byGroup, ([id, { name, devices: members }]) => {
+      const c = countDeviceHealth(members);
+      return {
+        id,
+        name,
+        total: members.length,
+        healthy: c.healthy,
+        warning: c.warning,
+        bad: c.critical + c.down,
+        unknown: c.unknown,
+      };
+    })
       .filter((r) => r.total > 0)
       .sort((a, b) => {
         // Groups with problems first, then by size, then alphabetical.
@@ -78,7 +74,7 @@ export function GroupHealthPanel({ groups, devices }: GroupHealthPanelProps) {
     return (
       <div className="glass-card card dashboard-overview-card">
         <h3 className="dashboard-overview-title">Group Health</h3>
-        <div className="dashboard-response-empty">
+        <div className="dashboard-response-empty" style={PANEL_BODY_STYLE}>
           <p style={{ margin: 0, color: 'var(--text-muted)' }}>
             No device groups with polled devices yet.
           </p>
@@ -94,7 +90,11 @@ export function GroupHealthPanel({ groups, devices }: GroupHealthPanelProps) {
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+          alignContent: 'start',
           gap: 12,
+          // Same body height as the Overall Health donut beside it; scroll the rest.
+          ...PANEL_BODY_STYLE,
+          overflowY: 'auto',
         }}
       >
         {rollups.map((r) => (
@@ -166,22 +166,22 @@ function GroupTile({ rollup }: { rollup: GroupRollup }) {
       <div style={{ display: 'flex', gap: 10, fontSize: 12, color: 'var(--text-muted)' }}>
         {rollup.warning > 0 && (
           <span>
-            <Dot color={TILE_COLORS.warning} /> {rollup.warning} warn
+            <Dot color={TILE_COLORS.warning} /> {rollup.warning} {HEALTH_LABELS.warning}
           </span>
         )}
         {rollup.bad > 0 && (
           <span>
-            <Dot color={TILE_COLORS.critical} /> {rollup.bad} down
+            <Dot color={TILE_COLORS.critical} /> {rollup.bad} {CRITICAL_DOWN_LABEL}
           </span>
         )}
         {rollup.unknown > 0 && (
           <span>
-            <Dot color={TILE_COLORS.unknown} /> {rollup.unknown} unknown
+            <Dot color={TILE_COLORS.unknown} /> {rollup.unknown} {HEALTH_LABELS.unknown}
           </span>
         )}
         {rollup.warning === 0 && rollup.bad === 0 && rollup.unknown === 0 && (
           <span>
-            <Dot color={TILE_COLORS.healthy} /> all healthy
+            <Dot color={TILE_COLORS.healthy} /> All healthy
           </span>
         )}
       </div>

@@ -24,6 +24,9 @@ const STATE_LABELS: Record<BackupState, string> = {
   never: 'never',
 };
 
+// The list grows with the problem hosts; loading, empty and short lists share this floor.
+const BODY_STYLE = { minHeight: 120, height: 'auto' } as const;
+
 interface Props {
   devices: DeviceHealth[];
 }
@@ -60,16 +63,16 @@ export function BackupStatusPanel({ devices }: Props) {
       </div>
 
       {isLoading ? (
-        <div className="skeleton skeleton-card" style={{ height: 120 }} />
+        <div className="skeleton skeleton-card" style={BODY_STYLE} />
       ) : !hasPolicies && rollups.length === 0 ? (
-        <div className="dashboard-response-empty">
+        <div className="dashboard-response-empty" style={BODY_STYLE}>
           <p style={{ margin: 0, color: 'var(--text-muted)' }}>
             No backup policies configured yet. Set one up on the Configuration
             page to start tracking device backups here.
           </p>
         </div>
       ) : (
-        <>
+        <div style={BODY_STYLE}>
           <div
             style={{
               display: 'flex',
@@ -107,7 +110,7 @@ export function BackupStatusPanel({ devices }: Props) {
               )}
             </div>
           )}
-        </>
+        </div>
       )}
     </div>
   );

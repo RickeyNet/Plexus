@@ -1,26 +1,24 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { echarts } from '@/lib/echart-core';
+import { observeChartResize } from '@/lib/useEChart';
 import { resolveThemeVars, useThemeName } from '@/lib/themeColors';
 
 import type { DeviceHealth } from '@/api/dashboard';
 
-import { HEALTH_COLORS, classifyDeviceHealth, type HealthStatus } from './helpers';
+import {
+  CRITICAL_DOWN_LABEL,
+  HEALTH_COLORS,
+  HEALTH_LABELS,
+  PANEL_BODY_HEIGHT,
+  countDeviceHealth,
+} from './helpers';
 
-const HEALTH_LABELS: Record<HealthStatus, string> = {
-  healthy: 'Good',
-  warning: 'Moderate',
-  critical: 'Bad',
-  down: 'Down',
-  unknown: 'Unknown',
-};
-
+/** The "Overall Health" card: the canonical global device-health count. */
 export function OverviewPanels({ devices }: { devices: DeviceHealth[] }) {
   return (
-    <div className="dashboard-overview-grid">
-      <div className="glass-card card dashboard-overview-card">
-        <h3 className="dashboard-overview-title">Overall Health</h3>
-        <HealthDonut devices={devices} />
-      </div>
+    <div className="glass-card card dashboard-overview-card">
+      <h3 className="dashboard-overview-title">Overall Health</h3>
+      <HealthDonut devices={devices} />
     </div>
   );
 }
@@ -29,17 +27,7 @@ function HealthDonut({ devices }: { devices: DeviceHealth[] }) {
   const ref = useRef<HTMLDivElement>(null);
   const theme = useThemeName();
 
-  const buckets = useMemo(() => {
-    const counts: Record<HealthStatus, number> = {
-      healthy: 0,
-      warning: 0,
-      critical: 0,
-      down: 0,
-      unknown: 0,
-    };
-    for (const d of devices) counts[classifyDeviceHealth(d)]++;
-    return counts;
-  }, [devices]);
+  const buckets = useMemo(() => countDeviceHealth(devices), [devices]);
 
   const total = devices.length;
 
@@ -47,13 +35,13 @@ function HealthDonut({ devices }: { devices: DeviceHealth[] }) {
     if (!ref.current) return;
     const chart = echarts.init(ref.current, undefined, { renderer: 'canvas' });
 
-    // Merge critical + down into one "Bad" slice, matching the SolarWinds
-    // four-bucket layout (Good / Moderate / Bad / Unknown).
+    // Merge critical + down into one slice, matching the four buckets the
+    // other dashboard panels show.
     const badCount = buckets.critical + buckets.down;
     const slices = [
       { name: HEALTH_LABELS.healthy, value: buckets.healthy, itemStyle: { color: HEALTH_COLORS.healthy } },
       { name: HEALTH_LABELS.warning, value: buckets.warning, itemStyle: { color: HEALTH_COLORS.warning } },
-      { name: HEALTH_LABELS.critical, value: badCount, itemStyle: { color: HEALTH_COLORS.critical } },
+      { name: CRITICAL_DOWN_LABEL, value: badCount, itemStyle: { color: HEALTH_COLORS.critical } },
       { name: HEALTH_LABELS.unknown, value: buckets.unknown, itemStyle: { color: HEALTH_COLORS.unknown } },
     ];
     const hasData = slices.some((s) => s.value > 0);
@@ -93,15 +81,14 @@ function HealthDonut({ devices }: { devices: DeviceHealth[] }) {
       ],
     }));
 
-    const onResize = () => chart.resize();
-    window.addEventListener('resize', onResize);
+    const stopObserving = observeChartResize(chart, ref.current);
     return () => {
-      window.removeEventListener('resize', onResize);
+      stopObserving();
       chart.dispose();
     };
   }, [buckets, total, theme]);
 
-  return <div ref={ref} style={{ width: '100%', height: 240 }} />;
+  return <div ref={ref} style={{ width: '100%', height: PANEL_BODY_HEIGHT }} />;
 }
 
 function formatCount(n: number): string {
