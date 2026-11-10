@@ -6,7 +6,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 
 import { GraphTemplateDetailModal } from './GraphTemplateDetailModal';
-import { GraphTemplateCreateModal } from './GraphTemplateCreateModal';
+import { GraphTemplateFormModal } from './GraphTemplateFormModal';
 
 const CATEGORIES = [
   { value: '', label: 'All categories' },
@@ -52,7 +52,7 @@ export function GraphTemplatesTab() {
           <input id={`${fid}-search`} className="form-input" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter…" />
         </div>
         <span className="toolbar-spacer" />
-        <button className="btn btn-primary" onClick={() => setCreating(true)}>+ New Template</button>
+        <button type="button" className="btn btn-primary" onClick={() => setCreating(true)}>+ New Template</button>
       </div>
 
       {query.isPending && <LoadingState />}
@@ -86,7 +86,7 @@ export function GraphTemplatesTab() {
       ))}
 
       <GraphTemplateDetailModal templateId={detailId} onClose={() => setDetailId(null)} />
-      <GraphTemplateCreateModal isOpen={creating} onClose={() => setCreating(false)} />
+      <GraphTemplateFormModal mode={creating ? 'create' : null} templateId={null} onClose={() => setCreating(false)} />
     </div>
   );
 }

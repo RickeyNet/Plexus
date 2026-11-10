@@ -244,11 +244,28 @@ async def delete_graph_template_api(template_id: int):
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+async def _editable_template_item(template_id: int, item_id: int | None = None) -> dict | None:
+    """Return the item (None when no ``item_id``) after checking it may be changed.
+
+    Items are addressed by their own id in the DB layer, so the route has to
+    confirm the template exists, is not built-in, and owns the item.
+    """
+    template = await db.get_graph_template(template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Graph template not found")
+    if template.get("built_in"):
+        raise HTTPException(status_code=403, detail="Cannot modify built-in templates")
+    if item_id is None:
+        return None
+    item = next((i for i in template.get("items", []) if i["id"] == item_id), None)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Template item not found")
+    return item
+
+
 @router.post("/api/graph-templates/{template_id}/items", status_code=201)
 async def create_graph_template_item_api(template_id: int, payload: GraphTemplateItemCreate):
-    existing = await db.get_graph_template(template_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Graph template not found")
+    await _editable_template_item(template_id)
     item = await db.create_graph_template_item(
         template_id=template_id,
         sort_order=payload.sort_order,
@@ -266,7 +283,11 @@ async def create_graph_template_item_api(template_id: int, payload: GraphTemplat
 
 @router.put("/api/graph-templates/{template_id}/items/{item_id}")
 async def update_graph_template_item_api(template_id: int, item_id: int, payload: GraphTemplateItemUpdate):
-    updated = await db.update_graph_template_item(item_id, **payload.model_dump(exclude_none=True))
+    existing = await _editable_template_item(template_id, item_id)
+    changes = payload.model_dump(exclude_none=True)
+    if not changes:
+        return existing
+    updated = await db.update_graph_template_item(item_id, **changes)
     if not updated:
         raise HTTPException(status_code=404, detail="Template item not found")
     return updated
@@ -274,6 +295,7 @@ async def update_graph_template_item_api(template_id: int, item_id: int, payload
 
 @router.delete("/api/graph-templates/{template_id}/items/{item_id}")
 async def delete_graph_template_item_api(template_id: int, item_id: int):
+    await _editable_template_item(template_id, item_id)
     deleted = await db.delete_graph_template_item(item_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Template item not found")
@@ -473,11 +495,35 @@ async def delete_graph_tree_api(tree_id: int):
 # ── Graph Tree Nodes ──────────────────────────────────────────────────────
 
 
-@router.post("/api/graph-trees/{tree_id}/nodes", status_code=201)
-async def create_graph_tree_node_api(tree_id: int, payload: GraphTreeNodeCreate):
+# Columns a node update may set to NULL; the rest are NOT NULL.
+_NULLABLE_NODE_FIELDS = {"parent_node_id", "host_id", "group_id", "graph_id"}
+
+
+async def _tree_nodes(tree_id: int) -> dict[int, dict]:
     tree = await db.get_graph_tree(tree_id)
     if not tree:
         raise HTTPException(status_code=404, detail="Graph tree not found")
+    return {n["id"]: n for n in tree.get("nodes", [])}
+
+
+def _check_node_parent(nodes: dict[int, dict], parent_id: int | None, node_id: int | None = None) -> None:
+    """Reject a parent outside the tree, or one that would make a cycle."""
+    if parent_id is None:
+        return
+    if parent_id not in nodes:
+        raise HTTPException(status_code=400, detail="Parent node is not in this tree")
+    seen: set[int] = set()
+    cursor: int | None = parent_id
+    while cursor is not None and cursor not in seen:
+        if cursor == node_id:
+            raise HTTPException(status_code=400, detail="A node cannot be moved under itself or its own children")
+        seen.add(cursor)
+        cursor = nodes.get(cursor, {}).get("parent_node_id")
+
+
+@router.post("/api/graph-trees/{tree_id}/nodes", status_code=201)
+async def create_graph_tree_node_api(tree_id: int, payload: GraphTreeNodeCreate):
+    _check_node_parent(await _tree_nodes(tree_id), payload.parent_node_id)
     node = await db.create_graph_tree_node(
         tree_id=tree_id,
         parent_node_id=payload.parent_node_id,
@@ -493,7 +539,19 @@ async def create_graph_tree_node_api(tree_id: int, payload: GraphTreeNodeCreate)
 
 @router.put("/api/graph-trees/{tree_id}/nodes/{node_id}")
 async def update_graph_tree_node_api(tree_id: int, node_id: int, payload: GraphTreeNodeUpdate):
-    updated = await db.update_graph_tree_node(node_id, **payload.model_dump(exclude_none=True))
+    nodes = await _tree_nodes(tree_id)
+    if node_id not in nodes:
+        raise HTTPException(status_code=404, detail="Tree node not found")
+    # An explicit null clears a link (parent, host, group, graph); a field left
+    # out of the body is unchanged.
+    changes = {
+        k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None or k in _NULLABLE_NODE_FIELDS
+    }
+    if not changes:
+        return nodes[node_id]
+    if "parent_node_id" in changes:
+        _check_node_parent(nodes, changes["parent_node_id"], node_id)
+    updated = await db.update_graph_tree_node(node_id, **changes)
     if not updated:
         raise HTTPException(status_code=404, detail="Tree node not found")
     return updated
@@ -501,6 +559,8 @@ async def update_graph_tree_node_api(tree_id: int, node_id: int, payload: GraphT
 
 @router.delete("/api/graph-trees/{tree_id}/nodes/{node_id}")
 async def delete_graph_tree_node_api(tree_id: int, node_id: int):
+    if node_id not in await _tree_nodes(tree_id):
+        raise HTTPException(status_code=404, detail="Tree node not found")
     deleted = await db.delete_graph_tree_node(node_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Tree node not found")

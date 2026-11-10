@@ -6,9 +6,14 @@ import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import {
   useCreateHostTemplate,
+  useGraphTemplates,
   useHostTemplate,
+  useLinkHostTemplateGraph,
+  useUnlinkHostTemplateGraph,
   useUpdateHostTemplate,
 } from '@/api/graphTemplates';
+
+import { linkDiff, parseDeviceTypes, splitDeviceTypes } from './helpers';
 
 interface Props {
   mode: 'create' | 'edit' | null;
@@ -20,66 +25,124 @@ export function HostTemplateModal({ mode, templateId, onClose }: Props) {
   const formId = useId();
   const isOpen = mode != null;
   const query = useHostTemplate(mode === 'edit' ? templateId : null);
+  const graphTemplates = useGraphTemplates();
   const createMut = useCreateHostTemplate();
   const updateMut = useUpdateHostTemplate();
+  const linkMut = useLinkHostTemplateGraph();
+  const unlinkMut = useUnlinkHostTemplateGraph();
 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [deviceTypes, setDeviceTypes] = useState('');
   const [autoApply, setAutoApply] = useState(true);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
   const [nameError, setNameError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  // The template id once saved and the links the server is known to hold. A
+  // create whose links partly fail keeps the modal open; the next Save then
+  // updates that template instead of creating a second one.
+  const [savedId, setSavedId] = useState<number | null>(null);
+  const [linked, setLinked] = useState<Set<number>>(new Set());
 
-  // Seed form fields from mode / loaded template data; re-seed when either changes.
+  // Seed form fields when the modal opens or the template first loads. A
+  // refetch after a save only refreshes the known links, so a selection
+  // whose save failed stays ticked for the retry.
   const [prevSeed, setPrevSeed] = useState<{ mode: typeof mode; data: typeof query.data }>({
     mode,
     data: query.data,
   });
   if (prevSeed.mode !== mode || prevSeed.data !== query.data) {
+    const opened = prevSeed.mode !== mode;
     setPrevSeed({ mode, data: query.data });
-    setNameError(null);
-    setSaveError(null);
-    if (mode === 'create') {
+    if (opened) {
+      setNameError(null);
+      setSaveError(null);
+      setSavedId(null);
+    }
+    if (mode === 'create' && opened) {
       setName(''); setDescription(''); setDeviceTypes(''); setAutoApply(true);
+      setSelected(new Set()); setLinked(new Set());
     } else if (mode === 'edit' && query.data) {
       const ht = query.data;
-      setName(ht.name ?? '');
-      setDescription(ht.description ?? '');
-      let dts: string[] = [];
-      try {
-        dts = JSON.parse(ht.device_types || '[]');
-      } catch { /* ignore */ }
-      setDeviceTypes(dts.join(', '));
-      setAutoApply(!!ht.auto_apply);
+      const ids = new Set((ht.graph_templates ?? []).map((g) => g.id));
+      setLinked(ids);
+      if (opened || prevSeed.data == null) {
+        setName(ht.name ?? '');
+        setDescription(ht.description ?? '');
+        setDeviceTypes(parseDeviceTypes(ht.device_types).join(', '));
+        setAutoApply(!!ht.auto_apply);
+        setSelected(ids);
+      }
     }
   }
 
-  function handleSubmit(e: FormEvent) {
+  function toggle(id: number, on: boolean) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id); else next.delete(id);
+      return next;
+    });
+  }
+
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setSaveError(null);
     if (!name.trim()) {
       setNameError('Name is required');
       return;
     }
-    const dts = deviceTypes.trim()
-      ? deviceTypes.split(',').map((s) => s.trim()).filter(Boolean)
-      : [];
     const data = {
       name: name.trim(),
       description: description.trim(),
-      device_types: JSON.stringify(dts),
+      device_types: JSON.stringify(splitDeviceTypes(deviceTypes)),
       auto_apply: autoApply,
     };
-    const onError = (err: unknown) => { setSaveError((err as Error).message); };
-    if (mode === 'edit' && templateId != null) {
-      updateMut.mutate({ id: templateId, data }, { onSuccess: onClose, onError });
-    } else {
-      createMut.mutate(data, { onSuccess: onClose, onError });
+    setSaving(true);
+    try {
+      let id = mode === 'edit' ? templateId : savedId;
+      if (id != null) {
+        await updateMut.mutateAsync({ id, data });
+      } else {
+        id = (await createMut.mutateAsync(data)).id;
+        setSavedId(id);
+      }
+      const hostTemplateId = id as number;
+      const { toLink, toUnlink } = linkDiff(linked, selected);
+      const nowLinked = new Set(linked);
+      const failures: string[] = [];
+      const nameOf = (gid: number) =>
+        graphTemplates.data?.graph_templates.find((g) => g.id === gid)?.name ?? `#${gid}`;
+      await Promise.all([
+        ...toLink.map((gid) =>
+          linkMut.mutateAsync({ hostTemplateId, graphTemplateId: gid }).then(
+            () => { nowLinked.add(gid); },
+            (err: unknown) => { failures.push(`assign "${nameOf(gid)}": ${(err as Error).message}`); },
+          ),
+        ),
+        ...toUnlink.map((gid) =>
+          unlinkMut.mutateAsync({ hostTemplateId, graphTemplateId: gid }).then(
+            () => { nowLinked.delete(gid); },
+            (err: unknown) => { failures.push(`remove "${nameOf(gid)}": ${(err as Error).message}`); },
+          ),
+        ),
+      ]);
+      setLinked(nowLinked);
+      if (failures.length) {
+        setSaveError(`The host template was saved, but some graph template changes failed - ${failures.join('; ')}. Save again to retry.`);
+        return;
+      }
+      onClose();
+    } catch (err) {
+      setSaveError((err as Error).message);
+    } finally {
+      setSaving(false);
     }
   }
 
-  const pending = createMut.isPending || updateMut.isPending;
   const loading = mode === 'edit' && query.isPending;
+  const loadError = mode === 'edit' ? query.error : null;
+  const allGraphTemplates = graphTemplates.data?.graph_templates ?? [];
 
   return (
     <Modal
@@ -89,17 +152,17 @@ export function HostTemplateModal({ mode, templateId, onClose }: Props) {
       footer={
         <>
           <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          {!loading && (
-            <button type="submit" form={formId} className="btn btn-primary" disabled={pending}>
-              {pending ? 'Saving…' : mode === 'edit' ? 'Save' : 'Create'}
+          {!loading && !loadError && (
+            <button type="submit" form={formId} className="btn btn-primary" disabled={saving}>
+              {saving ? 'Saving…' : mode === 'edit' || savedId != null ? 'Save' : 'Create'}
             </button>
           )}
         </>
       }
     >
-      {loading ? (
-        <LoadingState />
-      ) : (
+      {loading && <LoadingState />}
+      {loadError && <Callout tone="danger">Failed to load the host template: {(loadError as Error).message}</Callout>}
+      {!loading && !loadError && (
         <form id={formId} onSubmit={handleSubmit}>
           {saveError && <Callout tone="danger">{saveError}</Callout>}
           <div className="form-group">
@@ -128,6 +191,29 @@ export function HostTemplateModal({ mode, templateId, onClose }: Props) {
           <div className="form-group">
             <label><input type="checkbox" checked={autoApply} onChange={(e) => setAutoApply(e.target.checked)} /> Auto-apply to matching devices</label>
           </div>
+          <fieldset className="form-group" style={{ border: 'none', padding: 0, margin: 0 }}>
+            <legend className="form-label">Graph Templates ({selected.size} selected)</legend>
+            {graphTemplates.isPending && <LoadingState />}
+            {graphTemplates.error && (
+              <Callout tone="danger">Failed to load graph templates: {(graphTemplates.error as Error).message}</Callout>
+            )}
+            {graphTemplates.data && (allGraphTemplates.length === 0 ? (
+              <p className="text-muted" style={{ fontSize: '0.85rem' }}>No graph templates exist yet.</p>
+            ) : (
+              <div style={{ maxHeight: 240, overflowY: 'auto', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '0.25rem 1rem' }}>
+                {allGraphTemplates.map((g) => (
+                  <label key={g.id} style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', fontSize: '0.85rem' }}>
+                    <input type="checkbox" checked={selected.has(g.id)} onChange={(e) => toggle(g.id, e.target.checked)} />
+                    <span>{g.name}</span>
+                    <span className="text-muted">({g.scope})</span>
+                  </label>
+                ))}
+              </div>
+            ))}
+            <p className="text-muted" style={{ fontSize: '0.8rem', margin: '0.35rem 0 0' }}>
+              Only device-scoped templates are applied through a host template. Interface-scoped templates are added to every device, one graph per interface, when its interfaces are polled.
+            </p>
+          </fieldset>
         </form>
       )}
     </Modal>

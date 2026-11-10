@@ -11,6 +11,7 @@ import {
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 
+import { parseDeviceTypes } from './helpers';
 import { HostTemplateModal } from './HostTemplateModal';
 
 export function HostTemplatesTab() {
@@ -35,18 +36,10 @@ export function HostTemplatesTab() {
     });
   }
 
-  function parseDeviceTypes(raw?: string): string[] {
-    try {
-      return JSON.parse(raw || '[]');
-    } catch {
-      return [];
-    }
-  }
-
   return (
     <div>
       <div className="toolbar" style={{ justifyContent: 'flex-end' }}>
-        <button className="btn btn-primary" onClick={() => setModalId('new')}>+ New Host Template</button>
+        <button type="button" className="btn btn-primary" onClick={() => setModalId('new')}>+ New Host Template</button>
       </div>
 
       {query.isPending && <LoadingState />}
@@ -80,7 +73,7 @@ export function HostTemplatesTab() {
                   </div>
                 )}
                 <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
-                  <button className="btn btn-sm btn-secondary" onClick={() => setModalId(ht.id)}>Edit</button>
+                  <button type="button" className="btn btn-sm btn-secondary" onClick={() => setModalId(ht.id)}>Edit</button>
                   <DeleteButton onClick={() => handleDelete(ht)} />
                 </div>
               </div>
