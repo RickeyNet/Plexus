@@ -13,12 +13,15 @@ import {
   useDeleteBackupPolicy,
   useRunBackupPolicy,
 } from '@/api/configuration';
+import { BusyButton } from '@/components/BusyButton';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
+import { QueryError } from '@/components/QueryError';
 import { SegmentedControl } from '@/components/SegmentedControl';
 import { SummaryStrip } from '@/components/SummaryStrip';
 import { formatBackendDateTime, formatRelativeTime } from '@/lib/datetime';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import { BackupModal } from './BackupModal';
 import { BackupPolicyModal } from './BackupPolicyModal';
@@ -84,12 +87,18 @@ export function BackupsTab() {
       </div>
 
       {subTab === 'policies' ? (
-        <PoliciesList
-          policies={policies.data || []}
-          loading={policies.isPending}
-          query={query}
-          onEdit={setEditPolicy}
-        />
+        policies.isError && !policies.data ? (
+          <QueryError what="backup policies" query={policies} />
+        ) : (
+          <PoliciesList
+            policies={policies.data || []}
+            loading={policies.isPending}
+            query={query}
+            onEdit={setEditPolicy}
+          />
+        )
+      ) : backups.isError && !backups.data ? (
+        <QueryError what="backups" query={backups} />
       ) : (
         <HistoryList
           backups={backups.data || []}
@@ -157,6 +166,7 @@ function PoliciesList({
   const { confirm, alert } = useDialogs();
   const run = useRunBackupPolicy();
   const remove = useDeleteBackupPolicy();
+  const pending = usePendingKeys<string>();
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return policies;
@@ -179,8 +189,6 @@ function PoliciesList({
   return (
     <div className="stack stack-sm">
       {filtered.map((p) => {
-        const runningId = run.variables;
-        const isRunning = run.isPending && runningId === p.id;
         return (
           <div key={p.id} className="card">
             <div
@@ -218,31 +226,32 @@ function PoliciesList({
                 >
                   {p.enabled ? 'Enabled' : 'Disabled'}
                 </span>
-                <button
-                  type="button"
+                <BusyButton
                   className="btn btn-sm btn-secondary"
-                  disabled={isRunning}
+                  busy={pending.isPending(`run:${p.id}`)}
+                  busyLabel="Running…"
                   onClick={() =>
-                    run.mutate(p.id, {
-                      onSuccess: (res) => {
+                    void pending.run(`run:${p.id}`, async () => {
+                      try {
+                        const res = await run.mutateAsync(p.id);
                         let msg = `Backup complete: ${res.backed_up} saved, ${res.errors} errors`;
                         if (res.skipped)
                           msg += `, ${res.skipped} unchanged (skipped)`;
                         void alert(msg);
-                      },
-                      onError: (e) => {
+                      } catch (e) {
                         void alert({ message: (e as Error).message, variant: 'error' });
-                      },
+                      }
                     })
                   }
                 >
-                  {isRunning ? 'Running…' : 'Run Now'}
-                </button>
+                  Run Now
+                </BusyButton>
                 <KebabMenu label={`Actions for ${p.name}`}>
                   <MenuItem onSelect={() => onEdit(p)}>Edit</MenuItem>
                   <MenuSeparator />
                   <MenuItem
                     danger
+                    disabled={pending.isPending(`delete:${p.id}`)}
                     onSelect={async () => {
                       if (
                         !(await confirm({
@@ -252,10 +261,12 @@ function PoliciesList({
                         }))
                       )
                         return;
-                      remove.mutate(p.id, {
-                        onError: (e) => {
+                      await pending.run(`delete:${p.id}`, async () => {
+                        try {
+                          await remove.mutateAsync(p.id);
+                        } catch (e) {
                           void alert({ message: (e as Error).message, variant: 'error' });
-                        },
+                        }
                       });
                     }}
                   >
@@ -298,6 +309,7 @@ function HistoryList({
 }) {
   const { confirm, alert } = useDialogs();
   const remove = useDeleteBackup();
+  const deleting = usePendingKeys<number>();
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return backups;
@@ -387,6 +399,7 @@ function HistoryList({
                   </MenuItem>
                   <MenuItem
                     danger
+                    disabled={deleting.isPending(b.id)}
                     onSelect={async () => {
                       if (
                         !(await confirm({
@@ -396,10 +409,12 @@ function HistoryList({
                         }))
                       )
                         return;
-                      remove.mutate(b.id, {
-                        onError: (e) => {
+                      await deleting.run(b.id, async () => {
+                        try {
+                          await remove.mutateAsync(b.id);
+                        } catch (e) {
                           void alert({ message: (e as Error).message, variant: 'error' });
-                        },
+                        }
                       });
                     }}
                   >

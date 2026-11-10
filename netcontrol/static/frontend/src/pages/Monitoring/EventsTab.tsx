@@ -2,9 +2,9 @@ import { useMemo, useState } from 'react';
 
 import { useSyslogEvents, type SyslogEvent } from '@/api/monitoring';
 import { SeverityBadge } from '@/components/Badge';
-import { Callout } from '@/components/Callout';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
 import { StatGrid, StatTile } from '@/components/StatTile';
 import { formatBackendTimestamp } from '@/lib/datetime';
 
@@ -81,8 +81,11 @@ export function EventsTab() {
         <StatTile label="Warnings" value={String(warnCount)} tone="warning" />
       </StatGrid>
 
-      {query.isPending && <LoadingState />}
-      {query.error && <Callout tone="danger">Failed: {(query.error as Error).message}</Callout>}
+      {query.error && !query.data ? (
+        <QueryError what="events" query={query} />
+      ) : (
+        query.isPending && <LoadingState />
+      )}
       {query.data && (
         items.length ? (
           <table className="data-table">

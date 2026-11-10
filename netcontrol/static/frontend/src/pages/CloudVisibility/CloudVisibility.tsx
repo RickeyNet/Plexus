@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useCloudAccounts, useCloudProviders } from '@/api/cloud';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
+import { QueryError } from '@/components/QueryError';
 import { TabBar } from '@/components/TabBar';
 import { UntestedBanner } from '@/components/UntestedBanner';
 import { capitalize, cloudProviderTerms, cloudTerms } from '@/lib/cloudProviderTerms';
@@ -98,6 +99,9 @@ export function CloudVisibility() {
       />
 
       <div className="stack stack-sm" style={{ marginBottom: 'var(--space-3)' }}>
+        {providers.isError && !providers.data && (
+          <QueryError what="cloud providers" query={providers} />
+        )}
         {/* Provider capability hints */}
         {(providers.data?.providers ?? []).length > 0 && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--space-2)' }}>
@@ -163,6 +167,11 @@ export function CloudVisibility() {
           accounts={accountList}
           providerOptions={providerOptions.length ? providerOptions : ['aws', 'azure', 'gcp']}
           isLoading={accounts.isPending}
+          loadError={
+            accounts.isError && !accounts.data && (
+              <QueryError what="cloud accounts" query={accounts} />
+            )
+          }
           providers={providers.data?.providers ?? []}
         />
       )}

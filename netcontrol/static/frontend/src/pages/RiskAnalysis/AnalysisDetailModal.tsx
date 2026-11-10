@@ -3,9 +3,10 @@ import {
   useApproveRiskAnalysis,
   useRiskAnalysis,
 } from '@/api/riskAnalysis';
-import { Callout } from '@/components/Callout';
+import { BusyButton } from '@/components/BusyButton';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { formatBackendDateTime } from '@/lib/datetime';
 import { severityTone, toneColor } from '@/lib/severity';
@@ -49,9 +50,25 @@ interface Props {
 }
 
 export function AnalysisDetailModal({ isOpen, onClose, analysisId }: Props) {
-  const { alert } = useDialogs();
+  const { confirm, alert } = useDialogs();
   const query = useRiskAnalysis(isOpen ? analysisId : null);
   const approve = useApproveRiskAnalysis();
+
+  const handleApprove = async (analysis: RiskAnalysis) => {
+    const ok = await confirm({
+      title: 'Approve risk analysis',
+      message: `Approve risk analysis #${analysis.id} (${String(analysis.risk_level).toUpperCase()} risk) for ${targetLabel(analysis)}? You are recorded as the approver, and the analysis can then be linked to a new deployment of this change.`,
+      confirmLabel: 'Approve',
+      confirmVariant: 'primary',
+    });
+    if (!ok) return;
+    approve.mutate(analysis.id, {
+      onSuccess: () => onClose(),
+      onError: (e) => {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      },
+    });
+  };
 
   return (
     <Modal
@@ -65,32 +82,24 @@ export function AnalysisDetailModal({ isOpen, onClose, analysisId }: Props) {
             Close
           </button>
           {query.data && !query.data.approved && (
-            <button
-              type="button"
+            <BusyButton
               className="btn btn-primary"
-              disabled={approve.isPending}
+              busy={approve.isPending}
+              busyLabel="Approving…"
               onClick={() => {
-                if (!query.data) return;
-                approve.mutate(query.data.id, {
-                  onSuccess: () => onClose(),
-                  onError: (e) => {
-                    void alert({ message: (e as Error).message, variant: 'error' });
-                  },
-                });
+                if (query.data) void handleApprove(query.data);
               }}
             >
-              {approve.isPending ? 'Approving…' : 'Approve Change'}
-            </button>
+              Approve Change
+            </BusyButton>
           )}
         </>
       }
     >
-      {query.isPending && <LoadingState />}
-      {query.error && (
-        <Callout tone="danger">
-          Failed to load: {(query.error as Error).message}
-        </Callout>
+      {query.isError && !query.data && (
+        <QueryError what="the risk analysis" query={query} />
       )}
+      {query.isPending && <LoadingState />}
       {query.data && <DetailBody analysis={query.data} />}
     </Modal>
   );

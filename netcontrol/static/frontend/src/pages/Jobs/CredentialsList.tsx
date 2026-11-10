@@ -5,6 +5,7 @@ import { DeleteButton } from '@/components/DeleteButton';
 import { EmptyState } from '@/components/EmptyState';
 import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -14,11 +15,13 @@ import {
   useUpdateCredential,
   type Credential,
 } from '@/api/jobs';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 
 export function CredentialsList() {
   const { confirm, alert } = useDialogs();
   const query = useJobCredentials();
   const deleteMut = useDeleteCredential();
+  const deleting = usePendingKeys<number>();
   const [showCreate, setShowCreate] = useState(false);
 
   async function handleDelete(c: Credential) {
@@ -28,7 +31,13 @@ export function CredentialsList() {
       confirmLabel: 'Delete',
     });
     if (!ok) return;
-    deleteMut.mutate(c.id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
+    await deleting.run(c.id, async () => {
+      try {
+        await deleteMut.mutateAsync(c.id);
+      } catch (e) {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      }
+    });
   }
 
   return (
@@ -38,14 +47,17 @@ export function CredentialsList() {
         <button className="btn btn-primary" onClick={() => setShowCreate(true)}>+ New Credential</button>
       </div>
 
-      {query.isPending && <LoadingState />}
-      {query.error && <Callout tone="danger">Failed: {(query.error as Error).message}</Callout>}
+      {query.error && !query.data ? (
+        <QueryError what="credentials" query={query} />
+      ) : (
+        query.isPending && <LoadingState />
+      )}
       {query.data && (query.data.length === 0 ? (
         <EmptyState message="No credentials" />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {query.data.map((c) => (
-            <CredentialRow key={c.id} credential={c} onDelete={() => handleDelete(c)} />
+            <CredentialRow key={c.id} credential={c} isDeleting={deleting.isPending(c.id)} onDelete={() => void handleDelete(c)} />
           ))}
         </div>
       ))}
@@ -55,7 +67,15 @@ export function CredentialsList() {
   );
 }
 
-function CredentialRow({ credential, onDelete }: { credential: Credential; onDelete: () => void }) {
+function CredentialRow({
+  credential,
+  isDeleting,
+  onDelete,
+}: {
+  credential: Credential;
+  isDeleting: boolean;
+  onDelete: () => void;
+}) {
   const { alert } = useDialogs();
   const updateMut = useUpdateCredential();
   const [name, setName] = useState(credential.name);
@@ -103,7 +123,7 @@ function CredentialRow({ credential, onDelete }: { credential: Credential; onDel
             {updateMut.isPending ? 'Saving…' : 'Save'}
           </button>
         )}
-        <DeleteButton onClick={onDelete} />
+        <DeleteButton busy={isDeleting} onClick={onDelete} />
       </div>
     </div>
   );

@@ -4,6 +4,7 @@ import { Callout } from '@/components/Callout';
 import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import {
   useCreateOidProfile,
   useOidProfile,
@@ -95,14 +96,16 @@ export function OidProfileModal({ mode, profileId, onClose }: Props) {
             type="submit"
             form={formId}
             className="btn btn-primary"
-            disabled={pending || (mode === 'edit' && profileQuery.isPending)}
+            disabled={pending || (mode === 'edit' && !profileQuery.data)}
           >
             {pending ? 'Saving…' : mode === 'edit' ? 'Save' : 'Create'}
           </button>
         </>
       }
     >
-      {mode === 'edit' && profileQuery.isPending ? (
+      {mode === 'edit' && profileQuery.error && !profileQuery.data ? (
+        <QueryError what="OID profile" query={profileQuery} />
+      ) : mode === 'edit' && profileQuery.isPending ? (
         <LoadingState />
       ) : (
         <form id={formId} onSubmit={handleSubmit}>

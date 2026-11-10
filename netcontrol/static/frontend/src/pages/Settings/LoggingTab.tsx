@@ -6,8 +6,11 @@ import {
   useTestSyslog,
   useUpdateSyslogConfig,
 } from '@/api/settings';
-import { Callout } from '@/components/Callout';
+import { BusyButton } from '@/components/BusyButton';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
+
+import { FormStatus, StatusLine } from './StatusLine';
 
 const PROTOCOLS = ['udp', 'tcp'];
 const FACILITIES = [
@@ -22,20 +25,20 @@ export function LoggingTab() {
   const update = useUpdateSyslogConfig();
   const test = useTestSyslog();
   const [draft, setDraft] = useState<SyslogConfig | null>(null);
-  const [status, setStatus] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+  const [status, setStatus] = useState<FormStatus | null>(null);
   const [prevData, setPrevData] = useState(query.data);
   if (query.data !== prevData) {
     setPrevData(query.data);
     if (query.data) setDraft(query.data);
   }
 
-  if (query.isLoading || !draft) return <LoadingState />;
-  if (query.isError)
-    return (
-      <Callout tone="danger">
-        Failed to load syslog config: {(query.error as Error).message}
-      </Callout>
-    );
+  if (!draft) {
+    if (query.isError)
+      return (
+        <QueryError what="syslog config" query={query} />
+      );
+    return <LoadingState />;
+  }
 
   const statusLabel = draft.active ? 'Active' : draft.enabled ? 'Configured' : 'Disabled';
   const statusBadge = draft.active ? 'badge-success' : 'badge-info';
@@ -174,17 +177,19 @@ export function LoggingTab() {
         </div>
 
         <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-          <button
+          <BusyButton
             type="submit"
             className="btn btn-primary"
-            disabled={update.isPending}
+            busy={update.isPending}
+            busyLabel="Saving…"
           >
-            {update.isPending ? 'Saving…' : 'Save Syslog Settings'}
-          </button>
-          <button
-            type="button"
+            Save Syslog Settings
+          </BusyButton>
+          <BusyButton
             className="btn btn-secondary"
-            disabled={!draft.active || test.isPending}
+            busy={test.isPending}
+            busyLabel="Testing…"
+            disabled={!draft.active}
             title={
               !draft.active
                 ? 'Save with logging enabled first'
@@ -206,21 +211,11 @@ export function LoggingTab() {
               });
             }}
           >
-            {test.isPending ? 'Testing…' : 'Send Test Message'}
-          </button>
+            Send Test Message
+          </BusyButton>
         </div>
 
-        {status && (
-          <div
-            className={status.kind === 'error' ? 'error' : ''}
-            style={{
-              marginTop: '0.5rem',
-              color: status.kind === 'error' ? undefined : 'var(--success)',
-            }}
-          >
-            {status.message}
-          </div>
-        )}
+        <StatusLine status={status} />
       </form>
     </div>
   );

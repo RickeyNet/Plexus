@@ -4,7 +4,10 @@ import {
   AdminCapabilities,
   useUpdateFeatureVisibility,
 } from '@/api/settings';
+import { BusyButton } from '@/components/BusyButton';
 import { EmptyState } from '@/components/EmptyState';
+
+import { FormStatus, StatusLine } from './StatusLine';
 
 export function FeaturesTab({
   capabilities,
@@ -15,7 +18,7 @@ export function FeaturesTab({
   const [hidden, setHidden] = useState<Set<string>>(
     () => new Set(capabilities.feature_visibility.hidden),
   );
-  const [status, setStatus] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+  const [status, setStatus] = useState<FormStatus | null>(null);
 
   // If the capabilities query refetches with a different hidden list (e.g.
   // another admin saved changes), fold the server state back into the local
@@ -64,10 +67,10 @@ export function FeaturesTab({
       )}
 
       <div style={{ marginTop: '0.75rem' }}>
-        <button
-          type="button"
+        <BusyButton
           className="btn btn-primary"
-          disabled={update.isPending}
+          busy={update.isPending}
+          busyLabel="Saving…"
           onClick={() => {
             setStatus(null);
             update.mutate(Array.from(hidden), {
@@ -81,21 +84,11 @@ export function FeaturesTab({
             });
           }}
         >
-          {update.isPending ? 'Saving…' : 'Save Visibility'}
-        </button>
+          Save Visibility
+        </BusyButton>
       </div>
 
-      {status && (
-        <div
-          className={status.kind === 'error' ? 'error' : ''}
-          style={{
-            marginTop: '0.5rem',
-            color: status.kind === 'error' ? undefined : 'var(--success)',
-          }}
-        >
-          {status.message}
-        </div>
-      )}
+      <StatusLine status={status} />
     </div>
   );
 }

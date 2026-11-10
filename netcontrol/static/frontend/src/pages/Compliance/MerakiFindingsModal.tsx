@@ -1,6 +1,6 @@
-import { Callout } from '@/components/Callout';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import { MerakiFinding, useMerakiResult } from '@/api/compliance';
 import { complianceStatusTone, toneColor } from '@/lib/severity';
 
@@ -31,8 +31,10 @@ export function MerakiFindingsModal({ resultId, onClose }: { resultId: number; o
         </button>
       }
     >
+      {result.isError && !data && (
+        <QueryError what="this result" query={result} />
+      )}
       {result.isLoading && <LoadingState text="Loading findings…" />}
-      {result.isError && <Callout tone="danger">Could not load this result.</Callout>}
       {data && (
         <>
           <div style={{ marginBottom: '1rem', fontSize: '0.9em' }}>

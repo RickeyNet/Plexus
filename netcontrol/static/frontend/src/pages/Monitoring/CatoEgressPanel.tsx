@@ -2,8 +2,9 @@ import { useState } from 'react';
 
 import { useCatoEgressFindings, useRunCatoEgressCheck } from '@/api/monitoring';
 import { SeverityBadge } from '@/components/Badge';
-import { Callout } from '@/components/Callout';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
 import { sourceTypeLabel } from '@/pages/Topology/merakiHelpers';
 import { formatBackendDateTime } from '@/lib/datetime';
 
@@ -51,12 +52,12 @@ export function CatoEgressPanel() {
         </button>
       </div>
 
-      {findings.error && <Callout tone="danger">Failed to load the findings.</Callout>}
-
-      {!rows.length ? (
-        <div className="empty-state">
-          {findings.isPending ? 'Loading…' : 'No findings - collect a Cato account and an AWS, Azure or GCP account.'}
-        </div>
+      {findings.error && !findings.data ? (
+        <QueryError what="Cato egress findings" query={findings} />
+      ) : findings.isPending ? (
+        <LoadingState />
+      ) : !rows.length ? (
+        <div className="empty-state">No findings - collect a Cato account and an AWS, Azure or GCP account.</div>
       ) : (
         <div style={{ maxHeight: 520, overflow: 'auto' }}>
           <table className="data-table">

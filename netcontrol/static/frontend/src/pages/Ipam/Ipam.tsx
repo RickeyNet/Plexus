@@ -1,14 +1,17 @@
-import { FormEvent, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { FormEvent, type ReactNode, useState } from 'react';
+import { type UseQueryResult, useQueryClient } from '@tanstack/react-query';
 
 import { groupLabel } from '@/api/inventory';
 import { StatusBadge } from '@/components/Badge';
+import { BusyButton } from '@/components/BusyButton';
 import { LoadingState } from '@/components/LoadingState';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
+import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
 import { cloudProviderTerms } from '@/lib/cloudProviderTerms';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import {
   type DhcpServer,
@@ -16,6 +19,7 @@ import {
   type IpamOverlapSide,
   type IpamSource,
   type IpamSyncConfig,
+  type ReconcileDiff,
   useDeleteDhcpServer,
   useDeleteIpamSource,
   useDhcpCorrelation,
@@ -47,11 +51,26 @@ import {
   providerLabel,
 } from './helpers';
 
+type DiffResolution = 'accept_plexus' | 'accept_ipam' | 'ignored';
+
+const DIFF_RESOLUTIONS: DiffResolution[] = ['accept_plexus', 'accept_ipam', 'ignored'];
+
 type ModalState =
   | { kind: 'none' }
   | { kind: 'define-subnet' }
   | { kind: 'source'; source: IpamSource | null }
   | { kind: 'dhcp'; server: DhcpServer | null };
+
+/** The QueryError for a query that failed with nothing cached; null otherwise. */
+function loadError(query: UseQueryResult<unknown>, what: string): ReactNode {
+  if (!query.isError || query.data !== undefined) return null;
+  return (
+    <QueryError
+      what={what}
+      query={query}
+    />
+  );
+}
 
 export function Ipam() {
   const qc = useQueryClient();
@@ -83,6 +102,7 @@ export function Ipam() {
   const overlaps = overview.data?.overlaps ?? [];
   const sourceList = sources.data?.sources ?? [];
   const config = syncConfig.data?.config ?? { enabled: true, interval_seconds: 1800 };
+  const overviewError = loadError(overview, 'IPAM overview');
 
   const handleRefresh = () => {
     // Query keys must match the hyphenated keys registered in api/ipam.ts
@@ -175,28 +195,30 @@ export function Ipam() {
         text="Review inferred on-prem subnets, discovered cloud CIDRs, the subnets of your Meraki, Cato and Cisco FMC topology collections, duplicate IPs and ranges two sites both claim in one place so addressing issues are visible before they become outages."
       />
 
-      <div style={{ marginBottom: '1rem' }}>
-        <div
-          className="stats-grid"
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-            gap: '1rem',
-          }}
-        >
-          {summaryCards.map((card) => (
-            <div key={card.label} className="stat-card">
-              <div
-                className="stat-value"
-                style={card.color ? { color: card.color } : undefined}
-              >
-                {String(card.value)}
+      {!overviewError && (
+        <div style={{ marginBottom: '1rem' }}>
+          <div
+            className="stats-grid"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gap: '1rem',
+            }}
+          >
+            {summaryCards.map((card) => (
+              <div key={card.label} className="stat-card">
+                <div
+                  className="stat-value"
+                  style={card.color ? { color: card.color } : undefined}
+                >
+                  {String(card.value)}
+                </div>
+                <div className="stat-label">{card.label}</div>
               </div>
-              <div className="stat-label">{card.label}</div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       <div
         style={{
@@ -219,12 +241,14 @@ export function Ipam() {
           >
             <div>
               <h3 style={{ margin: 0 }}>Subnet Inventory</h3>
-              <div
-                className="text-muted"
-                style={{ fontSize: '0.88em', marginTop: '0.2rem' }}
-              >
-                {subnets.length} visible subnet{subnets.length === 1 ? '' : 's'}
-              </div>
+              {overview.data && (
+                <div
+                  className="text-muted"
+                  style={{ fontSize: '0.88em', marginTop: '0.2rem' }}
+                >
+                  {subnets.length} visible subnet{subnets.length === 1 ? '' : 's'}
+                </div>
+              )}
             </div>
             <button
               type="button"
@@ -234,7 +258,9 @@ export function Ipam() {
               + Define Subnet
             </button>
           </div>
-          {overview.isPending ? (
+          {overviewError ? (
+            overviewError
+          ) : overview.isPending ? (
             <LoadingState text="Loading subnet inventory…" />
           ) : subnets.length === 0 ? (
             <div className="empty-state">
@@ -386,6 +412,7 @@ export function Ipam() {
                 subnet={selectedSubnet}
                 detail={subnetDetail.data}
                 isLoading={subnetDetail.isPending}
+                loadError={loadError(subnetDetail, 'subnet detail')}
                 onRefresh={() =>
                   qc.invalidateQueries({ queryKey: ['ipam-subnet-detail'] })
                 }
@@ -401,6 +428,8 @@ export function Ipam() {
           <SourcesCard
             sources={sourceList}
             syncConfig={config}
+            sourcesError={loadError(sources, 'IPAM sources')}
+            syncConfigError={loadError(syncConfig, 'sync schedule')}
             onAddSource={() => setModal({ kind: 'source', source: null })}
             onEditSource={(s) => setModal({ kind: 'source', source: s })}
           />
@@ -409,9 +438,14 @@ export function Ipam() {
             runs={reconcileRuns.data?.runs ?? []}
             diffs={reconcileDiffs.data?.diffs ?? []}
             sources={sourceList}
+            runsError={loadError(reconcileRuns, 'reconciliation runs')}
+            diffsError={loadError(reconcileDiffs, 'open drifts')}
           />
 
           <DhcpCard
+            serversError={loadError(dhcpServers, 'DHCP servers')}
+            exhaustionError={loadError(dhcpExhaustion, 'scope utilization alerts')}
+            correlationError={loadError(dhcpCorrelation, 'lease correlation')}
             servers={dhcpServers.data?.servers ?? []}
             exhaustion={
               dhcpExhaustion.data ?? {
@@ -431,90 +465,94 @@ export function Ipam() {
             onEdit={(s) => setModal({ kind: 'dhcp', server: s })}
           />
 
-          <OverlapsCard
-            overlaps={overlaps}
-            total={summary.overlap_count ?? 0}
-            vpnTotal={summary.vpn_overlap_count ?? 0}
-            includeTopology={includeTopology}
-          />
+          {overview.data && (
+            <OverlapsCard
+              overlaps={overlaps}
+              total={summary.overlap_count ?? 0}
+              vpnTotal={summary.vpn_overlap_count ?? 0}
+              includeTopology={includeTopology}
+            />
+          )}
 
-          <div className="card">
-            <h3 style={{ margin: '0 0 0.75rem' }}>Duplicate IP Conflicts</h3>
-            {duplicates.length === 0 ? (
-              <p className="text-muted" style={{ margin: 0 }}>
-                No duplicate inventory IPs detected for the current scope.
-              </p>
-            ) : (
-              duplicates.map((item) => (
-                <div
-                  key={`${item.ip_address}-${item.vrf_name ?? ''}`}
-                  style={{
-                    padding: '0.8rem 0',
-                    borderBottom: '1px solid var(--border)',
-                  }}
-                >
+          {overview.data && (
+            <div className="card">
+              <h3 style={{ margin: '0 0 0.75rem' }}>Duplicate IP Conflicts</h3>
+              {duplicates.length === 0 ? (
+                <p className="text-muted" style={{ margin: 0 }}>
+                  No duplicate inventory IPs detected for the current scope.
+                </p>
+              ) : (
+                duplicates.map((item) => (
                   <div
+                    key={`${item.ip_address}-${item.vrf_name ?? ''}`}
                     style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      gap: '0.75rem',
-                      alignItems: 'flex-start',
+                      padding: '0.8rem 0',
+                      borderBottom: '1px solid var(--border)',
                     }}
                   >
-                    <div>
-                      <div
-                        style={{
-                          fontWeight: 600,
-                          color: 'var(--danger)',
-                        }}
-                      >
-                        {item.ip_address || ''}
-                        {item.vrf_name && (
-                          <span
-                            className="badge"
-                            style={{
-                              background: 'rgba(from var(--violet) r g b / 0.15)',
-                              color: 'var(--violet)',
-                              fontSize: '0.7em',
-                              marginLeft: '0.4rem',
-                            }}
-                          >
-                            VRF: {item.vrf_name}
-                          </span>
-                        )}
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        gap: '0.75rem',
+                        alignItems: 'flex-start',
+                      }}
+                    >
+                      <div>
+                        <div
+                          style={{
+                            fontWeight: 600,
+                            color: 'var(--danger)',
+                          }}
+                        >
+                          {item.ip_address || ''}
+                          {item.vrf_name && (
+                            <span
+                              className="badge"
+                              style={{
+                                background: 'rgba(from var(--violet) r g b / 0.15)',
+                                color: 'var(--violet)',
+                                fontSize: '0.7em',
+                                marginLeft: '0.4rem',
+                              }}
+                            >
+                              VRF: {item.vrf_name}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-muted" style={{ fontSize: '0.9em' }}>
+                          {item.host_count ?? 0} inventory entries
+                          {item.vrf_name ? ' · same VRF' : ''}
+                        </div>
                       </div>
-                      <div className="text-muted" style={{ fontSize: '0.9em' }}>
-                        {item.host_count ?? 0} inventory entries
-                        {item.vrf_name ? ' · same VRF' : ''}
-                      </div>
+                      <span className="badge badge-danger">Conflict</span>
                     </div>
-                    <span className="badge badge-danger">Conflict</span>
+                    <div
+                      style={{
+                        display: 'grid',
+                        gap: '0.45rem',
+                        marginTop: '0.65rem',
+                      }}
+                    >
+                      {(item.hosts ?? []).map((host, i) => (
+                        <div
+                          key={i}
+                          className="text-muted"
+                          style={{ lineHeight: 1.45 }}
+                        >
+                          <strong style={{ color: 'var(--text)' }}>
+                            {host.hostname || 'Unknown host'}
+                          </strong>
+                          <span> in {host.group_name || 'Unknown group'}</span>
+                          {host.status && <span> · {host.status}</span>}
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <div
-                    style={{
-                      display: 'grid',
-                      gap: '0.45rem',
-                      marginTop: '0.65rem',
-                    }}
-                  >
-                    {(item.hosts ?? []).map((host, i) => (
-                      <div
-                        key={i}
-                        className="text-muted"
-                        style={{ lineHeight: 1.45 }}
-                      >
-                        <strong style={{ color: 'var(--text)' }}>
-                          {host.hostname || 'Unknown host'}
-                        </strong>
-                        <span> in {host.group_name || 'Unknown group'}</span>
-                        {host.status && <span> · {host.status}</span>}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
+                ))
+              )}
+            </div>
+          )}
 
           <div className="card">
             <h3 style={{ margin: '0 0 0.75rem' }}>Scope Notes</h3>
@@ -730,6 +768,8 @@ function SyncScheduleBar({ config }: { config: IpamSyncConfig }) {
 interface SourcesCardProps {
   sources: IpamSource[];
   syncConfig: IpamSyncConfig;
+  sourcesError: ReactNode;
+  syncConfigError: ReactNode;
   onAddSource: () => void;
   onEditSource: (s: IpamSource) => void;
 }
@@ -737,6 +777,8 @@ interface SourcesCardProps {
 function SourcesCard({
   sources,
   syncConfig,
+  sourcesError,
+  syncConfigError,
   onAddSource,
   onEditSource,
 }: SourcesCardProps) {
@@ -744,33 +786,35 @@ function SourcesCard({
   const sync = useSyncIpamSource();
   const reconcile = useRunReconcile();
   const remove = useDeleteIpamSource();
+  const syncing = usePendingKeys<number>();
+  const reconciling = usePendingKeys<number>();
 
-  const handleSync = (id: number) => {
-    sync.mutate(id, {
-      onError: (e) => {
+  const handleSync = (id: number) =>
+    syncing.run(id, async () => {
+      try {
+        await sync.mutateAsync(id);
+      } catch (e) {
         void alert({ message: `Sync failed: ${(e as Error).message}`, variant: 'error' });
-      },
+      }
     });
-  };
 
-  const handleReconcile = (id: number) => {
-    reconcile.mutate(id, {
-      onSuccess: (result) => {
+  const handleReconcile = (id: number) =>
+    reconciling.run(id, async () => {
+      try {
+        const result = await reconcile.mutateAsync(id);
         const count = Number(result?.summary?.diff_count ?? 0);
         void alert(
           count
             ? `Reconciliation complete - ${count} drift${count === 1 ? '' : 's'} detected.`
             : 'Reconciliation complete - no drift detected.',
         );
-      },
-      onError: (e) => {
+      } catch (e) {
         void alert({
           message: `Reconciliation failed: ${(e as Error).message}`,
           variant: 'error',
         });
-      },
+      }
     });
-  };
 
   const handleDelete = async (id: number, name: string) => {
     if (
@@ -805,11 +849,15 @@ function SourcesCard({
           + Add Source
         </button>
       </div>
-      <SyncScheduleBar
-        key={`${syncConfig.enabled}-${syncConfig.interval_seconds}`}
-        config={syncConfig}
-      />
-      {sources.length === 0 ? (
+      {syncConfigError || (
+        <SyncScheduleBar
+          key={`${syncConfig.enabled}-${syncConfig.interval_seconds}`}
+          config={syncConfig}
+        />
+      )}
+      {sourcesError ? (
+        sourcesError
+      ) : sources.length === 0 ? (
         <p className="text-muted" style={{ margin: 0 }}>
           No external IPAM sources configured. Add one to start syncing
           subnets and allocations.
@@ -876,19 +924,19 @@ function SourcesCard({
                 flexWrap: 'wrap',
               }}
             >
-              <button
-                type="button"
+              <BusyButton
                 className="btn btn-primary"
                 style={{ fontSize: '0.82em', padding: '0.25rem 0.6rem' }}
-                onClick={() => handleSync(src.id)}
-                disabled={sync.isPending}
+                onClick={() => void handleSync(src.id)}
+                busy={syncing.isPending(src.id)}
+                busyLabel="Syncing…"
               >
                 Sync Now
-              </button>
+              </BusyButton>
               <KebabMenu label={`Actions for ${src.name}`}>
                 <MenuItem
-                  onSelect={() => handleReconcile(src.id)}
-                  disabled={reconcile.isPending}
+                  onSelect={() => void handleReconcile(src.id)}
+                  disabled={reconciling.isPending(src.id)}
                 >
                   Reconcile
                 </MenuItem>
@@ -918,29 +966,47 @@ interface ReconcileCardProps {
       : never
     : never;
   sources: IpamSource[];
+  runsError: ReactNode;
+  diffsError: ReactNode;
 }
 
-function ReconcileCard({ runs, diffs, sources }: ReconcileCardProps) {
-  const { alert } = useDialogs();
+function ReconcileCard({ runs, diffs, sources, runsError, diffsError }: ReconcileCardProps) {
+  const { confirm, alert } = useDialogs();
   const resolve = useResolveDiff();
+  const resolving = usePendingKeys<string>();
   const sourceById = new Map(sources.map((s) => [s.id, s]));
   const recentRuns = runs.slice(0, 5);
 
-  const handleResolve = (
-    diffId: number,
-    resolution: 'accept_plexus' | 'accept_ipam' | 'ignored',
-  ) => {
-    resolve.mutate(
-      { diffId, resolution },
-      {
-        onError: (e) => {
-          void alert({
-            message: `Failed to resolve drift: ${(e as Error).message}`,
-            variant: 'error',
-          });
-        },
-      },
-    );
+  const handleResolve = (diffId: number, resolution: DiffResolution) =>
+    resolving.run(`${diffId}:${resolution}`, async () => {
+      try {
+        await resolve.mutateAsync({ diffId, resolution });
+      } catch (e) {
+        void alert({
+          message: `Failed to resolve drift: ${(e as Error).message}`,
+          variant: 'error',
+        });
+      }
+    });
+
+  const handlePush = async (diff: ReconcileDiff, sourceName: string) => {
+    const hostname = diff.plexus_state?.hostname || '';
+    const overwrites = diff.drift_type !== 'missing_in_ipam';
+    if (
+      !(await confirm({
+        title: 'Push to IPAM',
+        message:
+          `Push the Plexus record for ${diff.address}${hostname ? ` (hostname "${hostname}")` : ''} ` +
+          `to the external IPAM source "${sourceName}"?` +
+          (overwrites
+            ? ' This overwrites the DNS name that source holds for this address.'
+            : ' This creates the allocation in that source.'),
+        confirmLabel: 'Push',
+        confirmVariant: overwrites ? 'danger' : 'primary',
+      }))
+    )
+      return;
+    await handleResolve(diff.id, 'accept_plexus');
   };
 
   return (
@@ -956,7 +1022,9 @@ function ReconcileCard({ runs, diffs, sources }: ReconcileCardProps) {
       </div>
 
       <div style={{ marginBottom: '0.75rem' }}>
-        {recentRuns.length === 0 ? (
+        {runsError ? (
+          runsError
+        ) : recentRuns.length === 0 ? (
           <div className="text-muted" style={{ fontSize: '0.85em' }}>
             No reconciliation runs yet. Click "Reconcile" on a source to start.
           </div>
@@ -1002,7 +1070,9 @@ function ReconcileCard({ runs, diffs, sources }: ReconcileCardProps) {
         )}
       </div>
 
-      {diffs.length === 0 ? (
+      {diffsError ? (
+        diffsError
+      ) : diffs.length === 0 ? (
         <div className="text-muted" style={{ fontSize: '0.85em' }}>
           No open drifts.
         </div>
@@ -1036,6 +1106,8 @@ function ReconcileCard({ runs, diffs, sources }: ReconcileCardProps) {
                 const ipamStatus = diff.ipam_state?.status || '';
                 const pushAvailable =
                   src?.push_enabled && diff.drift_type !== 'missing_in_plexus';
+                const isResolving = (r: DiffResolution) => resolving.isPending(`${diff.id}:${r}`);
+                const rowBusy = DIFF_RESOLUTIONS.some(isResolving);
                 return (
                   <tr key={diff.id}>
                     <td>
@@ -1057,45 +1129,46 @@ function ReconcileCard({ runs, diffs, sources }: ReconcileCardProps) {
                       )}
                     </td>
                     <td style={{ whiteSpace: 'nowrap' }}>
-                      {pushAvailable && (
-                        <button
-                          type="button"
+                      {pushAvailable && src && (
+                        <BusyButton
                           className="btn btn-primary"
                           style={{
                             fontSize: '0.78em',
                             padding: '0.18rem 0.45rem',
                           }}
-                          onClick={() =>
-                            handleResolve(diff.id, 'accept_plexus')
-                          }
+                          busy={isResolving('accept_plexus')}
+                          disabled={rowBusy}
+                          onClick={() => void handlePush(diff, src.name)}
                         >
                           Push to IPAM
-                        </button>
+                        </BusyButton>
                       )}
-                      <button
-                        type="button"
+                      <BusyButton
                         className="btn btn-secondary"
                         style={{
                           fontSize: '0.78em',
                           padding: '0.18rem 0.45rem',
                           marginLeft: pushAvailable ? '0.3rem' : 0,
                         }}
-                        onClick={() => handleResolve(diff.id, 'accept_ipam')}
+                        busy={isResolving('accept_ipam')}
+                        disabled={rowBusy}
+                        onClick={() => void handleResolve(diff.id, 'accept_ipam')}
                       >
                         Accept IPAM
-                      </button>
-                      <button
-                        type="button"
+                      </BusyButton>
+                      <BusyButton
                         className="btn btn-secondary"
                         style={{
                           fontSize: '0.78em',
                           padding: '0.18rem 0.45rem',
                           marginLeft: '0.3rem',
                         }}
-                        onClick={() => handleResolve(diff.id, 'ignored')}
+                        busy={isResolving('ignored')}
+                        disabled={rowBusy}
+                        onClick={() => void handleResolve(diff.id, 'ignored')}
                       >
                         Ignore
-                      </button>
+                      </BusyButton>
                     </td>
                   </tr>
                 );
@@ -1110,6 +1183,9 @@ function ReconcileCard({ runs, diffs, sources }: ReconcileCardProps) {
 
 interface DhcpCardProps {
   servers: DhcpServer[];
+  serversError: ReactNode;
+  exhaustionError: ReactNode;
+  correlationError: ReactNode;
   exhaustion: NonNullable<ReturnType<typeof useDhcpExhaustion>['data']>;
   correlation: NonNullable<ReturnType<typeof useDhcpCorrelation>['data']>;
   onAdd: () => void;
@@ -1118,6 +1194,9 @@ interface DhcpCardProps {
 
 function DhcpCard({
   servers,
+  serversError,
+  exhaustionError,
+  correlationError,
   exhaustion,
   correlation,
   onAdd,
@@ -1126,17 +1205,19 @@ function DhcpCard({
   const { confirm, alert } = useDialogs();
   const sync = useSyncDhcpServer();
   const remove = useDeleteDhcpServer();
+  const syncing = usePendingKeys<number>();
 
-  const handleSync = (id: number) => {
-    sync.mutate(id, {
-      onError: (e) => {
+  const handleSync = (id: number) =>
+    syncing.run(id, async () => {
+      try {
+        await sync.mutateAsync(id);
+      } catch (e) {
         void alert({
           message: `DHCP sync failed: ${(e as Error).message}`,
           variant: 'error',
         });
-      },
+      }
     });
-  };
 
   const handleDelete = async (id: number, name: string) => {
     if (
@@ -1185,7 +1266,9 @@ function DhcpCard({
       </div>
 
       <div style={{ marginBottom: '0.75rem' }}>
-        {servers.length === 0 ? (
+        {serversError ? (
+          serversError
+        ) : servers.length === 0 ? (
           <div className="text-muted" style={{ fontSize: '0.9em' }}>
             No DHCP servers configured. Add one to begin pulling scope
             utilization and lease data.
@@ -1230,14 +1313,13 @@ function DhcpCard({
                   <td>{s.lease_count ?? 0}</td>
                   <td>{formatBackendDateTime(s.last_sync_at, 'Never')}</td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    <button
-                      type="button"
+                    <BusyButton
                       className="btn btn-secondary btn-sm"
-                      onClick={() => handleSync(s.id)}
-                      disabled={sync.isPending}
+                      onClick={() => void handleSync(s.id)}
+                      busy={syncing.isPending(s.id)}
                     >
                       Sync
-                    </button>
+                    </BusyButton>
                     <span style={{ marginLeft: '0.3rem' }}>
                       <KebabMenu label={`Actions for ${s.name}`}>
                         <MenuItem onSelect={() => onEdit(s)}>Edit</MenuItem>
@@ -1255,6 +1337,7 @@ function DhcpCard({
         )}
       </div>
 
+      {exhaustionError && <div style={{ marginBottom: '0.75rem' }}>{exhaustionError}</div>}
       {exhaustedRows.length > 0 && (
         <div style={{ marginBottom: '0.75rem' }}>
           <div style={{ fontWeight: 600, marginBottom: '0.4rem' }}>
@@ -1315,14 +1398,16 @@ function DhcpCard({
         <div style={{ fontWeight: 600, marginBottom: '0.4rem' }}>
           Lease Correlation
         </div>
-        <div
-          className="text-muted"
-          style={{ fontSize: '0.88em', marginBottom: '0.5rem' }}
-        >
-          {correlation.totals.known} known / {correlation.totals.unknown}{' '}
-          unknown leases against discovered inventory.
-        </div>
-        {unknown.length === 0 ? (
+        {correlationError || (
+          <div
+            className="text-muted"
+            style={{ fontSize: '0.88em', marginBottom: '0.5rem' }}
+          >
+            {correlation.totals.known} known / {correlation.totals.unknown}{' '}
+            unknown leases against discovered inventory.
+          </div>
+        )}
+        {correlationError ? null : unknown.length === 0 ? (
           <div className="text-muted" style={{ fontSize: '0.85em' }}>
             All leases match a discovered inventory host.
           </div>

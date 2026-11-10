@@ -10,13 +10,16 @@ import {
   useScanMerakiAssignmentNow,
   useUpdateMerakiAssignment,
 } from '@/api/compliance';
+import { BusyButton } from '@/components/BusyButton';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
 import { TabBar } from '@/components/TabBar';
 import { formatBackendDateTime } from '@/lib/datetime';
 import { complianceStatusTone, toneColor } from '@/lib/severity';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import { MerakiAssignModal } from './MerakiAssignModal';
 import { MerakiFindingsModal } from './MerakiFindingsModal';
@@ -81,32 +84,41 @@ export function MerakiTab({ query }: { query: string }) {
         />
       )}
 
-      {view === 'assignments' && (
-        <AssignmentsView
-          assignments={assignments.data || []}
-          loading={assignments.isLoading}
-          query={query}
-          onScanStarted={setJobId}
-        />
-      )}
-      {view === 'status' && (
-        <StatusView
-          status={status.data || []}
-          loading={status.isLoading}
-          query={query}
-          onShowFindings={setFindingsId}
-        />
-      )}
-      {view === 'results' && (
-        <ResultsView
-          results={results.data || []}
-          loading={results.isLoading}
-          query={query}
-          scanFilter={scanFilter}
-          onClearScanFilter={() => setScanFilter(null)}
-          onShowFindings={setFindingsId}
-        />
-      )}
+      {view === 'assignments' &&
+        (assignments.isError && !assignments.data ? (
+          <QueryError what="Meraki assignments" query={assignments} />
+        ) : (
+          <AssignmentsView
+            assignments={assignments.data || []}
+            loading={assignments.isLoading}
+            query={query}
+            onScanStarted={setJobId}
+          />
+        ))}
+      {view === 'status' &&
+        (status.isError && !status.data ? (
+          <QueryError what="Meraki target status" query={status} />
+        ) : (
+          <StatusView
+            status={status.data || []}
+            loading={status.isLoading}
+            query={query}
+            onShowFindings={setFindingsId}
+          />
+        ))}
+      {view === 'results' &&
+        (results.isError && !results.data ? (
+          <QueryError what="Meraki scan results" query={results} />
+        ) : (
+          <ResultsView
+            results={results.data || []}
+            loading={results.isLoading}
+            query={query}
+            scanFilter={scanFilter}
+            onClearScanFilter={() => setScanFilter(null)}
+            onShowFindings={setFindingsId}
+          />
+        ))}
 
       {showAssign && <MerakiAssignModal onClose={() => setShowAssign(false)} />}
       {findingsId != null && (
@@ -131,6 +143,7 @@ function AssignmentsView({
   const toggle = useUpdateMerakiAssignment();
   const remove = useDeleteMerakiAssignment();
   const scanNow = useScanMerakiAssignmentNow();
+  const pending = usePendingKeys<string>();
 
   const filtered = useMemo(() => {
     if (!query.trim()) return assignments;
@@ -185,43 +198,49 @@ function AssignmentsView({
                 )}
               </div>
               <div style={{ display: 'flex', gap: '0.4rem' }}>
-                <button
+                <BusyButton
                   className="btn btn-sm btn-primary"
                   title="Collect this organization's configuration and evaluate the profile now"
-                  disabled={scanNow.isPending || a.scanning}
+                  busy={pending.isPending(`scan:${a.id}`)}
+                  disabled={a.scanning}
                   onClick={() =>
-                    scanNow.mutate(a.id, {
-                      onSuccess: (res) => onScanStarted(res.job_id),
-                      onError: (e) =>
+                    void pending.run(`scan:${a.id}`, async () => {
+                      try {
+                        const res = await scanNow.mutateAsync(a.id);
+                        onScanStarted(res.job_id);
+                      } catch (e) {
                         void alert({
                           title: 'Scan failed to start',
                           message: (e as Error).message,
                           variant: 'error',
-                        }),
+                        });
+                      }
                     })
                   }
                 >
                   {a.scanning ? 'Scanning…' : 'Scan Now'}
-                </button>
-                <button
+                </BusyButton>
+                <BusyButton
                   className="btn btn-sm btn-secondary"
+                  busy={pending.isPending(`toggle:${a.id}`)}
                   onClick={() =>
-                    toggle.mutate(
-                      { id: a.id, data: { enabled: !a.enabled } },
-                      {
-                        onError: (e) =>
-                          void alert({
-                            title: 'Update failed',
-                            message: (e as Error).message,
-                            variant: 'error',
-                          }),
-                      },
-                    )
+                    void pending.run(`toggle:${a.id}`, async () => {
+                      try {
+                        await toggle.mutateAsync({ id: a.id, data: { enabled: !a.enabled } });
+                      } catch (e) {
+                        void alert({
+                          title: 'Update failed',
+                          message: (e as Error).message,
+                          variant: 'error',
+                        });
+                      }
+                    })
                   }
                 >
                   {a.enabled ? 'Disable' : 'Enable'}
-                </button>
+                </BusyButton>
                 <DeleteButton
+                  busy={pending.isPending(`delete:${a.id}`)}
                   onClick={async () => {
                     if (
                       await confirm({
@@ -230,13 +249,16 @@ function AssignmentsView({
                         confirmLabel: 'Delete',
                       })
                     ) {
-                      remove.mutate(a.id, {
-                        onError: (e) =>
+                      await pending.run(`delete:${a.id}`, async () => {
+                        try {
+                          await remove.mutateAsync(a.id);
+                        } catch (e) {
                           void alert({
                             title: 'Delete failed',
                             message: (e as Error).message,
                             variant: 'error',
-                          }),
+                          });
+                        }
                       });
                     }
                   }}

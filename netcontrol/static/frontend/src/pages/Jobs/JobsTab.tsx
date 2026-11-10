@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 
 import { Badge, StatusBadge } from '@/components/Badge';
-import { Callout } from '@/components/Callout';
+import { BusyButton } from '@/components/BusyButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useCancelJob,
@@ -12,7 +12,9 @@ import {
 } from '@/api/jobs';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
 import { formatBackendDateTime } from '@/lib/datetime';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import {
   compareJobsDesc,
@@ -34,6 +36,7 @@ export function JobsTab() {
   const queueQuery = useJobQueue();
   const cancelMut = useCancelJob();
   const retryMut = useRetryJob();
+  const pendingJobs = usePendingKeys<number>();
 
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState<StatusFilter>('all');
@@ -70,13 +73,23 @@ export function JobsTab() {
       cancelLabel: 'Keep running',
     });
     if (!ok) return;
-    cancelMut.mutate(id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
+    await pendingJobs.run(id, async () => {
+      try {
+        await cancelMut.mutateAsync(id);
+      } catch (e) {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      }
+    });
   }
 
   function handleRetry(id: number) {
-    retryMut.mutate(id, {
-      onSuccess: (r) => setViewJobId(r.job_id),
-      onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
+    return pendingJobs.run(id, async () => {
+      try {
+        const r = await retryMut.mutateAsync(id);
+        setViewJobId(r.job_id);
+      } catch (e) {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      }
     });
   }
 
@@ -109,8 +122,11 @@ export function JobsTab() {
 
       <QueuePanel data={queueQuery.data} />
 
-      {jobsQuery.isPending && <LoadingState />}
-      {jobsQuery.error && <Callout tone="danger">Failed: {(jobsQuery.error as Error).message}</Callout>}
+      {jobsQuery.error && !jobsQuery.data ? (
+        <QueryError what="jobs" query={jobsQuery} />
+      ) : (
+        jobsQuery.isPending && <LoadingState />
+      )}
       {jobsQuery.data && (filtered.length === 0 ? (
         <EmptyState message="No matching jobs" />
       ) : (
@@ -119,9 +135,10 @@ export function JobsTab() {
             <JobRow
               key={j.id}
               job={j}
+              isBusy={pendingJobs.isPending(j.id)}
               onView={() => setViewJobId(j.id)}
-              onCancel={() => handleCancel(j.id)}
-              onRetry={() => handleRetry(j.id)}
+              onCancel={() => void handleCancel(j.id)}
+              onRetry={() => void handleRetry(j.id)}
             />
           ))}
         </div>
@@ -170,7 +187,19 @@ function QueuePanel({ data }: { data: ReturnType<typeof useJobQueue>['data'] }) 
   );
 }
 
-function JobRow({ job, onView, onCancel, onRetry }: { job: Job; onView: () => void; onCancel: () => void; onRetry: () => void }) {
+function JobRow({
+  job,
+  isBusy,
+  onView,
+  onCancel,
+  onRetry,
+}: {
+  job: Job;
+  isBusy: boolean;
+  onView: () => void;
+  onCancel: () => void;
+  onRetry: () => void;
+}) {
   const showPri = job.priority != null && job.priority !== 2;
   const deps = parseDeps(job.depends_on);
   const timeLabel = job.started_at ? `Started: ${formatBackendDateTime(job.started_at)}` :
@@ -194,10 +223,14 @@ function JobRow({ job, onView, onCancel, onRetry }: { job: Job; onView: () => vo
       </div>
       <div style={{ display: 'flex', gap: '0.4rem' }}>
         {(job.status === 'running' || job.status === 'queued') && (
-          <button className="btn btn-sm btn-danger" onClick={(e) => { e.stopPropagation(); onCancel(); }}>Cancel</button>
+          <BusyButton className="btn btn-sm btn-danger" busy={isBusy} onClick={(e) => { e.stopPropagation(); onCancel(); }}>
+            Cancel
+          </BusyButton>
         )}
         {(job.status === 'failed' || job.status === 'cancelled') && (
-          <button className="btn btn-sm btn-primary" onClick={(e) => { e.stopPropagation(); onRetry(); }}>Retry</button>
+          <BusyButton className="btn btn-sm btn-primary" busy={isBusy} onClick={(e) => { e.stopPropagation(); onRetry(); }}>
+            Retry
+          </BusyButton>
         )}
         <button className="btn btn-sm btn-secondary" onClick={onView}>View Output</button>
       </div>

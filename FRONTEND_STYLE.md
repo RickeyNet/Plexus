@@ -359,17 +359,49 @@ destructive. When the action is itself a cancellation, set `cancelLabel`
 Line breaks (`\n`) in a string message are kept. Never use
 `window.confirm()` or `window.alert()`.
 
+A confirm is required before a bulk action ("Acknowledge all", "Accept
+all"), anything that deletes or overwrites, anything that writes to a
+device or an external system (a live job launch, a push to IPAM), and an
+approval. A bulk confirm states how many items it affects.
+
 ### Conditional rendering
 
-Use early returns for loading / error / empty states. Don't nest the
-happy path inside ternaries:
+Use early returns for error / loading / empty states, **error first**.
+Don't nest the happy path inside ternaries:
 
 ```tsx
-if (query.isPending) return <p className="text-muted">Loading…</p>;
-if (query.error) return <p style={{ color: 'var(--danger)' }}>Failed: {(query.error as Error).message}</p>;
-if (!query.data?.length) return <div className="empty-state">…</div>;
+if (query.isError && !query.data)
+  return <QueryError what="deployments" query={query} />;
+if (query.isPending) return <LoadingState />;
+if (!query.data.length) return <EmptyState message="No deployments" />;
 return <Table data={query.data} />;
 ```
+
+- A loading or "no draft yet" check placed before the error check turns a
+  failed request into an endless spinner; `data ?? []` with no error
+  branch turns it into a false "No …" line. Every query a page renders
+  has an error branch.
+- `<QueryError>` (`@/components/QueryError`) is the one failed-request
+  state: it names what failed and offers Retry. Pass the query itself
+  (`query={q}`); `error` / `onRetry` are for a request that is not a query.
+- A form whose data failed to load is not rendered at all: a form seeded
+  with defaults or blanks can be saved over the real record.
+- Replace the content with the error only when there is nothing to show
+  (`isError && !data`). A failed background refetch or poll keeps the
+  data on screen.
+
+### Async buttons
+
+A button that starts a request is disabled until that request settles, so
+a double-click cannot fire it twice. Use `<BusyButton busy>` from
+`@/components/BusyButton` (disabled, spinner, `aria-busy`).
+
+- One button, one mutation: `busy={mut.isPending}`. In a modal footer,
+  `<ModalActions primaryBusy primaryBusyLabel>`.
+- The same action on every row of a list: a shared mutation's `isPending`
+  would disable every row, so key the busy state by row with
+  `usePendingKeys()` from `@/lib/usePendingKeys` and call `mutateAsync`
+  inside `pending.run(row.id, …)`. Only the clicked row is busy.
 
 ---
 
@@ -591,3 +623,6 @@ Append a one-liner each time you change a rule here.
   the layout rules built on them: `<PageHeader>`, `stack`, `toolbar`,
   `card-sm` / `card-inset` / `card-clickable`, `form-input-sm`; cards no
   longer carry a margin or a hover glow.
+- 2026-11-09 - Added the state rules: error before loading with
+  `<QueryError>`, `<BusyButton>` and `usePendingKeys` for async buttons,
+  and when a confirm is required.

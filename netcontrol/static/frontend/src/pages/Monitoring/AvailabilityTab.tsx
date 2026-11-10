@@ -3,6 +3,8 @@ import { useState } from 'react';
 import { groupLabel } from '@/api/inventory';
 import { useInventoryGroups } from '@/api/compliance';
 import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
 import { StatGrid, StatTile } from '@/components/StatTile';
 import { TabBar } from '@/components/TabBar';
 import {
@@ -75,7 +77,11 @@ export function AvailabilityTab() {
 
       {subTab === 'hosts' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-          {(s.hosts ?? []).length === 0 ? (
+          {summary.error && !summary.data ? (
+            <QueryError what="availability summary" query={summary} />
+          ) : summary.isPending ? (
+            <LoadingState />
+          ) : (s.hosts ?? []).length === 0 ? (
             <EmptyState message="No availability data - run polls to begin tracking." />
           ) : (
             (s.hosts ?? []).map((h) => {
@@ -102,7 +108,11 @@ export function AvailabilityTab() {
 
       {subTab === 'outages' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-          {!outages.data?.outages?.length ? (
+          {outages.error && !outages.data ? (
+            <QueryError what="outages" query={outages} />
+          ) : outages.isPending ? (
+            <LoadingState />
+          ) : !outages.data?.outages?.length ? (
             <div className="card text-muted">No outages recorded in the last {days} days.</div>
           ) : (
             outages.data.outages.map((o) => (
@@ -128,7 +138,11 @@ export function AvailabilityTab() {
       )}
 
       {subTab === 'transitions' && (
-        !transitions.data?.transitions?.length ? (
+        transitions.error && !transitions.data ? (
+          <QueryError what="state transitions" query={transitions} />
+        ) : transitions.isPending ? (
+          <LoadingState />
+        ) : !transitions.data?.transitions?.length ? (
           <div className="card text-muted">No state transitions recorded.</div>
         ) : (
           <div style={{ maxHeight: 480, overflow: 'auto' }}>

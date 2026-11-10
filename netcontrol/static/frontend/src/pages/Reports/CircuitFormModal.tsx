@@ -4,6 +4,7 @@ import { Callout } from '@/components/Callout';
 import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import { useInventoryGroupsFull } from '@/api/inventory';
 import {
   useBillingCircuit,
@@ -118,7 +119,10 @@ function CreateMode({ onClose }: { onClose: () => void }) {
             <option value="">Select device…</option>
             {hosts.map((h) => <option key={h.id} value={h.id}>{h.hostname || h.ip_address}</option>)}
           </select>
-          <FieldError>{hostError}</FieldError></div>
+          <FieldError>{hostError}</FieldError>
+          {groupsQuery.isError && !groupsQuery.data && (
+            <QueryError what="inventory devices" query={groupsQuery} />
+          )}</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
           <div className="form-group"><label className="form-label">Interface Index</label>
             <input
@@ -218,14 +222,16 @@ function EditMode({ circuitId, onClose }: { circuitId: number; onClose: () => vo
             type="submit"
             form={formId}
             className="btn btn-primary"
-            disabled={updateMut.isPending || query.isPending}
+            disabled={updateMut.isPending || !query.data}
           >
             {updateMut.isPending ? 'Saving…' : 'Save'}
           </button>
         </>
       }
     >
-      {query.isPending ? (
+      {query.isError && !query.data ? (
+        <QueryError what="billing circuit" query={query} />
+      ) : query.isPending ? (
         <LoadingState />
       ) : (
         <form id={formId} onSubmit={handleSubmit}>

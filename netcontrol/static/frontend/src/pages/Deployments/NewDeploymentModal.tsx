@@ -10,6 +10,7 @@ import {
 import { Callout } from '@/components/Callout';
 import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 
 interface Props {
   isOpen: boolean;
@@ -127,6 +128,18 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
     >
       <form id={formId} onSubmit={handleSubmit}>
         {saveError && <Callout tone="danger">{saveError}</Callout>}
+        {groups.isError && !groups.data && (
+          <QueryError what="inventory groups" query={groups} />
+        )}
+        {credentials.isError && !credentials.data && (
+          <QueryError what="credentials" query={credentials} />
+        )}
+        {templates.isError && !templates.data && (
+          <QueryError what="templates" query={templates} />
+        )}
+        {riskAnalyses.isError && !riskAnalyses.data && (
+          <QueryError what="risk analyses" query={riskAnalyses} />
+        )}
         <div className="form-group">
           <label className="form-label">Name</label>
           <input

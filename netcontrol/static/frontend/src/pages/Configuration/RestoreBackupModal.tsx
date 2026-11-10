@@ -4,6 +4,7 @@ import { useCredentials } from '@/api/compliance';
 import { useRestoreBackup } from '@/api/configuration';
 import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 
 interface Props {
@@ -64,6 +65,9 @@ export function RestoreBackupModal({ backupId, onClose }: Props) {
     >
       <form id={formId} onSubmit={handleSubmit}>
         {saveError && <Callout tone="danger">{saveError}</Callout>}
+        {creds.isError && !creds.data && (
+          <QueryError what="credentials" query={creds} />
+        )}
         <p style={{ color: 'var(--warning)', marginBottom: '1rem' }}>
           This will push the backup configuration to the device and validate
           the result.

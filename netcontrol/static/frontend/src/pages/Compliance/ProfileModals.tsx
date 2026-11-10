@@ -1,11 +1,14 @@
 import { useMemo, useState } from 'react';
 
 import { groupLabel } from '@/api/inventory';
+import { BusyButton } from '@/components/BusyButton';
 import { Callout } from '@/components/Callout';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { ModalActions } from '@/components/ModalActions';
+import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 import {
   MerakiCheck,
   ProfilePayload,
@@ -99,7 +102,8 @@ export function EditProfileModal({
   profileId: number;
   onClose: () => void;
 }) {
-  const { data: profile, isLoading } = useComplianceProfile(profileId);
+  const profileQuery = useComplianceProfile(profileId);
+  const { data: profile, isLoading } = profileQuery;
   const update = useUpdateProfile();
 
   const [name, setName] = useState('');
@@ -160,7 +164,9 @@ export function EditProfileModal({
         />
       }
     >
-      {isLoading || !hydrated ? (
+      {profileQuery.isError && !profile ? (
+        <QueryError what="the compliance profile" query={profileQuery} />
+      ) : isLoading || !hydrated ? (
         <LoadingState />
       ) : (
         <FormBody
@@ -191,6 +197,7 @@ export function AssignProfileModal({
   const credentials = useCredentials();
   const existing = useComplianceAssignments(profileId);
   const create = useCreateAssignment();
+  const submitting = usePendingKeys<'assign'>();
 
   const [selectedGroups, setSelectedGroups] = useState<Set<number>>(new Set());
   const [credentialId, setCredentialId] = useState<number | null>(null);
@@ -223,46 +230,64 @@ export function AssignProfileModal({
       onClose={onClose}
       title="Assign Profile to Groups"
       footer={
-        <ModalActions
-          onClose={onClose}
-          primaryLabel="Assign"
-          primaryDisabled={selectedGroups.size === 0 || credentialId == null}
-          onPrimary={async () => {
-            setError(null);
-            if (credentialId == null) {
-              setError('Credential is required');
-              return;
-            }
-            const ids = [...selectedGroups];
-            let success = 0;
-            let failed = 0;
-            for (const groupId of ids) {
-              try {
-                await create.mutateAsync({
-                  profile_id: profileId,
-                  group_id: groupId,
-                  credential_id: credentialId,
-                  interval_seconds: hours * 3600,
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <BusyButton
+            className="btn btn-primary"
+            busy={submitting.anyPending}
+            busyLabel="Assigning…"
+            disabled={selectedGroups.size === 0 || credentialId == null}
+            onClick={() =>
+              void submitting.run('assign', async () => {
+                setError(null);
+                if (credentialId == null) {
+                  setError('Credential is required');
+                  return;
+                }
+                const ids = [...selectedGroups];
+                let success = 0;
+                let failed = 0;
+                for (const groupId of ids) {
+                  try {
+                    await create.mutateAsync({
+                      profile_id: profileId,
+                      group_id: groupId,
+                      credential_id: credentialId,
+                      interval_seconds: hours * 3600,
+                    });
+                    success++;
+                  } catch {
+                    failed++;
+                  }
+                }
+                if (failed > 0) {
+                  setError(`Assigned to ${success} group(s), ${failed} failed.`);
+                  return;
+                }
+                onClose();
+                void alert({
+                  title: 'Profile assigned',
+                  message: `Profile assigned to ${success} group(s).`,
                 });
-                success++;
-              } catch {
-                failed++;
-              }
+              })
             }
-            if (failed === 0) {
-              await alert({
-                title: 'Profile assigned',
-                message: `Profile assigned to ${success} group(s).`,
-              });
-            } else {
-              setError(`Assigned to ${success} group(s), ${failed} failed.`);
-              return;
-            }
-            onClose();
-          }}
-        />
+          >
+            Assign
+          </BusyButton>
+        </>
       }
     >
+      {groups.isError && !groups.data && (
+        <QueryError what="inventory groups" query={groups} />
+      )}
+      {credentials.isError && !credentials.data && (
+        <QueryError what="credentials" query={credentials} />
+      )}
+      {existing.isError && !existing.data && (
+        <QueryError what="existing assignments" query={existing} />
+      )}
       <div className="form-group">
         <label className="form-label">Inventory Groups</label>
         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
@@ -296,8 +321,10 @@ export function AssignProfileModal({
             padding: '0.5rem 0.75rem',
           }}
         >
-          {groupList.length === 0 ? (
-            <span className="text-muted">No inventory groups found</span>
+          {groups.isPending ? (
+            <LoadingState variant="inline" />
+          ) : groupList.length === 0 ? (
+            groups.data && <span className="text-muted">No inventory groups found</span>
           ) : (
             groupList.map((g) => {
               const already = assignedGroupIds.has(g.id);

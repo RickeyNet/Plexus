@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-import { Callout } from '@/components/Callout';
+import { BusyButton } from '@/components/BusyButton';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -14,6 +14,10 @@ import {
 } from '@/api/settings';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
+import { usePendingKeys } from '@/lib/usePendingKeys';
+
+import type { FormStatus } from './StatusLine';
 
 const PROTOCOLS: SiemSink['protocol'][] = ['udp', 'tcp', 'tls', 'https'];
 const FORMATS: SiemSink['format'][] = ['cef', 'json'];
@@ -47,23 +51,23 @@ export function SiemTab() {
   const updateMut = useUpdateSiemSink();
   const deleteMut = useDeleteSiemSink();
   const testMut = useTestSiemSink();
+  const testing = usePendingKeys<string>();
+  const deleting = usePendingKeys<string>();
   const [editing, setEditing] = useState<SiemSink | null>(null);
-  const [status, setStatus] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+  const [status, setStatus] = useState<FormStatus | null>(null);
   const [testResults, setTestResults] = useState<Record<string, { ok: boolean; error: string }>>(
     {},
   );
 
-  if (query.isLoading) return <LoadingState />;
-  if (query.isError)
+  if (query.isError && !query.data)
     return (
-      <Callout tone="danger">
-        Failed to load SIEM sinks: {(query.error as Error).message}
-      </Callout>
+      <QueryError what="SIEM sinks" query={query} />
     );
+  if (!query.data) return <LoadingState />;
 
-  const sinks = query.data?.sinks ?? [];
+  const sinks = query.data.sinks ?? [];
   const statsById = new Map<string, SiemSinkStats>(
-    (query.data?.stats ?? []).map((s) => [s.id, s]),
+    (query.data.stats ?? []).map((s) => [s.id, s]),
   );
 
   const target = (s: SiemSink) =>
@@ -114,27 +118,31 @@ export function SiemTab() {
       }))
     )
       return;
-    deleteMut.mutate(s.id, {
-      onSuccess: () =>
-        setStatus({ kind: 'success', message: `Sink ${s.name || s.id} deleted.` }),
-      onError: (err) =>
+    await deleting.run(s.id, async () => {
+      try {
+        await deleteMut.mutateAsync(s.id);
+        setStatus({ kind: 'success', message: `Sink ${s.name || s.id} deleted.` });
+      } catch (err) {
         setStatus({
           kind: 'error',
           message: `Failed to delete sink: ${(err as Error).message}`,
-        }),
+        });
+      }
     });
   };
 
-  const onTest = (s: SiemSink) => {
-    testMut.mutate(s.id, {
-      onSuccess: (res) => setTestResults((prev) => ({ ...prev, [s.id]: res })),
-      onError: (err) =>
+  const onTest = (s: SiemSink) =>
+    testing.run(s.id, async () => {
+      try {
+        const res = await testMut.mutateAsync(s.id);
+        setTestResults((prev) => ({ ...prev, [s.id]: res }));
+      } catch (err) {
         setTestResults((prev) => ({
           ...prev,
           [s.id]: { ok: false, error: (err as Error).message },
-        })),
+        }));
+      }
     });
-  };
 
   return (
     <div>
@@ -219,13 +227,18 @@ export function SiemTab() {
                         : st?.last_error || ''}
                     </td>
                     <td style={{ whiteSpace: 'nowrap' }}>
-                      <button className="btn btn-xs btn-ghost" onClick={() => onTest(s)}>
+                      <BusyButton
+                        className="btn btn-xs btn-ghost"
+                        busy={testing.isPending(s.id)}
+                        busyLabel="Testing…"
+                        onClick={() => void onTest(s)}
+                      >
                         Test
-                      </button>{' '}
+                      </BusyButton>{' '}
                       <button className="btn btn-xs btn-ghost" onClick={() => setEditing({ ...s })}>
                         Edit
                       </button>{' '}
-                      <DeleteButton size="xs" onClick={() => onDelete(s)} />
+                      <DeleteButton size="xs" onClick={() => void onDelete(s)} busy={deleting.isPending(s.id)} />
                     </td>
                   </tr>
                 );
@@ -500,9 +513,9 @@ function SinkEditor({ sink, existing, onChange, onCancel, onSave, saving }: Sink
       </details>
 
       <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
-        <button className="btn btn-primary" onClick={onSave} disabled={saving}>
-          {saving ? 'Saving…' : isEdit ? 'Save Changes' : 'Create Sink'}
-        </button>
+        <BusyButton className="btn btn-primary" onClick={onSave} busy={saving} busyLabel="Saving…">
+          {isEdit ? 'Save Changes' : 'Create Sink'}
+        </BusyButton>
         <button className="btn btn-ghost" onClick={onCancel} disabled={saving}>
           Cancel
         </button>

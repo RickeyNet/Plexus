@@ -10,6 +10,7 @@ import {
 import { Callout } from '@/components/Callout';
 import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 
 interface Props {
   isOpen: boolean;
@@ -93,6 +94,15 @@ export function NewAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
     >
       <form id={formId} onSubmit={handleSubmit}>
         {runError && <Callout tone="danger">{runError}</Callout>}
+        {groups.isError && !groups.data && (
+          <QueryError what="inventory groups" query={groups} />
+        )}
+        {creds.isError && !creds.data && (
+          <QueryError what="credentials" query={creds} />
+        )}
+        {templates.isError && !templates.data && (
+          <QueryError what="templates" query={templates} />
+        )}
         <div className="form-group">
           <label className="form-label">Change Type</label>
           <select

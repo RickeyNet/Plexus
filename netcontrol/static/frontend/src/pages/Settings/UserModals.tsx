@@ -80,12 +80,13 @@ export function CreateUserModal({
   const [error, setError] = useState<string | null>(null);
 
   const passwordsMatch = password === confirm;
+  const saving = create.isPending || setGroups.isPending;
   const submitDisabled =
     !username.trim() ||
     username.trim().length < 3 ||
     password.length < 8 ||
     !passwordsMatch ||
-    create.isPending;
+    saving;
 
   return (
     <Modal
@@ -95,7 +96,9 @@ export function CreateUserModal({
       footer={
         <ModalActions
           onClose={onClose}
-          primaryLabel={create.isPending ? 'Creating…' : 'Create'}
+          primaryLabel="Create"
+          primaryBusy={saving}
+          primaryBusyLabel="Creating…"
           primaryDisabled={submitDisabled}
           onPrimary={() => {
             setError(null);
@@ -215,8 +218,9 @@ export function EditUserModal({
   const [neverExpires, setNeverExpires] = useState<boolean>(!!user.session_never_expires);
   const [error, setError] = useState<string | null>(null);
 
+  const saving = update.isPending || setGroups.isPending;
   const submitDisabled =
-    !username.trim() || username.trim().length < 3 || update.isPending;
+    !username.trim() || username.trim().length < 3 || saving;
 
   return (
     <Modal
@@ -226,7 +230,9 @@ export function EditUserModal({
       footer={
         <ModalActions
           onClose={onClose}
-          primaryLabel={update.isPending ? 'Saving…' : 'Save'}
+          primaryLabel="Save"
+          primaryBusy={saving}
+          primaryBusyLabel="Saving…"
           primaryDisabled={submitDisabled}
           onPrimary={() => {
             setError(null);
@@ -330,7 +336,9 @@ export function ResetPasswordModal({
       footer={
         <ModalActions
           onClose={onClose}
-          primaryLabel={reset.isPending ? 'Resetting…' : 'Reset Password'}
+          primaryLabel="Reset Password"
+          primaryBusy={reset.isPending}
+          primaryBusyLabel="Resetting…"
           primaryDisabled={submitDisabled}
           onPrimary={() => {
             setError(null);

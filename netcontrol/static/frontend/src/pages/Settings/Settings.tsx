@@ -5,6 +5,7 @@ import { Callout } from '@/components/Callout';
 import { LoadingState } from '@/components/LoadingState';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
+import { QueryError } from '@/components/QueryError';
 import { TabBar } from '@/components/TabBar';
 import { usePathTab } from '@/lib/usePathTab';
 
@@ -141,7 +142,22 @@ export function Settings() {
     );
   }
 
-  if (capabilities.isLoading) {
+  if (capabilities.isError && !capabilities.data) {
+    const status =
+      capabilities.error instanceof ApiError ? capabilities.error.status : null;
+    return (
+      <div>
+        <PageHeader title="Settings" />
+        {status === 401 || status === 403 ? (
+          <Callout tone="danger">Admin access is required to view settings.</Callout>
+        ) : (
+          <QueryError what="settings" query={capabilities} />
+        )}
+      </div>
+    );
+  }
+
+  if (!capabilities.data) {
     return (
       <div>
         <PageHeader title="Settings" />
@@ -150,22 +166,7 @@ export function Settings() {
     );
   }
 
-  if (capabilities.isError) {
-    const status =
-      capabilities.error instanceof ApiError ? capabilities.error.status : null;
-    const message =
-      status === 401 || status === 403
-        ? 'Admin access is required to view settings.'
-        : `Failed to load settings: ${(capabilities.error as Error).message}`;
-    return (
-      <div>
-        <PageHeader title="Settings" />
-        <Callout tone="danger">{message}</Callout>
-      </div>
-    );
-  }
-
-  const caps = capabilities.data!;
+  const caps = capabilities.data;
 
   return (
     <div>

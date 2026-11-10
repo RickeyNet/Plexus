@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router';
 
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
 import { Modal } from '@/components/Modal';
 import {
   useMonitoringPollHistory,
@@ -103,8 +104,11 @@ export function DevicesTab() {
         </div>
       )}
 
-      {polls.isPending && <LoadingState />}
-      {polls.error && <div style={{ color: 'var(--danger)' }}>Error: {(polls.error as Error).message}</div>}
+      {polls.error && !polls.data ? (
+        <QueryError what="poll results" query={polls} />
+      ) : (
+        polls.isPending && <LoadingState />
+      )}
       {polls.data && filtered.length === 0 && (
         <EmptyState message="No monitoring data - click Poll Now to begin." />
       )}
@@ -211,8 +215,11 @@ function HostHistoryModal({ hostId, hostname, onClose }: { hostId: number; hostn
   const history = useMonitoringPollHistory(hostId, 50);
   return (
     <Modal isOpen onClose={onClose} title={`${hostname} - Poll History`} size="medium">
-      {history.isPending && <LoadingState />}
-      {history.error && <div style={{ color: 'var(--danger)' }}>Error: {(history.error as Error).message}</div>}
+      {history.error && !history.data ? (
+        <QueryError what="poll history" query={history} />
+      ) : (
+        history.isPending && <LoadingState />
+      )}
       {history.data && (history.data.length === 0 ? (
         <EmptyState message="No history available" />
       ) : (

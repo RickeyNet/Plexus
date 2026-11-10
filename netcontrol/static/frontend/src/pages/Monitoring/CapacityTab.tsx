@@ -5,6 +5,7 @@ import { useInventoryGroups } from '@/api/compliance';
 import { useCapacityPlanning, type CapacityPlanningPoint } from '@/api/monitoring';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
 
 const METRIC_LABELS: Record<string, string> = {
   cpu_percent: 'CPU %',
@@ -61,8 +62,11 @@ export function CapacityTab() {
         </select>
       </div>
 
-      {data.isPending && <LoadingState />}
-      {data.error && <div style={{ color: 'var(--danger)' }}>Error: {(data.error as Error).message}</div>}
+      {data.error && !data.data ? (
+        <QueryError what="capacity data" query={data} />
+      ) : (
+        data.isPending && <LoadingState />
+      )}
 
       {data.data && points.length === 0 ? (
         <EmptyState message="No capacity data - run polls to collect metrics." />

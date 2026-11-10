@@ -1,7 +1,7 @@
 import { useState } from 'react';
 
 import { groupLabel } from '@/api/inventory';
-import { Callout } from '@/components/Callout';
+import { BusyButton } from '@/components/BusyButton';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -19,47 +19,31 @@ import {
   useUpsertStpRootPolicy,
 } from '@/api/settings';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import { SectionCard } from './SectionCard';
-
-function StatusLine({
-  status,
-}: {
-  status: { kind: 'success' | 'error'; message: string } | null;
-}) {
-  if (!status) return null;
-  return (
-    <div
-      className={status.kind === 'error' ? 'error' : ''}
-      style={{
-        marginTop: '0.5rem',
-        color: status.kind === 'error' ? undefined : 'var(--success)',
-      }}
-    >
-      {status.message}
-    </div>
-  );
-}
+import { FormStatus, StatusLine } from './StatusLine';
 
 function TopologyDiscoverySection() {
   const query = useTopologyDiscoveryConfig();
   const update = useUpdateTopologyDiscoveryConfig();
   const runNow = useRunTopologyDiscovery();
   const [draft, setDraft] = useState<TopologyDiscoveryConfig | null>(null);
-  const [status, setStatus] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+  const [status, setStatus] = useState<FormStatus | null>(null);
   const [prevData, setPrevData] = useState(query.data);
   if (query.data !== prevData) {
     setPrevData(query.data);
     if (query.data) setDraft(query.data);
   }
 
-  if (query.isLoading || !draft) return <LoadingState />;
-  if (query.isError)
-    return (
-      <Callout tone="danger">
-        Failed to load topology discovery: {(query.error as Error).message}
-      </Callout>
-    );
+  if (!draft) {
+    if (query.isError)
+      return (
+        <QueryError what="topology discovery" query={query} />
+      );
+    return <LoadingState />;
+  }
 
   return (
     <form
@@ -110,17 +94,18 @@ function TopologyDiscoverySection() {
         </div>
       </div>
       <div style={{ display: 'flex', gap: '0.5rem' }}>
-        <button
+        <BusyButton
           type="submit"
           className="btn btn-primary"
-          disabled={update.isPending}
+          busy={update.isPending}
+          busyLabel="Saving…"
         >
-          {update.isPending ? 'Saving…' : 'Save Schedule'}
-        </button>
-        <button
-          type="button"
+          Save Schedule
+        </BusyButton>
+        <BusyButton
           className="btn btn-secondary"
-          disabled={runNow.isPending}
+          busy={runNow.isPending}
+          busyLabel="Running…"
           onClick={() => {
             setStatus(null);
             runNow.mutate(undefined, {
@@ -140,8 +125,8 @@ function TopologyDiscoverySection() {
             });
           }}
         >
-          {runNow.isPending ? 'Running…' : 'Run Now'}
-        </button>
+          Run Now
+        </BusyButton>
       </div>
       <StatusLine status={status} />
     </form>
@@ -153,20 +138,20 @@ function StpDiscoverySection() {
   const update = useUpdateStpDiscoveryConfig();
   const runNow = useRunStpDiscovery();
   const [draft, setDraft] = useState<StpDiscoveryConfig | null>(null);
-  const [status, setStatus] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+  const [status, setStatus] = useState<FormStatus | null>(null);
   const [prevData, setPrevData] = useState(query.data);
   if (query.data !== prevData) {
     setPrevData(query.data);
     if (query.data) setDraft(query.data);
   }
 
-  if (query.isLoading || !draft) return <LoadingState />;
-  if (query.isError)
-    return (
-      <Callout tone="danger">
-        Failed to load STP discovery: {(query.error as Error).message}
-      </Callout>
-    );
+  if (!draft) {
+    if (query.isError)
+      return (
+        <QueryError what="STP discovery" query={query} />
+      );
+    return <LoadingState />;
+  }
 
   return (
     <form
@@ -255,17 +240,18 @@ function StpDiscoverySection() {
         </div>
       </div>
       <div style={{ display: 'flex', gap: '0.5rem' }}>
-        <button
+        <BusyButton
           type="submit"
           className="btn btn-primary"
-          disabled={update.isPending}
+          busy={update.isPending}
+          busyLabel="Saving…"
         >
-          {update.isPending ? 'Saving…' : 'Save Schedule'}
-        </button>
-        <button
-          type="button"
+          Save Schedule
+        </BusyButton>
+        <BusyButton
           className="btn btn-secondary"
-          disabled={runNow.isPending}
+          busy={runNow.isPending}
+          busyLabel="Running…"
           onClick={() => {
             setStatus(null);
             runNow.mutate(undefined, {
@@ -293,8 +279,8 @@ function StpDiscoverySection() {
             });
           }}
         >
-          {runNow.isPending ? 'Running…' : 'Run Now'}
-        </button>
+          Run Now
+        </BusyButton>
       </div>
       <StatusLine status={status} />
     </form>
@@ -307,13 +293,14 @@ function StpRootPoliciesSection() {
   const policies = useStpRootPolicies();
   const upsert = useUpsertStpRootPolicy();
   const remove = useDeleteStpRootPolicy();
+  const deleting = usePendingKeys<number>();
 
   const [groupId, setGroupId] = useState<number | ''>('');
   const [vlanId, setVlanId] = useState<number>(1);
   const [bridgeId, setBridgeId] = useState('');
   const [hostname, setHostname] = useState('');
   const [enabled, setEnabled] = useState(true);
-  const [status, setStatus] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+  const [status, setStatus] = useState<FormStatus | null>(null);
   const [prevGroups, setPrevGroups] = useState(groups.data);
   if (groups.data !== prevGroups) {
     setPrevGroups(groups.data);
@@ -324,6 +311,9 @@ function StpRootPoliciesSection() {
 
   return (
     <div>
+      {groups.isError && !groups.data && (
+        <QueryError what="inventory groups" query={groups} />
+      )}
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -419,24 +409,22 @@ function StpRootPoliciesSection() {
           </label>
         </div>
         <div>
-          <button
+          <BusyButton
             type="submit"
             className="btn btn-primary btn-sm"
-            disabled={upsert.isPending}
+            busy={upsert.isPending}
+            busyLabel="Saving…"
           >
-            {upsert.isPending ? 'Saving…' : 'Save Policy'}
-          </button>
+            Save Policy
+          </BusyButton>
         </div>
         <StatusLine status={status} />
       </form>
 
       <div className="stack stack-sm" style={{ marginTop: 'var(--space-4)' }}>
         {policies.isLoading && <LoadingState text="Loading policies…" />}
-        {policies.isError && (
-          <Callout tone="danger">
-            Failed to load STP root policies:{' '}
-            {(policies.error as Error).message}
-          </Callout>
+        {policies.isError && !policies.data && (
+          <QueryError what="STP root policies" query={policies} />
         )}
         {policies.data?.policies?.length === 0 && (
           <p className="card-description">No STP root policies defined yet.</p>
@@ -484,16 +472,19 @@ function StpRootPoliciesSection() {
                   {p.enabled ? 'Enabled' : 'Disabled'}
                 </span>
                 <DeleteButton
+                  busy={deleting.isPending(p.id)}
                   onClick={async () => {
                     if (!(await confirm({
                       title: 'Delete STP root policy',
                       message: `Delete the STP root policy for ${p.group_name || `Group ${p.group_id}`} · VLAN ${p.vlan_id}?`,
                       confirmLabel: 'Delete',
                     }))) return;
-                    remove.mutate(p.id, {
-                      onError: (e) => {
+                    await deleting.run(p.id, async () => {
+                      try {
+                        await remove.mutateAsync(p.id);
+                      } catch (e) {
                         void alert({ message: `Failed to delete: ${(e as Error).message}`, variant: 'error' });
-                      },
+                      }
                     });
                   }}
                 />

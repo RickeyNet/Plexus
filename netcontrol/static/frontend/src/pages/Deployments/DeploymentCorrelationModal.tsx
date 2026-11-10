@@ -1,9 +1,9 @@
 import { useMemo } from 'react';
 
 import { type DeploymentCorrelation, useDeploymentCorrelation } from '@/api/deployments';
-import { Callout } from '@/components/Callout';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import { formatBackendDateTime, formatBackendTime } from '@/lib/datetime';
 
 
@@ -37,12 +37,10 @@ export function DeploymentCorrelationModal({ isOpen, onClose, deploymentId }: Pr
         </button>
       }
     >
-      {query.isPending && <LoadingState />}
-      {query.error && (
-        <Callout tone="danger">
-          Failed to load: {(query.error as Error).message}
-        </Callout>
+      {query.isError && !query.data && (
+        <QueryError what="deployment correlation" query={query} />
       )}
+      {query.isPending && <LoadingState />}
       {query.data && <CorrelationBody data={query.data} />}
     </Modal>
   );

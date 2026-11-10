@@ -5,6 +5,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { useCredentials } from '@/api/compliance';
 import { useFetchGroupSerials, useFetchHostSerial } from '@/api/inventory';
@@ -104,7 +105,9 @@ export function SerialModal({ target, onClose }: Props) {
           </>
         )}
       </p>
-      {credentials.isPending ? (
+      {credentials.isError && !credentials.data ? (
+        <QueryError what="credentials" query={credentials} />
+      ) : credentials.isPending ? (
         <LoadingState text="Loading credentials…" />
       ) : list.length === 0 ? (
         <EmptyState compact message="No credentials configured. Add one under Settings → Credentials." />

@@ -27,7 +27,7 @@ const EXAMPLE = `[
 ]`;
 
 export function ImportAdvisoriesModal({ onClose }: Props) {
-  const { alert } = useDialogs();
+  const { alert, confirm } = useDialogs();
   const importAdvisories = useImportSoftwareAdvisories();
   const [text, setText] = useState('');
   const [problem, setProblem] = useState('');
@@ -43,6 +43,16 @@ export function ImportAdvisoriesModal({ onClose }: Props) {
     }
     setProblem('');
     setSaveError(null);
+    const count = parsed.advisories.length;
+    if (
+      !(await confirm({
+        title: 'Import advisories',
+        message: `Import ${count} advisor${count === 1 ? 'y' : 'ies'}? Any with the same ID as a stored advisory replace it.`,
+        confirmLabel: 'Import',
+        confirmVariant: 'primary',
+      }))
+    )
+      return;
     try {
       const res = await importAdvisories.mutateAsync(parsed.advisories);
       void alert(`Imported ${res.imported} advisor${res.imported === 1 ? 'y' : 'ies'}.`);

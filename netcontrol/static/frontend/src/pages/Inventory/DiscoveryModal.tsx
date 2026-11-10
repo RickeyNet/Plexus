@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useId, useRef, useState } from 'react';
 import { useAuthStatus } from '@/api/auth';
 import { Callout } from '@/components/Callout';
 import { CredentialSelect } from '@/components/CredentialSelect';
+import { useDialogs } from '@/components/DialogProvider-context';
 import { Modal } from '@/components/Modal';
 import {
   type DiscoveredHost,
@@ -63,6 +64,7 @@ interface ScanState {
 export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
   const isSync = mode === 'sync';
   const isGlobal = mode === 'global';
+  const { confirm } = useDialogs();
   const onboard = useOnboardDiscoveredHosts();
   const testSnmp = useTestGroupSnmpProfile();
   const isAdmin = useAuthStatus().data?.role === 'admin';
@@ -175,6 +177,22 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
     if (parsedCidrs.length === 0 && !isSync) {
       setError('At least one CIDR target is required.');
       return;
+    }
+
+    if (isSync && removeAbsent) {
+      const hostCount = group?.hosts?.length ?? 0;
+      const groupName = group ? groupLabel(group) : 'this group';
+      if (
+        !(await confirm({
+          title: 'Run sync and remove hosts',
+          message:
+            `Hosts in "${groupName}" that this scan does not find will be deleted from inventory. ` +
+            `The group has ${hostCount} host${hostCount === 1 ? '' : 's'}; any of them that do not answer are removed. ` +
+            'This cannot be undone.',
+          confirmLabel: 'Run Sync',
+        }))
+      )
+        return;
     }
 
     // Scan and sync both stream live per-host progress; sync ends with a

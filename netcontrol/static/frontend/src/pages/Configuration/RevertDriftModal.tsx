@@ -5,6 +5,7 @@ import { useRevertDriftEvent } from '@/api/configuration';
 import { Callout } from '@/components/Callout';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 
 interface Props {
   eventId: number | null;
@@ -63,6 +64,9 @@ export function RevertDriftModal({ eventId, onClose, onJobStarted }: Props) {
         overwriting any unauthorized changes. The device will be re-captured
         afterward to verify compliance.
       </p>
+      {creds.isError && !creds.data && (
+        <QueryError what="credentials" query={creds} />
+      )}
       {creds.isPending && <LoadingState text="Loading credentials…" />}
       {creds.data && (
         <div className="form-group" style={{ marginBottom: '1rem' }}>

@@ -7,12 +7,15 @@ import {
   useConfigDriftSummary,
   useUpdateDriftEventStatus,
 } from '@/api/configuration';
-import { Callout } from '@/components/Callout';
+import { BusyButton } from '@/components/BusyButton';
+import { useDialogs } from '@/components/DialogProvider-context';
 import { LoadingState } from '@/components/LoadingState';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
+import { QueryError } from '@/components/QueryError';
 import { SegmentedControl } from '@/components/SegmentedControl';
 import { SummaryStrip } from '@/components/SummaryStrip';
 import { formatBackendDateTime } from '@/lib/datetime';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import { CaptureSnapshotModal } from './CaptureSnapshotModal';
 import { DriftDiffModal } from './DriftDiffModal';
@@ -48,6 +51,9 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
   const events = useConfigDriftEvents(statusFilter);
   const updateStatus = useUpdateDriftEventStatus();
   const bulkAccept = useBulkAcceptDriftEvents();
+  const { confirm, alert } = useDialogs();
+  const pending = usePendingKeys<string>();
+  const isEventBusy = (id: number) => pending.isPending(`event:${id}`);
 
   const [diffEventId, setDiffEventId] = useState<number | null>(null);
   const [logEventId, setLogEventId] = useState<number | null>(null);
@@ -66,6 +72,67 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
   );
 
   const groups = useMemo(() => groupDriftEvents(filtered), [filtered]);
+
+  const showError = (e: unknown) => void alert({ message: (e as Error).message, variant: 'error' });
+
+  const setEventStatus = (id: number, status: 'accepted' | 'resolved') =>
+    pending.run(`event:${id}`, async () => {
+      try {
+        await updateStatus.mutateAsync({ id, status });
+      } catch (e) {
+        showError(e);
+      }
+    });
+
+  const acceptMany = async (key: string, ids: number[], scope: string) => {
+    if (
+      !(await confirm({
+        title: 'Accept drift events',
+        message: `Accept ${ids.length} open drift event(s) ${scope}? The current running config of each device becomes its new baseline, so these changes stop being reported as drift.`,
+        confirmLabel: `Accept ${ids.length}`,
+        confirmVariant: 'primary',
+      }))
+    )
+      return;
+    await pending.run(key, async () => {
+      try {
+        await bulkAccept.mutateAsync(ids);
+      } catch (e) {
+        showError(e);
+      }
+    });
+  };
+
+  const resolveAll = async () => {
+    const ids = openIds;
+    if (
+      !(await confirm({
+        title: 'Resolve drift events',
+        message: `Mark ${ids.length} open drift event(s) in this list as resolved? The baselines stay as they are; use this when the devices are already back in line with them.`,
+        confirmLabel: `Resolve ${ids.length}`,
+        confirmVariant: 'primary',
+      }))
+    )
+      return;
+    await pending.run('resolve-all', async () => {
+      let failed = 0;
+      let lastError = '';
+      for (const id of ids) {
+        try {
+          await updateStatus.mutateAsync({ id, status: 'resolved' });
+        } catch (e) {
+          failed++;
+          lastError = (e as Error).message;
+        }
+      }
+      if (failed > 0) {
+        void alert({
+          message: `${failed} of ${ids.length} drift event(s) could not be resolved: ${lastError}`,
+          variant: 'error',
+        });
+      }
+    });
+  };
 
   return (
     <>
@@ -112,38 +179,32 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
           </button>
           {openIds.length > 1 && (
             <>
-              <button
-                type="button"
+              <BusyButton
                 className="btn btn-sm btn-primary"
-                disabled={bulkAccept.isPending}
-                onClick={() => bulkAccept.mutate(openIds)}
+                busy={pending.isPending('accept-all')}
+                disabled={pending.isPending('resolve-all')}
+                onClick={() => void acceptMany('accept-all', openIds, 'in this list')}
               >
                 Accept All Open ({openIds.length})
-              </button>
-              <button
-                type="button"
+              </BusyButton>
+              <BusyButton
                 className="btn btn-sm btn-secondary"
-                disabled={updateStatus.isPending}
-                onClick={() => {
-                  for (const id of openIds) {
-                    updateStatus.mutate({ id, status: 'resolved' });
-                  }
-                }}
+                busy={pending.isPending('resolve-all')}
+                disabled={pending.isPending('accept-all')}
+                onClick={() => void resolveAll()}
               >
                 Resolve All Open ({openIds.length})
-              </button>
+              </BusyButton>
             </>
           )}
         </div>
       </div>
 
-      {events.isPending && <LoadingState text="Loading drift events…" />}
-      {events.error && (
-        <Callout tone="danger">
-          Failed to load: {(events.error as Error).message}
-        </Callout>
+      {events.isError && !events.data && (
+        <QueryError what="drift events" query={events} />
       )}
-      {!events.isPending && !filtered.length && (
+      {events.isPending && <LoadingState text="Loading drift events…" />}
+      {events.data && !filtered.length && (
         <p className="text-muted">
           {events.data?.length
             ? 'No matching drift events.'
@@ -158,31 +219,28 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
                 <DriftGroupCard
                   key={group.representative_id}
                   group={group}
+                  isEventBusy={isEventBusy}
+                  isGroupBusy={pending.isPending(`group:${group.representative_id}`)}
                   onShowDiff={(id) => setDiffEventId(id)}
                   onShowLog={(id) => setLogEventId(id)}
                   onShowRevert={(id) => setRevertEventId(id)}
-                  onAccept={(id) =>
-                    updateStatus.mutate({ id, status: 'accepted' })
+                  onAccept={(id) => void setEventStatus(id, 'accepted')}
+                  onResolve={(id) => void setEventStatus(id, 'resolved')}
+                  onAcceptGroup={(ids) =>
+                    void acceptMany(`group:${group.representative_id}`, ids, 'with identical changes')
                   }
-                  onResolve={(id) =>
-                    updateStatus.mutate({ id, status: 'resolved' })
-                  }
-                  onAcceptGroup={(ids) => bulkAccept.mutate(ids)}
                 />
               ))
             : filtered.map((ev) => (
                 <DriftEventCard
                   key={ev.id}
                   ev={ev}
+                  isBusy={isEventBusy(ev.id)}
                   onShowDiff={(id) => setDiffEventId(id)}
                   onShowLog={(id) => setLogEventId(id)}
                   onShowRevert={(id) => setRevertEventId(id)}
-                  onAccept={(id) =>
-                    updateStatus.mutate({ id, status: 'accepted' })
-                  }
-                  onResolve={(id) =>
-                    updateStatus.mutate({ id, status: 'resolved' })
-                  }
+                  onAccept={(id) => void setEventStatus(id, 'accepted')}
+                  onResolve={(id) => void setEventStatus(id, 'resolved')}
                 />
               ))}
         </div>
@@ -237,6 +295,8 @@ interface CardProps {
   ev: ConfigDriftEvent;
   /** Rendered inside a group card, so it is an inset panel, not a second card. */
   inset?: boolean;
+  /** An accept or resolve of this event is in flight. */
+  isBusy: boolean;
   onShowDiff: (id: number) => void;
   onShowLog: (id: number) => void;
   onShowRevert: (id: number) => void;
@@ -247,6 +307,7 @@ interface CardProps {
 function DriftEventCard({
   ev,
   inset = false,
+  isBusy,
   onShowDiff,
   onShowLog,
   onShowRevert,
@@ -316,8 +377,12 @@ function DriftEventCard({
           <MenuItem onSelect={() => onShowLog(ev.id)}>Event Log</MenuItem>
           {ev.status === 'open' && (
             <>
-              <MenuItem onSelect={() => onAccept(ev.id)}>Accept</MenuItem>
-              <MenuItem onSelect={() => onResolve(ev.id)}>Resolve</MenuItem>
+              <MenuItem disabled={isBusy} onSelect={() => onAccept(ev.id)}>
+                Accept
+              </MenuItem>
+              <MenuItem disabled={isBusy} onSelect={() => onResolve(ev.id)}>
+                Resolve
+              </MenuItem>
               <MenuSeparator />
               <MenuItem danger onSelect={() => onShowRevert(ev.id)}>
                 Revert
@@ -325,6 +390,7 @@ function DriftEventCard({
             </>
           )}
         </KebabMenu>
+        {isBusy && <LoadingState variant="inline" text="Updating…" />}
       </div>
     </div>
   );
@@ -332,6 +398,9 @@ function DriftEventCard({
 
 interface GroupCardProps {
   group: DriftGroup;
+  isEventBusy: (id: number) => boolean;
+  /** Accept Group is in flight for this group. */
+  isGroupBusy: boolean;
   onShowDiff: (id: number) => void;
   onShowLog: (id: number) => void;
   onShowRevert: (id: number) => void;
@@ -342,6 +411,8 @@ interface GroupCardProps {
 
 function DriftGroupCard({
   group,
+  isEventBusy,
+  isGroupBusy,
   onShowDiff,
   onShowLog,
   onShowRevert,
@@ -401,28 +472,30 @@ function DriftGroupCard({
         </div>
         <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', alignItems: 'center' }}>
           {openInGroup.length > 1 ? (
-            <button
-              type="button"
+            <BusyButton
               className="btn btn-sm btn-primary"
+              busy={isGroupBusy}
               onClick={() => onAcceptGroup(openInGroup)}
             >
               Accept Group ({openInGroup.length})
-            </button>
+            </BusyButton>
           ) : openInGroup.length === 1 ? (
-            <button
-              type="button"
+            <BusyButton
               className="btn btn-sm btn-primary"
+              busy={isEventBusy(openInGroup[0])}
               onClick={() => onAccept(openInGroup[0])}
             >
               Accept
-            </button>
+            </BusyButton>
           ) : null}
           {evs.length === 1 && (
             <KebabMenu label={`Actions for ${evs[0].hostname || evs[0].ip_address || 'drift event'}`}>
               <MenuItem onSelect={() => onShowLog(evs[0].id)}>Event Log</MenuItem>
               {openInGroup.length === 1 && (
                 <>
-                  <MenuItem onSelect={() => onResolve(evs[0].id)}>Resolve</MenuItem>
+                  <MenuItem disabled={isEventBusy(evs[0].id)} onSelect={() => onResolve(evs[0].id)}>
+                    Resolve
+                  </MenuItem>
                   <MenuSeparator />
                   <MenuItem danger onSelect={() => onShowRevert(evs[0].id)}>
                     Revert
@@ -522,6 +595,7 @@ function DriftGroupCard({
                   key={ev.id}
                   ev={ev}
                   inset
+                  isBusy={isEventBusy(ev.id)}
                   onShowDiff={onShowDiff}
                   onShowLog={onShowLog}
                   onShowRevert={onShowRevert}

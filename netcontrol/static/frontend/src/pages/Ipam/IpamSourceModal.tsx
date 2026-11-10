@@ -3,6 +3,7 @@ import { FormEvent, useId, useState } from 'react';
 import { Callout } from '@/components/Callout';
 import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import {
   type IpamSource,
   type IpamSourcePayload,
@@ -119,6 +120,9 @@ export function IpamSourceModal({ source, onClose }: Props) {
             ))}
           </select>
           <FieldError>{errors.provider}</FieldError>
+          {providers.isError && !providers.data && (
+            <QueryError what="IPAM providers" query={providers} />
+          )}
         </div>
         <div className="form-group">
           <label className="form-label">Name</label>

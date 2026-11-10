@@ -10,6 +10,7 @@ import { Callout } from '@/components/Callout';
 import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import {
   useCreatePlaybook,
   usePlaybook,
@@ -160,6 +161,7 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
   const pending = createMut.isPending || updateMut.isPending;
   const extHint = type === 'ansible' ? 'Must end with .yml or .yaml' : 'Must end with .py';
 
+  const loadFailed = mode === 'edit' && detailQuery.error != null && !detailQuery.data;
   const loading = mode === 'edit' && detailQuery.isPending;
 
   return (
@@ -171,7 +173,7 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
       footer={
         <>
           <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          {!loading && (
+          {!loading && !loadFailed && (
             <button type="submit" form={formId} className="btn btn-primary" disabled={pending}>
               {pending ? 'Saving…' : mode === 'edit' ? 'Save' : 'Create'}
             </button>
@@ -179,7 +181,9 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
         </>
       }
     >
-      {loading ? (
+      {loadFailed ? (
+        <QueryError what="playbook" query={detailQuery} />
+      ) : loading ? (
         <LoadingState />
       ) : (
         <form id={formId} onSubmit={handleSubmit}>

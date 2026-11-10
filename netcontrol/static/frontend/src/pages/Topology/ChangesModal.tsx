@@ -5,10 +5,13 @@ import {
   useAcknowledgeTopologyChanges,
   type TopologyChange,
 } from '@/api/topology';
+import { BusyButton } from '@/components/BusyButton';
 import { Callout } from '@/components/Callout';
+import { useDialogs } from '@/components/DialogProvider-context';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import { formatBackendDateTime } from '@/lib/datetime';
 
 interface Props {
@@ -28,7 +31,10 @@ const PROTO_LABEL: Record<string, string> = {
 export function ChangesModal({ isOpen, onClose, onAcknowledged }: Props) {
   const [changes, setChanges] = useState<TopologyChange[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<Error | null>(null);
+  const [ackError, setAckError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const { confirm } = useDialogs();
   const ack = useAcknowledgeTopologyChanges();
 
   const [prevOpen, setPrevOpen] = useState(isOpen);
@@ -36,8 +42,15 @@ export function ChangesModal({ isOpen, onClose, onAcknowledged }: Props) {
     setPrevOpen(isOpen);
     if (isOpen) {
       setLoading(true);
-      setError(null);
+      setLoadError(null);
+      setAckError(null);
     }
+  }
+
+  function reload() {
+    setLoading(true);
+    setLoadError(null);
+    setReloadKey((k) => k + 1);
   }
 
   useEffect(() => {
@@ -49,7 +62,7 @@ export function ChangesModal({ isOpen, onClose, onAcknowledged }: Props) {
         setChanges(r.changes ?? []);
       })
       .catch((e: Error) => {
-        if (!cancelled) setError(e.message);
+        if (!cancelled) setLoadError(e);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -57,34 +70,44 @@ export function ChangesModal({ isOpen, onClose, onAcknowledged }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [isOpen]);
+  }, [isOpen, reloadKey]);
 
   async function handleAck() {
+    const count = changes.length >= 200 ? `${changes.length} or more` : String(changes.length);
+    const ok = await confirm({
+      title: 'Acknowledge topology changes',
+      message: `Acknowledge all ${count} unacknowledged topology change${changes.length === 1 ? '' : 's'}?`,
+      confirmLabel: 'Acknowledge all',
+      confirmVariant: 'primary',
+    });
+    if (!ok) return;
+    setAckError(null);
     try {
       await ack.mutateAsync();
       onAcknowledged();
       onClose();
     } catch (e) {
-      setError((e as Error).message);
+      setAckError((e as Error).message);
     }
   }
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Topology Changes">
       {loading && <LoadingState />}
-      {error && <Callout tone="danger">Error: {error}</Callout>}
-      {!loading && !changes.length && (
+      {loadError && <QueryError what="topology changes" error={loadError} onRetry={reload} />}
+      {ackError && <Callout tone="danger">Failed to acknowledge: {ackError}</Callout>}
+      {!loading && !loadError && !changes.length && (
         <EmptyState compact message="No topology changes recorded." />
       )}
-      {!loading && changes.length > 0 && (
+      {!loading && !loadError && changes.length > 0 && (
         <>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
             <span className="text-muted" style={{ fontSize: '0.85rem' }}>
               {changes.length} change{changes.length !== 1 ? 's' : ''} detected
             </span>
-            <button className="btn btn-secondary btn-sm" onClick={handleAck} disabled={ack.isPending}>
-              {ack.isPending ? 'Acknowledging…' : 'Acknowledge All'}
-            </button>
+            <BusyButton className="btn btn-secondary btn-sm" busy={ack.isPending} busyLabel="Acknowledging…" onClick={() => void handleAck()}>
+              Acknowledge All
+            </BusyButton>
           </div>
           <div style={{ maxHeight: '420px', overflowY: 'auto' }}>
             {changes.map((c, i) => {

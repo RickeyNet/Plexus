@@ -32,13 +32,14 @@ import {
   isInventoryCollectionResult,
 } from "@/api/meraki";
 import { StatusBadge } from "@/components/Badge";
-import { Callout } from "@/components/Callout";
 import { DeleteButton } from "@/components/DeleteButton";
 import { useDialogs } from "@/components/DialogProvider-context";
 import { EmptyState } from "@/components/EmptyState";
 import { LoadingState } from "@/components/LoadingState";
 import { Modal } from "@/components/Modal";
+import { QueryError } from "@/components/QueryError";
 import { formatBackendDateTime } from "@/lib/datetime";
+import { usePendingKeys } from "@/lib/usePendingKeys";
 
 import {
   providerLabel,
@@ -137,7 +138,7 @@ export function SourcesModal({
   groupId = null,
 }: Props) {
   const qc = useQueryClient();
-  const { alert } = useDialogs();
+  const { alert, confirm } = useDialogs();
   const { data: auth } = useAuthStatus();
   const isAdmin = auth?.role === "admin";
   const canWrite =
@@ -296,6 +297,15 @@ export function SourcesModal({
   const handleCollectAll = async () => {
     const targets = (sources.data?.sources ?? []).filter(inCollectAll);
     if (targets.length === 0) return;
+    if (
+      !(await confirm({
+        title: "Collect all sources",
+        message: `Collect from all ${targets.length} source${targets.length === 1 ? "" : "s"} now?\n\n${targets.map((s) => s.name).join("\n")}`,
+        confirmLabel: "Collect all",
+        confirmVariant: "primary",
+      }))
+    )
+      return;
     setAllBusy(true);
     setAllNote(null);
     setJobId(null);
@@ -387,7 +397,7 @@ export function SourcesModal({
                 className="btn btn-primary btn-sm"
                 disabled={allBusy || !anyCollectable}
                 title="Collect from every source you are allowed to collect from"
-                onClick={handleCollectAll}
+                onClick={() => void handleCollectAll()}
               >
                 {allBusy ? "Collecting…" : "Collect All"}
               </button>
@@ -537,11 +547,10 @@ export function SourcesModal({
           </div>
         )}
 
-        {sources.isPending && <LoadingState text="Loading sources…" />}
-        {sources.error && (
-          <Callout tone="danger">
-            <strong>Failed to load sources:</strong> {sources.error.message}
-          </Callout>
+        {sources.error && !sources.data ? (
+          <QueryError what="sources" query={sources} />
+        ) : (
+          sources.isPending && <LoadingState text="Loading sources…" />
         )}
         {sources.data && (
           <table className="data-table">
@@ -628,11 +637,10 @@ export function SourcesModal({
         Collection history (Meraki, Cato, Cisco FMC, Palo Alto Panorama and
         Appgate SDP)
       </h4>
-      {snapshots.isPending && <LoadingState text="Loading history…" />}
-      {snapshots.error && (
-        <Callout tone="danger">
-          <strong>Failed to load history:</strong> {snapshots.error.message}
-        </Callout>
+      {snapshots.error && !snapshots.data ? (
+        <QueryError what="collection history" query={snapshots} />
+      ) : (
+        snapshots.isPending && <LoadingState text="Loading history…" />
       )}
       {snapshots.data && (
         <SnapshotTable
@@ -1194,6 +1202,7 @@ function SnapshotTable({
 }) {
   const { confirm, alert } = useDialogs();
   const remove = useDeleteMerakiSnapshot();
+  const deleting = usePendingKeys<number>();
 
   if (snapshots.length === 0) {
     return <EmptyState compact message="Nothing collected yet." />;
@@ -1215,14 +1224,16 @@ function SnapshotTable({
       }))
     )
       return;
-    try {
-      await remove.mutateAsync(snapshot.id);
-    } catch (err) {
-      void alert({
-        message: `Delete failed: ${errorText(err)}`,
-        variant: "error",
-      });
-    }
+    await deleting.run(snapshot.id, async () => {
+      try {
+        await remove.mutateAsync(snapshot.id);
+      } catch (err) {
+        void alert({
+          message: `Delete failed: ${errorText(err)}`,
+          variant: "error",
+        });
+      }
+    });
   };
 
   return (
@@ -1273,7 +1284,7 @@ function SnapshotTable({
             </td>
             <td>
               {canWrite && (
-                <DeleteButton disabled={remove.isPending} onClick={() => handleDelete(s)} />
+                <DeleteButton busy={deleting.isPending(s.id)} onClick={() => void handleDelete(s)} />
               )}
             </td>
           </tr>
@@ -1305,11 +1316,10 @@ function WarningsModal({
         of the map was built; what these calls would have added (users, subnets,
         WAN links...) is missing from it.
       </p>
-      {warnings.isPending && <LoadingState text="Loading warnings…" />}
-      {warnings.error && (
-        <Callout tone="danger">
-          <strong>Failed to load warnings:</strong> {warnings.error.message}
-        </Callout>
+      {warnings.error && !warnings.data ? (
+        <QueryError what="collection warnings" query={warnings} />
+      ) : (
+        warnings.isPending && <LoadingState text="Loading warnings…" />
       )}
       {warnings.data && rows.length === 0 && (
         <EmptyState compact message="No warnings recorded." />

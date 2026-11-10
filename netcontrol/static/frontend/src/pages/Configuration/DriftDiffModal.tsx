@@ -2,9 +2,11 @@ import {
   useConfigDriftEvent,
   useUpdateDriftEventStatus,
 } from '@/api/configuration';
-import { Callout } from '@/components/Callout';
+import { BusyButton } from '@/components/BusyButton';
+import { useDialogs } from '@/components/DialogProvider-context';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import { formatBackendDateTime } from '@/lib/datetime';
 
 import { UnifiedDiff } from './UnifiedDiff';
@@ -24,7 +26,18 @@ export function DriftDiffModal({
 }: Props) {
   const query = useConfigDriftEvent(eventId);
   const update = useUpdateDriftEventStatus();
+  const { alert } = useDialogs();
   const ev = query.data;
+  const busyStatus = update.isPending ? update.variables?.status : undefined;
+
+  const setStatus = (id: number, status: 'accepted' | 'resolved') =>
+    update.mutate(
+      { id, status },
+      {
+        onSuccess: onClose,
+        onError: (e) => void alert({ message: (e as Error).message, variant: 'error' }),
+      },
+    );
   const title = ev
     ? `Configuration Diff - ${ev.hostname || ''}`
     : 'Configuration Diff';
@@ -54,19 +67,14 @@ export function DriftDiffModal({
           )}
           {ev?.status === 'open' && (
             <>
-              <button
-                type="button"
+              <BusyButton
                 className="btn btn-secondary"
+                busy={busyStatus === 'resolved'}
                 disabled={update.isPending}
-                onClick={() => {
-                  update.mutate(
-                    { id: ev.id, status: 'resolved' },
-                    { onSuccess: onClose },
-                  );
-                }}
+                onClick={() => setStatus(ev.id, 'resolved')}
               >
                 Resolve
-              </button>
+              </BusyButton>
               <button
                 type="button"
                 className="btn btn-danger"
@@ -77,30 +85,23 @@ export function DriftDiffModal({
               >
                 Revert
               </button>
-              <button
-                type="button"
+              <BusyButton
                 className="btn btn-primary"
+                busy={busyStatus === 'accepted'}
                 disabled={update.isPending}
-                onClick={() => {
-                  update.mutate(
-                    { id: ev.id, status: 'accepted' },
-                    { onSuccess: onClose },
-                  );
-                }}
+                onClick={() => setStatus(ev.id, 'accepted')}
               >
                 Accept
-              </button>
+              </BusyButton>
             </>
           )}
         </>
       }
     >
-      {query.isPending && <LoadingState />}
-      {query.error && (
-        <Callout tone="danger">
-          Failed to load: {(query.error as Error).message}
-        </Callout>
+      {query.isError && !ev && (
+        <QueryError what="the drift event" query={query} />
       )}
+      {query.isPending && <LoadingState />}
       {ev && (
         <>
           <div

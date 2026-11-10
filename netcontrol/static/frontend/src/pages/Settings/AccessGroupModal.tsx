@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { BusyButton } from '@/components/BusyButton';
 import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
 import {
@@ -49,7 +50,7 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
   const [error, setError] = useState<string | null>(null);
 
   const pending = isEdit ? update.isPending : create.isPending;
-  const submitDisabled = name.trim().length < 2 || pending;
+  const submitDisabled = name.trim().length < 2;
   const featureSet = new Set(featureKeys);
 
   return (
@@ -62,9 +63,10 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
           <button type="button" className="btn btn-secondary" onClick={props.onClose}>
             Cancel
           </button>
-          <button
-            type="button"
+          <BusyButton
             className="btn btn-primary"
+            busy={pending}
+            busyLabel="Saving…"
             disabled={submitDisabled}
             onClick={() => {
               setError(null);
@@ -84,8 +86,8 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
               }
             }}
           >
-            {pending ? 'Saving…' : isEdit ? 'Save' : 'Create Group'}
-          </button>
+            {isEdit ? 'Save' : 'Create Group'}
+          </BusyButton>
         </>
       }
     >

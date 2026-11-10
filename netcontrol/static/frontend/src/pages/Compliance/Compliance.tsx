@@ -19,17 +19,20 @@ import {
   useUpdateAssignment,
 } from '@/api/compliance';
 import { SeverityBadge } from '@/components/Badge';
+import { BusyButton } from '@/components/BusyButton';
 import { DeleteButton } from '@/components/DeleteButton';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
+import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { SummaryStrip } from '@/components/SummaryStrip';
 import { TabBar } from '@/components/TabBar';
 import { complianceStatusTone, toneColor } from '@/lib/severity';
 import { visibleTabs } from '@/lib/tabGating';
 import { usePathTab } from '@/lib/usePathTab';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import { AuditContent } from '@/pages/Audit/Audit';
 import { formatBackendDateTime, parseBackendDate } from '@/lib/datetime';
@@ -194,33 +197,45 @@ export function Compliance() {
       <PageHelp pageKey={`compliance.${shownTab}`} title={TAB_HELP[shownTab].title} text={TAB_HELP[shownTab].text} />
 
       <div className="stack stack-sm">
-        {shownTab === 'profiles' && (
-          <ProfilesTab
-            profiles={profiles.data || []}
-            loading={profiles.isLoading}
-            query={query}
-            onEdit={setEditProfileId}
-            onAssign={setAssignProfileId}
-          />
-        )}
-        {shownTab === 'assignments' && (
-          <AssignmentsTab
-            assignments={assignments.data || []}
-            loading={assignments.isLoading}
-            query={query}
-          />
-        )}
-        {shownTab === 'results' && (
-          <ResultsTab
-            results={results.data || []}
-            loading={results.isLoading}
-            query={query}
-            onShowFindings={setFindingsResultId}
-          />
-        )}
-        {shownTab === 'status' && (
-          <StatusTab status={status.data || []} loading={status.isLoading} query={query} />
-        )}
+        {shownTab === 'profiles' &&
+          (profiles.isError && !profiles.data ? (
+            <QueryError what="compliance profiles" query={profiles} />
+          ) : (
+            <ProfilesTab
+              profiles={profiles.data || []}
+              loading={profiles.isLoading}
+              query={query}
+              onEdit={setEditProfileId}
+              onAssign={setAssignProfileId}
+            />
+          ))}
+        {shownTab === 'assignments' &&
+          (assignments.isError && !assignments.data ? (
+            <QueryError what="compliance assignments" query={assignments} />
+          ) : (
+            <AssignmentsTab
+              assignments={assignments.data || []}
+              loading={assignments.isLoading}
+              query={query}
+            />
+          ))}
+        {shownTab === 'results' &&
+          (results.isError && !results.data ? (
+            <QueryError what="scan results" query={results} />
+          ) : (
+            <ResultsTab
+              results={results.data || []}
+              loading={results.isLoading}
+              query={query}
+              onShowFindings={setFindingsResultId}
+            />
+          ))}
+        {shownTab === 'status' &&
+          (status.isError && !status.data ? (
+            <QueryError what="host compliance status" query={status} />
+          ) : (
+            <StatusTab status={status.data || []} loading={status.isLoading} query={query} />
+          ))}
         {shownTab === 'meraki' && <MerakiTab query={query} />}
         {shownTab === 'audit' && <AuditContent />}
       </div>
@@ -294,6 +309,7 @@ function ProfilesTab({
 }) {
   const { confirm, alert } = useDialogs();
   const remove = useDeleteProfile();
+  const deleting = usePendingKeys<number>();
   const filtered = useMemo(() => {
     if (!query.trim()) return profiles;
     const q = query.toLowerCase();
@@ -352,6 +368,7 @@ function ProfilesTab({
                   Assign
                 </button>
                 <DeleteButton
+                  busy={deleting.isPending(p.id)}
                   onClick={async () => {
                     if (
                       await confirm({
@@ -360,13 +377,16 @@ function ProfilesTab({
                         confirmLabel: 'Delete',
                       })
                     ) {
-                      remove.mutate(p.id, {
-                        onError: (e) =>
+                      await deleting.run(p.id, async () => {
+                        try {
+                          await remove.mutateAsync(p.id);
+                        } catch (e) {
                           void alert({
                             title: 'Delete failed',
                             message: (e as Error).message,
                             variant: 'error',
-                          }),
+                          });
+                        }
                       });
                     }
                   }}
@@ -415,6 +435,7 @@ function AssignmentsTab({
   const toggle = useUpdateAssignment();
   const remove = useDeleteAssignment();
   const scanNow = useScanAssignmentNow();
+  const pending = usePendingKeys<string>();
 
   const filtered = useMemo(() => {
     if (!query.trim()) return assignments;
@@ -461,9 +482,11 @@ function AssignmentsTab({
                 </span>
               </div>
               <div style={{ display: 'flex', gap: '0.4rem' }}>
-                <button
+                <BusyButton
                   className="btn btn-sm btn-primary"
                   title="Scan all hosts in this assignment now"
+                  busy={pending.isPending(`scan:${a.id}`)}
+                  busyLabel="Scanning…"
                   onClick={async () => {
                     if (
                       await confirm({
@@ -473,8 +496,9 @@ function AssignmentsTab({
                         confirmVariant: 'primary',
                       })
                     ) {
-                      scanNow.mutate(a.id, {
-                        onSuccess: (res) => {
+                      await pending.run(`scan:${a.id}`, async () => {
+                        try {
+                          const res = await scanNow.mutateAsync(a.id);
                           if (res.violations > 0) {
                             void alert({
                               title: 'Scan complete',
@@ -491,39 +515,40 @@ function AssignmentsTab({
                               message: `${res.hosts_scanned} hosts scanned - all compliant!`,
                             });
                           }
-                        },
-                        onError: (e) =>
+                        } catch (e) {
                           void alert({
                             title: 'Scan failed',
                             message: `Assignment scan failed: ${(e as Error).message}`,
                             variant: 'error',
-                          }),
+                          });
+                        }
                       });
                     }
                   }}
-                  disabled={scanNow.isPending}
                 >
-                  {scanNow.isPending ? 'Scanning…' : 'Scan Now'}
-                </button>
-                <button
+                  Scan Now
+                </BusyButton>
+                <BusyButton
                   className="btn btn-sm btn-secondary"
+                  busy={pending.isPending(`toggle:${a.id}`)}
                   onClick={() =>
-                    toggle.mutate(
-                      { id: a.id, data: { enabled: !a.enabled } },
-                      {
-                        onError: (e) =>
-                          void alert({
-                            title: 'Update failed',
-                            message: (e as Error).message,
-                            variant: 'error',
-                          }),
-                      },
-                    )
+                    void pending.run(`toggle:${a.id}`, async () => {
+                      try {
+                        await toggle.mutateAsync({ id: a.id, data: { enabled: !a.enabled } });
+                      } catch (e) {
+                        void alert({
+                          title: 'Update failed',
+                          message: (e as Error).message,
+                          variant: 'error',
+                        });
+                      }
+                    })
                   }
                 >
                   {a.enabled ? 'Disable' : 'Enable'}
-                </button>
+                </BusyButton>
                 <DeleteButton
+                  busy={pending.isPending(`delete:${a.id}`)}
                   onClick={async () => {
                     if (
                       await confirm({
@@ -532,13 +557,16 @@ function AssignmentsTab({
                         confirmLabel: 'Delete',
                       })
                     ) {
-                      remove.mutate(a.id, {
-                        onError: (e) =>
+                      await pending.run(`delete:${a.id}`, async () => {
+                        try {
+                          await remove.mutateAsync(a.id);
+                        } catch (e) {
                           void alert({
                             title: 'Delete failed',
                             message: (e as Error).message,
                             variant: 'error',
-                          }),
+                          });
+                        }
                       });
                     }
                   }}

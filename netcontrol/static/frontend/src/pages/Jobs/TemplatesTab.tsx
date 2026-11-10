@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
 
-import { Callout } from '@/components/Callout';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -10,6 +9,8 @@ import {
 } from '@/api/jobs';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import { TemplateFormModal } from './TemplateFormModal';
 
@@ -17,6 +18,7 @@ export function TemplatesTab() {
   const { confirm, alert } = useDialogs();
   const query = useTemplates();
   const deleteMut = useDeleteTemplate();
+  const deleting = usePendingKeys<number>();
   const [search, setSearch] = useState('');
   const [editing, setEditing] = useState<{ mode: 'create' } | { mode: 'edit'; id: number } | null>(null);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
@@ -40,7 +42,13 @@ export function TemplatesTab() {
       confirmLabel: 'Delete',
     });
     if (!ok) return;
-    deleteMut.mutate(t.id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
+    await deleting.run(t.id, async () => {
+      try {
+        await deleteMut.mutateAsync(t.id);
+      } catch (e) {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      }
+    });
   }
 
   function copyContent(content: string) {
@@ -69,8 +77,11 @@ export function TemplatesTab() {
         <button className="btn btn-primary" onClick={() => setEditing({ mode: 'create' })}>+ New Template</button>
       </div>
 
-      {query.isPending && <LoadingState />}
-      {query.error && <Callout tone="danger">Failed: {(query.error as Error).message}</Callout>}
+      {query.error && !query.data ? (
+        <QueryError what="templates" query={query} />
+      ) : (
+        query.isPending && <LoadingState />
+      )}
       {query.data && (filtered.length === 0 ? (
         <EmptyState message="No templates" />
       ) : (
@@ -83,7 +94,8 @@ export function TemplatesTab() {
               onToggle={() => toggleExpand(t.id)}
               onCopy={() => copyContent(t.content)}
               onEdit={() => setEditing({ mode: 'edit', id: t.id })}
-              onDelete={() => handleDelete(t)}
+              isDeleting={deleting.isPending(t.id)}
+              onDelete={() => void handleDelete(t)}
             />
           ))}
         </div>
@@ -99,13 +111,14 @@ export function TemplatesTab() {
 }
 
 function TemplateRow({
-  template, expanded, onToggle, onCopy, onEdit, onDelete,
+  template, expanded, isDeleting, onToggle, onCopy, onEdit, onDelete,
 }: {
   template: ConfigTemplate;
   expanded: boolean;
   onToggle: () => void;
   onCopy: () => void;
   onEdit: () => void;
+  isDeleting: boolean;
   onDelete: () => void;
 }) {
   const lines = template.content.split('\n');
@@ -132,7 +145,7 @@ function TemplateRow({
           <button className="btn btn-sm btn-secondary" onClick={onCopy}>Copy</button>
           {isLong && <button className="btn btn-sm btn-secondary" onClick={onToggle}>{expanded ? 'Collapse' : 'Expand'}</button>}
           <button className="btn btn-sm btn-secondary" onClick={onEdit}>Edit</button>
-          <DeleteButton onClick={onDelete} />
+          <DeleteButton busy={isDeleting} onClick={onDelete} />
         </div>
       </div>
       <pre
