@@ -687,8 +687,7 @@ button.card {
 }
 [data-theme="sandstone"] .badge-success { background: var(--success); }
 [data-theme="sandstone"] .badge-warning { background: var(--warning); }
-[data-theme="sandstone"] .badge-danger,
-[data-theme="sandstone"] .badge-error { background: var(--danger); }
+[data-theme="sandstone"] .badge-danger { background: var(--danger); }
 [data-theme="sandstone"] .badge-info { background: var(--info); }
 [data-theme="sandstone"] .badge-secondary { background: var(--text-muted); }
 
@@ -916,8 +915,7 @@ button.card {
     color: #FFdd55;
 }
 
-[data-theme="voyager"] .badge-danger,
-[data-theme="voyager"] .badge-error {
+[data-theme="voyager"] .badge-danger {
     background: rgba(204, 51, 51, 0.25);
     border: 1px solid rgba(204, 51, 51, 0.4);
     color: #EE6666;
@@ -1834,9 +1832,9 @@ body {
    where the gap already separates them. */
 .stack > .toolbar,
 .stack > .page-help,
+.stack > .callout,
 .stack > .chart-grid-2col,
 .stack > .stats-grid,
-.stack > .drift-summary-grid,
 .stack > .section,
 .stack > .time-range-bar {
     margin-bottom: 0;
@@ -1983,6 +1981,10 @@ body {
     border: 1px solid rgba(from var(--border) r g b / 0.5);
     border-top: 1px solid rgba(255, 255, 255, 0.06);
     transition: box-shadow 0.25s ease;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
 }
 
 .stat-label {
@@ -1993,11 +1995,119 @@ body {
     letter-spacing: 0.05em;
 }
 
+/* Inside a tile the flex gap spaces the lines. */
+.stat-card .stat-label {
+    margin-bottom: 0;
+}
+
 .stat-value {
     font-size: var(--text-3xl);
     font-weight: 700;
     color: var(--primary-light);
     text-shadow: 0 0 12px var(--primary-glow), 0 0 4px var(--primary-glow);
+    line-height: 1.15;
+    overflow-wrap: anywhere;
+}
+
+/* StatTile (src/components/StatTile.tsx): hint line, icon and the
+   tone, compact and centre modifiers of the .stat-card family. */
+.stat-hint {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+}
+
+.stat-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    margin-bottom: var(--space-1);
+    border-radius: 50%;
+    color: var(--stat-tone, var(--primary-light));
+    background: rgba(from var(--stat-tone, var(--primary)) r g b / 0.15);
+}
+
+.stat-icon svg {
+    width: 1.25rem;
+    height: 1.25rem;
+}
+
+.stat-tone-success { --stat-tone: var(--success); }
+.stat-tone-warning { --stat-tone: var(--warning); }
+.stat-tone-danger  { --stat-tone: var(--danger); }
+.stat-tone-info    { --stat-tone: var(--info); }
+.stat-tone-primary { --stat-tone: var(--primary-light); }
+.stat-tone-neutral { --stat-tone: var(--text); }
+
+.stat-card[class*="stat-tone-"] .stat-value {
+    color: var(--stat-tone);
+    text-shadow: none;
+}
+
+.stat-card-center {
+    align-items: center;
+    text-align: center;
+}
+
+/* A badge used as a filter chip is a <button>: reset the native look. */
+button.badge {
+    border: 1px solid transparent;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+/* A clickable tile is a <button>: reset the native button look. */
+button.stat-card {
+    width: 100%;
+    font: inherit;
+    color: inherit;
+    text-align: inherit;
+}
+
+/* Compact tiles: the summary-strip look (SummaryStrip, modal summaries). */
+.stats-grid-compact {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: var(--space-2);
+    margin-bottom: var(--space-4);
+}
+
+.stat-card-compact,
+.stats-grid-compact > .stat-card {
+    padding: var(--card-pad-sm);
+    border-radius: var(--radius-lg);
+    gap: 0.125rem;
+}
+
+.stat-card-compact .stat-value,
+.stats-grid-compact > .stat-card .stat-value {
+    font-size: var(--text-lg);
+    font-weight: 600;
+    color: var(--text);
+    text-shadow: none;
+}
+
+.stat-card-compact[class*="stat-tone-"] .stat-value,
+.stats-grid-compact > .stat-card[class*="stat-tone-"] .stat-value {
+    color: var(--stat-tone);
+}
+
+.stat-card-compact .stat-label,
+.stats-grid-compact > .stat-card .stat-label {
+    font-size: var(--text-xs);
+    letter-spacing: 0.04em;
+}
+
+.stat-card-compact .stat-icon,
+.stats-grid-compact > .stat-card .stat-icon {
+    width: 1.75rem;
+    height: 1.75rem;
+}
+
+.stat-card-compact .stat-icon svg,
+.stats-grid-compact > .stat-card .stat-icon svg {
+    width: 1rem;
+    height: 1rem;
 }
 
 .section {
@@ -2184,6 +2294,13 @@ body {
     animation: spin 0.7s linear infinite;
     vertical-align: middle;
     margin-right: 2px;
+}
+
+/* Whole-page loader (PageLoader). */
+.backup-spinner.spinner-lg {
+    width: 20px;
+    height: 20px;
+    border-width: 3px;
 }
 
 @keyframes spin {
@@ -2585,73 +2702,6 @@ input[type="number"].form-input {
     gap: var(--space-2);
 }
 
-.status-badge {
-    display: inline-block;
-    padding: var(--space-1) var(--space-3);
-    border-radius: var(--radius-pill);
-    font-size: var(--text-xs);
-    font-weight: 600;
-    text-transform: uppercase;
-}
-
-.status-pending {
-    background: rgba(from var(--warning) r g b / 0.15);
-    color: var(--warning);
-    border: 1px solid rgba(from var(--warning) r g b / 0.25);
-}
-
-.status-running {
-    background: var(--primary-soft);
-    color: var(--primary-light);
-    border: 1px solid var(--primary-soft-strong);
-    position: relative;
-    padding-left: var(--space-5);
-}
-
-.status-running::before {
-    content: '';
-    position: absolute;
-    left: 0.5rem;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--primary-light);
-    box-shadow: 0 0 6px var(--primary-light);
-    animation: pulse-dot 1.5s ease-in-out infinite;
-}
-
-@keyframes pulse-dot {
-    0%, 100% { box-shadow: 0 0 4px var(--primary-glow); transform: scale(1); }
-    50% { box-shadow: 0 0 12px var(--primary-glow), 0 0 20px var(--primary-glow); transform: scale(1.3); }
-}
-
-.status-success,
-.status-completed {
-    background: var(--primary-soft);
-    color: var(--primary-light);
-    border: 1px solid var(--primary-soft-strong);
-}
-
-.status-failed {
-    background: rgba(from var(--danger) r g b / 0.15);
-    color: var(--danger);
-    border: 1px solid rgba(from var(--danger) r g b / 0.25);
-}
-
-.status-queued {
-    background: rgba(from var(--violet) r g b / 0.15);
-    color: var(--violet);
-    border: 1px solid rgba(from var(--violet) r g b / 0.25);
-}
-
-.status-cancelled {
-    background: rgba(from var(--text-muted) r g b / 0.15);
-    color: var(--text-muted);
-    border: 1px solid rgba(from var(--text-muted) r g b / 0.25);
-}
-
 /* ═══════════════════════════════════════════════════════════════════════════════
    Job Output
    ═══════════════════════════════════════════════════════════════════════════════ */
@@ -2709,10 +2759,73 @@ code {
 .text-muted { color: var(--text-muted); }
 .text-danger { color: var(--danger); }
 
+/* LoadingState (src/components/LoadingState.tsx): block and inline. */
 .loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
     text-align: center;
     padding: var(--space-6);
     color: var(--text-muted);
+}
+
+.loading-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--text-muted);
+}
+
+.loading .backup-spinner,
+.loading-inline .backup-spinner {
+    margin-right: 0;
+}
+
+/* Callout (src/components/Callout.tsx): the one banner for errors,
+   warnings, notices and confirmations. --callout-color carries the tone. */
+.callout {
+    --callout-color: var(--info);
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    margin-bottom: var(--space-4);
+    background: rgba(from var(--callout-color) r g b / 0.1);
+    border: 1px solid rgba(from var(--callout-color) r g b / 0.35);
+    border-left: 3px solid var(--callout-color);
+    border-radius: var(--radius-lg);
+    color: var(--text);
+    font-size: var(--text-base);
+    line-height: 1.5;
+}
+
+.callout-info    { --callout-color: var(--info); }
+.callout-success { --callout-color: var(--success); }
+.callout-warning { --callout-color: var(--warning); }
+.callout-danger  { --callout-color: var(--danger); }
+
+.callout-icon {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: var(--callout-color);
+}
+
+.callout-body {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.callout-title {
+    font-weight: 600;
+}
+
+.callout-action {
+    flex-shrink: 0;
+    align-self: center;
 }
 
 .error {
@@ -2915,6 +3028,20 @@ code {
     text-align: center;
     padding: 3rem var(--space-6);
     color: var(--text-muted);
+}
+
+/* EmptyState (src/components/EmptyState.tsx). */
+.empty-state-compact {
+    padding: var(--space-4);
+}
+
+.empty-state-description {
+    margin-top: var(--space-1);
+    font-size: var(--text-sm);
+}
+
+.empty-state-action {
+    margin-top: var(--space-3);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════
@@ -3414,57 +3541,6 @@ code {
 
 /* ── Config Drift Detection ──────────────────────────────────────────────── */
 
-.drift-summary-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: var(--space-4);
-    margin-bottom: var(--space-5);
-}
-
-.drift-summary-grid .stat-card {
-    display: flex;
-    flex-direction: row-reverse;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-3);
-}
-
-.drift-summary-grid .stat-ring-value {
-    position: static;
-    transform: none;
-    flex-shrink: 0;
-}
-
-.drift-summary-grid .stat-label {
-    margin-bottom: 0;
-}
-
-/* Plain value-over-label tile used by the drift and backup summaries. */
-.drift-summary-card {
-    padding: var(--space-3) var(--space-4);
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    min-width: 0;
-}
-
-.drift-summary-value {
-    font-size: var(--text-2xl);
-    font-weight: 700;
-    line-height: 1.2;
-    color: var(--text);
-    overflow-wrap: anywhere;
-}
-
-.drift-summary-label {
-    margin-top: 0.2rem;
-    font-size: var(--text-xs);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--text-muted);
-}
-
 .drift-event-meta {
     display: flex;
     gap: var(--space-2);
@@ -3550,12 +3626,6 @@ code {
     box-shadow: 0 0 0 2px rgba(from var(--primary) r g b / 0.2);
 }
 
-@media (max-width: 768px) {
-    .drift-summary-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
-}
-
 /* ═══════════════════════════════════════════════════════════════════════════════
    Time Range Bar
    ═══════════════════════════════════════════════════════════════════════════════ */
@@ -3622,22 +3692,26 @@ code {
     }
 }
 
-/* Base layout for data tables (used across the React pages). Without cell
-   padding adjacent columns ran together ("InventoryCisco IOS XEC9300-48P")
-   and rows had no separation. Same spacing as .device-health-table.
-   Headers left-align to match their left-aligned cell data (otherwise
-   <th> falls back to the browser default of centered text). Inline styles
-   and the theme rules above (e.g. voyager) still override these. */
+/* Tables. .data-table is the one table style: a bare
+   <table className="data-table"> (or the DataTable component, which adds the
+   .table-scroll wrapper) needs no inline cell padding. Every row is at least
+   --control-h tall; .table-sm is the dense modifier and .table-sticky keeps
+   the header row in view inside a scrolling wrapper. Headers left-align to
+   match their cells. Theme rules above (voyager, matrix, sandstone) target
+   .data-table and still override these. */
 .data-table {
     width: 100%;
     border-collapse: collapse;
+    font-size: var(--text-base);
 }
 
 .data-table th,
 .data-table td {
+    height: var(--control-h);
     padding: var(--space-2) var(--space-3);
     border-bottom: 1px solid var(--border);
     vertical-align: middle;
+    line-height: 1.4;
 }
 
 .data-table th {
@@ -3651,53 +3725,94 @@ code {
     border-bottom: none;
 }
 
+.data-table tbody tr:hover > td {
+    background: rgba(from var(--text) r g b / 0.03);
+}
+
+.data-table.table-sm {
+    font-size: var(--text-sm);
+}
+
 .data-table.table-sm th,
 .data-table.table-sm td {
-    padding: 0.3rem var(--space-2);
+    height: var(--control-h-sm);
+    padding: var(--space-1) var(--space-2);
 }
 
-.chart-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: var(--text-base);
+/* A row that opens something (detail, drill-down). */
+.data-table tr.row-clickable {
+    cursor: pointer;
 }
 
-.chart-table th,
-.chart-table td {
-    padding: var(--space-2) var(--space-3);
-    text-align: left;
-    border-bottom: 1px solid var(--border);
-}
-
-.chart-table th {
-    color: var(--text-muted);
-    font-weight: 600;
-    font-size: var(--text-sm);
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-}
-
-.chart-table tr:hover {
+.data-table.table-sticky th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
     background: var(--bg-secondary);
 }
 
-/* Badges for alert severity */
+/* Horizontal scroll for wide tables (DataTable wraps its table in this). */
+.table-scroll {
+    max-width: 100%;
+    overflow-x: auto;
+}
+
+@media (max-width: 768px) {
+    .data-table {
+        font-size: var(--text-sm);
+    }
+}
+
+/* Badges. .badge + .badge-<tone> is the one pill (Badge component); tones
+   come from src/lib/severity.ts. A bare .badge is neutral. */
 .badge {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
     padding: 0.15rem var(--space-2);
     border-radius: var(--radius-sm);
     font-size: var(--text-xs);
     font-weight: 600;
+    line-height: 1.35;
     text-transform: uppercase;
     letter-spacing: 0.03em;
+    white-space: nowrap;
+    vertical-align: middle;
+    background: rgba(from var(--text-muted) r g b / 0.12);
+    color: var(--text-light);
 }
 
 .badge-success { background: rgba(from var(--success) r g b / 0.15); color: var(--success); }
 .badge-warning { background: rgba(from var(--warning) r g b / 0.15); color: var(--warning); }
-.badge-danger  { background: rgba(from var(--danger) r g b / 0.15); color: var(--danger); }
-.badge-info    { background: rgba(from var(--info) r g b / 0.15); color: var(--info); }
-.badge-error   { background: rgba(from var(--danger) r g b / 0.15); color: var(--danger); }
+.badge-danger { background: rgba(from var(--danger) r g b / 0.15); color: var(--danger); }
+.badge-info { background: rgba(from var(--info) r g b / 0.15); color: var(--info); }
+.badge-primary { background: var(--primary-soft); color: var(--primary-light); }
 .badge-secondary { background: rgba(from var(--text-muted) r g b / 0.12); color: var(--text-light); }
+
+/* Solid: filled with the tone, for the loudest state only (critical). */
+.badge-solid { color: var(--on-primary); }
+.badge-solid.badge-success { background: var(--success); }
+.badge-solid.badge-warning { background: var(--warning); }
+.badge-solid.badge-danger { background: var(--danger); }
+.badge-solid.badge-info { background: var(--info); }
+.badge-solid.badge-primary { background: var(--primary); }
+.badge-solid.badge-secondary { background: var(--text-muted); }
+
+/* Live: a pulsing dot before the text, for work in progress. */
+.badge-live::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    flex-shrink: 0;
+    animation: badge-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes badge-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+}
 .badge-sm { padding: 0.05rem 0.4rem; font-size: 0.68rem; }
 
 /* ═══════════════════════════════════════════════════════════════════════════════
@@ -3959,38 +4074,6 @@ code {
     border-radius: var(--radius-lg);
 }
 
-.device-health-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: var(--text-base);
-}
-
-.device-health-table th {
-    background: var(--bg-secondary);
-    padding: 0.6rem var(--space-3);
-    text-align: left;
-    font-weight: 600;
-    border-bottom: 2px solid var(--border);
-    white-space: nowrap;
-    position: sticky;
-    top: 0;
-    z-index: 1;
-}
-
-.device-health-table td {
-    padding: var(--space-2) var(--space-3);
-    border-bottom: 1px solid var(--border);
-    vertical-align: middle;
-}
-
-.device-health-table tr:last-child td {
-    border-bottom: none;
-}
-
-.device-health-table tr:hover td {
-    background: rgba(var(--topo-accent-rgb), 0.05);
-}
-
 /* Status indicators */
 .status-dot {
     display: inline-block;
@@ -4066,21 +4149,6 @@ code {
 
 .dashboard-alert-item:last-child { border-bottom: none; }
 
-.alert-severity-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 0.15rem var(--space-2);
-    border-radius: 4px;
-    font-size: var(--text-xs);
-    font-weight: 600;
-    text-transform: uppercase;
-    white-space: nowrap;
-}
-
-.alert-severity-badge.critical { background: rgba(from var(--danger) r g b / 0.15); color: var(--danger); }
-.alert-severity-badge.warning { background: rgba(from var(--warning) r g b / 0.15); color: var(--warning); }
-.alert-severity-badge.info { background: rgba(from var(--info) r g b / 0.15); color: var(--info); }
-
 .dashboard-alert-host { font-weight: 600; min-width: 120px; }
 .dashboard-alert-msg { flex: 1; color: var(--text-muted); }
 .dashboard-alert-time { font-size: 0.75rem; color: var(--text-muted); white-space: nowrap; }
@@ -4089,9 +4157,6 @@ code {
     .health-summary-tiles {
         grid-template-columns: repeat(2, 1fr);
     }
-    .device-health-table { font-size: 0.8rem; }
-    .device-health-table th,
-    .device-health-table td { padding: 0.4rem 0.5rem; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════

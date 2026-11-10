@@ -12,6 +12,7 @@ import {
   useInventoryGroupsForDashboard,
 } from '@/api/dashboard';
 import { groupLabel } from '@/api/inventory';
+import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { PageHeader } from '@/components/PageHeader';
 import { invalidateMetricQueries } from '@/lib/invalidateMetricQueries';
@@ -133,9 +134,7 @@ export function DashboardViewer() {
           Refresh
         </button>
         {editing && (
-          <button className="btn btn-danger" onClick={handleDeleteDashboard}>
-            Delete
-          </button>
+          <DeleteButton size="md" onClick={handleDeleteDashboard} />
         )}
       </PageHeader>
 

@@ -1,11 +1,15 @@
 import { useMemo, useState } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useDeleteTemplate,
   useTemplates,
   type ConfigTemplate,
 } from '@/api/jobs';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 
 import { TemplateFormModal } from './TemplateFormModal';
 
@@ -60,10 +64,10 @@ export function TemplatesTab() {
         <button className="btn btn-primary" onClick={() => setEditing({ mode: 'create' })}>+ New Template</button>
       </div>
 
-      {query.isPending && <p className="text-muted">Loading…</p>}
-      {query.error && <p style={{ color: 'var(--danger)' }}>Failed: {(query.error as Error).message}</p>}
+      {query.isPending && <LoadingState />}
+      {query.error && <Callout tone="danger">Failed: {(query.error as Error).message}</Callout>}
       {query.data && (filtered.length === 0 ? (
-        <div className="empty-state">No templates</div>
+        <EmptyState message="No templates" />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {filtered.map((t) => (
@@ -123,7 +127,7 @@ function TemplateRow({
           <button className="btn btn-sm btn-secondary" onClick={onCopy}>Copy</button>
           {isLong && <button className="btn btn-sm btn-secondary" onClick={onToggle}>{expanded ? 'Collapse' : 'Expand'}</button>}
           <button className="btn btn-sm btn-secondary" onClick={onEdit}>Edit</button>
-          <button className="btn btn-sm btn-danger" onClick={onDelete}>Delete</button>
+          <DeleteButton onClick={onDelete} />
         </div>
       </div>
       <pre

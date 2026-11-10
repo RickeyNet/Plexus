@@ -9,8 +9,6 @@ import {
   commandCount,
   filterDeployments,
   isApprovalBlocking,
-  rollbackStatusColor,
-  statusColor,
 } from './helpers';
 
 const make = (over: Partial<Deployment>): Deployment =>
@@ -55,22 +53,6 @@ describe('action predicates', () => {
     expect(canDelete('rolled-back')).toBe(true);
     expect(canDelete('executing')).toBe(false);
     expect(canDelete('rolling-back')).toBe(false);
-  });
-});
-
-describe('status color maps', () => {
-  it('statusColor falls back to text-muted for unknown', () => {
-    expect(statusColor('completed')).toBe('success');
-    expect(statusColor('failed')).toBe('danger');
-    expect(statusColor(undefined)).toBe('text-muted');
-    expect(statusColor('something-new')).toBe('text-muted');
-  });
-
-  it('rollbackStatusColor distinguishes completed/failed/in-progress', () => {
-    expect(rollbackStatusColor('completed')).toBe('success');
-    expect(rollbackStatusColor('failed')).toBe('danger');
-    expect(rollbackStatusColor('in-progress')).toBe('warning');
-    expect(rollbackStatusColor(null)).toBe('warning');
   });
 });
 

@@ -8,6 +8,7 @@ import {
   type MerakiBuildResult,
   type MerakiNodeDetails,
 } from "@/api/meraki";
+import { formatBackendDateTime } from "@/lib/datetime";
 
 import {
   APPGATE_OPTION_TOGGLES,
@@ -855,9 +856,7 @@ describe("next collection", () => {
 
   it("shows the time of a later collection", () => {
     const iso = "2026-10-26T13:00:00+00:00";
-    expect(describeNextCollection(iso, now)).toBe(
-      new Date(iso).toLocaleString(),
-    );
+    expect(describeNextCollection(iso, now)).toBe(formatBackendDateTime(iso));
   });
 });
 

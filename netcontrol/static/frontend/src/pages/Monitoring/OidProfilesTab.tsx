@@ -1,7 +1,10 @@
 import { useMemo, useState } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { useDeleteOidProfile, useOidProfiles, type OidProfile } from '@/api/monitoring';
+import { LoadingState } from '@/components/LoadingState';
 
 import { OidProfileModal } from './OidProfileModal';
 
@@ -56,8 +59,8 @@ export function OidProfilesTab() {
         <button className="btn btn-primary" onClick={() => setModalId('new')}>+ New Profile</button>
       </div>
 
-      {query.isPending && <p className="text-muted">Loading…</p>}
-      {query.error && <p style={{ color: 'var(--danger)' }}>Failed: {(query.error as Error).message}</p>}
+      {query.isPending && <LoadingState />}
+      {query.error && <Callout tone="danger">Failed: {(query.error as Error).message}</Callout>}
       {query.data && (profiles.length === 0 ? (
         <div className="empty-state">No custom OID profiles. Click "+ New Profile" to create one.</div>
       ) : (
@@ -76,7 +79,7 @@ export function OidProfilesTab() {
                   </div>
                   <div style={{ display: 'flex', gap: '0.5rem' }}>
                     <button className="btn btn-sm btn-secondary" onClick={() => setModalId(p.id)}>Edit</button>
-                    <button className="btn btn-sm btn-danger" onClick={() => handleDelete(p.id)}>Delete</button>
+                    <DeleteButton onClick={() => handleDelete(p.id)} />
                   </div>
                 </div>
                 <div className="text-muted" style={{ fontSize: '0.85em', marginTop: '0.25rem' }}>

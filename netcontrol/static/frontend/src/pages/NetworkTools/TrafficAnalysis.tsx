@@ -19,8 +19,9 @@ import {
   useFlowTopTalkers,
   useFlowTimeline,
 } from '@/api/networkTools';
+import { formatBackendDateTime } from '@/lib/datetime';
 
-import { formatBytes, formatTimestamp } from './formatting';
+import { formatBytes } from './formatting';
 
 const TIME_RANGES = [
   { value: 1, label: 'Last 1 Hour' },
@@ -199,7 +200,7 @@ function TalkerSection({ query }: { query: QueryShape<FlowTalker> }) {
   return (
     <>
       <BarChart categories={categories} values={values} rotateLabels={45} height={220} />
-      <table className="data-table" style={{ width: '100%', fontSize: '0.85em', marginTop: '0.5rem' }}>
+      <table className="data-table table-sm" style={{ marginTop: '0.5rem' }}>
         <thead>
           <tr>
             <th>IP</th>
@@ -242,7 +243,7 @@ function ApplicationsView({ hours, hostId }: { hours: number; hostId: number | n
     <div className="glass-card card">
       <h4 style={{ margin: '0 0 0.5rem' }}>Top Applications by Traffic</h4>
       <BarChart categories={categories} values={values} rotateLabels={45} height={260} />
-      <table className="data-table" style={{ width: '100%', fontSize: '0.85em', marginTop: '0.5rem' }}>
+      <table className="data-table table-sm" style={{ marginTop: '0.5rem' }}>
         <thead>
           <tr>
             <th>Service</th>
@@ -279,7 +280,7 @@ function ConversationsView({ hours, hostId }: { hours: number; hostId: number | 
   return (
     <div className="glass-card card">
       <h4 style={{ margin: '0 0 0.5rem' }}>Top Conversations</h4>
-      <table className="data-table" style={{ width: '100%', fontSize: '0.85em' }}>
+      <table className="data-table table-sm">
         <thead>
           <tr>
             <th>Source</th>
@@ -384,7 +385,7 @@ function ExportersView() {
         <h4 style={{ margin: 0 }}>Flow Exporters</h4>
         <span className="badge">Resolution cache: {cacheSize}</span>
       </div>
-      <table className="data-table" style={{ width: '100%', fontSize: '0.85em' }}>
+      <table className="data-table table-sm">
         <thead>
           <tr>
             <th>Exporter IP</th>
@@ -418,8 +419,8 @@ function ExportersView() {
               <td style={{ textAlign: 'right' }}>
                 {r.sampling_rate ? `1:${r.sampling_rate}` : '-'}
               </td>
-              <td>{formatTimestamp(r.first_seen)}</td>
-              <td>{formatTimestamp(r.last_seen)}</td>
+              <td>{formatBackendDateTime(r.first_seen)}</td>
+              <td>{formatBackendDateTime(r.last_seen)}</td>
             </tr>
           ))}
         </tbody>

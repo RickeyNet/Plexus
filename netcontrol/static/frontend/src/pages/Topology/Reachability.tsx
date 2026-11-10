@@ -13,7 +13,9 @@ import {
   type ReachabilityQuery,
   type ReachabilityReport,
 } from '@/api/meraki';
+import { EmptyState } from '@/components/EmptyState';
 import { PageHelp } from '@/components/PageHelp';
+import { formatBackendDateTime } from '@/lib/datetime';
 
 import {
   DETAIL_CELL_STYLE,
@@ -454,7 +456,7 @@ function Results({
     <div className="card card-sm">
       <div style={{ marginBottom: '0.5rem' }}>
         <ResultsHeading report={report} />
-        <span className="text-muted"> · {new Date(report.generated_at).toLocaleString()}</span>
+        <span className="text-muted"> · {formatBackendDateTime(report.generated_at)}</span>
       </div>
 
       <div className="toolbar">
@@ -563,7 +565,7 @@ function CountHeads() {
 function SiteTable({ rollup, withVerdicts }: { rollup: SiteRollup[]; withVerdicts: boolean }) {
   return (
     <div style={SCROLL_X_STYLE}>
-      <table className="data-table" style={{ width: '100%' }}>
+      <table className="data-table">
         <thead>
           <tr>
             <th style={HEAD_STYLE}>Site</th>
@@ -588,7 +590,7 @@ function SiteTable({ rollup, withVerdicts }: { rollup: SiteRollup[]; withVerdict
 function PairTable({ pairs }: { pairs: PairRollup[] }) {
   return (
     <div style={SCROLL_X_STYLE}>
-      <table className="data-table" style={{ width: '100%' }}>
+      <table className="data-table">
         <thead>
           <tr>
             <th style={HEAD_STYLE}>Source site</th>
@@ -630,7 +632,7 @@ function RowTable({
   const columns = matrix ? 12 : 10;
   return (
     <div style={SCROLL_X_STYLE}>
-      <table className="data-table" style={{ width: '100%' }}>
+      <table className="data-table">
         <thead>
           <tr>
             <th style={HEAD_STYLE}>Site</th>
@@ -732,7 +734,7 @@ function RowTable({
           })}
         </tbody>
       </table>
-      {!rows.length && <div className="text-muted">No network has this verdict.</div>}
+      {!rows.length && <EmptyState compact message="No network has this verdict." />}
     </div>
   );
 }

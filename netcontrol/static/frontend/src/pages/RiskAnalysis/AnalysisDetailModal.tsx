@@ -3,12 +3,14 @@ import {
   useApproveRiskAnalysis,
   useRiskAnalysis,
 } from '@/api/riskAnalysis';
+import { Callout } from '@/components/Callout';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { formatBackendDateTime } from '@/lib/datetime';
+import { severityTone, toneColor } from '@/lib/severity';
 
 import {
-  formatStamp,
-  levelColor,
   parseJsonArray,
   parseJsonObject,
   scorePercent,
@@ -53,11 +55,11 @@ export function AnalysisDetailModal({ isOpen, onClose, analysisId }: Props) {
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Risk Analysis Details" size="large">
-      {query.isPending && <p className="text-muted">Loading…</p>}
+      {query.isPending && <LoadingState />}
       {query.error && (
-        <p style={{ color: 'var(--danger)' }}>
+        <Callout tone="danger">
           Failed to load: {(query.error as Error).message}
-        </p>
+        </Callout>
       )}
       {query.data && (
         <DetailBody
@@ -90,7 +92,7 @@ function DetailBody({
   onApprove: () => void;
   onClose: () => void;
 }) {
-  const color = levelColor(analysis.risk_level);
+  const color = toneColor(severityTone(analysis.risk_level));
   const percent = scorePercent(analysis.risk_score);
   const analysisObj = parseJsonObject<AnalysisJson>(analysis.analysis);
   const compliance = parseJsonArray<ComplianceImpactItem>(analysis.compliance_impact);
@@ -107,7 +109,7 @@ function DetailBody({
             style={{
               fontSize: '2em',
               fontWeight: 700,
-              color: `var(--${color})`,
+              color: color,
               textTransform: 'uppercase',
             }}
           >
@@ -130,7 +132,7 @@ function DetailBody({
               style={{
                 width: `${percent}%`,
                 height: '100%',
-                background: `var(--${color})`,
+                background: color,
                 borderRadius: 4,
               }}
             />
@@ -155,7 +157,7 @@ function DetailBody({
             )}
           </div>
           <div>
-            <strong>Created:</strong> {formatStamp(analysis.created_at)}
+            <strong>Created:</strong> {formatBackendDateTime(analysis.created_at)}
             {analysis.created_by ? ` by ${analysis.created_by}` : ''}
           </div>
         </div>

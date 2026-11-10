@@ -1,10 +1,5 @@
 import type { SlaStatus } from '@/api/monitoring';
 
-export function formatTimestamp(ts: string | null | undefined): string {
-  if (!ts) return '-';
-  return new Date(ts + (ts.endsWith('Z') ? '' : 'Z')).toLocaleString();
-}
-
 export function formatUptime(seconds: number | null | undefined): string {
   if (seconds == null) return 'N/A';
   const d = Math.floor(seconds / 86400);
@@ -21,17 +16,6 @@ export function formatMinutes(min: number | null | undefined): string {
   const h = Math.floor(min / 60);
   const m = Math.round(min % 60);
   return `${h}h ${m}m`;
-}
-
-export const SEVERITY_COLOR: Record<string, string> = {
-  critical: 'danger',
-  warning: 'warning',
-  info: 'primary',
-};
-
-export function severityColor(sev: string | undefined | null): string {
-  if (!sev) return 'text-muted';
-  return SEVERITY_COLOR[sev] ?? 'text-muted';
 }
 
 // Badge class and label of each server-computed SLA status (see

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 
 import { groupLabel } from '@/api/inventory';
+import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -349,7 +350,7 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
           {hint}
         </div>
       )}
-      {error && <div className="error">{error}</div>}
+      {error && <Callout tone="danger">{error}</Callout>}
 
       <div
         style={{

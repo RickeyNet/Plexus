@@ -4,10 +4,8 @@ import {
   bootModeDisplay,
   campaignStatusBadgeClass,
   campaignStatusLabel,
-  formatBackupTimestamp,
   formatBytes,
   formatEta,
-  formatRelativeTime,
   formatScheduledTime,
   phaseLabel,
 } from './helpers';
@@ -15,7 +13,7 @@ import {
 describe('bootModeDisplay', () => {
   it('labels install, bundle and unread modes', () => {
     expect(bootModeDisplay('install')).toMatchObject({ label: 'INSTALL', badgeClass: 'badge-success' });
-    expect(bootModeDisplay('bundle')).toMatchObject({ label: 'BUNDLE', badgeClass: 'badge-error' });
+    expect(bootModeDisplay('bundle')).toMatchObject({ label: 'BUNDLE', badgeClass: 'badge-danger' });
     expect(bootModeDisplay('')).toMatchObject({ label: '-', badgeClass: '' });
     expect(bootModeDisplay(undefined).label).toBe('-');
   });
@@ -47,18 +45,6 @@ describe('formatBytes', () => {
   });
 });
 
-describe('formatBackupTimestamp', () => {
-  it('strips T and trims sub-second precision', () => {
-    expect(formatBackupTimestamp('2026-05-07T15:31:42.123456')).toBe('2026-05-07 15:31:42');
-  });
-
-  it('returns empty for null/undefined', () => {
-    expect(formatBackupTimestamp(null)).toBe('');
-    expect(formatBackupTimestamp(undefined)).toBe('');
-    expect(formatBackupTimestamp('')).toBe('');
-  });
-});
-
 describe('phaseLabel', () => {
   it('maps known phases', () => {
     expect(phaseLabel('prestage')).toBe('Prestage');
@@ -72,7 +58,7 @@ describe('phaseLabel', () => {
 
 describe('campaignStatusBadgeClass', () => {
   it('prefers failed over running', () => {
-    expect(campaignStatusBadgeClass('prestage_failed', true)).toBe('badge-error');
+    expect(campaignStatusBadgeClass('prestage_failed', true)).toBe('badge-danger');
   });
   it('returns info for running campaigns', () => {
     expect(campaignStatusBadgeClass('running_prestage', true)).toBe('badge-info');
@@ -108,20 +94,6 @@ describe('campaignStatusLabel', () => {
   it('falls back generically for unknown phase statuses', () => {
     expect(campaignStatusLabel('transfer_failed')).toBe('Transfer failed');
     expect(campaignStatusLabel(null)).toBe('Created');
-  });
-});
-
-describe('formatRelativeTime', () => {
-  const now = Date.UTC(2026, 5, 1, 12, 0, 0);
-  it('formats future spans with two units', () => {
-    expect(formatRelativeTime(now + (2 * 3600 + 15 * 60) * 1000, now)).toBe(
-      'in 2h 15m',
-    );
-    expect(formatRelativeTime(now + 45 * 60 * 1000, now)).toBe('in 45m');
-  });
-  it('formats past spans and the near-now window', () => {
-    expect(formatRelativeTime(now - 26 * 3600 * 1000, now)).toBe('1d 2h ago');
-    expect(formatRelativeTime(now + 30 * 1000, now)).toBe('in <1m');
   });
 });
 

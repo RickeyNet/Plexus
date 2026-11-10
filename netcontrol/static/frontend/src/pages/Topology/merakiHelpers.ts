@@ -9,6 +9,7 @@ import type {
   MerakiNodeDetails,
   PanoramaBuildOptions,
 } from "@/api/meraki";
+import { formatBackendDateTime, parseBackendDate } from "@/lib/datetime";
 
 export const DEFAULT_BASE_URL = "https://api.meraki.com/api/v1";
 
@@ -350,20 +351,6 @@ export const OPTION_TOGGLES: { key: ToggleKey; label: string; hint: string }[] =
     },
   ];
 
-export function formatWhen(iso?: string | null): string {
-  if (!iso) return "-";
-  const date = stampDate(iso);
-  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
-}
-
-/** A stored stamp as a Date; one without a zone is UTC. */
-function stampDate(iso: string): Date {
-  const normalized = /[zZ]|[+-]\d\d:?\d\d$/.test(iso)
-    ? iso
-    : `${iso.replace(" ", "T")}Z`;
-  return new Date(normalized);
-}
-
 /**
  * When the scheduler collects a source next, for its row in the Sources
  * dialog: empty when it never will, "next scheduler pass" once it is due.
@@ -373,10 +360,10 @@ export function describeNextCollection(
   now: number = Date.now(),
 ): string {
   if (!iso) return "";
-  const time = stampDate(iso).getTime();
-  return !Number.isNaN(time) && time <= now
+  const time = parseBackendDate(iso)?.getTime();
+  return time != null && time <= now
     ? "next scheduler pass"
-    : formatWhen(iso);
+    : formatBackendDateTime(iso);
 }
 
 /** What kind of map source a row of the Sources dialog is. */
@@ -390,13 +377,6 @@ export function sourceTypeLabel(type: string): string {
   if (type === "panorama") return "Palo Alto Panorama";
   if (type === "appgate") return "Appgate";
   return type === "cato" ? "Cato" : "Meraki";
-}
-
-export function buildStatusBadge(status?: string): string {
-  if (status === "success") return "badge badge-success";
-  if (status === "partial") return "badge badge-warning";
-  if (status === "failed") return "badge badge-danger";
-  return "badge";
 }
 
 const PHASE_LABELS: Record<string, string> = {

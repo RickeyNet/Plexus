@@ -1,7 +1,10 @@
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { type SoftwareDevice, useSoftwareHistory } from '@/api/software';
+import { formatBackendDateTime } from '@/lib/datetime';
 
-import { formatTime, sourceLabel } from './helpers';
+import { sourceLabel } from './helpers';
 
 interface Props {
   device: SoftwareDevice;
@@ -24,12 +27,12 @@ export function DeviceHistoryModal({ device, onClose }: Props) {
         {device.raw_version && device.raw_version !== device.version ? (
           <span className="text-muted"> (reported as {device.raw_version})</span>
         ) : null}
-        , first seen {formatTime(device.first_seen)}.
+        , first seen {formatBackendDateTime(device.first_seen, 'Never')}.
       </div>
       {history.isPending ? (
-        <div className="text-muted">Loading history…</div>
+        <LoadingState text="Loading history…" />
       ) : rows.length === 0 ? (
-        <div className="text-muted">No history recorded yet.</div>
+        <EmptyState compact message="No history recorded yet." />
       ) : (
         <table className="data-table">
           <thead>
@@ -43,8 +46,8 @@ export function DeviceHistoryModal({ device, onClose }: Props) {
             {rows.map((row, i) => (
               <tr key={`${row.version}-${row.seen_from}-${i}`}>
                 <td style={{ fontWeight: row.seen_until ? 400 : 600 }}>{row.version}</td>
-                <td>{formatTime(row.seen_from)}</td>
-                <td>{row.seen_until ? formatTime(row.seen_until) : 'now'}</td>
+                <td>{formatBackendDateTime(row.seen_from, 'Never')}</td>
+                <td>{row.seen_until ? formatBackendDateTime(row.seen_until, 'Never') : 'now'}</td>
               </tr>
             ))}
           </tbody>

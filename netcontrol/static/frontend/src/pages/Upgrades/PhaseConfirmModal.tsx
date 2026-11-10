@@ -5,6 +5,7 @@ import {
   useExecuteUpgradePhase,
 } from '@/api/upgrades';
 import { Modal } from '@/components/Modal';
+import { toLocalInputValue } from '@/lib/datetime';
 
 import { phaseLabel } from './helpers';
 
@@ -17,20 +18,12 @@ interface Props {
   onClose: () => void;
 }
 
-function pad(n: number) {
-  return String(n).padStart(2, '0');
-}
-
 function defaultScheduleValue(): { min: string; value: string } {
   const min = new Date(Date.now() + 60 * 1000);
   min.setSeconds(0, 0);
   const def = new Date(Date.now() + 30 * 60 * 1000);
   def.setSeconds(0, 0);
-  const fmt = (d: Date) =>
-    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
-      d.getHours(),
-    )}:${pad(d.getMinutes())}`;
-  return { min: fmt(min), value: fmt(def) };
+  return { min: toLocalInputValue(min), value: toLocalInputValue(def) };
 }
 
 export function PhaseConfirmModal({

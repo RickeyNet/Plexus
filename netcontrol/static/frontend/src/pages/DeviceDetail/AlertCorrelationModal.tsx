@@ -4,9 +4,11 @@ import {
   type AlertCorrelation,
   useAlertCorrelation,
 } from '@/api/deployments';
+import { Callout } from '@/components/Callout';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { DeploymentCorrelationModal } from '@/pages/Deployments/DeploymentCorrelationModal';
-import { formatStamp } from '@/pages/Deployments/helpers';
+import { formatBackendDateTime } from '@/lib/datetime';
 
 interface Props {
   isOpen: boolean;
@@ -29,11 +31,11 @@ export function AlertCorrelationModal({ isOpen, onClose, alertId }: Props) {
   return (
     <>
       <Modal isOpen={isOpen} onClose={onClose} title={title} size="large">
-        {query.isPending && <p className="text-muted">Loading…</p>}
+        {query.isPending && <LoadingState />}
         {query.error && (
-          <p style={{ color: 'var(--danger)' }}>
+          <Callout tone="danger">
             Failed to load: {(query.error as Error).message}
-          </p>
+          </Callout>
         )}
         {query.data && (
           <Body
@@ -87,7 +89,7 @@ function Body({
             <strong>Value:</strong> {alert.value != null ? alert.value : '-'}
           </span>
           <span>
-            <strong>Time:</strong> {formatStamp(alert.created_at) || '-'}
+            <strong>Time:</strong> {formatBackendDateTime(alert.created_at, '') || '-'}
           </span>
         </div>
         {alert.message && (
@@ -128,7 +130,7 @@ function Body({
                   {dep.name || `Deployment #${dep.id}`}
                 </div>
                 <div style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>
-                  {dep.status || ''} - {formatStamp(dep.started_at)}
+                  {dep.status || ''} - {formatBackendDateTime(dep.started_at, '')}
                 </div>
               </div>
               <button
@@ -163,7 +165,7 @@ function Body({
               </div>
               <div style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>
                 +{d.diff_lines_added || 0}/-{d.diff_lines_removed || 0} lines -{' '}
-                {formatStamp(d.detected_at)}
+                {formatBackendDateTime(d.detected_at, '')}
               </div>
             </div>
           ))

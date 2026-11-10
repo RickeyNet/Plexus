@@ -3,9 +3,10 @@ import { useState } from 'react';
 import { type DetailSection, useMerakiNodeDetails } from '@/api/meraki';
 import type { TopologyMerakiRef } from '@/api/topology';
 import { Modal } from '@/components/Modal';
+import { formatBackendDateTime } from '@/lib/datetime';
 
 import { DETAIL_CELL_STYLE, providerSourceName, SCROLL_X_STYLE } from './helpers';
-import { formatWhen, type MerakiView, merakiViewSections, rowMatches, searchTerms } from './merakiHelpers';
+import { type MerakiView, merakiViewSections, rowMatches, searchTerms } from './merakiHelpers';
 
 interface Props {
   meraki: TopologyMerakiRef;
@@ -81,7 +82,7 @@ export function MerakiDetails({ meraki, highlight = '', view, title }: Props) {
   return (
     <>
       <div className="text-muted" style={{ fontSize: '0.72rem', marginBottom: '0.4rem' }}>
-        {providerSourceName(data.provider)} data · collected {formatWhen(data.generated_at)}
+        {providerSourceName(data.provider)} data · collected {formatBackendDateTime(data.generated_at)}
       </div>
       {controls}
       {!expanded && body}
@@ -176,12 +177,12 @@ function Section({ section, filterTerms, highlightTerms }: SectionProps) {
         )}
       </summary>
       <div style={{ ...SCROLL_X_STYLE, marginBottom: '0.5rem' }}>
-        <table className="data-table" style={{ fontSize: '0.74rem', width: '100%' }}>
+        <table className="data-table table-sm">
           {!isKv && (
             <thead>
               <tr>
                 {(section.columns ?? []).map((c) => (
-                  <th key={c} style={{ ...DETAIL_CELL_STYLE, textAlign: 'left', whiteSpace: 'nowrap' }}>{c}</th>
+                  <th key={c} style={{ ...DETAIL_CELL_STYLE, whiteSpace: 'nowrap' }}>{c}</th>
                 ))}
               </tr>
             </thead>

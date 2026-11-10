@@ -2,14 +2,18 @@ import { useState } from 'react';
 
 import { groupLabel } from '@/api/inventory';
 import { useInventoryGroups } from '@/api/compliance';
+import { EmptyState } from '@/components/EmptyState';
+import { StatGrid, StatTile } from '@/components/StatTile';
 import { TabBar } from '@/components/TabBar';
 import {
   useAvailabilityOutages,
   useAvailabilitySummary,
   useAvailabilityTransitions,
 } from '@/api/monitoring';
+import { formatBackendDateTime } from '@/lib/datetime';
+import { type Tone } from '@/lib/severity';
 import { CatoEgressPanel } from './CatoEgressPanel';
-import { formatTimestamp, formatUptime } from './helpers';
+import { formatUptime } from './helpers';
 import { TopologyAvailabilityPanel } from './TopologyAvailabilityPanel';
 
 type SubTab = 'hosts' | 'outages' | 'transitions';
@@ -31,10 +35,10 @@ export function AvailabilityTab() {
   const transitions = useAvailabilityTransitions(500);
 
   const s = summary.data ?? {};
-  const cards = [
+  const cards: { label: string; value: string | number; tone?: Tone }[] = [
     { label: 'Hosts Tracked', value: s.total_hosts ?? '-' },
-    { label: 'Currently Up', value: s.hosts_up ?? '-', color: 'success' },
-    { label: 'Currently Down', value: s.hosts_down ?? '-', color: 'danger' },
+    { label: 'Currently Up', value: s.hosts_up ?? '-', tone: 'success' },
+    { label: 'Currently Down', value: s.hosts_down ?? '-', tone: 'danger' },
     { label: 'Avg Uptime', value: s.avg_uptime_pct != null ? `${s.avg_uptime_pct.toFixed(2)}%` : '-' },
     { label: `Outages (${days}d)`, value: s.total_outages ?? '-' },
   ];
@@ -61,21 +65,18 @@ export function AvailabilityTab() {
         </select>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.5rem', marginBottom: '0.75rem' }}>
+      <StatGrid compact>
         {cards.map((c) => (
-          <div key={c.label} className="card card-sm" style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '1.4em', fontWeight: 600, color: c.color ? `var(--${c.color})` : '' }}>{c.value}</div>
-            <div className="text-muted" style={{ fontSize: '0.85em' }}>{c.label}</div>
-          </div>
+          <StatTile key={c.label} center label={c.label} value={c.value} tone={c.tone} />
         ))}
-      </div>
+      </StatGrid>
 
       <TabBar tabs={SUB_TABS} active={subTab} onChange={setSubTab} size="sm" aria-label="Availability views" />
 
       {subTab === 'hosts' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
           {(s.hosts ?? []).length === 0 ? (
-            <div className="empty-state">No availability data - run polls to begin tracking.</div>
+            <EmptyState message="No availability data - run polls to begin tracking." />
           ) : (
             (s.hosts ?? []).map((h) => {
               const uptimeColor = (h.uptime_pct ?? 100) >= 99.9 ? 'success' : (h.uptime_pct ?? 100) >= 99 ? 'warning' : 'danger';
@@ -118,7 +119,7 @@ export function AvailabilityTab() {
                   </span>
                 </div>
                 <div className="text-muted" style={{ marginTop: '0.3rem', fontSize: '0.85em' }}>
-                  {formatTimestamp(o.started_at)} - {o.ended_at ? formatTimestamp(o.ended_at) : <span style={{ color: 'var(--danger)' }}>Ongoing</span>}
+                  {formatBackendDateTime(o.started_at)} - {o.ended_at ? formatBackendDateTime(o.ended_at) : <span style={{ color: 'var(--danger)' }}>Ongoing</span>}
                 </div>
               </div>
             ))
@@ -131,14 +132,14 @@ export function AvailabilityTab() {
           <div className="card text-muted">No state transitions recorded.</div>
         ) : (
           <div style={{ maxHeight: 480, overflow: 'auto' }}>
-            <table style={{ width: '100%', fontSize: '0.85em', borderCollapse: 'collapse' }}>
+            <table className="data-table table-sm">
               <thead>
-                <tr style={{ borderBottom: '2px solid var(--border)' }}>
-                  <th style={{ textAlign: 'left', padding: '4px 8px' }}>Time</th>
-                  <th style={{ textAlign: 'left', padding: '4px 8px' }}>Host</th>
-                  <th style={{ textAlign: 'left', padding: '4px 8px' }}>Entity</th>
-                  <th style={{ textAlign: 'center', padding: '4px 8px' }}>From</th>
-                  <th style={{ textAlign: 'center', padding: '4px 8px' }}>To</th>
+                <tr>
+                  <th>Time</th>
+                  <th>Host</th>
+                  <th>Entity</th>
+                  <th style={{ textAlign: 'center' }}>From</th>
+                  <th style={{ textAlign: 'center' }}>To</th>
                 </tr>
               </thead>
               <tbody>
@@ -146,12 +147,12 @@ export function AvailabilityTab() {
                   const fromColor = t.old_state === 'up' ? 'success' : t.old_state === 'down' ? 'danger' : 'text-muted';
                   const toColor = t.new_state === 'up' ? 'success' : t.new_state === 'down' ? 'danger' : 'text-muted';
                   return (
-                    <tr key={t.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                      <td style={{ padding: '4px 8px' }}>{formatTimestamp(t.changed_at)}</td>
-                      <td style={{ padding: '4px 8px' }}>{t.hostname}</td>
-                      <td style={{ padding: '4px 8px' }}>{t.entity_type ?? 'host'}{t.entity_id ? ` ${t.entity_id}` : ''}</td>
-                      <td style={{ padding: '4px 8px', textAlign: 'center', color: `var(--${fromColor})` }}>{t.old_state ?? '?'}</td>
-                      <td style={{ padding: '4px 8px', textAlign: 'center', color: `var(--${toColor})` }}>{t.new_state ?? '?'}</td>
+                    <tr key={t.id}>
+                      <td>{formatBackendDateTime(t.changed_at)}</td>
+                      <td>{t.hostname}</td>
+                      <td>{t.entity_type ?? 'host'}{t.entity_id ? ` ${t.entity_id}` : ''}</td>
+                      <td style={{ textAlign: 'center', color: `var(--${fromColor})` }}>{t.old_state ?? '?'}</td>
+                      <td style={{ textAlign: 'center', color: `var(--${toColor})` }}>{t.new_state ?? '?'}</td>
                     </tr>
                   );
                 })}

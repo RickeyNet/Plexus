@@ -5,6 +5,9 @@ import {
   useFlowCollectorConfig,
   useUpdateFlowCollectorConfig,
 } from '@/api/settings';
+import { Badge } from '@/components/Badge';
+import { Callout } from '@/components/Callout';
+import { LoadingState } from '@/components/LoadingState';
 
 export function NetFlowTab() {
   const query = useFlowCollectorConfig();
@@ -20,12 +23,12 @@ export function NetFlowTab() {
     if (query.data) setDraft(query.data);
   }
 
-  if (query.isLoading || !draft) return <p className="text-muted">Loading…</p>;
+  if (query.isLoading || !draft) return <LoadingState />;
   if (query.isError)
     return (
-      <div className="error">
+      <Callout tone="danger">
         Failed to load NetFlow config: {(query.error as Error).message}
-      </div>
+      </Callout>
     );
 
   const num = (
@@ -69,30 +72,8 @@ export function NetFlowTab() {
       >
         <h3 style={{ margin: 0 }}>NetFlow / sFlow Collector</h3>
         <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-          <span
-            className="badge"
-            style={{
-              background: running ? 'var(--success)' : 'var(--text-muted)',
-              color: 'var(--on-primary)',
-              padding: '0.15rem 0.5rem',
-              borderRadius: '999px',
-              fontSize: '0.78rem',
-            }}
-          >
-            NetFlow {running ? 'running' : 'stopped'}
-          </span>
-          <span
-            className="badge"
-            style={{
-              background: sflowRunning ? 'var(--success)' : 'var(--text-muted)',
-              color: 'var(--on-primary)',
-              padding: '0.15rem 0.5rem',
-              borderRadius: '999px',
-              fontSize: '0.78rem',
-            }}
-          >
-            sFlow {sflowRunning ? 'running' : 'stopped'}
-          </span>
+          <Badge tone={running ? 'success' : 'neutral'}>NetFlow {running ? 'running' : 'stopped'}</Badge>
+          <Badge tone={sflowRunning ? 'success' : 'neutral'}>sFlow {sflowRunning ? 'running' : 'stopped'}</Badge>
         </div>
       </div>
 

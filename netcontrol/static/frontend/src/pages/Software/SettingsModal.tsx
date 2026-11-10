@@ -8,8 +8,8 @@ import {
   useSaveSoftwareSettings,
   useTestPsirt,
 } from '@/api/software';
+import { formatBackendDateTime } from '@/lib/datetime';
 
-import { formatTime } from './helpers';
 
 interface Props {
   settings: SoftwareSettings;
@@ -83,7 +83,7 @@ export function SettingsModal({ settings, severities, onClose }: Props) {
           />
           <div className="text-muted" style={{ fontSize: '0.82em', marginTop: '0.25rem' }}>
             The tracker is also refreshed after every topology collection and by the Refresh button. Last
-            refresh: {formatTime(settings.last_refresh_at)}.
+            refresh: {formatBackendDateTime(settings.last_refresh_at, 'Never')}.
           </div>
         </div>
 
@@ -171,7 +171,7 @@ export function SettingsModal({ settings, severities, onClose }: Props) {
             style={{ width: 120 }}
           />
           <div className="text-muted" style={{ fontSize: '0.82em', marginTop: '0.25rem' }}>
-            Last sync: {formatTime(settings.psirt_last_sync_at)}
+            Last sync: {formatBackendDateTime(settings.psirt_last_sync_at, 'Never')}
             {settings.psirt_last_sync_status ? ` (${settings.psirt_last_sync_status}` : ''}
             {settings.psirt_last_sync_message ? `: ${settings.psirt_last_sync_message})` : settings.psirt_last_sync_status ? ')' : ''}
           </div>

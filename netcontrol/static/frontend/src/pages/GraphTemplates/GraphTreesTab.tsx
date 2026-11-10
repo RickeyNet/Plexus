@@ -1,11 +1,15 @@
 import { useState } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useDeleteGraphTree,
   useGraphTrees,
   type GraphTree,
 } from '@/api/graphTemplates';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 
 import { GraphTreeFormModal } from './GraphTreeFormModal';
 import { GraphTreeDetailModal } from './GraphTreeDetailModal';
@@ -32,12 +36,10 @@ export function GraphTreesTab() {
         <button className="btn btn-primary" onClick={() => setFormMode({ mode: 'create' })}>+ New Tree</button>
       </div>
 
-      {query.isPending && <p className="text-muted">Loading…</p>}
-      {query.error && <p style={{ color: 'var(--danger)' }}>Failed: {(query.error as Error).message}</p>}
+      {query.isPending && <LoadingState />}
+      {query.error && <Callout tone="danger">Failed: {(query.error as Error).message}</Callout>}
       {query.data && (items.length === 0 ? (
-        <div className="empty-state">
-          No graph trees configured. Create a tree to organize graphs hierarchically.
-        </div>
+        <EmptyState message="No graph trees configured. Create a tree to organize graphs hierarchically." />
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1rem' }}>
           {items.map((tree) => (
@@ -54,7 +56,7 @@ export function GraphTreesTab() {
               </button>
               <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
                 <button className="btn btn-sm btn-secondary" onClick={() => setFormMode({ mode: 'edit', treeId: tree.id })}>Edit</button>
-                <button className="btn btn-sm btn-danger" onClick={() => handleDelete(tree.id)}>Delete</button>
+                <DeleteButton onClick={() => handleDelete(tree.id)} />
               </div>
             </div>
           ))}

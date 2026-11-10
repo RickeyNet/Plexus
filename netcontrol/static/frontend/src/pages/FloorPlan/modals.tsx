@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react';
 
+import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
 import {
   GeoFloor,
@@ -288,7 +289,7 @@ function FieldRow({
 }
 
 function ErrorBox({ message }: { message: string }) {
-  return <div className="error">{message}</div>;
+  return <Callout tone="danger">{message}</Callout>;
 }
 
 function ModalActions({

@@ -1,5 +1,6 @@
 import { useMemo, useState, type FormEvent } from 'react';
 
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { useInventoryGroupsFull } from '@/api/inventory';
@@ -177,7 +178,7 @@ function EditMode({ circuitId, onClose }: { circuitId: number; onClose: () => vo
   return (
     <Modal isOpen onClose={onClose} title="Edit Billing Circuit">
       {query.isPending ? (
-        <p className="text-muted">Loading…</p>
+        <LoadingState />
       ) : (
         <form onSubmit={handleSubmit}>
           <div className="form-group"><label className="form-label">Circuit Name</label>

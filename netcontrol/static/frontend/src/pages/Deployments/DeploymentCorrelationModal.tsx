@@ -1,9 +1,11 @@
 import { useMemo } from 'react';
 
 import { type DeploymentCorrelation, useDeploymentCorrelation } from '@/api/deployments';
+import { Callout } from '@/components/Callout';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { formatBackendDateTime, formatBackendTime } from '@/lib/datetime';
 
-import { formatStamp, formatTime } from './helpers';
 
 interface Props {
   isOpen: boolean;
@@ -25,11 +27,11 @@ export function DeploymentCorrelationModal({ isOpen, onClose, deploymentId }: Pr
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Deployment Correlation" size="large">
-      {query.isPending && <p className="text-muted">Loading…</p>}
+      {query.isPending && <LoadingState />}
       {query.error && (
-        <p style={{ color: 'var(--danger)' }}>
+        <Callout tone="danger">
           Failed to load: {(query.error as Error).message}
-        </p>
+        </Callout>
       )}
       {query.data && <CorrelationBody data={query.data} onClose={onClose} />}
     </Modal>
@@ -44,8 +46,8 @@ function CorrelationBody({
   onClose: () => void;
 }) {
   const events = useMemo(() => buildTimeline(data), [data]);
-  const windowStart = formatStamp(data.time_window?.start) || '?';
-  const windowEnd = formatStamp(data.time_window?.end) || '?';
+  const windowStart = formatBackendDateTime(data.time_window?.start, '') || '?';
+  const windowEnd = formatBackendDateTime(data.time_window?.end, '') || '?';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -97,7 +99,7 @@ function TimelineRow({ event }: { event: TimelineEvent }) {
       }}
     >
       <span style={{ minWidth: 60, color: 'var(--text-muted)' }}>
-        {formatTime(event.time)}
+        {formatBackendTime(event.time, '')}
       </span>
       <span style={{ color: event.color, minWidth: 20, textAlign: 'center' }}>{event.icon}</span>
       <div>

@@ -1,6 +1,8 @@
 import { useAdminCapabilities } from '@/api/settings';
 import { useAuthStatus } from '@/api/auth';
 import { ApiError } from '@/api/client';
+import { Callout } from '@/components/Callout';
+import { LoadingState } from '@/components/LoadingState';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { TabBar } from '@/components/TabBar';
@@ -120,7 +122,7 @@ export function Settings() {
     return (
       <div>
         <PageHeader title="Settings" />
-        <p className="text-muted">Loading…</p>
+        <LoadingState />
       </div>
     );
   }
@@ -143,7 +145,7 @@ export function Settings() {
     return (
       <div>
         <PageHeader title="Settings" />
-        <p className="text-muted">Loading…</p>
+        <LoadingState />
       </div>
     );
   }
@@ -158,7 +160,7 @@ export function Settings() {
     return (
       <div>
         <PageHeader title="Settings" />
-        <div className="error">{message}</div>
+        <Callout tone="danger">{message}</Callout>
       </div>
     );
   }

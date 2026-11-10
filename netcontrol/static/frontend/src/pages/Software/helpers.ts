@@ -1,32 +1,9 @@
 import type { SoftwareAdvisoryPayload } from '@/api/software';
 
-const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
-
-export function severityBadgeClass(severity: string | null | undefined): string {
-  switch ((severity ?? '').toLowerCase()) {
-    case 'critical':
-    case 'high':
-      return 'badge badge-danger';
-    case 'medium':
-      return 'badge badge-warning';
-    case 'low':
-    case 'info':
-      return 'badge badge-info';
-    default:
-      return 'badge badge-secondary';
-  }
-}
-
 export function severityLabel(severity: string | null | undefined): string {
   const s = (severity ?? '').toLowerCase();
   if (!s) return '';
   return s === 'info' ? 'Info' : s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-/** Lower index = more severe; unknown severities sort last. */
-export function severityRank(severity: string | null | undefined): number {
-  const index = SEVERITY_ORDER.indexOf((severity ?? '').toLowerCase());
-  return index === -1 ? SEVERITY_ORDER.length : index;
 }
 
 export function sourceLabel(source: string | null | undefined): string {
@@ -52,15 +29,6 @@ export function sourceLabel(source: string | null | undefined): string {
     default:
       return source ?? '';
   }
-}
-
-export function formatTime(value: string | undefined | null): string {
-  if (!value) return 'Never';
-  const iso = value.includes('T') ? value : value.replace(' ', 'T');
-  const withTz = /Z|[+-]\d\d:\d\d$/.test(iso) ? iso : `${iso}Z`;
-  const d = new Date(withTz);
-  if (Number.isNaN(d.getTime())) return value;
-  return d.toLocaleString();
 }
 
 /** One version specification per line or comma; blank entries dropped. */

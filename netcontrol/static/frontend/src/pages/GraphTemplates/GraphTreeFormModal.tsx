@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -59,7 +60,7 @@ export function GraphTreeFormModal({ mode, treeId, onClose }: Props) {
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={mode === 'edit' ? 'Edit Graph Tree' : 'New Graph Tree'}>
       {mode === 'edit' && query.isPending ? (
-        <p className="text-muted">Loading…</p>
+        <LoadingState />
       ) : (
         <form onSubmit={handleSubmit}>
           <div className="form-group">

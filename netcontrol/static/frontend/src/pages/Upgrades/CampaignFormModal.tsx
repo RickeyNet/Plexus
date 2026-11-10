@@ -14,6 +14,7 @@ import {
   useUpgradeCampaign,
   useUpgradeImages,
 } from '@/api/upgrades';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { parseBoundedInt } from '@/lib/numberInput';
 
@@ -287,7 +288,7 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
   return (
     <Modal isOpen onClose={onClose} title={title} size="large">
       {isPending ? (
-        <p className="text-muted">Loading…</p>
+        <LoadingState />
       ) : (
         <form onSubmit={handleSubmit}>
           <div className="form-group">

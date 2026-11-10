@@ -1,32 +1,11 @@
 import type { ConfigDriftEvent } from '@/api/configuration';
 
-export function formatStamp(iso: string | null | undefined): string {
-  if (!iso) return '';
-  const hasZone = iso.includes('Z') || iso.includes('+');
-  return new Date(iso + (hasZone ? '' : 'Z')).toLocaleString();
-}
-
 export type BackupView = 'config' | 'diff';
 
 // Only successful captures have a config to diff. An unknown status (detail
 // still loading) leaves the diff view available.
 export function backupDiffAvailable(status: string | null | undefined): boolean {
   return status == null || status === 'success';
-}
-
-export function formatRelative(iso: string | null | undefined): string {
-  if (!iso) return 'Never';
-  const hasZone = iso.includes('Z') || iso.includes('+');
-  const dt = new Date(iso + (hasZone ? '' : 'Z'));
-  const diffMs = Date.now() - dt.getTime();
-  const sec = Math.floor(diffMs / 1000);
-  if (sec < 60) return `${sec}s ago`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const days = Math.floor(hr / 24);
-  return `${days}d ago`;
 }
 
 export function formatInterval(seconds: number | null | undefined): string {

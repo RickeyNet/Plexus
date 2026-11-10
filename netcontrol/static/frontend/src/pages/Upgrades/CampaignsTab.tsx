@@ -2,14 +2,17 @@ import { useMemo, useState } from 'react';
 
 import { useDeleteUpgradeCampaign, useUpgradeCampaigns } from '@/api/upgrades';
 import { AlertDialog } from '@/components/AlertDialog';
+import { Callout } from '@/components/Callout';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { DeleteButton } from '@/components/DeleteButton';
+import { LoadingState } from '@/components/LoadingState';
+import { formatBackendDateTime } from '@/lib/datetime';
 
 import { CampaignFormModal } from './CampaignFormModal';
 import { CampaignViewerModal } from './CampaignViewerModal';
 import {
   campaignStatusBadgeClass,
   campaignStatusLabel,
-  formatBackupTimestamp,
   formatScheduledTime,
 } from './helpers';
 
@@ -74,12 +77,12 @@ export function CampaignsTab() {
     });
   };
 
-  if (query.isPending) return <p className="text-muted">Loading…</p>;
+  if (query.isPending) return <LoadingState />;
   if (query.error) {
     return (
-      <p style={{ color: 'var(--danger)' }}>
+      <Callout tone="danger">
         Failed to load campaigns: {(query.error as Error).message}
-      </p>
+      </Callout>
     );
   }
 
@@ -294,7 +297,7 @@ export function CampaignsTab() {
                   onClick={(e) => e.stopPropagation()}
                 >
                   <span style={{ fontSize: '0.8em', opacity: 0.55 }}>
-                    Created {formatBackupTimestamp(c.created_at).slice(0, 16)}
+                    Created {formatBackendDateTime(c.created_at, '')}
                     {c.created_by ? ` by ${c.created_by}` : ''}
                   </span>
                   <span style={{ display: 'flex', gap: '0.25rem' }}>
@@ -309,17 +312,13 @@ export function CampaignsTab() {
                     >
                       Edit
                     </button>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-danger"
+                    <DeleteButton
                       onClick={(e) => {
                         e.stopPropagation();
                         setDeleteTarget({ id: c.id, name: c.name });
                       }}
                       disabled={c.is_actively_running || remove.isPending}
-                    >
-                      Delete
-                    </button>
+                    />
                   </span>
                 </div>
               </div>

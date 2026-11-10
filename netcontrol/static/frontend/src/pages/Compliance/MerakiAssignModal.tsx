@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import {
   useComplianceProfiles,
@@ -84,7 +86,7 @@ export function MerakiAssignModal({
           }}
         >
           {orgs.isLoading ? (
-            <span className="text-muted">Loading…</span>
+            <LoadingState variant="inline" />
           ) : orgList.length === 0 ? (
             <span className="text-muted">
               No Meraki organizations. Register one on the Topology page (Sources).
@@ -143,7 +145,7 @@ export function MerakiAssignModal({
           onChange={(e) => setHours(parseInt(e.target.value, 10) || 24)}
         />
       </div>
-      {error && <div className="error">{error}</div>}
+      {error && <Callout tone="danger">{error}</Callout>}
       <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
         <button type="button" className="btn btn-secondary" onClick={onClose}>
           Cancel

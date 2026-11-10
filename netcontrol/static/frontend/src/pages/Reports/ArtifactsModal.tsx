@@ -1,3 +1,6 @@
+import { Callout } from '@/components/Callout';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { reportArtifactUrl, useReportRunArtifacts } from '@/api/reports';
@@ -22,14 +25,14 @@ export function ArtifactsModal({ runId, isOpen, onClose }: Props) {
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={runId != null ? `Run #${runId} Artifacts` : 'Artifacts'}>
-      {query.isPending && <p className="text-muted">Loading…</p>}
+      {query.isPending && <LoadingState />}
       {query.error && (
-        <p style={{ color: 'var(--danger)' }}>Failed to load artifacts: {(query.error as Error).message}</p>
+        <Callout tone="danger">Failed to load artifacts: {(query.error as Error).message}</Callout>
       )}
       {query.data && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
           {(query.data.artifacts ?? []).length === 0 ? (
-            <p className="text-muted">No persisted artifacts found for this run.</p>
+            <EmptyState compact message="No persisted artifacts found for this run." />
           ) : (
             (query.data.artifacts ?? []).map((a) => (
               <div

@@ -2,6 +2,7 @@ import { useState } from 'react';
 
 import { useCredentials } from '@/api/compliance';
 import { useRevertDriftEvent } from '@/api/configuration';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 
@@ -26,7 +27,7 @@ export function RevertDriftModal({ eventId, onClose, onJobStarted }: Props) {
         overwriting any unauthorized changes. The device will be re-captured
         afterward to verify compliance.
       </p>
-      {creds.isPending && <p className="text-muted">Loading credentials…</p>}
+      {creds.isPending && <LoadingState text="Loading credentials…" />}
       {creds.data && (
         <>
           <div className="form-group" style={{ marginBottom: '1rem' }}>

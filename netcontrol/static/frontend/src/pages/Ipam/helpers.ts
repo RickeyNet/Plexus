@@ -91,16 +91,3 @@ export function driftBadgeClass(driftType: string): string {
   }
 }
 
-export function statusBadgeClass(status: string | undefined): string {
-  if (status === 'success') return 'badge-success';
-  if (status === 'error') return 'badge-danger';
-  return 'badge-secondary';
-}
-
-export function formatSyncTime(value: string | undefined | null): string {
-  if (!value) return 'Never';
-  const withTz = value.endsWith('Z') ? value : `${value}Z`;
-  const d = new Date(withTz);
-  if (Number.isNaN(d.getTime())) return value;
-  return d.toLocaleString();
-}

@@ -1,6 +1,9 @@
 import { useMemo, useState } from 'react';
 
 import { useGraphTemplates, type GraphTemplate } from '@/api/graphTemplates';
+import { Callout } from '@/components/Callout';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 
 import { GraphTemplateDetailModal } from './GraphTemplateDetailModal';
 import { GraphTemplateCreateModal } from './GraphTemplateCreateModal';
@@ -51,10 +54,10 @@ export function GraphTemplatesTab() {
         <button className="btn btn-primary" onClick={() => setCreating(true)}>+ New Template</button>
       </div>
 
-      {query.isPending && <p className="text-muted">Loading…</p>}
-      {query.error && <p style={{ color: 'var(--danger)' }}>Failed: {(query.error as Error).message}</p>}
+      {query.isPending && <LoadingState />}
+      {query.error && <Callout tone="danger">Failed: {(query.error as Error).message}</Callout>}
       {query.data && (items.length === 0 ? (
-        <div className="empty-state">No graph templates match the current filter.</div>
+        <EmptyState message="No graph templates match the current filter." />
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1rem' }}>
           {items.map((t) => (

@@ -10,21 +10,19 @@ import {
   useScanMerakiAssignmentNow,
   useUpdateMerakiAssignment,
 } from '@/api/compliance';
+import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { TabBar } from '@/components/TabBar';
-import { parseBackendDate } from '@/pages/Dashboard/helpers';
+import { formatBackendDateTime } from '@/lib/datetime';
+import { complianceStatusTone, toneColor } from '@/lib/severity';
 
 import { MerakiAssignModal } from './MerakiAssignModal';
 import { MerakiFindingsModal } from './MerakiFindingsModal';
 import { MerakiScanProgress } from './MerakiScanProgress';
-import { statusColor } from './merakiHelpers';
 
 const KIND_LABEL: Record<string, string> = { org: 'Org', network: 'Network', device: 'Switch', ssid: 'SSID' };
-
-function stamp(iso: string | null | undefined, fallback = '-'): string {
-  const d = parseBackendDate(iso);
-  return d ? d.toLocaleString() : fallback;
-}
 
 const formatInterval = (seconds: number): string => {
   if (seconds % 86400 === 0) return `${seconds / 86400}d`;
@@ -144,14 +142,12 @@ function AssignmentsView({
     );
   }, [assignments, query]);
 
-  if (loading) return <p className="text-muted">Loading Meraki assignments…</p>;
+  if (loading) return <LoadingState text="Loading Meraki assignments…" />;
   if (!filtered.length) {
     return (
-      <p className="text-muted">
-        No Meraki assignments. Load the built-in profiles (Meraki Switch / Security Appliance /
+      <EmptyState compact message="No Meraki assignments. Load the built-in profiles (Meraki Switch / Security Appliance /
         Wireless / Dashboard baselines) and assign one to a Meraki organization registered on the
-        Topology page.
-      </p>
+        Topology page." />
     );
   }
 
@@ -225,9 +221,7 @@ function AssignmentsView({
                 >
                   {a.enabled ? 'Disable' : 'Enable'}
                 </button>
-                <button
-                  className="btn btn-sm"
-                  style={{ color: 'var(--danger)' }}
+                <DeleteButton
                   onClick={async () => {
                     if (
                       await confirm({
@@ -246,14 +240,12 @@ function AssignmentsView({
                       });
                     }
                   }}
-                >
-                  Delete
-                </button>
+                />
               </div>
             </div>
             <div style={{ marginTop: '0.5rem', fontSize: '0.85em', color: 'var(--text-muted)' }}>
               {a.enabled ? <span style={{ color: 'var(--success)' }}>Enabled</span> : <span>Disabled</span>} ·
-              Every {formatInterval(a.interval_seconds)} · Last scan: {stamp(a.last_scan_at, 'Never')}
+              Every {formatInterval(a.interval_seconds)} · Last scan: {formatBackendDateTime(a.last_scan_at, 'Never')}
               {a.last_scan_status && (
                 <>
                   {' '}
@@ -324,9 +316,9 @@ function StatusView({
     [status, query, onlyFailing],
   );
 
-  if (loading) return <p className="text-muted">Loading target status…</p>;
+  if (loading) return <LoadingState text="Loading target status…" />;
   if (!status.length) {
-    return <p className="text-muted">No Meraki targets scanned yet. Run a scan from an assignment.</p>;
+    return <EmptyState compact message="No Meraki targets scanned yet. Run a scan from an assignment." />;
   }
 
   return (
@@ -335,9 +327,9 @@ function StatusView({
         <input type="checkbox" checked={onlyFailing} onChange={(e) => setOnlyFailing(e.target.checked)} />
         Only non-compliant or unreadable
       </label>
-      {filtered.length === 0 && <p className="text-muted">Nothing matches.</p>}
+      {filtered.length === 0 && <EmptyState compact message="Nothing matches." />}
       {filtered.map((r) => {
-        const color = statusColor(r.status);
+        const color = toneColor(complianceStatusTone(r.status));
         return (
           <div key={r.id} className="card card-sm">
             <div
@@ -356,15 +348,15 @@ function StatusView({
                     width: 10,
                     height: 10,
                     borderRadius: '50%',
-                    background: `var(--${color})`,
+                    background: color,
                     marginRight: '0.5rem',
                   }}
                 />
                 <TargetLine r={r} />
               </div>
               <div style={{ fontSize: '0.85em', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <span style={{ color: `var(--${color})`, fontWeight: 600 }}>{r.status}</span> · {r.passed_rules}/
-                {r.total_rules} passed · {stamp(r.scanned_at)}
+                <span style={{ color: color, fontWeight: 600 }}>{r.status}</span> · {r.passed_rules}/
+                {r.total_rules} passed · {formatBackendDateTime(r.scanned_at)}
                 {r.status !== 'compliant' && (
                   <button className="btn btn-sm btn-secondary" onClick={() => onShowFindings(r.id)}>
                     View findings
@@ -399,8 +391,8 @@ function ResultsView({
     [results, query, scanFilter],
   );
 
-  if (loading) return <p className="text-muted">Loading scan results…</p>;
-  if (!results.length) return <p className="text-muted">No Meraki scan results yet.</p>;
+  if (loading) return <LoadingState text="Loading scan results…" />;
+  if (!results.length) return <EmptyState compact message="No Meraki scan results yet." />;
 
   return (
     <>
@@ -412,9 +404,9 @@ function ResultsView({
           </button>
         </div>
       )}
-      {filtered.length === 0 && <p className="text-muted">Nothing matches.</p>}
+      {filtered.length === 0 && <EmptyState compact message="Nothing matches." />}
       {filtered.map((r) => {
-        const color = statusColor(r.status);
+        const color = toneColor(complianceStatusTone(r.status));
         return (
           <div key={r.id} className="card card-sm">
             <div
@@ -427,12 +419,12 @@ function ResultsView({
               }}
             >
               <div>
-                <span style={{ color: `var(--${color})`, fontWeight: 600, marginRight: '0.5rem' }}>{r.status}</span>
+                <span style={{ color: color, fontWeight: 600, marginRight: '0.5rem' }}>{r.status}</span>
                 <TargetLine r={r} />
               </div>
               <div style={{ fontSize: '0.85em', color: 'var(--text-muted)', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                 {r.passed_rules}/{r.total_rules} passed
-                {r.unreadable_rules > 0 ? ` (${r.unreadable_rules} unreadable)` : ''} · {stamp(r.scanned_at)}
+                {r.unreadable_rules > 0 ? ` (${r.unreadable_rules} unreadable)` : ''} · {formatBackendDateTime(r.scanned_at)}
                 <button className="btn btn-sm btn-secondary" onClick={() => onShowFindings(r.id)}>
                   {r.failed_rules > 0 ? `View ${r.failed_rules} violation(s)` : 'View findings'}
                 </button>
