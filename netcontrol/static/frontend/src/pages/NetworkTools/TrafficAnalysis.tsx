@@ -449,5 +449,5 @@ function ErrorRow({ message }: { message: string }) {
 }
 
 function Skeleton() {
-  return <div className="skeleton-loader" style={{ height: '260px' }} />;
+  return <div className="skeleton" style={{ height: '260px' }} />;
 }

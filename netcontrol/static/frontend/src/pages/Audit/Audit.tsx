@@ -28,7 +28,7 @@ const SEVERITY_BADGE: Record<AuditSeverity, string> = {
   high: 'badge-danger',
   medium: 'badge-warning',
   low: 'badge-info',
-  info: 'badge-muted',
+  info: 'badge-secondary',
 };
 
 // Display order for severities (critical first). Used to sort within a
@@ -61,7 +61,7 @@ function statusBadge(status?: string) {
   if (status === 'partial') return 'badge-warning';
   if (status === 'failed') return 'badge-danger';
   if (status === 'running') return 'badge-info';
-  return 'badge-muted';
+  return 'badge-secondary';
 }
 
 function severityCounts(run: AuditRunSummary) {
@@ -70,7 +70,7 @@ function severityCounts(run: AuditRunSummary) {
     { label: 'High', count: run.findings_high, cls: 'badge-danger' },
     { label: 'Medium', count: run.findings_medium, cls: 'badge-warning' },
     { label: 'Low', count: run.findings_low, cls: 'badge-info' },
-    { label: 'Info', count: run.findings_info, cls: 'badge-muted' },
+    { label: 'Info', count: run.findings_info, cls: 'badge-secondary' },
   ];
   return parts.filter((p) => p.count > 0);
 }
@@ -398,7 +398,7 @@ function FilterChip(props: {
     <button
       type="button"
       onClick={props.onClick}
-      className={`badge ${props.badgeClass ?? 'badge-muted'}`}
+      className={`badge ${props.badgeClass ?? 'badge-secondary'}`}
       style={{
         cursor: 'pointer',
         border: props.active
@@ -554,7 +554,7 @@ function SchedulesCard() {
                 <td>
                   <span
                     className={`badge ${
-                      s.enabled ? 'badge-success' : 'badge-muted'
+                      s.enabled ? 'badge-success' : 'badge-secondary'
                     }`}
                   >
                     {s.enabled ? 'enabled' : 'paused'}
@@ -710,7 +710,7 @@ function ScheduleEditor({
                 type="button"
                 key={p.value}
                 className={`badge ${
-                  cadence === p.value ? 'badge-info' : 'badge-muted'
+                  cadence === p.value ? 'badge-info' : 'badge-secondary'
                 }`}
                 style={{ cursor: 'pointer' }}
                 onClick={() => setCadence(p.value)}
@@ -886,7 +886,7 @@ function OverridesCard() {
                     className={`badge ${
                       o.mode === 'accept_risk'
                         ? 'badge-warning'
-                        : 'badge-muted'
+                        : 'badge-secondary'
                     }`}
                   >
                     {o.mode}

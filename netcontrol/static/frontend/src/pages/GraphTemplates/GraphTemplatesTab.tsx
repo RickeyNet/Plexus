@@ -62,8 +62,8 @@ export function GraphTemplatesTab() {
             <button
               key={t.id}
               type="button"
-              className="card"
-              style={{ textAlign: 'left', padding: '1rem', cursor: 'pointer', border: 'none' }}
+              className="card card-clickable"
+              style={{ padding: '1rem', marginBottom: 0 }}
               onClick={() => setDetailId(t.id)}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
