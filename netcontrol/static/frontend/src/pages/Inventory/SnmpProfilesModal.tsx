@@ -6,6 +6,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
   type SnmpProfile,
@@ -66,7 +67,9 @@ export function SnmpProfilesModal({ onClose }: Props) {
         className="stack stack-sm"
         style={{ maxHeight: 360, overflow: 'auto', marginBottom: 'var(--space-3)' }}
       >
-        {profiles.isPending ? (
+        {profiles.isError && !profiles.data ? (
+          <QueryError what="SNMP profiles" query={profiles} />
+        ) : profiles.isPending ? (
           <LoadingState />
         ) : list.length === 0 ? (
           <EmptyState compact message="No SNMP profiles configured. Create one to get started." />

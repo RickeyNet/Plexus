@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 
 import { useCloudPolicyEffective, useCloudPolicyRules } from '@/api/cloud';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
 import { StatGrid, StatTile } from '@/components/StatTile';
 import type { CloudFilterState } from './CloudVisibility';
 import { formatCount, providerLabel, topologyResourceTypeLabel } from './helpers';
@@ -110,9 +111,11 @@ export function PolicyTab({ filter }: Props) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1rem' }}>
         <div>
           <h4 style={{ margin: '0 0 0.45rem' }}>Effective Policy Views</h4>
-          {effective.isPending && <LoadingState />}
-          {effective.error && <div style={{ color: 'var(--danger)' }}>Error: {(effective.error as Error).message}</div>}
-          {!views.length ? (
+          {effective.isError && !effective.data ? (
+            <QueryError what="effective policy views" query={effective} />
+          ) : effective.isPending ? (
+            <LoadingState />
+          ) : !views.length ? (
             <div className="card">
               <p className="text-muted" style={{ margin: 0 }}>No effective cloud policy views available for current filters.</p>
             </div>
@@ -170,9 +173,11 @@ export function PolicyTab({ filter }: Props) {
 
         <div>
           <h4 style={{ margin: '0 0 0.45rem' }}>Rule Inventory</h4>
-          {rulesQuery.isPending && <LoadingState />}
-          {rulesQuery.error && <div style={{ color: 'var(--danger)' }}>Error: {(rulesQuery.error as Error).message}</div>}
-          {!rules.length ? (
+          {rulesQuery.isError && !rulesQuery.data ? (
+            <QueryError what="policy rules" query={rulesQuery} />
+          ) : rulesQuery.isPending ? (
+            <LoadingState />
+          ) : !rules.length ? (
             <div className="card">
               <p className="text-muted" style={{ margin: 0 }}>No policy rules yet. Run discovery on an account, subscription or project to read its security groups, NSGs or firewall rules.</p>
             </div>

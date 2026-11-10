@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 
 import { PageHelp } from '@/components/PageHelp';
+import { QueryError } from '@/components/QueryError';
 import { TabBar } from '@/components/TabBar';
 import { BarChart, TimeSeriesChart } from '@/lib/echart';
 import { useInventoryGroupsFull } from '@/api/inventory';
@@ -138,10 +139,8 @@ export function TrafficAnalysis() {
           {tab === 'exporters' && <ExportersView />}
         </div>
 
-        {status.error && (
-          <div className="glass-card card" style={{ color: 'var(--warning)' }}>
-            Could not read collector status: {status.error.message}
-          </div>
+        {status.error && !status.data && (
+          <QueryError what="collector status" query={status} />
         )}
       </div>
     </>
@@ -172,11 +171,11 @@ function TopTalkersView({ hours, hostId }: { hours: number; hostId: number | nul
     <div className="chart-grid-2col">
       <div className="glass-card card">
         <h4 style={{ margin: '0 0 0.5rem' }}>Top Sources</h4>
-        <TalkerSection query={src} />
+        <TalkerSection query={src} what="top sources" />
       </div>
       <div className="glass-card card">
         <h4 style={{ margin: '0 0 0.5rem' }}>Top Destinations</h4>
-        <TalkerSection query={dst} />
+        <TalkerSection query={dst} what="top destinations" />
       </div>
     </div>
   );
@@ -186,11 +185,15 @@ interface QueryShape<T> {
   data?: T[];
   error: Error | null;
   isPending: boolean;
+  isFetching: boolean;
+  refetch: () => Promise<unknown>;
 }
 
-function TalkerSection({ query }: { query: QueryShape<FlowTalker> }) {
+function TalkerSection({ query, what }: { query: QueryShape<FlowTalker>; what: string }) {
+  if (query.error && !query.data) {
+    return <QueryError what={what} query={query} />;
+  }
   if (query.isPending) return <Skeleton />;
-  if (query.error) return <ErrorRow message={query.error.message} />;
   const rows = (query.data ?? []).slice(0, 10);
   if (rows.length === 0) return <NoData />;
 
@@ -229,8 +232,10 @@ function TalkerSection({ query }: { query: QueryShape<FlowTalker> }) {
 function ApplicationsView({ hours, hostId }: { hours: number; hostId: number | null }) {
   const apps = useFlowTopApplications({ hours, hostId });
 
+  if (apps.error && !apps.data) {
+    return <QueryError what="top applications" query={apps} />;
+  }
   if (apps.isPending) return <Skeleton />;
-  if (apps.error) return <ErrorRow message={apps.error.message} />;
   const rows = (apps.data ?? []).slice(0, 15);
   if (rows.length === 0) return <NoData />;
 
@@ -272,8 +277,10 @@ function ApplicationsView({ hours, hostId }: { hours: number; hostId: number | n
 function ConversationsView({ hours, hostId }: { hours: number; hostId: number | null }) {
   const convos = useFlowTopConversations({ hours, hostId });
 
+  if (convos.error && !convos.data) {
+    return <QueryError what="top conversations" query={convos} />;
+  }
   if (convos.isPending) return <Skeleton />;
-  if (convos.error) return <ErrorRow message={convos.error.message} />;
   const rows = (convos.data ?? []).slice(0, 20);
   if (rows.length === 0) return <NoData />;
 
@@ -313,8 +320,10 @@ function ConversationsView({ hours, hostId }: { hours: number; hostId: number | 
 function TimelineView({ hours, hostId }: { hours: number; hostId: number | null }) {
   const timeline = useFlowTimeline({ hours, hostId });
 
+  if (timeline.error && !timeline.data) {
+    return <QueryError what="traffic timeline" query={timeline} />;
+  }
   if (timeline.isPending) return <Skeleton />;
-  if (timeline.error) return <ErrorRow message={timeline.error.message} />;
   const points = timeline.data ?? [];
   if (points.length === 0) return <NoData />;
 
@@ -354,8 +363,10 @@ function TimelineView({ hours, hostId }: { hours: number; hostId: number | null 
 function ExportersView() {
   const exporters = useFlowExporters();
 
+  if (exporters.error && !exporters.data) {
+    return <QueryError what="flow exporters" query={exporters} />;
+  }
   if (exporters.isPending) return <Skeleton />;
-  if (exporters.error) return <ErrorRow message={exporters.error.message} />;
   const rows = exporters.data?.exporters ?? [];
   const cacheSize = exporters.data?.cache_size ?? 0;
 
@@ -439,12 +450,6 @@ function NoData() {
         Configure devices to export NetFlow/sFlow/IPFIX to the collector, or widen the time range.
       </p>
     </div>
-  );
-}
-
-function ErrorRow({ message }: { message: string }) {
-  return (
-    <div style={{ color: 'var(--danger)', padding: '0.5rem' }}>Failed to load: {message}</div>
   );
 }
 

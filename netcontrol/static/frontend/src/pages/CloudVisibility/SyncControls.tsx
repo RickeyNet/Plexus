@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { type ReactNode, useState } from 'react';
 
 import type { CloudSyncConfig, CloudSyncCursor, CloudSyncStatus } from '@/api/cloud';
 import { formatBackendDateTime } from '@/lib/datetime';
@@ -9,6 +9,8 @@ interface Props {
   config: CloudSyncConfig | null;
   status: CloudSyncStatus | null;
   cursors: CloudSyncCursor[];
+  /** Shown in place of the cursor table when the cursors request failed with nothing cached. */
+  cursorsError?: ReactNode;
   selectedAccountId: number | null;
   onSave: (cfg: CloudSyncConfig) => Promise<void>;
   onPullAll: () => Promise<void>;
@@ -17,7 +19,7 @@ interface Props {
   isPulling: boolean;
 }
 
-export function SyncControls({ kind, config, status, cursors, selectedAccountId, onSave, onPullAll, onPullSelected, isSaving, isPulling }: Props) {
+export function SyncControls({ kind, config, status, cursors, cursorsError, selectedAccountId, onSave, onPullAll, onPullSelected, isSaving, isPulling }: Props) {
   const [enabled, setEnabled] = useState<boolean>(false);
   const [interval, setInterval] = useState<number>(300);
   const [lookback, setLookback] = useState<number>(15);
@@ -108,7 +110,9 @@ export function SyncControls({ kind, config, status, cursors, selectedAccountId,
           </ul>
         </details>
       )}
-      {cursors.length > 0 ? (
+      {cursorsError ? (
+        <div style={{ marginTop: '0.75rem' }}>{cursorsError}</div>
+      ) : cursors.length > 0 ? (
         <div style={{ marginTop: '0.75rem', overflowX: 'auto' }}>
           <table className="data-table">
             <thead>

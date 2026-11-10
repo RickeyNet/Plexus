@@ -1,9 +1,9 @@
 import { useMemo } from 'react';
 
-import { Callout } from '@/components/Callout';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import { useBillingPeriodUsage } from '@/api/reports';
 import { StatGrid, StatTile } from '@/components/StatTile';
 import { TimeSeriesChart, type TimeSeries } from '@/lib/echart';
@@ -43,7 +43,9 @@ export function BillingPeriodModal({ periodId, onClose }: Props) {
       footer={<button type="button" className="btn btn-secondary" onClick={onClose}>Close</button>}
     >
       {query.isPending && <LoadingState />}
-      {query.error && <Callout tone="danger">Failed: {(query.error as Error).message}</Callout>}
+      {query.isError && !query.data && (
+        <QueryError what="billing period usage" query={query} />
+      )}
       {query.data && (() => {
         const p = query.data.period ?? {};
         const isOverage = p.status === 'overage';

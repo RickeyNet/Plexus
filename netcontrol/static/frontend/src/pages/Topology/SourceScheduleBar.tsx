@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import { useSourceSchedule, useUpdateSourceSchedule } from "@/api/meraki";
 import { Callout } from "@/components/Callout";
+import { QueryError } from "@/components/QueryError";
 
 /**
  * The schedule that collects every Meraki, Cato, Cisco FMC, Palo Alto
@@ -45,12 +46,9 @@ export function SourceScheduleBar() {
     }
   };
 
-  if (schedule.error) {
+  if (schedule.error && !schedule.data) {
     return (
-      <Callout tone="danger">
-        <strong>Failed to load the collection schedule:</strong>{" "}
-        {schedule.error.message}
-      </Callout>
+      <QueryError what="the collection schedule" query={schedule} />
     );
   }
 

@@ -27,9 +27,11 @@ import {
 } from '@/api/topology';
 import { groupLabel } from '@/api/inventory';
 import { topologyExportUrl, useMerakiSubnets, useTopologyDeepSearch, type MerakiSubnet, type TopologyExportPath } from '@/api/meraki';
+import { useDialogs } from '@/components/DialogProvider-context';
 import { LoadingState } from '@/components/LoadingState';
 import { Menu, MenuCheckboxItem, MenuItem, MenuSeparator } from '@/components/Menu';
 import { PageHelp } from '@/components/PageHelp';
+import { QueryError } from '@/components/QueryError';
 import { mixColors, withAlpha } from '@/lib/themeColors';
 import { AddToInventoryModal } from './AddToInventoryModal';
 import { BulkAddToInventoryModal } from './BulkAddToInventoryModal';
@@ -142,6 +144,7 @@ type SiteBoxes = Map<string, { name: string; title?: string; x0: number; y0: num
 
 export function Topology() {
   const qc = useQueryClient();
+  const { confirm } = useDialogs();
   const [groupFilter, setGroupFilter] = useState<string>('');
   const [layout, setLayout] = useState<LayoutMode>('tidy');
   const [labelsVisible, setLabelsVisible] = useState(false);
@@ -1462,6 +1465,13 @@ export function Topology() {
   }
 
   async function handleResetPositions() {
+    const saved = Object.keys(savedPositionsRef.current).length;
+    const ok = await confirm({
+      title: 'Reset node positions',
+      message: `Clear ${saved} saved node position${saved === 1 ? '' : 's'} and lay the map out again? Positions you dragged by hand are lost.`,
+      confirmLabel: 'Reset positions',
+    });
+    if (!ok) return;
     try {
       await deletePositions.mutateAsync();
       savedPositionsRef.current = {};
@@ -2083,7 +2093,7 @@ export function Topology() {
             ))}
             <MenuSeparator />
             <MenuItem onSelect={handleFit}>Fit to screen</MenuItem>
-            <MenuItem onSelect={handleResetPositions}>Reset Positions</MenuItem>
+            <MenuItem onSelect={() => void handleResetPositions()}>Reset Positions</MenuItem>
             <MenuCheckboxItem checked={settingsOpen} onChange={setSettingsOpen}>Layout settings</MenuCheckboxItem>
           </Menu>
           <Menu
@@ -2321,8 +2331,13 @@ export function Topology() {
           </div>
         )}
 
-        {topologyQuery.isPending && <LoadingState text="Loading topology…" />}
-        {topologyQuery.error && <div style={{ color: 'var(--danger)' }}>Error: {(topologyQuery.error as Error).message}</div>}
+        {topologyQuery.error && !rawData ? (
+          <QueryError what="topology" query={topologyQuery} />
+        ) : positionsQuery.error && !positions ? (
+          <QueryError what="saved node positions" query={positionsQuery} />
+        ) : (
+          (topologyQuery.isPending || positionsQuery.isPending) && <LoadingState text="Loading topology…" />
+        )}
 
         {data && !data.nodes.length && (
           <div className="card" style={{ padding: '1.5rem', textAlign: 'center' }}>

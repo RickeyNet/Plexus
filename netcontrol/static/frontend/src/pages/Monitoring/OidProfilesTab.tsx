@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
 
-import { Callout } from '@/components/Callout';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { useDeleteOidProfile, useOidProfiles, type OidProfile } from '@/api/monitoring';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import { OidProfileModal } from './OidProfileModal';
 
@@ -24,6 +25,7 @@ export function OidProfilesTab() {
   const [vendor, setVendor] = useState('');
   const query = useOidProfiles(vendor || null);
   const del = useDeleteOidProfile();
+  const deleting = usePendingKeys<number>();
 
   const [modalId, setModalId] = useState<number | null | 'new'>(null);
 
@@ -41,8 +43,12 @@ export function OidProfilesTab() {
 
   async function handleDelete(p: OidProfile) {
     if (!(await confirm({ title: 'Delete OID profile', message: `Delete OID profile "${p.name}"?`, confirmLabel: 'Delete' }))) return;
-    del.mutate(p.id, {
-      onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
+    await deleting.run(p.id, async () => {
+      try {
+        await del.mutateAsync(p.id);
+      } catch (e) {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      }
     });
   }
 
@@ -59,8 +65,11 @@ export function OidProfilesTab() {
         <button className="btn btn-primary" onClick={() => setModalId('new')}>+ New Profile</button>
       </div>
 
-      {query.isPending && <LoadingState />}
-      {query.error && <Callout tone="danger">Failed: {(query.error as Error).message}</Callout>}
+      {query.error && !query.data ? (
+        <QueryError what="OID profiles" query={query} />
+      ) : (
+        query.isPending && <LoadingState />
+      )}
       {query.data && (profiles.length === 0 ? (
         <div className="empty-state">No custom OID profiles. Click "+ New Profile" to create one.</div>
       ) : (
@@ -79,7 +88,7 @@ export function OidProfilesTab() {
                   </div>
                   <div style={{ display: 'flex', gap: '0.5rem' }}>
                     <button className="btn btn-sm btn-secondary" onClick={() => setModalId(p.id)}>Edit</button>
-                    <DeleteButton onClick={() => handleDelete(p)} />
+                    <DeleteButton busy={deleting.isPending(p.id)} onClick={() => void handleDelete(p)} />
                   </div>
                 </div>
                 <div className="text-muted" style={{ fontSize: '0.85em', marginTop: '0.25rem' }}>

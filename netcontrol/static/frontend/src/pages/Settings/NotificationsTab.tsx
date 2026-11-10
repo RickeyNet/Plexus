@@ -1,11 +1,13 @@
 import { useState } from 'react';
 
-import { Callout } from '@/components/Callout';
+import { BusyButton } from '@/components/BusyButton';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
 import { TabBar } from '@/components/TabBar';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 import {
   NotificationChannel,
   NotificationChannelStats,
@@ -17,6 +19,8 @@ import {
   useTestNotificationChannel,
   useUpdateNotificationChannel,
 } from '@/api/settings';
+
+import type { FormStatus } from './StatusLine';
 
 const TYPES: NotificationChannelType[] = ['email', 'pagerduty', 'webhook', 'teams'];
 const TYPE_LABELS: Record<string, string> = {
@@ -200,24 +204,24 @@ export function NotificationsTab() {
   const deleteMut = useDeleteNotificationChannel();
   const testMut = useTestNotificationChannel();
   const defaultsMut = useSetNotificationDefaults();
+  const testing = usePendingKeys<string>();
+  const deleting = usePendingKeys<string>();
   const [editing, setEditing] = useState<NotificationChannel | null>(null);
-  const [status, setStatus] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+  const [status, setStatus] = useState<FormStatus | null>(null);
   const [testResults, setTestResults] = useState<Record<string, { ok: boolean; error: string }>>(
     {},
   );
 
-  if (query.isLoading) return <LoadingState />;
-  if (query.isError)
+  if (query.isError && !query.data)
     return (
-      <Callout tone="danger">
-        Failed to load notification channels: {(query.error as Error).message}
-      </Callout>
+      <QueryError what="notification channels" query={query} />
     );
+  if (!query.data) return <LoadingState />;
 
-  const channels = query.data?.channels ?? [];
-  const defaults = query.data?.default_channel_ids ?? [];
+  const channels = query.data.channels ?? [];
+  const defaults = query.data.default_channel_ids ?? [];
   const statsById = new Map<string, NotificationChannelStats>(
-    (query.data?.stats ?? []).map((s) => [s.id, s]),
+    (query.data.stats ?? []).map((s) => [s.id, s]),
   );
 
   const onSave = () => {
@@ -257,20 +261,25 @@ export function NotificationsTab() {
       }))
     )
       return;
-    deleteMut.mutate(c.id, {
-      onSuccess: () => setStatus({ kind: 'success', message: `Channel ${c.name || c.id} deleted.` }),
-      onError: (err) =>
-        setStatus({ kind: 'error', message: `Failed to delete channel: ${(err as Error).message}` }),
+    await deleting.run(c.id, async () => {
+      try {
+        await deleteMut.mutateAsync(c.id);
+        setStatus({ kind: 'success', message: `Channel ${c.name || c.id} deleted.` });
+      } catch (err) {
+        setStatus({ kind: 'error', message: `Failed to delete channel: ${(err as Error).message}` });
+      }
     });
   };
 
-  const onTest = (c: NotificationChannel) => {
-    testMut.mutate(c.id, {
-      onSuccess: (res) => setTestResults((prev) => ({ ...prev, [c.id]: res })),
-      onError: (err) =>
-        setTestResults((prev) => ({ ...prev, [c.id]: { ok: false, error: (err as Error).message } })),
+  const onTest = (c: NotificationChannel) =>
+    testing.run(c.id, async () => {
+      try {
+        const res = await testMut.mutateAsync(c.id);
+        setTestResults((prev) => ({ ...prev, [c.id]: res }));
+      } catch (err) {
+        setTestResults((prev) => ({ ...prev, [c.id]: { ok: false, error: (err as Error).message } }));
+      }
     });
-  };
 
   const toggleDefault = (id: string) => {
     const next = defaults.includes(id) ? defaults.filter((d) => d !== id) : [...defaults, id];
@@ -338,6 +347,7 @@ export function NotificationsTab() {
                       <input
                         type="checkbox"
                         checked={defaults.includes(c.id)}
+                        disabled={defaultsMut.isPending}
                         onChange={() => toggleDefault(c.id)}
                         title="Use this channel for alerts not tied to a rule"
                       />
@@ -385,13 +395,18 @@ export function NotificationsTab() {
                         : st?.last_error || ''}
                     </td>
                     <td style={{ whiteSpace: 'nowrap' }}>
-                      <button className="btn btn-xs btn-ghost" onClick={() => onTest(c)}>
+                      <BusyButton
+                        className="btn btn-xs btn-ghost"
+                        busy={testing.isPending(c.id)}
+                        busyLabel="Testing…"
+                        onClick={() => void onTest(c)}
+                      >
                         Test
-                      </button>{' '}
+                      </BusyButton>{' '}
                       <button className="btn btn-xs btn-ghost" onClick={() => setEditing({ ...c })}>
                         Edit
                       </button>{' '}
-                      <DeleteButton size="xs" onClick={() => onDelete(c)} />
+                      <DeleteButton size="xs" onClick={() => void onDelete(c)} busy={deleting.isPending(c.id)} />
                     </td>
                   </tr>
                 );
@@ -715,9 +730,9 @@ function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }
       </details>
 
       <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
-        <button className="btn btn-primary" onClick={onSave} disabled={saving}>
-          {saving ? 'Saving…' : isEdit ? 'Save Changes' : 'Create Channel'}
-        </button>
+        <BusyButton className="btn btn-primary" onClick={onSave} busy={saving} busyLabel="Saving…">
+          {isEdit ? 'Save Changes' : 'Create Channel'}
+        </BusyButton>
         <button className="btn btn-ghost" onClick={onCancel} disabled={saving}>
           Cancel
         </button>

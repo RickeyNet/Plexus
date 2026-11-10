@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { SeverityBadge } from '@/components/Badge';
+import { BusyButton } from '@/components/BusyButton';
 import { DeleteButton } from '@/components/DeleteButton';
 import { LoadingState } from '@/components/LoadingState';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
+import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { TabBar } from '@/components/TabBar';
 import { useAuthStatus } from '@/api/auth';
@@ -24,6 +26,7 @@ import {
 } from '@/api/software';
 import { visibleTabs } from '@/lib/tabGating';
 import { usePathTab } from '@/lib/usePathTab';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 import { UpgradesContent } from '@/pages/Upgrades/Upgrades';
 import { formatBackendDateTime } from '@/lib/datetime';
 
@@ -111,6 +114,7 @@ function VersionsTab() {
   const deleteAdvisory = useDeleteSoftwareAdvisory();
   const startSync = useStartPsirtSync();
   const syncJob = usePsirtSyncJob(syncJobId);
+  const acknowledging = usePendingKeys<number>();
 
   const data = overview.data;
   const summary = data?.summary;
@@ -156,13 +160,14 @@ function VersionsTab() {
     }
   };
 
-  const handleAcknowledge = async (a: SoftwareAlert) => {
-    try {
-      await acknowledge.mutateAsync(a.id);
-    } catch (err) {
-      void alert({ message: (err as Error).message, variant: 'error' });
-    }
-  };
+  const handleAcknowledge = (a: SoftwareAlert) =>
+    acknowledging.run(a.id, async () => {
+      try {
+        await acknowledge.mutateAsync(a.id);
+      } catch (err) {
+        void alert({ message: (err as Error).message, variant: 'error' });
+      }
+    });
 
   const handleDelete = async (adv: SoftwareAdvisory) => {
     const ok = await confirm({
@@ -272,6 +277,9 @@ function VersionsTab() {
       />
 
       <div className="stack">
+        {syncJobId && syncJob.isError && !syncJob.data && (
+          <QueryError what="Cisco PSIRT sync status" query={syncJob} />
+        )}
         {syncJobId && syncJob.data && (
           <div
             className="card card-sm"
@@ -304,51 +312,62 @@ function VersionsTab() {
           </div>
         )}
 
-        <div
-          className="stats-grid"
-          style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 'var(--space-4)' }}
-        >
-          {summaryCards.map((card) => (
-            <div key={card.label} className="stat-card">
-              <div className="stat-value" style={card.color ? { color: card.color } : undefined}>
-                {String(card.value)}
-              </div>
-              <div className="stat-label">{card.label}</div>
+        {overview.isError && !overview.data ? (
+          <QueryError what="software overview" query={overview} />
+        ) : (
+          <>
+            <div
+              className="stats-grid"
+              style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 'var(--space-4)' }}
+            >
+              {summaryCards.map((card) => (
+                <div key={card.label} className="stat-card">
+                  <div className="stat-value" style={card.color ? { color: card.color } : undefined}>
+                    {String(card.value)}
+                  </div>
+                  <div className="stat-label">{card.label}</div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
 
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'minmax(0, 2fr) minmax(340px, 1fr)',
-            gap: '1rem',
-            alignItems: 'start',
-          }}
-        >
-          <div style={{ display: 'grid', gap: '1rem' }}>
-            <DevicesCard
-              devices={devices}
-              loading={overview.isPending}
-              filtered={Boolean(platform || source || search)}
-              onHistory={(device) => setModal({ kind: 'history', device })}
-            />
-            <AlertsCard alerts={alerts} canWrite={canWrite} onAcknowledge={handleAcknowledge} />
-          </div>
-          <div style={{ display: 'grid', gap: '1rem' }}>
-            <SpreadCard spread={spread} />
-            <AdvisoriesCard
-              advisories={advisories}
-              canWrite={canWrite}
-              platformLabel={platformLabel}
-              onAdd={() => setModal({ kind: 'advisory', advisory: null })}
-              onImport={() => setModal({ kind: 'import' })}
-              onEdit={(advisory) => setModal({ kind: 'advisory', advisory })}
-              onDelete={handleDelete}
-            />
-            <ChangesCard changes={changes} platformLabel={platformLabel} />
-          </div>
-        </div>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'minmax(0, 2fr) minmax(340px, 1fr)',
+                gap: '1rem',
+                alignItems: 'start',
+              }}
+            >
+              <div style={{ display: 'grid', gap: '1rem' }}>
+                <DevicesCard
+                  devices={devices}
+                  loading={overview.isPending}
+                  filtered={Boolean(platform || source || search)}
+                  onHistory={(device) => setModal({ kind: 'history', device })}
+                />
+                <AlertsCard
+                  alerts={alerts}
+                  canWrite={canWrite}
+                  onAcknowledge={(a) => void handleAcknowledge(a)}
+                  isAcknowledging={acknowledging.isPending}
+                />
+              </div>
+              <div style={{ display: 'grid', gap: '1rem' }}>
+                <SpreadCard spread={spread} />
+                <AdvisoriesCard
+                  advisories={advisories}
+                  canWrite={canWrite}
+                  platformLabel={platformLabel}
+                  onAdd={() => setModal({ kind: 'advisory', advisory: null })}
+                  onImport={() => setModal({ kind: 'import' })}
+                  onEdit={(advisory) => setModal({ kind: 'advisory', advisory })}
+                  onDelete={handleDelete}
+                />
+                <ChangesCard changes={changes} platformLabel={platformLabel} />
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       {modal.kind === 'advisory' && (
@@ -520,9 +539,10 @@ interface AlertsCardProps {
   alerts: SoftwareAlert[];
   canWrite: boolean;
   onAcknowledge: (alert: SoftwareAlert) => void;
+  isAcknowledging: (alertId: number) => boolean;
 }
 
-function AlertsCard({ alerts, canWrite, onAcknowledge }: AlertsCardProps) {
+function AlertsCard({ alerts, canWrite, onAcknowledge, isAcknowledging }: AlertsCardProps) {
   const open = alerts.filter((a) => !a.acknowledged).length;
   return (
     <div className="card">
@@ -565,9 +585,13 @@ function AlertsCard({ alerts, canWrite, onAcknowledge }: AlertsCardProps) {
                   )}
                 </div>
                 {canWrite && !a.acknowledged && (
-                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => onAcknowledge(a)}>
+                  <BusyButton
+                    className="btn btn-secondary btn-sm"
+                    busy={isAcknowledging(a.id)}
+                    onClick={() => onAcknowledge(a)}
+                  >
                     Acknowledge
-                  </button>
+                  </BusyButton>
                 )}
               </div>
             </div>

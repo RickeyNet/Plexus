@@ -4,6 +4,7 @@ import { DataTable } from '@/components/DataTable';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import { TabBar } from '@/components/TabBar';
 import {
   useSlaCompliance,
@@ -43,13 +44,21 @@ export function SlaTab() {
         </select>
       </div>
 
-      <SlaComplianceStrip compliance={summary.data?.compliance} />
+      {summary.error && !summary.data ? (
+        <QueryError what="SLA summary" query={summary} />
+      ) : summary.isPending ? (
+        <LoadingState />
+      ) : (
+        <>
+          <SlaComplianceStrip compliance={summary.data.compliance} />
 
-      <SlaGauges summary={summary.data} />
+          <SlaGauges summary={summary.data} />
+        </>
+      )}
 
       <TabBar tabs={SUB_TABS} active={subTab} onChange={setSubTab} size="sm" aria-label="SLA views" />
 
-      {subTab === 'hosts' && (
+      {subTab === 'hosts' && summary.data && (
         <>
           <input
             className="form-input"
@@ -65,7 +74,7 @@ export function SlaTab() {
           <SlaIncidents summary={summary.data} />
         </>
       )}
-      {subTab === 'trends' && <SlaTrends summary={summary.data} days={days} />}
+      {subTab === 'trends' && summary.data && <SlaTrends summary={summary.data} days={days} />}
 
       {detailHostId != null && (
         <SlaHostDetailModal
@@ -238,8 +247,12 @@ function SlaTrends({ summary, days }: { summary?: { hosts: SlaHostSummary[] }; d
   if (!firstHostId) {
     return <div className="card text-muted">No trend data available.</div>;
   }
+  if (detail.error && !detail.data) {
+    return (
+      <QueryError what="SLA trends" query={detail} />
+    );
+  }
   if (detail.isPending) return <LoadingState />;
-  if (detail.error) return <div style={{ color: 'var(--danger)' }}>Error: {(detail.error as Error).message}</div>;
   const daily = detail.data?.daily ?? [];
   return (
     <div className="stack stack-sm">
@@ -351,8 +364,11 @@ function SlaHostDetailModal({ hostId, days, onClose }: { hostId: number; days: n
   const detail = useSlaHostDetail(hostId, days);
   return (
     <Modal isOpen onClose={onClose} title={`SLA Detail: ${detail.data?.hostname ?? `Host #${hostId}`}`} size="medium">
-      {detail.isPending && <LoadingState />}
-      {detail.error && <div style={{ color: 'var(--danger)' }}>Error: {(detail.error as Error).message}</div>}
+      {detail.error && !detail.data ? (
+        <QueryError what="SLA detail" query={detail} />
+      ) : (
+        detail.isPending && <LoadingState />
+      )}
       {detail.data && (
         <div className="stack">
           <div style={{ display: 'flex', gap: 'var(--space-5)', flexWrap: 'wrap', fontSize: '0.9em' }}>
@@ -394,6 +410,11 @@ function SlaHostTargets({ hostId }: { hostId: number }) {
   const history = useSlaComplianceHistory(hostId, 10);
   const rows = compliance.data ?? [];
   const changes = history.data ?? [];
+  if (compliance.error && !compliance.data) {
+    return (
+      <QueryError what="SLA targets" query={compliance} />
+    );
+  }
   if (rows.length === 0 && changes.length === 0) return null;
   return (
     <div className="card card-sm">

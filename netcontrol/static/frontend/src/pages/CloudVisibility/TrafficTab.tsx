@@ -12,6 +12,7 @@ import {
 } from '@/api/cloud';
 import { Callout } from '@/components/Callout';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
 import { StatGrid, StatTile } from '@/components/StatTile';
 import { formatBackendDateTime, formatBackendTime } from '@/lib/datetime';
 import type { CloudFilterState } from './CloudVisibility';
@@ -97,38 +98,47 @@ export function TrafficTab({ filter }: Props) {
 
       <div className="stack stack-sm">
         <h3 style={{ margin: 0 }}>Traffic Sync Controls</h3>
-        <SyncControls
-          kind="Traffic"
-          config={syncConfig.data?.config ?? null}
-          status={syncConfig.data?.status ?? null}
-          cursors={syncCursors.data?.cursors ?? []}
-          selectedAccountId={filter.accountId}
-          isSaving={updateConfig.isPending}
-          isPulling={triggerPull.isPending}
-          onSave={async (cfg) => {
-            try {
-              await updateConfig.mutateAsync(cfg);
-              flash('success', 'Cloud traffic sync config saved');
-            } catch (e) {
-              flash('error', `Saving traffic sync config failed: ${(e as Error).message}`);
+        {syncConfig.isError && !syncConfig.data ? (
+          <QueryError what="traffic sync config" query={syncConfig} />
+        ) : (
+          <SyncControls
+            kind="Traffic"
+            config={syncConfig.data?.config ?? null}
+            status={syncConfig.data?.status ?? null}
+            cursors={syncCursors.data?.cursors ?? []}
+            cursorsError={
+              syncCursors.isError && !syncCursors.data && (
+                <QueryError what="sync cursors" query={syncCursors} />
+              )
             }
-          }}
-          onPullAll={async () => {
-            try {
-              showPull('Traffic pull', await triggerPull.mutateAsync(null));
-            } catch (e) {
-              flash('error', `Traffic pull failed: ${(e as Error).message}`);
-            }
-          }}
-          onPullSelected={async () => {
-            if (!filter.accountId) return;
-            try {
-              showPull('Traffic pull (selected account)', await triggerPull.mutateAsync(filter.accountId));
-            } catch (e) {
-              flash('error', `Traffic pull failed: ${(e as Error).message}`);
-            }
-          }}
-        />
+            selectedAccountId={filter.accountId}
+            isSaving={updateConfig.isPending}
+            isPulling={triggerPull.isPending}
+            onSave={async (cfg) => {
+              try {
+                await updateConfig.mutateAsync(cfg);
+                flash('success', 'Cloud traffic sync config saved');
+              } catch (e) {
+                flash('error', `Saving traffic sync config failed: ${(e as Error).message}`);
+              }
+            }}
+            onPullAll={async () => {
+              try {
+                showPull('Traffic pull', await triggerPull.mutateAsync(null));
+              } catch (e) {
+                flash('error', `Traffic pull failed: ${(e as Error).message}`);
+              }
+            }}
+            onPullSelected={async () => {
+              if (!filter.accountId) return;
+              try {
+                showPull('Traffic pull (selected account)', await triggerPull.mutateAsync(filter.accountId));
+              } catch (e) {
+                flash('error', `Traffic pull failed: ${(e as Error).message}`);
+              }
+            }}
+          />
+        )}
       </div>
       {actionMsg && (
         <Callout tone={actionMsg.kind === 'success' ? 'success' : 'danger'}>{actionMsg.text}</Callout>
@@ -143,25 +153,30 @@ export function TrafficTab({ filter }: Props) {
             </small>
           )}
         </h3>
-        {summary.isPending && <LoadingState />}
-        {summary.error && <div style={{ color: 'var(--danger)' }}>Error: {(summary.error as Error).message}</div>}
-        <StatGrid compact>
-          <StatTile label="Samples" value={formatCount(s.sample_count)} />
-          <StatTile label="Metric Names" value={formatCount(s.metric_count)} />
-          <StatTile label="Resources" value={formatCount(s.resource_count)} />
-          <StatTile label="Total Value" value={formatMetricValue(s.total_value)} />
-          <StatTile label="Average Value" value={formatMetricValue(s.avg_value)} />
-          <StatTile label="Last Seen" value={formatBackendDateTime(s.last_seen)} />
-        </StatGrid>
+        {summary.isError && !summary.data ? (
+          <QueryError what="traffic metric summary" query={summary} />
+        ) : (
+          <>
+            {summary.isPending && <LoadingState />}
+            <StatGrid compact>
+              <StatTile label="Samples" value={formatCount(s.sample_count)} />
+              <StatTile label="Metric Names" value={formatCount(s.metric_count)} />
+              <StatTile label="Resources" value={formatCount(s.resource_count)} />
+              <StatTile label="Total Value" value={formatMetricValue(s.total_value)} />
+              <StatTile label="Average Value" value={formatMetricValue(s.avg_value)} />
+              <StatTile label="Last Seen" value={formatBackendDateTime(s.last_seen)} />
+            </StatGrid>
+          </>
+        )}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 'var(--space-4)' }}>
         <div>
           <h4 style={{ margin: '0 0 0.45rem' }}>Top Resources</h4>
-          {resources.isPending ? (
+          {resources.isError && !resources.data ? (
+            <QueryError what="top resources" query={resources} />
+          ) : resources.isPending ? (
             <div className="card"><LoadingState variant="inline" /></div>
-          ) : resources.error ? (
-            <div className="card"><p style={{ margin: 0, color: 'var(--danger)' }}>Failed to load top resources: {(resources.error as Error).message}</p></div>
           ) : !rList.length ? (
             <div className="card"><p className="text-muted" style={{ margin: 0 }}>No traffic metric resources for current filters.</p></div>
           ) : (
@@ -186,10 +201,10 @@ export function TrafficTab({ filter }: Props) {
         </div>
         <div>
           <h4 style={{ margin: '0 0 0.45rem' }}>Metric Timeline</h4>
-          {timeline.isPending ? (
+          {timeline.isError && !timeline.data ? (
+            <QueryError what="timeline" query={timeline} />
+          ) : timeline.isPending ? (
             <div className="card"><LoadingState variant="inline" /></div>
-          ) : timeline.error ? (
-            <div className="card"><p style={{ margin: 0, color: 'var(--danger)' }}>Failed to load timeline: {(timeline.error as Error).message}</p></div>
           ) : !tlList.length ? (
             <div className="card"><p className="text-muted" style={{ margin: 0 }}>No timeline data available for current filters.</p></div>
           ) : (

@@ -1,4 +1,4 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, type ReactNode, useState } from 'react';
 
 import { Callout } from '@/components/Callout';
 import { DeleteButton } from '@/components/DeleteButton';
@@ -18,10 +18,13 @@ interface Props {
   subnet: string;
   detail: IpamSubnetDetail | undefined;
   isLoading: boolean;
+  /** Shown in place of the drilldown when the detail request failed with nothing cached. */
+  loadError: ReactNode;
   onRefresh: () => void;
 }
 
-export function SubnetDrilldown({ subnet, detail, isLoading, onRefresh }: Props) {
+export function SubnetDrilldown({ subnet, detail, isLoading, loadError, onRefresh }: Props) {
+  if (loadError) return loadError;
   if (isLoading) {
     return (
       <LoadingState text="Loading subnet allocations and reservation data…" />

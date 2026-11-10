@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react';
+import { type ReactNode, useMemo, useState } from 'react';
 
 import { LoadingState } from '@/components/LoadingState';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
+import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
   FloorPlacement,
@@ -61,6 +62,22 @@ export function FloorPlan() {
 
   const confirmDeleteFloor = useConfirmDeleteFloor();
 
+  const sitesError = sites.isError && !sites.data && (
+    <QueryError what="sites" query={sites} />
+  );
+  const floorsError = site.isError && !site.data && (
+    <QueryError what="floors" query={site} />
+  );
+  const floorError = floor.isError && !floor.data && (
+    <QueryError what="floor" query={floor} />
+  );
+  const placementsError = placements.isError && !placements.data && (
+    <QueryError what="device placements" query={placements} />
+  );
+  const inventoryError = inventory.isError && !inventory.data && (
+    <QueryError what="inventory devices" query={inventory} />
+  );
+
   return (
     <>
       <PageHeader title="Floor Plan Mapping">
@@ -98,9 +115,11 @@ export function FloorPlan() {
         <SitesPanel
           sites={sites.data}
           loading={sites.isPending}
+          loadError={sitesError}
           activeSiteId={siteId}
           activeFloorId={floorId}
-          siteFloors={site.data?.floors ?? []}
+          siteFloors={site.data?.floors}
+          floorsError={floorsError}
           onSelectSite={(id) => {
             setSiteId(id);
             setFloorId(null);
@@ -115,6 +134,7 @@ export function FloorPlan() {
         <CanvasPanel
           site={site.data ?? null}
           floor={floor.data ?? null}
+          floorError={floorError || placementsError}
           placements={placements.data ?? []}
           placementsLoading={floor.data !== null && placements.isPending}
           placeMode={placeMode}
@@ -135,6 +155,7 @@ export function FloorPlan() {
             }
           }}
           unplaced={unplaced}
+          unplacedError={inventoryError}
         />
       </div>
 
@@ -157,17 +178,21 @@ export function FloorPlan() {
 function SitesPanel({
   sites,
   loading,
+  loadError,
   activeSiteId,
   activeFloorId,
   siteFloors,
+  floorsError,
   onSelectSite,
   onSelectFloor,
 }: {
   sites: GeoSiteSummary[] | undefined;
   loading: boolean;
+  loadError: ReactNode;
   activeSiteId: number | null;
   activeFloorId: number | null;
-  siteFloors: GeoFloor[];
+  siteFloors: GeoFloor[] | undefined;
+  floorsError: ReactNode;
   onSelectSite: (id: number) => void;
   onSelectFloor: (id: number) => void;
 }) {
@@ -184,8 +209,9 @@ function SitesPanel({
         padding: '0.5rem',
       }}
     >
+      {loadError}
       {loading && <LoadingState text="Loading sites…" />}
-      {!loading && (!sites || sites.length === 0) && (
+      {sites && sites.length === 0 && (
         <div style={{ padding: '0.75rem', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
           No sites yet.
           <br />
@@ -238,6 +264,7 @@ function SitesPanel({
             {isActive && (
               <FloorList
                 floors={siteFloors}
+                loadError={floorsError}
                 activeFloorId={activeFloorId}
                 onSelect={onSelectFloor}
               />
@@ -251,10 +278,12 @@ function SitesPanel({
 
 function FloorList({
   floors,
+  loadError,
   activeFloorId,
   onSelect,
 }: {
-  floors: GeoFloor[];
+  floors: GeoFloor[] | undefined;
+  loadError: ReactNode;
   activeFloorId: number | null;
   onSelect: (id: number) => void;
 }) {
@@ -263,12 +292,13 @@ function FloorList({
       style={{ display: 'block', marginTop: '0.4rem', paddingLeft: '0.6rem' }}
       onClick={(e) => e.stopPropagation()}
     >
-      {floors.length === 0 && (
+      {loadError}
+      {floors && floors.length === 0 && (
         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
           No floors - add one above
         </div>
       )}
-      {floors.map((f) => {
+      {floors?.map((f) => {
         const isActive = activeFloorId === f.id;
         return (
           <div
@@ -302,6 +332,7 @@ function FloorList({
 function CanvasPanel({
   site,
   floor,
+  floorError,
   placements,
   placementsLoading,
   placeMode,
@@ -311,9 +342,11 @@ function CanvasPanel({
   onEditFloor,
   onDeleteFloor,
   unplaced,
+  unplacedError,
 }: {
   site: { name: string } | null;
   floor: GeoFloor | null;
+  floorError: ReactNode;
   placements: FloorPlacement[];
   placementsLoading: boolean;
   placeMode: boolean;
@@ -323,6 +356,7 @@ function CanvasPanel({
   onEditFloor: () => void;
   onDeleteFloor: () => void;
   unplaced: InventoryHost[];
+  unplacedError: ReactNode;
 }) {
   const breadcrumb = floor
     ? `${site?.name ?? '-'} › ${floor.name}`
@@ -411,7 +445,8 @@ function CanvasPanel({
           padding: floor?.image_filename ? 0 : '1rem',
         }}
       >
-        {!floor && (
+        {floorError}
+        {!floor && !floorError && (
           <div
             style={{
               display: 'flex',
@@ -440,7 +475,7 @@ function CanvasPanel({
         {floor && placementsLoading && (
           <LoadingState text="Loading floor…" />
         )}
-        {floor && !placementsLoading && (
+        {floor && !placementsLoading && !floorError && (
           <FloorCanvas
             floor={floor}
             placements={placements}
@@ -450,7 +485,7 @@ function CanvasPanel({
       </div>
 
       {placeMode && floor && (
-        <UnplacedDevicesSidebar hosts={unplaced} />
+        <UnplacedDevicesSidebar hosts={unplaced} loadError={unplacedError} />
       )}
     </div>
   );
@@ -458,7 +493,13 @@ function CanvasPanel({
 
 // ── Bottom: unplaced devices sidebar (drag source) ─────────────────────────
 
-function UnplacedDevicesSidebar({ hosts }: { hosts: InventoryHost[] }) {
+function UnplacedDevicesSidebar({
+  hosts,
+  loadError,
+}: {
+  hosts: InventoryHost[];
+  loadError: ReactNode;
+}) {
   return (
     <div
       style={{
@@ -478,7 +519,9 @@ function UnplacedDevicesSidebar({ hosts }: { hosts: InventoryHost[] }) {
       >
         UNPLACED DEVICES - drag onto the floor plan above
       </div>
-      {hosts.length === 0 ? (
+      {loadError ? (
+        loadError
+      ) : hosts.length === 0 ? (
         <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
           All devices placed.
         </span>

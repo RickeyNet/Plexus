@@ -16,9 +16,10 @@ import {
   useUpdatesConfig,
   useUpdatesStatus,
 } from '@/api/adminUpdates';
-import { Callout } from '@/components/Callout';
+import { BusyButton } from '@/components/BusyButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
 import { formatBackendDateTime } from '@/lib/datetime';
 
 const CHANNEL_LABELS: Record<UpdateChannel, string> = {
@@ -90,27 +91,23 @@ export function SystemTab() {
     }
   }
 
-  if (status.isLoading || configQ.isLoading || !draft) {
+  if (status.isError && !status.data) {
+    return (
+      <QueryError what="update status" query={status} />
+    );
+  }
+  if (configQ.isError && !configQ.data) {
+    return (
+      <QueryError what="update config" query={configQ} />
+    );
+  }
+  if (!status.data || !configQ.data || !draft) {
     return <LoadingState />;
   }
-  if (status.isError) {
-    return (
-      <Callout tone="danger">
-        Failed to load update status: {(status.error as Error).message}
-      </Callout>
-    );
-  }
-  if (configQ.isError) {
-    return (
-      <Callout tone="danger">
-        Failed to load update config: {(configQ.error as Error).message}
-      </Callout>
-    );
-  }
 
-  const cur = status.data!.current;
-  const saved = configQ.data!;
-  const last = check.data ?? status.data!.last_check ?? null;
+  const cur = status.data.current;
+  const saved = configQ.data;
+  const last = check.data ?? status.data.last_check ?? null;
   const busy = isUpdateBusy(progress);
   const draftChanged =
     draft.channel !== saved.channel ||
@@ -264,14 +261,15 @@ export function SystemTab() {
         )}
 
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-          <button
-            type="button"
+          <BusyButton
             className="btn btn-primary btn-sm"
-            disabled={!draftChanged || save.isPending}
+            busy={save.isPending}
+            busyLabel="Saving…"
+            disabled={!draftChanged}
             onClick={onSave}
           >
-            {save.isPending ? 'Saving…' : 'Save channel settings'}
-          </button>
+            Save channel settings
+          </BusyButton>
           {savedMsg && (
             <span
               className={savedMsg.startsWith('Save failed') ? 'error' : 'text-muted'}
@@ -293,19 +291,23 @@ export function SystemTab() {
           snapshots the database, runs <code>deploy/upgrade.sh</code>, waits for the health
           check, and keeps a rollback target.
         </p>
+        {progressQ.isError && !progress && (
+          <QueryError what="updater status" query={progressQ} />
+        )}
         {progress && !progress.agent_installed && (
           <p className="text-muted" style={{ ...mutedSmall, marginTop: 0 }}>
             {AGENT_MISSING}
           </p>
         )}
-        <button
-          type="button"
+        <BusyButton
           className="btn btn-secondary btn-sm"
-          disabled={check.isPending || saved.channel === 'disabled'}
+          busy={check.isPending}
+          busyLabel="Checking…"
+          disabled={saved.channel === 'disabled'}
           onClick={() => check.mutate()}
         >
-          {check.isPending ? 'Checking…' : 'Check now'}
-        </button>
+          Check now
+        </BusyButton>
 
         {last && (
           <CheckResultBox
@@ -316,7 +318,9 @@ export function SystemTab() {
                 ? {
                     target: last.latest_version,
                     disabledReason: !progress
-                      ? 'Loading updater status…'
+                      ? progressQ.isError
+                        ? 'Updater status is unavailable.'
+                        : 'Loading updater status…'
                       : !progress.agent_installed
                         ? AGENT_MISSING
                         : saved.channel === 'disabled'
@@ -338,7 +342,8 @@ export function SystemTab() {
         busy={busy}
         actionMsg={actionMsg}
         waitingForRestart={watch != null}
-        rollbackDisabled={busy || rollback.isPending || saved.channel === 'disabled'}
+        rollbackDisabled={busy || saved.channel === 'disabled'}
+        rollbackPending={rollback.isPending}
         onRollback={onRollback}
       />
     </div>
@@ -453,15 +458,16 @@ function CheckResultBox({
       )}
       {install && (
         <div style={{ marginTop: '0.75rem' }}>
-          <button
-            type="button"
+          <BusyButton
             className="btn btn-primary btn-sm"
-            disabled={install.disabledReason != null || install.pending}
+            busy={install.pending}
+            busyLabel="Queueing…"
+            disabled={install.disabledReason != null}
             title={install.disabledReason ?? undefined}
             onClick={() => install.onInstall(install.target)}
           >
-            {install.pending ? 'Queueing…' : `Install ${install.target}`}
-          </button>
+            {`Install ${install.target}`}
+          </BusyButton>
           {install.disabledReason && (
             <div className="text-muted" style={{ ...mutedSmall, marginTop: '0.25rem' }}>
               {install.disabledReason}
@@ -479,6 +485,7 @@ function UpdateProgressPanel({
   actionMsg,
   waitingForRestart,
   rollbackDisabled,
+  rollbackPending,
   onRollback,
 }: {
   progress: UpdateProgress | undefined;
@@ -486,6 +493,7 @@ function UpdateProgressPanel({
   actionMsg: string | null;
   waitingForRestart: boolean;
   rollbackDisabled: boolean;
+  rollbackPending: boolean;
   onRollback: () => void;
 }) {
   if (!progress) return null;
@@ -563,15 +571,16 @@ function UpdateProgressPanel({
         )}
         {progress.rollback_available && (
           <div>
-            <button
-              type="button"
+            <BusyButton
               className="btn btn-secondary btn-sm"
+              busy={rollbackPending}
+              busyLabel="Queueing…"
               disabled={rollbackDisabled || !progress.agent_installed}
               title={!progress.agent_installed ? AGENT_MISSING : undefined}
               onClick={onRollback}
             >
               Roll back to previous
-            </button>
+            </BusyButton>
             {progress.rollback?.target && (
               <span className="text-muted" style={{ ...mutedSmall, marginLeft: '0.5rem' }}>
                 {progress.rollback.target}

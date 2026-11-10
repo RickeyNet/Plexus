@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { Badge, StatusBadge } from '@/components/Badge';
-import { Callout } from '@/components/Callout';
+import { BusyButton } from '@/components/BusyButton';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useCancelJob,
@@ -196,7 +197,9 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
                 <button type="button" className="btn btn-danger" onClick={handleCancel}>Cancel Job</button>
               )}
               {(effectiveStatus === 'failed' || effectiveStatus === 'cancelled') && (
-                <button type="button" className="btn btn-primary" onClick={handleRetry}>Retry</button>
+                <BusyButton className="btn btn-primary" busy={retryMut.isPending} busyLabel="Retrying…" onClick={handleRetry}>
+                  Retry
+                </BusyButton>
               )}
               {isFinished && isDry && (
                 <button type="button" className="btn btn-danger" onClick={handleRunLive}>Run Live</button>
@@ -206,8 +209,11 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
         </>
       }
     >
-      {jobQuery.isPending && <LoadingState />}
-      {jobQuery.error && <Callout tone="danger">Failed: {(jobQuery.error as Error).message}</Callout>}
+      {jobQuery.error && !job ? (
+        <QueryError what="job" query={jobQuery} />
+      ) : (
+        jobQuery.isPending && <LoadingState />
+      )}
       {job && (
         <>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
@@ -253,8 +259,12 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
                 [Job Complete] Status: {liveStatus}
               </div>
             )}
-            {(showLive ? liveEvents.length === 0 : historicalEvents.length === 0) && (
-              <EmptyState compact message="No output yet…" />
+            {!showLive && eventsQuery.error && !eventsQuery.data ? (
+              <QueryError what="job output" query={eventsQuery} />
+            ) : (
+              (showLive ? liveEvents.length === 0 : historicalEvents.length === 0) && (
+                <EmptyState compact message="No output yet…" />
+              )
             )}
           </div>
         </>

@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
-import { Callout } from '@/components/Callout';
 import { DeleteButton } from '@/components/DeleteButton';
 import { LoadingState } from '@/components/LoadingState';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
+import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
 
@@ -316,14 +316,19 @@ export function Inventory() {
         </button>
       </div>
 
-      {groupsQ.isPending && <LoadingState text="Loading inventory…" />}
-      {groupsQ.error && (
-        <Callout tone="danger">
-          Error loading inventory: {(groupsQ.error as Error).message}
-        </Callout>
+      {groupsQ.isError && !groupsQ.data ? (
+        <QueryError what="inventory" query={groupsQ} />
+      ) : (
+        groupsQ.isPending && <LoadingState text="Loading inventory…" />
+      )}
+      {profilesQ.isError && !profilesQ.data && (
+        <QueryError what="SNMP profiles" query={profilesQ} />
+      )}
+      {assignmentsQ.isError && !assignmentsQ.data && (
+        <QueryError what="SNMP profile assignments" query={assignmentsQ} />
       )}
       <div className="stack stack-sm">
-        {!groupsQ.isPending && filtered.length === 0 && (
+        {groupsQ.data && filtered.length === 0 && (
           <div
             className="card"
             style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-muted)' }}

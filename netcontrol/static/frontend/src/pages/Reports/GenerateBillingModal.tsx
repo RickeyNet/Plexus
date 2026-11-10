@@ -2,6 +2,7 @@ import { useId, useState, type FormEvent } from 'react';
 
 import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { useBillingCircuits, useGenerateBilling } from '@/api/reports';
 
@@ -65,6 +66,9 @@ export function GenerateBillingModal({ isOpen, onClose }: Props) {
               <option key={c.id} value={c.id}>{c.name} - {c.customer || 'No customer'}</option>
             ))}
           </select>
+          {circuitsQuery.isError && !circuitsQuery.data && (
+            <QueryError what="billing circuits" query={circuitsQuery} />
+          )}
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
           <div className="form-group">

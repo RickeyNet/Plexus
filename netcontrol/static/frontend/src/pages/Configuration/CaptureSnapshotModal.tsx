@@ -9,6 +9,7 @@ import {
 import { Callout } from '@/components/Callout';
 import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 
 interface Props {
   onClose: () => void;
@@ -81,6 +82,12 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
     >
       <form id={formId} onSubmit={handleSubmit}>
         {saveError && <Callout tone="danger">{saveError}</Callout>}
+        {groups.isError && !groups.data && (
+          <QueryError what="inventory groups" query={groups} />
+        )}
+        {creds.isError && !creds.data && (
+          <QueryError what="credentials" query={creds} />
+        )}
         <div className="form-group">
           <label className="form-label">Single Host</label>
           <select

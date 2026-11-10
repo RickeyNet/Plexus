@@ -7,7 +7,8 @@ import {
   useTopologyAvailabilityTransitions,
 } from '@/api/monitoring';
 import { StatusBadge } from '@/components/Badge';
-import { Callout } from '@/components/Callout';
+import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
 import { StatGrid, StatTile } from '@/components/StatTile';
 import { TabBar } from '@/components/TabBar';
 import { type Tone } from '@/lib/severity';
@@ -135,13 +136,13 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
 
       <TabBar tabs={SUB_TABS} active={subTab} onChange={setSubTab} size="sm" aria-label="Integration availability views" />
 
-      {summary.error && <Callout tone="danger">Failed to load availability.</Callout>}
-
       {subTab === 'entities' && (
-        !s?.entities.length ? (
-          <div className="empty-state">
-            {summary.isPending ? 'Loading…' : 'Nothing tracked yet - collect a topology source or run a cloud discovery.'}
-          </div>
+        summary.error && !s ? (
+          <QueryError what="integration availability" query={summary} />
+        ) : summary.isPending ? (
+          <LoadingState />
+        ) : !s?.entities.length ? (
+          <div className="empty-state">Nothing tracked yet - collect a topology source or run a cloud discovery.</div>
         ) : (
           <div style={{ maxHeight: 520, overflow: 'auto' }}>
             <table className="data-table">
@@ -183,7 +184,11 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
       )}
 
       {subTab === 'outages' && (
-        !outages.data?.outages.length ? (
+        outages.error && !outages.data ? (
+          <QueryError what="integration outages" query={outages} />
+        ) : outages.isPending ? (
+          <LoadingState />
+        ) : !outages.data?.outages.length ? (
           <div className="empty-state">No outages recorded in the last {days} days.</div>
         ) : (
           <div style={{ maxHeight: 520, overflow: 'auto' }}>
@@ -218,7 +223,11 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
       )}
 
       {subTab === 'transitions' && (
-        !transitions.data?.transitions.length ? (
+        transitions.error && !transitions.data ? (
+          <QueryError what="integration state changes" query={transitions} />
+        ) : transitions.isPending ? (
+          <LoadingState />
+        ) : !transitions.data?.transitions.length ? (
           <div className="empty-state">No state changes recorded in the last {days} days.</div>
         ) : (
           <div style={{ maxHeight: 520, overflow: 'auto' }}>

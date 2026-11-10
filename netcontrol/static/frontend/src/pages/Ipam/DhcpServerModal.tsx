@@ -3,6 +3,7 @@ import { FormEvent, useId, useState } from 'react';
 import { Callout } from '@/components/Callout';
 import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import {
   type DhcpServer,
   type DhcpServerPayload,
@@ -112,6 +113,9 @@ export function DhcpServerModal({ server, onClose }: Props) {
             ))}
           </select>
           <FieldError>{errors.provider}</FieldError>
+          {providers.isError && !providers.data && (
+            <QueryError what="DHCP providers" query={providers} />
+          )}
         </div>
         <div className="form-group">
           <label className="form-label">Name</label>

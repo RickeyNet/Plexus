@@ -4,6 +4,7 @@ import { Callout } from '@/components/Callout';
 import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import {
   useCreateTemplate,
   useTemplate,
@@ -90,6 +91,7 @@ export function TemplateFormModal({ mode, templateId, onClose }: Props) {
   }
 
   const pending = createMut.isPending || updateMut.isPending;
+  const loadFailed = mode === 'edit' && detailQuery.error != null && !detailQuery.data;
   const loading = mode === 'edit' && detailQuery.isPending;
 
   return (
@@ -101,7 +103,7 @@ export function TemplateFormModal({ mode, templateId, onClose }: Props) {
       footer={
         <>
           <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          {!loading && (
+          {!loading && !loadFailed && (
             <button type="submit" form={formId} className="btn btn-primary" disabled={pending}>
               {pending ? 'Saving…' : mode === 'edit' ? 'Save' : 'Create'}
             </button>
@@ -109,7 +111,9 @@ export function TemplateFormModal({ mode, templateId, onClose }: Props) {
         </>
       }
     >
-      {loading ? (
+      {loadFailed ? (
+        <QueryError what="template" query={detailQuery} />
+      ) : loading ? (
         <LoadingState />
       ) : (
         <form id={formId} onSubmit={handleSubmit}>

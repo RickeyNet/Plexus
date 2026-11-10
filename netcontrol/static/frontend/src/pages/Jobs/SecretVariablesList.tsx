@@ -5,6 +5,7 @@ import { DeleteButton } from '@/components/DeleteButton';
 import { EmptyState } from '@/components/EmptyState';
 import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -14,11 +15,13 @@ import {
   useUpdateSecretVariable,
   type SecretVariable,
 } from '@/api/jobs';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 
 export function SecretVariablesList() {
   const { confirm, alert } = useDialogs();
   const query = useSecretVariables();
   const deleteMut = useDeleteSecretVariable();
+  const deleting = usePendingKeys<number>();
   const [showCreate, setShowCreate] = useState(false);
   const [editing, setEditing] = useState<SecretVariable | null>(null);
 
@@ -29,7 +32,13 @@ export function SecretVariablesList() {
       confirmLabel: 'Delete',
     });
     if (!ok) return;
-    deleteMut.mutate(v.id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
+    await deleting.run(v.id, async () => {
+      try {
+        await deleteMut.mutateAsync(v.id);
+      } catch (e) {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      }
+    });
   }
 
   return (
@@ -42,8 +51,11 @@ export function SecretVariablesList() {
         <button className="btn btn-primary" onClick={() => setShowCreate(true)}>+ New Secret</button>
       </div>
 
-      {query.isPending && <LoadingState />}
-      {query.error && <Callout tone="danger">Failed: {(query.error as Error).message}</Callout>}
+      {query.error && !query.data ? (
+        <QueryError what="secret variables" query={query} />
+      ) : (
+        query.isPending && <LoadingState />
+      )}
       {query.data && (query.data.length === 0 ? (
         <EmptyState message="No secret variables yet" />
       ) : (
@@ -60,7 +72,7 @@ export function SecretVariablesList() {
               </div>
               <div style={{ display: 'flex', gap: '0.4rem' }}>
                 <button className="btn btn-sm btn-secondary" onClick={() => setEditing(v)}>Edit</button>
-                <DeleteButton onClick={() => handleDelete(v)} />
+                <DeleteButton busy={deleting.isPending(v.id)} onClick={() => void handleDelete(v)} />
               </div>
             </div>
           ))}

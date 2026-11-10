@@ -12,6 +12,7 @@ import { useServiceCredentialsList } from '@/api/settings';
 import { Callout } from '@/components/Callout';
 import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 
 interface Props {
   policy: ConfigBackupPolicy | null; // null = create mode
@@ -150,6 +151,12 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
     >
       <form id={formId} onSubmit={handleSubmit}>
         {saveError && <Callout tone="danger">{saveError}</Callout>}
+        {!isEdit && groups.isError && !groups.data && (
+          <QueryError what="inventory groups" query={groups} />
+        )}
+        {creds.isError && !creds.data && (
+          <QueryError what="credentials" query={creds} />
+        )}
         <label className="form-label">Policy Name</label>
         <input
           className="form-input"

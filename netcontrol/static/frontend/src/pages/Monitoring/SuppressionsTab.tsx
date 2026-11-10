@@ -6,6 +6,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { groupLabel, useInventoryGroupsFull } from '@/api/inventory';
 import {
@@ -16,17 +17,25 @@ import {
   type SuppressionCreate,
 } from '@/api/monitoring';
 import { formatBackendDateTime, parseBackendDate, toLocalInputValue } from '@/lib/datetime';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 
 export function SuppressionsTab() {
   const { confirm, alert } = useDialogs();
   const suppressions = useAlertSuppressions();
   const deleteMut = useDeleteSuppression();
   const [showCreate, setShowCreate] = useState(false);
+  const deleting = usePendingKeys<number>();
   const now = new Date();
 
   async function handleDelete(s: AlertSuppression) {
     if (!(await confirm({ title: 'Delete alert suppression', message: `Delete suppression '${s.name}'?`, confirmLabel: 'Delete' }))) return;
-    deleteMut.mutate(s.id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
+    await deleting.run(s.id, async () => {
+      try {
+        await deleteMut.mutateAsync(s.id);
+      } catch (e) {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      }
+    });
   }
 
   return (
@@ -35,8 +44,11 @@ export function SuppressionsTab() {
         <button className="btn btn-primary" onClick={() => setShowCreate(true)}>+ New Suppression</button>
       </div>
 
-      {suppressions.isPending && <LoadingState />}
-      {suppressions.error && <div style={{ color: 'var(--danger)' }}>Error: {(suppressions.error as Error).message}</div>}
+      {suppressions.error && !suppressions.data ? (
+        <QueryError what="suppressions" query={suppressions} />
+      ) : (
+        suppressions.isPending && <LoadingState />
+      )}
       {suppressions.data && (suppressions.data.length === 0 ? (
         <EmptyState message="No suppressions" />
       ) : (
@@ -58,7 +70,7 @@ export function SuppressionsTab() {
                       {scope} · {s.metric ? `Metric: ${s.metric}` : 'All metrics'}
                     </span>
                   </div>
-                  <DeleteButton onClick={() => handleDelete(s)} />
+                  <DeleteButton busy={deleting.isPending(s.id)} onClick={() => void handleDelete(s)} />
                 </div>
                 <div className="text-muted" style={{ marginTop: '0.3rem', fontSize: '0.85em' }}>
                   {formatBackendDateTime(s.starts_at)} - {formatBackendDateTime(s.ends_at)}

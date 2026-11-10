@@ -1,11 +1,13 @@
 import { useId, useState, type FormEvent } from 'react';
 
 import { SeverityBadge } from '@/components/Badge';
+import { BusyButton } from '@/components/BusyButton';
 import { Callout } from '@/components/Callout';
 import { DeleteButton } from '@/components/DeleteButton';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { groupLabel, useInventoryGroupsFull } from '@/api/inventory';
 import {
@@ -17,6 +19,7 @@ import {
   type AlertRuleCreate,
 } from '@/api/monitoring';
 import { useNotificationChannels } from '@/api/settings';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 
 function parseChannelIds(raw?: string | null): string[] {
   if (!raw) return [];
@@ -39,16 +42,28 @@ export function RulesTab() {
     (channelsQuery.data?.channels ?? []).map((c) => [c.id, c.name || c.id]),
   );
   const [showCreate, setShowCreate] = useState(false);
+  const toggling = usePendingKeys<number>();
+  const deleting = usePendingKeys<number>();
 
   function toggleEnabled(r: AlertRule) {
-    updateMut.mutate({ id: r.id, data: { enabled: !r.enabled } }, {
-      onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
+    return toggling.run(r.id, async () => {
+      try {
+        await updateMut.mutateAsync({ id: r.id, data: { enabled: !r.enabled } });
+      } catch (e) {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      }
     });
   }
 
   async function handleDelete(r: AlertRule) {
     if (!(await confirm({ title: 'Delete alert rule', message: `Delete rule '${r.name}'?`, confirmLabel: 'Delete' }))) return;
-    deleteMut.mutate(r.id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
+    await deleting.run(r.id, async () => {
+      try {
+        await deleteMut.mutateAsync(r.id);
+      } catch (e) {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      }
+    });
   }
 
   return (
@@ -57,8 +72,11 @@ export function RulesTab() {
         <button className="btn btn-primary" onClick={() => setShowCreate(true)}>+ New Rule</button>
       </div>
 
-      {rules.isPending && <LoadingState />}
-      {rules.error && <div style={{ color: 'var(--danger)' }}>Error: {(rules.error as Error).message}</div>}
+      {rules.error && !rules.data ? (
+        <QueryError what="alert rules" query={rules} />
+      ) : (
+        rules.isPending && <LoadingState />
+      )}
       {rules.data && (rules.data.length === 0 ? (
         <EmptyState message="No alert rules defined" />
       ) : (
@@ -77,10 +95,10 @@ export function RulesTab() {
                     {!r.enabled && <span className="text-muted" style={{ fontSize: '0.75em', marginLeft: '0.3rem' }}>(disabled)</span>}
                   </div>
                   <div style={{ display: 'flex', gap: '0.4rem' }}>
-                    <button className="btn btn-sm btn-secondary" onClick={() => toggleEnabled(r)}>
+                    <BusyButton className="btn btn-sm btn-secondary" busy={toggling.isPending(r.id)} onClick={() => void toggleEnabled(r)}>
                       {r.enabled ? 'Disable' : 'Enable'}
-                    </button>
-                    <DeleteButton onClick={() => handleDelete(r)} />
+                    </BusyButton>
+                    <DeleteButton busy={deleting.isPending(r.id)} onClick={() => void handleDelete(r)} />
                   </div>
                 </div>
                 <div className="text-muted" style={{ marginTop: '0.3rem', fontSize: '0.85em' }}>

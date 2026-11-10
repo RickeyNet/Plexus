@@ -9,10 +9,10 @@ import {
   useRiskAnalysisSummary,
 } from '@/api/riskAnalysis';
 import { SeverityBadge } from '@/components/Badge';
-import { Callout } from '@/components/Callout';
 import { DeleteButton } from '@/components/DeleteButton';
 import { type DialogApi, useDialogs } from '@/components/DialogProvider-context';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
 import { SummaryStrip, type SummaryStripItem } from '@/components/SummaryStrip';
 import { formatBackendDateTime } from '@/lib/datetime';
 import { severityTone, toneColor } from '@/lib/severity';
@@ -109,7 +109,9 @@ export function RiskAnalysis() {
           <AnalysisList
             items={filtered}
             loading={analyses.isLoading}
-            error={analyses.error}
+            error={analyses.isError && !analyses.data ? analyses.error : null}
+            onRetry={() => void analyses.refetch()}
+            isRetrying={analyses.isFetching}
             onView={(id) => setDetailId(id)}
             onNew={() => setShowNew(true)}
           />
@@ -171,23 +173,24 @@ function AnalysisList({
   items,
   loading,
   error,
+  onRetry,
+  isRetrying,
   onView,
   onNew,
 }: {
   items: RiskAnalysisRow[];
   loading: boolean;
+  /** Set only when the list failed and there is no data to show. */
   error: unknown;
+  onRetry: () => void;
+  isRetrying: boolean;
   onView: (id: number) => void;
   onNew: () => void;
 }) {
-  if (loading) return <LoadingState text="Loading risk analyses…" />;
   if (error) {
-    return (
-      <Callout tone="danger">
-        Failed to load risk analyses: {(error as Error).message}
-      </Callout>
-    );
+    return <QueryError what="risk analyses" error={error} onRetry={onRetry} isRetrying={isRetrying} />;
   }
+  if (loading) return <LoadingState text="Loading risk analyses…" />;
   if (!items.length) {
     return (
       <div className="empty-state" style={{ padding: '2rem 1rem', textAlign: 'center' }}>
@@ -261,6 +264,7 @@ function AnalysisRow({ analysis, onView }: { analysis: RiskAnalysisRow; onView: 
             Details
           </button>
           <DeleteButton
+            busy={remove.isPending}
             onClick={async () => {
               const ok = await confirm({
                 title: 'Delete risk analysis',
