@@ -881,6 +881,182 @@
     box-shadow: 0 0 8px rgba(255, 153, 0, 0.25);
 }
 
+/* ─── Matrix (green phosphor terminal) ─── */
+[data-theme="matrix"] {
+    --primary: #00ff41;
+    --primary-dark: #00c832;
+    --primary-light: #5cff85;
+    --secondary: #5fa874;
+    --success: #00ff41;
+    --warning: #ffd600;
+    --danger: #ff4d5e;
+    --bg: #030a05;
+    --bg-secondary: #06100a;
+    --bg-dark: #010502;
+    --card-bg: #0a1810;
+    --card-bg-hover: #0f2216;
+    --text: #a8f0b8;
+    --text-light: #7fd494;
+    --text-muted: #5fa874;
+    --border: #1c4a2a;
+    --border-light: #2a6a3c;
+    --primary-soft: rgba(0, 255, 65, 0.10);
+    --primary-soft-strong: rgba(0, 255, 65, 0.20);
+    --primary-glow: rgba(0, 255, 65, 0.25);
+    --overlay: rgba(0, 4, 1, 0.90);
+    --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.6), 0 1px 2px 0 rgba(0, 255, 65, 0.05);
+    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.6), 0 4px 6px -2px rgba(0, 255, 65, 0.07);
+    --topo-accent-rgb: 0, 255, 65;
+    --info: #4dd8ff;
+    --violet: #c77dff;
+
+    --topo-cisco-bg: #062b12;       --topo-cisco-border: #00ff41;
+    --topo-cisco-hi-bg: #0a3d1a;    --topo-cisco-hi-border: #5cff85;
+    --topo-juniper-bg: #06282a;     --topo-juniper-border: #2ee6c8;
+    --topo-juniper-hi-bg: #0a383a;  --topo-juniper-hi-border: #7df2de;
+    --topo-arista-bg: #2e2800;      --topo-arista-border: #ffd600;
+    --topo-arista-hi-bg: #3d3600;   --topo-arista-hi-border: #ffe666;
+    --topo-fortinet-bg: #3d0f16;    --topo-fortinet-border: #ff4d5e;
+    --topo-fortinet-hi-bg: #4d151e; --topo-fortinet-hi-border: #ff8591;
+    --topo-unknown-bg: #18261c;     --topo-unknown-border: #6f9a7c;
+    --topo-unknown-hi-bg: #213326;  --topo-unknown-hi-border: #9cc0a8;
+
+    --topo-edge-cdp: #00ff41;       --topo-edge-cdp-hi: #5cff85;
+    --topo-edge-lldp: #2ee6c8;      --topo-edge-lldp-hi: #7df2de;
+    --topo-edge-ospf: #ffd600;      --topo-edge-ospf-hi: #ffe666;
+    --topo-edge-bgp: #c77dff;       --topo-edge-bgp-hi: #dcaeff;
+
+    --topo-path-glow: rgba(0, 255, 65, 0.6);
+    --topo-dim-bg: rgba(3, 10, 5, 0.45);
+    --topo-dim-border: rgba(28, 74, 42, 0.4);
+    --topo-dim-edge: rgba(42, 106, 60, 0.2);
+    --topo-dim-edge-hi: rgba(42, 106, 60, 0.3);
+}
+
+/* Matrix: faint code columns, scanlines and falling rain instead of the star
+   field. All scale with the background-depth setting and vanish when it is off. */
+[data-theme="matrix"] .animated-bg {
+    background:
+        linear-gradient(180deg, transparent 0%, rgba(3, 10, 5, 0.9) 88%),
+        repeating-linear-gradient(90deg, transparent 0 17px, rgb(0 255 65 / calc(0.07 * var(--space-intensity))) 17px 18px),
+        repeating-linear-gradient(0deg, transparent 0 3px, rgb(0 255 65 / calc(0.03 * var(--space-intensity))) 3px 4px),
+        var(--bg);
+}
+
+/* Matrix rain: two sparse layers of falling streaks at different speeds.
+   Only transform animates, so it stays on the compositor. The app sets
+   .reduced-motion on body for every theme, hence the !important overrides;
+   an OS reduced-motion preference still turns the rain off entirely. */
+@media (prefers-reduced-motion: no-preference) {
+    [data-theme="matrix"] .animated-bg::before,
+    [data-theme="matrix"] .animated-bg::after {
+        content: '';
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: -100vh;
+        height: 200vh;
+        --drop: linear-gradient(180deg, transparent 40%, rgba(0, 255, 65, 0.4) 96%, rgba(200, 255, 215, 0.85) 100%);
+        background-image: var(--drop), var(--drop), var(--drop), var(--drop), var(--drop), var(--drop), var(--drop), var(--drop);
+        background-repeat: repeat-y;
+        /* Tile heights divide 100vh so the loop is seamless. */
+        background-size: 2px 100vh, 2px 50vh, 2px 100vh, 2px 50vh, 2px 100vh, 2px 100vh, 2px 50vh, 2px 100vh;
+        background-position: 5% 12vh, 16% 31vh, 29% 67vh, 41% 8vh, 54% 44vh, 66% 83vh, 79% 22vh, 92% 58vh;
+        /* Break each streak into glyph-sized cells. */
+        -webkit-mask-image: repeating-linear-gradient(180deg, #000 0 9px, transparent 9px 13px);
+        mask-image: repeating-linear-gradient(180deg, #000 0 9px, transparent 9px 13px);
+        opacity: calc(0.4 * var(--space-intensity));
+        will-change: transform;
+        animation: matrix-rain 18s linear infinite;
+        animation-duration: 18s !important;
+        animation-iteration-count: infinite !important;
+    }
+
+    [data-theme="matrix"] .animated-bg::after {
+        background-position: 10% 72vh, 22% 5vh, 35% 39vh, 47% 90vh, 60% 17vh, 73% 51vh, 85% 78vh, 97% 28vh;
+        opacity: calc(0.22 * var(--space-intensity));
+        animation-duration: 29s !important;
+    }
+}
+
+@keyframes matrix-rain {
+    from { transform: translateY(0); }
+    to { transform: translateY(100vh); }
+}
+
+[data-theme="matrix"] .app-container,
+[data-theme="matrix"] .login-screen {
+    background: transparent;
+}
+
+[data-theme="matrix"] .space-nebula,
+[data-theme="matrix"] .login-particles,
+[data-theme="matrix"] .app-particles {
+    display: none;
+}
+
+[data-theme="matrix"] .sidebar {
+    border-right-color: var(--border-light);
+    box-shadow: 4px 0 24px rgba(0, 255, 65, 0.05);
+}
+
+[data-theme="matrix"] .nav-brand-text {
+    color: var(--primary);
+    letter-spacing: 2px;
+    text-shadow: 0 0 14px rgba(0, 255, 65, 0.5);
+}
+
+[data-theme="matrix"] .nav-link.active {
+    box-shadow:
+        inset 3px 0 0 var(--primary),
+        0 0 16px rgba(0, 255, 65, 0.12);
+}
+
+[data-theme="matrix"] .page h2 {
+    color: var(--primary);
+    text-shadow: 0 0 18px rgba(0, 255, 65, 0.3);
+}
+
+[data-theme="matrix"] .card:hover {
+    border-color: var(--border-light);
+    box-shadow: 0 0 18px rgba(0, 255, 65, 0.08), 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+[data-theme="matrix"] .stat-value {
+    text-shadow: 0 0 14px rgba(0, 255, 65, 0.4);
+}
+
+[data-theme="matrix"] .stat-ring-fill {
+    filter: drop-shadow(0 0 6px rgba(0, 255, 65, 0.5));
+}
+
+[data-theme="matrix"] .stat-ring-value {
+    text-shadow: 0 0 12px rgba(0, 255, 65, 0.45);
+}
+
+[data-theme="matrix"] .data-table th {
+    color: var(--primary-light);
+    border-bottom-color: var(--border-light);
+}
+
+[data-theme="matrix"] .btn-primary {
+    box-shadow: 0 0 12px rgba(0, 255, 65, 0.25);
+}
+
+[data-theme="matrix"] .btn-primary:hover {
+    box-shadow: 0 0 20px rgba(0, 255, 65, 0.4);
+}
+
+[data-theme="matrix"] .login-card {
+    border-color: var(--border-light);
+    box-shadow: 0 0 40px rgba(0, 255, 65, 0.08), 0 8px 32px rgba(0, 0, 0, 0.6);
+}
+
+[data-theme="matrix"] .form-input:focus,
+[data-theme="matrix"] .form-select:focus {
+    box-shadow: 0 0 8px rgba(0, 255, 65, 0.25);
+}
+
 /* Light surfaces: a dark drop shadow under dark text only blurs it. */
 [data-theme="light"] .card-title,
 [data-theme="light"] .section h3,
@@ -984,6 +1160,18 @@
     --space-star-far-rgb: 180, 170, 140;
     --space-star-near-rgb: 255, 240, 200;
     --space-intensity-base: 0.85;
+}
+
+[data-theme="matrix"] {
+    --space-bg-1: #010502;
+    --space-bg-2: #041208;
+    --space-bg-3: #082412;
+    --space-nebula-a: rgba(0, 255, 65, 0.14);
+    --space-nebula-b: rgba(46, 230, 200, 0.08);
+    --space-nebula-c: rgba(0, 200, 50, 0.08);
+    --space-star-far-rgb: 60, 170, 90;
+    --space-star-near-rgb: 170, 255, 190;
+    --space-intensity-base: 0.9;
 }
 
 body {
