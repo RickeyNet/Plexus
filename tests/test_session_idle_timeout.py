@@ -199,7 +199,7 @@ async def test_auth_status_emits_audit_on_idle_expiry(monkeypatch):
 
     result = await auth_module.auth_status(cast(Request, req), resp)
 
-    assert result == {"authenticated": False}
+    assert result["authenticated"] is False
     assert len(recorder.events) == 1
     assert recorder.events[0]["category"] == "auth"
     assert recorder.events[0]["action"] == "session.idle_timeout"

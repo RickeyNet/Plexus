@@ -1,6 +1,6 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { Fragment, lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Navigate, Route, Routes, useLocation } from 'react-router';
+import { Link, Navigate, Route, Routes, useLocation } from 'react-router';
 
 import { useAuthStatus } from '@/api/auth';
 import { resetSessionExpiryFlag, setSessionExpiredHandler } from '@/api/client';
@@ -12,6 +12,7 @@ import { IdleTimeoutWatcher } from '@/components/IdleTimeoutWatcher';
 import { Sidebar } from '@/components/Sidebar';
 import { TimeRangeBar } from '@/components/TimeRangeBar';
 import { UserMenu } from '@/components/UserMenu';
+import { breadcrumbTrail } from '@/lib/breadcrumbs';
 import { pageLoaders } from '@/lib/pageLoaders';
 import { Login } from '@/pages/Login/Login';
 
@@ -41,64 +42,34 @@ const Reports = lazy(() => pageLoaders.reports().then(m => ({ default: m.Reports
 const Settings = lazy(() => pageLoaders.settings().then(m => ({ default: m.Settings })));
 const Topology = lazy(() => pageLoaders.topology().then(m => ({ default: m.TopologyPage })));
 
-const BREADCRUMBS: Record<string, string> = {
-  '/': 'Dashboard',
-  '/dashboards': 'Dashboards',
-  '/lab': 'Lab / Digital Twin',
-  '/federation': 'Federation',
-  '/floor-plan': 'Floor Plans',
-  '/inventory': 'Inventory',
-  '/ipam': 'IPAM',
-  '/software': 'Software · Versions',
-  '/software/upgrades': 'Software · Upgrades',
-  '/compliance': 'Compliance',
-  '/compliance/audit': 'Compliance · CIS Audit',
-  '/configuration': 'Configuration',
-  '/change-management': 'Changes',
-  '/change-management/deployments': 'Changes · Deployments',
-  '/change-management/maintenance': 'Changes · Maintenance',
-  '/reports': 'Reports',
-  '/assignments': 'Delegator · Assignments',
-  '/tasks': 'Delegator · Tasks',
-  '/instructions': 'Delegator · Instructions',
-  '/credentials': 'Delegator · Credentials',
-  '/monitoring': 'Monitoring',
-  '/monitoring/alerts': 'Monitoring · Alerts',
-  '/monitoring/events': 'Monitoring · Events',
-  '/monitoring/sla': 'Monitoring · SLA',
-  '/monitoring/availability': 'Monitoring · Availability',
-  '/monitoring/capacity': 'Monitoring · Capacity',
-  '/monitoring/configure': 'Monitoring · Configure',
-  '/cloud-visibility': 'Cloud Visibility',
-  '/cloud-visibility/topology': 'Cloud · Topology',
-  '/cloud-visibility/flow': 'Cloud · Flow Logs',
-  '/cloud-visibility/traffic': 'Cloud · Traffic Metrics',
-  '/cloud-visibility/policy': 'Cloud · Policy',
-  '/topology': 'Topology',
-  '/topology/reachability': 'Topology · Reachability',
-  '/topology/summarize': 'Topology · Summarize',
-  '/settings': 'Settings',
-  '/network-tools': 'Network Tools · MAC Tracking',
-  '/network-tools/traffic': 'Network Tools · Traffic Analysis',
-};
-
 function Breadcrumb() {
   const { pathname } = useLocation();
-  let label = BREADCRUMBS[pathname];
-  if (!label && pathname.startsWith('/devices/')) label = 'Device Detail';
-  if (!label && pathname.startsWith('/dashboards/')) label = 'Dashboard';
-  // Path-addressed tabs (/compliance/results, /settings/users) fall back to
-  // their page's label.
-  if (!label) label = BREADCRUMBS[pathname.slice(0, pathname.lastIndexOf('/'))];
-  if (!label) label = 'Plexus';
+  const trail = breadcrumbTrail(pathname);
   return (
-    <div className="breadcrumb-bar">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-        <polyline points="9 22 9 12 15 12 15 22" />
-      </svg>
-      <span>{label}</span>
-    </div>
+    <nav className="breadcrumb-bar" aria-label="Breadcrumb">
+      <Link
+        to="/"
+        className="breadcrumb-home"
+        aria-label="Dashboard"
+        title="Dashboard"
+        aria-current={pathname === '/' ? 'page' : undefined}
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+          <polyline points="9 22 9 12 15 12 15 22" />
+        </svg>
+      </Link>
+      {trail.map((crumb, i) => (
+        <Fragment key={crumb.label}>
+          <span className="breadcrumb-sep" aria-hidden="true">›</span>
+          {crumb.to ? (
+            <Link to={crumb.to}>{crumb.label}</Link>
+          ) : (
+            <span aria-current={i === trail.length - 1 ? 'page' : undefined}>{crumb.label}</span>
+          )}
+        </Fragment>
+      ))}
+    </nav>
   );
 }
 
@@ -156,7 +127,7 @@ export function App() {
   }
 
   if (!auth?.authenticated) {
-    return <Login />;
+    return <Login allowRegister={auth?.allow_self_register === true} />;
   }
 
   const username = auth.display_name ?? auth.username ?? 'admin';
@@ -190,8 +161,11 @@ export function App() {
       />
 
       <main className="main-content">
-        <Breadcrumb />
-        <MetricTimeRangeBar />
+        {/* One band: where you are on the left, the metric range on the right. */}
+        <div className="shell-topbar">
+          <Breadcrumb />
+          <MetricTimeRangeBar />
+        </div>
         <ErrorBoundary resetKey={pathname}>
         <Suspense fallback={<PageLoader />}>
         <Routes>

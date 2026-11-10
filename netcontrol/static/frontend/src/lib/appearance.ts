@@ -53,7 +53,7 @@ function isIntensity(value: string | null): value is SpaceIntensity {
 // Sandboxed iframes / private-mode browsers can throw SecurityError on any
 // localStorage access. Wrap reads/writes so a storage failure never crashes
 // the bundle at module load via initAppearance().
-function safeGet(key: string): string | null {
+export function safeGet(key: string): string | null {
   try {
     return localStorage.getItem(key);
   } catch {
@@ -61,7 +61,7 @@ function safeGet(key: string): string | null {
   }
 }
 
-function safeSet(key: string, value: string): void {
+export function safeSet(key: string, value: string): void {
   try {
     localStorage.setItem(key, value);
   } catch {
