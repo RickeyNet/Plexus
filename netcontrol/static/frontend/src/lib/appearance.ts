@@ -14,6 +14,7 @@ export const VALID_THEMES = [
   'coral',
   'sandstone',
   'voyager',
+  'matrix',
 ] as const;
 export type ThemeName = (typeof VALID_THEMES)[number];
 
@@ -26,6 +27,7 @@ export const THEME_LABELS: Record<ThemeName, string> = {
   coral: 'Coral',
   sandstone: 'Sandstone',
   voyager: 'Voyager',
+  matrix: 'Matrix',
 };
 
 export const DEFAULT_THEME: ThemeName = 'sandstone';
