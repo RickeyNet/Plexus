@@ -4,6 +4,10 @@ import type {
   InventoryHost,
   SshEnrichmentSummary,
 } from '@/api/inventory';
+import { descendantIdsOf, treeOrder } from '@/lib/tree';
+
+const groupIdOf = (g: InventoryGroupFull) => g.id;
+const groupParent = (g: InventoryGroupFull) => g.parent_id;
 
 export type InventorySort =
   | 'custom'
@@ -73,27 +77,7 @@ export function treeSort(
   groups: InventoryGroupFull[],
   compare: (a: InventoryGroupFull, b: InventoryGroupFull) => number = () => 0,
 ): InventoryGroupFull[] {
-  const ids = new Set(groups.map((g) => g.id));
-  const children = new Map<number | null, InventoryGroupFull[]>();
-  for (const g of groups) {
-    const parent = g.parent_id != null && ids.has(g.parent_id) ? g.parent_id : null;
-    const list = children.get(parent) ?? [];
-    list.push(g);
-    children.set(parent, list);
-  }
-  const out: InventoryGroupFull[] = [];
-  const seen = new Set<number>();
-  const walk = (parent: number | null) => {
-    for (const g of (children.get(parent) ?? []).slice().sort(compare)) {
-      if (seen.has(g.id)) continue;
-      seen.add(g.id);
-      out.push(g);
-      walk(g.id);
-    }
-  };
-  walk(null);
-  // Only a parent cycle leaves groups unvisited; list them rather than drop them.
-  return out.concat(groups.filter((g) => !seen.has(g.id)));
+  return treeOrder(groups, groupIdOf, groupParent, compare).map((e) => e.item);
 }
 
 /** The groups in tree order, siblings by the user's saved order (`orderedIds`). */
@@ -105,20 +89,7 @@ export function applyGroupOrder(groups: InventoryGroupFull[], orderedIds: number
 
 /** The ids of a group's sub-groups at any depth (not the group itself). */
 export function descendantIds(groups: InventoryGroupFull[], groupId: number): Set<number> {
-  const children = new Map<number, number[]>();
-  for (const g of groups) {
-    if (g.parent_id == null) continue;
-    children.set(g.parent_id, [...(children.get(g.parent_id) ?? []), g.id]);
-  }
-  const out = new Set<number>();
-  const stack = [...(children.get(groupId) ?? [])];
-  while (stack.length) {
-    const id = stack.pop() as number;
-    if (id === groupId || out.has(id)) continue;
-    out.add(id);
-    stack.push(...(children.get(id) ?? []));
-  }
-  return out;
+  return descendantIdsOf(groups, groupIdOf, groupParent, groupId);
 }
 
 /** Groups below a collapsed ancestor, which the page hides. */

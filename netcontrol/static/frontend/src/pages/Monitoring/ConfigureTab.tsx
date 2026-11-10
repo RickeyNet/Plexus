@@ -25,7 +25,7 @@ const GRAPH_HELP: Partial<Record<ConfigureSubTab, { title: string; text: string 
   },
   'host-templates': {
     title: 'Map Device Types to Graphs',
-    text: 'A host template binds graph templates to a class of device (e.g., "Catalyst 9300"). When a matching device is added to inventory, its graphs auto-appear.',
+    text: 'A host template binds graph templates to device types (e.g., cisco_ios), or to every device when no type is listed. When a matching device is added to inventory, the graphs of its device-scoped templates auto-appear.',
   },
   'graph-trees': {
     title: 'Graph Trees',
