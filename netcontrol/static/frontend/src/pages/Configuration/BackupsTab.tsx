@@ -245,9 +245,11 @@ function PoliciesList({
                     danger
                     onSelect={async () => {
                       if (
-                        !(await confirm(
-                          `Delete the backup policy "${p.name}"? This cannot be undone.`,
-                        ))
+                        !(await confirm({
+                          title: 'Delete backup policy',
+                          message: `Delete the backup policy "${p.name}"? This cannot be undone.`,
+                          confirmLabel: 'Delete',
+                        }))
                       )
                         return;
                       remove.mutate(p.id, {
@@ -387,9 +389,11 @@ function HistoryList({
                     danger
                     onSelect={async () => {
                       if (
-                        !(await confirm(
-                          'Delete this backup? This cannot be undone.',
-                        ))
+                        !(await confirm({
+                          title: 'Delete config backup',
+                          message: `Delete the backup of ${b.hostname || b.ip_address || '?'} captured ${formatBackendDateTime(b.captured_at, '')}? This cannot be undone.`,
+                          confirmLabel: 'Delete',
+                        }))
                       )
                         return;
                       remove.mutate(b.id, {

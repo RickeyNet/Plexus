@@ -126,7 +126,7 @@ export function DiscoveryProgressModal({ isOpen, groupId, onClose, onComplete }:
   const pct = total ? Math.round((scanned / total) * 100) : 0;
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title="Neighbor Discovery" size="large">
+    <Modal isOpen={isOpen} onClose={handleClose} title="Neighbor Discovery" size="medium">
       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
         {running && <div className="discovery-spinner" />}
         <div>

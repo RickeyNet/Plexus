@@ -21,7 +21,17 @@ export function DeviceUpgradeLogModal({
   const events = query.data || [];
 
   return (
-    <Modal isOpen onClose={onClose} title={`Upgrade Log: ${ip}`} size="large">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title={`Upgrade Log: ${ip}`}
+      size="large"
+      footer={
+        <button type="button" className="btn btn-secondary" onClick={onClose}>
+          Close
+        </button>
+      }
+    >
       {query.isPending ? (
         <LoadingState />
       ) : query.error ? (
@@ -53,17 +63,6 @@ export function DeviceUpgradeLogModal({
             .join('\n')}
         </pre>
       )}
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'flex-end',
-          marginTop: '1rem',
-        }}
-      >
-        <button type="button" className="btn btn-secondary" onClick={onClose}>
-          Close
-        </button>
-      </div>
     </Modal>
   );
 }

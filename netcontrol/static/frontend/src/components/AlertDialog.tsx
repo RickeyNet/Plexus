@@ -20,19 +20,19 @@ export function AlertDialog({
   onClose,
 }: AlertDialogProps) {
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={title}>
-      <p
-        style={{
-          margin: '0 0 1rem',
-          color: variant === 'error' ? 'var(--danger)' : undefined,
-        }}
-      >
-        {message}
-      </p>
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={title}
+      size="small"
+      footer={
         <button type="button" className="btn btn-primary" onClick={onClose} autoFocus>
           {okLabel}
         </button>
+      }
+    >
+      <div className={variant === 'error' ? 'dialog-message dialog-message-error' : 'dialog-message'}>
+        {message}
       </div>
     </Modal>
   );

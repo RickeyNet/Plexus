@@ -38,9 +38,13 @@ export function BillingTab() {
   const circuits: BillingCircuit[] = circuitsQuery.data?.circuits ?? [];
   const periods: BillingPeriod[] = periodsQuery.data?.periods ?? [];
 
-  async function handleDelete(id: number) {
-    if (!(await confirm('Delete this billing circuit and all its periods?'))) return;
-    deleteMut.mutate(id, {
+  async function handleDelete(c: BillingCircuit) {
+    if (!(await confirm({
+      title: 'Delete billing circuit',
+      message: `Delete billing circuit "${c.name}" and all its periods?`,
+      confirmLabel: 'Delete',
+    }))) return;
+    deleteMut.mutate(c.id, {
       onError: (e) => {
         void alert({ message: (e as Error).message, variant: 'error' });
       },
@@ -115,7 +119,7 @@ export function BillingTab() {
                   </td>
                   <td style={{ display: 'flex', gap: '0.25rem' }}>
                     <button className="btn btn-sm btn-secondary" onClick={() => setEditingId(c.id)}>Edit</button>
-                    <DeleteButton onClick={() => handleDelete(c.id)} />
+                    <DeleteButton onClick={() => handleDelete(c)} />
                   </td>
                 </tr>
               ))}

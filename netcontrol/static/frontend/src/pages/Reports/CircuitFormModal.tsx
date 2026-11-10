@@ -1,8 +1,9 @@
-import { useMemo, useState, type FormEvent } from 'react';
+import { useId, useMemo, useState, type FormEvent } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
-import { useDialogs } from '@/components/DialogProvider-context';
 import { useInventoryGroupsFull } from '@/api/inventory';
 import {
   useBillingCircuit,
@@ -27,7 +28,7 @@ export function CircuitFormModal({ mode, circuitId, onClose }: Props) {
 }
 
 function CreateMode({ onClose }: { onClose: () => void }) {
-  const { alert } = useDialogs();
+  const formId = useId();
   const groupsQuery = useInventoryGroupsFull(true);
   const createMut = useCreateBillingCircuit();
 
@@ -43,6 +44,9 @@ function CreateMode({ onClose }: { onClose: () => void }) {
   const [billingDay, setBillingDay] = useState('1');
   const [billingCycle, setBillingCycle] = useState('monthly');
   const [description, setDescription] = useState('');
+  const [hostError, setHostError] = useState('');
+  const [ifIndexError, setIfIndexError] = useState('');
+  const [saveError, setSaveError] = useState('');
 
   const hosts = useMemo(() => {
     const all = (groupsQuery.data ?? []).flatMap((g) => g.hosts ?? []);
@@ -54,10 +58,12 @@ function CreateMode({ onClose }: { onClose: () => void }) {
     e.preventDefault();
     const hid = parseInt(hostId, 10);
     const idx = parseInt(ifIndex, 10);
-    if (!hid || isNaN(idx)) {
-      void alert('Device and interface index are required');
-      return;
-    }
+    setSaveError('');
+    const hostErr = hid ? '' : 'Device is required';
+    const ifIndexErr = isNaN(idx) ? 'Interface index is required' : '';
+    setHostError(hostErr);
+    setIfIndexError(ifIndexErr);
+    if (hostErr || ifIndexErr) return;
     const payload: BillingCircuitCreate = {
       name,
       customer,
@@ -75,26 +81,55 @@ function CreateMode({ onClose }: { onClose: () => void }) {
     createMut.mutate(payload, {
       onSuccess: onClose,
       onError: (err) => {
-        void alert({ message: (err as Error).message, variant: 'error' });
+        setSaveError((err as Error).message);
       },
     });
   }
 
   return (
-    <Modal isOpen onClose={onClose} title="Create Billing Circuit" size="large">
-      <form onSubmit={handleSubmit}>
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Create Billing Circuit"
+      size="medium"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={createMut.isPending}>
+            {createMut.isPending ? 'Creating…' : 'Create'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={handleSubmit}>
+        {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group"><label className="form-label">Circuit Name</label>
           <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} required /></div>
         <div className="form-group"><label className="form-label">Customer</label>
           <input className="form-input" value={customer} onChange={(e) => setCustomer(e.target.value)} /></div>
         <div className="form-group"><label className="form-label">Device</label>
-          <select className="form-select" value={hostId} onChange={(e) => setHostId(e.target.value)} required>
+          <select
+            className="form-select"
+            value={hostId}
+            onChange={(e) => { setHostId(e.target.value); setHostError(''); }}
+            aria-invalid={!!hostError}
+            required
+          >
             <option value="">Select device…</option>
             {hosts.map((h) => <option key={h.id} value={h.id}>{h.hostname || h.ip_address}</option>)}
-          </select></div>
+          </select>
+          <FieldError>{hostError}</FieldError></div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
           <div className="form-group"><label className="form-label">Interface Index</label>
-            <input className="form-input" type="number" value={ifIndex} onChange={(e) => setIfIndex(e.target.value)} required /></div>
+            <input
+              className="form-input"
+              type="number"
+              value={ifIndex}
+              onChange={(e) => { setIfIndex(e.target.value); setIfIndexError(''); }}
+              aria-invalid={!!ifIndexError}
+              required
+            />
+            <FieldError>{ifIndexError}</FieldError></div>
           <div className="form-group"><label className="form-label">Interface Name</label>
             <input className="form-input" value={ifName} onChange={(e) => setIfName(e.target.value)} placeholder="e.g. GigabitEthernet0/0/0" /></div>
         </div>
@@ -117,19 +152,14 @@ function CreateMode({ onClose }: { onClose: () => void }) {
         </div>
         <div className="form-group"><label className="form-label">Description</label>
           <textarea className="form-textarea" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} /></div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={createMut.isPending}>
-            {createMut.isPending ? 'Creating…' : 'Create'}
-          </button>
-        </div>
       </form>
     </Modal>
   );
 }
 
 function EditMode({ circuitId, onClose }: { circuitId: number; onClose: () => void }) {
-  const { alert } = useDialogs();
+  const formId = useId();
+  const [saveError, setSaveError] = useState('');
   const query = useBillingCircuit(circuitId);
   const updateMut = useUpdateBillingCircuit();
 
@@ -158,6 +188,7 @@ function EditMode({ circuitId, onClose }: { circuitId: number; onClose: () => vo
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    setSaveError('');
     const data: BillingCircuitUpdate = {
       name,
       customer,
@@ -170,17 +201,35 @@ function EditMode({ circuitId, onClose }: { circuitId: number; onClose: () => vo
     updateMut.mutate({ id: circuitId, data }, {
       onSuccess: onClose,
       onError: (err) => {
-        void alert({ message: (err as Error).message, variant: 'error' });
+        setSaveError((err as Error).message);
       },
     });
   }
 
   return (
-    <Modal isOpen onClose={onClose} title="Edit Billing Circuit">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Edit Billing Circuit"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button
+            type="submit"
+            form={formId}
+            className="btn btn-primary"
+            disabled={updateMut.isPending || query.isPending}
+          >
+            {updateMut.isPending ? 'Saving…' : 'Save'}
+          </button>
+        </>
+      }
+    >
       {query.isPending ? (
         <LoadingState />
       ) : (
-        <form onSubmit={handleSubmit}>
+        <form id={formId} onSubmit={handleSubmit}>
+          {saveError && <Callout tone="danger">{saveError}</Callout>}
           <div className="form-group"><label className="form-label">Circuit Name</label>
             <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} /></div>
           <div className="form-group"><label className="form-label">Customer</label>
@@ -198,12 +247,6 @@ function EditMode({ circuitId, onClose }: { circuitId: number; onClose: () => vo
             </select></div>
           <div className="form-group"><label className="form-label">Description</label>
             <textarea className="form-textarea" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} /></div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-            <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={updateMut.isPending}>
-              {updateMut.isPending ? 'Saving…' : 'Save'}
-            </button>
-          </div>
         </form>
       )}
     </Modal>

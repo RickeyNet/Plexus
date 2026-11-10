@@ -328,9 +328,11 @@ function PeerRow({ peer, onEdit }: { peer: FederationPeer; onEdit: () => void })
             title="Delete"
             onClick={async () => {
               if (
-                !(await confirm(
-                  `Delete peer "${peer.name}"?\n\nThis will remove the peer and all cached sync data.`,
-                ))
+                !(await confirm({
+                  title: 'Delete federation peer',
+                  message: `Delete peer "${peer.name}"?\n\nThis will remove the peer and all cached sync data.`,
+                  confirmLabel: 'Delete',
+                }))
               )
                 return;
               try {

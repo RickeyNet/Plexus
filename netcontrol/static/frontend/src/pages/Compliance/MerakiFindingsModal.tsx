@@ -20,7 +20,17 @@ export function MerakiFindingsModal({ resultId, onClose }: { resultId: number; o
     : 'Meraki Findings';
 
   return (
-    <Modal isOpen onClose={onClose} title={title} size="large">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title={title}
+      size="medium"
+      footer={
+        <button type="button" className="btn btn-secondary" onClick={onClose}>
+          Close
+        </button>
+      }
+    >
       {result.isLoading && <LoadingState text="Loading findings…" />}
       {result.isError && <Callout tone="danger">Could not load this result.</Callout>}
       {data && (
@@ -93,11 +103,6 @@ export function MerakiFindingsModal({ resultId, onClose }: { resultId: number; o
           </div>
         </>
       )}
-      <div style={{ marginTop: '1rem', textAlign: 'right' }}>
-        <button type="button" className="btn btn-secondary" onClick={onClose}>
-          Close
-        </button>
-      </div>
     </Modal>
   );
 }

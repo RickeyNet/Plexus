@@ -1,9 +1,16 @@
 import { createContext, type ReactNode, useContext } from 'react';
 
 export interface ConfirmOptions {
-  title?: string;
+  /** Names the action and its object: "Delete report schedule". */
+  title: string;
+  /** What will happen. Line breaks in a string are kept. */
   message: ReactNode;
-  confirmLabel?: string;
+  /** The verb the button carries out: "Delete", "Restore", "Cancel job". */
+  confirmLabel: string;
+  /**
+   * Defaults to "Cancel". When the action being confirmed is itself a
+   * cancellation, pass something that cannot be misread, e.g. "Keep running".
+   */
   cancelLabel?: string;
   confirmVariant?: 'danger' | 'primary';
 }
@@ -16,8 +23,12 @@ export interface AlertOptions {
 }
 
 export interface DialogApi {
-  /** Themed replacement for window.confirm — resolves true if confirmed. */
-  confirm: (opts: ConfirmOptions | string) => Promise<boolean>;
+  /**
+   * Themed replacement for window.confirm — resolves true if confirmed. The
+   * title and button label are required so every confirmation says what it
+   * is about to do, and to what.
+   */
+  confirm: (opts: ConfirmOptions) => Promise<boolean>;
   /** Themed replacement for window.alert — resolves once dismissed. */
   alert: (opts: AlertOptions | string) => Promise<void>;
 }

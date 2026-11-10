@@ -24,7 +24,12 @@ export function ArtifactsModal({ runId, isOpen, onClose }: Props) {
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={runId != null ? `Run #${runId} Artifacts` : 'Artifacts'}>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={runId != null ? `Run #${runId} Artifacts` : 'Artifacts'}
+      footer={<button type="button" className="btn btn-secondary" onClick={onClose}>Close</button>}
+    >
       {query.isPending && <LoadingState />}
       {query.error && (
         <Callout tone="danger">Failed to load artifacts: {(query.error as Error).message}</Callout>
@@ -52,9 +57,6 @@ export function ArtifactsModal({ runId, isOpen, onClose }: Props) {
           )}
         </div>
       )}
-      <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'flex-end' }}>
-        <button className="btn btn-secondary" onClick={onClose}>Close</button>
-      </div>
     </Modal>
   );
 }

@@ -1,4 +1,5 @@
 import type { Deployment, DeploymentStatus } from '@/api/deployments';
+import type { ConfirmOptions } from '@/components/DialogProvider-context';
 
 export function commandCount(commands: string | null | undefined): number {
   if (!commands) return 0;
@@ -42,4 +43,23 @@ export function canRollback(status: DeploymentStatus | string): boolean {
 
 export function canDelete(status: DeploymentStatus | string): boolean {
   return ['planning', 'completed', 'failed', 'rolled-back'].includes(status);
+}
+
+/** Confirmation shown before executing a deployment, from the list or the detail view. */
+export function executeConfirmOptions(name: string): ConfirmOptions {
+  return {
+    title: 'Execute deployment',
+    message: `Execute deployment "${name}"? Pre-deployment snapshots will be captured before pushing config changes.`,
+    confirmLabel: 'Execute',
+    confirmVariant: 'primary',
+  };
+}
+
+/** Confirmation shown before rolling back a deployment, from the list or the detail view. */
+export function rollbackConfirmOptions(name: string): ConfirmOptions {
+  return {
+    title: 'Roll back deployment',
+    message: `Roll back deployment "${name}"? Pre-deployment config snapshots will be restored to all hosts.`,
+    confirmLabel: 'Roll back',
+  };
 }

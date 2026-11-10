@@ -1,7 +1,8 @@
-import { useMemo, useState, type FormEvent } from 'react';
+import { useId, useMemo, useState, type FormEvent } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
-import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useJobCredentials,
   useLaunchJob,
@@ -18,7 +19,7 @@ interface Props {
 }
 
 export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
-  const { alert } = useDialogs();
+  const formId = useId();
   const playbooksQuery = usePlaybooks();
   const groupsQuery = useInventoryGroupsFull(true);
   const credsQuery = useJobCredentials();
@@ -34,6 +35,9 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
   const [adHocIps, setAdHocIps] = useState('');
   const [hostIds, setHostIds] = useState<Set<number>>(new Set());
   const [paramValues, setParamValues] = useState<Record<string, string | boolean>>({});
+  const [playbookError, setPlaybookError] = useState<string | null>(null);
+  const [targetsError, setTargetsError] = useState<string | null>(null);
+  const [launchError, setLaunchError] = useState<string | null>(null);
 
   const selectedPb = useMemo(
     () => playbooksQuery.data?.find((p) => String(p.id) === playbookId),
@@ -66,9 +70,11 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
     setPlaybookId(''); setCredentialId(''); setTemplateId('');
     setPriority('2'); setDependsOn(''); setDryRun(true);
     setAdHocIps(''); setHostIds(new Set()); setParamValues({});
+    setPlaybookError(null); setTargetsError(null); setLaunchError(null);
   }
 
   function toggleGroup(groupHostIds: number[], checked: boolean) {
+    setTargetsError(null);
     setHostIds((prev) => {
       const next = new Set(prev);
       groupHostIds.forEach((id) => { if (checked) next.add(id); else next.delete(id); });
@@ -77,6 +83,7 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
   }
 
   function toggleHost(id: number, checked: boolean) {
+    setTargetsError(null);
     setHostIds((prev) => {
       const next = new Set(prev);
       if (checked) next.add(id); else next.delete(id);
@@ -86,17 +93,17 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!playbookId) {
-      void alert('Select a playbook');
-      return;
-    }
+    setLaunchError(null);
     const adHocList = adHocIps.trim()
       ? adHocIps.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean)
       : [];
-    if (hostIds.size === 0 && adHocList.length === 0) {
-      void alert('Select at least one host or enter an IP address');
-      return;
-    }
+    const pbErr = playbookId ? null : 'Select a playbook';
+    const tgtErr = hostIds.size === 0 && adHocList.length === 0
+      ? 'Select at least one host or enter an IP address'
+      : null;
+    setPlaybookError(pbErr);
+    setTargetsError(tgtErr);
+    if (pbErr || tgtErr) return;
     const depsList = dependsOn.trim()
       ? dependsOn.split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n))
       : undefined;
@@ -126,17 +133,37 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
           onClose();
           onLaunched?.(r.job_id);
         },
-        onError: (err) => { void alert({ message: (err as Error).message, variant: 'error' }); },
+        onError: (err) => { setLaunchError((err as Error).message); },
       },
     );
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Launch Job" size="large">
-      <form onSubmit={handleSubmit}>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Launch Job"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={launchMut.isPending}>
+            {launchMut.isPending ? 'Launching…' : 'Launch'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={handleSubmit}>
+        {launchError && <Callout tone="danger">{launchError}</Callout>}
         <div className="form-group">
           <label className="form-label">Playbook</label>
-          <select className="form-select" value={playbookId} onChange={(e) => setPlaybookId(e.target.value)} required disabled={playbooksQuery.isError}>
+          <select
+            className="form-select"
+            value={playbookId}
+            onChange={(e) => { setPlaybookId(e.target.value); setPlaybookError(null); }}
+            aria-invalid={!!playbookError}
+            required
+            disabled={playbooksQuery.isError}
+          >
             <option value="">Select a playbook…</option>
             {(playbooksQuery.data ?? []).map((pb) => (
               <option key={pb.id} value={pb.id}>
@@ -147,6 +174,7 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
           {playbooksQuery.isError && (
             <small className="text-muted">Tasks could not be loaded. You may not have access to Tasks.</small>
           )}
+          <FieldError>{playbookError}</FieldError>
         </div>
 
         <div className="form-group">
@@ -199,11 +227,13 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
             className="form-input"
             rows={3}
             value={adHocIps}
-            onChange={(e) => setAdHocIps(e.target.value)}
-            placeholder="One IP per line or comma-separated&#10;e.g. 10.0.1.50, 192.168.1.100"
+            onChange={(e) => { setAdHocIps(e.target.value); setTargetsError(null); }}
+            aria-invalid={!!targetsError}
+            placeholder="One IP per line or comma-separated&#10;e.g. 192.0.2.50, 198.51.100.100"
             style={{ fontFamily: 'monospace', fontSize: '0.85rem' }}
           />
           <small className="text-muted">Targets devices not in inventory. Will run as cisco_ios by default.</small>
+          <FieldError>{targetsError}</FieldError>
         </div>
 
         <div className="form-group">
@@ -307,13 +337,6 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
             <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} />
             Dry Run (simulation)
           </label>
-        </div>
-
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={launchMut.isPending}>
-            {launchMut.isPending ? 'Launching…' : 'Launch'}
-          </button>
         </div>
       </form>
     </Modal>

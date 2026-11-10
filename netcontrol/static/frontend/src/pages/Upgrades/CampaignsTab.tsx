@@ -348,7 +348,7 @@ export function CampaignsTab() {
       )}
       <ConfirmDialog
         isOpen={deleteTarget !== null}
-        title="Delete campaign?"
+        title="Delete campaign"
         message={
           <>
             Delete campaign <strong>{deleteTarget?.name}</strong>? This

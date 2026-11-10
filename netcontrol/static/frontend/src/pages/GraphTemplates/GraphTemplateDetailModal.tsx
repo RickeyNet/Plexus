@@ -20,16 +20,44 @@ export function GraphTemplateDetailModal({ templateId, onClose }: Props) {
   const query = useGraphTemplate(templateId);
   const deleteMut = useDeleteGraphTemplate();
 
-  async function handleDelete(id: number) {
-    if (!(await confirm('Delete this graph template? This will also remove all host graph instances using it.'))) return;
-    deleteMut.mutate(id, {
+  async function handleDelete() {
+    const tpl = query.data;
+    if (!tpl) return;
+    if (
+      !(await confirm({
+        title: 'Delete graph template',
+        message: `Delete graph template "${tpl.name}"? This will also remove all host graph instances using it.`,
+        confirmLabel: 'Delete',
+      }))
+    )
+      return;
+    deleteMut.mutate(tpl.id, {
       onSuccess: onClose,
       onError: (err) => { void alert({ message: (err as Error).message, variant: 'error' }); },
     });
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={query.data?.name ?? 'Graph Template'} size="large">
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={query.data?.name ?? 'Graph Template'}
+      size="medium"
+      footer={
+        <>
+          {query.data && !query.data.built_in && (
+            <DeleteButton
+              size="md"
+              className="modal-footer-start"
+              onClick={handleDelete}
+              disabled={deleteMut.isPending}
+              busy={deleteMut.isPending}
+            />
+          )}
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Close</button>
+        </>
+      }
+    >
       {query.isPending && <LoadingState />}
       {query.error && <Callout tone="danger">Failed: {(query.error as Error).message}</Callout>}
       {query.data && (() => {
@@ -70,17 +98,6 @@ export function GraphTemplateDetailModal({ templateId, onClose }: Props) {
                 </tbody>
               </table>
             ) : <EmptyState compact message="No data series defined." />}
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1rem' }}>
-              {!tpl.built_in ? (
-                <DeleteButton
-                  size="md"
-                  onClick={() => handleDelete(tpl.id)}
-                  disabled={deleteMut.isPending}
-                  busy={deleteMut.isPending}
-                />
-              ) : <span />}
-              <button className="btn btn-secondary" onClick={onClose}>Close</button>
-            </div>
           </>
         );
       })()}

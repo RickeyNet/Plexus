@@ -5,7 +5,7 @@ import {
   useSearchConfigBackups,
 } from '@/api/configuration';
 import { Callout } from '@/components/Callout';
-import { useDialogs } from '@/components/DialogProvider-context';
+import { FieldError } from '@/components/FieldError';
 import { formatBackendDateTime } from '@/lib/datetime';
 
 import { BackupModal } from './BackupModal';
@@ -29,8 +29,8 @@ const MODE_HINTS: Record<Mode, { placeholder: string; example: string }> = {
 };
 
 export function SearchTab() {
-  const { alert } = useDialogs();
   const [query, setQuery] = useState('');
+  const [queryError, setQueryError] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>('fulltext');
   const [limit, setLimit] = useState(50);
   const search = useSearchConfigBackups();
@@ -41,9 +41,10 @@ export function SearchTab() {
   const handleSearch = () => {
     const q = query.trim();
     if (!q) {
-      void alert('Enter text to search in configuration backups.');
+      setQueryError('Enter text to search in configuration backups.');
       return;
     }
+    setQueryError(null);
     const safeLimit = Math.max(1, Math.min(200, limit));
     setLimit(safeLimit);
     search.mutate({ query: q, mode, limit: safeLimit, contextLines: 1 });
@@ -59,14 +60,19 @@ export function SearchTab() {
             style={{ width: '100%' }}
             value={query}
             placeholder={hint.placeholder}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setQueryError(null);
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault();
                 handleSearch();
               }
             }}
+            aria-invalid={!!queryError}
           />
+          <FieldError>{queryError}</FieldError>
         </div>
         <div>
           <label className="form-label">Mode</label>

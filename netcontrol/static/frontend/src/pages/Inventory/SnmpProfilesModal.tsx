@@ -1,7 +1,9 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useId, useState } from 'react';
 
+import { Callout } from '@/components/Callout';
 import { DeleteButton } from '@/components/DeleteButton';
 import { EmptyState } from '@/components/EmptyState';
+import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -41,7 +43,25 @@ export function SnmpProfilesModal({ onClose }: Props) {
   const list = profiles.data ?? [];
 
   return (
-    <Modal isOpen onClose={onClose} title="SNMP Profiles" size="large">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="SNMP Profiles"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Close
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setView({ mode: 'create' })}
+          >
+            + New Profile
+          </button>
+        </>
+      }
+    >
       <div
         className="stack stack-sm"
         style={{ maxHeight: 360, overflow: 'auto', marginBottom: 'var(--space-3)' }}
@@ -84,9 +104,11 @@ export function SnmpProfilesModal({ onClose }: Props) {
                 <DeleteButton
                   onClick={async () => {
                     if (
-                      !(await confirm(
-                        `Delete SNMP profile "${p.name}"? Any groups using it will be unassigned.`,
-                      ))
+                      !(await confirm({
+                        title: 'Delete SNMP profile',
+                        message: `Delete SNMP profile "${p.name}"? Any groups using it will be unassigned.`,
+                        confirmLabel: 'Delete',
+                      }))
                     )
                       return;
                     remove.mutate(p.id, {
@@ -101,24 +123,6 @@ export function SnmpProfilesModal({ onClose }: Props) {
           ))
         )}
       </div>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'flex-end',
-          gap: '0.5rem',
-        }}
-      >
-        <button type="button" className="btn btn-secondary" onClick={onClose}>
-          Close
-        </button>
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={() => setView({ mode: 'create' })}
-        >
-          + New Profile
-        </button>
-      </div>
     </Modal>
   );
 }
@@ -130,7 +134,7 @@ interface FormProps {
 }
 
 function SnmpProfileFormModal({ profile, onBack, onClose }: FormProps) {
-  const { alert } = useDialogs();
+  const formId = useId();
   const create = useCreateSnmpProfile();
   const update = useUpdateSnmpProfile();
   const isEdit = profile != null;
@@ -154,13 +158,17 @@ function SnmpProfileFormModal({ profile, onBack, onClose }: FormProps) {
   const [v3PrivProtocol, setV3PrivProtocol] = useState(v3.priv_protocol ?? 'aes128');
   const [v3PrivPassword, setV3PrivPassword] = useState(v3.priv_password ?? '');
 
+  const [nameError, setNameError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   const isPending = create.isPending || update.isPending;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    setSaveError(null);
     const trimmed = name.trim();
     if (!trimmed) {
-      void alert('Profile name is required.');
+      setNameError('Profile name is required.');
       return;
     }
     const payload = {
@@ -188,7 +196,7 @@ function SnmpProfileFormModal({ profile, onBack, onClose }: FormProps) {
       }
       onBack();
     } catch (err) {
-      void alert({ message: (err as Error).message, variant: 'error' });
+      setSaveError((err as Error).message);
     }
   };
 
@@ -197,18 +205,34 @@ function SnmpProfileFormModal({ profile, onBack, onClose }: FormProps) {
       isOpen
       onClose={onClose}
       title={isEdit ? `Edit SNMP Profile: ${profile?.name}` : 'New SNMP Profile'}
-      size="large"
+      size="medium"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onBack}>
+            Back
+          </button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={isPending}>
+            {isPending ? 'Saving…' : isEdit ? 'Save Profile' : 'Create Profile'}
+          </button>
+        </>
+      }
     >
-      <form onSubmit={submit}>
+      <form id={formId} onSubmit={submit}>
+        {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
           <label className="form-label">Profile Name</label>
           <input
             className="form-input"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => {
+              setName(e.target.value);
+              setNameError(null);
+            }}
             required
             placeholder="e.g. Lab Switches"
+            aria-invalid={!!nameError}
           />
+          <FieldError>{nameError}</FieldError>
         </div>
         <label
           style={{
@@ -400,21 +424,6 @@ function SnmpProfileFormModal({ profile, onBack, onClose }: FormProps) {
         >
           Passwords support <code>{'{{secret.NAME}}'}</code> references from
           Settings → Credentials → Secret Variables.
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            gap: '0.5rem',
-            justifyContent: 'flex-end',
-            marginTop: '1rem',
-          }}
-        >
-          <button type="button" className="btn btn-secondary" onClick={onBack}>
-            Back
-          </button>
-          <button type="submit" className="btn btn-primary" disabled={isPending}>
-            {isPending ? 'Saving…' : isEdit ? 'Save Profile' : 'Create Profile'}
-          </button>
         </div>
       </form>
     </Modal>

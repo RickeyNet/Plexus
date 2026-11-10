@@ -2511,6 +2511,20 @@ input[type="search"].form-input::-webkit-search-results-decoration {
     line-height: var(--control-lh-sm);
 }
 
+/* Inline validation message under a field (<FieldError>). */
+.form-error {
+    margin-top: 0.3rem;
+    font-size: var(--text-sm);
+    line-height: 1.4;
+    color: var(--danger);
+}
+
+.form-input[aria-invalid="true"],
+.form-select[aria-invalid="true"],
+.form-textarea[aria-invalid="true"] {
+    border-color: var(--danger);
+}
+
 /* Hint line under a field. */
 .form-help {
     margin-top: 0.3rem;
@@ -2640,15 +2654,33 @@ input[type="number"].form-input {
     max-width: 700px;
     width: 100%;
     max-height: 90vh;
-    overflow-y: auto;
-    overflow-x: auto;
+    /* Header and footer stay put; .modal-body is the scroll container. */
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
+.modal:focus {
+    outline: none;
+}
+
+/* Confirms and one- or two-field prompts. */
+.modal-small {
+    max-width: 480px;
+}
+
+/* Two-column forms and modest tables. */
+.modal-medium {
+    max-width: 1000px;
+}
+
+/* Wide tables, diffs and log viewers. */
 .modal-large {
     max-width: 1600px;
 }
 
 .modal-header {
+    flex: none;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -2683,8 +2715,37 @@ input[type="number"].form-input {
 }
 
 .modal-body {
+    flex: 1 1 auto;
+    min-height: 0;
     padding: var(--space-5);
-    overflow-x: auto;
+    overflow: auto;
+}
+
+/* Action row: Cancel (.btn-secondary) first, the primary action last. */
+.modal-footer {
+    flex: none;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-4) var(--space-5);
+    border-top: 1px solid var(--border);
+}
+
+/* A footer item kept on the left (a Delete button, a status line). */
+.modal-footer-start {
+    margin-right: auto;
+}
+
+/* Alert/confirm text: keep the line breaks of a multi-line message. */
+.dialog-message {
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+}
+
+.dialog-message-error {
+    color: var(--danger);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════
@@ -3164,6 +3225,7 @@ code {
     }
 
     .modal,
+    .modal-medium,
     .modal-large {
         max-width: 95vw;
     }

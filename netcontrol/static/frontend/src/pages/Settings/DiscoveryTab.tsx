@@ -485,7 +485,11 @@ function StpRootPoliciesSection() {
                 </span>
                 <DeleteButton
                   onClick={async () => {
-                    if (!(await confirm('Delete this STP root policy?'))) return;
+                    if (!(await confirm({
+                      title: 'Delete STP root policy',
+                      message: `Delete the STP root policy for ${p.group_name || `Group ${p.group_id}`} · VLAN ${p.vlan_id}?`,
+                      confirmLabel: 'Delete',
+                    }))) return;
                     remove.mutate(p.id, {
                       onError: (e) => {
                         void alert({ message: `Failed to delete: ${(e as Error).message}`, variant: 'error' });

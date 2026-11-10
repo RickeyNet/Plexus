@@ -5,7 +5,12 @@ export function useConfirmDeleteFloor() {
   const remove = useDeleteGeoFloor();
   const { confirm } = useDialogs();
   return async (floor: GeoFloor) => {
-    if (!(await confirm(`Delete floor "${floor.name}" and all its device pins?`))) {
+    const confirmed = await confirm({
+      title: 'Delete floor',
+      message: `Delete floor "${floor.name}" and all its device pins?`,
+      confirmLabel: 'Delete',
+    });
+    if (!confirmed) {
       return { confirmed: false as const };
     }
     try {

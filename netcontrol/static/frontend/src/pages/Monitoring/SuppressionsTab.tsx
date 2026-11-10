@@ -1,7 +1,9 @@
-import { useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent } from 'react';
 
+import { Callout } from '@/components/Callout';
 import { DeleteButton } from '@/components/DeleteButton';
 import { EmptyState } from '@/components/EmptyState';
+import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -23,7 +25,7 @@ export function SuppressionsTab() {
   const now = new Date();
 
   async function handleDelete(s: AlertSuppression) {
-    if (!(await confirm(`Delete suppression '${s.name}'?`))) return;
+    if (!(await confirm({ title: 'Delete alert suppression', message: `Delete suppression '${s.name}'?`, confirmLabel: 'Delete' }))) return;
     deleteMut.mutate(s.id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
   }
 
@@ -75,7 +77,7 @@ export function SuppressionsTab() {
 }
 
 function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
-  const { alert } = useDialogs();
+  const formId = useId();
   const createMut = useCreateSuppression();
   const groups = useInventoryGroupsFull(true);
   const allHosts = (groups.data ?? []).flatMap((g) => (g.hosts ?? []).map((h) => ({ ...h, group_name: groupLabel(g) })));
@@ -88,23 +90,20 @@ function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
   const [hostId, setHostId] = useState('');
   const [metric, setMetric] = useState('');
   const [reason, setReason] = useState('');
+  const [startsError, setStartsError] = useState('');
+  const [endsError, setEndsError] = useState('');
+  const [saveError, setSaveError] = useState('');
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!starts) {
-      void alert('Start time is required');
-      return;
-    }
-    if (!ends) {
-      void alert('End time is required');
-      return;
-    }
+    setSaveError('');
     const startsDate = new Date(starts);
     const endsDate = new Date(ends);
-    if (Number.isNaN(startsDate.getTime()) || Number.isNaN(endsDate.getTime())) {
-      void alert('Invalid start or end time');
-      return;
-    }
+    const startsErr = !starts ? 'Start time is required' : Number.isNaN(startsDate.getTime()) ? 'Invalid start time' : '';
+    const endsErr = !ends ? 'End time is required' : Number.isNaN(endsDate.getTime()) ? 'Invalid end time' : '';
+    setStartsError(startsErr);
+    setEndsError(endsErr);
+    if (startsErr || endsErr) return;
     const data: SuppressionCreate = {
       name: name.trim(),
       starts_at: startsDate.toISOString().replace('T', ' ').slice(0, 19),
@@ -120,13 +119,26 @@ function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
         setName(''); setReason(''); setHostId(''); setGroupId(''); setMetric('');
         onClose();
       },
-      onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
+      onError: (e) => { setSaveError((e as Error).message); },
     });
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Create Alert Suppression">
-      <form onSubmit={handleSubmit}>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Create Alert Suppression"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={createMut.isPending}>
+            {createMut.isPending ? 'Creating…' : 'Create'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={handleSubmit}>
+        {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
           <label className="form-label">Name</label>
           <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Maintenance Window" required />
@@ -134,11 +146,26 @@ function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <div className="form-group" style={{ flex: 1 }}>
             <label className="form-label">Starts At</label>
-            <input className="form-input" type="datetime-local" value={starts} onChange={(e) => setStarts(e.target.value)} />
+            <input
+              className="form-input"
+              type="datetime-local"
+              value={starts}
+              onChange={(e) => { setStarts(e.target.value); setStartsError(''); }}
+              aria-invalid={!!startsError}
+            />
+            <FieldError>{startsError}</FieldError>
           </div>
           <div className="form-group" style={{ flex: 1 }}>
             <label className="form-label">Ends At</label>
-            <input className="form-input" type="datetime-local" value={ends} onChange={(e) => setEnds(e.target.value)} required />
+            <input
+              className="form-input"
+              type="datetime-local"
+              value={ends}
+              onChange={(e) => { setEnds(e.target.value); setEndsError(''); }}
+              aria-invalid={!!endsError}
+              required
+            />
+            <FieldError>{endsError}</FieldError>
           </div>
         </div>
         <div className="form-group">
@@ -173,12 +200,6 @@ function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
         <div className="form-group">
           <label className="form-label">Reason</label>
           <textarea className="form-input" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} />
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={createMut.isPending}>
-            {createMut.isPending ? 'Creating…' : 'Create'}
-          </button>
         </div>
       </form>
     </Modal>

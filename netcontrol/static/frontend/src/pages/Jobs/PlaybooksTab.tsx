@@ -38,9 +38,14 @@ export function PlaybooksTab() {
     });
   }, [query.data, search]);
 
-  async function handleDelete(id: number) {
-    if (!(await confirm('Delete this playbook? This cannot be undone.'))) return;
-    deleteMut.mutate(id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
+  async function handleDelete(pb: Playbook) {
+    const ok = await confirm({
+      title: 'Delete playbook',
+      message: `Delete playbook "${pb.name}"? This cannot be undone.`,
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
+    deleteMut.mutate(pb.id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
   }
 
   return (
@@ -68,7 +73,7 @@ export function PlaybooksTab() {
               key={pb.id}
               pb={pb}
               onEdit={() => setEditing({ mode: 'edit', id: pb.id })}
-              onDelete={() => handleDelete(pb.id)}
+              onDelete={() => handleDelete(pb)}
             />
           ))}
         </div>

@@ -159,6 +159,7 @@ export function SourcesModal({
   const [jobProvider, setJobProvider] = useState<TopologySourceType>("meraki");
   // The inventory source whose collection dialog (devices, credential) is open.
   const [inventoryFor, setInventoryFor] = useState<TopologySource | null>(null);
+  const [inventoryError, setInventoryError] = useState<string | null>(null);
   // AWS / Azure / GCP accounts whose discovery request is in flight.
   const [cloudBusy, setCloudBusy] = useState<number[]>([]);
   const [allBusy, setAllBusy] = useState(false);
@@ -238,16 +239,14 @@ export function SourcesModal({
 
   /** The Collect button of the inventory collection dialog: track the job like an organization build. */
   const handleInventoryCollect = async (body: InventoryCollectRequest) => {
+    setInventoryError(null);
     try {
       const started = await startInventoryCollection(body);
       setInventoryFor(null);
       setJobProvider(PROVIDER_INVENTORY);
       setJobId(started);
     } catch (err) {
-      void alert({
-        message: `Could not start the collection: ${errorText(err)}`,
-        variant: "error",
-      });
+      setInventoryError(`Could not start the collection: ${errorText(err)}`);
     }
   };
 
@@ -258,6 +257,7 @@ export function SourcesModal({
       return;
     }
     if (isInventorySource(source)) {
+      setInventoryError(null);
       setInventoryFor(source);
       return;
     }
@@ -656,6 +656,7 @@ export function SourcesModal({
           isAdmin={isAdmin}
           onCollect={handleInventoryCollect}
           isPending={startInventory.isPending}
+          error={inventoryError}
           onClose={() => setInventoryFor(null)}
         />
       )}
@@ -766,9 +767,11 @@ function SourceRow({
 
   const handleDelete = async () => {
     if (
-      !(await confirm(
-        `Delete "${source.name}"?\n\nIts devices leave the topology map, and its stored API key and collection history are deleted.`,
-      ))
+      !(await confirm({
+        title: "Delete map source",
+        message: `Delete "${source.name}"?\n\nIts devices leave the topology map, and its stored API key and collection history are deleted.`,
+        confirmLabel: "Delete",
+      }))
     ) {
       return;
     }
@@ -1205,9 +1208,11 @@ function SnapshotTable({
 
   const handleDelete = async (snapshot: MerakiSnapshot) => {
     if (
-      !(await confirm(
-        `Delete the ${formatBackendDateTime(snapshot.created_at)} collection of "${snapshot.org_name}"?`,
-      ))
+      !(await confirm({
+        title: "Delete collection",
+        message: `Delete the ${formatBackendDateTime(snapshot.created_at)} collection of "${snapshot.org_name}"?`,
+        confirmLabel: "Delete",
+      }))
     )
       return;
     try {

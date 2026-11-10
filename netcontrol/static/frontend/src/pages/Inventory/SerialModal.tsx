@@ -1,6 +1,8 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useId, useState } from 'react';
 
+import { Callout } from '@/components/Callout';
 import { EmptyState } from '@/components/EmptyState';
+import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -22,6 +24,9 @@ export function SerialModal({ target, onClose }: Props) {
   const fetchHost = useFetchHostSerial();
   const fetchGroup = useFetchGroupSerials();
   const [credentialId, setCredentialId] = useState<number | null>(null);
+  const [credentialError, setCredentialError] = useState<string | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
+  const formId = useId();
 
   const list = credentials.data ?? [];
   const isBulk = target.mode === 'bulk';
@@ -30,8 +35,9 @@ export function SerialModal({ target, onClose }: Props) {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    setRunError(null);
     if (credentialId == null) {
-      void alert('Select a credential.');
+      setCredentialError('Select a credential.');
       return;
     }
     try {
@@ -53,15 +59,30 @@ export function SerialModal({ target, onClose }: Props) {
         );
       }
     } catch (err) {
-      void alert({ message: (err as Error).message, variant: 'error' });
+      setRunError((err as Error).message);
     }
   };
+
+  const showForm = !credentials.isPending && list.length > 0;
 
   return (
     <Modal
       isOpen
       onClose={onClose}
       title={`${isBulk ? 'Fetch All Serials' : 'Fetch Serial Number'}${name ? ` - ${name}` : ''}`}
+      size="small"
+      footer={
+        showForm && (
+          <>
+            <button type="button" className="btn btn-secondary" onClick={onClose}>
+              Cancel
+            </button>
+            <button type="submit" form={formId} className="btn btn-primary" disabled={isPending}>
+              {isPending ? 'Fetching…' : isBulk ? 'Fetch All' : 'Fetch'}
+            </button>
+          </>
+        )
+      }
     >
       <p
         style={{
@@ -88,16 +109,19 @@ export function SerialModal({ target, onClose }: Props) {
       ) : list.length === 0 ? (
         <EmptyState compact message="No credentials configured. Add one under Settings → Credentials." />
       ) : (
-        <form onSubmit={submit}>
+        <form id={formId} onSubmit={submit}>
+          {runError && <Callout tone="danger">{runError}</Callout>}
           <div className="form-group">
             <label className="form-label">Credential</label>
             <select
               className="form-select"
               value={credentialId == null ? '' : String(credentialId)}
-              onChange={(e) =>
-                setCredentialId(e.target.value ? Number(e.target.value) : null)
-              }
+              onChange={(e) => {
+                setCredentialId(e.target.value ? Number(e.target.value) : null);
+                setCredentialError(null);
+              }}
               required
+              aria-invalid={!!credentialError}
             >
               <option value="">- Select -</option>
               {list.map((c) => (
@@ -106,21 +130,7 @@ export function SerialModal({ target, onClose }: Props) {
                 </option>
               ))}
             </select>
-          </div>
-          <div
-            style={{
-              display: 'flex',
-              gap: '0.5rem',
-              justifyContent: 'flex-end',
-              marginTop: '1rem',
-            }}
-          >
-            <button type="button" className="btn btn-secondary" onClick={onClose}>
-              Cancel
-            </button>
-            <button type="submit" className="btn btn-primary" disabled={isPending}>
-              {isPending ? 'Fetching…' : isBulk ? 'Fetch All' : 'Fetch'}
-            </button>
+            <FieldError>{credentialError}</FieldError>
           </div>
         </form>
       )}

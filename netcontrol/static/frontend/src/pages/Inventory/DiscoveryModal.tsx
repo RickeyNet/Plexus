@@ -1,6 +1,7 @@
-import { FormEvent, useEffect, useRef, useState } from 'react';
+import { FormEvent, useEffect, useId, useRef, useState } from 'react';
 
 import { useAuthStatus } from '@/api/auth';
+import { Callout } from '@/components/Callout';
 import { CredentialSelect } from '@/components/CredentialSelect';
 import { Modal } from '@/components/Modal';
 import {
@@ -103,6 +104,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tickNow, setTickNow] = useState(() => Date.now());
+  const formId = useId();
 
   const scanAbortRef = useRef<AbortController | null>(null);
 
@@ -323,7 +325,16 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
 
   if (phase === 'sync-result' && syncResult) {
     return (
-      <Modal isOpen onClose={onClose} title={title}>
+      <Modal
+        isOpen
+        onClose={onClose}
+        title={title}
+        footer={
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Close
+          </button>
+        }
+      >
         <div
           className="card card-sm"
           style={{ borderLeft: '3px solid var(--success)' }}
@@ -347,20 +358,23 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
           </table>
           <SshSummaryNote summary={sshSummary} />
         </div>
-        <div
-          style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.75rem' }}
-        >
-          <button type="button" className="btn btn-primary" onClick={onClose}>
-            Close
-          </button>
-        </div>
       </Modal>
     );
   }
 
   if (phase === 'onboard-result' && onboardResult) {
     return (
-      <Modal isOpen onClose={onClose} title={title}>
+      <Modal
+        isOpen
+        onClose={onClose}
+        title={title}
+        size="small"
+        footer={
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Close
+          </button>
+        }
+      >
         <div
           className="card card-sm"
           style={{ borderLeft: '3px solid var(--success)' }}
@@ -379,20 +393,22 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
             </tbody>
           </table>
         </div>
-        <div
-          style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.75rem' }}
-        >
-          <button type="button" className="btn btn-primary" onClick={onClose}>
-            Close
-          </button>
-        </div>
       </Modal>
     );
   }
 
   if (phase === 'snmp-result' && snmpResult) {
     return (
-      <Modal isOpen onClose={onClose} title="SNMP Test Result">
+      <Modal
+        isOpen
+        onClose={onClose}
+        title="SNMP Test Result"
+        footer={
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Close
+          </button>
+        }
+      >
         {snmpResult.ok ? (
           <div
             className="card card-sm"
@@ -444,13 +460,6 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
             <span style={{ opacity: 0.8 }}>{snmpResult.error}</span>
           </div>
         )}
-        <div
-          style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.75rem' }}
-        >
-          <button type="button" className="btn btn-secondary" onClick={onClose}>
-            Close
-          </button>
-        </div>
       </Modal>
     );
   }
@@ -469,7 +478,19 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
         isOpen
         onClose={onClose}
         title={isSync ? title : 'Scanning Network'}
-        size="large"
+        size="medium"
+        footer={
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => {
+              scanAbortRef.current?.abort();
+              onClose();
+            }}
+          >
+            Cancel
+          </button>
+        }
       >
         <div style={{ padding: '1rem 0.5rem' }}>
           <div style={{ marginBottom: '0.75rem', fontWeight: 600 }}>
@@ -559,24 +580,6 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
               </div>
             ))}
           </div>
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'flex-end',
-              marginTop: '0.75rem',
-            }}
-          >
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => {
-                scanAbortRef.current?.abort();
-                onClose();
-              }}
-            >
-              Cancel
-            </button>
-          </div>
         </div>
       </Modal>
     );
@@ -589,7 +592,41 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
     const allSelected =
       discovered.length > 0 && selectedSet.size === discovered.length;
     return (
-      <Modal isOpen onClose={onClose} title="Discovered Devices" size="large">
+      <Modal
+        isOpen
+        onClose={onClose}
+        title="Discovered Devices"
+        size="medium"
+        footer={
+          <>
+            <button
+              type="button"
+              className="btn btn-secondary modal-footer-start"
+              onClick={() =>
+                setSelectedSet(
+                  allSelected
+                    ? new Set()
+                    : new Set(discovered.map((_, i) => i)),
+                )
+              }
+            >
+              {allSelected ? 'Deselect All' : 'Select All'}
+            </button>
+            <button type="button" className="btn btn-secondary" onClick={onClose}>
+              Close
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={onboard.isPending || discovered.length === 0}
+              onClick={onboardSelected}
+            >
+              {onboard.isPending ? 'Onboarding…' : 'Onboard Selected'}
+            </button>
+          </>
+        }
+      >
+        {error && <Callout tone="danger">{error}</Callout>}
         <div className="card-description" style={{ marginBottom: '0.75rem' }}>
           Found {discovered.length} reachable device(s). Will onboard into{' '}
           <strong>{targetGroup?.name ?? 'selected group'}</strong>.
@@ -676,60 +713,41 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
             </div>
           )}
         </div>
-        {error && (
-          <p
-            style={{
-              color: 'var(--danger)',
-              marginTop: '0.5rem',
-              fontSize: '0.85rem',
-            }}
-          >
-            {error}
-          </p>
-        )}
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            marginTop: '0.75rem',
-            gap: '0.5rem',
-          }}
-        >
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() =>
-              setSelectedSet(
-                allSelected
-                  ? new Set()
-                  : new Set(discovered.map((_, i) => i)),
-              )
-            }
-          >
-            {allSelected ? 'Deselect All' : 'Select All'}
-          </button>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={onboard.isPending || discovered.length === 0}
-              onClick={onboardSelected}
-            >
-              {onboard.isPending ? 'Onboarding…' : 'Onboard Selected'}
-            </button>
-            <button type="button" className="btn btn-secondary" onClick={onClose}>
-              Close
-            </button>
-          </div>
-        </div>
       </Modal>
     );
   }
 
   // Form phase
   return (
-    <Modal isOpen onClose={onClose} title={title} size="large">
-      <form onSubmit={submit}>
+    <Modal
+      isOpen
+      onClose={onClose}
+      title={title}
+      size="medium"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="submit"
+            form={formId}
+            className="btn btn-primary"
+            disabled={testSnmp.isPending}
+          >
+            {isSync
+              ? 'Run Sync'
+              : testOnly
+                ? testSnmp.isPending
+                  ? 'Testing…'
+                  : 'Test SNMP'
+                : 'Scan Network'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={submit}>
+        {error && <Callout tone="danger">{error}</Callout>}
         {isGlobal && (
           <div className="form-group">
             <label className="form-label">Target Inventory Group</label>
@@ -944,42 +962,6 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
             )}
           </>
         )}
-        {error && (
-          <p
-            style={{
-              color: 'var(--danger)',
-              marginTop: '0.5rem',
-              fontSize: '0.85rem',
-            }}
-          >
-            {error}
-          </p>
-        )}
-        <div
-          style={{
-            display: 'flex',
-            gap: '0.5rem',
-            justifyContent: 'flex-end',
-            marginTop: '1rem',
-          }}
-        >
-          <button type="button" className="btn btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            type="submit"
-            className="btn btn-primary"
-            disabled={testSnmp.isPending}
-          >
-            {isSync
-              ? 'Run Sync'
-              : testOnly
-                ? testSnmp.isPending
-                  ? 'Testing…'
-                  : 'Test SNMP'
-                : 'Scan Network'}
-          </button>
-        </div>
       </form>
     </Modal>
   );

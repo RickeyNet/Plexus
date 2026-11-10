@@ -14,7 +14,7 @@ export function RouteSnapshotsModal({ hostId, hostname, onClose }: { hostId: num
   const [selected, setSelected] = useState<{ text: string; ts: string } | null>(null);
 
   return (
-    <Modal isOpen onClose={onClose} title={`${hostname} - Route Snapshots`} size="large">
+    <Modal isOpen onClose={onClose} title={`${hostname} - Route Snapshots`} size="medium">
       {snapshots.isPending && <LoadingState />}
       {snapshots.error && <div style={{ color: 'var(--danger)' }}>Error: {(snapshots.error as Error).message}</div>}
       {snapshots.data && (snapshots.data.length === 0 ? (
@@ -51,18 +51,24 @@ export function RouteSnapshotsModal({ hostId, hostname, onClose }: { hostId: num
       ))}
 
       {selected && (
-        <Modal isOpen onClose={() => setSelected(null)} title={`Route Table - ${selected.ts}`} size="large">
-          <pre style={{ background: 'var(--bg-secondary)', padding: '0.75rem', borderRadius: 4, maxHeight: 400, overflow: 'auto', fontSize: '0.8em' }}>
-            {selected.text || '(empty)'}
-          </pre>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+        <Modal
+          isOpen
+          onClose={() => setSelected(null)}
+          title={`Route Table - ${selected.ts}`}
+          size="large"
+          footer={
             <button
+              type="button"
               className="btn btn-sm btn-secondary"
               onClick={() => navigator.clipboard.writeText(selected.text)}
             >
               Copy
             </button>
-          </div>
+          }
+        >
+          <pre style={{ background: 'var(--bg-secondary)', padding: '0.75rem', borderRadius: 4, maxHeight: 400, overflow: 'auto', fontSize: '0.8em' }}>
+            {selected.text || '(empty)'}
+          </pre>
         </Modal>
       )}
     </Modal>
