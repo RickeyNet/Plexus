@@ -128,7 +128,7 @@ const SEVERITY_BADGE: Record<HostAuditFinding['severity'], string> = {
   high: 'badge-danger',
   medium: 'badge-warning',
   low: 'badge-info',
-  info: 'badge-muted',
+  info: 'badge-secondary',
 };
 
 export function NodeDetails({
@@ -939,7 +939,7 @@ function SubHeading({ label }: { label: string }) {
 
 function StateBadge({ value }: { value: string }) {
   const v = (value || '').toLowerCase();
-  let cls = 'badge-muted';
+  let cls = 'badge-secondary';
   if (v === 'up' || v === 'active' || v === 'operational') cls = 'badge-success';
   else if (v === 'down' || v === 'shutdown' || v === 'suspended') cls = 'badge-danger';
   else if (v === 'testing' || v === 'unknown') cls = 'badge-warning';

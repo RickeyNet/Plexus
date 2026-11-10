@@ -30,7 +30,7 @@ export function MerakiScanProgress({
   if (!data || data.status === 'running') {
     return (
       <Banner tone="info">
-        <span className="spinner" style={{ marginRight: '0.5rem' }} />
+        <span className="backup-spinner" style={{ marginRight: '0.5rem' }} />
         Scanning {String(data?.progress?.org_name ?? 'organization')}…{' '}
         <span style={{ color: 'var(--text-muted)' }}>{describeProgress(data)}</span>
       </Banner>

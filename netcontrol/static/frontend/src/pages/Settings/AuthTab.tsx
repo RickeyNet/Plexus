@@ -906,7 +906,7 @@ function ServiceCredentialsSection() {
         credentials and can only be created or modified by admins.
       </p>
 
-      <table className="table" style={{ marginBottom: '1rem' }}>
+      <table className="data-table" style={{ marginBottom: '1rem' }}>
         <thead>
           <tr>
             <th>Name</th>

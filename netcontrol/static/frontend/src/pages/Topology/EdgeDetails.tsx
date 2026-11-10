@@ -85,7 +85,7 @@ export function EdgeDetails({ edge, fromNode, toNode, onClose }: Props) {
           {abbreviateInterface(edge.target_interface) || '?'}
         </span>
         <strong>{toNode?.label || edge.to}</strong>
-        <span className="badge badge-muted" style={{ marginLeft: 'auto' }}>
+        <span className="badge badge-secondary" style={{ marginLeft: 'auto' }}>
           {protoLabel}
         </span>
         {edge.status && (
@@ -370,7 +370,7 @@ function truncateList(csv: string, max = 12): string {
 
 function StateBadge({ value }: { value: string }) {
   const v = (value || '').toLowerCase();
-  let cls = 'badge-muted';
+  let cls = 'badge-secondary';
   if (v === 'up' || v === 'active' || v === 'operational') cls = 'badge-success';
   else if (v === 'down' || v === 'shutdown' || v === 'suspended') cls = 'badge-danger';
   else if (v === 'testing' || v === 'unknown') cls = 'badge-warning';

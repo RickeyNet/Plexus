@@ -265,7 +265,7 @@ function SearchTab() {
       )}
 
       {search.isPending && (
-        <div className="skeleton-loader" style={{ height: '200px' }} />
+        <div className="skeleton" style={{ height: '200px' }} />
       )}
 
       {search.error && (
@@ -399,7 +399,7 @@ function MovesTab() {
       </div>
 
       {events.isPending && (
-        <div className="skeleton-loader" style={{ height: '200px' }} />
+        <div className="skeleton" style={{ height: '200px' }} />
       )}
 
       {events.error && (
@@ -555,7 +555,7 @@ function HostsTab() {
       </div>
 
       {rollup.isPending && (
-        <div className="skeleton-loader" style={{ height: '200px' }} />
+        <div className="skeleton" style={{ height: '200px' }} />
       )}
 
       {rollup.error && (
@@ -892,7 +892,7 @@ function MoveEventLogBody({ eventId }: { eventId: number | null }) {
   const { data, isPending, error } = useMacMoveEventHistory(eventId, 500);
 
   if (isPending)
-    return <div className="skeleton-loader" style={{ height: '120px' }} />;
+    return <div className="skeleton" style={{ height: '120px' }} />;
   if (error)
     return (
       <div style={{ color: 'var(--danger)' }}>
@@ -1036,7 +1036,7 @@ function ResultsTable({
 function MacHistoryBody({ macAddress }: { macAddress: string | null }) {
   const { data, isPending, error } = useMacHistory(macAddress);
 
-  if (isPending) return <div className="skeleton-loader" style={{ height: '120px' }} />;
+  if (isPending) return <div className="skeleton" style={{ height: '120px' }} />;
   if (error) return <div style={{ color: 'var(--danger)' }}>Failed to load history: {error.message}</div>;
   if (!data || data.length === 0) {
     return <p style={{ opacity: 0.7 }}>No movement history found for this MAC.</p>;

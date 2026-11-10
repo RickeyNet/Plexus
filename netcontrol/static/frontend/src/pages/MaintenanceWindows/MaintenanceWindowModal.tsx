@@ -161,7 +161,7 @@ export function MaintenanceWindowModal({ isOpen, onClose, editingId, groups }: P
           <div style={{ fontWeight: 600, fontSize: '0.85em' }}>Name</div>
           <input
             type="text"
-            className="input"
+            className="form-input"
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
             style={{ width: '100%' }}
@@ -172,7 +172,7 @@ export function MaintenanceWindowModal({ isOpen, onClose, editingId, groups }: P
         <label>
           <div style={{ fontWeight: 600, fontSize: '0.85em' }}>Description</div>
           <textarea
-            className="input"
+            className="form-textarea"
             rows={2}
             value={form.description || ''}
             onChange={(e) => setForm({ ...form, description: e.target.value })}
@@ -185,7 +185,7 @@ export function MaintenanceWindowModal({ isOpen, onClose, editingId, groups }: P
             <div style={{ fontWeight: 600, fontSize: '0.85em' }}>Start</div>
             <input
               type="datetime-local"
-              className="input"
+              className="form-input"
               value={startLocal}
               onChange={(e) => setStartLocal(e.target.value)}
               style={{ width: '100%' }}
@@ -195,7 +195,7 @@ export function MaintenanceWindowModal({ isOpen, onClose, editingId, groups }: P
             <div style={{ fontWeight: 600, fontSize: '0.85em' }}>End</div>
             <input
               type="datetime-local"
-              className="input"
+              className="form-input"
               value={endLocal}
               onChange={(e) => setEndLocal(e.target.value)}
               style={{ width: '100%' }}
@@ -207,7 +207,7 @@ export function MaintenanceWindowModal({ isOpen, onClose, editingId, groups }: P
           <label style={{ flex: 1, minWidth: 200 }}>
             <div style={{ fontWeight: 600, fontSize: '0.85em' }}>Recurrence</div>
             <select
-              className="input"
+              className="form-select"
               value={form.recurrence}
               onChange={(e) =>
                 setForm({ ...form, recurrence: e.target.value as WindowRecurrence })
@@ -222,7 +222,7 @@ export function MaintenanceWindowModal({ isOpen, onClose, editingId, groups }: P
           <label style={{ flex: 1, minWidth: 200 }}>
             <div style={{ fontWeight: 600, fontSize: '0.85em' }}>Policy</div>
             <select
-              className="input"
+              className="form-select"
               value={form.policy}
               onChange={(e) => setForm({ ...form, policy: e.target.value as WindowPolicy })}
               style={{ width: '100%' }}

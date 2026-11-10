@@ -401,7 +401,7 @@ function ApprovalSection({
         <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           <input
             type="text"
-            className="input"
+            className="form-input"
             placeholder="Optional comment"
             value={approverInput}
             onChange={(e) => onApproverInput(e.target.value)}

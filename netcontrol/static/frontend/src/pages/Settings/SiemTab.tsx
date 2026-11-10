@@ -157,7 +157,7 @@ export function SiemTab() {
         <p className="text-muted">No sinks configured. Add one to start forwarding audit events.</p>
       ) : (
         <div style={{ overflowX: 'auto' }}>
-          <table className="table" style={{ width: '100%', minWidth: '720px' }}>
+          <table className="data-table" style={{ width: '100%', minWidth: '720px' }}>
             <thead>
               <tr>
                 <th>Name</th>
