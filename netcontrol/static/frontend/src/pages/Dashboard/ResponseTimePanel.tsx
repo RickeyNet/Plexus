@@ -4,6 +4,8 @@ import { useMetricsQuery } from '@/api/dashboard';
 import { TimeSeriesChart } from '@/lib/echart';
 import { useTimeRange } from '@/lib/timeRange-context';
 
+import { PANEL_BODY_HEIGHT, PANEL_BODY_STYLE } from './helpers';
+
 export function ResponseTimePanel() {
   const { range } = useTimeRange();
   const query = useMetricsQuery({ metric: 'response_time_ms', range });
@@ -51,11 +53,13 @@ export function ResponseTimePanel() {
       </div>
 
       {query.isPending ? (
-        <div className="skeleton skeleton-card" style={{ height: 220 }} />
+        <div className="skeleton skeleton-card" style={PANEL_BODY_STYLE} />
       ) : query.error ? (
-        <p style={{ color: 'var(--danger)', margin: 0 }}>
-          Failed to load: {(query.error as Error).message}
-        </p>
+        <div className="dashboard-response-empty">
+          <p style={{ color: 'var(--danger)', margin: 0 }}>
+            Failed to load: {(query.error as Error).message}
+          </p>
+        </div>
       ) : series.length === 0 ? (
         <div className="dashboard-response-empty">
           <p style={{ margin: 0, color: 'var(--text-muted)' }}>
@@ -63,7 +67,7 @@ export function ResponseTimePanel() {
           </p>
         </div>
       ) : (
-        <TimeSeriesChart series={series} area yAxisName="ms" height={220} />
+        <TimeSeriesChart series={series} area yAxisName="ms" unit=" ms" height={PANEL_BODY_HEIGHT} />
       )}
     </div>
   );

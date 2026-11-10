@@ -4,33 +4,18 @@ import { Link } from 'react-router';
 import type { DeviceHealth } from '@/api/dashboard';
 import { SegmentedControl } from '@/components/SegmentedControl';
 
-import { HEALTH_COLORS, classifyDeviceHealth, type HealthStatus } from './helpers';
+import {
+  CRITICAL_DOWN_LABEL,
+  HEALTH_COLORS,
+  HEALTH_LABELS,
+  SEVERITY_ORDER,
+  classifyDeviceHealth,
+  countDeviceHealth,
+  type HealthStatus,
+} from './helpers';
 
-const HEALTH_LABELS: Record<HealthStatus, string> = {
-  healthy: 'Healthy',
-  warning: 'Warning',
-  critical: 'Critical',
-  down: 'Down',
-  unknown: 'Unknown',
-};
-
-type Filter = 'all' | HealthStatus;
-
-const FILTERS: { key: Filter; label: string }[] = [
-  { key: 'all', label: 'All' },
-  { key: 'critical', label: 'Bad' },
-  { key: 'warning', label: 'Warn' },
-  { key: 'healthy', label: 'Good' },
-  { key: 'unknown', label: '?' },
-];
-
-const SEVERITY_ORDER: Record<HealthStatus, number> = {
-  down: 0,
-  critical: 1,
-  warning: 2,
-  unknown: 3,
-  healthy: 4,
-};
+// 'critical' is the merged critical + down bucket.
+type Filter = 'all' | 'critical' | 'warning' | 'healthy' | 'unknown';
 
 export function DevicesGridPanel({ devices }: { devices: DeviceHealth[] }) {
   const [filter, setFilter] = useState<Filter>('all');
@@ -56,23 +41,23 @@ export function DevicesGridPanel({ devices }: { devices: DeviceHealth[] }) {
     return sorted.filter((e) => e.status === filter);
   }, [sorted, filter]);
 
-  const counts = useMemo(() => {
-    const c: Record<HealthStatus, number> = {
-      healthy: 0,
-      warning: 0,
-      critical: 0,
-      down: 0,
-      unknown: 0,
-    };
-    for (const e of classified) c[e.status]++;
-    return c;
-  }, [classified]);
+  // Each chip carries its count, so the grid needs no separate legend.
+  const filters = useMemo<{ key: Filter; label: string }[]>(() => {
+    const c = countDeviceHealth(devices);
+    return [
+      { key: 'all', label: `All ${devices.length}` },
+      { key: 'critical', label: `${CRITICAL_DOWN_LABEL} ${c.critical + c.down}` },
+      { key: 'warning', label: `${HEALTH_LABELS.warning} ${c.warning}` },
+      { key: 'healthy', label: `${HEALTH_LABELS.healthy} ${c.healthy}` },
+      { key: 'unknown', label: `${HEALTH_LABELS.unknown} ${c.unknown}` },
+    ];
+  }, [devices]);
 
   return (
     <div className="glass-card card dashboard-overview-card">
       <div className="dashboard-overview-header">
         <h3 className="dashboard-overview-title">Devices</h3>
-        <SegmentedControl options={FILTERS} value={filter} onChange={setFilter} size="xs" aria-label="Filter" />
+        <SegmentedControl options={filters} value={filter} onChange={setFilter} size="xs" aria-label="Filter" />
       </div>
 
       {devices.length === 0 ? (
@@ -82,23 +67,15 @@ export function DevicesGridPanel({ devices }: { devices: DeviceHealth[] }) {
           </p>
         </div>
       ) : (
-        <>
-          <div className="dashboard-devices-grid">
-            {filtered.map((e, i) => (
-              <DeviceTile
-                key={`${e.device.host_id ?? '-'}-${e.device.hostname ?? '-'}-${i}`}
-                device={e.device}
-                status={e.status}
-              />
-            ))}
-          </div>
-          <div className="dashboard-topology-legend" style={{ marginTop: '0.75rem' }}>
-            <LegendDot status="healthy" count={counts.healthy} />
-            <LegendDot status="warning" count={counts.warning} />
-            <LegendDot status="critical" count={counts.critical + counts.down} />
-            <LegendDot status="unknown" count={counts.unknown} />
-          </div>
-        </>
+        <div className="dashboard-devices-grid">
+          {filtered.map((e, i) => (
+            <DeviceTile
+              key={`${e.device.host_id ?? '-'}-${e.device.hostname ?? '-'}-${i}`}
+              device={e.device}
+              status={e.status}
+            />
+          ))}
+        </div>
       )}
     </div>
   );
@@ -133,17 +110,5 @@ function DeviceTile({ device, status }: { device: DeviceHealth; status: HealthSt
     </Link>
   ) : (
     tile
-  );
-}
-
-function LegendDot({ status, count }: { status: HealthStatus; count: number }) {
-  return (
-    <span className="dashboard-topology-legend-item">
-      <span
-        className="dashboard-topology-legend-dot"
-        style={{ background: HEALTH_COLORS[status] }}
-      />
-      {HEALTH_LABELS[status]} {count}
-    </span>
   );
 }

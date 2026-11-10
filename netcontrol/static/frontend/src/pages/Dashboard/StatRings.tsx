@@ -97,15 +97,15 @@ interface StatRingsProps {
 }
 
 export function StatRings({ hosts, playbooks, jobs, sources, entities }: StatRingsProps) {
-  const max = Math.max(hosts, playbooks, jobs, 1);
   const entityLine = entities
     ? `Entities ${entities.up} up / ${entities.degraded} degraded / ${entities.down} down`
     : undefined;
   return (
     <div className="stats-grid">
-      <Ring label="Total Hosts" value={hosts} max={max} />
-      <Ring label="Playbooks" value={playbooks} max={max} />
-      <Ring label="Total Jobs" value={jobs} max={max} />
+      {/* Plain counts have no maximum: each ring is full when there is anything to count. */}
+      <Ring label="Total Hosts" value={hosts} max={hosts} />
+      <Ring label="Playbooks" value={playbooks} max={playbooks} />
+      <Ring label="Total Jobs" value={jobs} max={jobs} />
       {sources && sources.total > 0 && (
         // The ring fills with the healthy share of the sources.
         <Ring

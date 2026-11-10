@@ -9,7 +9,7 @@ import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { AlertsSection } from './AlertsSection';
 import { CriticalIssuesBanner } from './CriticalIssuesBanner';
-import { ISSUE_ANCHORS } from './helpers';
+import { ISSUE_ANCHORS, PANEL_BODY_HEIGHT, PANEL_CHROME_HEIGHT, RESPONSE_SUMMARY_HEIGHT } from './helpers';
 import { DevicesGridPanel } from './DevicesGridPanel';
 import { GroupHealthPanel } from './GroupHealthPanel';
 import { HealthSection } from './HealthSection';
@@ -38,7 +38,13 @@ const EventsFeedPanel = lazy(() =>
   import('./EventsFeedPanel').then((m) => ({ default: m.EventsFeedPanel })),
 );
 
-const PanelSkeleton = () => <div className="skeleton skeleton-card" />;
+// Stands in for a whole chart card while its chunk loads, at the card's own
+// height so the page does not shift when the panel appears.
+const CHART_CARD_HEIGHT = PANEL_BODY_HEIGHT + PANEL_CHROME_HEIGHT;
+
+function PanelSkeleton({ height = CHART_CARD_HEIGHT }: { height?: number }) {
+  return <div className="skeleton skeleton-card" style={{ height }} />;
+}
 
 export function Dashboard() {
   const { data, isPending, error } = useDashboard();
@@ -79,7 +85,6 @@ export function Dashboard() {
 
   const stats = data?.stats ?? {};
   const groups = data?.groups ?? [];
-  const monitoring = data?.monitoring ?? {};
   const devices = data?.device_health ?? [];
   const alerts = data?.open_alerts ?? [];
   // Absent for users without the monitoring feature.
@@ -97,11 +102,13 @@ export function Dashboard() {
       />
       <div className="stack">
         <CriticalIssuesBanner devices={devices} alerts={alerts} sources={sources} topology={topology} />
-        <Suspense fallback={<PanelSkeleton />}>
-          <OverviewPanels devices={devices} />
-        </Suspense>
-        <GroupHealthPanel groups={groups} devices={devices} />
-        <Suspense fallback={<PanelSkeleton />}>
+        <div className="dashboard-overview-grid">
+          <Suspense fallback={<PanelSkeleton />}>
+            <OverviewPanels devices={devices} />
+          </Suspense>
+          <GroupHealthPanel groups={groups} devices={devices} />
+        </div>
+        <Suspense fallback={<PanelSkeleton height={CHART_CARD_HEIGHT + RESPONSE_SUMMARY_HEIGHT} />}>
           <ResponseTimePanel />
         </Suspense>
         <Suspense fallback={<PanelSkeleton />}>
@@ -128,7 +135,7 @@ export function Dashboard() {
           sources={canTopology && sourcesQuery.data ? summarizeSources(sources) : undefined}
           entities={topology?.entity_counts}
         />
-        <HealthSection monitoring={monitoring} devices={devices} groups={groups} />
+        <HealthSection devices={devices} groups={groups} />
         <div id={ISSUE_ANCHORS.alerts}>
           <AlertsSection
             alerts={alerts}

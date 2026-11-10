@@ -9,6 +9,8 @@ import {
 import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
 
+import { MIN_PANEL_ROWS } from './helpers';
+
 interface PanelMetricQuery {
   metric?: string;
   host?: string;
@@ -97,7 +99,7 @@ export function PanelModal({ isOpen, onClose, dashboardId, panel }: Props) {
         host: host.trim() || '*',
       }),
       grid_w: Math.min(Math.max(gridW, 1), 12),
-      grid_h: Math.min(Math.max(gridH, 1), 12),
+      grid_h: Math.min(Math.max(gridH, MIN_PANEL_ROWS), 12),
     };
 
     const onError = (err: unknown) => {
@@ -194,12 +196,12 @@ export function PanelModal({ isOpen, onClose, dashboardId, panel }: Props) {
             />
           </div>
           <div style={{ flex: 1 }}>
-            <label className="form-label" htmlFor={`${formId}-height`}>Height (rows)</label>
+            <label className="form-label" htmlFor={`${formId}-height`}>Height (rows, {MIN_PANEL_ROWS}-12)</label>
             <input
               id={`${formId}-height`}
               type="number"
               className="form-input"
-              min={1}
+              min={MIN_PANEL_ROWS}
               max={12}
               value={gridH}
               onChange={(e) => setGridH(parseInt(e.target.value, 10) || 4)}

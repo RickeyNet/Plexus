@@ -7,10 +7,13 @@ import {
   useAnnotations,
   useMetricsQuery,
 } from '@/api/dashboard';
+import { DeleteButton } from '@/components/DeleteButton';
+import { EmptyState } from '@/components/EmptyState';
 import { formatBackendDateTime, formatBackendTime } from '@/lib/datetime';
 import { BarChart, GaugeChart, HeatmapChart, TimeSeriesChart } from '@/lib/echart';
 import type { TimeRangePreset } from '@/lib/timeRange-context';
 
+import { MIN_PANEL_ROWS } from './helpers';
 
 interface PanelMetricQuery {
   metric?: string;
@@ -69,7 +72,8 @@ export function Panel({ panel, variables, range, editing, onEdit, onDelete }: Pa
 
   const gridStyle: React.CSSProperties = {
     gridColumn: `span ${panel.grid_w || 6}`,
-    gridRow: `span ${panel.grid_h || 4}`,
+    // Rows are a fixed unit (.dashboard-grid), so this sets the panel's height.
+    gridRow: `span ${Math.max(panel.grid_h || 4, MIN_PANEL_ROWS)}`,
   };
 
   return (
@@ -79,21 +83,19 @@ export function Panel({ panel, variables, range, editing, onEdit, onDelete }: Pa
         {editing && (
           <div className="panel-actions" style={{ display: 'flex', gap: '0.25rem' }}>
             <button
-              className="btn btn-sm btn-secondary"
-              title="Edit"
+              type="button"
+              className="btn btn-xs btn-secondary"
               aria-label={`Edit panel ${panel.title || 'Untitled'}`}
               onClick={() => onEdit(panel)}
             >
-              ✎
+              Edit
             </button>
-            <button
-              className="btn btn-sm btn-danger"
-              title="Remove"
+            <DeleteButton
+              size="xs"
+              label="Remove"
               aria-label={`Remove panel ${panel.title || 'Untitled'}`}
               onClick={() => onDelete(panel)}
-            >
-              ×
-            </button>
+            />
           </div>
         )}
       </div>
@@ -126,17 +128,23 @@ function PanelBody({ chartType, metric, items, isPending, error, annotations }: 
   }
   if (error) {
     return (
-      <p className="text-muted" style={{ padding: '1rem' }}>
-        Error: {(error as Error).message}
-      </p>
+      <div className="panel-state" style={{ color: 'var(--danger)' }}>
+        Failed to load: {(error as Error).message}
+      </div>
+    );
+  }
+  // One empty state for every chart type, rather than blank axes or a zero gauge.
+  if (!items.length) {
+    return (
+      <div className="panel-state">
+        <EmptyState compact message="No data" description="No samples for this metric in the selected range." />
+      </div>
     );
   }
 
   if (chartType === 'gauge') {
-    const avg = items.length
-      ? items.reduce((s, d) => s + (d.val_avg ?? d.value ?? 0), 0) / items.length
-      : 0;
-    return <GaugeChart value={avg} title={metric} />;
+    const avg = items.reduce((s, d) => s + (d.val_avg ?? d.value ?? 0), 0) / items.length;
+    return <GaugeChart value={avg} title={metric} height="100%" />;
   }
 
   if (chartType === 'bar') {
@@ -147,7 +155,7 @@ function PanelBody({ chartType, metric, items, isPending, error, annotations }: 
       const sum = arr.reduce((s, d) => s + (d.val_avg ?? d.value ?? 0), 0);
       return arr.length ? Math.round((sum / arr.length) * 10) / 10 : 0;
     });
-    return <BarChart categories={labels} values={values} rotateLabels={labels.length > 6 ? 30 : 0} />;
+    return <BarChart categories={labels} values={values} rotateLabels={labels.length > 6 ? 30 : 0} height="100%" />;
   }
 
   if (chartType === 'heatmap') {
@@ -168,17 +176,12 @@ function PanelBody({ chartType, metric, items, isPending, error, annotations }: 
     })),
   }));
   return (
-    <TimeSeriesChart
-      series={series.length ? series : [{ name: metric, data: [] }]}
-      area
-      annotations={annotations}
-    />
+    <TimeSeriesChart series={series} area annotations={annotations} height="100%" />
   );
 }
 
 function HeatmapPanelBody({ items }: { items: MetricSample[] }) {
   const { xLabels, yLabels, data } = useMemo(() => {
-    if (!items.length) return { xLabels: [] as string[], yLabels: [] as string[], data: [] as [number, number, number][] };
     const grouped = groupByHost(items);
     const hostNames = Object.keys(grouped);
     const timeSet = new Set<string>();
@@ -202,16 +205,10 @@ function HeatmapPanelBody({ items }: { items: MetricSample[] }) {
     };
   }, [items]);
 
-  if (!items.length) {
-    return <p className="text-muted" style={{ padding: '1rem' }}>No data</p>;
-  }
-  return <HeatmapChart xLabels={xLabels} yLabels={yLabels} data={data} />;
+  return <HeatmapChart xLabels={xLabels} yLabels={yLabels} data={data} height="100%" />;
 }
 
 function TablePanelBody({ items, metric }: { items: MetricSample[]; metric: string }) {
-  if (!items.length) {
-    return <p className="text-muted" style={{ padding: '1rem' }}>No data</p>;
-  }
   return (
     <div style={{ overflow: 'auto', height: '100%' }}>
       <table className="data-table">

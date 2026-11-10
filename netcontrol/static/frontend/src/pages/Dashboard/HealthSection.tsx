@@ -1,24 +1,16 @@
 import { useMemo, useState } from 'react';
 
-import type { DashboardGroup, DashboardMonitoring, DeviceHealth } from '@/api/dashboard';
+import type { DashboardGroup, DeviceHealth } from '@/api/dashboard';
 import { formatRelativeTime } from '@/lib/datetime';
 
-import {
-  HEALTH_COLORS,
-  classifyDeviceHealth,
-  formatUptime,
-  type HealthStatus,
-  sortDevices,
-  type SortBy,
-} from './helpers';
+import { HEALTH_LABELS, classifyDeviceHealth, formatUptime, sortDevices, type SortBy } from './helpers';
 
 interface HealthSectionProps {
-  monitoring: DashboardMonitoring;
   devices: DeviceHealth[];
   groups: DashboardGroup[];
 }
 
-export function HealthSection({ monitoring, devices, groups }: HealthSectionProps) {
+export function HealthSection({ devices, groups }: HealthSectionProps) {
   const [groupFilter, setGroupFilter] = useState('');
   const [sortBy, setSortBy] = useState<SortBy>('severity');
 
@@ -28,9 +20,12 @@ export function HealthSection({ monitoring, devices, groups }: HealthSectionProp
   }, [devices, groupFilter, sortBy]);
 
   return (
-    <div className="section stack" id="network-health-section">
+    <div className="glass-card card dashboard-overview-card stack" id="network-health-section">
       <div className="toolbar">
-        <h3 style={{ margin: 0 }}>Network Health Overview</h3>
+        <h3 className="dashboard-overview-title" style={{ margin: 0 }}>Network Health Overview</h3>
+        <span className="text-muted" style={{ fontSize: '0.8rem' }}>
+          {filtered.length} {filtered.length === 1 ? 'device' : 'devices'}
+        </span>
         <span className="toolbar-spacer" />
         <select
           className="form-select form-select-sm"
@@ -60,83 +55,9 @@ export function HealthSection({ monitoring, devices, groups }: HealthSectionProp
         </select>
       </div>
 
-      <HealthSummaryTiles monitoring={monitoring} devices={filtered} />
-
       <div className="device-health-table-wrap">
         <DeviceHealthTable devices={filtered} />
       </div>
-    </div>
-  );
-}
-
-function HealthSummaryTiles({ monitoring, devices }: { monitoring: DashboardMonitoring; devices: DeviceHealth[] }) {
-  const counts = useMemo(() => {
-    const c: Record<HealthStatus, number> = { healthy: 0, warning: 0, critical: 0, down: 0, unknown: 0 };
-    for (const d of devices) c[classifyDeviceHealth(d)]++;
-    return c;
-  }, [devices]);
-
-  const total = devices.length;
-  const openAlerts = monitoring.open_alerts ?? 0;
-
-  return (
-    <div className="health-summary-tiles">
-      <Tile iconClass="healthy" valueColor={HEALTH_COLORS.healthy} value={counts.healthy} label="Healthy">
-        <polyline points="20 6 9 17 4 12" />
-      </Tile>
-      <Tile iconClass="warning" valueColor={HEALTH_COLORS.warning} value={counts.warning} label="Warning">
-        <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-        <line x1="12" y1="9" x2="12" y2="13" />
-        <line x1="12" y1="17" x2="12.01" y2="17" />
-      </Tile>
-      <Tile iconClass="critical" valueColor={HEALTH_COLORS.critical} value={counts.critical + counts.down} label="Critical / Down">
-        <circle cx="12" cy="12" r="10" />
-        <line x1="15" y1="9" x2="9" y2="15" />
-        <line x1="9" y1="9" x2="15" y2="15" />
-      </Tile>
-      <Tile iconClass="unknown" valueColor={HEALTH_COLORS.unknown} value={counts.unknown} label="Unknown">
-        <circle cx="12" cy="12" r="10" />
-        <path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3" />
-        <line x1="12" y1="17" x2="12.01" y2="17" />
-      </Tile>
-      <Tile iconClass="info" value={total} label="Total Monitored">
-        <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
-        <line x1="8" y1="21" x2="16" y2="21" />
-        <line x1="12" y1="17" x2="12" y2="21" />
-      </Tile>
-      <Tile
-        iconClass={openAlerts > 0 ? 'critical' : 'healthy'}
-        valueColor={openAlerts > 0 ? HEALTH_COLORS.critical : HEALTH_COLORS.healthy}
-        value={openAlerts}
-        label="Open Alerts"
-      >
-        <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9" />
-        <path d="M13.73 21a2 2 0 01-3.46 0" />
-      </Tile>
-    </div>
-  );
-}
-
-interface TileProps {
-  iconClass: string;
-  valueColor?: string;
-  value: number;
-  label: string;
-  children: React.ReactNode;
-}
-
-function Tile({ iconClass, valueColor, value, label, children }: TileProps) {
-  return (
-    <div className="health-tile">
-      <div className={`health-tile-icon ${iconClass}`}>
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          {children}
-        </svg>
-      </div>
-      <div className="health-tile-value" style={valueColor ? { color: valueColor } : undefined}>
-        {value}
-      </div>
-      <div className="health-tile-label">{label}</div>
     </div>
   );
 }
@@ -184,16 +105,7 @@ function DeviceHealthTable({ devices }: { devices: DeviceHealth[] }) {
       <tbody>
         {devices.map((d, i) => {
           const health = classifyDeviceHealth(d);
-          const statusLabel =
-            health === 'healthy'
-              ? 'Up'
-              : health === 'warning'
-                ? 'Warning'
-                : health === 'critical'
-                  ? 'Critical'
-                  : health === 'down'
-                    ? 'Down'
-                    : 'Unknown';
+          const statusLabel = HEALTH_LABELS[health];
           const dotClass = health === 'healthy' ? 'up' : health;
           const statusClass = health === 'healthy' ? 'up' : health;
           return (

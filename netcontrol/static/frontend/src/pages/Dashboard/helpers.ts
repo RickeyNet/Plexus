@@ -1,7 +1,5 @@
 import type { DeviceHealth } from '@/api/dashboard';
 
-// Re-exported for existing importers; canonical impl lives in @/lib/datetime.
-
 // Anchor ids the CriticalIssuesBanner chips scroll to. The Dashboard wraps
 // each target panel in a div carrying the matching id. Kept out of the
 // component file so it stays component-only for Vite fast refresh.
@@ -21,6 +19,33 @@ export const HEALTH_COLORS: Record<HealthStatus, string> = {
   down: 'var(--danger)',
   unknown: 'var(--text-muted)',
 };
+
+/** Display name of each health status, used by every dashboard panel. */
+export const HEALTH_LABELS: Record<HealthStatus, string> = {
+  healthy: 'Healthy',
+  warning: 'Warning',
+  critical: 'Critical',
+  down: 'Down',
+  unknown: 'Unknown',
+};
+
+/** Label of the merged critical + down bucket (donut slice, filter chip, group rollup). */
+export const CRITICAL_DOWN_LABEL = 'Critical / Down';
+
+/**
+ * Height in px of every dashboard panel body: the chart, the loading
+ * skeleton, the empty state and the error state, so a panel keeps its size
+ * as it loads.
+ */
+export const PANEL_BODY_HEIGHT = 240;
+export const PANEL_BODY_STYLE = { height: PANEL_BODY_HEIGHT } as const;
+/** Card padding, border and title row around a panel body. */
+export const PANEL_CHROME_HEIGHT = 76;
+/** The Avg / Peak row the response-time panel shows above its chart. */
+export const RESPONSE_SUMMARY_HEIGHT = 46;
+
+/** Fewest grid rows a custom dashboard panel may span; below this a chart has no room. */
+export const MIN_PANEL_ROWS = 2;
 
 export function classifyDeviceHealth(poll: DeviceHealth | undefined | null): HealthStatus {
   if (!poll) return 'unknown';
@@ -47,13 +72,21 @@ export function classifyDeviceHealth(poll: DeviceHealth | undefined | null): Hea
 
 export type SortBy = 'severity' | 'name' | 'cpu' | 'memory';
 
-const SEVERITY_ORDER: Record<HealthStatus, number> = {
+/** Worst first: lower sorts earlier. */
+export const SEVERITY_ORDER: Record<HealthStatus, number> = {
   down: 0,
   critical: 1,
   warning: 2,
   unknown: 3,
   healthy: 4,
 };
+
+/** How many devices fall in each health status. */
+export function countDeviceHealth(devices: readonly DeviceHealth[]): Record<HealthStatus, number> {
+  const counts: Record<HealthStatus, number> = { healthy: 0, warning: 0, critical: 0, down: 0, unknown: 0 };
+  for (const d of devices) counts[classifyDeviceHealth(d)]++;
+  return counts;
+}
 
 export function sortDevices(devices: DeviceHealth[], sortBy: SortBy): DeviceHealth[] {
   const copy = [...devices];

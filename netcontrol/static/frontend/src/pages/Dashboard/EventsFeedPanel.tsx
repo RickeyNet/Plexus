@@ -6,6 +6,7 @@ import { EVENT_CATEGORY_COLORS } from '@/lib/themeColors';
 import { useTimeRange } from '@/lib/timeRange-context';
 import { formatRelativeTime } from '@/lib/datetime';
 
+import { PANEL_BODY_STYLE } from './helpers';
 
 type Category = 'deployment' | 'config' | 'alert';
 type Filter = 'all' | Category;
@@ -17,13 +18,6 @@ const CATEGORY_LABELS: Record<Category, string> = {
   config: 'Config',
   alert: 'Alert',
 };
-
-const FILTERS: { key: Filter; label: string }[] = [
-  { key: 'all', label: 'All' },
-  { key: 'deployment', label: 'Deploy' },
-  { key: 'config', label: 'Config' },
-  { key: 'alert', label: 'Alert' },
-];
 
 export function EventsFeedPanel() {
   const { range } = useTimeRange();
@@ -46,19 +40,30 @@ export function EventsFeedPanel() {
     return c;
   }, [data]);
 
+  // Each chip carries its count, so the feed needs no separate legend.
+  const filters: { key: Filter; label: string }[] = [
+    { key: 'all', label: 'All' },
+    ...(Object.keys(CATEGORY_LABELS) as Category[]).map((c) => ({
+      key: c,
+      label: data ? `${CATEGORY_LABELS[c]} ${counts[c]}` : CATEGORY_LABELS[c],
+    })),
+  ];
+
   return (
     <div className="glass-card card dashboard-overview-card">
       <div className="dashboard-overview-header">
         <h3 className="dashboard-overview-title">Recent Events</h3>
-        <SegmentedControl options={FILTERS} value={filter} onChange={setFilter} size="xs" aria-label="Filter" />
+        <SegmentedControl options={filters} value={filter} onChange={setFilter} size="xs" aria-label="Filter" />
       </div>
 
       {isPending ? (
-        <div className="skeleton skeleton-card" style={{ height: 220 }} />
+        <div className="skeleton skeleton-card" style={PANEL_BODY_STYLE} />
       ) : error ? (
-        <p style={{ color: 'var(--danger)', margin: 0 }}>
-          Failed to load: {(error as Error).message}
-        </p>
+        <div className="dashboard-response-empty">
+          <p style={{ color: 'var(--danger)', margin: 0 }}>
+            Failed to load: {(error as Error).message}
+          </p>
+        </div>
       ) : filtered.length === 0 ? (
         <div className="dashboard-response-empty">
           <p style={{ margin: 0, color: 'var(--text-muted)' }}>
@@ -66,18 +71,11 @@ export function EventsFeedPanel() {
           </p>
         </div>
       ) : (
-        <>
-          <div className="dashboard-events-feed">
-            {filtered.map((e, i) => (
-              <EventRow key={`${e.timestamp}-${i}`} event={e} />
-            ))}
-          </div>
-          <div className="dashboard-topology-legend" style={{ marginTop: '0.75rem' }}>
-            <LegendDot category="deployment" count={counts.deployment} />
-            <LegendDot category="config" count={counts.config} />
-            <LegendDot category="alert" count={counts.alert} />
-          </div>
-        </>
+        <div className="dashboard-events-feed" style={PANEL_BODY_STYLE}>
+          {filtered.map((e, i) => (
+            <EventRow key={`${e.timestamp}-${i}`} event={e} />
+          ))}
+        </div>
       )}
     </div>
   );
@@ -103,17 +101,5 @@ function EventRow({ event }: { event: Annotation }) {
       ) : null}
       <span className="dashboard-events-time">{formatRelativeTime(event.timestamp)}</span>
     </div>
-  );
-}
-
-function LegendDot({ category, count }: { category: Category; count: number }) {
-  return (
-    <span className="dashboard-topology-legend-item">
-      <span
-        className="dashboard-topology-legend-dot"
-        style={{ background: CATEGORY_COLORS[category] }}
-      />
-      {CATEGORY_LABELS[category]} {count}
-    </span>
   );
 }

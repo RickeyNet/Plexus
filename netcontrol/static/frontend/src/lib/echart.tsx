@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react';
-import { echarts, type ECharts } from './echart-core';
+
+import { chartTooltipFormatter, formatBpsTick } from './chartFormat';
 import { EVENT_CATEGORY_COLORS, SERIES_COLORS, resolveThemeVars, useThemeName } from './themeColors';
+import { useEChart } from './useEChart';
 
 export interface TimeSeriesPoint {
   time: string;
@@ -11,6 +13,14 @@ export interface TimeSeries {
   name: string;
   data: TimeSeriesPoint[];
   color?: string;
+  /** Dashed line, for projected or estimated values. */
+  dashed?: boolean;
+}
+
+/** A horizontal reference line at one y value (a capacity threshold, an SLA target). */
+export interface ChartThreshold {
+  value: number;
+  label?: string;
 }
 
 export interface ChartAnnotation {
@@ -26,12 +36,17 @@ interface TimeSeriesChartProps {
   series: TimeSeries[];
   area?: boolean;
   yAxisName?: string;
+  /** Suffix of each tooltip value ("%", " ms"). */
+  unit?: string;
   yMin?: number;
   yMax?: number;
-  height?: number;
+  height?: number | string;
   annotations?: ChartAnnotation[];
+  threshold?: ChartThreshold;
 }
 
+// Pixel height when the caller passes none. A string such as '100%' lets the
+// chart fill a container that has its own height (custom dashboard panels).
 const DEFAULT_HEIGHT = 240;
 
 // Options are written with theme tokens and resolved to concrete colors by
@@ -42,42 +57,21 @@ const TEXT_COLOR = 'var(--text)';
 const AXIS_COLOR = 'var(--text-muted)';
 const SPLIT_COLOR = 'var(--border)';
 
-function formatBpsTick(v: number): string {
-  const abs = Math.abs(v);
-  if (abs >= 1e12) return (v / 1e12).toFixed(1) + 'T';
-  if (abs >= 1e9) return (v / 1e9).toFixed(1) + 'G';
-  if (abs >= 1e6) return (v / 1e6).toFixed(1) + 'M';
-  if (abs >= 1e3) return (v / 1e3).toFixed(1) + 'k';
-  return String(v);
-}
-
 export function TimeSeriesChart({
   series,
   area,
   yAxisName,
+  unit,
   yMin,
   yMax,
   height = DEFAULT_HEIGHT,
   annotations,
+  threshold,
 }: TimeSeriesChartProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<ECharts | null>(null);
+  // One instance per mount, resized with its container, disposed on unmount.
+  const chartRef = useEChart(ref);
   const theme = useThemeName();
-
-  // Mount-only: create the instance once, wire resize, dispose on unmount.
-  useEffect(() => {
-    if (!ref.current) return;
-    const chart = echarts.init(ref.current, undefined, { renderer: 'canvas' });
-    chartRef.current = chart;
-
-    const onResize = () => chart.resize();
-    window.addEventListener('resize', onResize);
-    return () => {
-      window.removeEventListener('resize', onResize);
-      chart.dispose();
-      chartRef.current = null;
-    };
-  }, []);
 
   // Data effect: reuse the retained instance via setOption (no re-init).
   useEffect(() => {
@@ -88,7 +82,7 @@ export function TimeSeriesChart({
 
     // Legacy parity: overlay deployment/config/alert markers on series[0]
     // as a silent dashed markLine (PlexusChart.addAnnotations).
-    const markLineData = (annotations ?? [])
+    const markLineData: Record<string, unknown>[] = (annotations ?? [])
       .filter((e) => e.timestamp)
       .map((e) => {
         const color = ANNOTATION_COLORS[e.category ?? 'default'] ?? ANNOTATION_COLORS.default;
@@ -103,6 +97,26 @@ export function TimeSeriesChart({
           lineStyle: { color, type: 'dashed' as const, width: 1 },
         };
       });
+    if (threshold) {
+      markLineData.push({
+        yAxis: threshold.value,
+        label: {
+          formatter: threshold.label ?? '',
+          position: 'insideEndTop' as const,
+          fontSize: 10,
+          color: 'var(--danger)',
+        },
+        lineStyle: { color: 'var(--danger)', type: 'dashed' as const, width: 1 },
+      });
+    }
+
+    const formatValue = chartTooltipFormatter(isBpsAxis ? 'bps' : 'number');
+    const valueFormatter = unit
+      ? (value: unknown) => {
+          const text = formatValue(value);
+          return text === '-' ? text : text + unit;
+        }
+      : formatValue;
 
     chart.setOption(
       resolveThemeVars({
@@ -111,10 +125,22 @@ export function TimeSeriesChart({
         tooltip: {
           trigger: 'axis',
           axisPointer: { type: 'cross' },
+          valueFormatter,
         },
+        // Scroll legend: one line with a pager, so long or many series names
+        // never wrap down over the plot.
         legend:
           series.length > 1
-            ? { data: series.map((s) => s.name), textStyle: { color: TEXT_COLOR } }
+            ? {
+                type: 'scroll',
+                data: series.map((s) => s.name),
+                left: 8,
+                right: 8,
+                textStyle: { color: TEXT_COLOR },
+                pageIconColor: TEXT_COLOR,
+                pageIconInactiveColor: SPLIT_COLOR,
+                pageTextStyle: { color: AXIS_COLOR },
+              }
             : undefined,
         grid: {
           left: 50,
@@ -148,7 +174,7 @@ export function TimeSeriesChart({
           smooth: false,
           sampling: 'lttb',
           itemStyle: s.color ? { color: s.color } : undefined,
-          lineStyle: { width: 1.5 },
+          lineStyle: { width: 1.5, type: s.dashed ? ('dashed' as const) : ('solid' as const) },
           areaStyle: area ? { opacity: 0.2 } : undefined,
           data: s.data.map((p) => [p.time, p.value]),
           markLine:
@@ -161,7 +187,7 @@ export function TimeSeriesChart({
       // would leave stale series/legend entries behind.
       { notMerge: true },
     );
-  }, [series, area, yAxisName, yMin, yMax, annotations, theme]);
+  }, [chartRef, series, area, yAxisName, unit, yMin, yMax, annotations, threshold, theme]);
 
   return <div ref={ref} style={{ width: '100%', height }} />;
 }
@@ -171,28 +197,14 @@ interface GaugeChartProps {
   title?: string;
   min?: number;
   max?: number;
-  height?: number;
+  height?: number | string;
 }
 
 export function GaugeChart({ value, title, min = 0, max = 100, height = DEFAULT_HEIGHT }: GaugeChartProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<ECharts | null>(null);
+  // One instance per mount, resized with its container, disposed on unmount.
+  const chartRef = useEChart(ref);
   const theme = useThemeName();
-
-  // Mount-only: create the instance once, wire resize, dispose on unmount.
-  useEffect(() => {
-    if (!ref.current) return;
-    const chart = echarts.init(ref.current, undefined, { renderer: 'canvas' });
-    chartRef.current = chart;
-
-    const onResize = () => chart.resize();
-    window.addEventListener('resize', onResize);
-    return () => {
-      window.removeEventListener('resize', onResize);
-      chart.dispose();
-      chartRef.current = null;
-    };
-  }, []);
 
   // Data effect: reuse the retained instance via setOption (no re-init).
   useEffect(() => {
@@ -233,7 +245,7 @@ export function GaugeChart({ value, title, min = 0, max = 100, height = DEFAULT_
       }),
       { notMerge: true },
     );
-  }, [value, title, min, max, theme]);
+  }, [chartRef, value, title, min, max, theme]);
 
   return <div ref={ref} style={{ width: '100%', height }} />;
 }
@@ -242,28 +254,14 @@ interface HeatmapChartProps {
   xLabels: string[];
   yLabels: string[];
   data: [number, number, number][];
-  height?: number;
+  height?: number | string;
 }
 
 export function HeatmapChart({ xLabels, yLabels, data, height = DEFAULT_HEIGHT }: HeatmapChartProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<ECharts | null>(null);
+  // One instance per mount, resized with its container, disposed on unmount.
+  const chartRef = useEChart(ref);
   const theme = useThemeName();
-
-  // Mount-only: create the instance once, wire resize, dispose on unmount.
-  useEffect(() => {
-    if (!ref.current) return;
-    const chart = echarts.init(ref.current, undefined, { renderer: 'canvas' });
-    chartRef.current = chart;
-
-    const onResize = () => chart.resize();
-    window.addEventListener('resize', onResize);
-    return () => {
-      window.removeEventListener('resize', onResize);
-      chart.dispose();
-      chartRef.current = null;
-    };
-  }, []);
 
   // Data effect: reuse the retained instance via setOption (no re-init).
   useEffect(() => {
@@ -315,7 +313,7 @@ export function HeatmapChart({ xLabels, yLabels, data, height = DEFAULT_HEIGHT }
       }),
       { notMerge: true },
     );
-  }, [xLabels, yLabels, data, theme]);
+  }, [chartRef, xLabels, yLabels, data, theme]);
 
   return <div ref={ref} style={{ width: '100%', height }} />;
 }
@@ -324,7 +322,7 @@ interface BarChartProps {
   categories: string[];
   values: number[];
   rotateLabels?: number;
-  height?: number;
+  height?: number | string;
 }
 
 export function BarChart({
@@ -334,23 +332,9 @@ export function BarChart({
   height = DEFAULT_HEIGHT,
 }: BarChartProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<ECharts | null>(null);
+  // One instance per mount, resized with its container, disposed on unmount.
+  const chartRef = useEChart(ref);
   const theme = useThemeName();
-
-  // Mount-only: create the instance once, wire resize, dispose on unmount.
-  useEffect(() => {
-    if (!ref.current) return;
-    const chart = echarts.init(ref.current, undefined, { renderer: 'canvas' });
-    chartRef.current = chart;
-
-    const onResize = () => chart.resize();
-    window.addEventListener('resize', onResize);
-    return () => {
-      window.removeEventListener('resize', onResize);
-      chart.dispose();
-      chartRef.current = null;
-    };
-  }, []);
 
   // Data effect: reuse the retained instance via setOption (no re-init).
   useEffect(() => {
@@ -388,7 +372,7 @@ export function BarChart({
       }),
       { notMerge: true },
     );
-  }, [categories, values, rotateLabels, theme]);
+  }, [chartRef, categories, values, rotateLabels, theme]);
 
   return <div ref={ref} style={{ width: '100%', height }} />;
 }
