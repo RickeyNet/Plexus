@@ -9,6 +9,7 @@ import { formatBackendDateTime } from '@/lib/datetime';
 import { BarChart, TimeSeriesChart } from '@/lib/echart';
 import type { TimeRangePreset } from '@/lib/timeRange-context';
 import { clampPreset, toHours } from '@/lib/timeRangeMap';
+import { formatBytes } from '@/pages/NetworkTools/formatting';
 import {
   FlowApplication,
   FlowConversation,
@@ -181,6 +182,7 @@ function TalkersBody({ query }: { query: QueryShape<FlowTalker> }) {
       <BarChart
         categories={rows.map((r) => r.ip)}
         values={rows.map((r) => r.total_bytes)}
+        valueFormatter={formatBytes}
         rotateLabels={45}
         height={220}
       />
@@ -232,6 +234,7 @@ function ApplicationsView({ hostId, hours }: { hostId: number; hours: number }) 
       <BarChart
         categories={rows.map(labelFor)}
         values={rows.map((r) => r.total_bytes)}
+        valueFormatter={formatBytes}
         rotateLabels={45}
         height={240}
       />
@@ -361,13 +364,5 @@ function ErrorRow({ message }: { message: string }) {
 
 function Skeleton() {
   return <div className="skeleton" style={{ height: '240px' }} />;
-}
-
-function formatBytes(bytes: number | null | undefined): string {
-  if (!bytes || bytes <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  const idx = Math.min(i, units.length - 1);
-  return `${(bytes / Math.pow(1024, idx)).toFixed(1)} ${units[idx]}`;
 }
 

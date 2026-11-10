@@ -47,7 +47,7 @@ const TAB_HELP: Record<TabId, { title: string; text: string }> = {
   },
   interfaces: {
     title: 'Per-Interface Metrics',
-    text: 'Bandwidth in/out and operational status for each interface. Click an interface name to drill into its history.',
+    text: 'Bandwidth in/out, utilization, and operational status for each interface, with traffic charts for the busiest ones over the selected range.',
   },
   errors: {
     title: 'Interface Error Trending',
@@ -63,7 +63,7 @@ const TAB_HELP: Record<TabId, { title: string; text: string }> = {
   },
   compliance: {
     title: 'Compliance Status for This Host',
-    text: 'Most recent scan results across every profile assigned to this device. Failed checks expand to show the offending lines.',
+    text: 'Most recent scan results across every profile assigned to this device, with the status and score of each scan.',
   },
   syslog: {
     title: 'Syslog from This Device',
@@ -147,12 +147,7 @@ export function DeviceDetail() {
         {ipamCtx.data && <IpamContext ctx={ipamCtx.data} vrf={vrf} />}
       </div>
 
-      <PageHelp
-        pageKey="device-detail"
-        title="Single-Device Drill-Down"
-        text="Everything Plexus knows about one device - health metrics, interface stats, alerts, compliance status, and syslog - scoped to the time range above."
-      />
-
+      {/* One help banner only: the per-tab one inside the card below. */}
       <TabBar
         tabs={TABS.map((t) => ({ key: t.id, label: t.label }))}
         active={tab}
@@ -163,10 +158,10 @@ export function DeviceDetail() {
       <div className="card card-sm" style={{ overflow: 'hidden' }}>
         <PageHelp pageKey={`device-detail.${tab}`} title={TAB_HELP[tab].title} text={TAB_HELP[tab].text} />
         {tab === 'overview' && (
-          <OverviewTab cpu={cpu.data} mem={mem.data} rt={rt.data} pl={pl.data} />
+          <OverviewTab cpu={cpu} mem={mem} rt={rt} pl={pl} />
         )}
         {tab === 'interfaces' && (
-          <InterfaceTab ifData={ifData.data} latestPoll={latestPoll} />
+          <InterfaceTab ifData={ifData.data} latestPoll={latestPoll} loading={ifData.isLoading} />
         )}
         {tab === 'errors' && <ErrorTrendingTab hostId={hostId} range={range} />}
         {tab === 'flow' && !flowHidden && <FlowTab hostId={hostId} range={range} />}
@@ -394,50 +389,98 @@ function OverviewTab({
   rt,
   pl,
 }: {
-  cpu?: MetricQueryResult;
-  mem?: MetricQueryResult;
-  rt?: MetricQueryResult;
-  pl?: MetricQueryResult;
+  cpu: MetricQuery;
+  mem: MetricQuery;
+  rt: MetricQuery;
+  pl: MetricQuery;
 }) {
-  const cpuSeries = useMemo(() => extractSeries(cpu, 'CPU %'), [cpu]);
-  const memSeries = useMemo(() => extractSeries(mem, 'Memory %'), [mem]);
-  const rtSeries = useMemo(() => extractSeries(rt, 'Response Time'), [rt]);
-  const plSeries = useMemo(() => extractSeries(pl, 'Packet Loss'), [pl]);
+  const cpuSeries = useMemo(() => extractSeries(cpu.data, 'CPU %'), [cpu.data]);
+  const memSeries = useMemo(() => extractSeries(mem.data, 'Memory %'), [mem.data]);
+  const rtSeries = useMemo(() => extractSeries(rt.data, 'Response Time'), [rt.data]);
+  const plSeries = useMemo(() => extractSeries(pl.data, 'Packet Loss'), [pl.data]);
 
   return (
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 360px), 1fr))',
         gap: 'var(--space-3)',
       }}
     >
-      <ChartCard title="CPU %">
+      <ChartCard title="CPU %" query={cpu} series={cpuSeries}>
         <TimeSeriesChart series={cpuSeries} area yAxisName="%" yMin={0} yMax={100} />
       </ChartCard>
-      <ChartCard title="Memory %">
+      <ChartCard title="Memory %" query={mem} series={memSeries}>
         <TimeSeriesChart series={memSeries} area yAxisName="%" yMin={0} yMax={100} />
       </ChartCard>
-      <ChartCard title="Response Time (ms)">
+      <ChartCard title="Response Time (ms)" query={rt} series={rtSeries}>
         <TimeSeriesChart series={rtSeries} area yAxisName="ms" />
       </ChartCard>
-      <ChartCard title="Packet Loss (%)">
+      <ChartCard title="Packet Loss (%)" query={pl} series={plSeries}>
         <TimeSeriesChart series={plSeries} area yAxisName="%" yMin={0} />
       </ChartCard>
     </div>
   );
 }
 
-function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
+/** The parts of a metric query a chart card needs to pick its state. */
+interface MetricQuery {
+  data?: MetricQueryResult;
+  isLoading: boolean;
+  error: Error | null;
+}
+
+// Matches the TimeSeriesChart default height, so a card keeps its size when
+// the placeholder is replaced by the chart.
+const CHART_PLACEHOLDER_HEIGHT = 240;
+
+/** A titled chart that shows a loading, error or empty state until it has points. */
+function ChartCard({
+  title,
+  query,
+  series,
+  children,
+}: {
+  title: string;
+  query: MetricQuery;
+  series: TimeSeries[];
+  children: React.ReactNode;
+}) {
+  const hasPoints = series.some((s) => s.data.length > 0);
+  let body = children;
+  if (!hasPoints) {
+    body = (
+      <div
+        style={{
+          minHeight: CHART_PLACEHOLDER_HEIGHT,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {query.isLoading ? (
+          <LoadingState />
+        ) : query.error ? (
+          <EmptyState compact message="Could not load this metric" description={query.error.message} />
+        ) : (
+          <EmptyState
+            compact
+            message="No data in this time range"
+            description="Samples appear here after the device has been polled."
+          />
+        )}
+      </div>
+    );
+  }
   return (
-    <div className="card-inset">
+    <div className="card-inset" style={{ minWidth: 0 }}>
       <div
         className="card-title"
         style={{ fontSize: 'var(--text-base)', marginBottom: 'var(--space-2)' }}
       >
         {title}
       </div>
-      {children}
+      {body}
     </div>
   );
 }
