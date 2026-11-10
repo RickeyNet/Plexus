@@ -14,7 +14,6 @@ import {
   useUpgradeCampaign,
   useUpgradeImages,
 } from '@/api/upgrades';
-import { Callout } from '@/components/Callout';
 import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
@@ -294,6 +293,9 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
     : imagesQ.isPending || groupsQ.isPending || credsQ.isPending;
   const isSubmitting = create.isPending || update.isPending;
   const title = isEdit ? 'Edit Campaign' : 'Create Upgrade Campaign';
+  // The save error, or the validation message whose field (shown inline
+  // there as well) may be off screen.
+  const footerError = error ?? mapError ?? targetError;
 
   return (
     <Modal
@@ -302,6 +304,18 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
       title={title}
       footer={
         <>
+          {/* In the pinned footer, beside the button that raised it: the form
+              is taller than the modal, so a message in the body can be
+              scrolled out of view when Save is pressed. */}
+          {footerError && (
+            <span
+              role="alert"
+              className="modal-footer-start text-danger"
+              style={{ flex: '1 1 0', minWidth: 0, fontSize: '0.9em', overflowWrap: 'anywhere' }}
+            >
+              {footerError}
+            </span>
+          )}
           <button
             type="button"
             className="btn btn-secondary"
@@ -612,8 +626,6 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
               </div>
             </div>
           </fieldset>
-
-          {error && <Callout tone="danger">{error}</Callout>}
         </form>
       )}
     </Modal>

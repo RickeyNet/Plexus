@@ -6,6 +6,7 @@ import { Callout } from '@/components/Callout';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { DeleteButton } from '@/components/DeleteButton';
 import { LoadingState } from '@/components/LoadingState';
+import { ProgressBar } from '@/components/ProgressBar';
 import { clickableProps } from '@/lib/clickable';
 import { formatBackendDateTime } from '@/lib/datetime';
 
@@ -242,24 +243,8 @@ export function CampaignsTab() {
                     </div>
                   </div>
                 </div>
-                <div
-                  style={{
-                    marginTop: '0.5rem',
-                    height: 6,
-                    borderRadius: 3,
-                    background: 'var(--border)',
-                    overflow: 'hidden',
-                  }}
-                >
-                  <div
-                    style={{
-                      width: `${pct}%`,
-                      height: '100%',
-                      background: 'var(--success)',
-                      transition: 'width 0.3s',
-                    }}
-                  />
-                </div>
+                {/* Unlabelled: the "n/m devices · x%" line above says the same thing. */}
+                <ProgressBar value={pct} tone="success" size="sm" style={{ marginTop: '0.5rem' }} />
                 {sched && (
                   <div
                     style={{

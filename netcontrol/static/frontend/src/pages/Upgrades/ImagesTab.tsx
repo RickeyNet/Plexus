@@ -8,6 +8,7 @@ import {
 import { AlertDialog } from '@/components/AlertDialog';
 import { Callout } from '@/components/Callout';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { DataTable } from '@/components/DataTable';
 import { DeleteButton } from '@/components/DeleteButton';
 import { LoadingState } from '@/components/LoadingState';
 import { formatBackendDateTime } from '@/lib/datetime';
@@ -69,7 +70,7 @@ export function ImagesTab() {
           No software images uploaded yet.
         </div>
       ) : (
-        <table className="data-table">
+        <DataTable>
           <thead>
             <tr>
               <th>Filename</th>
@@ -111,7 +112,7 @@ export function ImagesTab() {
               </tr>
             ))}
           </tbody>
-        </table>
+        </DataTable>
       )}
 
       <NewImageModal
