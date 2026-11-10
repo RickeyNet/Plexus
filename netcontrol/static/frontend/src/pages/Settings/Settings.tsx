@@ -1,6 +1,7 @@
 import { useAdminCapabilities } from '@/api/settings';
 import { useAuthStatus } from '@/api/auth';
 import { ApiError } from '@/api/client';
+import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { TabBar } from '@/components/TabBar';
 import { usePathTab } from '@/lib/usePathTab';
@@ -118,9 +119,7 @@ export function Settings() {
   if (auth.isLoading) {
     return (
       <div>
-        <div className="page-header">
-          <h2 style={{ margin: 0 }}>Settings</h2>
-        </div>
+        <PageHeader title="Settings" />
         <p className="text-muted">Loading…</p>
       </div>
     );
@@ -129,23 +128,11 @@ export function Settings() {
   if (!isAdmin) {
     return (
       <div>
-        <div
-          className="page-header"
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            flexWrap: 'wrap',
-            gap: '0.5rem',
-            marginBottom: '0.75rem',
-          }}
-        >
-          <h2 style={{ margin: 0 }}>Settings</h2>
-        </div>
+        <PageHeader title="Settings" />
 
         <TabBar tabs={NON_ADMIN_TABS} active={tab} onChange={selectTab} aria-label="Settings sections" />
 
-        <div className="card" style={{ padding: '0.75rem' }}>
+        <div className="card card-sm">
           <AppearanceTab />
         </div>
       </div>
@@ -155,9 +142,7 @@ export function Settings() {
   if (capabilities.isLoading) {
     return (
       <div>
-        <div className="page-header">
-          <h2 style={{ margin: 0 }}>Settings</h2>
-        </div>
+        <PageHeader title="Settings" />
         <p className="text-muted">Loading…</p>
       </div>
     );
@@ -172,9 +157,7 @@ export function Settings() {
         : `Failed to load settings: ${(capabilities.error as Error).message}`;
     return (
       <div>
-        <div className="page-header">
-          <h2 style={{ margin: 0 }}>Settings</h2>
-        </div>
+        <PageHeader title="Settings" />
         <div className="error">{message}</div>
       </div>
     );
@@ -184,19 +167,7 @@ export function Settings() {
 
   return (
     <div>
-      <div
-        className="page-header"
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: '0.5rem',
-          marginBottom: '0.75rem',
-        }}
-      >
-        <h2 style={{ margin: 0 }}>Settings</h2>
-      </div>
+      <PageHeader title="Settings" />
 
       <PageHelp
         pageKey="settings"
@@ -206,22 +177,20 @@ export function Settings() {
 
       <TabBar tabs={ADMIN_TABS} active={tab} onChange={selectTab} aria-label="Settings sections" />
 
-      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div style={{ padding: '0.75rem' }}>
-          <PageHelp pageKey={`settings.${tab}`} title={TAB_HELP[tab].title} text={TAB_HELP[tab].text} />
-          {tab === 'appearance' && <AppearanceTab />}
-          {tab === 'users' && <UsersTab />}
-          {tab === 'access-groups' && <AccessGroupsTab capabilities={caps} />}
-          {tab === 'auth' && <AuthTab capabilities={caps} />}
-          {tab === 'logging' && <LoggingTab />}
-          {tab === 'siem' && <SiemTab />}
-          {tab === 'discovery' && <DiscoveryTab />}
-          {tab === 'monitoring' && <MonitoringTab />}
-          {tab === 'netflow' && <NetFlowTab />}
-          {tab === 'notifications' && <NotificationsTab />}
-          {tab === 'features' && <FeaturesTab capabilities={caps} />}
-          {tab === 'system' && <SystemTab />}
-        </div>
+      <div className="card card-sm">
+        <PageHelp pageKey={`settings.${tab}`} title={TAB_HELP[tab].title} text={TAB_HELP[tab].text} />
+        {tab === 'appearance' && <AppearanceTab />}
+        {tab === 'users' && <UsersTab />}
+        {tab === 'access-groups' && <AccessGroupsTab capabilities={caps} />}
+        {tab === 'auth' && <AuthTab capabilities={caps} />}
+        {tab === 'logging' && <LoggingTab />}
+        {tab === 'siem' && <SiemTab />}
+        {tab === 'discovery' && <DiscoveryTab />}
+        {tab === 'monitoring' && <MonitoringTab />}
+        {tab === 'netflow' && <NetFlowTab />}
+        {tab === 'notifications' && <NotificationsTab />}
+        {tab === 'features' && <FeaturesTab capabilities={caps} />}
+        {tab === 'system' && <SystemTab />}
       </div>
     </div>
   );

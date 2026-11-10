@@ -40,7 +40,7 @@ export function CatoEgressPanel() {
         Cloud rules that allow a Cato account&apos;s allocated IPs, checked against the Cato network rule a connection
         to the protected public address takes. Runs after every Cato collection and cloud discovery.
       </p>
-      <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+      <div className="toolbar">
         <label className="text-muted" style={{ display: 'flex', gap: '0.3rem', alignItems: 'center' }}>
           <input type="checkbox" checked={includeResolved} onChange={(e) => setIncludeResolved(e.target.checked)} />
           Show resolved

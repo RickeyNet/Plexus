@@ -73,8 +73,8 @@ export function PolicyTab({ filter }: Props) {
   }
 
   return (
-    <div>
-      <div className="card" style={{ padding: '0.9rem', marginBottom: '0.75rem' }}>
+    <div className="stack">
+      <div className="card">
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem', alignItems: 'end' }}>
           <label>Exposure Filter
             <select className="form-select" value={exposure} onChange={(e) => setExposure(e.target.value as Exposure)}>
@@ -111,7 +111,7 @@ export function PolicyTab({ filter }: Props) {
           {effective.isPending && <div className="text-muted">Loading…</div>}
           {effective.error && <div style={{ color: 'var(--danger)' }}>Error: {(effective.error as Error).message}</div>}
           {!views.length ? (
-            <div className="card" style={{ padding: '1rem' }}>
+            <div className="card">
               <p className="text-muted" style={{ margin: 0 }}>No effective cloud policy views available for current filters.</p>
             </div>
           ) : (
@@ -171,7 +171,7 @@ export function PolicyTab({ filter }: Props) {
           {rulesQuery.isPending && <div className="text-muted">Loading…</div>}
           {rulesQuery.error && <div style={{ color: 'var(--danger)' }}>Error: {(rulesQuery.error as Error).message}</div>}
           {!rules.length ? (
-            <div className="card" style={{ padding: '1rem' }}>
+            <div className="card">
               <p className="text-muted" style={{ margin: 0 }}>No policy rules yet. Run discovery on an account, subscription or project to read its security groups, NSGs or firewall rules.</p>
             </div>
           ) : (
@@ -220,7 +220,7 @@ export function PolicyTab({ filter }: Props) {
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="card" style={{ padding: '0.75rem' }}>
+    <div className="card card-sm">
       <div className="text-muted" style={{ fontSize: '0.75rem' }}>{label}</div>
       <div style={{ fontSize: '1.35rem', fontWeight: 700 }}>{value}</div>
     </div>

@@ -127,7 +127,7 @@ export function SiemTab() {
   };
 
   return (
-    <div className="card" style={{ padding: '1rem' }}>
+    <div>
       <div
         style={{
           display: 'flex',
@@ -265,15 +265,7 @@ function SinkEditor({ sink, existing, onChange, onCancel, onSave, saving }: Sink
   const showTls = sink.protocol === 'tls' || sink.protocol === 'https';
 
   return (
-    <div
-      style={{
-        marginTop: '1rem',
-        padding: '0.75rem',
-        border: '1px solid var(--border)',
-        borderRadius: 'var(--radius, 6px)',
-        background: 'rgba(from var(--text) r g b / 0.04)',
-      }}
-    >
+    <div className="card-inset" style={{ marginTop: 'var(--space-4)' }}>
       <h4 style={{ marginTop: 0 }}>{isEdit ? 'Edit Sink' : 'New Sink'}</h4>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>

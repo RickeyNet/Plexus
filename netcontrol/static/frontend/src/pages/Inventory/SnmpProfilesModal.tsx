@@ -39,7 +39,10 @@ export function SnmpProfilesModal({ onClose }: Props) {
 
   return (
     <Modal isOpen onClose={onClose} title="SNMP Profiles" size="large">
-      <div style={{ maxHeight: 360, overflow: 'auto', marginBottom: '0.75rem' }}>
+      <div
+        className="stack stack-sm"
+        style={{ maxHeight: 360, overflow: 'auto', marginBottom: 'var(--space-3)' }}
+      >
         {profiles.isPending ? (
           <p className="text-muted">Loading…</p>
         ) : list.length === 0 ? (
@@ -50,13 +53,11 @@ export function SnmpProfilesModal({ onClose }: Props) {
           list.map((p) => (
             <div
               key={p.id}
-              className="card"
+              className="card card-sm"
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                marginBottom: '0.4rem',
-                padding: '0.5rem 0.75rem',
               }}
             >
               <div>

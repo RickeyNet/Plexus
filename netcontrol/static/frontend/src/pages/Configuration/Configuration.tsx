@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import { useAuthStatus } from '@/api/auth';
+import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { TabBar } from '@/components/TabBar';
 import { visibleTabs } from '@/lib/tabGating';
@@ -54,9 +55,7 @@ export function Configuration() {
 
   return (
     <div>
-      <div className="page-header" style={{ marginBottom: '0.75rem' }}>
-        <h2 style={{ margin: 0 }}>Configuration</h2>
-      </div>
+      <PageHeader title="Configuration" />
 
       <PageHelp
         pageKey="configuration"
@@ -70,7 +69,7 @@ export function Configuration() {
 
       <PageHelp pageKey={`configuration.${shownTab}`} title={tabHelp.title} text={tabHelp.text} />
 
-      <div className="card" style={{ padding: '1rem' }}>
+      <div className="stack">
         {shownTab === 'drift' && (
           <DriftTab
             onCaptureStarted={(jobId) => setCaptureJob(jobId)}

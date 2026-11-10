@@ -1,4 +1,5 @@
 import { useAuthStatus } from '@/api/auth';
+import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { TabBar } from '@/components/TabBar';
 import { visibleTabs } from '@/lib/tabGating';
@@ -48,9 +49,7 @@ export function Monitoring() {
 
   return (
     <div className="page">
-      <div className="page-header">
-        <h2>Monitoring</h2>
-      </div>
+      <PageHeader title="Monitoring" />
 
       <PageHelp
         pageKey="monitoring"

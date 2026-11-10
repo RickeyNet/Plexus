@@ -2,6 +2,7 @@ import { FormEvent, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { groupLabel } from '@/api/inventory';
+import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
@@ -124,84 +125,48 @@ export function Ipam() {
 
   return (
     <div>
-      <div
-        className="page-header"
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-end',
-          gap: '1rem',
-          flexWrap: 'wrap',
-          marginBottom: '1rem',
-        }}
-      >
-        <div>
-          <h2 style={{ margin: 0 }}>IP Address Management</h2>
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            gap: '0.5rem',
-            flexWrap: 'wrap',
-            alignItems: 'end',
-          }}
+      <PageHeader title="IP Address Management">
+        <label>
+          Inventory Group{' '}
+          <select
+            className="form-select"
+            value={groupId ?? ''}
+            onChange={(e) =>
+              setGroupId(e.target.value ? Number(e.target.value) : null)
+            }
+          >
+            <option value="">All Groups</option>
+            {(groups.data ?? []).map((g) => (
+              <option key={g.id} value={g.id}>
+                {groupLabel(g) || `Group ${g.id}`}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <input
+            type="checkbox"
+            checked={includeCloud}
+            onChange={(e) => setIncludeCloud(e.target.checked)}
+          />
+          Include Cloud CIDRs
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <input
+            type="checkbox"
+            checked={includeTopology}
+            onChange={(e) => setIncludeTopology(e.target.checked)}
+          />
+          Include Topology Subnets
+        </label>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={handleRefresh}
         >
-          <label>
-            Inventory Group{' '}
-            <select
-              className="form-select"
-              value={groupId ?? ''}
-              onChange={(e) =>
-                setGroupId(e.target.value ? Number(e.target.value) : null)
-              }
-            >
-              <option value="">All Groups</option>
-              {(groups.data ?? []).map((g) => (
-                <option key={g.id} value={g.id}>
-                  {groupLabel(g) || `Group ${g.id}`}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem',
-              margin: '0 0 0.2rem',
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={includeCloud}
-              onChange={(e) => setIncludeCloud(e.target.checked)}
-            />
-            Include Cloud CIDRs
-          </label>
-          <label
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem',
-              margin: '0 0 0.2rem',
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={includeTopology}
-              onChange={(e) => setIncludeTopology(e.target.checked)}
-            />
-            Include Topology Subnets
-          </label>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={handleRefresh}
-          >
-            Refresh
-          </button>
-        </div>
-      </div>
+          Refresh
+        </button>
+      </PageHeader>
 
       <PageHelp
         pageKey="ipam"
@@ -240,7 +205,7 @@ export function Ipam() {
           alignItems: 'start',
         }}
       >
-        <div className="card" style={{ padding: '1rem', overflow: 'auto' }}>
+        <div className="card" style={{ overflow: 'auto' }}>
           <div
             style={{
               display: 'flex',
@@ -413,7 +378,7 @@ export function Ipam() {
         </div>
 
         <div style={{ display: 'grid', gap: '1rem' }}>
-          <div className="card" style={{ padding: '1rem' }}>
+          <div className="card">
             <h3 style={{ margin: '0 0 0.75rem' }}>Subnet Drilldown</h3>
             {selectedSubnet ? (
               <SubnetDrilldown
@@ -472,7 +437,7 @@ export function Ipam() {
             includeTopology={includeTopology}
           />
 
-          <div className="card" style={{ padding: '1rem' }}>
+          <div className="card">
             <h3 style={{ margin: '0 0 0.75rem' }}>Duplicate IP Conflicts</h3>
             {duplicates.length === 0 ? (
               <p className="text-muted" style={{ margin: 0 }}>
@@ -550,7 +515,7 @@ export function Ipam() {
             )}
           </div>
 
-          <div className="card" style={{ padding: '1rem' }}>
+          <div className="card">
             <h3 style={{ margin: '0 0 0.75rem' }}>Scope Notes</h3>
             <div
               className="text-muted"
@@ -635,7 +600,7 @@ function OverlapSide({ side }: { side: IpamOverlapSide }) {
 
 function OverlapsCard({ overlaps, total, vpnTotal, includeTopology }: OverlapsCardProps) {
   return (
-    <div className="card" style={{ padding: '1rem' }}>
+    <div className="card">
       <h3 style={{ margin: '0 0 0.75rem' }}>Overlapping Ranges</h3>
       {overlaps.length === 0 ? (
         <p className="text-muted" style={{ margin: 0 }}>
@@ -717,15 +682,11 @@ function SyncScheduleBar({ config }: { config: IpamSyncConfig }) {
   return (
     <form
       onSubmit={submit}
+      className="toolbar"
       style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '0.75rem',
-        flexWrap: 'wrap',
-        padding: '0.6rem 0.75rem',
+        padding: 'var(--space-2) var(--space-3)',
         background: 'rgba(from var(--text) r g b / 0.04)',
-        borderRadius: 8,
-        marginBottom: '0.75rem',
+        borderRadius: 'var(--radius-lg)',
       }}
     >
       <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
@@ -742,7 +703,7 @@ function SyncScheduleBar({ config }: { config: IpamSyncConfig }) {
       >
         Every
         <input
-          className="form-input"
+          className="form-input form-input-sm"
           type="number"
           min={5}
           max={1440}
@@ -825,7 +786,7 @@ function SourcesCard({
   };
 
   return (
-    <div className="card" style={{ padding: '1rem' }}>
+    <div className="card">
       <div
         style={{
           display: 'flex',
@@ -982,7 +943,7 @@ function ReconcileCard({ runs, diffs, sources }: ReconcileCardProps) {
   };
 
   return (
-    <div className="card" style={{ padding: '1rem' }}>
+    <div className="card">
       <div style={{ marginBottom: '0.75rem' }}>
         <h3 style={{ margin: 0 }}>Reconciliation</h3>
         <div
@@ -1192,7 +1153,7 @@ function DhcpCard({
   const unknown = correlation.unknown ?? [];
 
   return (
-    <div className="card" style={{ padding: '1rem' }}>
+    <div className="card">
       <div
         style={{
           display: 'flex',

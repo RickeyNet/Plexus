@@ -173,20 +173,12 @@ export function FindingsModal({ resultId, onClose, onRescan }: Props) {
             {result.data.passed_rules}/{result.data.total_rules} passed
           </div>
           {fixable.length > 0 && (
-            <div
-              style={{
-                marginBottom: '1rem',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.75rem',
-                flexWrap: 'wrap',
-              }}
-            >
+            <div className="toolbar">
               <label style={{ fontWeight: 600, fontSize: '0.9em' }}>
                 Credential for remediation:
               </label>
               <select
-                className="form-select"
+                className="form-select form-select-sm"
                 style={{ maxWidth: 300 }}
                 value={credentialId ?? ''}
                 onChange={(e) =>

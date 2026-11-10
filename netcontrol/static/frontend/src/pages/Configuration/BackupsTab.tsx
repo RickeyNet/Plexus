@@ -15,6 +15,7 @@ import {
 } from '@/api/configuration';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
 import { SegmentedControl } from '@/components/SegmentedControl';
+import { SummaryStrip } from '@/components/SummaryStrip';
 
 import { BackupModal } from './BackupModal';
 import { BackupPolicyModal } from './BackupPolicyModal';
@@ -51,24 +52,16 @@ export function BackupsTab() {
     <>
       <BackupSummaryStrip summary={summary.data} />
 
-      <div
-        style={{
-          display: 'flex',
-          gap: '0.5rem',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          margin: '0.75rem 0',
-        }}
-      >
+      <div className="toolbar">
         <SegmentedControl options={SUB_TABS} value={subTab} onChange={setSubTab} aria-label="Backups view" />
         <input
-          className="form-input"
+          className="form-input form-input-sm"
           placeholder="Search…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           style={{ maxWidth: 240 }}
         />
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.4rem' }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 'var(--space-2)' }}>
           {subTab === 'policies' ? (
             <button
               type="button"
@@ -146,31 +139,7 @@ function BackupSummaryStrip({
     { label: 'Hosts', value: String(summary?.hosts_backed_up ?? '-') },
     { label: 'Last backup', value: formatRelative(summary?.last_backup_at) },
   ];
-  return (
-    <div className="card">
-      <div
-        className="card-body"
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-          gap: '0.5rem',
-          padding: '0.75rem',
-        }}
-      >
-        {items.map((it) => (
-          <div
-            key={it.label}
-            style={{ display: 'flex', flexDirection: 'column' }}
-          >
-            <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
-              {it.label}
-            </span>
-            <span style={{ fontWeight: 600 }}>{it.value}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+  return <SummaryStrip items={items} />;
 }
 
 function PoliciesList({
@@ -207,16 +176,12 @@ function PoliciesList({
   }
 
   return (
-    <>
+    <div className="stack stack-sm">
       {filtered.map((p) => {
         const runningId = run.variables;
         const isRunning = run.isPending && runningId === p.id;
         return (
-          <div
-            key={p.id}
-            className="card"
-            style={{ marginBottom: '0.75rem', padding: '1rem' }}
-          >
+          <div key={p.id} className="card">
             <div
               style={{
                 display: 'flex',
@@ -309,7 +274,7 @@ function PoliciesList({
           </div>
         );
       })}
-    </>
+    </div>
   );
 }
 
@@ -346,18 +311,14 @@ function HistoryList({
   }
 
   return (
-    <>
+    <div className="stack stack-sm">
       {filtered.map((b) => {
         const sizeKb =
           b.config_length != null
             ? `${(b.config_length / 1024).toFixed(1)} KB`
             : '-';
         return (
-          <div
-            key={b.id}
-            className="card"
-            style={{ marginBottom: '0.75rem', padding: '1rem' }}
-          >
+          <div key={b.id} className="card">
             <div
               style={{
                 display: 'flex',
@@ -460,6 +421,6 @@ function HistoryList({
           </div>
         );
       })}
-    </>
+    </div>
   );
 }

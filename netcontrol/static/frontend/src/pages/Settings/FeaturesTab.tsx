@@ -28,7 +28,7 @@ export function FeaturesTab({
   const catalog = capabilities.feature_visibility.catalog;
 
   return (
-    <div className="card" style={{ padding: '1rem' }}>
+    <div>
       <h3 style={{ margin: '0 0 0.5rem 0' }}>Feature Visibility</h3>
       <p className="card-description" style={{ marginBottom: '0.75rem' }}>
         Hide nav entries from non-admin users without removing the feature itself.

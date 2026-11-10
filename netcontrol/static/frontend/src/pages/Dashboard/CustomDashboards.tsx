@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 
 import { useCustomDashboards, useDeleteCustomDashboard } from '@/api/dashboard';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { PageHeader } from '@/components/PageHeader';
 import { formatBackendDate } from '@/lib/datetime';
 
 import { CreateDashboardModal } from './CreateDashboardModal';
@@ -16,23 +17,12 @@ export function CustomDashboards() {
 
   return (
     <>
-      <div
-        className="page-header"
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: '0.75rem',
-        }}
-      >
-        <h2 style={{ margin: 0 }}>Dashboards</h2>
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <DashboardSwitcher current={null} />
-          <button className="btn btn-primary" onClick={() => setShowCreate(true)}>
-            + New Dashboard
-          </button>
-        </div>
-      </div>
+      <PageHeader title="Dashboards">
+        <DashboardSwitcher current={null} />
+        <button className="btn btn-primary" onClick={() => setShowCreate(true)}>
+          + New Dashboard
+        </button>
+      </PageHeader>
 
       {isPending && (
         <div className="dashboards-card-grid">
@@ -78,7 +68,7 @@ export function CustomDashboards() {
             <Link
               key={d.id}
               to={`/dashboards/${d.id}`}
-              className="card dashboard-card"
+              className="card card-clickable dashboard-card"
               style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}
             >
               <div className="card-title">{d.name}</div>

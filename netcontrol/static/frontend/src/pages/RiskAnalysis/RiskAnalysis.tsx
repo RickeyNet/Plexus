@@ -9,6 +9,7 @@ import {
   useRiskAnalysisSummary,
 } from '@/api/riskAnalysis';
 import { type DialogApi, useDialogs } from '@/components/DialogProvider-context';
+import { SummaryStrip, type SummaryStripItem } from '@/components/SummaryStrip';
 
 import { AnalysisDetailModal } from './AnalysisDetailModal';
 import { NewAnalysisModal } from './NewAnalysisModal';
@@ -48,49 +49,36 @@ export function RiskAnalysis() {
   );
 
   return (
-    <>
-      <div
-        className="page-header"
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: '0.5rem',
-          marginBottom: '0.75rem',
-        }}
-      >
-        <h2 style={{ margin: 0 }}>Risk Analysis</h2>
-        <div style={{ display: 'flex', gap: '0.4rem' }}>
-          <button className="btn btn-sm btn-primary" onClick={() => setShowNew(true)}>
-            New Analysis
-          </button>
-          <button className="btn btn-sm btn-secondary" onClick={() => setShowOffline(true)}>
-            Offline Analysis
-          </button>
-          <button
-            className="btn btn-sm btn-secondary"
-            onClick={() => {
-              summary.refetch();
-              analyses.refetch();
-            }}
-          >
-            Refresh
-          </button>
-        </div>
+    <div className="stack stack-sm">
+      <div className="toolbar">
+        <h3 style={{ margin: 0 }}>Risk Analysis</h3>
+        <span className="toolbar-spacer" />
+        <button className="btn btn-sm btn-primary" onClick={() => setShowNew(true)}>
+          New Analysis
+        </button>
+        <button className="btn btn-sm btn-secondary" onClick={() => setShowOffline(true)}>
+          Offline Analysis
+        </button>
+        <button
+          className="btn btn-sm btn-secondary"
+          onClick={() => {
+            summary.refetch();
+            analyses.refetch();
+          }}
+        >
+          Refresh
+        </button>
       </div>
 
-      <SummaryStrip summary={summary.data} />
+      <RiskSummary summary={summary.data} />
 
-      <div className="card" style={{ marginTop: '0.75rem', padding: 0, overflow: 'hidden' }}>
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <div
+          className="toolbar"
           style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            padding: '0.5rem 0.75rem',
+            padding: 'var(--space-2) var(--space-3)',
             borderBottom: '1px solid var(--border)',
-            flexWrap: 'wrap',
+            marginBottom: 0,
           }}
         >
           <select
@@ -106,14 +94,14 @@ export function RiskAnalysis() {
             ))}
           </select>
           <input
-            className="form-input"
+            className="form-input form-input-sm"
             placeholder="Search hostname, group, or change type…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             style={{ marginLeft: 'auto', maxWidth: 320 }}
           />
         </div>
-        <div style={{ padding: '0.75rem' }}>
+        <div style={{ padding: 'var(--space-3)' }}>
           <AnalysisList
             items={filtered}
             loading={analyses.isLoading}
@@ -139,7 +127,7 @@ export function RiskAnalysis() {
         onClose={() => setDetailId(null)}
         analysisId={detailId}
       />
-    </>
+    </div>
   );
 }
 
@@ -157,34 +145,15 @@ async function showRunResult(
   if (await confirm(msg)) setDetailId(result.id);
 }
 
-function SummaryStrip({ summary }: { summary?: RiskAnalysisSummary }) {
-  const items: { label: string; value: string }[] = [
+function RiskSummary({ summary }: { summary?: RiskAnalysisSummary }) {
+  const items: SummaryStripItem[] = [
     { label: 'Total', value: String(summary?.total ?? '-') },
     { label: 'High risk', value: String(summary?.high_risk ?? '-') },
     { label: 'Approved', value: String(summary?.approved ?? '-') },
     { label: 'Pending', value: String(summary?.pending ?? '-') },
     { label: 'Last analysis', value: formatStamp(summary?.last_analysis_at) || 'Never' },
   ];
-  return (
-    <div className="card">
-      <div
-        className="card-body"
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-          gap: '0.5rem',
-          padding: '0.75rem',
-        }}
-      >
-        {items.map((it) => (
-          <div key={it.label} style={{ display: 'flex', flexDirection: 'column' }}>
-            <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{it.label}</span>
-            <span style={{ fontWeight: 600 }}>{it.value}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+  return <SummaryStrip items={items} />;
 }
 
 function AnalysisList({
@@ -222,11 +191,11 @@ function AnalysisList({
   }
 
   return (
-    <>
+    <div className="stack stack-sm">
       {items.map((a) => (
         <AnalysisRow key={a.id} analysis={a} onView={() => onView(a.id)} />
       ))}
-    </>
+    </div>
   );
 }
 
@@ -239,7 +208,7 @@ function AnalysisRow({ analysis, onView }: { analysis: RiskAnalysisRow; onView: 
   const isApproved = !!analysis.approved;
 
   return (
-    <div className="card" style={{ marginBottom: '0.75rem', padding: '1rem' }}>
+    <div className="card-inset">
       <div
         style={{
           display: 'flex',

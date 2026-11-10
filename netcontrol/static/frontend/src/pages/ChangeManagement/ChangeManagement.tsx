@@ -1,4 +1,5 @@
 import { useAuthStatus } from '@/api/auth';
+import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { TabBar } from '@/components/TabBar';
 import { visibleTabs } from '@/lib/tabGating';
@@ -29,6 +30,8 @@ export function ChangeManagement() {
 
   return (
     <div>
+      <PageHeader title="Change Management" />
+
       <PageHelp
         pageKey="change-management"
         title="Plan, Analyze & Deploy Changes"

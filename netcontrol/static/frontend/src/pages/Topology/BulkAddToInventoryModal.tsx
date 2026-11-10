@@ -175,9 +175,9 @@ export function BulkAddToInventoryModal({ isOpen, nodes, edges, onClose, onAdded
               )}
             </div>
           )}
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+          <div className="toolbar" style={{ marginBottom: 0 }}>
             <input
-              className="form-input"
+              className="form-input form-input-sm"
               type="search"
               placeholder="Filter by name, IP, platform, site or group"
               aria-label="Filter devices"

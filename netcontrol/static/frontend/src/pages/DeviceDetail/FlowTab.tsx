@@ -49,19 +49,17 @@ export function FlowTab({ hostId, range }: Props) {
   const [sub, setSub] = useState<SubTab>('talkers');
 
   return (
-    <div>
+    <div className="stack stack-sm">
       <ExporterStatus hostId={hostId} />
 
-      <div style={{ marginTop: '0.75rem' }}>
-        <TabBar
-          tabs={SUB_TABS}
-          active={sub}
-          onChange={setSub}
-          size="sm"
-          aria-label="Flow views"
-          trailing={flowRange !== range && <ClampedRangeHint requested={range} shown={flowRange} />}
-        />
-      </div>
+      <TabBar
+        tabs={SUB_TABS}
+        active={sub}
+        onChange={setSub}
+        size="sm"
+        aria-label="Flow views"
+        trailing={flowRange !== range && <ClampedRangeHint requested={range} shown={flowRange} />}
+      />
 
       {sub === 'talkers' && <TalkersView hostId={hostId} hours={hours} />}
       {sub === 'applications' && <ApplicationsView hostId={hostId} hours={hours} />}
@@ -92,26 +90,23 @@ function ExporterStatus({ hostId }: { hostId: number }) {
   }
   if (rows.length === 0) {
     return (
-      <div className="card" style={{ marginBottom: 0 }}>
-        <div className="card-body" style={{ padding: '0.5rem 0.75rem' }}>
-          <span className="text-muted" style={{ fontSize: '0.85rem' }}>
-            This device has not been seen as a flow exporter. Configure NetFlow v5/v9/IPFIX
-            export to UDP/2055 or sFlow v5 to UDP/6343 on the device.
-          </span>
-        </div>
+      <div className="card-inset">
+        <span className="text-muted" style={{ fontSize: '0.85rem' }}>
+          This device has not been seen as a flow exporter. Configure NetFlow v5/v9/IPFIX
+          export to UDP/2055 or sFlow v5 to UDP/6343 on the device.
+        </span>
       </div>
     );
   }
 
   return (
-    <div className="card" style={{ marginBottom: 0 }}>
+    <div className="card-inset">
       <div
         className="card-body"
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-          gap: '0.5rem',
-          padding: '0.75rem',
+          gap: 'var(--space-2)',
         }}
       >
         {rows.map((r) => (
@@ -150,17 +145,8 @@ function TalkersView({ hostId, hours }: { hostId: number; hours: number }) {
   const q = useFlowTopTalkers({ hours, direction, hostId });
 
   return (
-    <div className="card" style={{ marginBottom: 0 }}>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          padding: '0.5rem 0.75rem',
-          flexWrap: 'wrap',
-          gap: '0.5rem',
-        }}
-      >
+    <div className="card-inset">
+      <div className="toolbar" style={{ justifyContent: 'space-between' }}>
         <h4 style={{ margin: 0, fontSize: '0.95rem' }}>
           Top {direction === 'src' ? 'Sources' : 'Destinations'}
         </h4>
@@ -171,9 +157,7 @@ function TalkersView({ hostId, hours }: { hostId: number; hours: number }) {
           aria-label="Talker direction"
         />
       </div>
-      <div style={{ padding: '0.5rem 0.75rem' }}>
-        <TalkersBody query={q} />
-      </div>
+      <TalkersBody query={q} />
     </div>
   );
 }
@@ -239,41 +223,39 @@ function ApplicationsView({ hostId, hours }: { hostId: number; hours: number }) 
     `${r.service_name || `port-${r.port}`} (${r.protocol_name || r.protocol})`;
 
   return (
-    <div className="card" style={{ marginBottom: 0 }}>
-      <div style={{ padding: '0.5rem 0.75rem' }}>
-        <h4 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem' }}>
-          Top Applications
-        </h4>
-        <BarChart
-          categories={rows.map(labelFor)}
-          values={rows.map((r) => r.total_bytes)}
-          rotateLabels={45}
-          height={240}
-        />
-        <table
-          className="data-table"
-          style={{ width: '100%', fontSize: '0.85em', marginTop: '0.5rem' }}
-        >
-          <thead>
-            <tr>
-              <th>Service</th>
-              <th style={{ textAlign: 'right' }}>Port</th>
-              <th>Proto</th>
-              <th style={{ textAlign: 'right' }}>Traffic</th>
+    <div className="card-inset">
+      <h4 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem' }}>
+        Top Applications
+      </h4>
+      <BarChart
+        categories={rows.map(labelFor)}
+        values={rows.map((r) => r.total_bytes)}
+        rotateLabels={45}
+        height={240}
+      />
+      <table
+        className="data-table"
+        style={{ width: '100%', fontSize: '0.85em', marginTop: '0.5rem' }}
+      >
+        <thead>
+          <tr>
+            <th>Service</th>
+            <th style={{ textAlign: 'right' }}>Port</th>
+            <th>Proto</th>
+            <th style={{ textAlign: 'right' }}>Traffic</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={`${r.port}-${r.protocol}-${i}`}>
+              <td>{r.service_name || '-'}</td>
+              <td style={{ textAlign: 'right' }}>{r.port}</td>
+              <td>{r.protocol_name || String(r.protocol)}</td>
+              <td style={{ textAlign: 'right' }}>{formatBytes(r.total_bytes)}</td>
             </tr>
-          </thead>
-          <tbody>
-            {rows.map((r, i) => (
-              <tr key={`${r.port}-${r.protocol}-${i}`}>
-                <td>{r.service_name || '-'}</td>
-                <td style={{ textAlign: 'right' }}>{r.port}</td>
-                <td>{r.protocol_name || String(r.protocol)}</td>
-                <td style={{ textAlign: 'right' }}>{formatBytes(r.total_bytes)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -289,34 +271,32 @@ function ConversationsView({ hostId, hours }: { hostId: number; hours: number })
   if (rows.length === 0) return <NoData />;
 
   return (
-    <div className="card" style={{ marginBottom: 0 }}>
-      <div style={{ padding: '0.5rem 0.75rem' }}>
-        <h4 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem' }}>Top Conversations</h4>
-        <table className="data-table" style={{ width: '100%', fontSize: '0.85em' }}>
-          <thead>
-            <tr>
-              <th>Source</th>
-              <th>Destination</th>
-              <th style={{ textAlign: 'right' }}>Traffic</th>
-              <th style={{ textAlign: 'right' }}>Flows</th>
+    <div className="card-inset">
+      <h4 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem' }}>Top Conversations</h4>
+      <table className="data-table" style={{ width: '100%', fontSize: '0.85em' }}>
+        <thead>
+          <tr>
+            <th>Source</th>
+            <th>Destination</th>
+            <th style={{ textAlign: 'right' }}>Traffic</th>
+            <th style={{ textAlign: 'right' }}>Flows</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r: FlowConversation, i) => (
+            <tr key={`${r.src_ip}-${r.dst_ip}-${i}`}>
+              <td>
+                <code>{r.src_ip}</code>
+              </td>
+              <td>
+                <code>{r.dst_ip}</code>
+              </td>
+              <td style={{ textAlign: 'right' }}>{formatBytes(r.total_bytes)}</td>
+              <td style={{ textAlign: 'right' }}>{r.flow_count}</td>
             </tr>
-          </thead>
-          <tbody>
-            {rows.map((r: FlowConversation, i) => (
-              <tr key={`${r.src_ip}-${r.dst_ip}-${i}`}>
-                <td>
-                  <code>{r.src_ip}</code>
-                </td>
-                <td>
-                  <code>{r.dst_ip}</code>
-                </td>
-                <td style={{ textAlign: 'right' }}>{formatBytes(r.total_bytes)}</td>
-                <td style={{ textAlign: 'right' }}>{r.flow_count}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -348,14 +328,12 @@ function TimelineView({ hostId, hours }: { hostId: number; hours: number }) {
   ];
 
   return (
-    <div className="card" style={{ marginBottom: 0 }}>
-      <div style={{ padding: '0.5rem 0.75rem' }}>
-        <h4 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem' }}>Traffic over time</h4>
-        <TimeSeriesChart series={series} area yAxisName="bps" height={300} />
-        <div className="text-muted" style={{ fontSize: '0.78rem', marginTop: '0.25rem' }}>
-          Bucket size: {bucketMinutes} min. Bytes are normalised to bps assuming a full bucket
-          - the last bucket may underestimate if it hasn't closed yet.
-        </div>
+    <div className="card-inset">
+      <h4 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem' }}>Traffic over time</h4>
+      <TimeSeriesChart series={series} area yAxisName="bps" height={300} />
+      <div className="text-muted" style={{ fontSize: '0.78rem', marginTop: '0.25rem' }}>
+        Bucket size: {bucketMinutes} min. Bytes are normalised to bps assuming a full bucket
+        - the last bucket may underestimate if it hasn't closed yet.
       </div>
     </div>
   );

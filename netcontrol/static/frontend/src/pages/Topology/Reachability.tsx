@@ -176,127 +176,129 @@ export function Reachability() {
         text="Check which networks can reach one destination with the same traffic, for example which user VLANs cannot reach a file server on tcp/445. Every network the filters keep is traced hop by hop like a Path Mode trace. Narrow the sources with kinds, VLAN ids, names (a term in /slashes/ is a regular expression), exclusions such as voice or guest, sites and address ranges (Within keeps networks inside a range, Overlapping any network that shares an address with it, wider ones included). A typed Source (an IP address, network or subnet) replaces the source filters and is traced alone. List networks shows the networks the Source networks filters keep, without tracing them, as a table and a spreadsheet. To trace many destinations at once, leave Destination empty and narrow the Destination networks: every source network is then traced to every destination network, for example every cloud subnet to every Meraki network. With the Traffic box empty each row lists the ports allowed end to end. Click a verdict to show only those networks, group the results by site, open any row's full trace, and download the list as a spreadsheet or CSV."
       />
 
-      <div className="card" style={{ padding: '0.75rem', marginBottom: '0.75rem' }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'flex-end' }}>
-          <datalist id={SUBNETS_LIST_ID}>
-            {subnets.map((s) => (
-              <option key={subnetKey(s)} value={subnetOptionLabel(s)} />
+      <div className="stack stack-sm">
+        <div className="card card-sm">
+          <div className="toolbar" style={{ alignItems: 'flex-end', marginBottom: 0 }}>
+            <datalist id={SUBNETS_LIST_ID}>
+              {subnets.map((s) => (
+                <option key={subnetKey(s)} value={subnetOptionLabel(s)} />
+              ))}
+            </datalist>
+            {(['source', 'destination'] as const).map((side) => (
+              <EndField
+                key={side}
+                label={side === 'source' ? 'Source' : 'Destination'}
+                placeholder={
+                  side === 'source'
+                    ? 'IP address, network or subnet; empty: use the filters'
+                    : 'IP address, network or subnet; empty: many'
+                }
+                value={form[side]}
+                onChange={(value) => setEnd(side, value)}
+                onEnter={run}
+                owners={owners[side]}
+                picked={picked[side]}
+                onPick={(key) => pickOwner(side, key)}
+              />
             ))}
-          </datalist>
-          {(['source', 'destination'] as const).map((side) => (
-            <EndField
-              key={side}
-              label={side === 'source' ? 'Source' : 'Destination'}
-              placeholder={
-                side === 'source'
-                  ? 'IP address, network or subnet; empty: use the filters'
-                  : 'IP address, network or subnet; empty: many'
+            <label style={FIELD_STYLE}>
+              <span className="form-label">Traffic</span>
+              <input
+                className="form-input form-input-sm"
+                placeholder="tcp/445, udp 53, icmp; empty: any"
+                value={form.traffic}
+                onChange={(e) => update({ traffic: e.target.value })}
+                onKeyDown={(e) => { if (e.key === 'Enter') run(); }}
+                title="Empty: any traffic, and each row lists the ports allowed end to end"
+              />
+            </label>
+            <button type="button" className="btn btn-sm btn-primary" onClick={run} disabled={sweep.isFetching}>
+              {sweep.isFetching ? 'Running…' : 'Run'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-secondary"
+              onClick={listNetworks}
+              disabled={sweep.isFetching || typedSource}
+              title={
+                typedSource
+                  ? LIST_TYPED_SOURCE_ERROR
+                  : 'List the networks the Source networks filters keep, without tracing them'
               }
-              value={form[side]}
-              onChange={(value) => setEnd(side, value)}
-              onEnter={run}
-              owners={owners[side]}
-              picked={picked[side]}
-              onPick={(key) => pickOwner(side, key)}
-            />
-          ))}
-          <label style={FIELD_STYLE}>
-            <span className="form-label">Traffic</span>
-            <input
-              className="form-input"
-              placeholder="tcp/445, udp 53, icmp; empty: any"
-              value={form.traffic}
-              onChange={(e) => update({ traffic: e.target.value })}
-              onKeyDown={(e) => { if (e.key === 'Enter') run(); }}
-              title="Empty: any traffic, and each row lists the ports allowed end to end"
-            />
-          </label>
-          <button type="button" className="btn btn-sm btn-primary" onClick={run} disabled={sweep.isFetching}>
-            {sweep.isFetching ? 'Running…' : 'Run'}
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm btn-secondary"
-            onClick={listNetworks}
-            disabled={sweep.isFetching || typedSource}
-            title={
-              typedSource
-                ? LIST_TYPED_SOURCE_ERROR
-                : 'List the networks the Source networks filters keep, without tracing them'
+            >
+              List networks
+            </button>
+            <button type="button" className="btn btn-sm btn-secondary" onClick={() => resetTo(emptyForm())}>
+              Reset
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-secondary"
+              onClick={() => resetTo(cloudsToMerakiForm())}
+              title="Every AWS, Azure and GCP subnet and Cato site range to every Meraki network, any traffic (lists the ports allowed). Press Run to start."
+            >
+              Clouds &amp; Cato → Meraki
+            </button>
+          </div>
+
+          <FilterFields
+            title="Source networks"
+            idPrefix="reachability-from"
+            filters={form}
+            onChange={update}
+            sources={sources}
+            providers={providers}
+            disabled={typedSource}
+            note={typedSource ? 'Used when Source is empty.' : 'Every network these filters keep is traced.'}
+          />
+          <FilterFields
+            title="Destination networks"
+            idPrefix="reachability-to"
+            filters={form.to}
+            onChange={updateTo}
+            sources={sources}
+            providers={providers}
+            disabled={!matrixForm}
+            note={
+              matrixForm
+                ? 'Every source network is traced to every network these filters keep.'
+                : 'Used when Destination is empty.'
             }
-          >
-            List networks
-          </button>
-          <button type="button" className="btn btn-sm btn-secondary" onClick={() => resetTo(emptyForm())}>
-            Reset
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm btn-secondary"
-            onClick={() => resetTo(cloudsToMerakiForm())}
-            title="Every AWS, Azure and GCP subnet and Cato site range to every Meraki network, any traffic (lists the ports allowed). Press Run to start."
-          >
-            Clouds &amp; Cato → Meraki
-          </button>
+          />
+
+          <div className="text-muted" style={{ ...NOTE_STYLE, marginTop: '0.5rem' }}>
+            Lists are comma-separated and any term matches; a term in /slashes/ is a regular expression. Names and sites
+            match without regard to case. The destination's own network is never swept.
+          </div>
+          {(formError || vlanError) && (
+            <div style={{ color: 'var(--danger)', marginTop: '0.5rem' }}>{formError ?? vlanError}</div>
+          )}
         </div>
 
-        <FilterFields
-          title="Source networks"
-          idPrefix="reachability-from"
-          filters={form}
-          onChange={update}
-          sources={sources}
-          providers={providers}
-          disabled={typedSource}
-          note={typedSource ? 'Used when Source is empty.' : 'Every network these filters keep is traced.'}
-        />
-        <FilterFields
-          title="Destination networks"
-          idPrefix="reachability-to"
-          filters={form.to}
-          onChange={updateTo}
-          sources={sources}
-          providers={providers}
-          disabled={!matrixForm}
-          note={
-            matrixForm
-              ? 'Every source network is traced to every network these filters keep.'
-              : 'Used when Destination is empty.'
-          }
-        />
-
-        <div className="text-muted" style={{ ...NOTE_STYLE, marginTop: '0.5rem' }}>
-          Lists are comma-separated and any term matches; a term in /slashes/ is a regular expression. Names and sites
-          match without regard to case. The destination's own network is never swept.
-        </div>
-        {(formError || vlanError) && (
-          <div style={{ color: 'var(--danger)', marginTop: '0.5rem' }}>{formError ?? vlanError}</div>
+        {query && sweep.isPending && (
+          <div className="text-muted">
+            {isListQuery(query)
+              ? 'Listing the networks…'
+              : 'Tracing every network… a few hundred traces take seconds, a few thousand about a minute; a matrix runs at most 20,000.'}
+          </div>
+        )}
+        {query && sweep.error && <SweepError error={sweep.error} />}
+        {report && query && (
+          <Results
+            report={report}
+            query={query}
+            rows={shown}
+            rollup={rollup}
+            pairs={pairs}
+            verdict={verdict}
+            onVerdict={(v) => { setVerdict((current) => (current === v ? null : v)); setOpen(null); }}
+            bySite={bySite}
+            onBySite={setBySite}
+            open={open}
+            onOpen={(key) => setOpen((current) => (current === key ? null : key))}
+          />
         )}
       </div>
-
-      {query && sweep.isPending && (
-        <div className="text-muted">
-          {isListQuery(query)
-            ? 'Listing the networks…'
-            : 'Tracing every network… a few hundred traces take seconds, a few thousand about a minute; a matrix runs at most 20,000.'}
-        </div>
-      )}
-      {query && sweep.error && <SweepError error={sweep.error} />}
-      {report && query && (
-        <Results
-          report={report}
-          query={query}
-          rows={shown}
-          rollup={rollup}
-          pairs={pairs}
-          verdict={verdict}
-          onVerdict={(v) => { setVerdict((current) => (current === v ? null : v)); setOpen(null); }}
-          bySite={bySite}
-          onBySite={setBySite}
-          open={open}
-          onOpen={(key) => setOpen((current) => (current === key ? null : key))}
-        />
-      )}
     </div>
   );
 }
@@ -321,7 +323,7 @@ function EndField({ label, placeholder, value, onChange, onEnter, owners, picked
       <label style={{ ...FIELD_STYLE, minWidth: 280 }}>
         <span className="form-label">{label}</span>
         <input
-          className="form-input"
+          className="form-input form-input-sm"
           list={SUBNETS_LIST_ID}
           placeholder={placeholder}
           value={value}
@@ -332,7 +334,7 @@ function EndField({ label, placeholder, value, onChange, onEnter, owners, picked
       {owners.length > 1 && (
         <label style={FIELD_STYLE}>
           <span className="form-label">{label} is at</span>
-          <select className="form-select" value={picked} onChange={(e) => onPick(e.target.value)}>
+          <select className="form-select form-select-sm" value={picked} onChange={(e) => onPick(e.target.value)}>
             <option value="">Pick the subnet you mean</option>
             {owners.map((s) => (
               <option key={subnetKey(s)} value={subnetKey(s)}>{subnetOptionLabel(s)}</option>
@@ -352,7 +354,7 @@ function SweepError({ error }: { error: Error }) {
   const tooMany = body && typeof body === 'object' && typeof body.count === 'number';
   const serverMessage = body && typeof body === 'object' ? body.error?.message : undefined;
   return (
-    <div className="card" style={{ padding: '0.6rem 0.85rem', borderLeft: '3px solid var(--danger)' }}>
+    <div className="card card-sm" style={{ borderLeft: '3px solid var(--danger)' }}>
       {tooMany && serverMessage ? (
         <>{serverMessage}</>
       ) : tooMany ? (
@@ -449,13 +451,13 @@ function Results({
   const matrix = report.mode === 'matrix';
   const listed = report.mode === 'list';
   return (
-    <div className="card" style={{ padding: '0.75rem' }}>
+    <div className="card card-sm">
       <div style={{ marginBottom: '0.5rem' }}>
         <ResultsHeading report={report} />
         <span className="text-muted"> · {new Date(report.generated_at).toLocaleString()}</span>
       </div>
 
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', alignItems: 'center', marginBottom: '0.6rem' }}>
+      <div className="toolbar">
         {!listed && VERDICT_ORDER.map((v) => {
           const label = verdictLabel(v);
           const active = verdict === v;
@@ -477,7 +479,7 @@ function Results({
           <input type="checkbox" checked={bySite} onChange={(e) => onBySite(e.target.checked)} />
           {matrix ? 'Group by site pair' : 'Group by site'}
         </label>
-        <span style={{ flex: 1 }} />
+        <span className="toolbar-spacer" />
         <a
           className="btn btn-sm btn-secondary"
           href={reachabilityFileUrl(query)}

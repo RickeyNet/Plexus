@@ -13,6 +13,7 @@ import {
 } from '@/api/dashboard';
 import { groupLabel } from '@/api/inventory';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { PageHeader } from '@/components/PageHeader';
 import { invalidateMetricQueries } from '@/lib/invalidateMetricQueries';
 import { useTimeRange } from '@/lib/timeRange-context';
 
@@ -58,9 +59,7 @@ export function DashboardViewer() {
   if (dashQuery.isPending) {
     return (
       <>
-        <div className="page-header">
-          <h2>Dashboard</h2>
-        </div>
+        <PageHeader title="Dashboard" />
         <div className="skeleton skeleton-card" style={{ height: 200 }} />
       </>
     );
@@ -69,17 +68,17 @@ export function DashboardViewer() {
   if (dashQuery.error || !dashQuery.data) {
     return (
       <>
-        <div className="page-header">
-          <h2>Dashboard</h2>
-        </div>
-        <div className="glass-card card" style={{ borderColor: 'var(--danger)' }}>
-          <strong>Failed to load dashboard:</strong>{' '}
-          {dashQuery.error ? (dashQuery.error as Error).message : 'Not found'}
-        </div>
-        <div style={{ marginTop: '1rem' }}>
-          <Link to="/dashboards" className="btn btn-secondary">
-            ← Back to Dashboards
-          </Link>
+        <PageHeader title="Dashboard" />
+        <div className="stack">
+          <div className="glass-card card" style={{ borderColor: 'var(--danger)' }}>
+            <strong>Failed to load dashboard:</strong>{' '}
+            {dashQuery.error ? (dashQuery.error as Error).message : 'Not found'}
+          </div>
+          <div>
+            <Link to="/dashboards" className="btn btn-secondary">
+              ← Back to Dashboards
+            </Link>
+          </div>
         </div>
       </>
     );
@@ -110,50 +109,35 @@ export function DashboardViewer() {
 
   return (
     <>
-      <div
-        className="page-header"
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: '0.5rem',
-          marginBottom: '0.75rem',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-          <h2 style={{ margin: 0, fontSize: '1.25rem' }}>{dashboard.name}</h2>
-          <DashboardSwitcher current={dashboardId} />
-        </div>
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <VariablesBar
-            variables={variables}
-            values={variableValues}
-            onChange={setVariableValues}
-            groups={groupsQuery.data ?? []}
-          />
-          <button
-            className={editing ? 'btn btn-primary' : 'btn btn-secondary'}
-            onClick={() => setEditing((v) => !v)}
-          >
-            {editing ? 'Done' : 'Edit'}
+      <PageHeader title={dashboard.name}>
+        <DashboardSwitcher current={dashboardId} />
+        <VariablesBar
+          variables={variables}
+          values={variableValues}
+          onChange={setVariableValues}
+          groups={groupsQuery.data ?? []}
+        />
+        <button
+          className={editing ? 'btn btn-primary' : 'btn btn-secondary'}
+          onClick={() => setEditing((v) => !v)}
+        >
+          {editing ? 'Done' : 'Edit'}
+        </button>
+        <button
+          className="btn btn-secondary"
+          onClick={() => {
+            void dashQuery.refetch();
+            invalidateMetricQueries(qc);
+          }}
+        >
+          Refresh
+        </button>
+        {editing && (
+          <button className="btn btn-danger" onClick={handleDeleteDashboard}>
+            Delete
           </button>
-          <button
-            className="btn btn-secondary"
-            onClick={() => {
-              void dashQuery.refetch();
-              invalidateMetricQueries(qc);
-            }}
-          >
-            Refresh
-          </button>
-          {editing && (
-            <button className="btn btn-danger btn-sm" onClick={handleDeleteDashboard}>
-              Delete
-            </button>
-          )}
-        </div>
-      </div>
+        )}
+      </PageHeader>
 
       {panels.length === 0 ? (
         <div className="empty-state" style={{ padding: '3rem 1rem' }}>
@@ -231,7 +215,7 @@ function VariablesBar({ variables, values, onChange, groups }: VariablesBarProps
   if (!variables.length) return null;
 
   return (
-    <div className="dashboard-variables" style={{ display: 'flex', gap: '0.5rem' }}>
+    <div className="dashboard-variables">
       {variables.map((v) => {
         const value = values[v.name] ?? '*';
         const set = (next: string) => onChange({ ...values, [v.name]: next });
@@ -240,7 +224,7 @@ function VariablesBar({ variables, values, onChange, groups }: VariablesBarProps
           return (
             <select
               key={v.name}
-              className="form-select form-select-sm"
+              className="form-select"
               value={value}
               onChange={(e) => set(e.target.value)}
             >
@@ -257,7 +241,7 @@ function VariablesBar({ variables, values, onChange, groups }: VariablesBarProps
           return (
             <select
               key={v.name}
-              className="form-select form-select-sm"
+              className="form-select"
               value={value}
               onChange={(e) => set(e.target.value)}
             >

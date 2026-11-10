@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
+import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { TabBar } from '@/components/TabBar';
@@ -66,9 +67,7 @@ export function Software() {
 
   return (
     <div className="page">
-      <div className="page-header">
-        <h2>Software</h2>
-      </div>
+      <PageHeader title="Software" />
 
       {shownTabs.length > 1 && (
         <TabBar tabs={shownTabs} active={shownTab} onChange={selectTab} aria-label="Software sections" />
@@ -201,76 +200,66 @@ function VersionsTab() {
 
   return (
     <div>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-end',
-          gap: '1rem',
-          flexWrap: 'wrap',
-          marginBottom: '1rem',
-        }}
-      >
+      <div className="toolbar">
         <div className="text-muted" style={{ fontSize: '0.88em' }}>
           Last refresh: {formatTime(summary?.last_refresh_at)}
           {settings?.psirt_last_sync_at ? ` · Cisco PSIRT sync: ${formatTime(settings.psirt_last_sync_at)}` : ''}
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'end' }}>
-          <label>
-            Platform{' '}
-            <select className="form-select" value={platform} onChange={(e) => setPlatform(e.target.value)}>
-              <option value="">All platforms</option>
-              {spread.map((p) => (
-                <option key={p.platform} value={p.platform}>
-                  {p.label} ({p.device_count})
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Source{' '}
-            <select className="form-select" value={source} onChange={(e) => setSource(e.target.value)}>
-              <option value="">All sources</option>
-              {sources.map((s) => (
-                <option key={s} value={s}>
-                  {sourceLabel(s)} ({summary?.sources[s] ?? 0})
-                </option>
-              ))}
-            </select>
-          </label>
-          <input
-            className="form-input"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search name, model, serial, site, version"
-            style={{ width: 260 }}
-          />
-          {canWrite && (
-            <button type="button" className="btn btn-secondary" onClick={handleRefresh} disabled={refresh.isPending}>
-              {refresh.isPending ? 'Refreshing…' : 'Refresh'}
-            </button>
-          )}
-          {isAdmin && (
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={handleSync}
-              disabled={startSync.isPending || jobStatus === 'running' || !settings?.has_psirt_secret}
-              title={
-                settings?.has_psirt_secret
-                  ? 'Ask Cisco PSIRT about every tracked Cisco version'
-                  : 'Store a Cisco PSIRT client ID and secret in Settings first'
-              }
-            >
-              {jobStatus === 'running' ? 'Syncing PSIRT…' : 'Sync Cisco PSIRT'}
-            </button>
-          )}
-          {isAdmin && (
-            <button type="button" className="btn btn-secondary" onClick={() => setModal({ kind: 'settings' })}>
-              Settings
-            </button>
-          )}
-        </div>
+        <span className="toolbar-spacer" />
+        <label>
+          Platform{' '}
+          <select className="form-select" value={platform} onChange={(e) => setPlatform(e.target.value)}>
+            <option value="">All platforms</option>
+            {spread.map((p) => (
+              <option key={p.platform} value={p.platform}>
+                {p.label} ({p.device_count})
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Source{' '}
+          <select className="form-select" value={source} onChange={(e) => setSource(e.target.value)}>
+            <option value="">All sources</option>
+            {sources.map((s) => (
+              <option key={s} value={s}>
+                {sourceLabel(s)} ({summary?.sources[s] ?? 0})
+              </option>
+            ))}
+          </select>
+        </label>
+        <input
+          className="form-input"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search name, model, serial, site, version"
+          style={{ width: 260 }}
+        />
+        {canWrite && (
+          <button type="button" className="btn btn-secondary" onClick={handleRefresh} disabled={refresh.isPending}>
+            {refresh.isPending ? 'Refreshing…' : 'Refresh'}
+          </button>
+        )}
+        {isAdmin && (
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={handleSync}
+            disabled={startSync.isPending || jobStatus === 'running' || !settings?.has_psirt_secret}
+            title={
+              settings?.has_psirt_secret
+                ? 'Ask Cisco PSIRT about every tracked Cisco version'
+                : 'Store a Cisco PSIRT client ID and secret in Settings first'
+            }
+          >
+            {jobStatus === 'running' ? 'Syncing PSIRT…' : 'Sync Cisco PSIRT'}
+          </button>
+        )}
+        {isAdmin && (
+          <button type="button" className="btn btn-secondary" onClick={() => setModal({ kind: 'settings' })}>
+            Settings
+          </button>
+        )}
       </div>
 
       <PageHelp
@@ -279,42 +268,42 @@ function VersionsTab() {
         text="Every software version Plexus knows - inventory hosts polled by SNMP/SSH, and the Meraki, Cato and Cisco FMC devices of the latest topology collections - in one list, with the version spread per platform, a history of upgrades and downgrades, and alerts when a device runs a version an advisory names. Add advisories by hand, import them, or let Plexus ask Cisco PSIRT about every Cisco version it tracks."
       />
 
-      {syncJobId && syncJob.data && (
-        <div
-          className="card"
-          style={{ padding: '0.6rem 1rem', marginBottom: '1rem', display: 'flex', gap: '1rem', alignItems: 'center' }}
-        >
-          <strong>Cisco PSIRT sync</strong>
-          {jobStatus === 'running' ? (
-            <span className="text-muted">
-              {syncJob.data.progress.phase ?? 'running'}
-              {syncJob.data.progress.total
-                ? ` · ${syncJob.data.progress.done ?? 0} / ${syncJob.data.progress.total} versions`
-                : ''}
-              {syncJob.data.progress.current ? ` · ${syncJob.data.progress.current}` : ''}
-            </span>
-          ) : (
-            <span className={jobStatus === 'failed' ? 'text-danger' : 'text-muted'}>
-              {jobStatus === 'failed'
-                ? syncJob.data.error ?? 'failed'
-                : syncJob.data.result?.message ?? jobStatus}
-              {jobStatus === 'partial' && syncJob.data.result?.errors?.length
-                ? ` - ${syncJob.data.result.errors[0]}`
-                : ''}
-            </span>
-          )}
-          {jobStatus !== 'running' && (
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => setSyncJobId(null)}>
-              Dismiss
-            </button>
-          )}
-        </div>
-      )}
+      <div className="stack">
+        {syncJobId && syncJob.data && (
+          <div
+            className="card card-sm"
+            style={{ display: 'flex', gap: 'var(--space-4)', alignItems: 'center' }}
+          >
+            <strong>Cisco PSIRT sync</strong>
+            {jobStatus === 'running' ? (
+              <span className="text-muted">
+                {syncJob.data.progress.phase ?? 'running'}
+                {syncJob.data.progress.total
+                  ? ` · ${syncJob.data.progress.done ?? 0} / ${syncJob.data.progress.total} versions`
+                  : ''}
+                {syncJob.data.progress.current ? ` · ${syncJob.data.progress.current}` : ''}
+              </span>
+            ) : (
+              <span className={jobStatus === 'failed' ? 'text-danger' : 'text-muted'}>
+                {jobStatus === 'failed'
+                  ? syncJob.data.error ?? 'failed'
+                  : syncJob.data.result?.message ?? jobStatus}
+                {jobStatus === 'partial' && syncJob.data.result?.errors?.length
+                  ? ` - ${syncJob.data.result.errors[0]}`
+                  : ''}
+              </span>
+            )}
+            {jobStatus !== 'running' && (
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setSyncJobId(null)}>
+                Dismiss
+              </button>
+            )}
+          </div>
+        )}
 
-      <div style={{ marginBottom: '1rem' }}>
         <div
           className="stats-grid"
-          style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '1rem' }}
+          style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 'var(--space-4)' }}
         >
           {summaryCards.map((card) => (
             <div key={card.label} className="stat-card">
@@ -325,37 +314,37 @@ function VersionsTab() {
             </div>
           ))}
         </div>
-      </div>
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'minmax(0, 2fr) minmax(340px, 1fr)',
-          gap: '1rem',
-          alignItems: 'start',
-        }}
-      >
-        <div style={{ display: 'grid', gap: '1rem' }}>
-          <DevicesCard
-            devices={devices}
-            loading={overview.isPending}
-            filtered={Boolean(platform || source || search)}
-            onHistory={(device) => setModal({ kind: 'history', device })}
-          />
-          <AlertsCard alerts={alerts} canWrite={canWrite} onAcknowledge={handleAcknowledge} />
-        </div>
-        <div style={{ display: 'grid', gap: '1rem' }}>
-          <SpreadCard spread={spread} />
-          <AdvisoriesCard
-            advisories={advisories}
-            canWrite={canWrite}
-            platformLabel={platformLabel}
-            onAdd={() => setModal({ kind: 'advisory', advisory: null })}
-            onImport={() => setModal({ kind: 'import' })}
-            onEdit={(advisory) => setModal({ kind: 'advisory', advisory })}
-            onDelete={handleDelete}
-          />
-          <ChangesCard changes={changes} platformLabel={platformLabel} />
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0, 2fr) minmax(340px, 1fr)',
+            gap: '1rem',
+            alignItems: 'start',
+          }}
+        >
+          <div style={{ display: 'grid', gap: '1rem' }}>
+            <DevicesCard
+              devices={devices}
+              loading={overview.isPending}
+              filtered={Boolean(platform || source || search)}
+              onHistory={(device) => setModal({ kind: 'history', device })}
+            />
+            <AlertsCard alerts={alerts} canWrite={canWrite} onAcknowledge={handleAcknowledge} />
+          </div>
+          <div style={{ display: 'grid', gap: '1rem' }}>
+            <SpreadCard spread={spread} />
+            <AdvisoriesCard
+              advisories={advisories}
+              canWrite={canWrite}
+              platformLabel={platformLabel}
+              onAdd={() => setModal({ kind: 'advisory', advisory: null })}
+              onImport={() => setModal({ kind: 'import' })}
+              onEdit={(advisory) => setModal({ kind: 'advisory', advisory })}
+              onDelete={handleDelete}
+            />
+            <ChangesCard changes={changes} platformLabel={platformLabel} />
+          </div>
         </div>
       </div>
 
@@ -389,7 +378,7 @@ interface DevicesCardProps {
 
 function DevicesCard({ devices, loading, filtered, onHistory }: DevicesCardProps) {
   return (
-    <div className="card" style={{ padding: '1rem', overflow: 'auto' }}>
+    <div className="card" style={{ overflow: 'auto' }}>
       <div style={{ marginBottom: '0.75rem' }}>
         <h3 style={{ margin: 0 }}>Devices</h3>
         <div className="text-muted" style={{ fontSize: '0.88em', marginTop: '0.2rem' }}>
@@ -477,7 +466,7 @@ function DevicesCard({ devices, loading, filtered, onHistory }: DevicesCardProps
 
 function SpreadCard({ spread }: { spread: SoftwarePlatformSpread[] }) {
   return (
-    <div className="card" style={{ padding: '1rem' }}>
+    <div className="card">
       <h3 style={{ margin: '0 0 0.75rem' }}>Version Spread</h3>
       {spread.length === 0 ? (
         <p className="text-muted" style={{ margin: 0 }}>
@@ -533,7 +522,7 @@ interface AlertsCardProps {
 function AlertsCard({ alerts, canWrite, onAcknowledge }: AlertsCardProps) {
   const open = alerts.filter((a) => !a.acknowledged).length;
   return (
-    <div className="card" style={{ padding: '1rem' }}>
+    <div className="card">
       <h3 style={{ margin: '0 0 0.75rem' }}>Vulnerability Alerts</h3>
       {alerts.length === 0 ? (
         <p className="text-muted" style={{ margin: 0 }}>
@@ -598,7 +587,7 @@ interface AdvisoriesCardProps {
 
 function AdvisoriesCard({ advisories, canWrite, platformLabel, onAdd, onImport, onEdit, onDelete }: AdvisoriesCardProps) {
   return (
-    <div className="card" style={{ padding: '1rem' }}>
+    <div className="card">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
         <h3 style={{ margin: 0 }}>Advisories</h3>
         {canWrite && (
@@ -667,7 +656,7 @@ function AdvisoriesCard({ advisories, canWrite, platformLabel, onAdd, onImport, 
 
 function ChangesCard({ changes, platformLabel }: { changes: SoftwareVersionChange[]; platformLabel: (key: string) => string }) {
   return (
-    <div className="card" style={{ padding: '1rem' }}>
+    <div className="card">
       <h3 style={{ margin: '0 0 0.75rem' }}>Recent Version Changes</h3>
       {changes.length === 0 ? (
         <p className="text-muted" style={{ margin: 0 }}>

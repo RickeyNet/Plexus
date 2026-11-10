@@ -51,11 +51,11 @@ export class ErrorBoundary extends Component<Props, State> {
 
     const chunkError = isChunkLoadError(error);
     return (
-      <div className="glass-card card" style={{ margin: '2rem', maxWidth: 640 }}>
-        <div className="card-body" style={{ padding: '2rem' }}>
-          <h2 className="gradient-text" style={{ marginTop: 0 }}>
+      <div className="glass-card card" style={{ margin: 'var(--space-6)', maxWidth: 640, padding: 'var(--space-6)' }}>
+        <div className="card-body">
+          <h3 className="card-title" style={{ marginTop: 0 }}>
             {chunkError ? 'A new version is available' : 'Something went wrong'}
-          </h2>
+          </h3>
           <p style={{ color: 'var(--text-light)' }}>
             {chunkError
               ? 'This page could not load because the app was updated since you opened it. Reload to get the latest version.'
@@ -77,7 +77,7 @@ export class ErrorBoundary extends Component<Props, State> {
               {error.message}
             </pre>
           )}
-          <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.25rem' }}>
+          <div style={{ display: 'flex', gap: 'var(--space-3)', marginTop: 'var(--space-5)' }}>
             <button className="btn btn-primary" onClick={() => window.location.reload()}>
               Reload
             </button>

@@ -41,7 +41,7 @@ export function AvailabilityTab() {
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+      <div className="toolbar">
         <label className="text-muted">Group:</label>
         <select
           className="form-select"
@@ -63,7 +63,7 @@ export function AvailabilityTab() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.5rem', marginBottom: '0.75rem' }}>
         {cards.map((c) => (
-          <div key={c.label} className="card" style={{ padding: '0.75rem', textAlign: 'center' }}>
+          <div key={c.label} className="card card-sm" style={{ textAlign: 'center' }}>
             <div style={{ fontSize: '1.4em', fontWeight: 600, color: c.color ? `var(--${c.color})` : '' }}>{c.value}</div>
             <div className="text-muted" style={{ fontSize: '0.85em' }}>{c.label}</div>
           </div>
@@ -81,7 +81,7 @@ export function AvailabilityTab() {
               const uptimeColor = (h.uptime_pct ?? 100) >= 99.9 ? 'success' : (h.uptime_pct ?? 100) >= 99 ? 'warning' : 'danger';
               const stateColor = h.current_state === 'up' ? 'success' : h.current_state === 'down' ? 'danger' : 'text-muted';
               return (
-                <div key={h.host_id} className="card" style={{ padding: '0.75rem 1rem' }}>
+                <div key={h.host_id} className="card card-sm">
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div>
                       <span style={{ width: 8, height: 8, borderRadius: '50%', background: `var(--${stateColor})`, display: 'inline-block' }} />
@@ -102,10 +102,10 @@ export function AvailabilityTab() {
       {subTab === 'outages' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
           {!outages.data?.outages?.length ? (
-            <div className="card text-muted" style={{ padding: '1rem' }}>No outages recorded in the last {days} days.</div>
+            <div className="card text-muted">No outages recorded in the last {days} days.</div>
           ) : (
             outages.data.outages.map((o) => (
-              <div key={o.id} className="card" style={{ padding: '0.75rem 1rem', borderLeft: '3px solid var(--danger)' }}>
+              <div key={o.id} className="card card-sm" style={{ borderLeft: '3px solid var(--danger)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
                     <strong>{o.hostname || 'Unknown'}</strong>
@@ -128,7 +128,7 @@ export function AvailabilityTab() {
 
       {subTab === 'transitions' && (
         !transitions.data?.transitions?.length ? (
-          <div className="card text-muted" style={{ padding: '1rem' }}>No state transitions recorded.</div>
+          <div className="card text-muted">No state transitions recorded.</div>
         ) : (
           <div style={{ maxHeight: 480, overflow: 'auto' }}>
             <table style={{ width: '100%', fontSize: '0.85em', borderCollapse: 'collapse' }}>

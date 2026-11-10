@@ -34,7 +34,7 @@ export function HostTemplatesTab() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.75rem' }}>
+      <div className="toolbar" style={{ justifyContent: 'flex-end' }}>
         <button className="btn btn-primary" onClick={() => setModalId('new')}>+ New Host Template</button>
       </div>
 
@@ -49,7 +49,7 @@ export function HostTemplatesTab() {
             const dtLabel = dtypes.length ? dtypes.join(', ') : 'All devices';
             const gtCount = (ht.graph_templates ?? []).length;
             return (
-              <div key={ht.id} className="card" style={{ padding: '1rem' }}>
+              <div key={ht.id} className="card">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
                   <h4 style={{ margin: 0 }}>{ht.name}</h4>
                   <span className={`badge ${ht.auto_apply ? 'badge-success' : 'badge-secondary'}`}>

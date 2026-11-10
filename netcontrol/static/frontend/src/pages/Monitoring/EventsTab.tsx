@@ -50,7 +50,7 @@ export function EventsTab() {
 
   return (
     <div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '0.75rem', alignItems: 'flex-end' }}>
+      <div className="toolbar" style={{ alignItems: 'flex-end' }}>
         <div className="form-group" style={{ marginBottom: 0 }}>
           <label className="form-label">Severity</label>
           <select className="form-select" value={severity} onChange={(e) => setSeverity(e.target.value)}>
@@ -104,7 +104,7 @@ export function EventsTab() {
 
 function Card({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
-    <div className="card stat-card" style={{ padding: '0.85rem' }}>
+    <div className="card card-sm stat-card">
       <div className="stat-value" style={color ? { color } : undefined}>{value}</div>
       <div className="stat-label">{label}</div>
     </div>

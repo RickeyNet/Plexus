@@ -64,8 +64,8 @@ export function MerakiDetails({ meraki, highlight = '', view, title }: Props) {
   const controls = (
     <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.5rem' }}>
       <input
-        className="form-input"
-        style={{ flex: 1, fontSize: '0.8rem', padding: '0.25rem 0.5rem' }}
+        className="form-input form-input-sm"
+        style={{ flex: 1 }}
         placeholder="Filter…"
         value={filter}
         onChange={(e) => setFilter(e.target.value)}

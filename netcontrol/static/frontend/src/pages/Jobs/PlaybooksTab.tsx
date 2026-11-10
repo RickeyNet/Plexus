@@ -40,7 +40,7 @@ export function PlaybooksTab() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
+      <div className="toolbar">
         <input
           className="form-input"
           placeholder="Search playbooks…"
@@ -48,6 +48,7 @@ export function PlaybooksTab() {
           onChange={(e) => setSearch(e.target.value)}
           style={{ width: 240 }}
         />
+        <span className="toolbar-spacer" />
         <button className="btn btn-primary" onClick={() => setEditing({ mode: 'create' })}>+ New Playbook</button>
       </div>
 
@@ -85,7 +86,7 @@ function PlaybookRow({ pb, onEdit, onDelete }: { pb: Playbook; onEdit: () => voi
   const tags = parseTags(pb.tags);
   const isAnsible = pb.type === 'ansible';
   return (
-    <div className="card" style={{ padding: '0.75rem 1rem', display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center' }}>
+    <div className="card card-sm" style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-4)', alignItems: 'center' }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
           <span className="badge" style={{ background: isAnsible ? 'var(--info)' : 'var(--primary)', color: 'var(--on-primary)' }}>

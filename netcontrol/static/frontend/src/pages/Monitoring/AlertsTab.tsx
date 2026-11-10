@@ -70,21 +70,21 @@ export function AlertsTab() {
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+      <div className="toolbar">
         <input
-          className="form-input"
+          className="form-input form-input-sm"
           placeholder="Search alerts…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           style={{ flex: 1, minWidth: 200 }}
         />
-        <select className="form-select" value={severity} onChange={(e) => setSeverity(e.target.value)}>
+        <select className="form-select form-select-sm" value={severity} onChange={(e) => setSeverity(e.target.value)}>
           <option value="">All severities</option>
           <option value="critical">Critical</option>
           <option value="warning">Warning</option>
           <option value="info">Info</option>
         </select>
-        <select className="form-select" value={ackFilter} onChange={(e) => setAckFilter(e.target.value as 'all' | 'open' | 'ack')}>
+        <select className="form-select form-select-sm" value={ackFilter} onChange={(e) => setAckFilter(e.target.value as 'all' | 'open' | 'ack')}>
           <option value="open">Unacknowledged</option>
           <option value="ack">Acknowledged</option>
           <option value="all">All</option>
@@ -110,7 +110,7 @@ export function AlertsTab() {
       )}
 
       {unackedIds.length > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+        <div className="toolbar">
           <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', cursor: 'pointer', fontSize: '0.9em' }}>
             <input
               type="checkbox"
@@ -181,7 +181,7 @@ function AlertRow({
   const sev = severityColor(alert.severity);
   const occurrences = alert.occurrence_count ?? 1;
   return (
-    <div className="card" style={{ padding: '0.75rem 1rem', borderLeft: `3px solid var(--${sev})` }}>
+    <div className="card card-sm" style={{ borderLeft: `3px solid var(--${sev})` }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
           {!alert.acknowledged && (

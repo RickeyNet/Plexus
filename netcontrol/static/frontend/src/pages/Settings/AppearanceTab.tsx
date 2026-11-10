@@ -34,7 +34,7 @@ export function AppearanceTab() {
   }
 
   return (
-    <div className="card" style={{ padding: '1rem' }}>
+    <div>
       <h3 style={{ margin: '0 0 0.5rem 0' }}>Appearance</h3>
       <p className="card-description" style={{ marginBottom: '0.75rem' }}>
         Theme and background-depth preferences are saved to this browser.

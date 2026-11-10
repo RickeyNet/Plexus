@@ -1,4 +1,5 @@
 import { useAuthStatus } from '@/api/auth';
+import { PageHeader } from '@/components/PageHeader';
 import { TabBar } from '@/components/TabBar';
 import { visibleTabs } from '@/lib/tabGating';
 import { usePathTab } from '@/lib/usePathTab';
@@ -30,9 +31,7 @@ export function NetworkTools() {
 
   return (
     <div className="page">
-      <div className="page-header">
-        <h2>Network Tools</h2>
-      </div>
+      <PageHeader title="Network Tools" />
 
       <TabBar tabs={shownTabs} active={tab} onChange={selectTab} aria-label="Network tools" />
 

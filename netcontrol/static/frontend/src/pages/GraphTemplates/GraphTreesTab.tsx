@@ -28,7 +28,7 @@ export function GraphTreesTab() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.75rem' }}>
+      <div className="toolbar" style={{ justifyContent: 'flex-end' }}>
         <button className="btn btn-primary" onClick={() => setFormMode({ mode: 'create' })}>+ New Tree</button>
       </div>
 
@@ -41,7 +41,7 @@ export function GraphTreesTab() {
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1rem' }}>
           {items.map((tree) => (
-            <div key={tree.id} className="card" style={{ padding: '1rem' }}>
+            <div key={tree.id} className="card">
               <button
                 type="button"
                 onClick={() => setDetailId(tree.id)}

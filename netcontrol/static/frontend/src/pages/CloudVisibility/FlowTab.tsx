@@ -66,8 +66,8 @@ export function FlowTab({ filter }: Props) {
   }
 
   return (
-    <div>
-      <div className="card" style={{ padding: '0.75rem', marginBottom: '0.75rem' }}>
+    <div className="stack">
+      <div className="card card-sm">
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem' }}>
           <label>Flow Hours
             <select className="form-select" value={hours} onChange={(e) => setHours(parseInt(e.target.value, 10))}>
@@ -99,73 +99,77 @@ export function FlowTab({ filter }: Props) {
         </div>
       </div>
 
-      <h3 style={{ margin: '0.25rem 0 0.5rem' }}>Flow Sync Controls</h3>
-      <SyncControls
-        kind="Flow"
-        config={syncConfig.data?.config ?? null}
-        status={syncConfig.data?.status ?? null}
-        cursors={syncCursors.data?.cursors ?? []}
-        selectedAccountId={filter.accountId}
-        isSaving={updateConfig.isPending}
-        isPulling={triggerPull.isPending}
-        onSave={async (cfg) => {
-          try {
-            await updateConfig.mutateAsync(cfg);
-            flash('success', 'Cloud flow sync config saved');
-          } catch (e) {
-            flash('error', `Saving flow sync config failed: ${(e as Error).message}`);
-          }
-        }}
-        onPullAll={async () => {
-          try {
-            showPull('Cloud flow pull', await triggerPull.mutateAsync(null));
-          } catch (e) {
-            flash('error', `Cloud flow pull failed: ${(e as Error).message}`);
-          }
-        }}
-        onPullSelected={async () => {
-          if (!filter.accountId) return;
-          try {
-            showPull('Cloud flow pull (selected account)', await triggerPull.mutateAsync(filter.accountId));
-          } catch (e) {
-            flash('error', `Cloud flow pull failed: ${(e as Error).message}`);
-          }
-        }}
-      />
+      <div className="stack stack-sm">
+        <h3 style={{ margin: 0 }}>Flow Sync Controls</h3>
+        <SyncControls
+          kind="Flow"
+          config={syncConfig.data?.config ?? null}
+          status={syncConfig.data?.status ?? null}
+          cursors={syncCursors.data?.cursors ?? []}
+          selectedAccountId={filter.accountId}
+          isSaving={updateConfig.isPending}
+          isPulling={triggerPull.isPending}
+          onSave={async (cfg) => {
+            try {
+              await updateConfig.mutateAsync(cfg);
+              flash('success', 'Cloud flow sync config saved');
+            } catch (e) {
+              flash('error', `Saving flow sync config failed: ${(e as Error).message}`);
+            }
+          }}
+          onPullAll={async () => {
+            try {
+              showPull('Cloud flow pull', await triggerPull.mutateAsync(null));
+            } catch (e) {
+              flash('error', `Cloud flow pull failed: ${(e as Error).message}`);
+            }
+          }}
+          onPullSelected={async () => {
+            if (!filter.accountId) return;
+            try {
+              showPull('Cloud flow pull (selected account)', await triggerPull.mutateAsync(filter.accountId));
+            } catch (e) {
+              flash('error', `Cloud flow pull failed: ${(e as Error).message}`);
+            }
+          }}
+        />
+      </div>
       {actionMsg && (
-        <div className="card" style={{ padding: '0.6rem 0.85rem', marginBottom: '0.6rem', borderLeft: `3px solid var(--${actionMsg.kind === 'success' ? 'success' : 'danger'})` }}>
+        <div className="card card-sm" style={{ borderLeft: `3px solid var(--${actionMsg.kind === 'success' ? 'success' : 'danger'})` }}>
           {actionMsg.text}
         </div>
       )}
 
-      <h3 style={{ margin: '0.25rem 0 0.5rem' }}>
-        Cloud Flow Analytics
-        {summary.dataUpdatedAt > 0 && (
-          <small className="text-muted" style={{ marginLeft: '0.6rem', fontWeight: 400 }}>
-            Updated {new Date(summary.dataUpdatedAt).toLocaleTimeString()}
-          </small>
-        )}
-      </h3>
-      {summary.isPending && <div className="text-muted">Loading…</div>}
-      {summary.error && <div style={{ color: 'var(--danger)' }}>Error: {(summary.error as Error).message}</div>}
-      <div className="drift-summary-grid" style={{ marginBottom: '1rem' }}>
-        <Card label="Flows" value={formatCount(s.flow_count)} />
-        <Card label="Total Bytes" value={formatBytes(s.total_bytes)} />
-        <Card label="Total Packets" value={formatCount(s.total_packets)} />
-        <Card label="Unique Sources" value={formatCount(s.unique_sources)} />
-        <Card label="Unique Destinations" value={formatCount(s.unique_destinations)} />
-        <Card label="Last Seen" value={formatTimestamp(s.last_seen)} small />
+      <div className="stack stack-sm">
+        <h3 style={{ margin: 0 }}>
+          Cloud Flow Analytics
+          {summary.dataUpdatedAt > 0 && (
+            <small className="text-muted" style={{ marginLeft: '0.6rem', fontWeight: 400 }}>
+              Updated {new Date(summary.dataUpdatedAt).toLocaleTimeString()}
+            </small>
+          )}
+        </h3>
+        {summary.isPending && <div className="text-muted">Loading…</div>}
+        {summary.error && <div style={{ color: 'var(--danger)' }}>Error: {(summary.error as Error).message}</div>}
+        <div className="drift-summary-grid">
+          <Card label="Flows" value={formatCount(s.flow_count)} />
+          <Card label="Total Bytes" value={formatBytes(s.total_bytes)} />
+          <Card label="Total Packets" value={formatCount(s.total_packets)} />
+          <Card label="Unique Sources" value={formatCount(s.unique_sources)} />
+          <Card label="Unique Destinations" value={formatCount(s.unique_destinations)} />
+          <Card label="Last Seen" value={formatTimestamp(s.last_seen)} small />
+        </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 'var(--space-4)' }}>
         <div>
           <h4 style={{ margin: '0 0 0.45rem' }}>Top Talkers</h4>
           {talkers.isPending ? (
-            <div className="card" style={{ padding: '1rem' }}><p className="text-muted" style={{ margin: 0 }}>Loading…</p></div>
+            <div className="card"><p className="text-muted" style={{ margin: 0 }}>Loading…</p></div>
           ) : talkers.error ? (
-            <div className="card" style={{ padding: '1rem' }}><p style={{ margin: 0, color: 'var(--danger)' }}>Failed to load top talkers: {(talkers.error as Error).message}</p></div>
+            <div className="card"><p style={{ margin: 0, color: 'var(--danger)' }}>Failed to load top talkers: {(talkers.error as Error).message}</p></div>
           ) : !tList.length ? (
-            <div className="card" style={{ padding: '1rem' }}><p className="text-muted" style={{ margin: 0 }}>No flow talkers found for current filters.</p></div>
+            <div className="card"><p className="text-muted" style={{ margin: 0 }}>No flow talkers found for current filters.</p></div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
               <table className="chart-table">
@@ -189,11 +193,11 @@ export function FlowTab({ filter }: Props) {
         <div>
           <h4 style={{ margin: '0 0 0.45rem' }}>Traffic Timeline</h4>
           {timeline.isPending ? (
-            <div className="card" style={{ padding: '1rem' }}><p className="text-muted" style={{ margin: 0 }}>Loading…</p></div>
+            <div className="card"><p className="text-muted" style={{ margin: 0 }}>Loading…</p></div>
           ) : timeline.error ? (
-            <div className="card" style={{ padding: '1rem' }}><p style={{ margin: 0, color: 'var(--danger)' }}>Failed to load timeline: {(timeline.error as Error).message}</p></div>
+            <div className="card"><p style={{ margin: 0, color: 'var(--danger)' }}>Failed to load timeline: {(timeline.error as Error).message}</p></div>
           ) : !tlList.length ? (
-            <div className="card" style={{ padding: '1rem' }}><p className="text-muted" style={{ margin: 0 }}>No timeline data available for current filters.</p></div>
+            <div className="card"><p className="text-muted" style={{ margin: 0 }}>No timeline data available for current filters.</p></div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
               <table className="chart-table">

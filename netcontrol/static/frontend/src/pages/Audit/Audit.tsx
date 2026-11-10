@@ -87,7 +87,7 @@ export function AuditContent() {
   const runList: AuditRunSummary[] = runs.data?.runs ?? [];
 
   return (
-    <div style={{ display: 'grid', gap: '1rem' }}>
+    <div className="stack">
       <div
         style={{
           display: 'flex',
@@ -110,10 +110,7 @@ export function AuditContent() {
       </div>
 
       {trigger.error && (
-        <div
-          className="card"
-          style={{ padding: '0.75rem', color: 'var(--danger)' }}
-        >
+        <div className="card card-sm" style={{ color: 'var(--danger)' }}>
           Run failed: {(trigger.error as Error).message}
         </div>
       )}
@@ -122,7 +119,7 @@ export function AuditContent() {
 
       <OverridesCard />
 
-      <section className="card" style={{ padding: '1rem' }}>
+      <section className="card">
         <h3 style={{ marginTop: 0 }}>Recent runs</h3>
         {runs.isPending && <p className="text-muted">Loading…</p>}
         {runs.error && (
@@ -190,7 +187,7 @@ export function AuditContent() {
       </section>
 
       {selectedRunId != null && (
-        <section className="card" style={{ padding: '1rem' }}>
+        <section className="card">
           <h3 style={{ marginTop: 0 }}>Findings - run #{selectedRunId}</h3>
           {findings.isPending && <p className="text-muted">Loading findings…</p>}
           {findings.error && (
@@ -504,7 +501,7 @@ function SchedulesCard() {
   const rows = schedules.data?.schedules ?? [];
 
   return (
-    <section className="card" style={{ padding: '1rem' }}>
+    <section className="card">
       <div
         style={{
           display: 'flex',
@@ -686,7 +683,7 @@ function ScheduleEditor({
     >
       <div
         className="card"
-        style={{ width: 420, padding: '1rem', display: 'grid', gap: '0.75rem' }}
+        style={{ width: 420, display: 'grid', gap: 'var(--space-3)' }}
       >
         <h3 style={{ margin: 0 }}>
           {isNew ? 'New schedule' : `Edit "${schedule!.name}"`}
@@ -848,7 +845,7 @@ function OverridesCard() {
   const rows = overrides.data?.overrides ?? [];
 
   return (
-    <section className="card" style={{ padding: '1rem' }}>
+    <section className="card">
       <h3 style={{ marginTop: 0 }}>Suppressed findings</h3>
       {overrides.isPending && <p className="text-muted">Loading…</p>}
       {overrides.error && (

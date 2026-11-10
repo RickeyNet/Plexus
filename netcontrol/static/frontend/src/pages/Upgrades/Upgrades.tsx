@@ -24,7 +24,7 @@ export function UpgradesContent() {
     <div>
       <TabBar tabs={TABS} active={tab} onChange={setTab} size="sm" aria-label="Upgrade tool sections" />
 
-      <div className="card" style={{ padding: '1rem' }}>
+      <div className="card">
         {tab === 'campaigns' && <CampaignsTab />}
         {tab === 'images' && <ImagesTab />}
         {tab === 'backups' && <BackupsTab />}

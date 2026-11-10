@@ -56,11 +56,9 @@ export function ConfigureTab() {
       {help && (
         <>
           <PageHelp pageKey={`graph-templates.${tab}`} title={help.title} text={help.text} />
-          <div className="card" style={{ padding: '1rem' }}>
-            {tab === 'graph-templates' && <GraphTemplatesTab />}
-            {tab === 'host-templates' && <HostTemplatesTab />}
-            {tab === 'graph-trees' && <GraphTreesTab />}
-          </div>
+          {tab === 'graph-templates' && <GraphTemplatesTab />}
+          {tab === 'host-templates' && <HostTemplatesTab />}
+          {tab === 'graph-trees' && <GraphTreesTab />}
         </>
       )}
     </div>

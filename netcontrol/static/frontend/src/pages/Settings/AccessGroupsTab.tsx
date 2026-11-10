@@ -23,13 +23,12 @@ export function AccessGroupsTab({
   const [editGroup, setEditGroup] = useState<AccessGroup | null>(null);
 
   return (
-    <div>
+    <div className="stack stack-sm">
       <div
         style={{
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          marginBottom: '0.75rem',
         }}
       >
         <h3 style={{ margin: 0 }}>Access Groups</h3>
@@ -51,8 +50,7 @@ export function AccessGroupsTab({
       {(groups.data || []).map((g) => (
         <div
           key={g.id}
-          className="card"
-          style={{ marginBottom: '0.75rem', padding: '1rem' }}
+          className="card-inset"
         >
           <div
             style={{

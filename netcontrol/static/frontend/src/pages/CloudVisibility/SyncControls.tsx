@@ -47,7 +47,7 @@ export function SyncControls({ kind, config, status, cursors, selectedAccountId,
   const cfgLookback = config?.lookback_minutes ?? 15;
 
   return (
-    <div className="card" style={{ padding: '0.9rem', marginBottom: '1rem' }}>
+    <div className="card">
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem', alignItems: 'end' }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />

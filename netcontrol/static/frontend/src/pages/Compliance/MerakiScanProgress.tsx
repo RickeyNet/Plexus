@@ -85,14 +85,12 @@ function Banner({
   const color = tone === 'info' ? 'var(--primary)' : `var(--${tone})`;
   return (
     <div
-      className="card"
+      className="card card-sm"
       style={{
-        marginBottom: '0.75rem',
-        padding: '0.6rem 0.9rem',
         borderLeft: `4px solid ${color}`,
         display: 'flex',
         alignItems: 'center',
-        gap: '0.5rem',
+        gap: 'var(--space-2)',
         flexWrap: 'wrap',
         fontSize: '0.9em',
       }}

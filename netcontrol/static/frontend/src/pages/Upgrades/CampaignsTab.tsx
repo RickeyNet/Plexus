@@ -84,18 +84,11 @@ export function CampaignsTab() {
   }
 
   return (
-    <div>
-      <div
-        style={{
-          display: 'flex',
-          gap: '0.5rem',
-          marginBottom: '0.75rem',
-          alignItems: 'center',
-        }}
-      >
+    <div className="stack stack-sm">
+      <div className="toolbar">
         <input
           type="search"
-          className="form-input"
+          className="form-input form-input-sm"
           placeholder="Search campaigns…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -113,12 +106,8 @@ export function CampaignsTab() {
 
       {upcoming.length > 0 && (
         <div
-          className="card"
-          style={{
-            padding: '0.75rem 1rem',
-            marginBottom: '0.75rem',
-            borderLeft: '3px solid var(--warning)',
-          }}
+          className="card-inset"
+          style={{ borderLeft: '3px solid var(--warning)' }}
         >
           <div
             style={{
@@ -203,8 +192,7 @@ export function CampaignsTab() {
             return (
               <div
                 key={c.id}
-                className="card"
-                style={{ padding: '0.75rem 1rem', cursor: 'pointer' }}
+                className="card-inset card-clickable"
                 onClick={() => setViewingId(c.id)}
                 role="button"
                 tabIndex={0}

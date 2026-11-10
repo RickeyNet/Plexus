@@ -54,7 +54,7 @@ export function SlaTargetsTab() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginBottom: '0.75rem' }}>
+      <div className="toolbar" style={{ justifyContent: 'flex-end' }}>
         {isAdmin && (
           <button className="btn btn-secondary" onClick={handleEvaluate} disabled={evaluateMut.isPending}>
             {evaluateMut.isPending ? 'Evaluating…' : 'Evaluate Now'}
@@ -69,7 +69,7 @@ export function SlaTargetsTab() {
           {targets.map((t) => {
             const scope = t.host_name ? `Host: ${t.host_name}` : t.group_name ? `Group: ${t.group_name}` : 'Global';
             return (
-              <div key={t.id} className="card" style={{ padding: '0.75rem 1rem' }}>
+              <div key={t.id} className="card card-sm">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
                   <div>
                     <strong>{t.name}</strong>

@@ -25,7 +25,7 @@ export function CapacityTab() {
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+      <div className="toolbar">
         <label className="text-muted">Metric:</label>
         <select className="form-select" value={metric} onChange={(e) => setMetric(e.target.value)}>
           {Object.entries(METRIC_LABELS).map(([k, label]) => (
@@ -65,8 +65,8 @@ export function CapacityTab() {
       {data.data && points.length === 0 ? (
         <div className="empty-state">No capacity data - run polls to collect metrics.</div>
       ) : data.data && (
-        <>
-          <div className="card" style={{ padding: '1rem', marginBottom: '0.75rem' }}>
+        <div className="stack">
+          <div className="card">
             <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>{METRIC_LABELS[metric] ?? metric}</div>
             <CapacityChart points={points} projection={projection} />
             <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem', fontSize: '0.85em' }}>
@@ -76,7 +76,7 @@ export function CapacityTab() {
           </div>
 
           {Object.keys(estimates).length > 0 && (
-            <div className="card" style={{ padding: '1rem' }}>
+            <div className="card">
               <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>Threshold Estimates</div>
               <table style={{ width: '100%', fontSize: '0.9em', borderCollapse: 'collapse' }}>
                 <thead>
@@ -104,7 +104,7 @@ export function CapacityTab() {
               </table>
             </div>
           )}
-        </>
+        </div>
       )}
     </div>
   );

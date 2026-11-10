@@ -47,7 +47,7 @@ export function SourceScheduleBar() {
 
   if (schedule.error) {
     return (
-      <div className="error" style={{ marginBottom: "0.75rem" }}>
+      <div className="error">
         <strong>Failed to load the collection schedule:</strong>{" "}
         {schedule.error.message}
       </div>
@@ -55,10 +55,7 @@ export function SourceScheduleBar() {
   }
 
   return (
-    <div
-      className="card"
-      style={{ padding: "0.75rem 1rem", marginBottom: "0.75rem" }}
-    >
+    <div className="card card-sm">
       <div
         style={{
           display: "flex",

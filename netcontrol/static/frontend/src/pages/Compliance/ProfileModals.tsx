@@ -485,9 +485,9 @@ function MerakiCheckPicker({
       }}
     >
       <div style={{ fontWeight: 600, marginBottom: '0.4rem' }}>Add a Meraki check</div>
-      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+      <div className="toolbar" style={{ marginBottom: 0 }}>
         <select
-          className="form-select"
+          className="form-select form-select-sm"
           style={{ maxWidth: 220 }}
           value={category}
           onChange={(e) => {
@@ -503,7 +503,7 @@ function MerakiCheckPicker({
           ))}
         </select>
         <select
-          className="form-select"
+          className="form-select form-select-sm"
           style={{ flex: 1, minWidth: 220 }}
           value={selected?.id ?? ''}
           onChange={(e) => setCheckId(e.target.value)}

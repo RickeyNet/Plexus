@@ -20,25 +20,7 @@ import {
   useUpdateServiceCredential,
 } from '@/api/settings';
 
-const SECTION_GAP = '1.5rem';
-
-function SectionCard({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      className="card"
-      style={{ padding: '1rem', marginBottom: SECTION_GAP }}
-    >
-      <h3 style={{ margin: '0 0 0.75rem 0' }}>{title}</h3>
-      {children}
-    </div>
-  );
-}
+import { SectionCard } from './SectionCard';
 
 function ToastSlot({ message, kind }: { message: string | null; kind: 'success' | 'error' }) {
   if (!message) return null;
@@ -1011,7 +993,7 @@ export function AuthTab({ capabilities }: { capabilities: AdminCapabilities }) {
   const groups = useAccessGroups();
 
   return (
-    <div>
+    <div className="stack">
       <SectionCard title="Login Rules">
         <LoginRulesForm />
       </SectionCard>

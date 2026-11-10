@@ -57,21 +57,19 @@ export function MacTracking() {
   return (
     <>
       {/* Rendered inside Network Tools, which owns the page header. */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() =>
-              startFleet.mutate(undefined, {
-                onSuccess: (d) => setFleetJobId(d.job_id),
-              })
-            }
-            disabled={isCollecting}
-          >
-            {isCollecting ? 'Collecting…' : 'Collect Now'}
-          </button>
-        </div>
+      <div className="toolbar" style={{ justifyContent: 'flex-end' }}>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() =>
+            startFleet.mutate(undefined, {
+              onSuccess: (d) => setFleetJobId(d.job_id),
+            })
+          }
+          disabled={isCollecting}
+        >
+          {isCollecting ? 'Collecting…' : 'Collect Now'}
+        </button>
       </div>
 
       <PageHelp
@@ -80,77 +78,79 @@ export function MacTracking() {
         text="Search and browse MAC address and ARP tables collected from network devices, including the clients of Meraki devices (refreshed by each Meraki collection on the Topology page). Track where hosts are connected and trace MAC-to-IP mappings across the network. The Moves tab records every time a MAC relocates (switch, port, VLAN or IP binding change) so you can review and acknowledge them like config drift."
       />
 
-      {jobStatus === 'running' && (
-        <div className="glass-card card" style={{ marginBottom: '1rem' }}>
-          <span className="badge">
-            Collecting… {fleetJob.data?.progress.hosts_done ?? 0}/
-            {fleetJob.data?.progress.hosts_total ?? '?'} hosts walked
-            {' · '}
-            {fleetJob.data?.progress.macs_found ?? 0} MACs,{' '}
-            {fleetJob.data?.progress.arps_found ?? 0} ARPs so far
-          </span>
-        </div>
-      )}
-      {result && (
-        <div
-          className="glass-card card"
-          style={{
-            borderColor: result.errors?.length
-              ? 'var(--warning)'
-              : 'var(--success)',
-            marginBottom: '1rem',
-          }}
-        >
-          <span
-            className={`badge ${
-              result.errors?.length ? 'badge-warning' : 'badge-success'
-            }`}
+      {/* Status cards, the view tabs and the tab body share one vertical rhythm. */}
+      <div className="stack">
+        {jobStatus === 'running' && (
+          <div className="glass-card card">
+            <span className="badge">
+              Collecting… {fleetJob.data?.progress.hosts_done ?? 0}/
+              {fleetJob.data?.progress.hosts_total ?? '?'} hosts walked
+              {' · '}
+              {fleetJob.data?.progress.macs_found ?? 0} MACs,{' '}
+              {fleetJob.data?.progress.arps_found ?? 0} ARPs so far
+            </span>
+          </div>
+        )}
+        {result && (
+          <div
+            className="glass-card card"
+            style={{
+              borderColor: result.errors?.length
+                ? 'var(--warning)'
+                : 'var(--success)',
+            }}
           >
-            Collected {result.macs_found} MACs, {result.arps_found} ARPs from{' '}
-            {result.hosts_collected} host(s)
-          </span>
-          {!!result.errors?.length && (
-            <details style={{ marginTop: '0.5rem' }}>
-              <summary style={{ cursor: 'pointer', fontSize: '0.85em' }}>
-                {result.errors.length} diagnostic
-                {result.errors.length === 1 ? '' : 's'} — some hosts
-                returned partial or no data
-              </summary>
-              <ul
-                style={{
-                  margin: '0.35rem 0 0',
-                  paddingLeft: '1.25rem',
-                  fontSize: '0.85em',
-                }}
-              >
-                {result.errors.map((err, idx) => (
-                  <li key={idx} style={{ color: 'var(--warning)' }}>
-                    {err}
-                  </li>
-                ))}
-              </ul>
-            </details>
-          )}
-        </div>
-      )}
-      {(startFleet.isError || jobStatus === 'failed' || fleetJob.isError) && (
-        <div
-          className="glass-card card"
-          style={{ borderColor: 'var(--danger)', marginBottom: '1rem' }}
-        >
-          <strong>MAC collection failed:</strong>{' '}
-          {startFleet.error?.message ??
-            fleetJob.data?.error ??
-            fleetJob.error?.message ??
-            'Unknown error'}
-        </div>
-      )}
+            <span
+              className={`badge ${
+                result.errors?.length ? 'badge-warning' : 'badge-success'
+              }`}
+            >
+              Collected {result.macs_found} MACs, {result.arps_found} ARPs from{' '}
+              {result.hosts_collected} host(s)
+            </span>
+            {!!result.errors?.length && (
+              <details style={{ marginTop: '0.5rem' }}>
+                <summary style={{ cursor: 'pointer', fontSize: '0.85em' }}>
+                  {result.errors.length} diagnostic
+                  {result.errors.length === 1 ? '' : 's'} — some hosts
+                  returned partial or no data
+                </summary>
+                <ul
+                  style={{
+                    margin: '0.35rem 0 0',
+                    paddingLeft: '1.25rem',
+                    fontSize: '0.85em',
+                  }}
+                >
+                  {result.errors.map((err, idx) => (
+                    <li key={idx} style={{ color: 'var(--warning)' }}>
+                      {err}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
+        )}
+        {(startFleet.isError || jobStatus === 'failed' || fleetJob.isError) && (
+          <div
+            className="glass-card card"
+            style={{ borderColor: 'var(--danger)' }}
+          >
+            <strong>MAC collection failed:</strong>{' '}
+            {startFleet.error?.message ??
+              fleetJob.data?.error ??
+              fleetJob.error?.message ??
+              'Unknown error'}
+          </div>
+        )}
 
-      <TabBar tabs={TABS} active={tab} onChange={setTab} size="sm" aria-label="MAC tracking views" />
+        <TabBar tabs={TABS} active={tab} onChange={setTab} size="sm" aria-label="MAC tracking views" />
 
-      {tab === 'search' && <SearchTab />}
-      {tab === 'moves' && <MovesTab />}
-      {tab === 'hosts' && <HostsTab />}
+        {tab === 'search' && <SearchTab />}
+        {tab === 'moves' && <MovesTab />}
+        {tab === 'hosts' && <HostsTab />}
+      </div>
     </>
   );
 }
@@ -180,14 +180,7 @@ function SearchTab() {
 
   return (
     <>
-      <div
-        style={{
-          display: 'flex',
-          gap: '0.75rem',
-          flexWrap: 'wrap',
-          marginBottom: '1rem',
-        }}
-      >
+      <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
         <SummaryCard label="Total Entries" value={stats.data?.total_entries} />
         <SummaryCard
           label="Unique MACs"
@@ -207,19 +200,10 @@ function SearchTab() {
         />
       </div>
 
-      <form
-        onSubmit={submit}
-        className="page-header"
-        style={{
-          marginTop: 0,
-          alignItems: 'center',
-          gap: '0.5rem',
-          flexWrap: 'wrap',
-        }}
-      >
+      <form onSubmit={submit} className="toolbar">
         <input
           id="mac-tracking-search"
-          className="form-input list-control-search"
+          className="form-input form-input-sm list-control-search"
           type="search"
           placeholder="Search by MAC (any format), IP, port, or Meraki client name…"
           value={draft}
@@ -250,13 +234,7 @@ function SearchTab() {
       </form>
 
       {submitted && (
-        <div
-          style={{
-            fontSize: '0.8em',
-            opacity: 0.65,
-            margin: '-0.5rem 0 0.75rem',
-          }}
-        >
+        <div style={{ fontSize: '0.8em', opacity: 0.65 }}>
           Showing matches for &ldquo;{submitted}&rdquo;. MAC formats (with or
           without <code>:</code> <code>-</code> <code>.</code>) all match.
           A missing MAC usually means the host&apos;s switch hasn&apos;t been
@@ -341,14 +319,7 @@ function MovesTab() {
 
   return (
     <>
-      <div
-        style={{
-          display: 'flex',
-          gap: '0.75rem',
-          flexWrap: 'wrap',
-          marginBottom: '1rem',
-        }}
-      >
+      <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
         <SummaryCard label="Open" value={summary.data?.open} accent="warning" />
         <SummaryCard
           label="Acknowledged"
@@ -358,12 +329,9 @@ function MovesTab() {
         <SummaryCard label="Total" value={summary.data?.total} />
       </div>
 
-      <div
-        className="page-header"
-        style={{ marginTop: 0, alignItems: 'center', gap: '0.5rem' }}
-      >
+      <div className="toolbar">
         <select
-          className="form-input"
+          className="form-select form-select-sm"
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
           style={{ maxWidth: '12rem' }}
@@ -373,7 +341,7 @@ function MovesTab() {
           <option value="acknowledged">Acknowledged</option>
         </select>
         <select
-          className="form-input"
+          className="form-select form-select-sm"
           value={hostFilter ?? ''}
           onChange={(e) =>
             setHostFilter(e.target.value ? Number(e.target.value) : null)
@@ -522,14 +490,7 @@ function HostsTab() {
 
   return (
     <>
-      <div
-        style={{
-          display: 'flex',
-          gap: '0.75rem',
-          flexWrap: 'wrap',
-          marginBottom: '1rem',
-        }}
-      >
+      <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
         <SummaryCard
           label="Reporting"
           value={reporting.length}
@@ -544,10 +505,7 @@ function HostsTab() {
         <SummaryCard label="Hosts total" value={rows.length} />
       </div>
 
-      <div
-        className="page-header"
-        style={{ marginTop: 0, alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}
-      >
+      <div className="toolbar">
         <SegmentedControl options={filterOptions} value={filter} onChange={setFilter} aria-label="Host filter" />
         <span style={{ marginLeft: 'auto', fontSize: '0.85em', opacity: 0.7 }}>
           {visible.length} host{visible.length === 1 ? '' : 's'} shown
@@ -771,7 +729,7 @@ function SummaryCard({
   return (
     <div
       className="glass-card card"
-      style={{ minWidth: '8rem', textAlign: 'center', padding: '1rem' }}
+      style={{ minWidth: '8rem', textAlign: 'center' }}
     >
       <div style={{ fontSize, fontWeight: 600, color }}>{display}</div>
       <div style={{ fontSize: '0.85em', opacity: 0.7 }}>{label}</div>
@@ -903,13 +861,9 @@ function MoveEventLogBody({ eventId }: { eventId: number | null }) {
     return <p style={{ opacity: 0.7 }}>No log entries recorded yet.</p>;
 
   return (
-    <div style={{ maxHeight: '60vh', overflow: 'auto' }}>
+    <div className="stack stack-sm" style={{ maxHeight: '60vh', overflow: 'auto' }}>
       {data.map((item) => (
-        <div
-          key={item.id}
-          className="card"
-          style={{ marginBottom: '0.5rem', padding: '0.75rem' }}
-        >
+        <div key={item.id} className="card card-sm">
           <div
             style={{
               display: 'flex',

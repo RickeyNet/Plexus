@@ -39,7 +39,7 @@ export function LoggingTab() {
   const statusBadge = draft.active ? 'badge-success' : 'badge-info';
 
   return (
-    <div className="card" style={{ padding: '1rem' }}>
+    <div>
       <div
         style={{
           display: 'flex',

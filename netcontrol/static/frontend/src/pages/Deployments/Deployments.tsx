@@ -12,6 +12,7 @@ import {
 } from '@/api/deployments';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
+import { SummaryStrip, type SummaryStripItem } from '@/components/SummaryStrip';
 
 import { DeploymentCorrelationModal } from './DeploymentCorrelationModal';
 import { DeploymentDetailModal } from './DeploymentDetailModal';
@@ -67,46 +68,33 @@ export function Deployments() {
   };
 
   return (
-    <>
-      <div
-        className="page-header"
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: '0.5rem',
-          marginBottom: '0.75rem',
-        }}
-      >
-        <h2 style={{ margin: 0 }}>Deployments</h2>
-        <div style={{ display: 'flex', gap: '0.4rem' }}>
-          <button className="btn btn-sm btn-primary" onClick={() => setShowNew(true)}>
-            New Deployment
-          </button>
-          <button
-            className="btn btn-sm btn-secondary"
-            onClick={() => {
-              summary.refetch();
-              deployments.refetch();
-            }}
-          >
-            Refresh
-          </button>
-        </div>
+    <div className="stack stack-sm">
+      <div className="toolbar">
+        <h3 style={{ margin: 0 }}>Deployments</h3>
+        <span className="toolbar-spacer" />
+        <button className="btn btn-sm btn-primary" onClick={() => setShowNew(true)}>
+          New Deployment
+        </button>
+        <button
+          className="btn btn-sm btn-secondary"
+          onClick={() => {
+            summary.refetch();
+            deployments.refetch();
+          }}
+        >
+          Refresh
+        </button>
       </div>
 
-      <SummaryStrip summary={summary.data} />
+      <DeploymentSummaryStrip summary={summary.data} />
 
-      <div className="card" style={{ marginTop: '0.75rem', padding: 0, overflow: 'hidden' }}>
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         <div
+          className="toolbar"
           style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            padding: '0.5rem 0.75rem',
+            padding: 'var(--space-2) var(--space-3)',
             borderBottom: '1px solid var(--border)',
-            flexWrap: 'wrap',
+            marginBottom: 0,
           }}
         >
           <select
@@ -122,14 +110,14 @@ export function Deployments() {
             ))}
           </select>
           <input
-            className="form-input"
+            className="form-input form-input-sm"
             placeholder="Search name, group, or description…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             style={{ marginLeft: 'auto', maxWidth: 320 }}
           />
         </div>
-        <div style={{ padding: '0.75rem' }}>
+        <div style={{ padding: 'var(--space-3)' }}>
           <DeploymentList
             items={filtered}
             loading={deployments.isLoading}
@@ -176,38 +164,19 @@ export function Deployments() {
         onClose={() => setCorrelationId(null)}
         deploymentId={correlationId}
       />
-    </>
+    </div>
   );
 }
 
-function SummaryStrip({ summary }: { summary?: DeploymentSummary }) {
-  const items: { label: string; value: string }[] = [
+function DeploymentSummaryStrip({ summary }: { summary?: DeploymentSummary }) {
+  const items: SummaryStripItem[] = [
     { label: 'Total', value: String(summary?.total ?? '-') },
     { label: 'Completed', value: String(summary?.completed ?? '-') },
     { label: 'Active', value: String(summary?.active ?? '-') },
     { label: 'Rolled back', value: String(summary?.rolled_back ?? '-') },
     { label: 'Failed', value: String(summary?.failed ?? '-') },
   ];
-  return (
-    <div className="card">
-      <div
-        className="card-body"
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-          gap: '0.5rem',
-          padding: '0.75rem',
-        }}
-      >
-        {items.map((it) => (
-          <div key={it.label} style={{ display: 'flex', flexDirection: 'column' }}>
-            <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{it.label}</span>
-            <span style={{ fontWeight: 600 }}>{it.value}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+  return <SummaryStrip items={items} />;
 }
 
 function DeploymentList({
@@ -247,7 +216,7 @@ function DeploymentList({
   }
 
   return (
-    <>
+    <div className="stack stack-sm">
       {items.map((d) => (
         <DeploymentRow
           key={d.id}
@@ -257,7 +226,7 @@ function DeploymentList({
           onRolledBack={onRolledBack}
         />
       ))}
-    </>
+    </div>
   );
 }
 
@@ -324,7 +293,7 @@ function DeploymentRow({
   };
 
   return (
-    <div className="card" style={{ marginBottom: '0.75rem', padding: '1rem' }}>
+    <div className="card-inset">
       <div
         style={{
           display: 'flex',

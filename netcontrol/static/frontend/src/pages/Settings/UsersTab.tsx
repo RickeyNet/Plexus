@@ -37,13 +37,12 @@ export function UsersTab() {
   });
 
   return (
-    <div>
+    <div className="stack stack-sm">
       <div
         style={{
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          marginBottom: '0.75rem',
         }}
       >
         <h3 style={{ margin: 0 }}>User Accounts</h3>
@@ -65,8 +64,7 @@ export function UsersTab() {
       {(users.data || []).map((u) => (
         <div
           key={u.id}
-          className="card"
-          style={{ marginBottom: '0.75rem', padding: '1rem' }}
+          className="card-inset"
         >
           <div
             style={{

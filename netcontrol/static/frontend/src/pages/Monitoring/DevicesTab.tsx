@@ -41,10 +41,10 @@ export function DevicesTab() {
   const showProgress = progress.active || (progress.startedAt != null && (progress.completed > 0 || progress.failed || progress.title));
 
   return (
-    <div>
+    <div className="stack stack-sm">
       <SummaryCards />
 
-      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+      <div className="toolbar">
         <input
           className="form-input"
           placeholder="Search devices…"
@@ -54,10 +54,11 @@ export function DevicesTab() {
         />
         <button className="btn btn-primary" onClick={pollNow} disabled={progress.active}>
           {progress.active ? 'Polling…' : 'Poll Now'}
-        </button>      </div>
+        </button>
+      </div>
 
       {showProgress && (
-        <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '0.75rem' }}>
+        <div className="card card-sm">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', gap: '0.5rem' }}>
             <strong>{progress.title}</strong>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -140,9 +141,9 @@ function SummaryCards() {
     { label: 'Open Alerts', value: s?.open_alerts ?? '-', danger: (s?.open_alerts ?? 0) > 0 },
   ];
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: '0.5rem', marginBottom: '0.75rem' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 'var(--space-2)' }}>
       {items.map((it) => (
-        <div key={it.label} className="card" style={{ padding: '0.5rem 0.75rem', textAlign: 'center' }}>
+        <div key={it.label} className="card card-sm" style={{ textAlign: 'center' }}>
           <div className="text-muted" style={{ fontSize: '0.75em' }}>{it.label}</div>
           <div style={{ fontWeight: 600, fontSize: '1.1em', color: it.danger ? 'var(--danger)' : it.warning ? 'var(--warning)' : '' }}>
             {it.value}
@@ -160,7 +161,7 @@ function PollRow({ poll, onDetail, onHistory }: { poll: MonitoringPoll; onDetail
   const cpuVal = poll.cpu_percent != null ? `${poll.cpu_percent}%` : 'N/A';
   const memVal = poll.memory_percent != null ? `${poll.memory_percent}%` : 'N/A';
   return (
-    <div className="card" style={{ padding: '1rem' }}>
+    <div className="card">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <span style={{ width: 8, height: 8, borderRadius: '50%', background: `var(--${statusDot})`, display: 'inline-block' }} />

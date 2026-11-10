@@ -225,12 +225,17 @@ Common classes:
 
 | Use for | Class |
 |---|---|
-| Page card / section | `card` (or `glass-card card`) |
-| Page header strip | `page-header` |
+| Page card / section | `card` (or `glass-card card`); `card-sm` for dense rows |
+| Card that does something on click | add `card-clickable` (the only card that reacts to hover) |
+| Grouping inside a card | `card-inset` (never a `card` in a `card`) |
+| Page title row | `<PageHeader title>` from `@/components/PageHeader` (`page-header` + `page-title`) |
+| Vertical run of sections | `stack` (`stack-sm` for dense lists) |
+| Filter / action row | `toolbar` (controls keep their natural width) |
 | Tables | `data-table` |
 | Empty states | `empty-state` |
 | Buttons | `btn`, `btn-primary`, `btn-secondary`, `btn-sm`, `btn-danger`, `btn-ghost` |
 | Form fields | `form-input`, `form-select`, `form-textarea`, `form-label`, `form-group` |
+| Small controls beside `btn-sm` | `form-input form-input-sm`, `form-select form-select-sm` |
 | Status badges | `badge`, `badge-success`, `badge-danger`, `badge-warning`, `badge-info` |
 | Modal overlay (handled by `<Modal>`) | `modal-overlay`, `modal`, `modal-large` |
 | Muted text | `text-muted` |
@@ -245,6 +250,36 @@ per theme for contrast (text 4.5:1 on each surface), and a literal that
 reads well on a dark theme is usually unreadable on Light or Sandstone.
 A canvas (vis-network, ECharts) cannot resolve `var()`; read the token
 through the helper in `src/lib/themeColors.ts`.
+
+### Spacing, radius and type tokens
+
+Sizes come from the scale on `:root` in `style.css`, in CSS and in inline
+styles alike. A literal `rem` value needs the same justification as a
+literal hex colour.
+
+| Token | Values |
+|---|---|
+| `--space-1` .. `--space-6` | 0.25, 0.5, 0.75, 1, 1.5, 2rem (padding, margin, gap) |
+| `--radius-sm` `md` `lg` `xl` `2xl` `pill` | badges, controls, banners and inset panels, cards, modals, chips |
+| `--text-xs` `sm` `base` `md` `lg` `xl` `2xl` `3xl` | 0.75, 0.8, 0.875, 1, 1.125, 1.25, 1.5, 2rem |
+| `--control-h`, `--control-h-sm` | 36px and 30px control heights |
+| `--card-pad`, `--card-pad-sm` | card padding (1rem, 0.75rem) |
+
+Layout rules that follow from the tokens:
+
+- **Cards carry no margin.** The parent sets the rhythm: `stack` for a
+  vertical run, or a grid/flex `gap`. Never patch a card with
+  `marginBottom`.
+- **Cards do not nest.** Use `card-inset` or a plain heading inside a card.
+- **Static cards do not react to hover.** Add `card-clickable` only when
+  the card has a click handler or is a link or button.
+- **One control height per row.** A toolbar of `btn-sm` buttons uses the
+  `-sm` inputs and selects; a row of normal buttons uses the normal ones.
+  Do not set `padding`, `height` or `fontSize` inline on a control.
+- **Selects and inputs are full width only in forms.** Inside `toolbar`,
+  `page-header` and a `TabBar` `trailing` slot they size to their content.
+- **One page title.** Every page renders `<PageHeader>`; headings inside a
+  tab are `<h3>`.
 
 ### When the legacy class doesn't fit
 
@@ -523,3 +558,7 @@ Append a one-liner each time you change a rule here.
 - 2026-10-12 - Added the Tabs section: tab in the URL path via
   `usePathTab`, `<TabBar>` / `<SegmentedControl>`, `tabGating` for per-tab
   feature gates, `<Navigate replace>` for retired tabs.
+- 2026-11-09 - Added spacing, radius, type and control-height tokens and
+  the layout rules built on them: `<PageHeader>`, `stack`, `toolbar`,
+  `card-sm` / `card-inset` / `card-clickable`, `form-input-sm`; cards no
+  longer carry a margin or a hover glow.

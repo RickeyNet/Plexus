@@ -23,7 +23,8 @@ export function CredentialsList() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.75rem' }}>
+      <div className="toolbar">
+        <span className="toolbar-spacer" />
         <button className="btn btn-primary" onClick={() => setShowCreate(true)}>+ New Credential</button>
       </div>
 
@@ -67,7 +68,7 @@ function CredentialRow({ credential, onDelete }: { credential: Credential; onDel
   }
 
   return (
-    <div className="card" style={{ padding: '0.75rem 1rem' }}>
+    <div className="card card-sm">
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.5rem' }}>
         <div>
           <label className="form-label" style={{ fontSize: '0.75rem' }}>Name</label>
