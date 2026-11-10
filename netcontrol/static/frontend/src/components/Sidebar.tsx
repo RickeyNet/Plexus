@@ -2,7 +2,17 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { NavLink, useLocation } from 'react-router';
 
 import { useAuthStatus } from '@/api/auth';
+import { safeGet, safeSet } from '@/lib/appearance';
 import { prefetchRoute } from '@/lib/pageLoaders';
+import {
+  parseCollapsedPref,
+  resolveCollapsed,
+  serializeCollapsedPref,
+  SIDEBAR_COLLAPSED_KEY,
+  SIDEBAR_MOBILE_QUERY,
+  SIDEBAR_NARROW_QUERY,
+} from '@/lib/sidebarState';
+import { useMediaQuery } from '@/lib/useMediaQuery';
 
 import { isNavItemVisible, type NavGate } from './navVisibility';
 
@@ -269,7 +279,8 @@ const NAV: TopItem[] = [
   { label: 'Settings', icon: ic.settings, to: '/settings' },
 ];
 
-function NavItem({ item, child }: { item: RouteItem | LegacyItem; child?: boolean }) {
+// `collapsed`: the rail shows icons only, so each link names itself in a tooltip.
+function NavItem({ item, child, collapsed }: { item: RouteItem | LegacyItem; child?: boolean; collapsed: boolean }) {
   const cls = child ? 'nav-link nav-child-link' : 'nav-link';
   if (isRoute(item)) {
     // Warm the page's chunk on hover/focus so it's usually downloaded before
@@ -282,6 +293,7 @@ function NavItem({ item, child }: { item: RouteItem | LegacyItem; child?: boolea
         className={({ isActive }) => (isActive ? `${cls} active` : cls)}
         onMouseEnter={warm}
         onFocus={warm}
+        title={collapsed ? item.label : undefined}
       >
         {item.icon}
         <span className="nav-label">{item.label}</span>
@@ -289,14 +301,16 @@ function NavItem({ item, child }: { item: RouteItem | LegacyItem; child?: boolea
     );
   }
   return (
-    <a href={item.href} className={cls} title="Open in classic UI">
+    <a href={item.href} className={cls} title={collapsed ? item.label : 'Open in classic UI'}>
       {item.icon}
       <span className="nav-label">{item.label}</span>
     </a>
   );
 }
 
-function NavGroupItem({ group, currentPath }: { group: NavGroup; currentPath: string }) {
+// In the collapsed rail the group header is hidden and the children show as
+// icons (style.css), so every page stays one click away.
+function NavGroupItem({ group, currentPath, collapsed }: { group: NavGroup; currentPath: string; collapsed: boolean }) {
   const hasActiveChild = group.children.some(
     (c) => isRoute(c) && (c.to === currentPath || (c.to !== '/' && currentPath.startsWith(c.to))),
   );
@@ -328,7 +342,7 @@ function NavGroupItem({ group, currentPath }: { group: NavGroup; currentPath: st
       <div className="nav-group-children">
         <div className="nav-group-children-inner">
           {group.children.map((c) => (
-            <NavItem key={c.label} item={c} child />
+            <NavItem key={c.label} item={c} child collapsed={collapsed} />
           ))}
         </div>
       </div>
@@ -344,7 +358,25 @@ interface SidebarProps {
 }
 
 export function Sidebar({ username, mobileOpen, onMobileClose, onOpenUserMenu }: SidebarProps) {
-  const [collapsed, setCollapsed] = useState(false);
+  const mobile = useMediaQuery(SIDEBAR_MOBILE_QUERY);
+  const narrow = useMediaQuery(SIDEBAR_NARROW_QUERY);
+  const [pref, setPref] = useState(() => parseCollapsedPref(safeGet(SIDEBAR_COLLAPSED_KEY)));
+  // A toggle made in the narrow band lasts until the viewport leaves it.
+  const [narrowOverride, setNarrowOverride] = useState<boolean | null>(null);
+  const [prevNarrow, setPrevNarrow] = useState(narrow);
+  if (prevNarrow !== narrow) {
+    setPrevNarrow(narrow);
+    setNarrowOverride(null);
+  }
+  const collapsed = resolveCollapsed({ mobile, narrow, pref, narrowOverride });
+  const toggleCollapsed = () => {
+    if (narrow) {
+      setNarrowOverride(!collapsed);
+      return;
+    }
+    setPref(!collapsed);
+    safeSet(SIDEBAR_COLLAPSED_KEY, serializeCollapsedPref(!collapsed));
+  };
   const { pathname } = useLocation();
   const { data: auth } = useAuthStatus();
 
@@ -376,7 +408,15 @@ export function Sidebar({ username, mobileOpen, onMobileClose, onOpenUserMenu }:
     .join(' ');
 
   return (
-    <nav className={navClass} aria-label="Main navigation" onClick={() => mobileOpen && onMobileClose()}>
+    <nav
+      className={navClass}
+      aria-label="Main navigation"
+      onClick={(e) => {
+        // Close the mobile drawer once a destination is picked; a group
+        // header only opens or closes its list, so the drawer stays.
+        if (mobileOpen && (e.target as Element).closest('.nav-link:not(.nav-group-toggle)')) onMobileClose();
+      }}
+    >
 
       <div className="sidebar-top">
         <div className="nav-brand">
@@ -385,7 +425,7 @@ export function Sidebar({ username, mobileOpen, onMobileClose, onOpenUserMenu }:
         </div>
         <button
           className="sidebar-toggle"
-          onClick={() => setCollapsed((v) => !v)}
+          onClick={toggleCollapsed}
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           aria-expanded={!collapsed}
@@ -398,9 +438,9 @@ export function Sidebar({ username, mobileOpen, onMobileClose, onOpenUserMenu }:
       <div className="nav-links">
         {visibleNav.map((item) =>
           isGroup(item) ? (
-            <NavGroupItem key={item.id} group={item} currentPath={pathname} />
+            <NavGroupItem key={item.id} group={item} currentPath={pathname} collapsed={collapsed} />
           ) : (
-            <NavItem key={item.label} item={item} />
+            <NavItem key={item.label} item={item} collapsed={collapsed} />
           ),
         )}
       </div>
@@ -408,6 +448,7 @@ export function Sidebar({ username, mobileOpen, onMobileClose, onOpenUserMenu }:
         <a
           href="#"
           className="nav-link nav-user"
+          title={collapsed ? username : undefined}
           onClick={(e) => {
             e.preventDefault();
             onOpenUserMenu();

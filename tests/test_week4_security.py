@@ -202,6 +202,23 @@ async def test_register_blocked_by_default(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("env", "expected"), [(None, False), ("true", True)])
+async def test_logged_out_status_reports_self_register_flag(monkeypatch, env, expected):
+    """The login screen reads allow_self_register to show or hide Register."""
+    if env is None:
+        monkeypatch.delenv("APP_ALLOW_SELF_REGISTER", raising=False)
+    else:
+        monkeypatch.setenv("APP_ALLOW_SELF_REGISTER", env)
+
+    from fastapi import Response
+    from netcontrol.routes import auth as auth_module
+
+    result = await auth_module.auth_status(cast(Request, DummyRequest()), Response())
+
+    assert result == {"authenticated": False, "allow_self_register": expected}
+
+
+@pytest.mark.asyncio
 async def test_register_allowed_when_opted_in(monkeypatch):
     """Self-registration should proceed when APP_ALLOW_SELF_REGISTER=true."""
     monkeypatch.setenv("APP_ALLOW_SELF_REGISTER", "true")
