@@ -559,3 +559,270 @@ items were implemented 2026-07-08 in a follow-up pass:
 ### Batch 6 - The Big One
 
 - [x] **Split `routes/database.py` (16,795 lines) into domain modules** (hosts, credentials, monitoring, audit, mac-tracking, lab, etc.) while preserving the `routes.database` API surface. *Prerequisite: batches 1 and 4 - the suite must be green and fast before a refactor this wide.* Done 2026-06: core (connection singleton, pragmas, schema, init_db) stays in `routes/database.py` (~2,800 lines); 20 domain modules live in `routes/db/*` and are star re-exported through the facade, so all `import routes.database as db` callsites and test monkeypatches (`DB_PATH`, `DB_ENGINE`, `get_db`) work unchanged — moved code reads those names late-bound via the facade. Public API surface verified byte-identical (606 names) against a pre-split snapshot.
+
+## UI Spacing & UX Audit (2026-11-09)
+
+Static code audit of every page, the app shell, the shared components and
+`netcontrol/static/css/style.css`. Nothing was viewed in a browser; items
+marked *(verify in browser)* are derived from the CSS layout rules. Paths are
+relative to `netcontrol/static/frontend/src/` unless they start with
+`style.css`. Severity: **H** broken or unusable, **M** visibly inconsistent,
+**L** polish.
+
+Suggested order: Batch 1, then Batch 2 plus the `.main-content` min-width
+item, then the modal and error-state items in Batches 4 and 5, then the
+per-page **H** items.
+
+### Batch 1 - Missing or broken CSS (fix once, affects every page)
+
+- [x] **H: Define the classes the TSX uses but `style.css` never declares** — `text-muted` (~580 uses), `input`, `table` / `table-sm`, `glass-card` (44), `card-body` (17), `skeleton-loader` (8), `badge-sm`, `btn-xs`, `badge-muted`, `text-danger`, `spinner`, `form-help`, `btn-link`, `drift-summary-card*`, `status-completed`, `.btn.active`, and a global `form-select-sm`. Today muted text renders at full colour, some inputs and tables are raw browser controls, loading skeletons are blank gaps, and the "Completed" job badge has no colour. Either define each class or switch the callers to the existing one (`form-input`, `data-table`, `btn-sm`, `badge-secondary`, `skeleton`).
+- [x] **H: Add a disabled style for controls** — no `:disabled` rule exists for `.btn`, `.form-input`, `.form-select` or `.page-tab-btn`; 249 `disabled=` props look enabled and disabled primary buttons still lift and glow on hover. Remove the 17 inline opacity patches afterwards.
+- [x] **H: Stop freezing progress indicators** — `lib/appearance.ts:93` always adds `reduced-motion` to `body`, and `style.css:3854` then freezes every spinner, skeleton shimmer and running-status pulse, so loading looks hung. Exempt progress indicators or apply the class only on user/OS request.
+- [x] **M: Opaque cards under `reduced-motion`** — the same class strips card blur (`style.css:3884`) while cards keep 25-55% alpha, so the Astral image and Matrix rain show sharply through cards and tables.
+- [x] **M: Add `button, input, select, textarea { font: inherit }`** — `.btn` renders in the system font while the rest of the UI uses JetBrains Mono (visible in TimeRangeBar, ExportMenu, Login "Register").
+- [x] **H: Template cards render browser-default button text** — `pages/GraphTemplates/GraphTemplatesTab.tsx:62` uses `<button className="card">` with no colour/font reset and `border: none`; dark text on dark cards.
+- [x] **M: Declare `color-scheme` per theme** — native date/time pickers and select popups stay light on dark themes.
+- [x] **M: Fix themed rules that never apply** — sidebar active-link glows (`style.css:345,432,592,751,1009` lose to `:1572`), Voyager nav pills (`:741`), Voyager/Sandstone sidebar and login backgrounds (wiped by `:3870`), Voyager/Matrix title colours (`:793`, `:1016`).
+- [x] **L: Remove dead and duplicate CSS** — about 150 of 425 classes are unreferenced by React (command palette, toast, stepper, `sla-*`, `credential-card`, `confirm-modal`, `#job-output-modal`); `@keyframes pulse-dot` is defined twice (`style.css:2653`, `:3416`); 68 `!important`. *Done 2026-11: 255 dead rules (177 class and id names, ~1,450 lines) and the duplicate keyframes removed; `!important` only dropped 68 to 64, the rest sit in the performance-mode and print blocks. `glass-card` and `card-body` stay as unstyled hooks.*
+
+### Batch 2 - Spacing system
+
+- [ ] **M: Introduce spacing, radius and font-size tokens** — only colour tokens exist. `style.css` has 55 distinct paddings, 27 radii and 34 font sizes; the TSX has 2,925 inline styles with 69 distinct paddings. Card padding varies 0.75 / 1 / 1.25 / 1.5 / 2rem for the same surface. Move the primitives onto the tokens first.
+- [ ] **M: One page-title and page-header pattern** — `.page h2` (`style.css:1872`, 2rem gradient) only applies on Monitoring, Jobs, NetworkTools, Software and CloudVisibility, where the title margin plus `.page-header` margin leave about 4rem. Other pages use a plain h2 with an inline 0.75rem gap; DeviceDetail and DashboardViewer use 1.25rem.
+- [ ] **M: Remove `margin-bottom` from `.card`** — `style.css:1960` stacks on grid/flex `gap`, so rows sit 1.5-2rem apart while columns sit 0.5-1rem. Drop the 29 inline `marginBottom: 0` patches afterwards.
+- [ ] **M: Remove cards nested in cards** — double border, padding and hover glow on Settings, Configuration, Compliance, Upgrades, Reports, DeviceDetail, Traffic Analysis and Monitoring Configure.
+- [ ] **M: Hover glow only on clickable cards** — `.card:hover` / `.stat-card:hover` (`style.css:1967`, `:1915`) make static panels look clickable; `.card-clickable` exists and is unused.
+- [ ] **M: Standard control heights with small variants** — inputs/selects ~36px, tabs ~34px, `btn-sm` ~31px, time-range ~28px. Add `.form-input-sm` / `.form-select-sm` and use them in the Topology, Configuration, Inventory, Compliance and Software toolbars.
+- [ ] **H: Selects take a full row in wrapping toolbars** *(verify in browser)* — `.form-select { width: 100% }` (`style.css:2233`) inside flex-wrap toolbars: `pages/Jobs/JobsTab.tsx:76`, `pages/Monitoring/AlertsTab.tsx:73`, `AvailabilityTab.tsx:44`, `CapacityTab.tsx:28`, `SlaTab.tsx:32`, `TopologyAvailabilityPanel.tsx:80`. Add a toolbar select variant or use `.list-controls`.
+
+### Batch 3 - Shared primitives built several ways
+
+- [ ] **M: One stat tile component** — five or more designs across Monitoring (four of them), Dashboard, Software, Billing, the summary strip copied in Compliance / Deployments / RiskAnalysis, and the unstyled CloudVisibility cards.
+- [ ] **M: One table style** — `.data-table`, `.chart-table`, `.device-health-table`, about 20 unclassed tables with inline `4px 8px` cells, and a div-grid table in `pages/Monitoring/SlaTab.tsx:176`. Row height ranges 29-37px. Standardise on `.data-table` plus a compact modifier.
+- [ ] **M: One badge style** — `.badge`, `.status-badge`, `.alert-severity-badge`, `.tab-bar-badge`, `.topology-change-badge`, plus solid inline badges in Deployments, Monitoring Alerts/Rules and the NetFlow tab.
+- [ ] **H: One severity colour map** — Compliance profiles show medium and low as green (`pages/Compliance/Compliance.tsx:349`); RiskAnalysis maps medium and high both to amber (`pages/RiskAnalysis/helpers.ts:3`); Monitoring maps info to primary while Dashboard uses info (`pages/Monitoring/helpers.ts:26`).
+- [ ] **M: Compliance status colours reversed between scanners** — host scans show non-compliant amber and error red (`pages/Compliance/Compliance.tsx:651`); Meraki scans show the opposite (`merakiHelpers.ts:12`).
+- [ ] **M: One delete button style and label** — plain button with red text, ghost, `btn-danger` and `btn-xs` are all in use; label is "Del" in Inventory, Federation and Topology Sources.
+- [ ] **M: One callout, loading and empty-state component** — five banner styles; loading is a spinner, `.loading`, skeletons or one of 86 bare "Loading…" strings; empty is `.empty-state` (42) or one of 21 bare lines.
+- [ ] **M: One date/time formatter** — at least five formats and several local helpers. Some parse zone-less timestamps as local and others as UTC, so the same event can show different times (Jobs, Federation, Maintenance, Monitoring Events; Reports History needs the backend format checked). Use `lib/datetime.ts` everywhere; also consolidate the uptime formatters.
+- [ ] **M: Reuse `CredentialSelect`** — the credential picker is hand-built five times with different labels (`pages/Inventory/SerialModal.tsx:93`, Configuration `RestoreBackupModal.tsx:48`, `RevertDriftModal.tsx:33`, `CaptureSnapshotModal.tsx:97`, `BackupPolicyModal.tsx:182`).
+- [ ] **L: One progress bar component** — four hand-written styles (`pages/Upgrades/CampaignsTab.tsx:260`, `NewImageModal.tsx:72`, `CampaignViewerModal.tsx:96`, `pages/RiskAnalysis/RiskAnalysis.tsx:317`).
+
+### Batch 4 - Modals and dialogs
+
+- [ ] **M: Sticky modal header and footer** — `.modal` is the scroll container (`style.css:2425`), so the title and × scroll away; footers are 98 hand-built inline rows at the end of the body. Make `.modal-body` scroll and add a `footer` slot to `components/Modal.tsx`.
+- [ ] **M: One button order** — Cancel then primary, right-aligned; today the order and the Cancel style (`btn-secondary`, `btn-ghost`, plain) vary per modal.
+- [ ] **M: Add medium and small modal sizes** — `size="large"` is 1600px and used for simple forms; the 700px default is used for wide tables and one-line confirms.
+- [ ] **M: Backdrop close and focus handling** — `components/Modal.tsx:67` closes when a text-selection drag ends on the backdrop; no focus trap, initial focus or focus restore.
+- [ ] **M: Specific confirmations** — callers rely on the "Please confirm" / "Confirm" defaults (`components/DialogProvider.tsx:71`) and never name the object; cancel dialogs pair "Cancel" with "Cancel reload" (`pages/Upgrades/CampaignViewerModal.tsx:1185`).
+- [ ] **M: Inline validation instead of `alert()`** — Inventory, Jobs, Deployments, RiskAnalysis, GraphTemplates, Backup policy. Multi-line messages lose their line breaks in `AlertDialog` / `ConfirmDialog`.
+- [ ] **M: Hide the × on the forced password-change modal** — `components/ChangePasswordModal.tsx:59` makes close a no-op but the × still renders.
+
+### Batch 5 - States
+
+- [ ] **H: Failed requests shown as empty or endless loading** — Settings forms check `isLoading || !draft` before `isError` (seven places, e.g. `pages/Settings/AuthTab.tsx:73`); also Monitoring Availability/SLA, Compliance tabs, Configuration Backups, IPAM overview and drilldown, FloorPlan sites, Software overview, Billing summary.
+- [ ] **M: Busy state on async buttons** — double-click fires twice on Jobs Retry/Cancel, IPAM Push/Accept, Compliance Assign, Alerts Acknowledge, Notification/SIEM Test. A shared pending flag disables every row at once on Compliance Scan, IPAM Sync, Cloud Discover and Audit Run now.
+- [ ] **M: Confirm destructive and bulk actions** — Drift Accept All / Resolve All, Monitoring Acknowledge All, MAC Acknowledge all, Discovery "remove hosts not found", IPAM Push to IPAM, Jobs live Launch, Topology Reset Positions, RiskAnalysis and Deployment Approve.
+
+### Batch 6 - Accessibility
+
+- [ ] **M: Link labels to inputs** — about 300 `form-label` elements have no `htmlFor`; toolbar search and filter inputs have no label.
+- [ ] **M: Keyboard access for clickable rows** — Inventory group headers, Audit rows and categories, SLA host rows, FloorPlan site/floor rows, Campaign viewer rows.
+- [ ] **M: `aria-label` on icon-only buttons and 28px minimum targets** — help toggle 18×22, kebab 23, `segmented-xs` 24, DeviceDetail Ack/Resolve ~20, IPAM ✕ ~20.
+- [ ] **M: Visible focus** — menu keyboard focus contrast is about 1.1 (`style.css:5573`); add a shared `:focus-visible` ring.
+- [ ] **M: Remove `aria-live` from `<main>`** — `App.tsx:192` re-announces every poll.
+- [ ] **M: User-menu role chip contrast** — 1.2-3.4 in every theme (`components/UserMenu.tsx:62`).
+- [ ] **L: TabBar arrow-key navigation**; tabs and segmented controls jump on hover from the inherited button lift.
+
+### Shell
+
+- [ ] **H: Collapsed sidebar hides all grouped pages** — only Dashboard and Settings stay reachable (`style.css:1648`); icons have no tooltip and the state is not persisted (`components/Sidebar.tsx:279`, `:347`).
+- [ ] **H: Add `min-width: 0` to `.main-content`** — any wide table makes the whole page scroll sideways (`style.css:1722`). 99 tables, about 26 overflow wrappers; add a shared `.table-scroll`.
+- [ ] **H: Login form width** *(verify in browser)* — `.login-card` uses `align-items: center` (`style.css:1295`), so the form in `pages/Login/Login.tsx:83` shrinks to its content.
+- [ ] **H: Mobile drawer closes when a nav group is tapped** — `components/Sidebar.tsx:379`.
+- [ ] **M: Breadcrumb bar repeats the page title** — single unlinked label (`App.tsx:85`); with the time-range bar the Dashboard opens with three header bands.
+- [ ] **M: Change Management header** — no page title, two help banners, sub-page h2 below the tabs (`pages/ChangeManagement/ChangeManagement.tsx:32`).
+- [ ] **M: Page overlays sit under the sidebar** — `.main-content { z-index: 1 }` vs sidebar 100; hand-built dialogs must portal (use `Modal`).
+- [ ] **L: Breakpoints at 1024/1280** — auto-collapse the sidebar and reduce page padding at ≤1100px.
+- [ ] **L: Sidebar labels clip without ellipsis or tooltip** (`style.css:1590`).
+- [ ] **L: Theme flash on load and missing favicon** — theme is set after first paint (`main.tsx:12`).
+- [ ] **L: Login shows "Register" regardless of the server setting** (`pages/Login/Login.tsx:22`).
+- [ ] **L: Mobile shell** — hamburger covers the drawer brand, no Escape, `100vh` hides the user link.
+
+### Dashboard
+
+- [ ] **H: "Overall Health" sits alone in a two-column grid** — `pages/Dashboard/OverviewPanels.tsx:19`, `style.css:5043`.
+- [ ] **H: Custom panel "Height (rows)" has almost no effect** — charts are fixed at 240px (`pages/Dashboard/Panel.tsx:70`, `lib/echart.tsx:35`).
+- [ ] **M: Panels jump height** between skeleton (80px), empty and loaded states (`Dashboard.tsx:40`, `BandwidthTrendPanel.tsx:47`, `TopTalkersPanel.tsx:50`, `BackupStatusPanel.tsx:63`).
+- [ ] **M: One health label map** — Good/Bad, Healthy/Critical, warn/down and "?" are all in use (`OverviewPanels.tsx:9`, `DevicesGridPanel.tsx:9`, `HealthSection.tsx:91`, `GroupHealthPanel.tsx:169`).
+- [ ] **M: Same device-health counts shown four times**; rings sit far down the page (`Dashboard.tsx:110`).
+- [ ] **M: Two section-heading styles on one page** (`HealthSection.tsx:32`, `AlertsSection.tsx:23`).
+- [ ] **M: Busiest Interfaces tooltip shows raw bps; legend wraps over the plot** (`lib/echart.tsx:111`).
+- [ ] **M: Empty custom panels draw blank axes; error is muted text** (`Panel.tsx:126`).
+- [ ] **M: Viewer toolbar mixes button sizes and duplicates Refresh** (`DashboardViewer.tsx:135`).
+- [ ] **L: Charts resize only on window resize** — use a `ResizeObserver` (`lib/echart.tsx:73`).
+- [ ] **L: Hosts/Playbooks/Jobs rings are scaled against each other** (`StatRings.tsx:100`).
+- [ ] **L: Dashboards list** — delete button nested inside a link (`CustomDashboards.tsx:78`); switcher duplicates Manage; time-range bar shown where nothing is time-based.
+- [ ] **L: Device Health hostnames do not link to the device; Active Alerts stops at 20 with no "view all"**.
+- [ ] **L: Panel modal** — metric is free text; width/height snap back when cleared (`PanelModal.tsx:143`).
+
+### Monitoring
+
+- [ ] **M: Availability tab is two stacked dashboards** with different table styles; host Transitions ignore the filters; "Currently Down" is red at 0 (`pages/Monitoring/AvailabilityTab.tsx:31`).
+- [ ] **M: Capacity chart** — threshold always "80%" even for count metrics; no tooltip or units (`CapacityTab.tsx:21`).
+- [ ] **M: Move the Capacity and SLA SVG charts onto the shared chart component** (`CapacityTab.tsx:113`, `SlaTab.tsx:254`).
+- [ ] **M: SLA tab** — Trends shows only the first host; MTTR/MTTD shown twice (`SlaTab.tsx:233`).
+- [ ] **M: Alert Rules cannot be edited**; disabled rules fade the Enable button too (`RulesTab.tsx:66`).
+- [ ] **M: Suppressions accept an end before the start; Scheduled and Expired look the same** (`SuppressionsTab.tsx:105`).
+- [ ] **M: OID Profiles vendor dropdown collapses to the selected vendor** (`OidProfilesTab.tsx:22`).
+- [ ] **M: Events tab** — empty state says "syslog" when SNMP Trap is selected; truncated messages have no tooltip; no overflow wrapper (`EventsTab.tsx:83`).
+
+### DeviceDetail
+
+- [ ] **H: Interfaces tab fixed two-column tables overflow at 1280 and 1024** (`pages/DeviceDetail/InterfaceTab.tsx:162`).
+- [ ] **M: Doubled padding from the undefined `card-body`**; use the existing `.device-info-bar` (`DeviceDetail.tsx:171`).
+- [ ] **M: Overview charts have no loading or empty state** (`DeviceDetail.tsx:403`).
+- [ ] **M: Flow charts show raw bytes; rotated labels squash the Top Interfaces chart** (`FlowTab.tsx:195`, `InterfaceTab.tsx:151`).
+- [ ] **M: Ack/Resolve buttons are ~20px, unguarded, and "Acked" stays clickable** (`ErrorTrendingTab.tsx:158`).
+- [ ] **M: Help text promises an interface drill-down that does not exist; two help banners stacked** (`DeviceDetail.tsx:46`).
+- [ ] **L: Interface up/down/admin counts rely on colour alone** (`DeviceDetail.tsx:240`).
+
+### GraphTemplates
+
+- [ ] **M: Templates, tree nodes and host-template assignments can be created but not edited or completed** (`pages/GraphTemplates/GraphTemplateDetailModal.tsx:69`, `GraphTreeDetailModal.tsx:62`, `HostTemplateModal.tsx:81`).
+
+### Topology
+
+- [ ] **H: MAC/IP/VLAN result tables are unstyled** — five columns in a 380px panel (`pages/Topology/TopologySearchPanel.tsx:245`, `:281`).
+- [ ] **H: Floating panels overlap and cover the map at 1024** *(verify in browser)* — search 380px, node details 380-460px, edge details fixed 480px (`TopologySearchPanel.tsx:131`, `NodeDetails.tsx:204`, `EdgeDetails.tsx:36`).
+- [ ] **M: Map height ignores what is stacked above it** — `calc(100vh - 280px)` (`Topology.tsx:2332`); the Path card is unbounded and pushes the map off screen; flash messages shift the toolbar.
+- [ ] **M: Toolbar overloaded** — 12 controls in one wrapping row, primary button mid-row, two search entry points, toggle labels change width (`Topology.tsx:1924`).
+- [ ] **M: Search dropdown likely painted under the map panels** *(verify in browser)* (`Topology.tsx:1973`).
+- [ ] **M: Use the shared loading, error and empty-state primitives; add a page header** (`Topology.tsx:2322`, `TopologyPage.tsx:24`).
+- [ ] **M: Add on-canvas zoom/fit controls** (`Topology.tsx:929`).
+- [ ] **M: Legend reuses colours for different meanings and draws link types as dots** (`Topology.tsx:2391`).
+- [ ] **M: Validation shown only as a red border** (`Topology.tsx:2250`, `SweepFilterFields.tsx:103`).
+- [ ] **M: Detail panels** — long hostnames do not wrap; MerakiDetails filter has no label or "no matches" message (`NodeDetails.tsx:296`, `MerakiDetails.tsx:66`).
+- [ ] **M: NodeDetails uses its own ~22px tab bar instead of the shared `TabBar`** (`NodeDetails.tsx:358`).
+- [ ] **M: STP chip is always green, even when blocking** (`NodeDetails.tsx:593`).
+- [ ] **M: Changes and STP Events modals lose row tint** (invalid `var(--x)14`) and show error and empty together (`ChangesModal.tsx:71`, `:94`, `StpEventsModal.tsx:54`, `:78`).
+- [ ] **M: Discovery progress modal** — no Stop button, stale title on error, log does not auto-scroll (`DiscoveryProgressModal.tsx:105`).
+- [ ] **M: Map Sources** — all eight sample buttons show "Building…" at once; progress renders below the table; history has no limit (`SourcesModal.tsx:528`, `:609`).
+- [ ] **M: Reachability verdict filter shows no active state** (`Reachability.tsx:466`).
+- [ ] **M: Reachability renders up to 20,000 rows unpaginated** (`Reachability.tsx:659`).
+- [ ] **M: Reachability form has ~25 always-visible controls and 170-word help**; Sources multi-select needs Ctrl+click (`Reachability.tsx:176`, `SweepFilterFields.tsx:43`).
+- [ ] **L: `DETAIL_CELL_STYLE` overrides `.data-table` padding; "Download shown rows" is disabled only through `pointerEvents`** (`helpers.ts:212`, `Reachability.tsx:497`).
+
+### FloorPlan
+
+- [ ] **H: Pins cannot be inspected outside edit mode** — `pointer-events: none`, label is the first three letters of the hostname (`pages/FloorPlan/FloorCanvas.tsx:131`, `:246`).
+- [ ] **M: Place mode says "All devices placed" while inventory loads; no error state or search** (`FloorPlan.tsx:482`).
+- [ ] **M: No way to remove a pin or edit/delete a site** (`FloorPlan.tsx:64`).
+- [ ] **M: Failed site load shows "No sites yet"; floor rows are ~22px** (`FloorPlan.tsx:188`, `:275`).
+- [ ] **L: Status dots have no label or legend; "add one above" points the wrong way; modal buttons show no busy label** (`FloorPlan.tsx:229`, `:269`, `modals.tsx:317`).
+
+### CloudVisibility
+
+- [ ] **H: Summary stat cards are unstyled on the Topology, Flow and Traffic tabs** (`pages/CloudVisibility/TopologyTab.tsx:484`, `FlowTab.tsx:222`, `TrafficTab.tsx:214`).
+- [ ] **M: Half a screen of header before content**; the account filter shows on tabs that ignore it (`CloudVisibility.tsx:89`).
+- [ ] **M: Form labels touch their inputs; Title Case labels with units in the name** (`SyncControls.tsx:56`, `FlowTab.tsx:72`, `AccountsTab.tsx:488`).
+- [ ] **M: Flow/Traffic sync panel sits between the filters and the data; timelines render up to 10,080 table rows** (`FlowTab.tsx:102`, `:198`).
+- [ ] **M: Policy tab shows Loading and empty together** (`PolicyTab.tsx:111`).
+- [ ] **M: Policy tables squeezed side by side; rules silently capped at 200; route-path tables overflow 320px cards** (`PolicyTab.tsx:38`, `:108`, `TopologyTab.tsx:344`).
+- [ ] **L: Accounts tab** — three primary "Add" buttons; nine-column table scrolls at 1280 (`AccountsTab.tsx:154`, `:199`).
+
+### Settings
+
+- [ ] **M: Unsaved changes are lost silently on tab switch; the save model is mixed without signalling** (`pages/Settings/Settings.tsx:212`).
+- [ ] **M: 12-tab bar wraps to two rows at 1280** (`Settings.tsx:86`).
+- [ ] **M: Tab help describes features that do not exist** — density, SAML, password policy, log level (`Settings.tsx:35`).
+- [ ] **M: Same introduction shown up to four times per tab** (`Settings.tsx:201`, `NotificationsTab.tsx:295`, `SiemTab.tsx:150`).
+- [ ] **M: Auth and Discovery field alignment** — checkbox rows touch the next label or sit ~1rem above inputs; Notifications/SIEM patch with `marginTop: 1.4rem` (`AuthTab.tsx:731`, `DiscoveryTab.tsx:79`, `NotificationsTab.tsx:490`).
+- [ ] **M: Notifications, SIEM and Service Credentials tables** — unstyled tables, full-size row buttons, editors open below the table out of view, Test gives no feedback (`AuthTab.tsx:909`, `NotificationsTab.tsx:309`, `:409`, `SiemTab.tsx:160`, `:236`).
+- [ ] **M: Success and error messages look different on every tab**; the boxed `.error` breaks layout inline (`UserModals.tsx:161`, `SystemTab.tsx:272`).
+- [ ] **M: Users** — wall of feature badges per card; Create is disabled with no reason given; Access Groups show raw feature keys (`UsersTab.tsx:141`, `UserModals.tsx:115`, `AccessGroupsTab.tsx:107`).
+- [ ] **L: "Job Retention" sits under Authentication; rate-limit and escalation fields lack help; NetFlow status badges hand-coloured; PEM boxes use a proportional font** (`AuthTab.tsx:117`, `:251`, `MonitoringTab.tsx:130`, `NetFlowTab.tsx:72`, `SiemTab.tsx:417`).
+- [ ] **L: Consolidate duplicated Settings helpers** — status line (~8 copies), `SectionCard` (2), access-group checkbox grid (4), modal footer (2), SIEM/Notification advanced blocks.
+
+### Audit (CIS)
+
+- [ ] **H: Schedule and Mute dialogs are hand-built and render inside their card** — no Escape, no × (`pages/Audit/Audit.tsx:671`, `:957`). Rebuild on `components/Modal.tsx`.
+- [ ] **H: Their inputs are unstyled** (`Audit.tsx:697`, `:722`, `:1027`, `:1037`).
+- [ ] **M: Clicking label text changes the selection** — button rows wrapped in `<label>` (`Audit.tsx:705`, `:1001`).
+- [ ] **M: Findings open at the bottom of the page with no scroll** (`Audit.tsx:121`, `:192`).
+- [ ] **M: Filter chips are unstyled and ~20px tall** (`Audit.tsx:398`).
+- [ ] **L: No feedback after Run now or Mute; Host column shows a numeric id** (`Audit.tsx:569`, `:883`).
+
+### Federation, Maintenance Windows, Network Tools
+
+- [ ] **M: Federation table overflows at 1024** — seven columns with an unbounded URL (`pages/Federation/Federation.tsx:219`).
+- [ ] **M: Federation row actions** — busy state shows "…", test result uses a blocking alert, Sync gives no confirmation (`Federation.tsx:293`).
+- [ ] **L: Federation stacks three banners before content** (`Federation.tsx:39`).
+- [ ] **H: Maintenance modal fields are unstyled** (`pages/MaintenanceWindows/MaintenanceWindowModal.tsx:164`).
+- [ ] **M: Maintenance edit modal shows stale or blank data while loading, with Save enabled** (`MaintenanceWindowModal.tsx:70`).
+- [ ] **M: Maintenance table is hand-built; state shown as lowercase text; own h2 under the tab bar** (`MaintenanceWindows.tsx:75`, `:117`).
+- [ ] **M: MAC Tracking toolbars reuse `page-header`**, spreading controls full width (`pages/NetworkTools/MacTracking.tsx:212`, `:362`, `:548`).
+- [ ] **M: MAC Tracking badges and stat tiles are unstyled** (`MacTracking.tsx:641`, `:772`, `:828`).
+- [ ] **L: Nested scrollbars in the MAC history modals** (`MacTracking.tsx:906`, `:1046`).
+- [ ] **L: Traffic Analysis** — own range select instead of the shared time bar; sub-tab not in the URL (`TrafficAnalysis.tsx:68`, `:103`).
+
+### Inventory
+
+- [ ] **M: Whole group card is draggable**, so selecting a hostname drags the card (`pages/Inventory/Inventory.tsx:562`).
+- [ ] **M: Bulk selection has no count or Clear; the buttons shift the toolbar** (`Inventory.tsx:707`).
+- [ ] **M: Discovery modal** — device type is free text; "Onboard Selected" shows no count (`DiscoveryModal.tsx:712`, `:808`).
+- [ ] **M: SNMP profiles** — v3 fields shown for v2c; community string in plain text (`SnmpProfilesModal.tsx:64`, `:324`).
+- [ ] **L: Compact mode barely changes density** (`Inventory.tsx:574`).
+- [ ] **L: Help text points to "Settings → Credentials", which does not exist** (`SnmpProfilesModal.tsx:403`, `SerialModal.tsx:88`).
+
+### Configuration
+
+- [ ] **H: Restore result dumps a unified diff into an alert as one paragraph**; the confirm button is primary, not danger (`pages/Configuration/RestoreBackupModal.tsx:29`, `:75`).
+- [ ] **M: Drift bulk actions fire n separate mutations with no error handling; two primary buttons in the toolbar** (`DriftTab.tsx:118`).
+- [ ] **M: "View Diff" expands inline in one view and opens a modal in the other**; ghost buttons with zero padding (`DriftTab.tsx:330`, `:502`).
+- [ ] **M: Config viewers sized 480 / 400 / 220px**; a 400px diff inside a 1600px modal; search snippet margin bug (`BackupModal.tsx:70`, `UnifiedDiff.tsx:14`, `SearchTab.tsx:265`).
+- [ ] **M: Silent no-op submits** (`BackupPolicyModal.tsx:113`, `SetBaselineModal.tsx:62`, `CaptureSnapshotModal.tsx:39`).
+- [ ] **L: Backups and drift events render as unbounded card lists** (`BackupsTab.tsx:350`, `DriftTab.tsx:159`).
+
+### IPAM
+
+- [ ] **H: Right column clamps to 320px but holds 5-7 column tables with no scroll wrapper** *(verify in browser)* (`pages/Ipam/Ipam.tsx:235`, `:1060`, `:1228`, `:1367`).
+- [ ] **M: Drilldown stat values overflow on large subnets; no thousands separators** (`SubnetDrilldown.tsx:53`).
+- [ ] **M: Selected subnet is nearly invisible; the drilldown panel is not scrolled into view** (`Ipam.tsx:299`, `:416`).
+- [ ] **M: Inline button sizes instead of `btn-sm`; four primary buttons on the page** (`Ipam.tsx:917`, `:1101`).
+- [ ] **L: Inline drilldown forms reverse the button order** (`SubnetDrilldown.tsx:306`).
+- [ ] **L: 11 stat cards before content; permanent five-paragraph notes card** (`Ipam.tsx:99`, `:553`).
+
+### Jobs
+
+- [ ] **M: Tabs say Tasks/Instructions, content says Playbook/Template** (`pages/Jobs/LaunchJobModal.tsx:138`, `PlaybooksTab.tsx:46`, `TemplatesTab.tsx:54`).
+- [ ] **M: Launch target picker has no search, count or clear** (`LaunchJobModal.tsx:152`).
+- [ ] **M: Credentials are always-open inline forms; Save appears on change and shifts the layout** (`CredentialsList.tsx:69`).
+- [ ] **L: Job list silently capped at 100; Copy gives no feedback; output modal ignores the `.job-output` class** (`JobsTab.tsx:29`, `JobOutputModal.tsx:175`, `:199`).
+- [ ] **L: Credentials help mentions an Inventory control that does not exist** (`Jobs.tsx:42`).
+
+### Upgrades and Software
+
+- [ ] **H: Software two-column grid has no breakpoint** *(verify in browser)* — the devices table gets ~350px at 1024 (`pages/Software/Software.tsx:330`).
+- [ ] **M: Software toolbar is crowded**; labels sit on the select bottom edge; full-size buttons (`Software.tsx:204`).
+- [ ] **L: Software side column lists are uncapped; empty actions header; version spread marks "behind" by colour only** (`Software.tsx:420`, `:501`, `:547`).
+- [ ] **M: Campaign viewer ordering** — history before actions, selection controls after the buttons they affect (`pages/Upgrades/CampaignViewerModal.tsx:833`, `:963`).
+- [ ] **M: Campaign viewer** — nested scrollbars, "Sel" header with no select-all, raw WebSocket state text (`CampaignViewerModal.tsx:1027`, `:1138`).
+- [ ] **M: Images table has no overflow wrapper; truncated campaign names have no tooltip** (`ImagesTab.tsx:73`, `CampaignsTab.tsx:158`).
+- [ ] **L: Campaign form error sits at the bottom of a tall 1600px modal; host checkboxes are tightly packed** (`CampaignFormModal.tsx:443`, `:562`).
+
+### Compliance, Deployments, RiskAnalysis, Reports
+
+- [ ] **M: Compliance scans run synchronously with only "Scanning…"; Fix All shows no progress** (`pages/Compliance/RunScanModal.tsx:187`, `FindingsModal.tsx:128`).
+- [ ] **M: Up to 500 rows rendered as stacked cards with no sorting** (`Compliance.tsx:650`, `MerakiTab.tsx:339`).
+- [ ] **L: Two findings tables styled differently; second tab bar inside the Meraki tab; rules line not clamped; kind labels duplicated** (`FindingsModal.tsx:214`, `MerakiFindingsModal.tsx:43`, `MerakiTab.tsx:22`, `:62`).
+- [ ] **H: Deployment approval comment field is unstyled** (`pages/Deployments/DeploymentDetailModal.tsx:402`).
+- [ ] **M: Deployment status shown three ways with raw tokens** (`Deployments.tsx:338`, `DeploymentDetailModal.tsx:159`).
+- [ ] **M: Deployment detail tables use inline padding; proposed commands are collapsed beside Execute** (`DeploymentDetailModal.tsx:259`, `:473`).
+- [ ] **M: RiskAnalysis run result shown in a red Confirm dialog with line breaks lost** (`pages/RiskAnalysis/RiskAnalysis.tsx:146`).
+- [ ] **L: RiskAnalysis predicted diff is collapsed and uncoloured** (`AnalysisDetailModal.tsx:272`).
+- [ ] **M: Reports action cells use `display: flex` on `<td>`** (`pages/Reports/HistoryTab.tsx:63`, `BillingTab.tsx:194`).
+- [ ] **M: Reports show raw JSON keys as headers, raw type names and sizes in bytes** (`GenerateReportTab.tsx:164`, `HistoryTab.tsx:59`, `ArtifactsModal.tsx:43`).
+- [ ] **L: Circuit create and edit forms differ** (`CircuitFormModal.tsx:95`, `:186`).
+- [ ] **L: Code and JSON boxes use a proportional font while prose fields get monospace** (`Compliance/ProfileModals.tsx:410`, `RiskAnalysis/NewAnalysisModal.tsx:149`).
+- [ ] **L: Number fields snap back to a default when cleared** (`Compliance/ProfileModals.tsx:305`, `Software/SettingsModal.tsx:81`, `Reports/GenerateReportTab.tsx:86`).

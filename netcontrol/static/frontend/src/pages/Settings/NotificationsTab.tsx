@@ -306,7 +306,7 @@ export function NotificationsTab() {
         <p className="text-muted">No channels configured. Add one to start delivering alerts.</p>
       ) : (
         <div style={{ overflowX: 'auto' }}>
-          <table className="table" style={{ width: '100%', minWidth: '760px' }}>
+          <table className="data-table" style={{ width: '100%', minWidth: '760px' }}>
             <thead>
               <tr>
                 <th>Default</th>

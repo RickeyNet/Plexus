@@ -164,7 +164,7 @@ function OverviewCards({
   data: FederationOverview | undefined;
   loading: boolean;
 }) {
-  if (loading) return <div className="skeleton-loader" style={{ height: 100 }} />;
+  if (loading) return <div className="skeleton" style={{ height: 100 }} />;
   if (!data || !data.totals) {
     return (
       <p style={{ color: 'var(--text-muted)' }}>
