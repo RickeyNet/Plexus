@@ -217,6 +217,57 @@ def test_rule_update_and_delete(monkeypatch, request):
     assert client.get(f"/api/monitoring/rules/{rule_id}").status_code == 404
 
 
+def test_rule_update_edits_fields_and_clears_scope(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
+
+    async def _seed_host() -> int:
+        conn = await pg_raw.connect()
+        try:
+            group_id = await conn.fetchval("INSERT INTO inventory_groups (name) VALUES ('rule-scope') RETURNING id")
+            return await conn.fetchval(
+                "INSERT INTO hosts (group_id, hostname, ip_address) VALUES ($1, 'rule-host', '192.0.2.21') RETURNING id",
+                group_id,
+            )
+        finally:
+            await conn.close()
+
+    host_id = asyncio.run(_seed_host())
+    rule_id = client.post(
+        "/api/monitoring/rules",
+        json={"name": "scoped", "metric": "cpu", "value": 85, "host_id": host_id, "channel_ids": ["ops"]},
+    ).json()["id"]
+    assert client.get(f"/api/monitoring/rules/{rule_id}").json()["host_id"] == host_id
+
+    updated = client.put(
+        f"/api/monitoring/rules/{rule_id}",
+        json={
+            "name": "renamed",
+            "metric": "memory",
+            "operator": ">",
+            "value": 70,
+            "severity": "critical",
+            "cooldown_minutes": 30,
+            "host_id": None,
+            "group_id": None,
+            "channel_ids": [],
+        },
+    )
+    assert updated.status_code == 200
+    rule = updated.json()
+    assert (rule["name"], rule["metric"], rule["operator"], rule["value"]) == ("renamed", "memory", ">", 70)
+    assert (rule["severity"], rule["cooldown_minutes"]) == ("critical", 30)
+    assert rule["host_id"] is None and rule["group_id"] is None
+    assert rule["channel_ids"] == "[]"
+
+
+def test_rule_update_rejects_bad_fields(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
+    rule_id = client.post("/api/monitoring/rules", json={"name": "strict", "metric": "cpu", "value": 85}).json()["id"]
+    for body in ({"name": "  "}, {"metric": ""}, {"operator": "~="}, {"value": "not-a-number"}):
+        assert client.put(f"/api/monitoring/rules/{rule_id}", json=body).status_code == 400
+    assert client.get(f"/api/monitoring/rules/{rule_id}").json()["name"] == "strict"
+
+
 def test_rule_update_missing_returns_404(monkeypatch, request):
     client = _auth_client(monkeypatch, request)
     assert client.put("/api/monitoring/rules/99999", json={"value": 1}).status_code == 404
@@ -251,6 +302,76 @@ def test_suppression_requires_ends_at(monkeypatch, request):
     client = _auth_client(monkeypatch, request)
     resp = client.post("/api/monitoring/suppressions", json={"name": "no end"})
     assert resp.status_code == 400
+
+
+def test_suppression_rejects_end_not_after_start(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
+    for ends_at in ("2099-01-01 00:00:00", "2099-01-02 00:00:00"):
+        resp = client.post(
+            "/api/monitoring/suppressions",
+            json={"name": "backwards", "starts_at": "2099-01-02 00:00:00", "ends_at": ends_at},
+        )
+        assert resp.status_code == 400
+        assert "after starts_at" in resp.json()["detail"]
+
+    resp = client.post(
+        "/api/monitoring/suppressions",
+        json={"name": "garbled", "starts_at": "not-a-date", "ends_at": "2099-01-02 00:00:00"},
+    )
+    assert resp.status_code == 400
+
+    resp = client.post(
+        "/api/monitoring/suppressions",
+        json={"name": "forwards", "starts_at": "2099-01-01 00:00:00", "ends_at": "2099-01-02 00:00:00"},
+    )
+    assert resp.status_code == 201
+
+
+def test_availability_transitions_filter_by_group_and_days(monkeypatch, request):
+    client = _auth_client(monkeypatch, request)
+
+    async def _seed() -> tuple[int, int]:
+        conn = await pg_raw.connect()
+        try:
+            ids = []
+            for name, ip in (("avail-a", "192.0.2.11"), ("avail-b", "192.0.2.12")):
+                group_id = await conn.fetchval("INSERT INTO inventory_groups (name) VALUES ($1) RETURNING id", name)
+                host_id = await conn.fetchval(
+                    "INSERT INTO hosts (group_id, hostname, ip_address) VALUES ($1, $2, $3) RETURNING id",
+                    group_id,
+                    name,
+                    ip,
+                )
+                await conn.execute(
+                    """INSERT INTO availability_transitions (host_id, entity_type, old_state, new_state)
+                       VALUES ($1, 'host', 'up', 'down')""",
+                    host_id,
+                )
+                ids.append(group_id)
+            # An old transition in the first group, outside a 7 day window.
+            await conn.execute(
+                """INSERT INTO availability_transitions (host_id, entity_type, old_state, new_state, transition_at)
+                   SELECT id, 'host', 'unknown', 'up', '2000-01-01 00:00:00' FROM hosts WHERE group_id = $1""",
+                ids[0],
+            )
+            return ids[0], ids[1]
+        finally:
+            await conn.close()
+
+    group_a, group_b = asyncio.run(_seed())
+
+    everything = client.get("/api/availability/transitions").json()["transitions"]
+    assert {t["hostname"] for t in everything} >= {"avail-a", "avail-b"}
+
+    in_a = client.get(f"/api/availability/transitions?group_id={group_a}").json()["transitions"]
+    assert [t["hostname"] for t in in_a] == ["avail-a", "avail-a"]
+
+    recent_a = client.get(f"/api/availability/transitions?group_id={group_a}&days=7").json()["transitions"]
+    assert [(t["old_state"], t["new_state"]) for t in recent_a] == [("up", "down")]
+    assert recent_a[0]["transition_at"]
+
+    in_b = client.get(f"/api/availability/transitions?group_id={group_b}&days=7").json()["transitions"]
+    assert [t["hostname"] for t in in_b] == ["avail-b"]
 
 
 def test_suppression_active_only_filter(monkeypatch, request):

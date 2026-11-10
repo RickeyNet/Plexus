@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 
 import { DataTable } from '@/components/DataTable';
 import { EmptyState } from '@/components/EmptyState';
@@ -17,6 +17,7 @@ import {
 } from '@/api/monitoring';
 import { clickableProps } from '@/lib/clickable';
 import { formatBackendDateTime } from '@/lib/datetime';
+import { TimeSeriesChart } from '@/lib/echart';
 import { formatMinutes, slaStatusBadge } from './helpers';
 
 type SubTab = 'hosts' | 'trends';
@@ -249,28 +250,61 @@ function SlaIncidents({ summary }: { summary?: { total_alerts?: number; resolved
 }
 
 function SlaTrends({ summary, days }: { summary?: { hosts: SlaHostSummary[] }; days: number }) {
-  const firstHostId = summary?.hosts?.[0]?.host_id ?? null;
-  const detail = useSlaHostDetail(firstHostId, days);
-  if (!firstHostId) {
-    return <div className="card text-muted">No trend data available.</div>;
+  const fid = useId();
+  const hosts = summary?.hosts ?? [];
+  const [pickedHostId, setPickedHostId] = useState<number | null>(null);
+  // The picked host, or the first one until the user picks (or when the picked host left the list).
+  const hostId = hosts.some((h) => h.host_id === pickedHostId) ? pickedHostId : (hosts[0]?.host_id ?? null);
+  const detail = useSlaHostDetail(hostId, days);
+  if (hostId == null) {
+    return <EmptyState message="No trend data available." />;
   }
-  if (detail.error && !detail.data) {
-    return (
-      <QueryError what="SLA trends" query={detail} />
-    );
-  }
-  if (detail.isPending) return <LoadingState />;
   const daily = detail.data?.daily ?? [];
   return (
     <div className="stack stack-sm">
-      <SlaChart daily={daily} field="uptime_pct" label="Uptime %" color="var(--success)" minY={95} maxY={100} />
-      <SlaChart daily={daily} field="avg_latency_ms" label="Latency (ms)" color="var(--primary)" minY={0} maxY={null} />
-      <SlaChart daily={daily} field="jitter_ms" label="Jitter (ms)" color="var(--warning)" minY={0} maxY={null} />
-      <SlaChart daily={daily} field="avg_packet_loss_pct" label="Packet Loss %" color="var(--danger)" minY={0} maxY={null} />
-      <div className="text-muted" style={{ fontSize: '0.8em' }}>
-        Showing trends for <strong>{detail.data?.hostname}</strong>. Click a host to view its specific trends.
+      <div className="toolbar">
+        <label className="text-muted" htmlFor={`${fid}-host`}>Host:</label>
+        <select
+          id={`${fid}-host`}
+          className="form-select"
+          value={hostId}
+          onChange={(e) => setPickedHostId(parseInt(e.target.value, 10))}
+        >
+          {hosts.map((h) => (
+            <option key={h.host_id} value={h.host_id}>
+              {h.hostname || `Host #${h.host_id}`}{h.ip_address ? ` (${h.ip_address})` : ''}
+            </option>
+          ))}
+        </select>
       </div>
+      {detail.error && !detail.data ? (
+        <QueryError what="SLA trends" query={detail} />
+      ) : detail.isPending ? (
+        <LoadingState />
+      ) : (
+        <SlaDailyCharts daily={daily} />
+      )}
     </div>
+  );
+}
+
+type SlaDailyField = Exclude<keyof SlaDailyPoint, 'day'>;
+
+// The four daily SLA series of one host, each with its unit on the axis and in the tooltip.
+const SLA_CHARTS: { field: SlaDailyField; label: string; unit: string; color: string; floor: number; ceiling?: number }[] = [
+  { field: 'uptime_pct', label: 'Uptime', unit: '%', color: 'var(--success)', floor: 95, ceiling: 100 },
+  { field: 'avg_latency_ms', label: 'Latency', unit: ' ms', color: 'var(--primary)', floor: 0 },
+  { field: 'jitter_ms', label: 'Jitter', unit: ' ms', color: 'var(--warning)', floor: 0 },
+  { field: 'avg_packet_loss_pct', label: 'Packet Loss', unit: '%', color: 'var(--danger)', floor: 0 },
+];
+
+function SlaDailyCharts({ daily }: { daily: SlaDailyPoint[] }) {
+  return (
+    <>
+      {SLA_CHARTS.map((c) => (
+        <SlaChart key={c.field} daily={daily} {...c} />
+      ))}
+    </>
   );
 }
 
@@ -278,91 +312,45 @@ function SlaChart({
   daily,
   field,
   label,
+  unit,
   color,
-  minY,
-  maxY,
+  floor,
+  ceiling,
 }: {
   daily: SlaDailyPoint[];
-  field: keyof SlaDailyPoint;
+  field: SlaDailyField;
   label: string;
+  unit: string;
   color: string;
-  minY: number | null;
-  maxY: number | null;
+  /** Lowest y value shown unless the data goes below it. */
+  floor: number;
+  ceiling?: number;
 }) {
-  const W = 700, H = 200, PAD_L = 55, PAD_R = 20, PAD_T = 30, PAD_B = 35;
-  const chartW = W - PAD_L - PAD_R;
-  const chartH = H - PAD_T - PAD_B;
-
-  const values = daily.map((d) => d[field]).filter((v): v is number => typeof v === 'number');
-  if (values.length === 0) {
-    return (
-      <div className="card">
-        <div style={{ fontWeight: 600 }}>{label}</div>
-        <EmptyState compact message="No data" />
-      </div>
-    );
-  }
-
-  const dataMin = Math.min(...values);
-  const dataMax = Math.max(...values);
-  const yMin = minY != null ? Math.min(minY, dataMin) : dataMin - (dataMax - dataMin) * 0.1;
-  const yMax = maxY != null ? Math.max(maxY, dataMax) : dataMax + (dataMax - dataMin) * 0.1 || 1;
-  const yRange = yMax - yMin || 1;
-
-  const points = daily
-    .map((d, i) => {
+  const series = useMemo(() => {
+    const data = daily.flatMap((d) => {
       const v = d[field];
-      if (typeof v !== 'number') return null;
-      const x = PAD_L + (i / Math.max(daily.length - 1, 1)) * chartW;
-      const y = PAD_T + chartH - ((v - yMin) / yRange) * chartH;
-      return { x, y, v, day: d.day };
-    })
-    .filter((p): p is { x: number; y: number; v: number; day: string } => p != null);
-
-  if (points.length === 0) return null;
-
-  const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-  const areaPath = `${linePath} L${points[points.length - 1].x.toFixed(1)},${PAD_T + chartH} L${points[0].x.toFixed(1)},${PAD_T + chartH} Z`;
-
-  const gridLines = [];
-  for (let i = 0; i <= 4; i++) {
-    const y = PAD_T + (i / 4) * chartH;
-    const val = yMax - (i / 4) * yRange;
-    gridLines.push(
-      <g key={i}>
-        <line x1={PAD_L} y1={y} x2={W - PAD_R} y2={y} stroke="var(--border)" strokeDasharray="2,2" />
-        <text x={PAD_L - 8} y={y + 3} textAnchor="end" fill="var(--text-muted)" fontSize="10">
-          {val.toFixed(val < 10 ? 1 : 0)}
-        </text>
-      </g>,
-    );
-  }
-
-  const xLabels = [];
-  const step = Math.max(1, Math.floor(daily.length / 5));
-  for (let i = 0; i < daily.length; i += step) {
-    const x = PAD_L + (i / Math.max(daily.length - 1, 1)) * chartW;
-    xLabels.push(
-      <text key={i} x={x} y={H - 5} textAnchor="middle" fill="var(--text-muted)" fontSize="10">
-        {(daily[i].day || '').slice(5)}
-      </text>,
-    );
-  }
+      return typeof v === 'number' ? [{ time: d.day, value: v }] : [];
+    });
+    return [{ name: label, data, color }];
+  }, [daily, field, label, color]);
+  const values = series[0].data.map((p) => p.value);
 
   return (
     <div className="card">
-      <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>{label}</div>
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" style={{ width: '100%', height: 'auto' }}>
-        {gridLines}
-        {xLabels}
-        <path d={areaPath} fill={color} opacity="0.15" />
-        <path d={linePath} fill="none" stroke={color} strokeWidth="2" />
-        {points.map((p, i) => (
-          <circle key={i} cx={p.x} cy={p.y} r="3" fill="var(--card-bg)" stroke={color} strokeWidth="2">
-            <title>{`${p.day}: ${p.v.toFixed(2)}`}</title>
-          </circle>
-        ))}
-      </svg>
+      <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>{`Daily ${label} (${unit.trim()})`}</div>
+      {values.length === 0 ? (
+        <EmptyState compact message="No data" />
+      ) : (
+        <TimeSeriesChart
+          series={series}
+          area
+          unit={unit}
+          yAxisName={unit.trim()}
+          yMin={Math.floor(Math.min(floor, ...values))}
+          yMax={ceiling}
+          height={200}
+        />
+      )}
     </div>
   );
 }
@@ -388,12 +376,7 @@ function SlaHostDetailModal({ hostId, days, onClose }: { hostId: number; days: n
           </div>
           <SlaHostTargets hostId={hostId} />
           {detail.data.daily && detail.data.daily.length > 0 ? (
-            <>
-              <SlaChart daily={detail.data.daily} field="uptime_pct" label="Daily Uptime %" color="var(--success)" minY={95} maxY={100} />
-              <SlaChart daily={detail.data.daily} field="avg_latency_ms" label="Daily Latency (ms)" color="var(--primary)" minY={0} maxY={null} />
-              <SlaChart daily={detail.data.daily} field="jitter_ms" label="Daily Jitter (ms)" color="var(--warning)" minY={0} maxY={null} />
-              <SlaChart daily={detail.data.daily} field="avg_packet_loss_pct" label="Daily Packet Loss %" color="var(--danger)" minY={0} maxY={null} />
-            </>
+            <SlaDailyCharts daily={detail.data.daily} />
           ) : (
             <EmptyState compact message="No daily trend data available." />
           )}

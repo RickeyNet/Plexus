@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 import netcontrol.routes.state as state
 from netcontrol.routes.icmp import ICMP_AVAILABLE, ping_host
+from netcontrol.routes.maintenance_windows import _parse_iso
 from netcontrol.routes.metrics_engine import (
     emit_metric_samples_from_poll,
     run_retention_cleanup as metrics_retention_cleanup,
@@ -1689,6 +1690,36 @@ def _normalize_channel_ids(raw) -> str:
     return json.dumps([str(x).strip() for x in raw if str(x).strip()])
 
 
+_ALERT_RULE_OPERATORS = {">", ">=", "<", "<=", "==", "!="}
+
+
+def _validate_alert_rule_fields(body: dict) -> dict:
+    """Validated ``name`` / ``metric`` / ``operator`` / numeric fields present
+    in ``body`` (HTTP 400 for a bad value). Shared by rule create and update."""
+    out: dict = {}
+    try:
+        if "value" in body:
+            out["value"] = float(body["value"])
+        for key in ("consecutive", "cooldown_minutes", "escalate_after_minutes"):
+            if key in body:
+                out[key] = int(body[key])
+    except ValueError, TypeError:
+        raise HTTPException(status_code=400, detail="Numeric fields must be valid numbers")
+    if "name" in body:
+        out["name"] = (body["name"] or "").strip()
+        if not out["name"]:
+            raise HTTPException(status_code=400, detail="Rule name is required")
+    if "metric" in body:
+        out["metric"] = (body["metric"] or "").strip()
+        if not out["metric"]:
+            raise HTTPException(status_code=400, detail="Metric is required")
+    if "operator" in body:
+        if body["operator"] not in _ALERT_RULE_OPERATORS:
+            raise HTTPException(status_code=400, detail=f"Operator must be one of {_ALERT_RULE_OPERATORS}")
+        out["operator"] = body["operator"]
+    return out
+
+
 @router.get("/api/monitoring/rules")
 async def list_alert_rules():
     return await db.get_alert_rules()
@@ -1698,33 +1729,28 @@ async def list_alert_rules():
 async def create_alert_rule_endpoint(body: dict, request: Request):
     session = _get_session(request)
     user = session["user"] if session else ""
-    try:
-        value = float(body.get("value", 0))
-        consecutive = int(body.get("consecutive", 1))
-        cooldown_minutes = int(body.get("cooldown_minutes", 15))
-        escalate_after_minutes = int(body.get("escalate_after_minutes", 0))
-    except ValueError, TypeError:
-        raise HTTPException(status_code=400, detail="Numeric fields must be valid numbers")
-    name = (body.get("name") or "").strip()
-    metric = (body.get("metric") or "").strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Rule name is required")
-    if not metric:
-        raise HTTPException(status_code=400, detail="Metric is required")
-    allowed_operators = {">", ">=", "<", "<=", "==", "!="}
-    operator = body.get("operator", ">=")
-    if operator not in allowed_operators:
-        raise HTTPException(status_code=400, detail=f"Operator must be one of {allowed_operators}")
+    fields = _validate_alert_rule_fields(
+        {
+            "name": "",
+            "metric": "",
+            "operator": ">=",
+            "value": 0,
+            "consecutive": 1,
+            "cooldown_minutes": 15,
+            "escalate_after_minutes": 0,
+            **body,
+        }
+    )
     rule_id = await db.create_alert_rule(
-        name=name,
-        metric=metric,
+        name=fields["name"],
+        metric=fields["metric"],
         rule_type=body.get("rule_type", "threshold"),
-        operator=operator,
-        value=value,
+        operator=fields["operator"],
+        value=fields["value"],
         severity=body.get("severity", "warning"),
-        consecutive=consecutive,
-        cooldown_minutes=cooldown_minutes,
-        escalate_after_minutes=escalate_after_minutes,
+        consecutive=fields["consecutive"],
+        cooldown_minutes=fields["cooldown_minutes"],
+        escalate_after_minutes=fields["escalate_after_minutes"],
         escalate_to=body.get("escalate_to", "critical"),
         host_id=body.get("host_id"),
         group_id=body.get("group_id"),
@@ -1757,7 +1783,7 @@ async def update_alert_rule_endpoint(rule_id: int, body: dict, request: Request)
         raise HTTPException(status_code=404, detail="Rule not found")
     if "channel_ids" in body:
         body["channel_ids"] = _normalize_channel_ids(body.get("channel_ids"))
-    await db.update_alert_rule(rule_id, **body)
+    await db.update_alert_rule(rule_id, **{**body, **_validate_alert_rule_fields(body)})
     session = _get_session(request)
     await _audit(
         "monitoring",
@@ -1800,6 +1826,16 @@ async def create_alert_suppression_endpoint(body: dict, request: Request):
     user = session["user"] if session else ""
     if not body.get("ends_at"):
         raise HTTPException(status_code=400, detail="ends_at is required")
+    # A window that ends at or before its start never suppresses anything.
+    # Without starts_at the window starts now, and an already-ended window is
+    # still accepted (it is listed as expired).
+    if body.get("starts_at"):
+        try:
+            window_ok = _parse_iso(str(body["ends_at"])) > _parse_iso(str(body["starts_at"]))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="starts_at and ends_at must be valid timestamps")
+        if not window_ok:
+            raise HTTPException(status_code=400, detail="ends_at must be after starts_at")
     sup_id = await db.create_alert_suppression(
         name=body.get("name", ""),
         ends_at=body["ends_at"],
@@ -2004,9 +2040,11 @@ async def availability_summary_api(
 @router.get("/api/availability/transitions")
 async def availability_transitions_api(
     host_id: int | None = Query(default=None),
+    group_id: int | None = Query(default=None),
     entity_type: str | None = Query(default=None),
     start: str | None = Query(default=None),
     end: str | None = Query(default=None),
+    days: int | None = Query(default=None, ge=1, le=365),
     limit: int = Query(default=500, ge=1, le=10000),
 ):
     return {
@@ -2016,6 +2054,8 @@ async def availability_transitions_api(
             start=start,
             end=end,
             limit=limit,
+            group_id=group_id,
+            days=days,
         )
     }
 
