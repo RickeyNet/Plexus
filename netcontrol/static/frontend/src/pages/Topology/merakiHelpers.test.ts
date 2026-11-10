@@ -103,6 +103,54 @@ describe("meraki detail tabs", () => {
     expect(sectionsMatch(sections, searchTerms("voice"))).toBe(false);
     expect(sectionsMatch(sections, [])).toBe(false);
   });
+
+  it("searches a pasted URL, UNC path or NFS mount by its host", () => {
+    const host = "svm-0123.fs-0123.fsx.example.com";
+    for (const pasted of [
+      `https://${host.toUpperCase()}:443/share/path?x=1`,
+      `nfs://${host}/vol1`,
+      `smb://user@${host}/share`,
+      `\\\\${host}\\share\\dir`,
+      `//${host}/share`,
+      `${host}:/fsx`,
+      `https://${host}./`,
+    ]) {
+      expect(searchTerms(pasted), pasted).toEqual([host]);
+    }
+    expect(searchTerms("https://[2001:db8::1]:8443/")).toEqual(["2001:db8::1"]);
+    expect(searchTerms("http://192.0.2.10:8080/x")).toEqual(["192.0.2.10"]);
+    // Addresses, networks and names are searched as typed.
+    expect(searchTerms("2001:db8::/32 192.0.2.0/24 core-files fe80::1")).toEqual([
+      "2001:db8::/32",
+      "192.0.2.0/24",
+      "core-files",
+      "fe80::1",
+    ]);
+    expect(searchTerms("https://")).toEqual([]);
+  });
+
+  it("searches a host:port endpoint or a JDBC URL by its host", () => {
+    const host = "dw-1.c0re0example.us-east-1.redshift.amazonaws.com";
+    for (const pasted of [
+      `${host}:5439`,
+      `${host.toUpperCase()}:5439/dev`,
+      `jdbc:redshift://${host}:5439/dev`,
+      `jdbc:postgresql://${host}:5432/orders?ssl=true`,
+      `postgresql://app@${host}:5432/orders`,
+    ]) {
+      expect(searchTerms(pasted), pasted).toEqual([host]);
+    }
+    expect(searchTerms("192.0.2.10:443")).toEqual(["192.0.2.10"]);
+    // MAC addresses, IPv6 addresses, interfaces and plain names stay as typed.
+    expect(searchTerms("00:11:22:aa:bb:cc 2001:db8::5 fe80::1%eth0 gi1/0/1 vlan:10 core-db")).toEqual([
+      "00:11:22:aa:bb:cc",
+      "2001:db8::5",
+      "fe80::1%eth0",
+      "gi1/0/1",
+      "vlan:10",
+      "core-db",
+    ]);
+  });
 });
 
 describe("cato detail tabs", () => {

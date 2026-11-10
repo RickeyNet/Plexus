@@ -750,7 +750,10 @@ export like the collected data itself.
   mount from the DB volume; co-locating them defeats at-rest encryption.
 - Grant read-only IAM: AWS `ec2:Describe*`, `directconnect:Describe*`,
   `logs:StartQuery/GetQueryResults/StopQuery`, `cloudwatch:GetMetricData`,
-  `sts:GetCallerIdentity`; Azure `Reader` on the subscription +
+  `sts:GetCallerIdentity`, plus, optionally, the read calls of the services
+  whose endpoints the map lists (FSx, RDS, load balancers, EFS, ElastiCache,
+  OpenSearch, MSK, Redshift; see the permissions table and minimal policy in
+  `docs/aws-topology.md`); Azure `Reader` on the subscription +
   `Storage Blob Data Reader` on the NSG flow-log storage account +
   `Monitoring Reader`; GCP `roles/compute.networkViewer`,
   `roles/logging.viewer`, `roles/monitoring.viewer`.
