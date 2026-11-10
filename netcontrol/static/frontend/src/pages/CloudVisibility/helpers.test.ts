@@ -6,6 +6,7 @@ import {
   liveMissingDependencies,
   liveUnavailableReason,
   pullOutcome,
+  skippedNote,
   topologyConnectionLabel,
   topologyResourceTypeLabel,
 } from './helpers';
@@ -162,5 +163,25 @@ describe('discoverOutcome', () => {
       kind: 'success',
       text: 'Test AWS: Discovery completed',
     });
+  });
+
+  it('names the sections a run skipped for missing permissions', () => {
+    const note = 'Collected with 2 sections skipped for missing permissions: kafka:ListClustersV2, rds:DescribeDBInstances.';
+    const result = { ok: true, summary, message: `Live provider discovery snapshot refreshed. ${note}` };
+    expect(discoverOutcome('Test AWS', result, 'us-east-1')).toEqual({
+      kind: 'success',
+      text: `Test AWS: discovery completed, 42 resources and 61 connections (us-east-1). ${note}`,
+    });
+    expect(skippedNote(result.message)).toBe(note);
+    expect(skippedNote('Live provider discovery snapshot refreshed')).toBe('');
+    expect(skippedNote(null)).toBe('');
+  });
+});
+
+describe('topologyResourceTypeLabel of AWS services', () => {
+  it('names the services whose endpoints are collected', () => {
+    expect(topologyResourceTypeLabel('rds_db_cluster', 'aws')).toBe('RDS DB cluster');
+    expect(topologyResourceTypeLabel('redshift_serverless_workgroup', 'aws')).toBe('Redshift Serverless workgroup');
+    expect(topologyResourceTypeLabel('vpc_endpoint', 'aws')).toBe('VPC endpoint');
   });
 });

@@ -677,8 +677,48 @@ export function merakiViewsWithData(data: MerakiNodeDetails): MerakiView[] {
   });
 }
 
+/**
+ * The host of a pasted URL, UNC path or NFS mount, else the term itself:
+ * `https://files.example.com:443/share` -> `files.example.com`,
+ * `\\files.example.com\share` and `//files.example.com/share` ->
+ * `files.example.com`, `files.example.com:/fsx` -> `files.example.com`,
+ * `https://[2001:db8::1]/` -> `2001:db8::1`,
+ * `jdbc:redshift://dw.example.com:5439/db` -> `dw.example.com`, and a
+ * `host:port` endpoint (`db.example.com:5432`, `192.0.2.10:443`) -> its host.
+ * An address, a CIDR, a MAC address, an interface or a name is returned as
+ * typed.
+ */
+export function searchHost(term: string): string {
+  let rest = term;
+  // Any scheme, including a JDBC one with a subprotocol (jdbc:postgresql://).
+  const scheme = /^[a-z][a-z0-9+.-]*(?::[a-z][a-z0-9+.-]*)*:\/\/(.*)$/i.exec(rest);
+  const unc = /^(?:\\\\|\/\/)([^\\/]+)/.exec(rest);
+  if (scheme) rest = scheme[1].split(/[/?#\\]/, 1)[0].replace(/^[^@]*@/, "");
+  else if (unc) rest = unc[1];
+  else {
+    // NFS mount syntax: host:/export (not an IPv6 address, which has more colons).
+    const mount = /^([^\s:/\\]+):\//.exec(rest);
+    if (mount) return mount[1];
+    // host:port, the host a DNS name or an IPv4 address: a MAC address, an
+    // IPv6 address or an interface (gi1/0/1) has no dotted part before its colon.
+    const endpoint = /^((?:[a-z0-9-]+\.)+[a-z0-9-]+)\.?:\d{1,5}(?:[/?#].*)?$/i.exec(rest);
+    if (endpoint) return endpoint[1];
+    return rest;
+  }
+  const bracketed = /^\[([^\]]*)\]/.exec(rest);
+  if (bracketed) return bracketed[1];
+  // host:port, but not a bare IPv6 address.
+  return (rest.split(":").length === 2 ? rest.split(":")[0] : rest).replace(/\.$/, "");
+}
+
+/** The terms of a search box, lower case; a pasted URL or UNC path searches for its host. */
 export function searchTerms(text: string): string[] {
-  return text.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  return text
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .map(searchHost)
+    .filter(Boolean);
 }
 
 export function rowMatches(cells: string[], terms: string[]): boolean {

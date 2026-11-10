@@ -32,6 +32,7 @@ import {
   liveMissingDependencies,
   liveUnavailableReason,
   providerLabel,
+  skippedNote,
 } from './helpers';
 
 interface Props {
@@ -277,6 +278,11 @@ export function AccountsTab({ accounts, providerOptions, isLoading, loadError, p
                       {a.last_sync_status === 'error' && a.last_sync_message && (
                         <small style={{ color: 'var(--danger)', display: 'block', maxWidth: '16rem' }}>
                           {a.last_sync_message}
+                        </small>
+                      )}
+                      {a.last_sync_status !== 'error' && skippedNote(a.last_sync_message) && (
+                        <small style={{ color: 'var(--warning)', display: 'block', maxWidth: '16rem' }}>
+                          {skippedNote(a.last_sync_message)}
                         </small>
                       )}
                       <small className="text-muted">{a.last_sync_at ? formatBackendDateTime(a.last_sync_at) : 'Never'}</small>

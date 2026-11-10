@@ -39,6 +39,7 @@ import { buildInventoryAddRows } from './inventoryAdd';
 import { ChangesModal } from './ChangesModal';
 import { DiscoveryProgressModal } from './DiscoveryProgressModal';
 import { ExportMenu } from './ExportMenu';
+import { searchTerms } from './merakiHelpers';
 import { exportJSON, exportPNG, exportSVG } from './exporters';
 import {
   abbreviateInterface,
@@ -306,7 +307,8 @@ export function Topology() {
   const addableBadge = badgeText(addableCount);
   showAllTunnelsRef.current = showAllTunnels;
   const positions = positionsQuery.data;
-  const deepSearch = useTopologyDeepSearch(hasDeepSearch ? debouncedSearch : '');
+  // A pasted URL or UNC path searches for its host, here and in the local match.
+  const deepSearch = useTopologyDeepSearch(hasDeepSearch ? searchTerms(debouncedSearch).join(' ') : '');
 
   // Debounce the deep (server-side) search so typing doesn't fire a request
   // per keystroke; the local name/IP match stays instant.
@@ -1856,7 +1858,7 @@ export function Topology() {
   // VPN peers, firewall rules, ports...) and the networks of inventory hosts,
   // resolved back to nodes on the map.
   const searchResults = useMemo<SearchResult[]>(() => {
-    const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const terms = searchTerms(search);
     if (!terms.length || !data?.nodes.length) return [];
     const results: SearchResult[] = [];
     const seen = new Set<number | string>();

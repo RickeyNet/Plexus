@@ -20,6 +20,15 @@ How AWS maps onto the map:
     instance is listed in its VPC's details; the others are kept aside as
     ``latent`` nodes, which the topology route puts on the map when they
     match a host added to the inventory since
+  - an Amazon FSx file system or ONTAP storage virtual machine is never a
+    node: its VPC's details list it with every endpoint (DNS name and
+    address), so the search finds the VPC by any of them
+  - so are the services with DNS endpoints (RDS / Aurora, load balancers,
+    VPC endpoints, EFS, ElastiCache, OpenSearch, MSK, Redshift; ``SERVICES``):
+    a table per service and one "Service endpoints" table with a row per
+    address, which the subnet index reads as hosts of the VPC. One whose
+    VPC was not collected (or that has none, like a public OpenSearch
+    domain) is left off the map; Cloud Visibility still lists it
   - transit gateways, Direct Connect and customer gateways share an
     "AWS transit and VPN" box; a site-to-site VPN is a tunnel from its
     gateway to the customer gateway
@@ -28,8 +37,10 @@ How AWS maps onto the map:
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any
 
+from netcontrol.integrations.aws.failures import FAILED, PERMISSION, UNAVAILABLE, failure_category
 from netcontrol.integrations.meraki.normalize import (
     SCHEMA_VERSION,
     InventoryIndex,
@@ -63,6 +74,98 @@ SUBNET_COLUMNS = [
 PEERING_SECTION_TITLE = "VPC peerings"
 PEERING_COLUMNS = ["Peering", "Peered with", "CIDR", "Region", "Account", "State"]
 ROUTES_TO_SECTION_TITLE = "Routes to this VPC"
+
+# Amazon FSx: listed in their VPC's details, not drawn.
+FSX_TYPE = "fsx_file_system"
+FSX_SVM_TYPE = "fsx_storage_virtual_machine"
+FSX_SECTION_TITLE = "FSx file systems"
+FSX_SVM_SECTION_TITLE = "FSx storage virtual machines"
+# One row per address (an endpoint with none has one row with no address).
+# ``netcontrol.integrations.meraki.subnets`` reads it by these column names.
+FSX_ENDPOINT_SECTION_TITLE = "FSx endpoints"
+FSX_ENDPOINT_COLUMNS = ["Name", "Resource ID", "Endpoint", "DNS name", "IP address"]
+_FSX_TYPE_NAMES = {
+    "WINDOWS": "Windows File Server",
+    "LUSTRE": "Lustre",
+    "ONTAP": "NetApp ONTAP",
+    "OPENZFS": "OpenZFS",
+}
+
+# Services with DNS endpoints: listed in their VPC's details, not drawn.
+RDS_INSTANCE_TYPE = "rds_db_instance"
+RDS_CLUSTER_TYPE = "rds_db_cluster"
+RDS_PROXY_TYPE = "rds_db_proxy"
+LOAD_BALANCER_TYPE = "load_balancer"
+VPC_ENDPOINT_TYPE = "vpc_endpoint"
+EFS_TYPE = "efs_file_system"
+ELASTICACHE_GROUP_TYPE = "elasticache_replication_group"
+ELASTICACHE_CLUSTER_TYPE = "elasticache_cache_cluster"
+ELASTICACHE_SERVERLESS_TYPE = "elasticache_serverless_cache"
+OPENSEARCH_TYPE = "opensearch_domain"
+MSK_TYPE = "msk_cluster"
+REDSHIFT_TYPE = "redshift_cluster"
+REDSHIFT_WORKGROUP_TYPE = "redshift_serverless_workgroup"
+
+
+@dataclass(frozen=True)
+class Service:
+    """How the VPC details list one resource type: in the table ``section``
+    (shared by the types of one service), named ``label`` when the resource
+    gives no kind of its own, with ``details`` (caption, metadata key) in
+    its Details cell."""
+
+    resource_type: str
+    label: str
+    section: str
+    details: tuple[tuple[str, str], ...] = ()
+
+
+_RDS_DETAILS = (("Class", "instance_class"), ("Multi-AZ", "multi_az"), ("Public", "publicly_accessible"))
+_CACHE_DETAILS = (("Node type", "node_type"), ("Subnet group", "subnet_group"))
+SERVICES: tuple[Service, ...] = (
+    Service(RDS_INSTANCE_TYPE, "RDS instance", "RDS and Aurora databases", (*_RDS_DETAILS, ("Cluster", "cluster_id"))),
+    Service(RDS_CLUSTER_TYPE, "RDS cluster", "RDS and Aurora databases", (("Mode", "engine_mode"), *_RDS_DETAILS)),
+    Service(RDS_PROXY_TYPE, "RDS proxy", "RDS and Aurora databases", (("Requires TLS", "require_tls"),)),
+    Service(LOAD_BALANCER_TYPE, "Load balancer", "Load balancers", (("Scheme", "scheme"), ("Ports", "listener_ports"))),
+    Service(
+        VPC_ENDPOINT_TYPE,
+        "VPC endpoint",
+        "VPC endpoints",
+        (("Service", "service_name"), ("Private DNS", "private_dns_enabled")),
+    ),
+    Service(EFS_TYPE, "EFS file system", "EFS file systems", (("Performance", "performance_mode"),)),
+    Service(ELASTICACHE_GROUP_TYPE, "ElastiCache", "ElastiCache", (*_CACHE_DETAILS, ("Cluster mode", "cluster_mode"))),
+    Service(ELASTICACHE_CLUSTER_TYPE, "ElastiCache", "ElastiCache", (*_CACHE_DETAILS, ("Nodes", "node_count"))),
+    Service(ELASTICACHE_SERVERLESS_TYPE, "ElastiCache", "ElastiCache"),
+    Service(
+        OPENSEARCH_TYPE,
+        "OpenSearch domain",
+        "OpenSearch domains",
+        (("Instance type", "instance_type"), ("Instances", "instance_count")),
+    ),
+    Service(MSK_TYPE, "MSK cluster", "MSK clusters", (("Brokers", "broker_count"), ("Instance type", "instance_type"))),
+    Service(REDSHIFT_TYPE, "Redshift", "Redshift", (("Node type", "node_type"), ("Nodes", "node_count"))),
+    Service(REDSHIFT_WORKGROUP_TYPE, "Redshift", "Redshift", (("Namespace", "namespace"),)),
+)
+SERVICE_TYPES = tuple(s.resource_type for s in SERVICES)
+SERVICE_COLUMNS = [
+    "Name",
+    "Resource ID",
+    "Kind",
+    "Engine",
+    "Version",
+    "State",
+    "Endpoints",
+    "IP addresses",
+    "Subnets",
+    "Security groups",
+    "Details",
+]
+# One row per address of every service resource of a VPC (an endpoint with
+# none has one row with no address). ``netcontrol.integrations.meraki.subnets``
+# reads it by these column names; the Service column names the host.
+SERVICE_ENDPOINT_SECTION_TITLE = "Service endpoints"
+SERVICE_ENDPOINT_COLUMNS = ["Service", "Name", "Resource ID", "Endpoint", "DNS name", "Port", "IP address"]
 
 # Detail tables are capped so one large VPC cannot bloat the snapshot.
 MAX_SITE_ROWS = 3000
@@ -163,6 +266,61 @@ def _default_route_via(target: str) -> str:
     return target
 
 
+def _endpoint_rows(meta: dict) -> tuple[list[tuple[str, str, Any, str]], list[str]]:
+    """The ``(role, DNS name, port, address)`` rows of a resource's
+    ``endpoints`` (one per address; an endpoint with none has one row with
+    no address), then one per private address of its ``interfaces`` that no
+    endpoint names; and every address listed, once each."""
+    rows: list[tuple[str, str, Any, str]] = []
+    listed: list[str] = []
+    for endpoint in meta.get("endpoints") or []:
+        if not isinstance(endpoint, dict):
+            continue
+        addresses = [_text(a) for a in endpoint.get("ip_addresses") or [] if _text(a)]
+        listed += addresses
+        for address in addresses or [""]:
+            rows.append((_text(endpoint.get("role")), _text(endpoint.get("dns_name")), endpoint.get("port"), address))
+    for interface in meta.get("interfaces") or []:
+        if not isinstance(interface, dict):
+            continue
+        for address in interface.get("private_ips") or []:
+            if _text(address) and _text(address) not in listed:
+                listed.append(_text(address))
+                rows.append((f"Network interface {_text(interface.get('id'))}", "", None, _text(address)))
+    return rows, list(dict.fromkeys(listed))
+
+
+def _dns_names(meta: dict) -> list[str]:
+    """``host:port`` (or ``host``) of every endpoint with a DNS name, once each."""
+    names = []
+    for endpoint in meta.get("endpoints") or []:
+        if isinstance(endpoint, dict) and _text(endpoint.get("dns_name")):
+            port = endpoint.get("port")
+            names.append(f"{_text(endpoint.get('dns_name'))}:{port}" if port else _text(endpoint.get("dns_name")))
+    return list(dict.fromkeys(names))
+
+
+def _warning_message(titles: list[str], regions: list[str], category: str, code: str, actions: list[str]) -> str:
+    """What the report says about sections discovery could not read, for an admin to act on."""
+    what = f"{', '.join(titles)} in {', '.join(regions) or 'the account'}"
+    if category == PERMISSION:
+        fix = (
+            f"Add {' and '.join(actions)} to the IAM policy of the account"
+            if actions
+            else "The read-only policy of the account may not allow this call"
+        )
+        return f"{what}: not collected, AWS denied the call ({code}). {fix}; the rest of the discovery is complete."
+    if category == UNAVAILABLE:
+        return (
+            f"{what}: not collected, the service is not available there or the AWS SDK on the Plexus server "
+            f"does not support it ({code}). Nothing to change unless the service is used there."
+        )
+    return (
+        f"{what}: not collected, AWS answered {code or 'with an error'}. Run discovery again; "
+        "if it keeps failing, check the Plexus server log."
+    )
+
+
 class _Builder:
     def __init__(
         self, accounts: list[dict], resources: list[dict], connections: list[dict], inventory: InventoryIndex
@@ -224,6 +382,8 @@ class _Builder:
 
         self.vpcs = self._of_type("vpc")
         self._vpc_uid_by_rid = {v["rid"]: _text(v["resource_uid"]) for v in self.vpcs}
+        # Subnet ID -> VPC ID: places a resource that names only its subnets.
+        self._vpc_of_subnet = {s["rid"]: _text(s["meta"].get("vpc_id")) for s in self._of_type("subnet")}
         # Resource uid -> VPC uid, from the attachments a discovery records.
         self._vpc_links: dict[str, str] = {}
         for conn in self.connections:
@@ -254,7 +414,14 @@ class _Builder:
         for rid in candidates:
             if rid in self._vpc_uid_by_rid:
                 return self._vpc_uid_by_rid[rid]
-        return self._vpc_links.get(_text(resource["resource_uid"]), "")
+        linked = self._vpc_links.get(_text(resource["resource_uid"]), "")
+        if linked:
+            return linked
+        for subnet_id in meta.get("subnet_ids") or []:
+            rid = self._vpc_of_subnet.get(_text(subnet_id), "")
+            if rid in self._vpc_uid_by_rid:
+                return self._vpc_uid_by_rid[rid]
+        return ""
 
     def _account(self, resource: dict) -> str:
         return _text(resource.get("account_name")) or self._account_names.get(resource.get("account_id"), "")
@@ -381,7 +548,16 @@ class _Builder:
     def build_vpcs(self) -> None:
         many_accounts = len({self._account(v) for v in self.vpcs}) > 1
         by_vpc: dict[str, dict[str, list[dict]]] = {}
-        for resource_type in ("subnet", "route_table", "instance", "security_group", "network_acl"):
+        for resource_type in (
+            "subnet",
+            "route_table",
+            "instance",
+            "security_group",
+            "network_acl",
+            FSX_TYPE,
+            FSX_SVM_TYPE,
+            *SERVICE_TYPES,
+        ):
             for resource in self._of_type(resource_type):
                 by_vpc.setdefault(self._vpc_uid(resource), {}).setdefault(resource_type, []).append(resource)
 
@@ -436,6 +612,8 @@ class _Builder:
                         ("Default VPC", vpc["meta"].get("is_default")),
                         ("Subnets", len(subnets) or ""),
                         ("Instances", len(instances) or ""),
+                        ("FSx file systems", len(owned.get(FSX_TYPE, [])) or ""),
+                        *self._service_counts(owned),
                     ],
                 ),
             )
@@ -488,6 +666,10 @@ class _Builder:
                     ],
                 ),
             )
+            for section in self._fsx_sections(owned.get(FSX_TYPE, []), owned.get(FSX_SVM_TYPE, []), subnet_names):
+                _add(sections, section)
+            for section in self._service_sections(owned, subnet_names):
+                _add(sections, section)
             _add(
                 sections,
                 table_section(
@@ -580,6 +762,128 @@ class _Builder:
                 ]
             )
         return rows
+
+    def _fsx_sections(
+        self, file_systems: list[dict], svms: list[dict], subnet_names: dict[str, str]
+    ) -> list[dict | None]:
+        """The FSx file systems and ONTAP storage virtual machines of a VPC.
+
+        They are no nodes: like an instance that forwards nothing, a file
+        system is listed in its VPC's details, which the search covers. The
+        endpoints table has a row per address, so each address is in the
+        subnet index as a host of its own (``FSX_ENDPOINT_COLUMNS``)."""
+        fs_rows: list[list[Any]] = []
+        endpoint_rows: list[list[Any]] = []
+        for fs in file_systems:
+            meta = fs["meta"]
+            name = _text(fs.get("name")) or fs["rid"]
+            endpoints = [e for e in meta.get("endpoints") or [] if isinstance(e, dict)]
+            rows, listed = _endpoint_rows(meta)
+            endpoint_rows += [[name, fs["rid"], role, dns_name, address] for role, dns_name, _port, address in rows]
+            fs_rows.append(
+                [
+                    name,
+                    fs["rid"],
+                    _FSX_TYPE_NAMES.get(_text(meta.get("file_system_type")).upper(), meta.get("file_system_type")),
+                    fs.get("status"),
+                    list(dict.fromkeys(_text(e.get("dns_name")) for e in endpoints if _text(e.get("dns_name")))),
+                    listed,
+                    [subnet_names.get(_text(s)) or s for s in meta.get("subnet_ids") or []],
+                    meta.get("storage_capacity"),
+                    meta.get("deployment_type"),
+                    meta.get("mount_name"),
+                ]
+            )
+        svm_rows: list[list[Any]] = []
+        for svm in svms:
+            meta = svm["meta"]
+            name = _text(svm.get("name")) or svm["rid"]
+            file_system_id = _text(meta.get("file_system_id"))
+            fs_name = _text((self.resources.get(f"aws:{FSX_TYPE}:{file_system_id}") or {}).get("name"))
+            svm_rows.append(
+                [
+                    name,
+                    svm["rid"],
+                    f"{fs_name} ({file_system_id})" if fs_name and fs_name != file_system_id else file_system_id,
+                    svm.get("status"),
+                    meta.get("subtype"),
+                    meta.get("netbios_name"),
+                ]
+            )
+            rows, _listed = _endpoint_rows(meta)
+            endpoint_rows += [
+                [name, svm["rid"], f"SVM {role}", dns_name, address] for role, dns_name, _p, address in rows
+            ]
+        return [
+            table_section(
+                FSX_SECTION_TITLE,
+                [
+                    "Name",
+                    "File system ID",
+                    "Type",
+                    "State",
+                    "DNS names",
+                    "IP addresses",
+                    "Subnets",
+                    "Storage (GiB)",
+                    "Deployment",
+                    "Mount name",
+                ],
+                fs_rows[:MAX_SITE_ROWS],
+            ),
+            table_section(
+                FSX_SVM_SECTION_TITLE,
+                ["Name", "SVM ID", "File system", "State", "Subtype", "NetBIOS name"],
+                svm_rows[:MAX_SITE_ROWS],
+            ),
+            table_section(FSX_ENDPOINT_SECTION_TITLE, FSX_ENDPOINT_COLUMNS, endpoint_rows[:MAX_SITE_ROWS]),
+        ]
+
+    @staticmethod
+    def _service_counts(owned: dict[str, list[dict]]) -> list[tuple[str, Any]]:
+        """VPC overview rows: how many resources each service table lists."""
+        counts: dict[str, int] = {}
+        for service in SERVICES:
+            if owned.get(service.resource_type):
+                counts[service.section] = counts.get(service.section, 0) + len(owned[service.resource_type])
+        return list(counts.items())
+
+    def _service_sections(self, owned: dict[str, list[dict]], subnet_names: dict[str, str]) -> list[dict | None]:
+        """A table per service (``SERVICES``) of a VPC, then the "Service
+        endpoints" table with a row per address of all of them, which the
+        subnet index reads as hosts of the VPC. Like FSx, they are no nodes."""
+        tables: dict[str, list[list[Any]]] = {}
+        endpoint_rows: list[list[Any]] = []
+        for service in SERVICES:
+            rows = tables.setdefault(service.section, [])
+            for resource in owned.get(service.resource_type, []):
+                meta = resource["meta"]
+                name = _text(resource.get("name")) or resource["rid"]
+                kind = _text(meta.get("kind")) or service.label
+                endpoints, listed = _endpoint_rows(meta)
+                endpoint_rows += [
+                    [kind, name, resource["rid"], role, dns_name, port, address]
+                    for role, dns_name, port, address in endpoints
+                ]
+                rows.append(
+                    [
+                        name,
+                        resource["rid"],
+                        kind,
+                        meta.get("engine"),
+                        meta.get("engine_version"),
+                        resource.get("status"),
+                        _dns_names(meta),
+                        list(dict.fromkeys([*listed, *[_text(a) for a in meta.get("public_ips") or []]])),
+                        [subnet_names.get(_text(s)) or s for s in meta.get("subnet_ids") or []],
+                        meta.get("security_group_ids"),
+                        {caption: meta.get(key) for caption, key in service.details},
+                    ]
+                )
+        return [
+            *[table_section(title, SERVICE_COLUMNS, rows[:MAX_SITE_ROWS]) for title, rows in tables.items()],
+            table_section(SERVICE_ENDPOINT_SECTION_TITLE, SERVICE_ENDPOINT_COLUMNS, endpoint_rows[:MAX_SITE_ROWS]),
+        ]
 
     def _instance_nodes(
         self, instances: list[dict], vpc_node: dict, site_id: str, subnet_names: dict[str, str]
@@ -1138,17 +1442,49 @@ class _Builder:
                         + _text(account.get("last_sync_message")),
                     }
                 )
+        self.errors += self._warning_entries()
+
+    def _warning_entries(self) -> list[dict]:
+        """One report entry per problem, not per region: a section skipped
+        the same way in many regions is one entry listing them, and sections
+        skipped for the same reason (the same IAM action missing, say) in the
+        same regions share an entry. Permission problems come first.
+
+        The HTML map's report shows the scope and the message, the Sources
+        dialog the path too, so the message names the sections and regions."""
+        per_section: dict[tuple, dict] = {}
         for warning in self._of_type(WARNING_TYPE):
             meta = warning["meta"]
-            self.errors.append(
+            section = _text(meta.get("section")) or _text(warning.get("name"))
+            code = _text(meta.get("error"))
+            # Warnings stored before the category was recorded are classified by their code.
+            category = _text(meta.get("category")) or failure_category(code)
+            actions = tuple(_text(a) for a in meta.get("actions") or [] if _text(a))
+            key = (self._account(warning), section, category, code, actions)
+            entry = per_section.setdefault(key, {"title": _text(meta.get("title")) or section, "regions": []})
+            region = _text(warning.get("region"))
+            if region and region not in entry["regions"]:
+                entry["regions"].append(region)
+        merged: dict[tuple, dict] = {}
+        for (account, section, category, code, actions), entry in per_section.items():
+            regions = tuple(sorted(entry["regions"]))
+            group = merged.setdefault((account, category, code, actions, regions), {"sections": [], "titles": []})
+            group["sections"].append(section)
+            group["titles"].append(entry["title"])
+        order = {PERMISSION: 0, FAILED: 1, UNAVAILABLE: 2}
+        entries = []
+        for (account, category, code, actions, regions), group in sorted(
+            merged.items(), key=lambda item: (order.get(item[0][1], 1), item[0][0], item[1]["sections"])
+        ):
+            entries.append(
                 {
-                    "scope": f"AWS account {self._account(warning)}",
-                    "path": f"{_text(meta.get('section')) or warning.get('name')} ({_text(warning.get('region'))})",
+                    "scope": f"AWS account {account}",
+                    "path": f"{', '.join(group['sections'])} ({', '.join(regions)})",
                     "status": None,
-                    "message": f"Not collected: AWS answered {_text(meta.get('error')) or 'with an error'}. "
-                    "The read-only policy of the account may not allow this call.",
+                    "message": _warning_message(group["titles"], list(regions), category, code, list(actions)),
                 }
             )
+        return entries
 
     def build_edge_sections(self) -> None:
         latent = {n["id"]: n for n in self.latent_nodes}

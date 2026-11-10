@@ -23,12 +23,13 @@ from netcontrol.integrations.aws.normalize import TRANSIT_SITE_ID, build_snapsho
 from netcontrol.integrations.aws.reachability import Reachability
 from netcontrol.integrations.aws.sample import build_sample
 from netcontrol.integrations.meraki.normalize import InventoryIndex
-from netcontrol.integrations.meraki.subnets import subnet_index
+from netcontrol.integrations.meraki.subnets import subnet_index, subnets_containing
 from netcontrol.integrations.meraki.unified import (
     build_search_index,
     graph_to_snapshot,
     merge_meraki_into_graph,
     node_details,
+    search_index,
     virtual_appliance_pairs,
 )
 from netcontrol.integrations.meraki.vpn_reach import VpnCarrier
@@ -191,6 +192,9 @@ class _FakeEc2:
     def describe_network_acls(self):
         return {"NetworkAcls": [{"NetworkAclId": "acl-1", "VpcId": "vpc-1", "Entries": []}]}
 
+    def describe_vpc_endpoints(self):
+        return {"VpcEndpoints": []}
+
     def describe_transit_gateway_route_tables(self):
         return {"TransitGatewayRouteTables": [{"TransitGatewayRouteTableId": "tgw-rtb-1", "TransitGatewayId": "tgw-1"}]}
 
@@ -222,10 +226,39 @@ class _FakeDx:
         }
 
 
+class _FakeFsx:
+    """FSx with nothing in it, unless given ``describe_*`` answers (an
+    exception instance is raised instead of answered)."""
+
+    def __init__(self, **answers):
+        self._answers = answers
+
+    def can_paginate(self, _operation):
+        return False
+
+    def _answer(self, operation: str, key: str) -> dict:
+        found = self._answers.get(operation, {key: []})
+        if isinstance(found, Exception):
+            raise found
+        return found
+
+    def describe_file_systems(self):
+        return self._answer("describe_file_systems", "FileSystems")
+
+    def describe_storage_virtual_machines(self):
+        return self._answer("describe_storage_virtual_machines", "StorageVirtualMachines")
+
+
 class _FakeSession:
+    """Direct Connect and FSx as given; every other service has nothing in it."""
+
+    def __init__(self, fsx: _FakeFsx | None = None):
+        self._fsx = fsx or _FakeFsx()
+
     def client(self, name, **_kwargs):
-        assert name == "directconnect"
-        return _FakeDx()
+        if name == "directconnect":
+            return _FakeDx()
+        return self._fsx if name == "fsx" else _StubClient({})
 
 
 def test_map_detail_skips_a_section_it_may_not_read():
@@ -243,13 +276,228 @@ def test_map_detail_skips_a_section_it_may_not_read():
     }
     assert by_type["transit_gateway_route_table"]["metadata"]["routes"][0]["destination"] == "10.1.0.0/16"
     warning = by_type[collect.WARNING_TYPE]
-    # The AWS error code is kept; the message (which names the caller) is not.
-    assert warning["metadata"] == {"section": "instances", "error": "UnauthorizedOperation"}
+    # The AWS error code is kept, with why and the IAM action to add; the
+    # message (which names the caller) is not.
+    assert warning["metadata"] == {
+        "section": "instances",
+        "error": "UnauthorizedOperation",
+        "category": "permission",
+        "title": "EC2 instances",
+        "actions": ["ec2:DescribeInstances"],
+    }
     assert "arn:aws" not in json.dumps(warning)
     assert {(c["source_resource_uid"], c["target_resource_uid"]) for c in connections} == {
         ("aws:direct_connect:dxcon-1", "aws:direct-connect-gateway:dxgw-1"),
         ("aws:direct-connect-gateway:dxgw-1", "aws:tgw:tgw-1"),
     }
+
+
+# ── Amazon FSx ───────────────────────────────────────────────────────────────
+
+_WINDOWS_FS = {
+    "FileSystemId": "fs-0w1n",
+    "FileSystemType": "WINDOWS",
+    "Lifecycle": "AVAILABLE",
+    "OwnerId": "111122223333",
+    "VpcId": "vpc-1",
+    "SubnetIds": ["subnet-1"],
+    "NetworkInterfaceIds": ["eni-w1"],
+    "DNSName": "amznfsxw1n.corp.example.com",
+    "StorageCapacity": 300,
+    "KmsKeyId": "arn:aws:kms:us-east-1:111122223333:key/TOP-SECRET-KEY",
+    "Tags": [{"Key": "Name", "Value": "files"}],
+    "WindowsConfiguration": {
+        "DeploymentType": "MULTI_AZ_1",
+        "PreferredFileServerIp": "10.0.1.70",
+        "RemoteAdministrationEndpoint": "amznfsxw1n-admin.corp.example.com",
+        "Aliases": [{"Name": "files.corp.example.com", "Lifecycle": "AVAILABLE"}],
+        "SelfManagedActiveDirectoryConfiguration": {
+            "DomainName": "corp.example.com",
+            "UserName": "TOP-SECRET-JOIN-USER",
+            "DomainJoinServiceAccountSecret": "arn:aws:secretsmanager:us-east-1:111122223333:secret:TOP-SECRET",
+            "DnsIps": ["10.0.1.2"],
+        },
+    },
+}
+_ONTAP_FS = {
+    "FileSystemId": "fs-0a7",
+    "FileSystemType": "ONTAP",
+    "Lifecycle": "AVAILABLE",
+    "VpcId": "vpc-1",
+    "SubnetIds": ["subnet-1", "subnet-2"],
+    "NetworkInterfaceIds": ["eni-o1"],
+    "OntapConfiguration": {
+        "DeploymentType": "MULTI_AZ_1",
+        "FsxAdminPassword": "TOP-SECRET-FSXADMIN",
+        "Endpoints": {
+            "Management": {"DNSName": "management.fs-0a7.example.com", "IpAddresses": ["10.0.1.50"]},
+            "Intercluster": {
+                "DNSName": "intercluster.fs-0a7.example.com",
+                "IpAddresses": ["10.0.1.51"],
+                "Ipv6Addresses": ["2001:db8::51"],
+            },
+        },
+    },
+}
+_SVM = {
+    "StorageVirtualMachineId": "svm-1",
+    "FileSystemId": "fs-0a7",
+    "Name": "svm1",
+    "Lifecycle": "CREATED",
+    "ActiveDirectoryConfiguration": {
+        "NetBiosName": "SVM1",
+        "SelfManagedActiveDirectoryConfiguration": {"DomainName": "corp.example.com", "UserName": "TOP-SECRET-USER"},
+    },
+    "Endpoints": {
+        "Nfs": {"DNSName": "svm-1.fs-0a7.example.com", "IpAddresses": ["10.0.1.60"]},
+        "Iscsi": {"DNSName": "iscsi.svm-1.fs-0a7.example.com", "IpAddresses": ["10.0.1.61", "10.0.2.61"]},
+        "Smb": {},
+    },
+}
+
+
+def test_fsx_file_system_resource_reads_every_endpoint_and_no_secret():
+    interfaces = collect.network_interfaces_by_id(
+        [{"NetworkInterfaceId": "eni-w1", "SubnetId": "subnet-1", "PrivateIpAddress": "10.0.1.70"}]
+    )
+    windows = collect.fsx_file_system_resource(_WINDOWS_FS, "us-east-1", interfaces)
+    meta = windows["metadata"]
+    assert windows["resource_uid"] == "aws:fsx_file_system:fs-0w1n" and windows["resource_type"] == "fsx_file_system"
+    assert windows["name"] == "files" and windows["status"] == "available"
+    assert meta["file_system_type"] == "WINDOWS" and meta["vpc_id"] == "vpc-1" and meta["subnet_ids"] == ["subnet-1"]
+    assert meta["deployment_type"] == "MULTI_AZ_1" and meta["domain_name"] == "corp.example.com"
+    assert meta["endpoints"] == [
+        {"role": "File server", "dns_name": "amznfsxw1n.corp.example.com", "ip_addresses": ["10.0.1.70"]},
+        {"role": "Remote administration", "dns_name": "amznfsxw1n-admin.corp.example.com", "ip_addresses": []},
+        {"role": "DNS alias", "dns_name": "files.corp.example.com", "ip_addresses": []},
+    ]
+    assert [i["private_ips"] for i in meta["interfaces"]] == [["10.0.1.70"]]
+
+    ontap = collect.fsx_file_system_resource(_ONTAP_FS, "us-east-1")
+    assert ontap["metadata"]["endpoints"] == [
+        {"role": "Management", "dns_name": "management.fs-0a7.example.com", "ip_addresses": ["10.0.1.50"]},
+        {
+            "role": "Intercluster",
+            "dns_name": "intercluster.fs-0a7.example.com",
+            "ip_addresses": ["10.0.1.51", "2001:db8::51"],
+        },
+    ]
+    # No interfaces were read: the file system is kept without them.
+    assert ontap["metadata"]["network_interface_ids"] == ["eni-o1"] and ontap["metadata"]["interfaces"] == []
+    assert "TOP-SECRET" not in json.dumps([windows, ontap])
+
+    openzfs = collect.fsx_file_system_resource(
+        {
+            "FileSystemId": "fs-0z",
+            "FileSystemType": "OPENZFS",
+            "DNSName": "fs-0z.example.com",
+            "OpenZFSConfiguration": {"EndpointIpAddress": "10.0.1.90"},
+        },
+        "us-east-1",
+    )
+    assert openzfs["metadata"]["endpoints"] == [
+        {"role": "File system", "dns_name": "fs-0z.example.com", "ip_addresses": ["10.0.1.90"]}
+    ]
+    lustre = collect.fsx_file_system_resource(
+        {"FileSystemId": "fs-0l", "FileSystemType": "LUSTRE", "LustreConfiguration": {"MountName": "abcd"}},
+        "us-east-1",
+    )
+    assert lustre["name"] == "fs-0l" and lustre["metadata"]["mount_name"] == "abcd"
+    assert collect.fsx_file_system_resource({**_ONTAP_FS, "Lifecycle": "DELETING"}, "us-east-1") is None
+
+
+def test_fsx_storage_virtual_machine_resource_keeps_endpoints_not_the_service_account():
+    svm = collect.fsx_storage_virtual_machine_resource(_SVM, "us-east-1", "vpc-1")
+    meta = svm["metadata"]
+    assert svm["resource_uid"] == "aws:fsx_storage_virtual_machine:svm-1" and svm["status"] == "created"
+    assert meta["file_system_id"] == "fs-0a7" and meta["vpc_id"] == "vpc-1" and meta["netbios_name"] == "SVM1"
+    # An endpoint AWS reports empty is left out.
+    assert [(e["role"], e["ip_addresses"]) for e in meta["endpoints"]] == [
+        ("NFS", ["10.0.1.60"]),
+        ("iSCSI", ["10.0.1.61", "10.0.2.61"]),
+    ]
+    assert "TOP-SECRET" not in json.dumps(svm)
+    assert collect.fsx_storage_virtual_machine_resource({**_SVM, "Lifecycle": "DELETING"}, "us-east-1") is None
+
+
+class _FsxEc2(_FakeEc2):
+    """EC2 that answers the network interfaces of FSx, or is denied them."""
+
+    def __init__(self, *, deny: bool = False):
+        self.deny = deny
+        self.batches: list[list[str]] = []
+
+    def describe_network_interfaces(self, Filters):
+        if self.deny:
+            raise _Denied()
+        assert Filters[0]["Name"] == "network-interface-id"
+        self.batches.append(list(Filters[0]["Values"]))
+        known = {
+            "eni-w1": {"NetworkInterfaceId": "eni-w1", "SubnetId": "subnet-1", "PrivateIpAddress": "10.0.1.70"},
+            "eni-o1": {"NetworkInterfaceId": "eni-o1", "SubnetId": "subnet-1", "PrivateIpAddress": "10.0.1.50"},
+        }
+        return {"NetworkInterfaces": [known[i] for i in Filters[0]["Values"] if i in known]}
+
+
+def _fsx_detail(ec2: _FakeEc2, fsx: _FakeFsx) -> list[dict]:
+    resources: list[dict] = []
+    collectors_module._collect_aws_map_detail(_FakeSession(fsx), ec2, "us-east-1", None, resources, [])
+    return resources
+
+
+def test_map_detail_reads_fsx_file_systems_their_interfaces_and_svms(monkeypatch):
+    # One interface ID per filter, so both batches are seen.
+    monkeypatch.setattr(collectors_module, "_AWS_FILTER_VALUES_MAX", 1)
+    ec2 = _FsxEc2()
+    fsx = _FakeFsx(
+        describe_file_systems={"FileSystems": [_WINDOWS_FS, _ONTAP_FS]},
+        describe_storage_virtual_machines={"StorageVirtualMachines": [_SVM]},
+    )
+    resources = _fsx_detail(ec2, fsx)
+    by_uid = {r["resource_uid"]: r for r in resources}
+    assert ec2.batches == [["eni-o1"], ["eni-w1"]]
+    assert by_uid["aws:fsx_file_system:fs-0w1n"]["metadata"]["interfaces"][0]["private_ips"] == ["10.0.1.70"]
+    # The SVM is placed in its file system's VPC.
+    assert by_uid["aws:fsx_storage_virtual_machine:svm-1"]["metadata"]["vpc_id"] == "vpc-1"
+    # Only the instances are denied by the fake EC2.
+    assert [r["name"] for r in resources if r["resource_type"] == collect.WARNING_TYPE] == ["instances"]
+    assert "TOP-SECRET" not in json.dumps(resources)
+
+
+def test_map_detail_keeps_fsx_it_cannot_fully_read():
+    fsx = _FakeFsx(
+        describe_file_systems={"FileSystems": [_WINDOWS_FS, _ONTAP_FS]},
+        describe_storage_virtual_machines=_Denied(),
+    )
+    resources = _fsx_detail(_FsxEc2(deny=True), fsx)
+    warnings = {r["name"]: r["metadata"] for r in resources if r["resource_type"] == collect.WARNING_TYPE}
+    assert warnings["fsx_network_interfaces"] == {
+        "section": "fsx_network_interfaces",
+        "error": "UnauthorizedOperation",
+        "category": "permission",
+        "title": "Addresses of FSx file systems",
+        "actions": ["ec2:DescribeNetworkInterfaces"],
+    }
+    assert warnings["fsx_storage_virtual_machines"]["error"] == "UnauthorizedOperation"
+    # The file systems are kept, with the endpoints AWS reports and no interfaces.
+    systems = [r for r in resources if r["resource_type"] == "fsx_file_system"]
+    assert [s["metadata"]["interfaces"] for s in systems] == [[], []]
+    assert systems[0]["metadata"]["endpoints"][0]["ip_addresses"] == ["10.0.1.70"]
+
+    # FSx denied outright: one warning, and the rest of the detail is read.
+    resources = _fsx_detail(_FsxEc2(), _FakeFsx(describe_file_systems=_Denied()))
+    names = [r["name"] for r in resources if r["resource_type"] == collect.WARNING_TYPE]
+    assert names == ["instances", "fsx_file_systems"]
+    assert any(r["resource_type"] == "subnet" for r in resources)
+
+
+def test_map_detail_asks_for_no_svm_without_an_ontap_file_system():
+    fsx = _FakeFsx(
+        describe_file_systems={"FileSystems": [_WINDOWS_FS]},
+        describe_storage_virtual_machines=AssertionError("not an ONTAP file system"),
+    )
+    resources = _fsx_detail(_FsxEc2(), fsx)
+    assert "fsx_storage_virtual_machines" not in {r["name"] for r in resources}
 
 
 # ── Snapshot ─────────────────────────────────────────────────────────────────
@@ -425,6 +673,72 @@ def test_search_finds_an_instance_that_is_not_a_node(snapshot):
     assert owner["node_id"] == "vpc:vpc-0c0re00001"
     details = node_details(snapshot, "vpc:vpc-0c0re00001")
     assert details["provider"] == "aws" and any(s["title"] == "Subnets" for s in details["site_sections"])
+
+
+def test_snapshot_lists_fsx_in_its_vpc(snapshot):
+    core = next(s for s in snapshot["sites"] if s["id"] == "vpc-0c0re00001")
+    assert dict(_section(core, "VPC overview")["rows"])["FSx file systems"] == "2"
+    systems = {r[0]: r for r in _section(core, "FSx file systems")["rows"]}
+    assert systems["core-ontap"][1:4] == ["fs-0c0re0a0a7001", "NetApp ONTAP", "available"]
+    assert systems["core-files"][5:7] == ["10.200.10.70", "core-app-a (10.200.10.0/24)"]
+    assert "files.corp.example.com" in systems["core-files"][4]
+    svm = _section(core, "FSx storage virtual machines")["rows"][0]
+    assert svm[:3] == ["core-svm1", "svm-0c0re0a0a7001", "core-ontap (fs-0c0re0a0a7001)"]
+    endpoints = _section(core, "FSx endpoints")
+    assert endpoints["columns"] == ["Name", "Resource ID", "Endpoint", "DNS name", "IP address"]
+    assert ["core-svm1", "svm-0c0re0a0a7001", "SVM SMB", "coresvm1.corp.example.com", "10.200.10.60"] in endpoints[
+        "rows"
+    ]
+    # A Lustre file system's addresses are those of its network interfaces.
+    apps = next(s for s in snapshot["sites"] if s["id"] == "vpc-0a9950003")
+    lustre = _section(apps, "FSx endpoints")["rows"]
+    assert [r[2:] for r in lustre] == [
+        ["File system", "fs-0a995015e0001.fsx.us-west-2.amazonaws.com", ""],
+        ["Network interface eni-0a9951u5e1", "", "10.220.1.80"],
+        ["Network interface eni-0a9951u5e2", "", "10.220.1.81"],
+    ]
+    # Listed, not drawn: the sample's node count is unchanged.
+    assert not any(n["id"].startswith("fs") for n in snapshot["nodes"])
+
+
+def test_snapshot_fsx_of_a_vpc_not_collected_is_left_out():
+    resources = [
+        collect.fsx_file_system_resource(_ONTAP_FS, "us-east-1"),
+        collect.fsx_storage_virtual_machine_resource(_SVM, "us-east-1", "vpc-1"),
+    ]
+    snap = build_snapshot([ACCOUNT], [{**r, "account_id": 1} for r in resources], [])
+    assert snap["sites"] == [] and snap["nodes"] == []
+
+
+def test_subnet_index_has_every_fsx_address(snapshot):
+    index = subnet_index(snapshot)
+    by_cidr = {s["cidr"]: s for s in index}
+    svm = by_cidr["10.200.10.60/32"]
+    assert (svm["node_id"], svm["kind"], svm["name"]) == ("vpc:vpc-0c0re00001", "host", "FSx core-svm1")
+    assert by_cidr["10.220.1.81/32"]["node_id"] == "vpc:vpc-0a9950003"
+    # An FSx address is as specific as an instance's own.
+    found = subnets_containing(index, "10.200.10.70")
+    assert [(s["cidr"], s["name"]) for s in found] == [
+        ("10.200.10.70/32", "FSx core-files"),
+        ("10.200.10.0/24", "core-app-a (us-east-1a)"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "coresvm1.corp.example.com",
+        "management.fs-0c0re0a0a7001",
+        "fs-0c0re0w1n0001",
+        "svm-0c0re0a0a7001",
+        "core-files",
+        "amznfsx0w1n0002",
+    ],
+)
+def test_search_finds_fsx_by_dns_name_id_and_name(snapshot, query):
+    hits = search_index(build_search_index(snapshot), [query.lower()], 10)
+    assert [h["node_id"] for h in hits] == ["vpc:vpc-0c0re00001"]
+    assert "FSx" in hits[0]["snippet"]
 
 
 def test_snapshot_reports_what_discovery_could_not_read():
@@ -1061,6 +1375,16 @@ def test_api_discovered_aws_account_is_on_the_topology(api):
 
     hits = api.get("/api/topology/search/deep?q=fmc-01").json()["results"]
     assert [(h["org_ref"], h["node_id"]) for h in hits] == [(org_ref, "vpc:vpc-0ed9e00002")]
+    # An FSx file system is found by any of its DNS names, its ID or an address.
+    core = (org_ref, "vpc:vpc-0c0re00001")
+    for q in ("iscsi.svm-0c0re0a0a7001.fs-0c0re0a0a7001.fsx.us-east-1.amazonaws.com", "fs-0c0re0w1n0001"):
+        hits = api.get("/api/topology/search/deep", params={"q": q}).json()["results"]
+        assert [(h["org_ref"], h["node_id"]) for h in hits] == [core], q
+    hits = api.get("/api/topology/search/deep?q=10.200.10.61").json()["results"]
+    assert (hits[0]["org_ref"], hits[0]["node_id"]) == core and "10.200.10.61/32 FSx core-svm1" in hits[0]["snippet"]
+    # A long DNS name is no validation error.
+    long_name = "a" * 60 + "." + "b" * 60 + ".fsx.us-east-1.amazonaws.com"
+    assert api.get("/api/topology/search/deep", params={"q": long_name}).status_code == 200
 
     export = api.get("/api/topology/export.html")
     assert export.status_code == 200 and "prod-core-vpc" in export.text

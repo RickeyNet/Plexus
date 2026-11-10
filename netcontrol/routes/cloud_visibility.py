@@ -31,6 +31,7 @@ from netcontrol.routes.cloud_collectors import (
     ProgressCallback,
     collect_provider_snapshot,
     get_provider_capabilities,
+    with_skipped_note,
 )
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.telemetry import configure_logging
@@ -1171,7 +1172,7 @@ async def run_scheduled_discovery() -> dict:
                 connections=connections,
                 hybrid_links=hybrid_links,
                 sync_status="success",
-                sync_message="Scheduled live discovery refresh",
+                sync_message=with_skipped_note("Scheduled live discovery refresh", resources),
             )
             refreshed += 1
             _topology_changed()
@@ -1352,7 +1353,7 @@ async def validate_cloud_account_api(account_id: int, request: Request, body: Cl
     else:
         try:
             resources, connections = await asyncio.to_thread(collect_provider_snapshot, account)
-            message = "Live provider validation succeeded"
+            message = with_skipped_note("Live provider validation succeeded", resources)
         except CloudCollectorUnavailable:
             valid = False
             status = "unavailable"
@@ -1606,7 +1607,9 @@ async def _discover_cloud_account(
                     progress,
                 )
                 effective_mode = "live"
-                sync_message = "Live provider discovery snapshot refreshed"
+                # Sections skipped for missing permissions do not fail the
+                # discovery; the message says which IAM actions to add.
+                sync_message = with_skipped_note("Live provider discovery snapshot refreshed", resources)
             except CloudCollectorUnavailable:
                 sync_status = "error"
                 sync_message = "Live discovery dependencies are not installed"

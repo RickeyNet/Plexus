@@ -40,10 +40,22 @@ export function pullOutcome(
 }
 
 /**
+ * The note a successful discovery's message ends with when it skipped
+ * sections ("Collected with 2 sections skipped for missing permissions:
+ * rds:DescribeDBInstances, ..."), or '' when it skipped none.
+ */
+export function skippedNote(message: string | null | undefined): string {
+  const text = String(message ?? '');
+  const start = text.indexOf('Collected with ');
+  return start >= 0 ? text.slice(start) : '';
+}
+
+/**
  * The message for a discovery run that succeeded. A run that found nothing
  * (wrong region scope, missing permissions, empty account) is reported as an
  * error so it is not mistaken for a good run. `regionsLabel` is null for
- * providers without regions.
+ * providers without regions. Sections the run skipped (an optional permission
+ * missing) are named after the counts.
  */
 export function discoverOutcome(
   accountName: string,
@@ -65,9 +77,10 @@ export function discoverOutcome(
   }
   const plural = (n: number, word: string) => `${formatCount(n)} ${word}${n === 1 ? '' : 's'}`;
   const counts = `${plural(resources, 'resource')} and ${plural(Number(summary.connections ?? 0), 'connection')}`;
+  const note = skippedNote(result?.message);
   return {
     kind: 'success',
-    text: `${accountName}: discovery completed, ${counts}${regionsLabel ? ` (${regionsLabel})` : ''}`,
+    text: `${accountName}: discovery completed, ${counts}${regionsLabel ? ` (${regionsLabel})` : ''}${note ? `. ${note}` : ''}`,
   };
 }
 
@@ -199,6 +212,21 @@ const RESOURCE_TYPE_LABELS: Record<string, string> = {
   firewall_policy: 'Firewall policy',
   public_ip: 'Public IP',
   network_interface: 'Network interface',
+  fsx_file_system: 'FSx file system',
+  fsx_storage_virtual_machine: 'FSx storage virtual machine',
+  rds_db_instance: 'RDS DB instance',
+  rds_db_cluster: 'RDS DB cluster',
+  rds_db_proxy: 'RDS proxy',
+  load_balancer: 'Load balancer',
+  vpc_endpoint: 'VPC endpoint',
+  efs_file_system: 'EFS file system',
+  elasticache_replication_group: 'ElastiCache replication group',
+  elasticache_cache_cluster: 'ElastiCache cluster',
+  elasticache_serverless_cache: 'ElastiCache serverless cache',
+  opensearch_domain: 'OpenSearch domain',
+  msk_cluster: 'MSK cluster',
+  redshift_cluster: 'Redshift cluster',
+  redshift_serverless_workgroup: 'Redshift Serverless workgroup',
   collection_warning: 'Collection warning',
 };
 

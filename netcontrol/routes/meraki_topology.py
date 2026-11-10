@@ -168,6 +168,7 @@ from netcontrol.integrations.pathtrace.offline import (
     trace as offline_trace,
 )
 from netcontrol.routes import background_jobs, state
+from netcontrol.routes.cloud_collectors import skipped_note
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, supervise_task
 from netcontrol.telemetry import configure_logging, redact_value
 
@@ -1670,7 +1671,10 @@ def _cloud_source(account: dict) -> dict[str, Any]:
         id=account["id"],
         status="failed" if status == "error" else status,
         last_collected_at=_utc_iso(account.get("last_sync_at")),
-        message=str(account.get("last_sync_message") or "") if status == "error" else "",
+        # A failure says why; a success only which sections it skipped (missing permissions...).
+        message=str(account.get("last_sync_message") or "")
+        if status == "error"
+        else skipped_note(str(account.get("last_sync_message") or "")),
         detail=_count_text(resources, "resource") if resources else "",
         # The demo account has nothing to discover; its data is reloaded as a sample.
         can_collect=not demo,
@@ -2391,7 +2395,8 @@ async def topology_summarize_api(body: SummarizeRequest):
 
 @router.get("/api/topology/search/deep")
 async def topology_deep_search_api(
-    q: str = Query(min_length=2, max_length=100),
+    # Room for a DNS name (up to 253 characters) among the other terms.
+    q: str = Query(min_length=2, max_length=500),
     limit: int = Query(default=200, ge=1, le=1000),
 ):
     """Search everything collected for Meraki nodes - VLANs, subnets, routes,

@@ -16,6 +16,7 @@ from collections.abc import Callable
 from typing import Any
 
 from netcontrol.integrations.aws import collect as aws_detail
+from netcontrol.integrations.aws.failures import FAILED, PERMISSION, UNAVAILABLE, OperationNotInSdk
 from netcontrol.integrations.azure import collect as azure_detail
 from netcontrol.integrations.gcp import collect as gcp_detail
 from netcontrol.telemetry import configure_logging
@@ -409,13 +410,13 @@ def _dedupe_connections(connections: list[dict]) -> list[dict]:
     return list(merged.values())
 
 
-def _aws_tag_name(tags: list[dict] | None) -> str:
-    if not tags:
-        return ""
-    for tag in tags:
-        if str(tag.get("Key") or "").lower() == "name":
-            return str(tag.get("Value") or "")
-    return ""
+def _aws_call(client, operation: str, **kwargs) -> dict:
+    """One AWS call; an operation the installed botocore lacks is reported
+    as such (``OperationNotInSdk``), not as an ``AttributeError``."""
+    method = getattr(client, operation, None)
+    if method is None:
+        raise OperationNotInSdk(operation)
+    return method(**kwargs) or {}
 
 
 def _aws_list_all(client, operation: str, result_key: str, **kwargs) -> list[dict]:
@@ -425,50 +426,186 @@ def _aws_list_all(client, operation: str, result_key: str, **kwargs) -> list[dic
         for page in client.get_paginator(operation).paginate(**kwargs):
             items.extend(page.get(result_key) or [])
         return items
-    resp = getattr(client, operation)(**kwargs)
-    return list(resp.get(result_key) or [])
+    return list(_aws_call(client, operation, **kwargs).get(result_key) or [])
 
 
-def _collect_aws_map_detail(session, ec2, region: str, cfg, resources: list[dict], connections: list[dict]) -> None:
-    """Detail the Topology map uses: subnets, instances, customer gateways and
-    how Direct Connect reaches a gateway.
+# The most values one EC2 ``Describe*`` filter takes.
+_AWS_FILTER_VALUES_MAX = 200
+# The most domains one OpenSearch ``DescribeDomains`` call takes.
+_OPENSEARCH_DESCRIBE_MAX = 5
+
+# The best-effort AWS sections: key -> (what it adds, for the report; the IAM
+# actions it calls). A section AWS refuses is skipped and reported with these
+# actions, so an admin knows what to add. ``docs/aws-topology.md`` lists the
+# same actions (a test keeps them in step).
+AWS_OPTIONAL_SECTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "subnets": ("Subnets", ("ec2:DescribeSubnets",)),
+    "instances": ("EC2 instances", ("ec2:DescribeInstances",)),
+    "customer_gateways": ("Customer gateways", ("ec2:DescribeCustomerGateways",)),
+    "direct_connect_gateways": (
+        "Direct Connect virtual interfaces and gateways",
+        (
+            "directconnect:DescribeVirtualInterfaces",
+            "directconnect:DescribeDirectConnectGateways",
+            "directconnect:DescribeDirectConnectGatewayAssociations",
+        ),
+    ),
+    "network_acls": ("Network ACLs", ("ec2:DescribeNetworkAcls",)),
+    "transit_gateway_route_tables": (
+        "Transit gateway route tables",
+        ("ec2:DescribeTransitGatewayRouteTables", "ec2:SearchTransitGatewayRoutes"),
+    ),
+    "fsx_file_systems": ("FSx file systems", ("fsx:DescribeFileSystems",)),
+    "fsx_network_interfaces": ("Addresses of FSx file systems", ("ec2:DescribeNetworkInterfaces",)),
+    "fsx_storage_virtual_machines": ("FSx storage virtual machines", ("fsx:DescribeStorageVirtualMachines",)),
+    "rds_db_instances": ("RDS and Aurora DB instances", ("rds:DescribeDBInstances",)),
+    "rds_db_clusters": ("Aurora and Multi-AZ DB clusters", ("rds:DescribeDBClusters",)),
+    "rds_db_subnet_groups": ("VPCs of DB clusters", ("rds:DescribeDBSubnetGroups",)),
+    "rds_db_proxies": ("RDS proxies", ("rds:DescribeDBProxies",)),
+    "load_balancers": (
+        "Application, Network and Gateway Load Balancers",
+        ("elasticloadbalancing:DescribeLoadBalancers",),
+    ),
+    "classic_load_balancers": ("Classic Load Balancers", ("elasticloadbalancing:DescribeLoadBalancers",)),
+    "load_balancer_network_interfaces": ("Private addresses of load balancers", ("ec2:DescribeNetworkInterfaces",)),
+    "vpc_endpoints": ("VPC endpoints", ("ec2:DescribeVpcEndpoints",)),
+    "vpc_endpoint_network_interfaces": ("Addresses of VPC endpoints", ("ec2:DescribeNetworkInterfaces",)),
+    "efs_file_systems": ("EFS file systems", ("elasticfilesystem:DescribeFileSystems",)),
+    "efs_mount_targets": ("EFS mount targets", ("elasticfilesystem:DescribeMountTargets",)),
+    "elasticache_cache_clusters": ("ElastiCache clusters and nodes", ("elasticache:DescribeCacheClusters",)),
+    "elasticache_replication_groups": ("ElastiCache replication groups", ("elasticache:DescribeReplicationGroups",)),
+    "elasticache_subnet_groups": ("VPCs of ElastiCache clusters", ("elasticache:DescribeCacheSubnetGroups",)),
+    "elasticache_serverless_caches": ("ElastiCache serverless caches", ("elasticache:DescribeServerlessCaches",)),
+    "opensearch_domain_names": ("OpenSearch domains", ("es:ListDomainNames",)),
+    "opensearch_domains": ("OpenSearch domain endpoints", ("es:DescribeDomains",)),
+    "msk_clusters": ("MSK clusters", ("kafka:ListClustersV2",)),
+    "msk_bootstrap_brokers": ("MSK bootstrap brokers", ("kafka:GetBootstrapBrokers",)),
+    "msk_nodes": ("MSK broker addresses", ("kafka:ListNodes",)),
+    "redshift_clusters": ("Redshift clusters", ("redshift:DescribeClusters",)),
+    "redshift_serverless_workgroups": ("Redshift Serverless workgroups", ("redshift-serverless:ListWorkgroups",)),
+}
+# The base sections: discovery fails without them (``ec2:DescribeRegions``
+# only for an account set to All regions).
+AWS_REQUIRED_ACTIONS: tuple[str, ...] = (
+    "ec2:DescribeVpcs",
+    "ec2:DescribeInternetGateways",
+    "ec2:DescribeNatGateways",
+    "ec2:DescribeSecurityGroups",
+    "ec2:DescribeTransitGateways",
+    "ec2:DescribeTransitGatewayAttachments",
+    "ec2:DescribeVpcPeeringConnections",
+    "ec2:DescribeVpnGateways",
+    "ec2:DescribeRouteTables",
+    "ec2:DescribeVpnConnections",
+    "directconnect:DescribeConnections",
+    "ec2:DescribeRegions",
+)
+# MSK clusters in these states answer no GetBootstrapBrokers / ListNodes.
+_MSK_NOT_READY = ("CREATING", "DELETING", "FAILED")
+
+# The progress steps of the map detail, in the order they are read; each is
+# one step of the progress bar (``_AWS_SECTIONS_PER_REGION``).
+_AWS_MAP_DETAIL_STEPS = (
+    "subnets, instances and network ACLs",
+    "FSx file systems",
+    "RDS and Aurora databases",
+    "load balancers",
+    "VPC endpoints",
+    "EFS file systems",
+    "ElastiCache",
+    "OpenSearch domains",
+    "MSK clusters",
+    "Redshift",
+)
+
+
+def _collect_aws_map_detail(
+    session,
+    ec2,
+    region: str,
+    cfg,
+    resources: list[dict],
+    connections: list[dict],
+    step: Callable[[str], None] | None = None,
+) -> None:
+    """Detail the Topology map uses: subnets, instances, customer gateways,
+    how Direct Connect reaches a gateway, and the services whose endpoints
+    have DNS names (FSx, RDS / Aurora, load balancers, VPC endpoints, EFS,
+    ElastiCache, OpenSearch, MSK, Redshift) with their endpoints.
 
     These sections were added after the base discovery and need permissions
     an existing read-only policy may lack (``ec2:DescribeInstances`` is not
-    part of the VPC read-only policy). One that cannot be read is skipped and
-    recorded as a ``collection_warning`` resource; it never fails discovery.
+    part of the VPC read-only policy; each service has its own). One that
+    cannot be read is skipped and recorded as a ``collection_warning``
+    resource with why (``failures.failure_category``) and the IAM actions it
+    needs (``AWS_OPTIONAL_SECTIONS``); it never fails discovery. A service
+    that is not available in the region stops at its first call.
+    ``step`` is told each ``_AWS_MAP_DETAIL_STEPS`` label as it starts.
     """
+    clients: dict[str, Any] = {}
 
-    def optional(section: str, read) -> None:
+    def client(name: str):
+        # Created on first use, inside the section that needs it: a service the
+        # installed botocore does not know fails only that section.
+        if name not in clients:
+            clients[name] = session.client(name, region_name=region, config=cfg)
+        return clients[name]
+
+    def optional(section: str, read) -> str:
+        """Run ``read``; on failure record the warning and return its category ("" on success)."""
         try:
             read()
         except Exception as exc:  # noqa: BLE001 - best-effort detail; discovery goes on
-            LOGGER.warning(
-                "aws collector: skipped %s region=%s: %s", section, region, aws_detail.error_code(exc), exc_info=True
-            )
-            resources.append(aws_detail.warning_resource(section, region, exc))
+            title, actions = AWS_OPTIONAL_SECTIONS.get(section, ("", ()))
+            warning = aws_detail.warning_resource(section, region, exc, title=title, actions=actions)
+            log = LOGGER.info if warning["metadata"]["category"] == UNAVAILABLE else LOGGER.warning
+            log("aws collector: skipped %s region=%s: %s", section, region, aws_detail.error_code(exc), exc_info=True)
+            resources.append(warning)
+            return str(warning["metadata"]["category"])
+        return ""
+
+    def add(*found: dict | None) -> None:
+        resources.extend(r for r in found if r)
+
+    def network_interfaces(section: str, filter_name: str, values) -> list[dict]:
+        """The ENIs whose ``filter_name`` is one of ``values``, in batches of
+        ``_AWS_FILTER_VALUES_MAX``; none when ``section`` is refused. A filter,
+        not ``NetworkInterfaceIds``: an ENI deleted since it was named would
+        fail the whole batch."""
+        wanted = sorted({str(v).strip() for v in values if str(v or "").strip()})
+        found: list[dict] = []
+
+        def read() -> None:
+            for start in range(0, len(wanted), _AWS_FILTER_VALUES_MAX):
+                chunk = wanted[start : start + _AWS_FILTER_VALUES_MAX]
+                found.extend(
+                    _aws_list_all(
+                        ec2,
+                        "describe_network_interfaces",
+                        "NetworkInterfaces",
+                        Filters=[{"Name": filter_name, "Values": chunk}],
+                    )
+                )
+
+        if wanted:
+            optional(section, read)
+        return found
 
     def subnets() -> None:
         for subnet in _aws_list_all(ec2, "describe_subnets", "Subnets"):
-            resource = aws_detail.subnet_resource(subnet, region)
-            if resource:
-                resources.append(resource)
+            add(aws_detail.subnet_resource(subnet, region))
 
     def instances() -> None:
         for reservation in _aws_list_all(ec2, "describe_instances", "Reservations"):
             for instance in reservation.get("Instances") or []:
-                resource = aws_detail.instance_resource(instance, region)
-                if resource:
-                    resources.append(resource)
+                add(aws_detail.instance_resource(instance, region))
 
     def customer_gateways() -> None:
         for gateway in _aws_list_all(ec2, "describe_customer_gateways", "CustomerGateways"):
-            resource = aws_detail.customer_gateway_resource(gateway, region)
-            if resource:
-                resources.append(resource)
+            add(aws_detail.customer_gateway_resource(gateway, region))
 
     def direct_connect() -> None:
-        dx = session.client("directconnect", region_name=region, config=cfg)
+        dx = client("directconnect")
         for vif in _aws_list_all(dx, "describe_virtual_interfaces", "virtualInterfaces"):
             conn_id = str(vif.get("connectionId") or "").strip()
             vgw_id = str(vif.get("virtualGatewayId") or "").strip()
@@ -530,9 +667,7 @@ def _collect_aws_map_detail(session, ec2, region: str, cfg, resources: list[dict
 
     def network_acls() -> None:
         for acl in _aws_list_all(ec2, "describe_network_acls", "NetworkAcls"):
-            resource = aws_detail.network_acl_resource(acl, region)
-            if resource:
-                resources.append(resource)
+            add(aws_detail.network_acl_resource(acl, region))
 
     def transit_gateway_route_tables() -> None:
         for table in _aws_list_all(ec2, "describe_transit_gateway_route_tables", "TransitGatewayRouteTables"):
@@ -544,22 +679,312 @@ def _collect_aws_map_detail(session, ec2, region: str, cfg, resources: list[dict
                 Filters=[{"Name": "state", "Values": ["active", "blackhole"]}],
                 MaxResults=1000,
             )
-            resource = aws_detail.transit_gateway_route_table_resource(
-                table, list(found.get("Routes") or []), bool(found.get("AdditionalRoutesAvailable")), region
+            add(
+                aws_detail.transit_gateway_route_table_resource(
+                    table, list(found.get("Routes") or []), bool(found.get("AdditionalRoutesAvailable")), region
+                )
             )
+
+    def map_detail() -> None:
+        optional("subnets", subnets)
+        optional("instances", instances)
+        optional("customer_gateways", customer_gateways)
+        optional("direct_connect_gateways", direct_connect)
+        optional("network_acls", network_acls)
+        optional("transit_gateway_route_tables", transit_gateway_route_tables)
+
+    def fsx() -> None:
+        file_systems: list[dict] = []
+
+        def read() -> None:
+            file_systems.extend(_aws_list_all(client("fsx"), "describe_file_systems", "FileSystems"))
+
+        if optional("fsx_file_systems", read):
+            return
+        # The ENIs give a Lustre or Windows file system its addresses. Without
+        # them the file systems are kept with their endpoints alone.
+        eni_ids = [i for fs in file_systems for i in aws_detail.fsx_network_interface_ids(fs)]
+        interfaces = aws_detail.network_interfaces_by_id(
+            network_interfaces("fsx_network_interfaces", "network-interface-id", eni_ids)
+        )
+        vpc_of: dict[str, str] = {}
+        for file_system in file_systems:
+            resource = aws_detail.fsx_file_system_resource(file_system, region, interfaces)
             if resource:
                 resources.append(resource)
+                vpc_of[resource["metadata"]["file_system_id"]] = resource["metadata"]["vpc_id"]
 
-    optional("subnets", subnets)
-    optional("instances", instances)
-    optional("customer_gateways", customer_gateways)
-    optional("direct_connect_gateways", direct_connect)
-    optional("network_acls", network_acls)
-    optional("transit_gateway_route_tables", transit_gateway_route_tables)
+        def storage_virtual_machines() -> None:
+            for svm in _aws_list_all(client("fsx"), "describe_storage_virtual_machines", "StorageVirtualMachines"):
+                vpc_id = vpc_of.get(str(svm.get("FileSystemId") or "").strip(), "")
+                add(aws_detail.fsx_storage_virtual_machine_resource(svm, region, vpc_id))
+
+        # Only ONTAP file systems have storage virtual machines.
+        if any(str(fs.get("FileSystemType") or "").upper() == "ONTAP" for fs in file_systems):
+            optional("fsx_storage_virtual_machines", storage_virtual_machines)
+
+    def rds() -> None:
+        instances_found: list[dict] = []
+
+        def db_instances() -> None:
+            instances_found.extend(_aws_list_all(client("rds"), "describe_db_instances", "DBInstances"))
+            add(*[aws_detail.rds_instance_resource(db, region) for db in instances_found])
+
+        if optional("rds_db_instances", db_instances) == UNAVAILABLE:
+            return
+        # A cluster names its subnet group only; its instances give the VPC.
+        groups = aws_detail.subnet_groups_by_name(
+            [db.get("DBSubnetGroup") or {} for db in instances_found], "DBSubnetGroupName"
+        )
+
+        def db_clusters() -> None:
+            clusters = _aws_list_all(client("rds"), "describe_db_clusters", "DBClusters")
+            unknown = {str(c.get("DBSubnetGroup") or "") for c in clusters} - set(groups) - {""}
+            if unknown:
+
+                def subnet_groups() -> None:
+                    listed = _aws_list_all(client("rds"), "describe_db_subnet_groups", "DBSubnetGroups")
+                    groups.update(aws_detail.subnet_groups_by_name(listed, "DBSubnetGroupName"))
+
+                optional("rds_db_subnet_groups", subnet_groups)
+            add(*[aws_detail.rds_cluster_resource(c, region, groups) for c in clusters])
+
+        def db_proxies() -> None:
+            for proxy in _aws_list_all(client("rds"), "describe_db_proxies", "DBProxies"):
+                add(aws_detail.rds_proxy_resource(proxy, region))
+
+        optional("rds_db_clusters", db_clusters)
+        optional("rds_db_proxies", db_proxies)
+
+    def load_balancers() -> None:
+        found: list[dict] = []
+
+        def current() -> None:
+            found.extend(_aws_list_all(client("elbv2"), "describe_load_balancers", "LoadBalancers"))
+
+        def classic() -> None:
+            found.extend(_aws_list_all(client("elb"), "describe_load_balancers", "LoadBalancerDescriptions"))
+
+        if optional("load_balancers", current) == UNAVAILABLE:
+            return
+        optional("classic_load_balancers", classic)
+        # AWS names a load balancer's ENIs only in their description.
+        descriptions = [aws_detail.load_balancer_eni_description(lb) for lb in found]
+        by_description = aws_detail.network_interfaces_by_description(
+            network_interfaces("load_balancer_network_interfaces", "description", descriptions)
+        )
+        for lb in found:
+            interfaces = by_description.get(aws_detail.load_balancer_eni_description(lb), [])
+            add(aws_detail.load_balancer_resource(lb, region, interfaces))
+
+    def vpc_endpoints() -> None:
+        found: list[dict] = []
+
+        def read() -> None:
+            found.extend(_aws_list_all(ec2, "describe_vpc_endpoints", "VpcEndpoints"))
+
+        if optional("vpc_endpoints", read):
+            return
+        eni_ids = [str(i) for vpce in found for i in vpce.get("NetworkInterfaceIds") or []]
+        interfaces = aws_detail.network_interfaces_by_id(
+            network_interfaces("vpc_endpoint_network_interfaces", "network-interface-id", eni_ids)
+        )
+        add(*[aws_detail.vpc_endpoint_resource(vpce, region, interfaces) for vpce in found])
+
+    def efs() -> None:
+        file_systems: list[dict] = []
+        targets: dict[str, list[dict]] = {}
+
+        def read() -> None:
+            file_systems.extend(_aws_list_all(client("efs"), "describe_file_systems", "FileSystems"))
+
+        def mount_targets() -> None:
+            for fs in file_systems:
+                fs_id = str(fs.get("FileSystemId") or "").strip()
+                if fs_id and fs.get("NumberOfMountTargets") != 0:
+                    targets[fs_id] = _aws_list_all(
+                        client("efs"), "describe_mount_targets", "MountTargets", FileSystemId=fs_id
+                    )
+
+        if optional("efs_file_systems", read):
+            return
+        if file_systems:
+            optional("efs_mount_targets", mount_targets)
+        for fs in file_systems:
+            add(aws_detail.efs_file_system_resource(fs, region, targets.get(str(fs.get("FileSystemId") or ""))))
+
+    def elasticache() -> None:
+        clusters: list[dict] = []
+        groups: list[dict] = []
+        subnet_groups: dict[str, dict] = {}
+
+        def cache_clusters() -> None:
+            clusters.extend(
+                _aws_list_all(client("elasticache"), "describe_cache_clusters", "CacheClusters", ShowCacheNodeInfo=True)
+            )
+
+        def replication_groups() -> None:
+            groups.extend(_aws_list_all(client("elasticache"), "describe_replication_groups", "ReplicationGroups"))
+
+        def cache_subnet_groups() -> None:
+            listed = _aws_list_all(client("elasticache"), "describe_cache_subnet_groups", "CacheSubnetGroups")
+            subnet_groups.update(aws_detail.subnet_groups_by_name(listed, "CacheSubnetGroupName"))
+
+        def serverless_caches() -> None:
+            for cache in _aws_list_all(client("elasticache"), "describe_serverless_caches", "ServerlessCaches"):
+                add(aws_detail.elasticache_serverless_cache_resource(cache, region))
+
+        if optional("elasticache_cache_clusters", cache_clusters) == UNAVAILABLE:
+            return
+        optional("elasticache_replication_groups", replication_groups)
+        if any(c.get("CacheSubnetGroupName") for c in clusters):
+            optional("elasticache_subnet_groups", cache_subnet_groups)
+        members: dict[str, list[dict]] = {}
+        for cluster in clusters:
+            group_id = str(cluster.get("ReplicationGroupId") or "").strip()
+            if group_id:
+                members.setdefault(group_id, []).append(cluster)
+            else:
+                add(aws_detail.elasticache_cache_cluster_resource(cluster, region, subnet_groups))
+        for group in groups:
+            group_id = str(group.get("ReplicationGroupId") or "").strip()
+            add(aws_detail.elasticache_replication_group_resource(group, region, members.get(group_id), subnet_groups))
+        optional("elasticache_serverless_caches", serverless_caches)
+
+    def opensearch() -> None:
+        names: list[str] = []
+
+        def domain_names() -> None:
+            listed = _aws_call(client("opensearch"), "list_domain_names").get("DomainNames") or []
+            names.extend(str(d.get("DomainName") or "").strip() for d in listed if d.get("DomainName"))
+
+        def domains() -> None:
+            for start in range(0, len(names), _OPENSEARCH_DESCRIBE_MAX):
+                batch = names[start : start + _OPENSEARCH_DESCRIBE_MAX]
+                answer = _aws_call(client("opensearch"), "describe_domains", DomainNames=batch)
+                for domain in answer.get("DomainStatusList") or []:
+                    add(aws_detail.opensearch_domain_resource(domain, region))
+
+        if optional("opensearch_domain_names", domain_names) or not names:
+            return
+        optional("opensearch_domains", domains)
+
+    def msk() -> None:
+        clusters: list[dict] = []
+        bootstrap: dict[str, dict] = {}
+        nodes: dict[str, list[dict]] = {}
+
+        def read() -> None:
+            clusters.extend(_aws_list_all(client("kafka"), "list_clusters_v2", "ClusterInfoList"))
+
+        # The clusters that answer for their brokers, once they are listed.
+        ready: list[str] = []
+
+        def bootstrap_brokers() -> None:
+            for arn in ready:
+                bootstrap[arn] = _aws_call(client("kafka"), "get_bootstrap_brokers", ClusterArn=arn)
+
+        def broker_nodes() -> None:
+            for cluster in clusters:
+                arn = str(cluster.get("ClusterArn") or "")
+                # A serverless cluster has no nodes to list.
+                if arn in ready and str(cluster.get("ClusterType") or "").upper() == "PROVISIONED":
+                    nodes[arn] = _aws_list_all(client("kafka"), "list_nodes", "NodeInfoList", ClusterArn=arn)
+
+        if optional("msk_clusters", read):
+            return
+        ready += [
+            str(c.get("ClusterArn") or "")
+            for c in clusters
+            if c.get("ClusterArn") and str(c.get("State") or "").upper() not in _MSK_NOT_READY
+        ]
+        if ready:
+            optional("msk_bootstrap_brokers", bootstrap_brokers)
+            optional("msk_nodes", broker_nodes)
+        for cluster in clusters:
+            arn = str(cluster.get("ClusterArn") or "")
+            add(aws_detail.msk_cluster_resource(cluster, region, bootstrap.get(arn), nodes.get(arn)))
+
+    def redshift() -> None:
+        def clusters() -> None:
+            for cluster in _aws_list_all(client("redshift"), "describe_clusters", "Clusters"):
+                add(aws_detail.redshift_cluster_resource(cluster, region))
+
+        def workgroups() -> None:
+            for workgroup in _aws_list_all(client("redshift-serverless"), "list_workgroups", "workgroups"):
+                add(aws_detail.redshift_workgroup_resource(workgroup, region))
+
+        optional("redshift_clusters", clusters)
+        optional("redshift_serverless_workgroups", workgroups)
+
+    readers = (map_detail, fsx, rds, load_balancers, vpc_endpoints, efs, elasticache, opensearch, msk, redshift)
+    for label, read in zip(_AWS_MAP_DETAIL_STEPS, readers, strict=True):
+        if step is not None:
+            step(label)
+        read()
 
 
-# The sections _collect_aws reads per region (one _step each), for the progress total.
-_AWS_SECTIONS_PER_REGION = 12
+# The sections _collect_aws reads per region (one _step each), for the progress
+# total: the eleven base sections, then the map detail steps.
+_AWS_SECTIONS_PER_REGION = 11 + len(_AWS_MAP_DETAIL_STEPS)
+
+
+def skipped_sections_note(resources: list[dict]) -> str:
+    """A sentence on the sections a discovery skipped, for its sync message,
+    or ``""`` when none was. Permission problems name the IAM actions to
+    add; sections not available in a region are left to the map's report.
+    Works for every provider: a warning without a category (Azure, GCP) is
+    counted as skipped."""
+    by_category: dict[str, dict[str, set[str]]] = {}
+    for resource in resources:
+        if resource.get("resource_type") != aws_detail.WARNING_TYPE:
+            continue
+        raw_meta = resource.get("metadata")
+        meta: dict = raw_meta if isinstance(raw_meta, dict) else {}
+        section = str(meta.get("section") or resource.get("name") or "").strip()
+        category = str(meta.get("category") or "").strip()
+        bucket = by_category.setdefault(category, {})
+        detail = bucket.setdefault(section, set())
+        if category == PERMISSION:
+            detail.update(str(a) for a in meta.get("actions") or [])
+        elif category == FAILED:
+            detail.add(str(meta.get("error") or ""))
+
+    def sections(count: int) -> str:
+        return f"{count} section{'' if count == 1 else 's'}"
+
+    parts = []
+    denied = by_category.get(PERMISSION, {})
+    if denied:
+        actions = sorted({a for found in denied.values() for a in found if a})
+        parts.append(
+            f"{sections(len(denied))} skipped for missing permissions" + (f": {', '.join(actions)}" if actions else "")
+        )
+    failed = by_category.get(FAILED, {})
+    if failed:
+        codes = sorted({c for found in failed.values() for c in found if c})
+        parts.append(f"{sections(len(failed))} failed" + (f" ({', '.join(codes)})" if codes else ""))
+    other = by_category.get("", {})
+    if other:
+        parts.append(f"{sections(len(other))} skipped ({', '.join(sorted(other))})")
+    return f"{SKIPPED_NOTE_PREFIX}{'; '.join(parts)}." if parts else ""
+
+
+# How the skipped-sections note starts, so it can be picked out of a sync message.
+SKIPPED_NOTE_PREFIX = "Collected with "
+
+
+def with_skipped_note(message: str, resources: list[dict]) -> str:
+    """``message`` followed by ``skipped_sections_note`` when sections were skipped."""
+    note = skipped_sections_note(resources)
+    return f"{message}. {note}" if note else message
+
+
+def skipped_note(message: str) -> str:
+    """The skipped-sections note of a sync message, or ``""``."""
+    text = str(message or "")
+    start = text.find(SKIPPED_NOTE_PREFIX)
+    return text[start:] if start >= 0 else ""
 
 
 def _collect_aws(account: dict, progress: ProgressCallback | None = None) -> tuple[list[dict], list[dict]]:
@@ -683,7 +1108,7 @@ def _collect_aws(account: dict, progress: ProgressCallback | None = None) -> tup
                         "aws",
                         f"aws:vpc:{vpc_id}",
                         "vpc",
-                        name=_aws_tag_name(vpc.get("Tags")),
+                        name=aws_detail.tag_name(vpc.get("Tags")),
                         region=region,
                         cidr=str(vpc.get("CidrBlock") or ""),
                         status=str(vpc.get("State") or ""),
@@ -811,7 +1236,7 @@ def _collect_aws(account: dict, progress: ProgressCallback | None = None) -> tup
                         "aws",
                         f"aws:tgw:{tgw_id}",
                         "transit_gateway",
-                        name=_aws_tag_name(tgw.get("Tags")),
+                        name=aws_detail.tag_name(tgw.get("Tags")),
                         region=region,
                         status=str(tgw.get("State") or ""),
                         metadata={
@@ -951,7 +1376,7 @@ def _collect_aws(account: dict, progress: ProgressCallback | None = None) -> tup
                         "aws",
                         route_table_uid,
                         "route_table",
-                        name=_aws_tag_name(route_table.get("Tags")) or route_table_id,
+                        name=aws_detail.tag_name(route_table.get("Tags")) or route_table_id,
                         region=region,
                         status="active",
                         metadata={
@@ -1012,7 +1437,7 @@ def _collect_aws(account: dict, progress: ProgressCallback | None = None) -> tup
                         "aws",
                         vpn_uid,
                         "vpn_connection",
-                        name=_aws_tag_name(vpn.get("Tags")),
+                        name=aws_detail.tag_name(vpn.get("Tags")),
                         region=region,
                         status=str(vpn.get("State") or ""),
                         metadata=aws_detail.vpn_connection_metadata(vpn),
@@ -1079,8 +1504,9 @@ def _collect_aws(account: dict, progress: ProgressCallback | None = None) -> tup
             LOGGER.warning("aws collector: failed direct connect list region=%s", region, exc_info=True)
             section_errors.append((f"direct_connect:{region}", provider_error_detail(exc)))
 
-        _step(region, "subnets, instances and network ACLs")
-        _collect_aws_map_detail(session, ec2, region, _cfg, resources, connections)
+        _collect_aws_map_detail(
+            session, ec2, region, _cfg, resources, connections, step=lambda label: _step(region, label)
+        )
 
     # A partial snapshot must not silently replace the last known-good one; the
     # discover endpoint keeps the previous snapshot and surfaces this message on failure.
