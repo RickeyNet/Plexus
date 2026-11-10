@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 
 import { groupLabel } from '@/api/inventory';
 import { Callout } from '@/components/Callout';
@@ -32,6 +32,7 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
   const runBulk = useRunScanBulk();
   const merakiOrgs = useMerakiComplianceOrgs();
   const runMeraki = useRunMerakiScan();
+  const fid = useId();
 
   const [scope, setScope] = useState<Scope>('all');
   const [groupId, setGroupId] = useState<number | null>(null);
@@ -248,13 +249,14 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
         <QueryError what="Meraki organizations" query={merakiOrgs} />
       )}
       <div className="form-group">
-        <label className="form-label">Scope</label>
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+        <span className="form-label" id={`${fid}-scope`}>Scope</span>
+        <div role="group" aria-labelledby={`${fid}-scope`} style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
           {(['all', 'group', 'single', 'meraki'] as Scope[]).map((s) => (
             <button
               key={s}
               type="button"
               className={`btn btn-sm ${scope === s ? 'btn-primary' : 'btn-secondary'}`}
+              aria-pressed={scope === s}
               onClick={() => {
                 setScope(s);
                 setProfileId(null);
@@ -275,8 +277,9 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
 
       {scope === 'meraki' && (
         <div className="form-group">
-          <label className="form-label">Meraki Organization</label>
+          <label className="form-label" htmlFor={`${fid}-org`}>Meraki Organization</label>
           <select
+            id={`${fid}-org`}
             className="form-select"
             value={orgRef ?? ''}
             onChange={(e) => setOrgRef(e.target.value ? parseInt(e.target.value, 10) : null)}
@@ -296,8 +299,9 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
 
       {scope === 'group' && (
         <div className="form-group">
-          <label className="form-label">Group</label>
+          <label className="form-label" htmlFor={`${fid}-group`}>Group</label>
           <select
+            id={`${fid}-group`}
             className="form-select"
             value={groupId ?? ''}
             onChange={(e) =>
@@ -315,8 +319,9 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
 
       {scope === 'single' && (
         <div className="form-group">
-          <label className="form-label">Host</label>
+          <label className="form-label" htmlFor={`${fid}-host`}>Host</label>
           <select
+            id={`${fid}-host`}
             className="form-select"
             value={hostId ?? ''}
             onChange={(e) =>
@@ -334,8 +339,9 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
       )}
 
       <div className="form-group">
-        <label className="form-label">Compliance Profile</label>
+        <label className="form-label" htmlFor={`${fid}-profile`}>Compliance Profile</label>
         <select
+          id={`${fid}-profile`}
           className="form-select"
           value={profileId ?? ''}
           onChange={(e) =>
@@ -357,8 +363,9 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
 
       {scope !== 'meraki' && (
         <div className="form-group">
-          <label className="form-label">Credential</label>
+          <label className="form-label" htmlFor={`${fid}-credential`}>Credential</label>
           <select
+            id={`${fid}-credential`}
             className="form-select"
             value={credentialId ?? ''}
             onChange={(e) =>

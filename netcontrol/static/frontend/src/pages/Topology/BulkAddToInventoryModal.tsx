@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 
 import {
   BULK_ADD_MAX_HOSTS,
@@ -46,6 +46,7 @@ type GroupMode = BulkAddGrouping['mode'];
  * sub-groups, or put every device into one existing group.
  */
 export function BulkAddToInventoryModal({ isOpen, nodes, edges, onClose, onAdded }: Props) {
+  const fid = useId();
   const groupsQuery = useInventoryGroupsLite();
   const groups = useMemo(() => groupsQuery.data ?? [], [groupsQuery.data]);
   const bulkAdd = useBulkAddHosts();
@@ -154,8 +155,12 @@ export function BulkAddToInventoryModal({ isOpen, nodes, edges, onClose, onAdded
             captures, config backups and path tracing. An IP already in inventory is skipped.
           </p>
           <div>
-            <label className="form-label">Group</label>
-            <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', fontSize: '0.85rem' }}>
+            <span className="form-label" id={`${fid}-group-mode`}>Group</span>
+            <div
+              role="radiogroup"
+              aria-labelledby={`${fid}-group-mode`}
+              style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', fontSize: '0.85rem' }}
+            >
               <label style={{ display: 'flex', gap: '0.3rem', alignItems: 'center' }}>
                 <input type="radio" name="bulk-add-group-mode" checked={mode === 'auto'} onChange={() => setMode('auto')} />
                 Automatic by source and site

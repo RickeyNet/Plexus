@@ -119,8 +119,9 @@ export function TemplateFormModal({ mode, templateId, onClose }: Props) {
         <form id={formId} onSubmit={handleSubmit}>
           {saveError && <Callout tone="danger">{saveError}</Callout>}
           <div className="form-group">
-            <label className="form-label">Name</label>
+            <label className="form-label" htmlFor={`${formId}-name`}>Name</label>
             <input
+              id={`${formId}-name`}
               className="form-input"
               value={name}
               onChange={(e) => { setName(e.target.value); setErrors((p) => ({ ...p, name: undefined })); }}
@@ -130,12 +131,13 @@ export function TemplateFormModal({ mode, templateId, onClose }: Props) {
             <FieldError>{errors.name}</FieldError>
           </div>
           <div className="form-group">
-            <label className="form-label">Description</label>
-            <input className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} />
+            <label className="form-label" htmlFor={`${formId}-description`}>Description</label>
+            <input id={`${formId}-description`} className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} />
           </div>
           <div className="form-group">
-            <label className="form-label">Vendor</label>
+            <label className="form-label" htmlFor={`${formId}-vendor`}>Vendor</label>
             <select
+              id={`${formId}-vendor`}
               className="form-input"
               value={deviceType}
               onChange={(e) => setDeviceType(e.target.value)}
@@ -151,8 +153,9 @@ export function TemplateFormModal({ mode, templateId, onClose }: Props) {
             </small>
           </div>
           <div className="form-group">
-            <label className="form-label">Config Content</label>
+            <label className="form-label" htmlFor={`${formId}-content`}>Config Content</label>
             <textarea
+              id={`${formId}-content`}
               className="form-input"
               value={content}
               onChange={(e) => { setContent(e.target.value); setErrors((p) => ({ ...p, content: undefined })); }}

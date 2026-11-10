@@ -147,15 +147,13 @@ function ActiveEventsTable({
               </td>
               <td>
                 <button
-                  className="btn btn-sm btn-secondary"
-                  style={{ padding: '2px 6px', fontSize: '0.75em' }}
+                  className="btn btn-xs btn-secondary"
                   onClick={() => onAck(e.id)}
                 >
                   {e.acknowledged ? 'Acked' : 'Ack'}
                 </button>{' '}
                 <button
-                  className="btn btn-sm btn-secondary"
-                  style={{ padding: '2px 6px', fontSize: '0.75em' }}
+                  className="btn btn-xs btn-secondary"
                   onClick={() => onResolve(e.id)}
                 >
                   Resolve

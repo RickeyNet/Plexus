@@ -77,6 +77,7 @@ function CredentialRow({
   onDelete: () => void;
 }) {
   const { alert } = useDialogs();
+  const fid = useId();
   const updateMut = useUpdateCredential();
   const [name, setName] = useState(credential.name);
   const [username, setUsername] = useState(credential.username);
@@ -101,20 +102,20 @@ function CredentialRow({
     <div className="card card-sm">
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.5rem' }}>
         <div>
-          <label className="form-label" style={{ fontSize: '0.75rem' }}>Name</label>
-          <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} />
+          <label className="form-label" htmlFor={`${fid}-name`} style={{ fontSize: '0.75rem' }}>Name</label>
+          <input id={`${fid}-name`} className="form-input" value={name} onChange={(e) => setName(e.target.value)} />
         </div>
         <div>
-          <label className="form-label" style={{ fontSize: '0.75rem' }}>Username</label>
-          <input className="form-input" value={username} onChange={(e) => setUsername(e.target.value)} />
+          <label className="form-label" htmlFor={`${fid}-username`} style={{ fontSize: '0.75rem' }}>Username</label>
+          <input id={`${fid}-username`} className="form-input" value={username} onChange={(e) => setUsername(e.target.value)} />
         </div>
         <div>
-          <label className="form-label" style={{ fontSize: '0.75rem' }}>Password</label>
-          <input className="form-input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="unchanged" />
+          <label className="form-label" htmlFor={`${fid}-password`} style={{ fontSize: '0.75rem' }}>Password</label>
+          <input id={`${fid}-password`} className="form-input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="unchanged" />
         </div>
         <div>
-          <label className="form-label" style={{ fontSize: '0.75rem' }}>Secret</label>
-          <input className="form-input" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="unchanged" />
+          <label className="form-label" htmlFor={`${fid}-secret`} style={{ fontSize: '0.75rem' }}>Secret</label>
+          <input id={`${fid}-secret`} className="form-input" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="unchanged" />
         </div>
       </div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.4rem', marginTop: '0.5rem' }}>
@@ -178,8 +179,9 @@ function CreateCredentialModal({ isOpen, onClose }: { isOpen: boolean; onClose: 
       <form id={formId} onSubmit={handleSubmit}>
         {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
-          <label className="form-label">Name</label>
+          <label className="form-label" htmlFor={`${formId}-name`}>Name</label>
           <input
+            id={`${formId}-name`}
             className="form-input"
             value={name}
             onChange={(e) => { setName(e.target.value); setErrors((p) => ({ ...p, name: undefined })); }}
@@ -189,8 +191,9 @@ function CreateCredentialModal({ isOpen, onClose }: { isOpen: boolean; onClose: 
           <FieldError>{errors.name}</FieldError>
         </div>
         <div className="form-group">
-          <label className="form-label">Username</label>
+          <label className="form-label" htmlFor={`${formId}-username`}>Username</label>
           <input
+            id={`${formId}-username`}
             className="form-input"
             value={username}
             onChange={(e) => { setUsername(e.target.value); setErrors((p) => ({ ...p, username: undefined })); }}
@@ -200,8 +203,9 @@ function CreateCredentialModal({ isOpen, onClose }: { isOpen: boolean; onClose: 
           <FieldError>{errors.username}</FieldError>
         </div>
         <div className="form-group">
-          <label className="form-label">Password</label>
+          <label className="form-label" htmlFor={`${formId}-password`}>Password</label>
           <input
+            id={`${formId}-password`}
             className="form-input"
             type="password"
             value={password}
@@ -212,8 +216,8 @@ function CreateCredentialModal({ isOpen, onClose }: { isOpen: boolean; onClose: 
           <FieldError>{errors.password}</FieldError>
         </div>
         <div className="form-group">
-          <label className="form-label">Secret (Enable Password)</label>
-          <input className="form-input" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} />
+          <label className="form-label" htmlFor={`${formId}-secret`}>Secret (Enable Password)</label>
+          <input id={`${formId}-secret`} className="form-input" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} />
         </div>
       </form>
     </Modal>

@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent } from 'react';
 
 import { groupLabel } from '@/api/inventory';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -24,6 +24,7 @@ const REPORT_TYPES: { value: ReportType; label: string }[] = [
 const NO_DAYS = new Set<ReportType>(['compliance', 'network_documentation']);
 
 export function GenerateReportTab() {
+  const fid = useId();
   const groupsQuery = useInventoryGroups(false);
   const generate = useGenerateReport();
 
@@ -59,16 +60,16 @@ export function GenerateReportTab() {
     <div>
       <form onSubmit={handleSubmit} className="toolbar" style={{ alignItems: 'flex-end' }}>
         <div className="form-group" style={{ marginBottom: 0 }}>
-          <label className="form-label">Report Type</label>
-          <select className="form-select" value={reportType} onChange={(e) => setReportType(e.target.value as ReportType)}>
+          <label className="form-label" htmlFor={`${fid}-report-type`}>Report Type</label>
+          <select id={`${fid}-report-type`} className="form-select" value={reportType} onChange={(e) => setReportType(e.target.value as ReportType)}>
             {REPORT_TYPES.map((t) => (
               <option key={t.value} value={t.value}>{t.label}</option>
             ))}
           </select>
         </div>
         <div className="form-group" style={{ marginBottom: 0 }}>
-          <label className="form-label">Group</label>
-          <select className="form-select" value={groupId} onChange={(e) => setGroupId(e.target.value)}>
+          <label className="form-label" htmlFor={`${fid}-group`}>Group</label>
+          <select id={`${fid}-group`} className="form-select" value={groupId} onChange={(e) => setGroupId(e.target.value)}>
             <option value="">All Groups</option>
             {(groupsQuery.data ?? []).map((g) => (
               <option key={g.id} value={g.id}>{groupLabel(g)}</option>
@@ -77,8 +78,9 @@ export function GenerateReportTab() {
         </div>
         {showDays && (
           <div className="form-group" style={{ marginBottom: 0 }}>
-            <label className="form-label">Days</label>
+            <label className="form-label" htmlFor={`${fid}-days`}>Days</label>
             <input
+              id={`${fid}-days`}
               type="number"
               className="form-input"
               min={1}

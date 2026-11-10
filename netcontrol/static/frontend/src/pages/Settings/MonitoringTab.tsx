@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import {
   MonitoringConfig,
@@ -16,6 +16,7 @@ export function MonitoringTab() {
   const query = useMonitoringConfig();
   const update = useUpdateMonitoringConfig();
   const runNow = useRunMonitoringPoll();
+  const fid = useId();
 
   const [draft, setDraft] = useState<MonitoringConfig | null>(null);
   const [status, setStatus] = useState<FormStatus | null>(null);
@@ -40,8 +41,9 @@ export function MonitoringTab() {
     flex = '0 1 160px',
   ) => (
     <div className="form-group" style={{ flex }}>
-      <label className="form-label">{label}</label>
+      <label className="form-label" htmlFor={`${fid}-${key}`}>{label}</label>
       <input
+        id={`${fid}-${key}`}
         type="number"
         min={min}
         className="form-input"

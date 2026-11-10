@@ -238,6 +238,7 @@ function VariablesBar({ variables, values, onChange, groups }: VariablesBarProps
             <select
               key={v.name}
               className="form-select"
+              aria-label="Filter by group"
               value={value}
               onChange={(e) => set(e.target.value)}
             >
@@ -255,6 +256,7 @@ function VariablesBar({ variables, values, onChange, groups }: VariablesBarProps
             <select
               key={v.name}
               className="form-select"
+              aria-label="Filter by host"
               value={value}
               onChange={(e) => set(e.target.value)}
             >

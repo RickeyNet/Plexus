@@ -96,8 +96,8 @@ export function JobsTab() {
   return (
     <div className="stack">
       <div className="toolbar">
-        <input className="form-input" placeholder="Search jobs…" value={query} onChange={(e) => setQuery(e.target.value)} style={{ width: 220 }} />
-        <select className="form-select" value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)}>
+        <input className="form-input" placeholder="Search jobs…" aria-label="Search jobs" value={query} onChange={(e) => setQuery(e.target.value)} style={{ width: 220 }} />
+        <select className="form-select" aria-label="Filter by status" value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)}>
           <option value="all">All Statuses</option>
           <option value="queued">Queued</option>
           <option value="running">Running</option>
@@ -105,12 +105,12 @@ export function JobsTab() {
           <option value="failed">Failed</option>
           <option value="cancelled">Cancelled</option>
         </select>
-        <select className="form-select" value={dryRun} onChange={(e) => setDryRun(e.target.value as DryRunFilter)}>
+        <select className="form-select" aria-label="Filter by run mode" value={dryRun} onChange={(e) => setDryRun(e.target.value as DryRunFilter)}>
           <option value="all">Dry+Live</option>
           <option value="yes">Dry Run only</option>
           <option value="no">Live only</option>
         </select>
-        <select className="form-select" value={dateRange} onChange={(e) => setDateRange(e.target.value as DateRange)}>
+        <select className="form-select" aria-label="Filter by date" value={dateRange} onChange={(e) => setDateRange(e.target.value as DateRange)}>
           <option value="all">All time</option>
           <option value="today">Today</option>
           <option value="7d">Last 7 days</option>

@@ -61,6 +61,7 @@ export function BackupsTab() {
         <input
           className="form-input form-input-sm"
           placeholder="Search…"
+          aria-label="Search backups"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           style={{ maxWidth: 240 }}

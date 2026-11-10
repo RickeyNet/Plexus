@@ -237,6 +237,7 @@ function VersionsTab() {
           </select>
         </label>
         <input
+          aria-label="Search devices"
           className="form-input"
           value={search}
           onChange={(e) => setSearch(e.target.value)}

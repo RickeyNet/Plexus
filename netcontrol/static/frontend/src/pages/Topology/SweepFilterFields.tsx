@@ -59,8 +59,8 @@ export function FilterFields({ title, idPrefix, filters, onChange, sources, prov
             {filters.sources.length ? `${filters.sources.length} selected` : 'All sources'}
           </span>
         </label>
-        <fieldset style={{ ...FIELD_STYLE, border: 'none', padding: 0, margin: 0 }}>
-          <span className="form-label">Providers</span>
+        <fieldset aria-labelledby={`${idPrefix}-providers`} style={{ ...FIELD_STYLE, border: 'none', padding: 0, margin: 0 }}>
+          <span className="form-label" id={`${idPrefix}-providers`}>Providers</span>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, auto)', gap: '0.1rem 0.75rem' }}>
             {providers.map((p) => (
               <label key={p} style={{ display: 'flex', gap: '0.3rem', alignItems: 'center' }}>
@@ -75,8 +75,8 @@ export function FilterFields({ title, idPrefix, filters, onChange, sources, prov
           </div>
           <span className="text-muted" style={NOTE_STYLE}>None checked: every provider</span>
         </fieldset>
-        <fieldset style={{ ...FIELD_STYLE, border: 'none', padding: 0, margin: 0 }}>
-          <span className="form-label">Kinds of network</span>
+        <fieldset aria-labelledby={`${idPrefix}-kinds`} style={{ ...FIELD_STYLE, border: 'none', padding: 0, margin: 0 }}>
+          <span className="form-label" id={`${idPrefix}-kinds`}>Kinds of network</span>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, auto)', gap: '0.1rem 0.75rem' }}>
             {SWEEP_KINDS.map((k) => (
               <label key={k.key} style={{ display: 'flex', gap: '0.3rem', alignItems: 'center' }}>

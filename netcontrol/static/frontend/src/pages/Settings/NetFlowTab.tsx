@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import {
   FlowCollectorConfig,
@@ -15,6 +15,7 @@ import { FormStatus, StatusLine } from './StatusLine';
 export function NetFlowTab() {
   const query = useFlowCollectorConfig();
   const update = useUpdateFlowCollectorConfig();
+  const fid = useId();
 
   const [draft, setDraft] = useState<FlowCollectorConfig | null>(null);
   const [status, setStatus] = useState<FormStatus | null>(null);
@@ -40,8 +41,9 @@ export function NetFlowTab() {
     help?: string,
   ) => (
     <div className="form-group" style={{ flex }}>
-      <label className="form-label">{label}</label>
+      <label className="form-label" htmlFor={`${fid}-${key}`}>{label}</label>
       <input
+        id={`${fid}-${key}`}
         type="number"
         min={min}
         className="form-input"

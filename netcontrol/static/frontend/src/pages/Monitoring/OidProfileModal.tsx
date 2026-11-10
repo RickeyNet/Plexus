@@ -111,8 +111,9 @@ export function OidProfileModal({ mode, profileId, onClose }: Props) {
         <form id={formId} onSubmit={handleSubmit}>
           {saveError && <Callout tone="danger">{saveError}</Callout>}
           <div className="form-group">
-            <label className="form-label">Name</label>
+            <label className="form-label" htmlFor={`${formId}-name`}>Name</label>
             <input
+              id={`${formId}-name`}
               className="form-input"
               value={name}
               onChange={(e) => { setName(e.target.value); setNameError(''); }}
@@ -123,21 +124,22 @@ export function OidProfileModal({ mode, profileId, onClose }: Props) {
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
             <div className="form-group">
-              <label className="form-label">Vendor</label>
-              <input className="form-input" value={vendor} onChange={(e) => setVendor(e.target.value)} />
+              <label className="form-label" htmlFor={`${formId}-vendor`}>Vendor</label>
+              <input id={`${formId}-vendor`} className="form-input" value={vendor} onChange={(e) => setVendor(e.target.value)} />
             </div>
             <div className="form-group">
-              <label className="form-label">Device Type</label>
-              <input className="form-input" value={deviceType} onChange={(e) => setDeviceType(e.target.value)} />
+              <label className="form-label" htmlFor={`${formId}-device-type`}>Device Type</label>
+              <input id={`${formId}-device-type`} className="form-input" value={deviceType} onChange={(e) => setDeviceType(e.target.value)} />
             </div>
           </div>
           <div className="form-group">
-            <label className="form-label">Description</label>
-            <input className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} />
+            <label className="form-label" htmlFor={`${formId}-description`}>Description</label>
+            <input id={`${formId}-description`} className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} />
           </div>
           <div className="form-group">
-            <label className="form-label">OID Mappings (JSON)</label>
+            <label className="form-label" htmlFor={`${formId}-oid-mappings`}>OID Mappings (JSON)</label>
             <textarea
+              id={`${formId}-oid-mappings`}
               className="form-textarea"
               rows={10}
               value={oidsJson}

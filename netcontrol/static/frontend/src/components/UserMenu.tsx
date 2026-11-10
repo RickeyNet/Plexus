@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 
 import { useAuthStatus } from '@/api/auth';
 import { apiRequest, setCsrfToken } from '@/api/client';
+import { Badge } from '@/components/Badge';
 import { ChangePasswordModal } from '@/components/ChangePasswordModal';
 import { EditProfileModal } from '@/components/EditProfileModal';
 import { Modal } from '@/components/Modal';
@@ -59,7 +60,7 @@ export function UserMenu({ isOpen, onClose }: UserMenuProps) {
             <div style={{ fontWeight: 600, fontSize: '1rem' }}>{displayName}</div>
             <div style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>@{username}</div>
             <div style={{ marginTop: '0.25rem' }}>
-              <span style={{ fontSize: '0.7rem', padding: '0.15rem 0.5rem', background: 'var(--primary-dark)', color: 'var(--text)', borderRadius: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{role}</span>
+              <Badge tone="primary" solid>{role}</Badge>
             </div>
           </div>
         </div>

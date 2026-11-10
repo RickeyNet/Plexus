@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -22,6 +22,7 @@ const VENDOR_DEFAULTS: { vendor: string; metric: string; oid: string }[] = [
 
 export function OidProfilesTab() {
   const { confirm, alert } = useDialogs();
+  const fid = useId();
   const [vendor, setVendor] = useState('');
   const query = useOidProfiles(vendor || null);
   const del = useDeleteOidProfile();
@@ -56,8 +57,8 @@ export function OidProfilesTab() {
     <div className="stack">
       <div className="toolbar" style={{ justifyContent: 'space-between', alignItems: 'flex-end' }}>
         <div className="form-group" style={{ marginBottom: 0 }}>
-          <label className="form-label">Vendor</label>
-          <select className="form-select" value={vendor} onChange={(e) => setVendor(e.target.value)}>
+          <label className="form-label" htmlFor={`${fid}-vendor`}>Vendor</label>
+          <select id={`${fid}-vendor`} className="form-select" value={vendor} onChange={(e) => setVendor(e.target.value)}>
             <option value="">All vendors</option>
             {allVendors.map((v) => <option key={v} value={v}>{v}</option>)}
           </select>

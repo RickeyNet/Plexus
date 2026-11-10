@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent } from 'react';
 
 import { Callout } from '@/components/Callout';
 import { EmptyState } from '@/components/EmptyState';
@@ -16,6 +16,7 @@ interface Props {
 }
 
 export function GraphTreeDetailModal({ treeId, onClose }: Props) {
+  const fid = useId();
   const isOpen = treeId != null;
   const query = useGraphTree(treeId);
   const createNodeMut = useCreateGraphTreeNode();
@@ -88,8 +89,9 @@ export function GraphTreeDetailModal({ treeId, onClose }: Props) {
             {addingNode ? (
               <form onSubmit={handleAddNode} style={{ marginTop: '0.75rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'flex-end' }}>
                 <div className="form-group" style={{ marginBottom: 0, flex: 1, minWidth: 200 }}>
-                  <label className="form-label">Title</label>
+                  <label className="form-label" htmlFor={`${fid}-title`}>Title</label>
                   <input
+                    id={`${fid}-title`}
                     className="form-input"
                     value={title}
                     onChange={(e) => {
@@ -102,16 +104,16 @@ export function GraphTreeDetailModal({ treeId, onClose }: Props) {
                   <FieldError>{titleError}</FieldError>
                 </div>
                 <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Type</label>
-                  <select className="form-select" value={nodeType} onChange={(e) => setNodeType(e.target.value)}>
+                  <label className="form-label" htmlFor={`${fid}-type`}>Type</label>
+                  <select id={`${fid}-type`} className="form-select" value={nodeType} onChange={(e) => setNodeType(e.target.value)}>
                     <option value="header">Header</option>
                     <option value="device">Device</option>
                     <option value="graph">Graph</option>
                   </select>
                 </div>
                 <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Sort</label>
-                  <input className="form-input" type="number" value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} style={{ width: 80 }} />
+                  <label className="form-label" htmlFor={`${fid}-sort`}>Sort</label>
+                  <input id={`${fid}-sort`} className="form-input" type="number" value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} style={{ width: 80 }} />
                 </div>
                 <button type="submit" className="btn btn-primary btn-sm" disabled={createNodeMut.isPending}>
                   {createNodeMut.isPending ? 'Adding…' : 'Add'}

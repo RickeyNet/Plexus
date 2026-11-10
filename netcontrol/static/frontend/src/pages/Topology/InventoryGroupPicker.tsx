@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import { groupLabel } from '@/api/inventory';
 import { useCreateInventoryGroup, type InventoryGroupLite } from '@/api/topology';
@@ -19,6 +19,7 @@ interface Props {
  * single and bulk "Add to inventory" dialogs.
  */
 export function InventoryGroupPicker({ groups, value, onChange, onError }: Props) {
+  const fid = useId();
   const createGroup = useCreateInventoryGroup();
   const [creating, setCreating] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
@@ -63,9 +64,10 @@ export function InventoryGroupPicker({ groups, value, onChange, onError }: Props
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-      <label style={{ fontSize: '0.85rem', fontWeight: 500 }}>New Group Name</label>
+      <label htmlFor={`${fid}-new-group`} style={{ fontSize: '0.85rem', fontWeight: 500 }}>New Group Name</label>
       <div className="toolbar" style={{ marginBottom: 0 }}>
         <input
+          id={`${fid}-new-group`}
           className="form-input form-input-sm"
           type="text"
           placeholder="Group name"

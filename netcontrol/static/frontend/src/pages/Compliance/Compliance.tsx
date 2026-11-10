@@ -186,6 +186,7 @@ export function Compliance() {
             <input
               className="form-input"
               placeholder="Search…"
+              aria-label="Search compliance"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               style={{ maxWidth: 240 }}

@@ -143,6 +143,8 @@ button.card {
     --control-h-sm: 1.875rem;
     --control-lh: 1.25rem;
     --control-lh-sm: 1.125rem;
+    /* Smallest click target for a compact control (xs buttons, icon buttons). */
+    --target-min: 1.75rem;
     --control-pad-y: calc((var(--control-h) - var(--control-lh)) / 2 - 1px);
     --control-pad-y-sm: calc((var(--control-h-sm) - var(--control-lh-sm)) / 2 - 1px);
 
@@ -1893,6 +1895,11 @@ body {
 }
 
 .page-help-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: var(--target-min);
+    min-height: var(--target-min);
     background: none;
     border: none;
     color: var(--text-muted);
@@ -2317,6 +2324,22 @@ button.stat-card {
     padding: 0.15rem var(--space-2);
     font-size: var(--text-xs);
     line-height: 1.4;
+    min-width: var(--target-min);
+    min-height: var(--target-min);
+}
+
+/* Keyboard focus ring for every focusable element. Form fields draw their
+   own ring (border + glow) further down. */
+:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
+/* A row or cell has no room outside its box: draw the ring inside it. */
+tr:focus-visible,
+td:focus-visible,
+.card-clickable:focus-visible {
+    outline-offset: -2px;
 }
 
 /* Text-style button for inline actions (login "Register" / "Back"). */
@@ -2389,7 +2412,7 @@ button.stat-card {
     gap: var(--space-1);
     flex-wrap: wrap;
 }
-.segmented-xs .btn { padding: 0.15rem 0.5rem; font-size: var(--text-xs); line-height: 1.4; }
+.segmented-xs .btn { padding: 0.15rem 0.5rem; font-size: var(--text-xs); line-height: 1.4; min-height: var(--target-min); }
 
 .page-tab-btn {
     padding: var(--control-pad-y) var(--space-4);
@@ -4353,6 +4376,11 @@ code {
 .menu-item[role="menuitemcheckbox"] { flex-direction: row; align-items: center; }
 .menu-item:hover,
 .menu-item:focus { background: var(--bg-secondary); outline: none; }
+.menu-item:focus-visible {
+    background: var(--primary-soft-strong);
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
+}
 .menu-item:disabled,
 .menu-item[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; background: transparent; }
 .menu-item.danger { color: var(--danger); }
@@ -4366,7 +4394,7 @@ code {
 }
 .menu-item-check { display: inline-block; width: 1.2em; flex-shrink: 0; }
 .menu-separator { height: 1px; margin: 0.25rem 0; background: var(--border); }
-.menu-kebab { padding: 0.15rem 0.5rem; line-height: 1; font-size: 1rem; }
+.menu-kebab { padding: 0 0.5rem; min-width: var(--target-min); min-height: var(--target-min); line-height: 1; font-size: 1rem; }
 
 /* Topology toolbar menus (pages/Topology/Topology.tsx) */
 .topo-toolbar-badge { margin-left: 0.3rem; }

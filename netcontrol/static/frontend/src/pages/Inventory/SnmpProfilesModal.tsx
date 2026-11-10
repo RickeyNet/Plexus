@@ -223,8 +223,9 @@ function SnmpProfileFormModal({ profile, onBack, onClose }: FormProps) {
       <form id={formId} onSubmit={submit}>
         {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
-          <label className="form-label">Profile Name</label>
+          <label className="form-label" htmlFor={`${formId}-name`}>Profile Name</label>
           <input
+            id={`${formId}-name`}
             className="form-input"
             value={name}
             onChange={(e) => {
@@ -261,8 +262,9 @@ function SnmpProfileFormModal({ profile, onBack, onClose }: FormProps) {
           }}
         >
           <div>
-            <label className="form-label">Version</label>
+            <label className="form-label" htmlFor={`${formId}-version`}>Version</label>
             <select
+              id={`${formId}-version`}
               className="form-select"
               value={version}
               onChange={(e) => setVersion(e.target.value)}
@@ -272,8 +274,9 @@ function SnmpProfileFormModal({ profile, onBack, onClose }: FormProps) {
             </select>
           </div>
           <div>
-            <label className="form-label">Port</label>
+            <label className="form-label" htmlFor={`${formId}-port`}>Port</label>
             <input
+              id={`${formId}-port`}
               className="form-input"
               type="number"
               min={1}
@@ -283,8 +286,9 @@ function SnmpProfileFormModal({ profile, onBack, onClose }: FormProps) {
             />
           </div>
           <div>
-            <label className="form-label">Retries</label>
+            <label className="form-label" htmlFor={`${formId}-retries`}>Retries</label>
             <input
+              id={`${formId}-retries`}
               className="form-input"
               type="number"
               min={0}
@@ -296,8 +300,9 @@ function SnmpProfileFormModal({ profile, onBack, onClose }: FormProps) {
         </div>
         {version !== '3' && (
           <div className="form-group">
-            <label className="form-label">Community (v2c)</label>
+            <label className="form-label" htmlFor={`${formId}-community`}>Community (v2c)</label>
             <input
+              id={`${formId}-community`}
               className="form-input"
               value={community}
               onChange={(e) => setCommunity(e.target.value)}
@@ -305,8 +310,9 @@ function SnmpProfileFormModal({ profile, onBack, onClose }: FormProps) {
           </div>
         )}
         <div className="form-group">
-          <label className="form-label">Timeout Seconds</label>
+          <label className="form-label" htmlFor={`${formId}-timeout`}>Timeout Seconds</label>
           <input
+            id={`${formId}-timeout`}
             className="form-input"
             type="number"
             min={0.2}
@@ -358,16 +364,18 @@ function SnmpProfileFormModal({ profile, onBack, onClose }: FormProps) {
           }}
         >
           <div>
-            <label className="form-label">Username</label>
+            <label className="form-label" htmlFor={`${formId}-v3-username`}>Username</label>
             <input
+              id={`${formId}-v3-username`}
               className="form-input"
               value={v3Username}
               onChange={(e) => setV3Username(e.target.value)}
             />
           </div>
           <div>
-            <label className="form-label">Auth Protocol</label>
+            <label className="form-label" htmlFor={`${formId}-v3-auth-protocol`}>Auth Protocol</label>
             <select
+              id={`${formId}-v3-auth-protocol`}
               className="form-select"
               value={v3AuthProtocol}
               onChange={(e) => setV3AuthProtocol(e.target.value)}
@@ -388,8 +396,9 @@ function SnmpProfileFormModal({ profile, onBack, onClose }: FormProps) {
           }}
         >
           <div>
-            <label className="form-label">Auth Password</label>
+            <label className="form-label" htmlFor={`${formId}-v3-auth-password`}>Auth Password</label>
             <input
+              id={`${formId}-v3-auth-password`}
               className="form-input"
               type={v3AuthPassword.includes('{{secret.') ? 'text' : 'password'}
               value={v3AuthPassword}
@@ -398,8 +407,9 @@ function SnmpProfileFormModal({ profile, onBack, onClose }: FormProps) {
             />
           </div>
           <div>
-            <label className="form-label">Privacy Protocol</label>
+            <label className="form-label" htmlFor={`${formId}-v3-priv-protocol`}>Privacy Protocol</label>
             <select
+              id={`${formId}-v3-priv-protocol`}
               className="form-select"
               value={v3PrivProtocol}
               onChange={(e) => setV3PrivProtocol(e.target.value)}
@@ -412,8 +422,9 @@ function SnmpProfileFormModal({ profile, onBack, onClose }: FormProps) {
           </div>
         </div>
         <div className="form-group">
-          <label className="form-label">Privacy Password</label>
+          <label className="form-label" htmlFor={`${formId}-v3-priv-password`}>Privacy Password</label>
           <input
+            id={`${formId}-v3-priv-password`}
             className="form-input"
             type={v3PrivPassword.includes('{{secret.') ? 'text' : 'password'}
             value={v3PrivPassword}

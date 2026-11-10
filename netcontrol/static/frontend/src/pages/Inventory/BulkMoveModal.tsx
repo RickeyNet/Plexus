@@ -67,8 +67,9 @@ export function BulkMoveModal({ hostIds, sourceGroupId, groups, onClose }: Props
         <form id={formId} onSubmit={submit}>
           {error && <Callout tone="danger">{error}</Callout>}
           <div className="form-group">
-            <label className="form-label">Destination Group</label>
+            <label className="form-label" htmlFor={`${formId}-target`}>Destination Group</label>
             <select
+              id={`${formId}-target`}
               className="form-select"
               value={String(targetGroupId)}
               onChange={(e) => setTargetGroupId(Number(e.target.value))}

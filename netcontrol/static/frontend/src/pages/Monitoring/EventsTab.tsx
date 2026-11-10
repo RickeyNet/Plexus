@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 
 import { useSyslogEvents, type SyslogEvent } from '@/api/monitoring';
 import { SeverityBadge } from '@/components/Badge';
@@ -26,6 +26,7 @@ const TYPES = [
 ];
 
 export function EventsTab() {
+  const fid = useId();
   const [severity, setSeverity] = useState('');
   const [eventType, setEventType] = useState('syslog');
   const [search, setSearch] = useState('');
@@ -57,20 +58,20 @@ export function EventsTab() {
     <div>
       <div className="toolbar" style={{ alignItems: 'flex-end' }}>
         <div className="form-group" style={{ marginBottom: 0 }}>
-          <label className="form-label">Severity</label>
-          <select className="form-select" value={severity} onChange={(e) => setSeverity(e.target.value)}>
+          <label className="form-label" htmlFor={`${fid}-severity`}>Severity</label>
+          <select id={`${fid}-severity`} className="form-select" value={severity} onChange={(e) => setSeverity(e.target.value)}>
             {SEVERITIES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
           </select>
         </div>
         <div className="form-group" style={{ marginBottom: 0 }}>
-          <label className="form-label">Type</label>
-          <select className="form-select" value={eventType} onChange={(e) => setEventType(e.target.value)}>
+          <label className="form-label" htmlFor={`${fid}-type`}>Type</label>
+          <select id={`${fid}-type`} className="form-select" value={eventType} onChange={(e) => setEventType(e.target.value)}>
             {TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
           </select>
         </div>
         <div className="form-group" style={{ marginBottom: 0, flex: 1, minWidth: 200 }}>
-          <label className="form-label">Search</label>
-          <input className="form-input" placeholder="Filter…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <label className="form-label" htmlFor={`${fid}-search`}>Search</label>
+          <input id={`${fid}-search`} className="form-input" placeholder="Filter…" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
       </div>
 

@@ -16,6 +16,7 @@ import {
   useGeoSite,
   useInventoryGroupsWithHosts,
 } from '@/api/floorPlan';
+import { clickableProps } from '@/lib/clickable';
 
 import { FloorCanvas } from './FloorCanvas';
 import {
@@ -228,7 +229,6 @@ function SitesPanel({
         return (
           <div
             key={s.id}
-            onClick={() => onSelectSite(s.id)}
             style={{
               padding: '0.5rem 0.6rem',
               borderRadius: 4,
@@ -237,29 +237,34 @@ function SitesPanel({
               background: isActive ? 'var(--primary-soft)' : undefined,
             }}
           >
-            <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>{s.name}</div>
-            {s.address && (
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                {s.address}
-              </div>
-            )}
             <div
-              style={{
-                fontSize: '0.72rem',
-                color: 'var(--text-muted)',
-                marginTop: 2,
-              }}
+              {...clickableProps(() => onSelectSite(s.id))}
+              aria-current={isActive ? 'true' : undefined}
             >
-              {floors} floor{floors !== 1 ? 's' : ''} · {placed} pinned
-              {online > 0 && (
-                <span style={{ color: 'var(--success)', marginLeft: 4 }}>● {online}</span>
+              <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>{s.name}</div>
+              {s.address && (
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                  {s.address}
+                </div>
               )}
-              {offline > 0 && (
-                <span style={{ color: 'var(--danger)', marginLeft: 4 }}>● {offline}</span>
-              )}
-              {unknown > 0 && (
-                <span style={{ color: 'var(--text-muted)', marginLeft: 4 }}>● {unknown}</span>
-              )}
+              <div
+                style={{
+                  fontSize: '0.72rem',
+                  color: 'var(--text-muted)',
+                  marginTop: 2,
+                }}
+              >
+                {floors} floor{floors !== 1 ? 's' : ''} · {placed} pinned
+                {online > 0 && (
+                  <span style={{ color: 'var(--success)', marginLeft: 4 }}>● {online}</span>
+                )}
+                {offline > 0 && (
+                  <span style={{ color: 'var(--danger)', marginLeft: 4 }}>● {offline}</span>
+                )}
+                {unknown > 0 && (
+                  <span style={{ color: 'var(--text-muted)', marginLeft: 4 }}>● {unknown}</span>
+                )}
+              </div>
             </div>
             {isActive && (
               <FloorList
@@ -303,7 +308,8 @@ function FloorList({
         return (
           <div
             key={f.id}
-            onClick={() => onSelect(f.id)}
+            {...clickableProps(() => onSelect(f.id))}
+            aria-current={isActive ? 'true' : undefined}
             style={{
               padding: '3px 6px',
               borderRadius: 3,

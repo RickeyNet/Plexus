@@ -8,6 +8,7 @@ import { Modal } from '@/components/Modal';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { clickableProps } from '@/lib/clickable';
 import { TopologyCanvas } from '@/pages/TopologyCanvas';
 import {
   LabDeviceSummary,
@@ -180,6 +181,7 @@ export function Lab() {
               <button
                 key={e.id}
                 type="button"
+                aria-pressed={selectedEnvId === e.id}
                 onClick={() => {
                   setSelectedEnvId(e.id);
                   setSelectedDeviceId(null);
@@ -410,7 +412,8 @@ function EnvironmentDetail({
                       cursor: 'pointer',
                       background: selected ? 'var(--primary-soft)' : undefined,
                     }}
-                    onClick={() => onSelectDevice(d.id)}
+                    {...clickableProps(() => onSelectDevice(d.id), { role: null })}
+                    aria-current={selected || undefined}
                   >
                     <td>{d.hostname}</td>
                     <td>{d.runtime_mgmt_address || d.ip_address || '-'}</td>
@@ -726,7 +729,7 @@ function DevicePanel({ deviceId }: { deviceId: number }) {
               {runs.data.map((r) => (
                 <tr
                   key={r.id}
-                  onClick={() => setOpenRunId(r.id)}
+                  {...clickableProps(() => setOpenRunId(r.id), { role: null })}
                   style={{ cursor: 'pointer' }}
                 >
                   <td>{r.id}</td>
@@ -1075,7 +1078,8 @@ function TopologiesCard({
                   cursor: 'pointer',
                   background: openId === t.id ? 'var(--primary-soft)' : undefined,
                 }}
-                onClick={() => setOpenId(openId === t.id ? null : t.id)}
+                {...clickableProps(() => setOpenId(openId === t.id ? null : t.id), { role: null })}
+                aria-expanded={openId === t.id}
               >
                 <td>{t.name}</td>
                 <td>{t.device_count ?? 0}</td>
@@ -1343,6 +1347,7 @@ function TopologyEditor({
       {!isRunning && (
         <div className="toolbar">
           <select
+            aria-label="Device to add"
             className="form-select"
             value={memberPick}
             onChange={(e) => setMemberPick(e.target.value)}

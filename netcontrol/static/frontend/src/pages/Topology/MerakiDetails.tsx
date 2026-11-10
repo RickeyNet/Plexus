@@ -65,6 +65,7 @@ export function MerakiDetails({ meraki, highlight = '', view, title }: Props) {
   const controls = (
     <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.5rem' }}>
       <input
+        aria-label="Filter Meraki details"
         className="form-input form-input-sm"
         style={{ flex: 1 }}
         placeholder="Filter…"

@@ -1,4 +1,4 @@
-import { FormEvent, type ReactNode, useState } from 'react';
+import { FormEvent, type ReactNode, useId, useState } from 'react';
 
 import { Callout } from '@/components/Callout';
 import { DeleteButton } from '@/components/DeleteButton';
@@ -142,6 +142,7 @@ function ReservationsSection({
   reservations,
   onChanged,
 }: ReservationsSectionProps) {
+  const fid = useId();
   const { confirm, alert } = useDialogs();
   const create = useCreateIpamReservation();
   const remove = useDeleteIpamReservation();
@@ -235,7 +236,11 @@ function ReservationsSection({
                   {item.kind || 'reserved'}
                 </span>
                 {item.kind === 'custom' && (
-                  <DeleteButton size="xs" onClick={() => handleDelete(item)} />
+                  <DeleteButton
+                    size="xs"
+                    aria-label={`Delete reservation ${item.start_ip || ''}`.trim()}
+                    onClick={() => handleDelete(item)}
+                  />
                 )}
               </div>
             </div>
@@ -267,8 +272,9 @@ function ReservationsSection({
             }}
           >
             <div>
-              <label className="form-label">Start IP</label>
+              <label className="form-label" htmlFor={`${fid}-start-ip`}>Start IP</label>
               <input
+                id={`${fid}-start-ip`}
                 className="form-input"
                 value={startIp}
                 onChange={(e) => {
@@ -282,10 +288,11 @@ function ReservationsSection({
               <FieldError>{startIpError}</FieldError>
             </div>
             <div>
-              <label className="form-label">
+              <label className="form-label" htmlFor={`${fid}-end-ip`}>
                 End IP <span className="text-muted">(optional)</span>
               </label>
               <input
+                id={`${fid}-end-ip`}
                 className="form-input"
                 value={endIp}
                 onChange={(e) => setEndIp(e.target.value)}
@@ -294,8 +301,9 @@ function ReservationsSection({
             </div>
           </div>
           <div>
-            <label className="form-label">Reason</label>
+            <label className="form-label" htmlFor={`${fid}-reason`}>Reason</label>
             <input
+              id={`${fid}-reason`}
               className="form-input"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
@@ -323,8 +331,8 @@ function ReservationsSection({
       ) : (
         <button
           type="button"
-          className="btn btn-secondary"
-          style={{ marginTop: '0.5rem', fontSize: '0.85em' }}
+          className="btn btn-secondary btn-sm"
+          style={{ marginTop: '0.5rem' }}
           onClick={() => setShowForm(true)}
         >
           + Add Reservation
@@ -345,6 +353,7 @@ function AllocationsSection({
   allocations,
   onChanged,
 }: AllocationsSectionProps) {
+  const fid = useId();
   const { confirm, alert } = useDialogs();
   const create = useCreateIpamAllocation();
   const remove = useDeleteIpamAllocation();
@@ -464,19 +473,13 @@ function AllocationsSection({
                     <span className="badge badge-warning">Reserved</span>
                   )}
                   {item.source_type === 'local' && item.allocation_id && (
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      style={{
-                        padding: '0.15rem 0.45rem',
-                        fontSize: '0.78em',
-                        color: 'var(--danger)',
-                      }}
+                    <DeleteButton
+                      size="xs"
+                      label="✕"
                       title="Remove local allocation"
+                      aria-label={`Remove allocation ${item.ip_address || ''}`.trim()}
                       onClick={() => handleDelete(item.allocation_id!, item.ip_address)}
-                    >
-                      ✕
-                    </button>
+                    />
                   )}
                 </div>
               </div>
@@ -495,8 +498,9 @@ function AllocationsSection({
         >
           {saveError && <Callout tone="danger">{saveError}</Callout>}
           <div>
-            <label className="form-label">IP Address</label>
+            <label className="form-label" htmlFor={`${fid}-ip-address`}>IP Address</label>
             <input
+              id={`${fid}-ip-address`}
               className="form-input"
               value={address}
               onChange={(e) => {
@@ -510,10 +514,11 @@ function AllocationsSection({
             <FieldError>{addressError}</FieldError>
           </div>
           <div>
-            <label className="form-label">
+            <label className="form-label" htmlFor={`${fid}-hostname-label`}>
               Hostname / Label <span className="text-muted">(optional)</span>
             </label>
             <input
+              id={`${fid}-hostname-label`}
               className="form-input"
               value={hostname}
               onChange={(e) => setHostname(e.target.value)}
@@ -522,10 +527,11 @@ function AllocationsSection({
             />
           </div>
           <div>
-            <label className="form-label">
+            <label className="form-label" htmlFor={`${fid}-description`}>
               Description <span className="text-muted">(optional)</span>
             </label>
             <input
+              id={`${fid}-description`}
               className="form-input"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -553,8 +559,8 @@ function AllocationsSection({
       ) : (
         <button
           type="button"
-          className="btn btn-secondary"
-          style={{ marginTop: '0.5rem', fontSize: '0.85em' }}
+          className="btn btn-secondary btn-sm"
+          style={{ marginTop: '0.5rem' }}
           onClick={() => setShowForm(true)}
         >
           + Add IP Allocation

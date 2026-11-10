@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import { groupLabel } from '@/api/inventory';
 import { useInventoryGroups } from '@/api/compliance';
@@ -28,6 +28,7 @@ const SUB_TABS: { key: SubTab; label: string }[] = [
 
 export function AvailabilityTab() {
   const groups = useInventoryGroups();
+  const fid = useId();
   const [groupId, setGroupId] = useState<number | null>(null);
   const [days, setDays] = useState(7);
   const [subTab, setSubTab] = useState<SubTab>('hosts');
@@ -48,8 +49,9 @@ export function AvailabilityTab() {
   return (
     <div>
       <div className="toolbar">
-        <label className="text-muted">Group:</label>
+        <label className="text-muted" htmlFor={`${fid}-group`}>Group:</label>
         <select
+          id={`${fid}-group`}
           className="form-select"
           value={groupId ?? ''}
           onChange={(e) => setGroupId(e.target.value ? parseInt(e.target.value, 10) : null)}
@@ -59,8 +61,8 @@ export function AvailabilityTab() {
             <option key={g.id} value={g.id}>{groupLabel(g)}</option>
           ))}
         </select>
-        <label className="text-muted">Period:</label>
-        <select className="form-select" value={days} onChange={(e) => setDays(parseInt(e.target.value, 10))}>
+        <label className="text-muted" htmlFor={`${fid}-period`}>Period:</label>
+        <select id={`${fid}-period`} className="form-select" value={days} onChange={(e) => setDays(parseInt(e.target.value, 10))}>
           <option value={1}>Last 24h</option>
           <option value={7}>Last 7 days</option>
           <option value={30}>Last 30 days</option>

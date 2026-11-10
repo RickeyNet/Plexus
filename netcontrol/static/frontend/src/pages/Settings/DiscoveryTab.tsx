@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import { groupLabel } from '@/api/inventory';
 import { BusyButton } from '@/components/BusyButton';
@@ -29,6 +29,7 @@ function TopologyDiscoverySection() {
   const query = useTopologyDiscoveryConfig();
   const update = useUpdateTopologyDiscoveryConfig();
   const runNow = useRunTopologyDiscovery();
+  const fid = useId();
   const [draft, setDraft] = useState<TopologyDiscoveryConfig | null>(null);
   const [status, setStatus] = useState<FormStatus | null>(null);
   const [prevData, setPrevData] = useState(query.data);
@@ -81,8 +82,9 @@ function TopologyDiscoverySection() {
           <span>Enable scheduled topology discovery</span>
         </label>
         <div className="form-group" style={{ flex: '0 1 200px' }}>
-          <label className="form-label">Interval (seconds)</label>
+          <label className="form-label" htmlFor={`${fid}-interval`}>Interval (seconds)</label>
           <input
+            id={`${fid}-interval`}
             type="number"
             min={60}
             className="form-input"
@@ -137,6 +139,7 @@ function StpDiscoverySection() {
   const query = useStpDiscoveryConfig();
   const update = useUpdateStpDiscoveryConfig();
   const runNow = useRunStpDiscovery();
+  const fid = useId();
   const [draft, setDraft] = useState<StpDiscoveryConfig | null>(null);
   const [status, setStatus] = useState<FormStatus | null>(null);
   const [prevData, setPrevData] = useState(query.data);
@@ -204,8 +207,9 @@ function StpDiscoverySection() {
           <span>Poll all VLANs</span>
         </label>
         <div className="form-group" style={{ flex: '0 1 160px' }}>
-          <label className="form-label">Interval (seconds)</label>
+          <label className="form-label" htmlFor={`${fid}-interval`}>Interval (seconds)</label>
           <input
+            id={`${fid}-interval`}
             type="number"
             min={60}
             className="form-input"
@@ -216,8 +220,9 @@ function StpDiscoverySection() {
           />
         </div>
         <div className="form-group" style={{ flex: '0 1 140px' }}>
-          <label className="form-label">VLAN ID</label>
+          <label className="form-label" htmlFor={`${fid}-vlan-id`}>VLAN ID</label>
           <input
+            id={`${fid}-vlan-id`}
             type="number"
             min={1}
             disabled={draft.all_vlans}
@@ -227,8 +232,9 @@ function StpDiscoverySection() {
           />
         </div>
         <div className="form-group" style={{ flex: '0 1 140px' }}>
-          <label className="form-label">Max VLANs</label>
+          <label className="form-label" htmlFor={`${fid}-max-vlans`}>Max VLANs</label>
           <input
+            id={`${fid}-max-vlans`}
             type="number"
             min={1}
             className="form-input"
@@ -294,6 +300,7 @@ function StpRootPoliciesSection() {
   const upsert = useUpsertStpRootPolicy();
   const remove = useDeleteStpRootPolicy();
   const deleting = usePendingKeys<number>();
+  const fid = useId();
 
   const [groupId, setGroupId] = useState<number | ''>('');
   const [vlanId, setVlanId] = useState<number>(1);
@@ -350,8 +357,9 @@ function StpRootPoliciesSection() {
       >
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
           <div className="form-group" style={{ flex: '1 1 200px' }}>
-            <label className="form-label">Group</label>
+            <label className="form-label" htmlFor={`${fid}-group`}>Group</label>
             <select
+              id={`${fid}-group`}
               className="form-select"
               value={groupId}
               onChange={(e) =>
@@ -366,8 +374,9 @@ function StpRootPoliciesSection() {
             </select>
           </div>
           <div className="form-group" style={{ flex: '0 1 120px' }}>
-            <label className="form-label">VLAN</label>
+            <label className="form-label" htmlFor={`${fid}-vlan`}>VLAN</label>
             <input
+              id={`${fid}-vlan`}
               type="number"
               min={1}
               className="form-input"
@@ -376,8 +385,9 @@ function StpRootPoliciesSection() {
             />
           </div>
           <div className="form-group" style={{ flex: '1 1 220px' }}>
-            <label className="form-label">Expected Root Bridge ID</label>
+            <label className="form-label" htmlFor={`${fid}-expected-root-bridge-id`}>Expected Root Bridge ID</label>
             <input
+              id={`${fid}-expected-root-bridge-id`}
               className="form-input"
               placeholder="32768.aabb.ccdd.eeff"
               value={bridgeId}
@@ -385,8 +395,9 @@ function StpRootPoliciesSection() {
             />
           </div>
           <div className="form-group" style={{ flex: '1 1 180px' }}>
-            <label className="form-label">Expected Hostname</label>
+            <label className="form-label" htmlFor={`${fid}-expected-hostname`}>Expected Hostname</label>
             <input
+              id={`${fid}-expected-hostname`}
               className="form-input"
               value={hostname}
               onChange={(e) => setHostname(e.target.value)}

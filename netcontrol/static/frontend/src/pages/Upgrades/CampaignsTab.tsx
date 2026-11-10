@@ -6,6 +6,7 @@ import { Callout } from '@/components/Callout';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { DeleteButton } from '@/components/DeleteButton';
 import { LoadingState } from '@/components/LoadingState';
+import { clickableProps } from '@/lib/clickable';
 import { formatBackendDateTime } from '@/lib/datetime';
 
 import { CampaignFormModal } from './CampaignFormModal';
@@ -93,6 +94,7 @@ export function CampaignsTab() {
           type="search"
           className="form-input form-input-sm"
           placeholder="Search campaigns…"
+          aria-label="Search campaigns"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           style={{ flex: 1, maxWidth: 320 }}
@@ -196,15 +198,7 @@ export function CampaignsTab() {
               <div
                 key={c.id}
                 className="card-inset card-clickable"
-                onClick={() => setViewingId(c.id)}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    setViewingId(c.id);
-                  }
-                }}
+                {...clickableProps(() => setViewingId(c.id))}
               >
                 <div
                   style={{

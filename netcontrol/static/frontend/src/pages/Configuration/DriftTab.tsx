@@ -142,6 +142,7 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
         <select
           className="form-select form-select-sm"
           style={{ maxWidth: 160 }}
+          aria-label="Filter by status"
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value as DriftStatusFilter)}
         >
@@ -152,6 +153,7 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
         <input
           className="form-input form-input-sm"
           placeholder="Search hosts…"
+          aria-label="Search hosts"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           style={{ maxWidth: 240 }}
@@ -553,7 +555,7 @@ function DriftGroupCard({
       <button
         type="button"
         className="btn btn-sm btn-ghost"
-        style={{ marginTop: '0.5rem', padding: 0 }}
+        style={{ marginTop: '0.5rem' }}
         onClick={() => setShowDiff((v) => !v)}
       >
         {showDiff ? 'Hide Diff' : 'View Diff'}
@@ -572,7 +574,6 @@ function DriftGroupCard({
             className="btn btn-sm btn-ghost"
             style={{
               marginTop: '0.35rem',
-              padding: 0,
               color: 'var(--text-muted)',
             }}
             onClick={() => setShowHosts((v) => !v)}

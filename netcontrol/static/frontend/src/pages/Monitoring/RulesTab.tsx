@@ -187,12 +187,12 @@ function CreateRuleModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
       <form id={formId} onSubmit={handleSubmit}>
         {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
-          <label className="form-label">Name</label>
-          <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. High CPU Warning" required />
+          <label className="form-label" htmlFor={`${formId}-name`}>Name</label>
+          <input id={`${formId}-name`} className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. High CPU Warning" required />
         </div>
         <div className="form-group">
-          <label className="form-label">Metric</label>
-          <select className="form-select" value={metric} onChange={(e) => setMetric(e.target.value)}>
+          <label className="form-label" htmlFor={`${formId}-metric`}>Metric</label>
+          <select id={`${formId}-metric`} className="form-select" value={metric} onChange={(e) => setMetric(e.target.value)}>
             <option value="cpu">CPU %</option>
             <option value="memory">Memory %</option>
             <option value="interface_down">Interfaces Down</option>
@@ -203,8 +203,8 @@ function CreateRuleModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <div className="form-group" style={{ flex: 1 }}>
-            <label className="form-label">Operator</label>
-            <select className="form-select" value={operator} onChange={(e) => setOperator(e.target.value)}>
+            <label className="form-label" htmlFor={`${formId}-operator`}>Operator</label>
+            <select id={`${formId}-operator`} className="form-select" value={operator} onChange={(e) => setOperator(e.target.value)}>
               <option value=">=">{'>='}</option>
               <option value=">">{'>'}</option>
               <option value="<=">{'<='}</option>
@@ -212,30 +212,30 @@ function CreateRuleModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
             </select>
           </div>
           <div className="form-group" style={{ flex: 1 }}>
-            <label className="form-label">Value</label>
-            <input className="form-input" type="number" step="0.1" value={value} onChange={(e) => setValue(e.target.value)} />
+            <label className="form-label" htmlFor={`${formId}-value`}>Value</label>
+            <input id={`${formId}-value`} className="form-input" type="number" step="0.1" value={value} onChange={(e) => setValue(e.target.value)} />
           </div>
         </div>
         <div className="form-group">
-          <label className="form-label">Severity</label>
-          <select className="form-select" value={severity} onChange={(e) => setSeverity(e.target.value)}>
+          <label className="form-label" htmlFor={`${formId}-severity`}>Severity</label>
+          <select id={`${formId}-severity`} className="form-select" value={severity} onChange={(e) => setSeverity(e.target.value)}>
             <option value="warning">Warning</option>
             <option value="critical">Critical</option>
           </select>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <div className="form-group" style={{ flex: 1 }}>
-            <label className="form-label">Cooldown (min)</label>
-            <input className="form-input" type="number" min="1" max="1440" value={cooldown} onChange={(e) => setCooldown(e.target.value)} />
+            <label className="form-label" htmlFor={`${formId}-cooldown`}>Cooldown (min)</label>
+            <input id={`${formId}-cooldown`} className="form-input" type="number" min="1" max="1440" value={cooldown} onChange={(e) => setCooldown(e.target.value)} />
           </div>
           <div className="form-group" style={{ flex: 1 }}>
-            <label className="form-label">Escalate After (min, 0=off)</label>
-            <input className="form-input" type="number" min="0" max="1440" value={escalateAfter} onChange={(e) => setEscalateAfter(e.target.value)} />
+            <label className="form-label" htmlFor={`${formId}-escalate-after`}>Escalate After (min, 0=off)</label>
+            <input id={`${formId}-escalate-after`} className="form-input" type="number" min="0" max="1440" value={escalateAfter} onChange={(e) => setEscalateAfter(e.target.value)} />
           </div>
         </div>
         <div className="form-group">
-          <label className="form-label">Scope: Group</label>
-          <select className="form-select" value={groupId} onChange={(e) => setGroupId(e.target.value)}>
+          <label className="form-label" htmlFor={`${formId}-scope-group`}>Scope: Group</label>
+          <select id={`${formId}-scope-group`} className="form-select" value={groupId} onChange={(e) => setGroupId(e.target.value)}>
             <option value="">All Groups</option>
             {(groups.data ?? []).map((g) => (
               <option key={g.id} value={g.id}>{groupLabel(g)}</option>
@@ -243,8 +243,8 @@ function CreateRuleModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
           </select>
         </div>
         <div className="form-group">
-          <label className="form-label">Scope: Host (overrides group)</label>
-          <select className="form-select" value={hostId} onChange={(e) => setHostId(e.target.value)}>
+          <label className="form-label" htmlFor={`${formId}-scope-host`}>Scope: Host (overrides group)</label>
+          <select id={`${formId}-scope-host`} className="form-select" value={hostId} onChange={(e) => setHostId(e.target.value)}>
             <option value="">All Hosts</option>
             {allHosts.map((h) => (
               <option key={h.id} value={h.id}>{h.hostname} ({h.ip_address})</option>
@@ -252,7 +252,7 @@ function CreateRuleModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
           </select>
         </div>
         <div className="form-group">
-          <label className="form-label">Notification Channels</label>
+          <span className="form-label" id={`${formId}-channels`}>Notification Channels</span>
           {channels.length === 0 ? (
             <div className="text-muted" style={{ fontSize: '0.82em' }}>
               No channels configured. Add them under Settings → Notifications. Until then, alerts
@@ -260,7 +260,11 @@ function CreateRuleModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
             </div>
           ) : (
             <>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+              <div
+                role="group"
+                aria-labelledby={`${formId}-channels`}
+                style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}
+              >
                 {channels.map((c) => (
                   <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.88em' }}>
                     <input
@@ -286,8 +290,8 @@ function CreateRuleModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
           )}
         </div>
         <div className="form-group">
-          <label className="form-label">Description</label>
-          <textarea className="form-input" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
+          <label className="form-label" htmlFor={`${formId}-description`}>Description</label>
+          <textarea id={`${formId}-description`} className="form-input" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
         </div>
       </form>
     </Modal>

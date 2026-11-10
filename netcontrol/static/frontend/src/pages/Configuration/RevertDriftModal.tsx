@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import { useCredentials } from '@/api/compliance';
 import { useRevertDriftEvent } from '@/api/configuration';
@@ -18,6 +18,7 @@ export function RevertDriftModal({ eventId, onClose, onJobStarted }: Props) {
   const revert = useRevertDriftEvent();
   const [credentialId, setCredentialId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const fid = useId();
 
   if (eventId == null) return null;
 
@@ -70,8 +71,9 @@ export function RevertDriftModal({ eventId, onClose, onJobStarted }: Props) {
       {creds.isPending && <LoadingState text="Loading credentials…" />}
       {creds.data && (
         <div className="form-group" style={{ marginBottom: '1rem' }}>
-          <label className="form-label">SSH Credential</label>
+          <label className="form-label" htmlFor={`${fid}-credential`}>SSH Credential</label>
           <select
+            id={`${fid}-credential`}
             className="form-select"
             value={credentialId ?? ''}
             onChange={(e) =>

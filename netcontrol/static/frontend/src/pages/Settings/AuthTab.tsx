@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import { BusyButton } from '@/components/BusyButton';
 import { DeleteButton } from '@/components/DeleteButton';
@@ -31,6 +31,7 @@ import { FormStatus, StatusLine } from './StatusLine';
 function LoginRulesForm() {
   const query = useLoginRules();
   const update = useUpdateLoginRules();
+  const fid = useId();
   const [draft, setDraft] = useState<LoginRules | null>(null);
   const [status, setStatus] = useState<FormStatus | null>(null);
   const [prevData, setPrevData] = useState(query.data);
@@ -57,8 +58,9 @@ function LoginRulesForm() {
     min: number,
   ) => (
     <div className="form-group" style={{ flex: '1 1 180px' }}>
-      <label className="form-label">{label}</label>
+      <label className="form-label" htmlFor={`${fid}-${key}`}>{label}</label>
       <input
+        id={`${fid}-${key}`}
         type="number"
         className="form-input"
         min={min}
@@ -113,6 +115,7 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
   const update = useUpdateAuthConfig();
   const credentials = useCredentialsList();
   const serviceCredentials = useServiceCredentialsList();
+  const fid = useId();
   const [draft, setDraft] = useState<AuthConfig | null>(null);
   const [status, setStatus] = useState<FormStatus | null>(null);
   const [prevData, setPrevData] = useState(query.data);
@@ -165,8 +168,9 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
       )}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
         <div className="form-group" style={{ flex: '1 1 200px' }}>
-          <label className="form-label">Auth Provider</label>
+          <label className="form-label" htmlFor={`${fid}-provider`}>Auth Provider</label>
           <select
+            id={`${fid}-provider`}
             className="form-select"
             value={draft.provider}
             onChange={(e) => setDraft({ ...draft, provider: e.target.value })}
@@ -178,8 +182,9 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
           </select>
         </div>
         <div className="form-group" style={{ flex: '1 1 200px' }}>
-          <label className="form-label">Default Credential</label>
+          <label className="form-label" htmlFor={`${fid}-default-credential`}>Default Credential</label>
           <select
+            id={`${fid}-default-credential`}
             className="form-select"
             value={draft.default_credential_id ?? ''}
             onChange={(e) =>
@@ -202,8 +207,9 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
           </small>
         </div>
         <div className="form-group" style={{ flex: '1 1 200px' }}>
-          <label className="form-label">Service Credential</label>
+          <label className="form-label" htmlFor={`${fid}-service-credential`}>Service Credential</label>
           <select
+            id={`${fid}-service-credential`}
             className="form-select"
             value={draft.service_credential_id ?? ''}
             onChange={(e) =>
@@ -226,8 +232,9 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
           </small>
         </div>
         <div className="form-group" style={{ flex: '1 1 160px' }}>
-          <label className="form-label">Job Retention (days)</label>
+          <label className="form-label" htmlFor={`${fid}-retention`}>Job Retention (days)</label>
           <input
+            id={`${fid}-retention`}
             type="number"
             className="form-input"
             min={30}
@@ -336,39 +343,11 @@ function RadiusPanel({
           onChange={(v) => setR({ timeout: v })}
         />
       </div>
-      <div className="form-group">
-        <label className="form-label">Default Access Groups</label>
-        {groups.length === 0 ? (
-          <span className="card-description">Create access groups first.</span>
-        ) : (
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-              gap: '0.4rem',
-            }}
-          >
-            {groups.map((g) => (
-              <label
-                key={g.id}
-                style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-              >
-                <input
-                  type="checkbox"
-                  checked={groupSet.has(g.id)}
-                  onChange={(e) => {
-                    const next = new Set(groupSet);
-                    if (e.target.checked) next.add(g.id);
-                    else next.delete(g.id);
-                    setR({ default_group_ids: Array.from(next) });
-                  }}
-                />
-                <span>{g.name}</span>
-              </label>
-            ))}
-          </div>
-        )}
-      </div>
+      <DefaultGroupsField
+        groups={groups}
+        groupSet={groupSet}
+        onChange={(ids) => setR({ default_group_ids: ids })}
+      />
     </fieldset>
   );
 }
@@ -385,6 +364,7 @@ function TacacsPanel({
   groupSet: Set<number>;
 }) {
   const t = draft.tacacs;
+  const fid = useId();
   const setT = (patch: Partial<typeof t>) =>
     setDraft({ ...draft, tacacs: { ...t, ...patch } });
 
@@ -450,8 +430,9 @@ function TacacsPanel({
           onChange={(v) => setT({ timeout: v })}
         />
         <div className="form-group" style={{ flex: '1 1 160px' }}>
-          <label className="form-label">Authentication Type</label>
+          <label className="form-label" htmlFor={`${fid}-authen-type`}>Authentication Type</label>
           <select
+            id={`${fid}-authen-type`}
             className="form-select"
             value={t.authen_type}
             onChange={(e) => setT({ authen_type: e.target.value })}
@@ -481,8 +462,9 @@ function TacacsPanel({
             onChange={(v) => setT({ admin_priv_lvl: v })}
           />
           <div className="form-group" style={{ flex: '1 1 140px' }}>
-            <label className="form-label">Default Role</label>
+            <label className="form-label" htmlFor={`${fid}-default-role`}>Default Role</label>
             <select
+              id={`${fid}-default-role`}
               className="form-select"
               value={t.default_role ?? 'user'}
               onChange={(e) => setT({ default_role: e.target.value })}
@@ -500,39 +482,11 @@ function TacacsPanel({
           {t.admin_priv_lvl || '(off)'}, then the default role. Re-synced on every login.
         </small>
       )}
-      <div className="form-group">
-        <label className="form-label">Default Access Groups</label>
-        {groups.length === 0 ? (
-          <span className="card-description">Create access groups first.</span>
-        ) : (
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-              gap: '0.4rem',
-            }}
-          >
-            {groups.map((g) => (
-              <label
-                key={g.id}
-                style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-              >
-                <input
-                  type="checkbox"
-                  checked={groupSet.has(g.id)}
-                  onChange={(e) => {
-                    const next = new Set(groupSet);
-                    if (e.target.checked) next.add(g.id);
-                    else next.delete(g.id);
-                    setT({ default_group_ids: Array.from(next) });
-                  }}
-                />
-                <span>{g.name}</span>
-              </label>
-            ))}
-          </div>
-        )}
-      </div>
+      <DefaultGroupsField
+        groups={groups}
+        groupSet={groupSet}
+        onChange={(ids) => setT({ default_group_ids: ids })}
+      />
     </fieldset>
   );
 }
@@ -549,6 +503,7 @@ function LdapPanel({
   groupSet: Set<number>;
 }) {
   const l = draft.ldap;
+  const fid = useId();
   const setL = (patch: Partial<typeof l>) =>
     setDraft({ ...draft, ldap: { ...l, ...patch } });
 
@@ -607,8 +562,9 @@ function LdapPanel({
           onChange={(v) => setL({ timeout: v })}
         />
         <div className="form-group" style={{ flex: '1 1 160px' }}>
-          <label className="form-label">TLS Certificate Verification</label>
+          <label className="form-label" htmlFor={`${fid}-tls-verify`}>TLS Certificate Verification</label>
           <select
+            id={`${fid}-tls-verify`}
             className="form-select"
             value={l.tls_verify}
             onChange={(e) => setL({ tls_verify: e.target.value })}
@@ -653,40 +609,61 @@ function LdapPanel({
         value={l.admin_group_dn}
         onChange={(v) => setL({ admin_group_dn: v })}
       />
-      <div className="form-group">
-        <label className="form-label">Default Access Groups</label>
-        {groups.length === 0 ? (
-          <span className="card-description">Create access groups first.</span>
-        ) : (
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-              gap: '0.4rem',
-            }}
-          >
-            {groups.map((g) => (
-              <label
-                key={g.id}
-                style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-              >
-                <input
-                  type="checkbox"
-                  checked={groupSet.has(g.id)}
-                  onChange={(e) => {
-                    const next = new Set(groupSet);
-                    if (e.target.checked) next.add(g.id);
-                    else next.delete(g.id);
-                    setL({ default_group_ids: Array.from(next) });
-                  }}
-                />
-                <span>{g.name}</span>
-              </label>
-            ))}
-          </div>
-        )}
-      </div>
+      <DefaultGroupsField
+        groups={groups}
+        groupSet={groupSet}
+        onChange={(ids) => setL({ default_group_ids: ids })}
+      />
     </fieldset>
+  );
+}
+
+function DefaultGroupsField({
+  groups,
+  groupSet,
+  onChange,
+}: {
+  groups: AccessGroup[];
+  groupSet: Set<number>;
+  onChange: (ids: number[]) => void;
+}) {
+  const id = useId();
+  return (
+    <div className="form-group">
+      <span className="form-label" id={id}>Default Access Groups</span>
+      {groups.length === 0 ? (
+        <span className="card-description">Create access groups first.</span>
+      ) : (
+        <div
+          role="group"
+          aria-labelledby={id}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+            gap: '0.4rem',
+          }}
+        >
+          {groups.map((g) => (
+            <label
+              key={g.id}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+            >
+              <input
+                type="checkbox"
+                checked={groupSet.has(g.id)}
+                onChange={(e) => {
+                  const next = new Set(groupSet);
+                  if (e.target.checked) next.add(g.id);
+                  else next.delete(g.id);
+                  onChange(Array.from(next));
+                }}
+              />
+              <span>{g.name}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -732,10 +709,12 @@ function TextField({
   type?: string;
   flex?: string;
 }) {
+  const id = useId();
   return (
     <div className="form-group" style={flex ? { flex } : undefined}>
-      <label className="form-label">{label}</label>
+      <label className="form-label" htmlFor={id}>{label}</label>
       <input
+        id={id}
         className="form-input"
         type={type}
         value={value}
@@ -756,10 +735,12 @@ function NumberField({
   onChange: (v: number) => void;
   min?: number;
 }) {
+  const id = useId();
   return (
     <div className="form-group" style={{ flex: '0 1 140px' }}>
-      <label className="form-label">{label}</label>
+      <label className="form-label" htmlFor={id}>{label}</label>
       <input
+        id={id}
         type="number"
         className="form-input"
         min={min}

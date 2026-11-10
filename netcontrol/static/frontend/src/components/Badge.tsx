@@ -29,6 +29,8 @@ export interface BadgeProps {
   live?: boolean;
   /** Makes the badge a button (filter chips). */
   onClick?: () => void;
+  /** With `onClick`: the chip is a toggle and this is its state (`aria-pressed`). */
+  pressed?: boolean;
   title?: string;
   className?: string;
   style?: CSSProperties;
@@ -42,6 +44,7 @@ export function Badge({
   solid,
   live,
   onClick,
+  pressed,
   title,
   className,
   style,
@@ -54,7 +57,14 @@ export function Badge({
   if (className) cls.push(className);
   if (onClick) {
     return (
-      <button type="button" className={cls.join(' ')} title={title} style={style} onClick={onClick}>
+      <button
+        type="button"
+        className={cls.join(' ')}
+        title={title}
+        style={style}
+        aria-pressed={pressed}
+        onClick={onClick}
+      >
         {children}
       </button>
     );

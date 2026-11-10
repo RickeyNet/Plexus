@@ -332,8 +332,9 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
       ) : (
         <form id={formId} onSubmit={handleSubmit}>
           <div className="form-group">
-            <label className="form-label">Campaign Name</label>
+            <label className="form-label" htmlFor={`${formId}-name`}>Campaign Name</label>
             <input
+              id={`${formId}-name`}
               className="form-input"
               required
               value={name}
@@ -342,8 +343,9 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
             />
           </div>
           <div className="form-group">
-            <label className="form-label">Description</label>
+            <label className="form-label" htmlFor={`${formId}-description`}>Description</label>
             <textarea
+              id={`${formId}-description`}
               className="form-input"
               rows={2}
               value={description}
@@ -378,6 +380,7 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
                 <input
                   className="form-input"
                   placeholder="Model pattern (e.g. 9200)"
+                  aria-label={`Model pattern ${i + 1}`}
                   value={row.pattern}
                   onChange={(e) => setRow(i, { pattern: e.target.value })}
                   style={{ flex: 1 }}
@@ -386,6 +389,7 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
                   className="form-select"
                   value={row.image}
                   onChange={(e) => setRow(i, { image: e.target.value })}
+                  aria-label={`Image for pattern ${i + 1}`}
                   style={{ flex: 2 }}
                 >
                   {images.length === 0 && <option value="">No images uploaded</option>}
@@ -400,7 +404,7 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
                   type="button"
                   className="btn btn-sm btn-secondary"
                   onClick={() => removeRow(i)}
-                  aria-label="Remove mapping"
+                  aria-label={`Remove mapping ${i + 1}`}
                 >
                   ×
                 </button>
@@ -417,8 +421,9 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
           </fieldset>
 
           <div className="form-group">
-            <label className="form-label">Credential</label>
+            <label className="form-label" htmlFor={`${formId}-credential`}>Credential</label>
             <select
+              id={`${formId}-credential`}
               className="form-select"
               value={credentialId}
               onChange={(e) =>
@@ -516,8 +521,9 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
               })}
             </div>
             <div className="form-group" style={{ marginTop: '0.75rem' }}>
-              <label className="form-label">Ad-hoc IPs (one per line)</label>
+              <label className="form-label" htmlFor={`${formId}-adhoc-ips`}>Ad-hoc IPs (one per line)</label>
               <textarea
+                id={`${formId}-adhoc-ips`}
                 className="form-input"
                 rows={2}
                 value={adHocIps}
@@ -579,8 +585,9 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
             </div>
             <div style={{ display: 'flex', gap: '1rem', marginTop: '0.75rem' }}>
               <div className="form-group" style={{ flex: 1 }}>
-                <label className="form-label">Parallel Workers</label>
+                <label className="form-label" htmlFor={`${formId}-parallel`}>Parallel Workers</label>
                 <input
+                  id={`${formId}-parallel`}
                   type="number"
                   className="form-input"
                   min={1}
@@ -591,8 +598,9 @@ export function CampaignFormModal({ mode, campaignId, onClose }: Props) {
                 />
               </div>
               <div className="form-group" style={{ flex: 1 }}>
-                <label className="form-label">SSH Retries</label>
+                <label className="form-label" htmlFor={`${formId}-retries`}>SSH Retries</label>
                 <input
+                  id={`${formId}-retries`}
                   type="number"
                   className="form-input"
                   min={0}

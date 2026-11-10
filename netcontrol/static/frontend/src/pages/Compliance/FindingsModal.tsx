@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 
 import { Callout } from '@/components/Callout';
 import { LoadingState } from '@/components/LoadingState';
@@ -24,6 +24,7 @@ export function FindingsModal({ resultId, onClose, onRescan }: Props) {
   const result = useComplianceScanResult(resultId);
   const credentials = useCredentials();
   const remediate = useRemediateFinding();
+  const fid = useId();
 
   const [credentialId, setCredentialId] = useState<number | null>(null);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
@@ -168,10 +169,11 @@ export function FindingsModal({ resultId, onClose, onRescan }: Props) {
           )}
           {fixable.length > 0 && (
             <div className="toolbar">
-              <label style={{ fontWeight: 600, fontSize: '0.9em' }}>
+              <label htmlFor={`${fid}-credential`} style={{ fontWeight: 600, fontSize: '0.9em' }}>
                 Credential for remediation:
               </label>
               <select
+                id={`${fid}-credential`}
                 className="form-select form-select-sm"
                 style={{ maxWidth: 300 }}
                 value={credentialId ?? ''}

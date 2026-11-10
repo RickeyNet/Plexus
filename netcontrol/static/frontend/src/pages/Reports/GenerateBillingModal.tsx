@@ -59,8 +59,8 @@ export function GenerateBillingModal({ isOpen, onClose }: Props) {
       <form id={formId} onSubmit={handleSubmit}>
         {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
-          <label className="form-label">Circuit (optional - leave blank for all)</label>
-          <select className="form-select" value={circuitId} onChange={(e) => setCircuitId(e.target.value)}>
+          <label className="form-label" htmlFor={`${formId}-circuit`}>Circuit (optional - leave blank for all)</label>
+          <select id={`${formId}-circuit`} className="form-select" value={circuitId} onChange={(e) => setCircuitId(e.target.value)}>
             <option value="">All enabled circuits</option>
             {(circuitsQuery.data?.circuits ?? []).map((c) => (
               <option key={c.id} value={c.id}>{c.name} - {c.customer || 'No customer'}</option>
@@ -72,12 +72,12 @@ export function GenerateBillingModal({ isOpen, onClose }: Props) {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
           <div className="form-group">
-            <label className="form-label">Period Start</label>
-            <input className="form-input" type="date" value={start} onChange={(e) => setStart(e.target.value)} />
+            <label className="form-label" htmlFor={`${formId}-period-start`}>Period Start</label>
+            <input id={`${formId}-period-start`} className="form-input" type="date" value={start} onChange={(e) => setStart(e.target.value)} />
           </div>
           <div className="form-group">
-            <label className="form-label">Period End</label>
-            <input className="form-input" type="date" value={end} onChange={(e) => setEnd(e.target.value)} />
+            <label className="form-label" htmlFor={`${formId}-period-end`}>Period End</label>
+            <input id={`${formId}-period-end`} className="form-input" type="date" value={end} onChange={(e) => setEnd(e.target.value)} />
           </div>
         </div>
         <p className="text-muted" style={{ fontSize: '0.85rem' }}>

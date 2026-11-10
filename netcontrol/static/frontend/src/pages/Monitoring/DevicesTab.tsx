@@ -53,6 +53,7 @@ export function DevicesTab() {
         <input
           className="form-input"
           placeholder="Search devices…"
+          aria-label="Search devices"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           style={{ flex: 1, minWidth: 200 }}

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 
 import { useGraphTemplates, type GraphTemplate } from '@/api/graphTemplates';
 import { Callout } from '@/components/Callout';
@@ -17,6 +17,7 @@ const CATEGORIES = [
 ];
 
 export function GraphTemplatesTab() {
+  const fid = useId();
   const query = useGraphTemplates();
   const [category, setCategory] = useState('');
   const [search, setSearch] = useState('');
@@ -41,14 +42,14 @@ export function GraphTemplatesTab() {
     <div>
       <div className="toolbar" style={{ alignItems: 'flex-end' }}>
         <div className="form-group" style={{ marginBottom: 0 }}>
-          <label className="form-label">Category</label>
-          <select className="form-select" value={category} onChange={(e) => setCategory(e.target.value)}>
+          <label className="form-label" htmlFor={`${fid}-category`}>Category</label>
+          <select id={`${fid}-category`} className="form-select" value={category} onChange={(e) => setCategory(e.target.value)}>
             {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
           </select>
         </div>
         <div className="form-group" style={{ marginBottom: 0, minWidth: 220 }}>
-          <label className="form-label">Search</label>
-          <input className="form-input" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter…" />
+          <label className="form-label" htmlFor={`${fid}-search`}>Search</label>
+          <input id={`${fid}-search`} className="form-input" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter…" />
         </div>
         <span className="toolbar-spacer" />
         <button className="btn btn-primary" onClick={() => setCreating(true)}>+ New Template</button>

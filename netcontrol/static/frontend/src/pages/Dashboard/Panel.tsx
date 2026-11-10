@@ -81,6 +81,7 @@ export function Panel({ panel, variables, range, editing, onEdit, onDelete }: Pa
             <button
               className="btn btn-sm btn-secondary"
               title="Edit"
+              aria-label={`Edit panel ${panel.title || 'Untitled'}`}
               onClick={() => onEdit(panel)}
             >
               ✎
@@ -88,6 +89,7 @@ export function Panel({ panel, variables, range, editing, onEdit, onDelete }: Pa
             <button
               className="btn btn-sm btn-danger"
               title="Remove"
+              aria-label={`Remove panel ${panel.title || 'Untitled'}`}
               onClick={() => onDelete(panel)}
             >
               ×

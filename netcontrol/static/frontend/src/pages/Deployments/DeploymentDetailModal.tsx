@@ -415,6 +415,7 @@ function ApprovalSection({
             type="text"
             className="form-input"
             placeholder="Optional comment"
+            aria-label="Approval comment"
             value={approverInput}
             onChange={(e) => onApproverInput(e.target.value)}
             style={{ width: '100%' }}

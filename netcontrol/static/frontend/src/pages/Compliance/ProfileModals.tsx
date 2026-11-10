@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 
 import { groupLabel } from '@/api/inventory';
 import { BusyButton } from '@/components/BusyButton';
@@ -198,6 +198,7 @@ export function AssignProfileModal({
   const existing = useComplianceAssignments(profileId);
   const create = useCreateAssignment();
   const submitting = usePendingKeys<'assign'>();
+  const fid = useId();
 
   const [selectedGroups, setSelectedGroups] = useState<Set<number>>(new Set());
   const [credentialId, setCredentialId] = useState<number | null>(null);
@@ -289,7 +290,7 @@ export function AssignProfileModal({
         <QueryError what="existing assignments" query={existing} />
       )}
       <div className="form-group">
-        <label className="form-label">Inventory Groups</label>
+        <span className="form-label" id={`${fid}-groups`}>Inventory Groups</span>
         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
           <button
             type="button"
@@ -313,6 +314,8 @@ export function AssignProfileModal({
           </button>
         </div>
         <div
+          role="group"
+          aria-labelledby={`${fid}-groups`}
           style={{
             maxHeight: 200,
             overflowY: 'auto',
@@ -364,8 +367,9 @@ export function AssignProfileModal({
         </div>
       </div>
       <div className="form-group">
-        <label className="form-label">Credential</label>
+        <label className="form-label" htmlFor={`${fid}-credential`}>Credential</label>
         <select
+          id={`${fid}-credential`}
           className="form-select"
           value={credentialId ?? ''}
           onChange={(e) =>
@@ -381,8 +385,9 @@ export function AssignProfileModal({
         </select>
       </div>
       <div className="form-group">
-        <label className="form-label">Scan Interval (hours)</label>
+        <label className="form-label" htmlFor={`${fid}-interval`}>Scan Interval (hours)</label>
         <input
+          id={`${fid}-interval`}
           type="number"
           min={1}
           max={168}
@@ -417,11 +422,13 @@ function FormBody({
   rulesText: string;
   setRulesText: (v: string) => void;
 }) {
+  const fid = useId();
   return (
     <>
       <div className="form-group">
-        <label className="form-label">Profile Name</label>
+        <label className="form-label" htmlFor={`${fid}-name`}>Profile Name</label>
         <input
+          id={`${fid}-name`}
           className="form-input"
           placeholder="PCI-DSS Baseline"
           value={name}
@@ -430,8 +437,9 @@ function FormBody({
         />
       </div>
       <div className="form-group">
-        <label className="form-label">Description</label>
+        <label className="form-label" htmlFor={`${fid}-description`}>Description</label>
         <input
+          id={`${fid}-description`}
           className="form-input"
           placeholder="Describe the compliance standard"
           value={description}
@@ -439,8 +447,9 @@ function FormBody({
         />
       </div>
       <div className="form-group">
-        <label className="form-label">Severity</label>
+        <label className="form-label" htmlFor={`${fid}-severity`}>Severity</label>
         <select
+          id={`${fid}-severity`}
           className="form-select"
           value={severity}
           onChange={(e) => setSeverity(e.target.value as (typeof SEVERITIES)[number])}
@@ -453,8 +462,9 @@ function FormBody({
         </select>
       </div>
       <div className="form-group">
-        <label className="form-label">Rules (JSON array)</label>
+        <label className="form-label" htmlFor={`${fid}-rules`}>Rules (JSON array)</label>
         <textarea
+          id={`${fid}-rules`}
           className="form-input"
           rows={8}
           placeholder={RULES_PLACEHOLDER}
@@ -537,6 +547,7 @@ function MerakiCheckPicker({
         <select
           className="form-select form-select-sm"
           style={{ maxWidth: 220 }}
+          aria-label="Meraki check category"
           value={category}
           onChange={(e) => {
             setCategory(e.target.value);
@@ -553,6 +564,7 @@ function MerakiCheckPicker({
         <select
           className="form-select form-select-sm"
           style={{ flex: 1, minWidth: 220 }}
+          aria-label="Meraki check"
           value={selected?.id ?? ''}
           onChange={(e) => setCheckId(e.target.value)}
         >

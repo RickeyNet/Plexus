@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import {
   SyslogConfig,
@@ -24,6 +24,7 @@ export function LoggingTab() {
   const query = useSyslogConfig();
   const update = useUpdateSyslogConfig();
   const test = useTestSyslog();
+  const fid = useId();
   const [draft, setDraft] = useState<SyslogConfig | null>(null);
   const [status, setStatus] = useState<FormStatus | null>(null);
   const [prevData, setPrevData] = useState(query.data);
@@ -106,16 +107,18 @@ export function LoggingTab() {
 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
           <div className="form-group" style={{ flex: '1 1 220px' }}>
-            <label className="form-label">Host</label>
+            <label className="form-label" htmlFor={`${fid}-host`}>Host</label>
             <input
+              id={`${fid}-host`}
               className="form-input"
               value={draft.host}
               onChange={(e) => setDraft({ ...draft, host: e.target.value })}
             />
           </div>
           <div className="form-group" style={{ flex: '0 1 120px' }}>
-            <label className="form-label">Port</label>
+            <label className="form-label" htmlFor={`${fid}-port`}>Port</label>
             <input
+              id={`${fid}-port`}
               type="number"
               min={1}
               max={65535}
@@ -125,8 +128,9 @@ export function LoggingTab() {
             />
           </div>
           <div className="form-group" style={{ flex: '0 1 140px' }}>
-            <label className="form-label">Protocol</label>
+            <label className="form-label" htmlFor={`${fid}-protocol`}>Protocol</label>
             <select
+              id={`${fid}-protocol`}
               className="form-select"
               value={draft.protocol}
               onChange={(e) => setDraft({ ...draft, protocol: e.target.value })}
@@ -139,8 +143,9 @@ export function LoggingTab() {
             </select>
           </div>
           <div className="form-group" style={{ flex: '0 1 160px' }}>
-            <label className="form-label">Facility</label>
+            <label className="form-label" htmlFor={`${fid}-facility`}>Facility</label>
             <select
+              id={`${fid}-facility`}
               className="form-select"
               value={draft.facility}
               onChange={(e) => setDraft({ ...draft, facility: e.target.value })}
@@ -153,8 +158,9 @@ export function LoggingTab() {
             </select>
           </div>
           <div className="form-group" style={{ flex: '0 1 140px' }}>
-            <label className="form-label">Level</label>
+            <label className="form-label" htmlFor={`${fid}-level`}>Level</label>
             <select
+              id={`${fid}-level`}
               className="form-select"
               value={draft.level}
               onChange={(e) => setDraft({ ...draft, level: e.target.value })}
@@ -167,8 +173,9 @@ export function LoggingTab() {
             </select>
           </div>
           <div className="form-group" style={{ flex: '1 1 200px' }}>
-            <label className="form-label">App Name</label>
+            <label className="form-label" htmlFor={`${fid}-app-name`}>App Name</label>
             <input
+              id={`${fid}-app-name`}
               className="form-input"
               value={draft.app_name}
               onChange={(e) => setDraft({ ...draft, app_name: e.target.value })}

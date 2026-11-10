@@ -88,30 +88,33 @@ export function EditImageModal({ image, onClose }: Props) {
     >
       <form id={formId} onSubmit={handleSubmit}>
         <div className="form-group">
-          <label className="form-label">Filename</label>
-          <input className="form-input" value={image.filename} disabled />
+          <label className="form-label" htmlFor={`${formId}-filename`}>Filename</label>
+          <input id={`${formId}-filename`} className="form-input" value={image.filename} disabled />
         </div>
         <div className="form-group">
-          <label className="form-label">
+          <label className="form-label" htmlFor={`${formId}-model-pattern`}>
             Model Pattern (e.g. "9200", "C9300", "C9200L")
           </label>
           <input
+            id={`${formId}-model-pattern`}
             className="form-input"
             value={modelPattern}
             onChange={(e) => setModelPattern(e.target.value)}
           />
         </div>
         <div className="form-group">
-          <label className="form-label">Version</label>
+          <label className="form-label" htmlFor={`${formId}-version`}>Version</label>
           <input
+            id={`${formId}-version`}
             className="form-input"
             value={version}
             onChange={(e) => setVersion(e.target.value)}
           />
         </div>
         <div className="form-group">
-          <label className="form-label">Notes</label>
+          <label className="form-label" htmlFor={`${formId}-notes`}>Notes</label>
           <textarea
+            id={`${formId}-notes`}
             className="form-input"
             rows={3}
             value={notes}

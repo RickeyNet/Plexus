@@ -626,12 +626,12 @@ per-page **H** items.
 
 ### Batch 6 - Accessibility
 
-- [ ] **M: Link labels to inputs** — about 300 `form-label` elements have no `htmlFor`; toolbar search and filter inputs have no label.
-- [ ] **M: Keyboard access for clickable rows** — Inventory group headers, Audit rows and categories, SLA host rows, FloorPlan site/floor rows, Campaign viewer rows.
-- [ ] **M: `aria-label` on icon-only buttons and 28px minimum targets** — help toggle 18×22, kebab 23, `segmented-xs` 24, DeviceDetail Ack/Resolve ~20, IPAM ✕ ~20.
-- [ ] **M: Visible focus** — menu keyboard focus contrast is about 1.1 (`style.css:5573`); add a shared `:focus-visible` ring.
-- [ ] **M: Remove `aria-live` from `<main>`** — `App.tsx:192` re-announces every poll.
-- [ ] **M: User-menu role chip contrast** — 1.2-3.4 in every theme (`components/UserMenu.tsx:62`).
+- [x] **M: Link labels to inputs** — about 300 `form-label` elements have no `htmlFor`; toolbar search and filter inputs have no label. *Done 2026-11: every `form-label` is linked with `useId` ids or titles a `role="group"`; toolbar searches, filters and row checkboxes carry an `aria-label`.*
+- [x] **M: Keyboard access for clickable rows** — Inventory group headers, Audit rows and categories, SLA host rows, FloorPlan site/floor rows, Campaign viewer rows. *Done 2026-11: all listed plus Lab rows, through `clickableProps` in `lib/clickable.ts`.*
+- [x] **M: `aria-label` on icon-only buttons and 28px minimum targets** — help toggle 18×22, kebab 23, `segmented-xs` 24, DeviceDetail Ack/Resolve ~20, IPAM ✕ ~20. *Done 2026-11: `--target-min` on `btn-xs`, `segmented-xs`, kebab and help toggle. Still under 28px: clickable `.badge` chips (Audit filters, Topology warnings) and FloorPlan floor rows (~25px).*
+- [x] **M: Visible focus** — menu keyboard focus contrast is about 1.1 (`style.css:5573`); add a shared `:focus-visible` ring.
+- [x] **M: Remove `aria-live` from `<main>`** — `App.tsx:192` re-announces every poll.
+- [x] **M: User-menu role chip contrast** — 1.2-3.4 in every theme (`components/UserMenu.tsx:62`).
 - [ ] **L: TabBar arrow-key navigation**; tabs and segmented controls jump on hover from the inherited button lift.
 
 ### Shell

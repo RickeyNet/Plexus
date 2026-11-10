@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import { groupLabel } from '@/api/inventory';
 import { useInventoryGroups } from '@/api/compliance';
@@ -17,6 +17,7 @@ const METRIC_LABELS: Record<string, string> = {
 
 export function CapacityTab() {
   const groups = useInventoryGroups();
+  const fid = useId();
   const [metric, setMetric] = useState('cpu_percent');
   const [range, setRange] = useState('90d');
   const [groupId, setGroupId] = useState<number | null>(null);
@@ -29,8 +30,8 @@ export function CapacityTab() {
   return (
     <div>
       <div className="toolbar">
-        <label className="text-muted">Metric:</label>
-        <select className="form-select" value={metric} onChange={(e) => setMetric(e.target.value)}>
+        <label className="text-muted" htmlFor={`${fid}-metric`}>Metric:</label>
+        <select id={`${fid}-metric`} className="form-select" value={metric} onChange={(e) => setMetric(e.target.value)}>
           {Object.entries(METRIC_LABELS).map(([k, label]) => (
             <option key={k} value={k}>{label}</option>
           ))}
@@ -49,8 +50,9 @@ export function CapacityTab() {
           <option value="180d">180 days</option>
           <option value="365d">365 days</option>
         </select>
-        <label className="text-muted">Group:</label>
+        <label className="text-muted" htmlFor={`${fid}-group`}>Group:</label>
         <select
+          id={`${fid}-group`}
           className="form-select"
           value={groupId ?? ''}
           onChange={(e) => setGroupId(e.target.value ? parseInt(e.target.value, 10) : null)}

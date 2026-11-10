@@ -135,7 +135,7 @@ export function DeviceDetail() {
           clips its text to a gradient, which would blank the button label. */}
       <div className="page-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-          <button className="btn btn-sm btn-ghost" onClick={() => navigate('/monitoring')}>
+          <button className="btn btn-sm btn-ghost" onClick={() => navigate('/monitoring')} aria-label="Back to devices">
             ← Devices
           </button>
           <h2 className="page-title">{title}</h2>

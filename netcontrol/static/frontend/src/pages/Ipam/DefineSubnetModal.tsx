@@ -56,10 +56,11 @@ export function DefineSubnetModal({ onClose }: Props) {
       <form id={formId} onSubmit={submit}>
         {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
-          <label className="form-label">
+          <label className="form-label" htmlFor={`${formId}-cidr`}>
             CIDR <span className="text-muted">(e.g. 192.168.10.0/24)</span>
           </label>
           <input
+            id={`${formId}-cidr`}
             className="form-input"
             value={subnet}
             onChange={(e) => {
@@ -73,10 +74,11 @@ export function DefineSubnetModal({ onClose }: Props) {
           <FieldError>{subnetError}</FieldError>
         </div>
         <div className="form-group">
-          <label className="form-label">
+          <label className="form-label" htmlFor={`${formId}-description`}>
             Description <span className="text-muted">(optional)</span>
           </label>
           <input
+            id={`${formId}-description`}
             className="form-input"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
@@ -85,10 +87,11 @@ export function DefineSubnetModal({ onClose }: Props) {
           />
         </div>
         <div className="form-group">
-          <label className="form-label">
+          <label className="form-label" htmlFor={`${formId}-vrf`}>
             VRF <span className="text-muted">(optional)</span>
           </label>
           <input
+            id={`${formId}-vrf`}
             className="form-input"
             value={vrf}
             onChange={(e) => setVrf(e.target.value)}

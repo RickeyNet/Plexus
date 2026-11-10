@@ -103,8 +103,9 @@ export function HostTemplateModal({ mode, templateId, onClose }: Props) {
         <form id={formId} onSubmit={handleSubmit}>
           {saveError && <Callout tone="danger">{saveError}</Callout>}
           <div className="form-group">
-            <label className="form-label">Name</label>
+            <label className="form-label" htmlFor={`${formId}-name`}>Name</label>
             <input
+              id={`${formId}-name`}
               className="form-input"
               value={name}
               onChange={(e) => {
@@ -117,12 +118,12 @@ export function HostTemplateModal({ mode, templateId, onClose }: Props) {
             <FieldError>{nameError}</FieldError>
           </div>
           <div className="form-group">
-            <label className="form-label">Description</label>
-            <input className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} />
+            <label className="form-label" htmlFor={`${formId}-description`}>Description</label>
+            <input id={`${formId}-description`} className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} />
           </div>
           <div className="form-group">
-            <label className="form-label">Device Types (comma-separated, leave empty for all)</label>
-            <input className="form-input" value={deviceTypes} onChange={(e) => setDeviceTypes(e.target.value)} placeholder="e.g. cisco_ios, cisco_nxos" />
+            <label className="form-label" htmlFor={`${formId}-device-types`}>Device Types (comma-separated, leave empty for all)</label>
+            <input id={`${formId}-device-types`} className="form-input" value={deviceTypes} onChange={(e) => setDeviceTypes(e.target.value)} placeholder="e.g. cisco_ios, cisco_nxos" />
           </div>
           <div className="form-group">
             <label><input type="checkbox" checked={autoApply} onChange={(e) => setAutoApply(e.target.checked)} /> Auto-apply to matching devices</label>

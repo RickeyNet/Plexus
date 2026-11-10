@@ -103,8 +103,9 @@ export function AdvisoryModal({ advisory, platforms, severities, onClose }: Prop
         {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 1rem' }}>
           <div className="form-group">
-            <label className="form-label">Advisory ID</label>
+            <label className="form-label" htmlFor={`${formId}-advisory-id`}>Advisory ID</label>
             <input
+              id={`${formId}-advisory-id`}
               className="form-input"
               value={advisoryId}
               onChange={(e) => {
@@ -120,8 +121,8 @@ export function AdvisoryModal({ advisory, platforms, severities, onClose }: Prop
             <FieldError>{errors.advisoryId}</FieldError>
           </div>
           <div className="form-group">
-            <label className="form-label">Severity</label>
-            <select className="form-select" value={severity} onChange={(e) => setSeverity(e.target.value)}>
+            <label className="form-label" htmlFor={`${formId}-severity`}>Severity</label>
+            <select id={`${formId}-severity`} className="form-select" value={severity} onChange={(e) => setSeverity(e.target.value)}>
               {severities.map((s) => (
                 <option key={s} value={s}>
                   {s}
@@ -131,8 +132,9 @@ export function AdvisoryModal({ advisory, platforms, severities, onClose }: Prop
           </div>
         </div>
         <div className="form-group">
-          <label className="form-label">Title</label>
+          <label className="form-label" htmlFor={`${formId}-title`}>Title</label>
           <input
+            id={`${formId}-title`}
             className="form-input"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
@@ -142,10 +144,10 @@ export function AdvisoryModal({ advisory, platforms, severities, onClose }: Prop
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0 1rem' }}>
           <div className="form-group">
-            <label className="form-label">
+            <label className="form-label" htmlFor={`${formId}-platform`}>
               Platform <span className="text-muted">(blank = any)</span>
             </label>
-            <select className="form-select" value={platform} onChange={(e) => setPlatform(e.target.value)}>
+            <select id={`${formId}-platform`} className="form-select" value={platform} onChange={(e) => setPlatform(e.target.value)}>
               <option value="">Any platform</option>
               {platforms.map((p) => (
                 <option key={p.key} value={p.key}>
@@ -155,10 +157,11 @@ export function AdvisoryModal({ advisory, platforms, severities, onClose }: Prop
             </select>
           </div>
           <div className="form-group">
-            <label className="form-label">
+            <label className="form-label" htmlFor={`${formId}-model-contains`}>
               Model contains <span className="text-muted">(optional)</span>
             </label>
             <input
+              id={`${formId}-model-contains`}
               className="form-input"
               value={productMatch}
               onChange={(e) => setProductMatch(e.target.value)}
@@ -167,10 +170,11 @@ export function AdvisoryModal({ advisory, platforms, severities, onClose }: Prop
             />
           </div>
           <div className="form-group">
-            <label className="form-label">
+            <label className="form-label" htmlFor={`${formId}-cvss`}>
               CVSS <span className="text-muted">(optional)</span>
             </label>
             <input
+              id={`${formId}-cvss`}
               className="form-input"
               value={cvss}
               onChange={(e) => {
@@ -186,8 +190,9 @@ export function AdvisoryModal({ advisory, platforms, severities, onClose }: Prop
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 1rem' }}>
           <div className="form-group">
-            <label className="form-label">Affected versions, one per line</label>
+            <label className="form-label" htmlFor={`${formId}-affected-versions`}>Affected versions, one per line</label>
             <textarea
+              id={`${formId}-affected-versions`}
               className="form-textarea"
               rows={5}
               value={affected}
@@ -207,10 +212,11 @@ export function AdvisoryModal({ advisory, platforms, severities, onClose }: Prop
             </div>
           </div>
           <div className="form-group">
-            <label className="form-label">
+            <label className="form-label" htmlFor={`${formId}-fixed-versions`}>
               Fixed versions <span className="text-muted">(optional, one per line)</span>
             </label>
             <textarea
+              id={`${formId}-fixed-versions`}
               className="form-textarea"
               rows={5}
               value={fixed}
@@ -221,10 +227,11 @@ export function AdvisoryModal({ advisory, platforms, severities, onClose }: Prop
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 1rem' }}>
           <div className="form-group">
-            <label className="form-label">
+            <label className="form-label" htmlFor={`${formId}-cves`}>
               CVEs <span className="text-muted">(optional)</span>
             </label>
             <input
+              id={`${formId}-cves`}
               className="form-input"
               value={cves}
               onChange={(e) => setCves(e.target.value)}
@@ -232,10 +239,11 @@ export function AdvisoryModal({ advisory, platforms, severities, onClose }: Prop
             />
           </div>
           <div className="form-group">
-            <label className="form-label">
+            <label className="form-label" htmlFor={`${formId}-published`}>
               Published <span className="text-muted">(optional)</span>
             </label>
             <input
+              id={`${formId}-published`}
               className="form-input"
               value={published}
               onChange={(e) => setPublished(e.target.value)}
@@ -245,10 +253,11 @@ export function AdvisoryModal({ advisory, platforms, severities, onClose }: Prop
           </div>
         </div>
         <div className="form-group">
-          <label className="form-label">
+          <label className="form-label" htmlFor={`${formId}-url`}>
             URL <span className="text-muted">(optional)</span>
           </label>
           <input
+            id={`${formId}-url`}
             className="form-input"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
@@ -257,10 +266,11 @@ export function AdvisoryModal({ advisory, platforms, severities, onClose }: Prop
           />
         </div>
         <div className="form-group">
-          <label className="form-label">
+          <label className="form-label" htmlFor={`${formId}-summary`}>
             Summary <span className="text-muted">(optional)</span>
           </label>
           <textarea
+            id={`${formId}-summary`}
             className="form-textarea"
             rows={3}
             value={summary}

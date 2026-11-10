@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 
 import { BusyButton } from '@/components/BusyButton';
 import { Callout } from '@/components/Callout';
@@ -31,6 +31,7 @@ export function MerakiAssignModal({
   const orgs = useMerakiComplianceOrgs();
   const create = useCreateMerakiAssignment();
   const submitting = usePendingKeys<'assign'>();
+  const fid = useId();
 
   const [profileId, setProfileId] = useState<number | null>(initialProfileId ?? null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -109,8 +110,9 @@ export function MerakiAssignModal({
         <QueryError what="existing Meraki assignments" query={existing} />
       )}
       <div className="form-group">
-        <label className="form-label">Compliance Profile (with Meraki rules)</label>
+        <label className="form-label" htmlFor={`${fid}-profile`}>Compliance Profile (with Meraki rules)</label>
         <select
+          id={`${fid}-profile`}
           className="form-select"
           value={profileId ?? ''}
           onChange={(e) => {
@@ -129,8 +131,10 @@ export function MerakiAssignModal({
         </select>
       </div>
       <div className="form-group">
-        <label className="form-label">Meraki Organizations</label>
+        <span className="form-label" id={`${fid}-orgs`}>Meraki Organizations</span>
         <div
+          role="group"
+          aria-labelledby={`${fid}-orgs`}
           style={{
             maxHeight: 200,
             overflowY: 'auto',
@@ -191,8 +195,9 @@ export function MerakiAssignModal({
         </div>
       </div>
       <div className="form-group">
-        <label className="form-label">Scan Interval (hours)</label>
+        <label className="form-label" htmlFor={`${fid}-interval`}>Scan Interval (hours)</label>
         <input
+          id={`${fid}-interval`}
           type="number"
           min={1}
           max={168}

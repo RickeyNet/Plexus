@@ -80,8 +80,9 @@ export function NewImageModal({ isOpen, onClose }: Props) {
     >
       <form id={formId} onSubmit={handleSubmit}>
         <div className="form-group">
-          <label className="form-label">IOS-XE Image File (.bin)</label>
+          <label className="form-label" htmlFor={`${formId}-file`}>IOS-XE Image File (.bin)</label>
           <input
+            id={`${formId}-file`}
             type="file"
             className="form-input"
             accept=".bin,.SPA.bin"
