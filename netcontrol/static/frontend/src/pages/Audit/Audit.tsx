@@ -4,8 +4,10 @@ import { Badge, SeverityBadge, StatusBadge } from '@/components/Badge';
 import { Callout } from '@/components/Callout';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { EmptyState } from '@/components/EmptyState';
+import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
+import { Modal } from '@/components/Modal';
 import {
   useAuditRuns,
   useAuditFindings,
@@ -557,7 +559,11 @@ function SchedulesCard() {
                         disabled={remove.isPending}
                         onSelect={async () => {
                           if (
-                            await confirm(`Delete schedule "${s.name}"?`)
+                            await confirm({
+                              title: 'Delete audit schedule',
+                              message: `Delete schedule "${s.name}"?`,
+                              confirmLabel: 'Delete',
+                            })
                           ) {
                             remove.mutate(s.id);
                           }
@@ -596,6 +602,7 @@ function ScheduleEditor({
   const [name, setName] = useState(schedule?.name ?? '');
   const [cadence, setCadence] = useState(schedule?.schedule ?? '@daily');
   const [enabled, setEnabled] = useState(schedule?.enabled ?? true);
+  const [nameError, setNameError] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const isNew = schedule === null;
@@ -605,7 +612,7 @@ function ScheduleEditor({
     setError(null);
     const trimmedName = name.trim();
     if (!trimmedName) {
-      setError('Name is required');
+      setNameError('Name is required');
       return;
     }
     try {
@@ -632,38 +639,46 @@ function ScheduleEditor({
   };
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.5)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 100,
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+    <Modal
+      isOpen
+      onClose={onClose}
+      title={isNew ? 'New schedule' : `Edit "${schedule!.name}"`}
+      size="small"
+      footer={
+        <>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={onClose}
+            disabled={pending}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={submit}
+            disabled={pending}
+          >
+            {pending ? 'Saving…' : isNew ? 'Create' : 'Save'}
+          </button>
+        </>
+      }
     >
-      <div
-        className="card"
-        style={{ width: 420, display: 'grid', gap: 'var(--space-3)' }}
-      >
-        <h3 style={{ margin: 0 }}>
-          {isNew ? 'New schedule' : `Edit "${schedule!.name}"`}
-        </h3>
-
+      <div style={{ display: 'grid', gap: 'var(--space-3)' }}>
         <label style={{ display: 'grid', gap: '0.25rem' }}>
           <span>Name</span>
           <input
             type="text"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => {
+              setName(e.target.value);
+              setNameError('');
+            }}
+            aria-invalid={!!nameError}
             placeholder="e.g. Nightly compliance sweep"
           />
+          <FieldError>{nameError}</FieldError>
         </label>
 
         <label style={{ display: 'grid', gap: '0.25rem' }}>
@@ -705,36 +720,9 @@ function ScheduleEditor({
           <span>Enabled</span>
         </label>
 
-        {error && (
-          <p style={{ color: 'var(--danger)', margin: 0 }}>{error}</p>
-        )}
-
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'flex-end',
-            gap: '0.5rem',
-          }}
-        >
-          <button
-            type="button"
-            className="btn"
-            onClick={onClose}
-            disabled={pending}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={submit}
-            disabled={pending}
-          >
-            {pending ? 'Saving…' : isNew ? 'Create' : 'Save'}
-          </button>
-        </div>
+        {error && <Callout tone="danger">{error}</Callout>}
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -870,7 +858,13 @@ function OverridesCard() {
                     className="btn btn-sm btn-danger"
                     disabled={remove.isPending}
                     onClick={async () => {
-                      if (await confirm('Remove this override?')) {
+                      if (
+                        await confirm({
+                          title: 'Remove finding override',
+                          message: `Remove the override for rule "${o.rule_id}"?`,
+                          confirmLabel: 'Remove',
+                        })
+                      ) {
                         remove.mutate(o.id);
                       }
                     }}
@@ -914,110 +908,13 @@ function MuteFindingDialog({
   }
 
   return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-        zIndex: 1000, display: 'flex', alignItems: 'center',
-        justifyContent: 'center', padding: '1rem',
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="card"
-        style={{ padding: '1.25rem', minWidth: 420, maxWidth: 560 }}
-      >
-        <h3 style={{ marginTop: 0 }}>Mute finding</h3>
-        <p className="text-muted" style={{ marginTop: 0 }}>
-          <code>{finding.rule_id}</code> - {finding.title}
-        </p>
-
-        <div style={{ display: 'grid', gap: '0.75rem' }}>
-          <label style={{ display: 'grid', gap: '0.25rem' }}>
-            <span>Scope</span>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button
-                type="button"
-                className={`btn btn-sm ${
-                  scope === 'host' ? 'btn-primary' : ''
-                }`}
-                disabled={hostId == null}
-                onClick={() => setScope('host')}
-              >
-                This host{hostId != null ? ` (#${hostId})` : ''}
-              </button>
-              <button
-                type="button"
-                className={`btn btn-sm ${
-                  scope === 'global' ? 'btn-primary' : ''
-                }`}
-                onClick={() => setScope('global')}
-              >
-                All hosts
-              </button>
-            </div>
-          </label>
-
-          <label style={{ display: 'grid', gap: '0.25rem' }}>
-            <span>Mode</span>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button
-                type="button"
-                className={`btn btn-sm ${
-                  mode === 'mute' ? 'btn-primary' : ''
-                }`}
-                onClick={() => setMode('mute')}
-              >
-                Mute (false positive)
-              </button>
-              <button
-                type="button"
-                className={`btn btn-sm ${
-                  mode === 'accept_risk' ? 'btn-primary' : ''
-                }`}
-                onClick={() => setMode('accept_risk')}
-              >
-                Accept risk
-              </button>
-            </div>
-          </label>
-
-          <label style={{ display: 'grid', gap: '0.25rem' }}>
-            <span>Reason</span>
-            <textarea
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              rows={3}
-              placeholder="Why is this finding being suppressed?"
-            />
-          </label>
-
-          <label style={{ display: 'grid', gap: '0.25rem' }}>
-            <span>Expires (optional)</span>
-            <input
-              type="datetime-local"
-              value={expiresAt}
-              onChange={(e) => setExpiresAt(e.target.value)}
-            />
-            <span className="text-muted" style={{ fontSize: '0.8rem' }}>
-              Leave blank for a permanent override.
-            </span>
-          </label>
-        </div>
-
-        {create.error && (
-          <Callout tone="danger">
-            {(create.error as Error).message}
-          </Callout>
-        )}
-
-        <div
-          style={{
-            display: 'flex', gap: '0.5rem', justifyContent: 'flex-end',
-            marginTop: '1rem',
-          }}
-        >
-          <button type="button" className="btn" onClick={onClose}>
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Mute finding"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
             Cancel
           </button>
           <button
@@ -1028,9 +925,92 @@ function MuteFindingDialog({
           >
             {create.isPending ? 'Saving…' : 'Mute'}
           </button>
-        </div>
+        </>
+      }
+    >
+      <p className="text-muted" style={{ marginTop: 0 }}>
+        <code>{finding.rule_id}</code> - {finding.title}
+      </p>
+
+      <div style={{ display: 'grid', gap: '0.75rem' }}>
+        <label style={{ display: 'grid', gap: '0.25rem' }}>
+          <span>Scope</span>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button
+              type="button"
+              className={`btn btn-sm ${
+                scope === 'host' ? 'btn-primary' : ''
+              }`}
+              disabled={hostId == null}
+              onClick={() => setScope('host')}
+            >
+              This host{hostId != null ? ` (#${hostId})` : ''}
+            </button>
+            <button
+              type="button"
+              className={`btn btn-sm ${
+                scope === 'global' ? 'btn-primary' : ''
+              }`}
+              onClick={() => setScope('global')}
+            >
+              All hosts
+            </button>
+          </div>
+        </label>
+
+        <label style={{ display: 'grid', gap: '0.25rem' }}>
+          <span>Mode</span>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button
+              type="button"
+              className={`btn btn-sm ${
+                mode === 'mute' ? 'btn-primary' : ''
+              }`}
+              onClick={() => setMode('mute')}
+            >
+              Mute (false positive)
+            </button>
+            <button
+              type="button"
+              className={`btn btn-sm ${
+                mode === 'accept_risk' ? 'btn-primary' : ''
+              }`}
+              onClick={() => setMode('accept_risk')}
+            >
+              Accept risk
+            </button>
+          </div>
+        </label>
+
+        <label style={{ display: 'grid', gap: '0.25rem' }}>
+          <span>Reason</span>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={3}
+            placeholder="Why is this finding being suppressed?"
+          />
+        </label>
+
+        <label style={{ display: 'grid', gap: '0.25rem' }}>
+          <span>Expires (optional)</span>
+          <input
+            type="datetime-local"
+            value={expiresAt}
+            onChange={(e) => setExpiresAt(e.target.value)}
+          />
+          <span className="text-muted" style={{ fontSize: '0.8rem' }}>
+            Leave blank for a permanent override.
+          </span>
+        </label>
       </div>
-    </div>
+
+      {create.error && (
+        <Callout tone="danger">
+          {(create.error as Error).message}
+        </Callout>
+      )}
+    </Modal>
   );
 }
 

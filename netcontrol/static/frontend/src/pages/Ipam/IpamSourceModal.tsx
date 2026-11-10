@@ -1,7 +1,8 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useId, useState } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
-import { useDialogs } from '@/components/DialogProvider-context';
 import {
   type IpamSource,
   type IpamSourcePayload,
@@ -9,6 +10,8 @@ import {
   useIpamProviders,
   useUpdateIpamSource,
 } from '@/api/ipam';
+
+import { type ConnectionFieldErrors, validateConnectionForm } from './helpers';
 
 interface Props {
   source: IpamSource | null;
@@ -19,7 +22,7 @@ export function IpamSourceModal({ source, onClose }: Props) {
   const providers = useIpamProviders();
   const create = useCreateIpamSource();
   const update = useUpdateIpamSource();
-  const { alert } = useDialogs();
+  const formId = useId();
   const isEdit = source != null;
 
   const [provider, setProvider] = useState(source?.provider ?? '');
@@ -34,18 +37,17 @@ export function IpamSourceModal({ source, onClose }: Props) {
   const [pushEnabled, setPushEnabled] = useState(source?.push_enabled ?? false);
   const [verifyTls, setVerifyTls] = useState(source?.verify_tls !== false);
 
+  const [errors, setErrors] = useState<ConnectionFieldErrors>({});
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   const isPending = create.isPending || update.isPending;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!provider) {
-      void alert('Select a provider.');
-      return;
-    }
-    if (!name.trim() || !baseUrl.trim()) {
-      void alert('Name and base URL are required.');
-      return;
-    }
+    setSaveError(null);
+    const fieldErrors = validateConnectionForm({ provider, name, baseUrl });
+    setErrors(fieldErrors);
+    if (Object.keys(fieldErrors).length) return;
     const auth_config: Record<string, string> = {};
     if (token) {
       if (authType === 'basic') {
@@ -75,7 +77,7 @@ export function IpamSourceModal({ source, onClose }: Props) {
       }
       onClose();
     } catch (err) {
-      void alert({ message: (err as Error).message, variant: 'error' });
+      setSaveError((err as Error).message);
     }
   };
 
@@ -84,15 +86,30 @@ export function IpamSourceModal({ source, onClose }: Props) {
       isOpen
       onClose={onClose}
       title={isEdit ? `Edit: ${source?.name}` : 'Add IPAM Source'}
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={isPending}>
+            {isPending ? 'Saving…' : isEdit ? 'Save Changes' : 'Add Source'}
+          </button>
+        </>
+      }
     >
-      <form onSubmit={submit}>
+      <form id={formId} onSubmit={submit}>
+        {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
           <label className="form-label">Provider</label>
           <select
             className="form-select"
             value={provider}
-            onChange={(e) => setProvider(e.target.value)}
+            onChange={(e) => {
+              setProvider(e.target.value);
+              setErrors((prev) => ({ ...prev, provider: undefined }));
+            }}
             required
+            aria-invalid={!!errors.provider}
           >
             <option value="">Select provider…</option>
             {(providers.data?.providers ?? []).map((p) => (
@@ -101,17 +118,23 @@ export function IpamSourceModal({ source, onClose }: Props) {
               </option>
             ))}
           </select>
+          <FieldError>{errors.provider}</FieldError>
         </div>
         <div className="form-group">
           <label className="form-label">Name</label>
           <input
             className="form-input"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => {
+              setName(e.target.value);
+              setErrors((prev) => ({ ...prev, name: undefined }));
+            }}
             maxLength={120}
             required
+            aria-invalid={!!errors.name}
             placeholder="e.g. Production NetBox"
           />
+          <FieldError>{errors.name}</FieldError>
         </div>
         <div className="form-group">
           <label className="form-label">Base URL</label>
@@ -119,10 +142,15 @@ export function IpamSourceModal({ source, onClose }: Props) {
             className="form-input"
             type="url"
             value={baseUrl}
-            onChange={(e) => setBaseUrl(e.target.value)}
+            onChange={(e) => {
+              setBaseUrl(e.target.value);
+              setErrors((prev) => ({ ...prev, baseUrl: undefined }));
+            }}
             required
+            aria-invalid={!!errors.baseUrl}
             placeholder="https://netbox.example.com"
           />
+          <FieldError>{errors.baseUrl}</FieldError>
         </div>
         <div className="form-group">
           <label className="form-label">Auth Type</label>
@@ -209,21 +237,6 @@ export function IpamSourceModal({ source, onClose }: Props) {
             />{' '}
             Verify TLS
           </label>
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            gap: '0.5rem',
-            justifyContent: 'flex-end',
-            marginTop: '1rem',
-          }}
-        >
-          <button type="button" className="btn btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="btn btn-primary" disabled={isPending}>
-            {isPending ? 'Saving…' : isEdit ? 'Save Changes' : 'Add Source'}
-          </button>
         </div>
       </form>
     </Modal>

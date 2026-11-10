@@ -1,7 +1,8 @@
-import { useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
-import { useDialogs } from '@/components/DialogProvider-context';
 import { useCreateGraphTemplate } from '@/api/graphTemplates';
 
 interface Props {
@@ -10,7 +11,7 @@ interface Props {
 }
 
 export function GraphTemplateCreateModal({ isOpen, onClose }: Props) {
-  const { alert } = useDialogs();
+  const formId = useId();
   const createMut = useCreateGraphTemplate();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -21,11 +22,14 @@ export function GraphTemplateCreateModal({ isOpen, onClose }: Props) {
   const [yAxisLabel, setYAxisLabel] = useState('');
   const [stacked, setStacked] = useState(false);
   const [areaFill, setAreaFill] = useState(true);
+  const [nameError, setNameError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   function reset() {
     setName(''); setDescription(''); setGraphType('line'); setScope('device');
     setCategory('system'); setTitleFormat(''); setYAxisLabel('');
     setStacked(false); setAreaFill(true);
+    setNameError(null); setSaveError(null);
   }
 
   function handleClose() {
@@ -35,8 +39,9 @@ export function GraphTemplateCreateModal({ isOpen, onClose }: Props) {
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    setSaveError(null);
     if (!name.trim()) {
-      void alert('Name is required');
+      setNameError('Name is required');
       return;
     }
     createMut.mutate(
@@ -53,17 +58,42 @@ export function GraphTemplateCreateModal({ isOpen, onClose }: Props) {
       },
       {
         onSuccess: handleClose,
-        onError: (err) => { void alert({ message: (err as Error).message, variant: 'error' }); },
+        onError: (err) => { setSaveError((err as Error).message); },
       },
     );
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title="New Graph Template">
-      <form onSubmit={handleSubmit}>
+    <Modal
+      isOpen={isOpen}
+      onClose={handleClose}
+      title="New Graph Template"
+      size="medium"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={handleClose}>Cancel</button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={createMut.isPending}>
+            {createMut.isPending ? 'Creating…' : 'Create'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={handleSubmit}>
+        {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
           <label className="form-label">Name</label>
-          <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. CPU Usage" required />
+          <input
+            className="form-input"
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value);
+              setNameError(null);
+            }}
+            placeholder="e.g. CPU Usage"
+            required
+            aria-invalid={!!nameError}
+          />
+          <FieldError>{nameError}</FieldError>
         </div>
         <div className="form-group">
           <label className="form-label">Description</label>
@@ -107,12 +137,6 @@ export function GraphTemplateCreateModal({ isOpen, onClose }: Props) {
             <label><input type="checkbox" checked={stacked} onChange={(e) => setStacked(e.target.checked)} /> Stacked</label>
             <label><input type="checkbox" checked={areaFill} onChange={(e) => setAreaFill(e.target.checked)} /> Area Fill</label>
           </div>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-          <button type="button" className="btn btn-secondary" onClick={handleClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={createMut.isPending}>
-            {createMut.isPending ? 'Creating…' : 'Create'}
-          </button>
         </div>
       </form>
     </Modal>

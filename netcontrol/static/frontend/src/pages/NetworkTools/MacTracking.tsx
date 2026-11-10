@@ -408,7 +408,7 @@ function MovesTab() {
         isOpen={logEvent !== null}
         onClose={() => setLogEvent(null)}
         title="MAC Move Event Log"
-        size="large"
+        size="medium"
       >
         <MoveEventLogBody eventId={logEvent} />
       </Modal>

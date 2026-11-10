@@ -65,6 +65,21 @@ export function PeerFormModal({ existing, onClose, onSaved }: PeerFormModalProps
       isOpen
       onClose={onClose}
       title={isEdit ? 'Edit Federation Peer' : 'Add Federation Peer'}
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={!name.trim() || !url.trim() || pending}
+            onClick={submit}
+          >
+            {isEdit ? 'Save' : 'Add Peer'}
+          </button>
+        </>
+      }
     >
       <div className="form-group">
         <label className="form-label" htmlFor="fed-name">
@@ -142,27 +157,6 @@ export function PeerFormModal({ existing, onClose, onSaved }: PeerFormModalProps
           <strong>{isEdit ? 'Update failed' : 'Create failed'}:</strong> {errMsg}
         </Callout>
       )}
-
-      <div
-        style={{
-          display: 'flex',
-          gap: '0.5rem',
-          justifyContent: 'flex-end',
-          marginTop: '1rem',
-        }}
-      >
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={!name.trim() || !url.trim() || pending}
-          onClick={submit}
-        >
-          {isEdit ? 'Save' : 'Add Peer'}
-        </button>
-        <button type="button" className="btn btn-ghost" onClick={onClose}>
-          Cancel
-        </button>
-      </div>
     </Modal>
   );
 }

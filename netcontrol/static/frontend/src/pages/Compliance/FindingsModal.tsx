@@ -60,15 +60,8 @@ export function FindingsModal({ resultId, onClose, onRescan }: Props) {
     }
     if (
       !(await confirm({
-        title: 'Apply fix?',
-        message: (
-          <>
-            Push fix commands to the device for rule &ldquo;{rule}&rdquo;?
-            <br />
-            <br />
-            This will modify the running config and save it.
-          </>
-        ),
+        title: 'Apply remediation fix',
+        message: `Push fix commands to the device for rule “${rule}”?\n\nThis will modify the running config and save it.`,
         confirmLabel: 'Apply fix',
       }))
     ) {
@@ -111,16 +104,8 @@ export function FindingsModal({ resultId, onClose, onRescan }: Props) {
     }
     if (
       !(await confirm({
-        title: 'Apply all fixes?',
-        message: (
-          <>
-            Apply remediation for {fixable.length} failed rule(s) on{' '}
-            {result.data?.hostname || '?'}?
-            <br />
-            <br />
-            This will push config changes and save.
-          </>
-        ),
+        title: 'Apply all remediation fixes',
+        message: `Apply remediation for ${fixable.length} failed rule(s) on ${result.data?.hostname || '?'}?\n\nThis will push config changes and save.`,
         confirmLabel: 'Apply fixes',
       }))
     ) {
@@ -165,7 +150,7 @@ export function FindingsModal({ resultId, onClose, onRescan }: Props) {
     : 'Compliance Findings';
 
   return (
-    <Modal isOpen onClose={onClose} title={title}>
+    <Modal isOpen onClose={onClose} title={title} size="medium">
       {result.isLoading && <LoadingState text="Loading findings…" />}
       {result.data && (
         <>
@@ -268,6 +253,11 @@ export function FindingsModal({ resultId, onClose, onRescan }: Props) {
           isOpen
           onClose={() => setPreviewIndex(null)}
           title={`Remediation Preview - ${findings[previewIndex].name}`}
+          footer={
+            <button type="button" className="btn btn-secondary" onClick={() => setPreviewIndex(null)}>
+              Close
+            </button>
+          }
         >
           <p style={{ marginBottom: '0.75rem' }}>
             The following commands will be pushed in config mode:
@@ -283,11 +273,6 @@ export function FindingsModal({ resultId, onClose, onRescan }: Props) {
           >
             {(findings[previewIndex].remediation || []).join('\n')}
           </pre>
-          <div style={{ marginTop: '1rem', textAlign: 'right' }}>
-            <button className="btn btn-secondary" onClick={() => setPreviewIndex(null)}>
-              Close
-            </button>
-          </div>
         </Modal>
       )}
     </Modal>

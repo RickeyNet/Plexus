@@ -4,9 +4,15 @@ import { Modal } from './Modal';
 
 export interface ConfirmDialogProps {
   isOpen: boolean;
+  /** Names the action and its object: "Delete report schedule". */
   title: string;
   message: ReactNode;
-  confirmLabel?: string;
+  /** The verb the button carries out: "Delete", "Restore", "Cancel job". */
+  confirmLabel: string;
+  /**
+   * Defaults to "Cancel". When the action being confirmed is itself a
+   * cancellation, pass something that cannot be misread, e.g. "Keep running".
+   */
   cancelLabel?: string;
   confirmVariant?: 'danger' | 'primary';
   loading?: boolean;
@@ -18,7 +24,7 @@ export function ConfirmDialog({
   isOpen,
   title,
   message,
-  confirmLabel = 'Confirm',
+  confirmLabel,
   cancelLabel = 'Cancel',
   confirmVariant = 'danger',
   loading = false,
@@ -32,27 +38,30 @@ export function ConfirmDialog({
         if (!loading) onCancel();
       }}
       title={title}
+      size="small"
+      footer={
+        <>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={onCancel}
+            disabled={loading}
+          >
+            {cancelLabel}
+          </button>
+          <button
+            type="button"
+            className={`btn btn-${confirmVariant}`}
+            onClick={onConfirm}
+            disabled={loading}
+            autoFocus
+          >
+            {loading ? `${confirmLabel}…` : confirmLabel}
+          </button>
+        </>
+      }
     >
-      <div style={{ marginBottom: '1rem' }}>{message}</div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-        <button
-          type="button"
-          className="btn btn-secondary"
-          onClick={onCancel}
-          disabled={loading}
-        >
-          {cancelLabel}
-        </button>
-        <button
-          type="button"
-          className={`btn btn-${confirmVariant}`}
-          onClick={onConfirm}
-          disabled={loading}
-          autoFocus
-        >
-          {loading ? `${confirmLabel}…` : confirmLabel}
-        </button>
-      </div>
+      <div className="dialog-message">{message}</div>
     </Modal>
   );
 }

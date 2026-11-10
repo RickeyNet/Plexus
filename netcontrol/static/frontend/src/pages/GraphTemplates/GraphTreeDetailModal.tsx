@@ -2,9 +2,9 @@ import { useState, type FormEvent } from 'react';
 
 import { Callout } from '@/components/Callout';
 import { EmptyState } from '@/components/EmptyState';
+import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
-import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useCreateGraphTreeNode,
   useGraphTree,
@@ -16,7 +16,6 @@ interface Props {
 }
 
 export function GraphTreeDetailModal({ treeId, onClose }: Props) {
-  const { alert } = useDialogs();
   const isOpen = treeId != null;
   const query = useGraphTree(treeId);
   const createNodeMut = useCreateGraphTreeNode();
@@ -25,11 +24,14 @@ export function GraphTreeDetailModal({ treeId, onClose }: Props) {
   const [title, setTitle] = useState('');
   const [nodeType, setNodeType] = useState('header');
   const [sortOrder, setSortOrder] = useState('0');
+  const [titleError, setTitleError] = useState<string | null>(null);
+  const [addError, setAddError] = useState<string | null>(null);
 
   function handleAddNode(e: FormEvent) {
     e.preventDefault();
+    setAddError(null);
     if (!title.trim() || treeId == null) {
-      void alert('Title is required');
+      setTitleError('Title is required');
       return;
     }
     createNodeMut.mutate(
@@ -46,13 +48,18 @@ export function GraphTreeDetailModal({ treeId, onClose }: Props) {
           setAddingNode(false);
           setTitle(''); setNodeType('header'); setSortOrder('0');
         },
-        onError: (err) => { void alert({ message: (err as Error).message, variant: 'error' }); },
+        onError: (err) => { setAddError((err as Error).message); },
       },
     );
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={query.data?.name ?? 'Graph Tree'} size="large">
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={query.data?.name ?? 'Graph Tree'}
+      footer={<button type="button" className="btn btn-secondary" onClick={onClose}>Close</button>}
+    >
       {query.isPending && <LoadingState />}
       {query.error && <Callout tone="danger">Failed: {(query.error as Error).message}</Callout>}
       {query.data && (() => {
@@ -77,11 +84,22 @@ export function GraphTreeDetailModal({ treeId, onClose }: Props) {
               </table>
             ) : <EmptyState compact message="No nodes yet. Add nodes to organize your graph hierarchy." />}
 
+            {addingNode && addError && <Callout tone="danger">{addError}</Callout>}
             {addingNode ? (
               <form onSubmit={handleAddNode} style={{ marginTop: '0.75rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'flex-end' }}>
                 <div className="form-group" style={{ marginBottom: 0, flex: 1, minWidth: 200 }}>
                   <label className="form-label">Title</label>
-                  <input className="form-input" value={title} onChange={(e) => setTitle(e.target.value)} required />
+                  <input
+                    className="form-input"
+                    value={title}
+                    onChange={(e) => {
+                      setTitle(e.target.value);
+                      setTitleError(null);
+                    }}
+                    required
+                    aria-invalid={!!titleError}
+                  />
+                  <FieldError>{titleError}</FieldError>
                 </div>
                 <div className="form-group" style={{ marginBottom: 0 }}>
                   <label className="form-label">Type</label>
@@ -103,10 +121,6 @@ export function GraphTreeDetailModal({ treeId, onClose }: Props) {
             ) : (
               <button className="btn btn-sm btn-primary" style={{ marginTop: '0.5rem' }} onClick={() => setAddingNode(true)}>+ Add Node</button>
             )}
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
-              <button className="btn btn-secondary" onClick={onClose}>Close</button>
-            </div>
           </>
         );
       })()}

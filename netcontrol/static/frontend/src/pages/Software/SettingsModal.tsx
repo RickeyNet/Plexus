@@ -1,5 +1,6 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useId, useState } from 'react';
 
+import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -30,6 +31,8 @@ export function SettingsModal({ settings, severities, onClose }: Props) {
   const [clientSecret, setClientSecret] = useState('');
   const [clearSecret, setClearSecret] = useState(false);
   const [psirtHours, setPsirtHours] = useState(Math.max(1, Math.round(settings.psirt_interval_seconds / 3600)));
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const formId = useId();
 
   const payload = (): SoftwareSettingsPayload => {
     const body: SoftwareSettingsPayload = {
@@ -47,28 +50,54 @@ export function SettingsModal({ settings, severities, onClose }: Props) {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    setSaveError(null);
     try {
       await save.mutateAsync(payload());
       onClose();
     } catch (err) {
-      void alert({ message: (err as Error).message, variant: 'error' });
+      setSaveError((err as Error).message);
     }
   };
 
   const testLogin = async () => {
+    setSaveError(null);
     try {
       await save.mutateAsync(payload());
       setClientSecret('');
       const res = await test.mutateAsync();
       void alert(res.message || 'Signed in to Cisco PSIRT.');
     } catch (err) {
-      void alert({ message: (err as Error).message, variant: 'error' });
+      setSaveError((err as Error).message);
     }
   };
 
   return (
-    <Modal isOpen onClose={onClose} title="Software Tracker Settings" size="large">
-      <form onSubmit={submit}>
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Software Tracker Settings"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={testLogin}
+            disabled={save.isPending || test.isPending || !clientId.trim()}
+            title="Saves the settings, then signs in to Cisco PSIRT"
+          >
+            {test.isPending ? 'Testing…' : 'Save & Test Login'}
+          </button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={save.isPending}>
+            {save.isPending ? 'Saving…' : 'Save Settings'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={submit}>
+        {saveError && <Callout tone="danger">{saveError}</Callout>}
         <h4 style={{ margin: '0 0 0.5rem' }}>Refresh</h4>
         <div className="form-group">
           <label className="form-label">Refresh the tracked versions every (hours)</label>
@@ -175,24 +204,6 @@ export function SettingsModal({ settings, severities, onClose }: Props) {
             {settings.psirt_last_sync_status ? ` (${settings.psirt_last_sync_status}` : ''}
             {settings.psirt_last_sync_message ? `: ${settings.psirt_last_sync_message})` : settings.psirt_last_sync_status ? ')' : ''}
           </div>
-        </div>
-
-        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={testLogin}
-            disabled={save.isPending || test.isPending || !clientId.trim()}
-            title="Saves the settings, then signs in to Cisco PSIRT"
-          >
-            {test.isPending ? 'Testing…' : 'Save & Test Login'}
-          </button>
-          <button type="button" className="btn btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="btn btn-primary" disabled={save.isPending}>
-            {save.isPending ? 'Saving…' : 'Save Settings'}
-          </button>
         </div>
       </form>
     </Modal>

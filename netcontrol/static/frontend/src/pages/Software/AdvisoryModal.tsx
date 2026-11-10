@@ -1,7 +1,8 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useId, useState } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
-import { useDialogs } from '@/components/DialogProvider-context';
 import {
   type SoftwareAdvisory,
   type SoftwarePlatformInfo,
@@ -18,7 +19,6 @@ interface Props {
 }
 
 export function AdvisoryModal({ advisory, platforms, severities, onClose }: Props) {
-  const { alert } = useDialogs();
   const save = useSaveSoftwareAdvisory();
   const isEdit = advisory != null;
 
@@ -35,21 +35,26 @@ export function AdvisoryModal({ advisory, platforms, severities, onClose }: Prop
   const [published, setPublished] = useState(advisory?.published ?? '');
   const [summary, setSummary] = useState(advisory?.summary ?? '');
   const [enabled, setEnabled] = useState(advisory?.enabled ?? true);
+  const [errors, setErrors] = useState<{ advisoryId?: string; affected?: string; cvss?: string }>({});
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const formId = useId();
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    setErrors({});
+    setSaveError(null);
     const affected_versions = parseVersionList(affected);
     if (!advisoryId.trim()) {
-      void alert('An advisory ID is required.');
+      setErrors({ advisoryId: 'An advisory ID is required.' });
       return;
     }
     if (affected_versions.length === 0) {
-      void alert('List at least one affected version.');
+      setErrors({ affected: 'List at least one affected version.' });
       return;
     }
     const cvssNumber = cvss.trim() === '' ? null : Number(cvss);
     if (cvssNumber != null && (!Number.isFinite(cvssNumber) || cvssNumber < 0 || cvssNumber > 10)) {
-      void alert('CVSS must be a number between 0 and 10.');
+      setErrors({ cvss: 'CVSS must be a number between 0 and 10.' });
       return;
     }
     try {
@@ -73,25 +78,46 @@ export function AdvisoryModal({ advisory, platforms, severities, onClose }: Prop
       });
       onClose();
     } catch (err) {
-      void alert({ message: (err as Error).message, variant: 'error' });
+      setSaveError((err as Error).message);
     }
   };
 
   return (
-    <Modal isOpen onClose={onClose} title={isEdit ? `Edit ${advisory.advisory_id}` : 'Add Advisory'} size="large">
-      <form onSubmit={submit}>
+    <Modal
+      isOpen
+      onClose={onClose}
+      title={isEdit ? `Edit ${advisory.advisory_id}` : 'Add Advisory'}
+      size="medium"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={save.isPending}>
+            {save.isPending ? 'Saving…' : isEdit ? 'Save Advisory' : 'Add Advisory'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={submit}>
+        {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 1rem' }}>
           <div className="form-group">
             <label className="form-label">Advisory ID</label>
             <input
               className="form-input"
               value={advisoryId}
-              onChange={(e) => setAdvisoryId(e.target.value)}
+              onChange={(e) => {
+                setAdvisoryId(e.target.value);
+                setErrors((prev) => ({ ...prev, advisoryId: undefined }));
+              }}
               disabled={isEdit}
               required
               maxLength={120}
               placeholder="cisco-sa-… or CVE-…"
+              aria-invalid={!!errors.advisoryId}
             />
+            <FieldError>{errors.advisoryId}</FieldError>
           </div>
           <div className="form-group">
             <label className="form-label">Severity</label>
@@ -147,10 +173,15 @@ export function AdvisoryModal({ advisory, platforms, severities, onClose }: Prop
             <input
               className="form-input"
               value={cvss}
-              onChange={(e) => setCvss(e.target.value)}
+              onChange={(e) => {
+                setCvss(e.target.value);
+                setErrors((prev) => ({ ...prev, cvss: undefined }));
+              }}
               inputMode="decimal"
               placeholder="9.8"
+              aria-invalid={!!errors.cvss}
             />
+            <FieldError>{errors.cvss}</FieldError>
           </div>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 1rem' }}>
@@ -160,10 +191,15 @@ export function AdvisoryModal({ advisory, platforms, severities, onClose }: Prop
               className="form-textarea"
               rows={5}
               value={affected}
-              onChange={(e) => setAffected(e.target.value)}
+              onChange={(e) => {
+                setAffected(e.target.value);
+                setErrors((prev) => ({ ...prev, affected: undefined }));
+              }}
               placeholder={'17.9.4a\n<17.6.5\n17.3.*\n16.12..16.12.9, !=16.12.5'}
               required
+              aria-invalid={!!errors.affected}
             />
+            <FieldError>{errors.affected}</FieldError>
             <div className="text-muted" style={{ fontSize: '0.82em', marginTop: '0.25rem' }}>
               Exact version, prefix with <code>*</code>, comparison (<code>&lt;</code>, <code>&lt;=</code>,{' '}
               <code>&gt;</code>, <code>&gt;=</code>, <code>!=</code>) or range <code>a..b</code>. Comma joins
@@ -236,14 +272,6 @@ export function AdvisoryModal({ advisory, platforms, severities, onClose }: Prop
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Enabled
           (devices are checked against this advisory)
         </label>
-        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
-          <button type="button" className="btn btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="btn btn-primary" disabled={save.isPending}>
-            {save.isPending ? 'Saving…' : isEdit ? 'Save Advisory' : 'Add Advisory'}
-          </button>
-        </div>
       </form>
     </Modal>
   );

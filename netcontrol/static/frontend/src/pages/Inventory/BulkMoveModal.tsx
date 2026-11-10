@@ -1,8 +1,8 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useId, useState } from 'react';
 
+import { Callout } from '@/components/Callout';
 import { EmptyState } from '@/components/EmptyState';
 import { Modal } from '@/components/Modal';
-import { useDialogs } from '@/components/DialogProvider-context';
 import { groupLabel, type InventoryGroupFull, useMoveHosts } from '@/api/inventory';
 
 interface Props {
@@ -13,21 +13,23 @@ interface Props {
 }
 
 export function BulkMoveModal({ hostIds, sourceGroupId, groups, onClose }: Props) {
-  const { alert } = useDialogs();
   const move = useMoveHosts();
+  const formId = useId();
   const candidates = groups.filter((g) => g.id !== sourceGroupId);
   const [targetGroupId, setTargetGroupId] = useState<number>(
     candidates[0]?.id ?? 0,
   );
+  const [error, setError] = useState<string | null>(null);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    setError(null);
     if (!targetGroupId) return;
     try {
       await move.mutateAsync({ hostIds, targetGroupId });
       onClose();
     } catch (err) {
-      void alert({ message: (err as Error).message, variant: 'error' });
+      setError((err as Error).message);
     }
   };
 
@@ -36,24 +38,34 @@ export function BulkMoveModal({ hostIds, sourceGroupId, groups, onClose }: Props
       isOpen
       onClose={onClose}
       title={`Move ${hostIds.length} Host(s)`}
+      size="small"
+      footer={
+        candidates.length === 0 ? (
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Close
+          </button>
+        ) : (
+          <>
+            <button type="button" className="btn btn-secondary" onClick={onClose}>
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form={formId}
+              className="btn btn-primary"
+              disabled={move.isPending}
+            >
+              {move.isPending ? 'Moving…' : 'Move'}
+            </button>
+          </>
+        )
+      }
     >
       {candidates.length === 0 ? (
-        <>
-          <EmptyState compact message="No other groups available to move hosts to." />
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'flex-end',
-              marginTop: '1rem',
-            }}
-          >
-            <button type="button" className="btn btn-secondary" onClick={onClose}>
-              Close
-            </button>
-          </div>
-        </>
+        <EmptyState compact message="No other groups available to move hosts to." />
       ) : (
-        <form onSubmit={submit}>
+        <form id={formId} onSubmit={submit}>
+          {error && <Callout tone="danger">{error}</Callout>}
           <div className="form-group">
             <label className="form-label">Destination Group</label>
             <select
@@ -68,25 +80,6 @@ export function BulkMoveModal({ hostIds, sourceGroupId, groups, onClose }: Props
                 </option>
               ))}
             </select>
-          </div>
-          <div
-            style={{
-              display: 'flex',
-              gap: '0.5rem',
-              justifyContent: 'flex-end',
-              marginTop: '1rem',
-            }}
-          >
-            <button type="button" className="btn btn-secondary" onClick={onClose}>
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={move.isPending}
-            >
-              {move.isPending ? 'Moving…' : 'Move'}
-            </button>
           </div>
         </form>
       )}

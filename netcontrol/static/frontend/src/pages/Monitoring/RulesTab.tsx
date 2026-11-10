@@ -1,6 +1,7 @@
-import { useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent } from 'react';
 
 import { SeverityBadge } from '@/components/Badge';
+import { Callout } from '@/components/Callout';
 import { DeleteButton } from '@/components/DeleteButton';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
@@ -46,7 +47,7 @@ export function RulesTab() {
   }
 
   async function handleDelete(r: AlertRule) {
-    if (!(await confirm(`Delete rule '${r.name}'?`))) return;
+    if (!(await confirm({ title: 'Delete alert rule', message: `Delete rule '${r.name}'?`, confirmLabel: 'Delete' }))) return;
     deleteMut.mutate(r.id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
   }
 
@@ -104,7 +105,8 @@ export function RulesTab() {
 }
 
 function CreateRuleModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
-  const { alert } = useDialogs();
+  const formId = useId();
+  const [saveError, setSaveError] = useState('');
   const createMut = useCreateAlertRule();
   const groups = useInventoryGroupsFull(true);
   const channelsQuery = useNotificationChannels();
@@ -125,6 +127,7 @@ function CreateRuleModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    setSaveError('');
     const data: AlertRuleCreate = {
       name: name.trim(),
       metric,
@@ -145,13 +148,26 @@ function CreateRuleModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
         setName(''); setValue('90'); setDescription(''); setHostId(''); setGroupId(''); setChannelIds([]);
         onClose();
       },
-      onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
+      onError: (e) => { setSaveError((e as Error).message); },
     });
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Create Alert Rule">
-      <form onSubmit={handleSubmit}>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Create Alert Rule"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={createMut.isPending}>
+            {createMut.isPending ? 'Creating…' : 'Create'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={handleSubmit}>
+        {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
           <label className="form-label">Name</label>
           <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. High CPU Warning" required />
@@ -254,12 +270,6 @@ function CreateRuleModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => 
         <div className="form-group">
           <label className="form-label">Description</label>
           <textarea className="form-input" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={createMut.isPending}>
-            {createMut.isPending ? 'Creating…' : 'Create'}
-          </button>
         </div>
       </form>
     </Modal>

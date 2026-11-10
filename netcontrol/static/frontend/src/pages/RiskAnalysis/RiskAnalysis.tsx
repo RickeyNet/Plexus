@@ -146,7 +146,14 @@ async function showRunResult(
     `Hosts analyzed: ${result.hosts_analyzed}\n` +
     `Compliance violations: ${result.total_compliance_violations}\n` +
     `Affected areas: ${areas}\n\nOpen full details?`;
-  if (await confirm(msg)) setDetailId(result.id);
+  const open = await confirm({
+    title: 'Risk analysis complete',
+    message: msg,
+    confirmLabel: 'Open details',
+    cancelLabel: 'Close',
+    confirmVariant: 'primary',
+  });
+  if (open) setDetailId(result.id);
 }
 
 function RiskSummary({ summary }: { summary?: RiskAnalysisSummary }) {
@@ -255,7 +262,12 @@ function AnalysisRow({ analysis, onView }: { analysis: RiskAnalysisRow; onView: 
           </button>
           <DeleteButton
             onClick={async () => {
-              if (!(await confirm('Delete this risk analysis?'))) return;
+              const ok = await confirm({
+                title: 'Delete risk analysis',
+                message: `Delete risk analysis #${analysis.id} · ${targetLabel(analysis)}?`,
+                confirmLabel: 'Delete',
+              });
+              if (!ok) return;
               remove.mutate(analysis.id, {
                 onError: (e) => {
                   void alert({ message: (e as Error).message, variant: 'error' });

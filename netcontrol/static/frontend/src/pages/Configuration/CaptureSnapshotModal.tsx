@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 
 import { groupLabel } from '@/api/inventory';
 import { useCredentials, useInventoryGroups } from '@/api/compliance';
@@ -6,8 +6,9 @@ import {
   useStartCaptureGroupJob,
   useStartCaptureSingleJob,
 } from '@/api/configuration';
+import { Callout } from '@/components/Callout';
+import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
-import { useDialogs } from '@/components/DialogProvider-context';
 
 interface Props {
   onClose: () => void;
@@ -15,7 +16,6 @@ interface Props {
 }
 
 export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
-  const { alert } = useDialogs();
   const groups = useInventoryGroups(true);
   const creds = useCredentials();
   const single = useStartCaptureSingleJob();
@@ -23,6 +23,9 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
   const [hostId, setHostId] = useState<number | null>(null);
   const [groupId, setGroupId] = useState<number | null>(null);
   const [credId, setCredId] = useState<number | null>(null);
+  const [targetError, setTargetError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const formId = useId();
 
   const hosts = useMemo(() => {
     const list: { id: number; hostname: string; ip_address: string }[] = [];
@@ -36,18 +39,18 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    setTargetError(null);
+    setSaveError(null);
     if (!credId) return;
     if (!hostId && !groupId) {
-      void alert('Please select a host or group');
+      setTargetError('Please select a host or group');
       return;
     }
     const onSuccess = (res: { job_id: string }) => {
       onClose();
       onJobStarted(res.job_id);
     };
-    const onError = (err: unknown) => {
-      void alert({ message: (err as Error).message, variant: 'error' });
-    };
+    const onError = (err: unknown) => setSaveError((err as Error).message);
     if (groupId) {
       group.mutate({ groupId, credentialId: credId }, { onSuccess, onError });
     } else if (hostId) {
@@ -56,8 +59,28 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
   };
 
   return (
-    <Modal isOpen onClose={onClose} title="Capture Running Config">
-      <form onSubmit={handleSubmit}>
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Capture Running Config"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="submit"
+            form={formId}
+            className="btn btn-primary"
+            disabled={isPending}
+          >
+            {isPending ? 'Starting…' : 'Capture'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={handleSubmit}>
+        {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
           <label className="form-label">Single Host</label>
           <select
@@ -66,7 +89,9 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
             onChange={(e) => {
               setHostId(e.target.value ? Number(e.target.value) : null);
               if (e.target.value) setGroupId(null);
+              setTargetError(null);
             }}
+            aria-invalid={!!targetError}
           >
             <option value="">Select a host…</option>
             {hosts.map((h) => (
@@ -84,7 +109,9 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
             onChange={(e) => {
               setGroupId(e.target.value ? Number(e.target.value) : null);
               if (e.target.value) setHostId(null);
+              setTargetError(null);
             }}
+            aria-invalid={!!targetError}
           >
             <option value="">- Or select entire group -</option>
             {(groups.data || []).map((g) => (
@@ -93,6 +120,7 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
               </option>
             ))}
           </select>
+          <FieldError>{targetError}</FieldError>
         </div>
         <div className="form-group">
           <label className="form-label">Credentials</label>
@@ -111,25 +139,6 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
               </option>
             ))}
           </select>
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            gap: '0.5rem',
-            justifyContent: 'flex-end',
-            marginTop: '1rem',
-          }}
-        >
-          <button type="button" className="btn btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            type="submit"
-            className="btn btn-primary"
-            disabled={isPending}
-          >
-            {isPending ? 'Starting…' : 'Capture'}
-          </button>
         </div>
       </form>
     </Modal>

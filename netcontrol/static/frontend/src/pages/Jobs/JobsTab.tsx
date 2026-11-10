@@ -63,7 +63,13 @@ export function JobsTab() {
   }, [jobsQuery.data, query, status, dryRun, dateRange]);
 
   async function handleCancel(id: number) {
-    if (!(await confirm('Cancel this job?'))) return;
+    const ok = await confirm({
+      title: 'Cancel job',
+      message: `Cancel job #${id}?`,
+      confirmLabel: 'Cancel job',
+      cancelLabel: 'Keep running',
+    });
+    if (!ok) return;
     cancelMut.mutate(id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
   }
 

@@ -8,6 +8,8 @@ import {
   type BulkAddHostsResult,
 } from '@/api/inventory';
 import { useInventoryGroupsLite, type TopologyEdge, type TopologyNode } from '@/api/topology';
+import { Callout } from '@/components/Callout';
+import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
 import { DEVICE_TYPES } from '@/lib/deviceTypes';
 
@@ -110,9 +112,34 @@ export function BulkAddToInventoryModal({ isOpen, nodes, edges, onClose, onAdded
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Add to Inventory" size="large">
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Add to Inventory"
+      size="large"
+      footer={
+        result ? (
+          <>
+            <button type="button" className="btn btn-secondary" onClick={() => setResult(null)}>Add more</button>
+            <button type="button" className="btn btn-primary" onClick={onClose}>Done</button>
+          </>
+        ) : rows.length === 0 && !showManaged ? undefined : (
+          <>
+            <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleSubmit}
+              disabled={bulkAdd.isPending || noGroup || selected.size === 0 || tooMany}
+            >
+              {bulkAdd.isPending ? 'Adding…' : selected.size ? `Add ${selected.size} to inventory` : 'Add to inventory'}
+            </button>
+          </>
+        )
+      }
+    >
       {result ? (
-        <BulkAddSummary result={result} groupName={groupName} onDone={onClose} onBack={() => setResult(null)} />
+        <BulkAddSummary result={result} groupName={groupName} />
       ) : rows.length === 0 && !showManaged ? (
         <p className="text-muted">
           Every device on the map with an IP address is already in inventory, apart from Meraki hardware.{' '}
@@ -249,23 +276,8 @@ export function BulkAddToInventoryModal({ isOpen, nodes, edges, onClose, onAdded
               </tbody>
             </table>
           </div>
-          {tooMany && (
-            <div style={{ color: 'var(--danger)' }}>
-              At most {BULK_ADD_MAX_HOSTS} devices can be added at once.
-            </div>
-          )}
-          {error && <div style={{ color: 'var(--danger)' }}>{error}</div>}
-          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-            <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={handleSubmit}
-              disabled={bulkAdd.isPending || noGroup || selected.size === 0 || tooMany}
-            >
-              {bulkAdd.isPending ? 'Adding…' : selected.size ? `Add ${selected.size} to inventory` : 'Add to inventory'}
-            </button>
-          </div>
+          <FieldError>{tooMany && `At most ${BULK_ADD_MAX_HOSTS} devices can be added at once.`}</FieldError>
+          {error && <Callout tone="danger">{error}</Callout>}
         </div>
       )}
     </Modal>
@@ -285,13 +297,9 @@ function addedPerGroup(result: BulkAddHostsResult): [string, number][] {
 function BulkAddSummary({
   result,
   groupName,
-  onDone,
-  onBack,
 }: {
   result: BulkAddHostsResult;
   groupName: (id: number | null) => string;
-  onDone: () => void;
-  onBack: () => void;
 }) {
   const perGroup = addedPerGroup(result);
   return (
@@ -342,10 +350,6 @@ function BulkAddSummary({
           </ul>
         </div>
       )}
-      <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-        <button type="button" className="btn btn-secondary" onClick={onBack}>Add more</button>
-        <button type="button" className="btn btn-primary" onClick={onDone}>Done</button>
-      </div>
     </div>
   );
 }

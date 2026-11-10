@@ -250,9 +250,11 @@ export function NotificationsTab() {
 
   const onDelete = async (c: NotificationChannel) => {
     if (
-      !(await confirm(
-        `Delete notification channel "${c.name || c.id}"? Alerts will stop being delivered to it.`,
-      ))
+      !(await confirm({
+        title: 'Delete notification channel',
+        message: `Delete notification channel "${c.name || c.id}"? Alerts will stop being delivered to it.`,
+        confirmLabel: 'Delete',
+      }))
     )
       return;
     deleteMut.mutate(c.id, {

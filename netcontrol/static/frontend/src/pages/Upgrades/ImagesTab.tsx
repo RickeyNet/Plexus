@@ -124,7 +124,7 @@ export function ImagesTab() {
       />
       <ConfirmDialog
         isOpen={deleteTarget !== null}
-        title="Delete software image?"
+        title="Delete software image"
         message={
           <>
             Delete <code>{deleteTarget?.filename}</code>? This removes the file

@@ -11,6 +11,7 @@ import {
   useMaintenanceWindow,
   useUpdateMaintenanceWindow,
 } from '@/api/maintenanceWindows';
+import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
 import { localInputToIso, toLocalInputValue } from '@/lib/datetime';
 
@@ -134,7 +135,21 @@ export function MaintenanceWindowModal({ isOpen, onClose, editingId, groups }: P
       isOpen={isOpen}
       onClose={onClose}
       title={isEdit ? 'Edit Maintenance Window' : 'New Maintenance Window'}
-      size="default"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={isPending}
+            onClick={handleSave}
+          >
+            {isPending ? 'Saving…' : isEdit ? 'Save' : 'Create'}
+          </button>
+        </>
+      }
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
         <label>
@@ -285,23 +300,7 @@ export function MaintenanceWindowModal({ isOpen, onClose, editingId, groups }: P
           <span>Enabled</span>
         </label>
 
-        {error && (
-          <div style={{ color: 'var(--danger)', fontSize: '0.85em' }}>{error}</div>
-        )}
-
-        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-          <button type="button" className="btn btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={isPending}
-            onClick={handleSave}
-          >
-            {isPending ? 'Saving…' : isEdit ? 'Save' : 'Create'}
-          </button>
-        </div>
+        {error && <Callout tone="danger">{error}</Callout>}
       </div>
     </Modal>
   );

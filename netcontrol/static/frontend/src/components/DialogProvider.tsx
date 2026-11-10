@@ -43,9 +43,8 @@ export function DialogProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const confirm = useCallback(
-    (o: ConfirmOptions | string) =>
+    (opts: ConfirmOptions) =>
       new Promise<boolean>((resolve) => {
-        const opts = typeof o === 'string' ? { message: o } : o;
         enqueue({ kind: 'confirm', opts, resolve });
       }),
     [enqueue],
@@ -68,7 +67,7 @@ export function DialogProvider({ children }: { children: ReactNode }) {
       {active?.kind === 'confirm' && (
         <ConfirmDialog
           isOpen
-          title={active.opts.title ?? 'Please confirm'}
+          title={active.opts.title}
           message={active.opts.message}
           confirmLabel={active.opts.confirmLabel}
           cancelLabel={active.opts.cancelLabel}

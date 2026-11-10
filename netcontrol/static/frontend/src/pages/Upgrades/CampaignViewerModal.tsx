@@ -1175,7 +1175,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
       )}
       <ConfirmDialog
         isOpen={confirmCancelOpen}
-        title={isScheduled ? 'Cancel scheduled reload?' : 'Cancel running phase?'}
+        title={isScheduled ? 'Cancel scheduled reload' : 'Cancel running phase'}
         message={
           isScheduled
             ? sched
@@ -1184,6 +1184,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
             : 'Cancel the running phase? Devices may be left in a partial state.'
         }
         confirmLabel={isScheduled ? 'Cancel reload' : 'Cancel phase'}
+        cancelLabel={isScheduled ? 'Keep reload' : 'Keep running'}
         loading={cancel.isPending}
         onCancel={() => {
           if (!cancel.isPending) setConfirmCancelOpen(false);
@@ -1192,11 +1193,12 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
       />
       <ConfirmDialog
         isOpen={confirmDeviceCancelOpen}
-        title="Cancel selected activate devices?"
+        title="Cancel activate on selected devices"
         message={`Mark ${selectedCount} selected device${
           selectedCount === 1 ? '' : 's'
         } cancelled for activate. Queued devices will be skipped; a reload command already sent to a device cannot be withdrawn.`}
         confirmLabel="Cancel selected"
+        cancelLabel="Keep selected"
         loading={cancelDevices.isPending}
         onCancel={() => {
           if (!cancelDevices.isPending) setConfirmDeviceCancelOpen(false);

@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import { useCredentials } from '@/api/compliance';
 import { useRestoreBackup } from '@/api/configuration';
+import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 
@@ -15,12 +16,15 @@ export function RestoreBackupModal({ backupId, onClose }: Props) {
   const creds = useCredentials();
   const restore = useRestoreBackup();
   const [credId, setCredId] = useState<number | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const formId = useId();
 
   if (backupId == null) return null;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!credId) return;
+    setSaveError(null);
     restore.mutate(
       { backupId, credentialId: credId },
       {
@@ -31,16 +35,35 @@ export function RestoreBackupModal({ backupId, onClose }: Props) {
             : `Restore completed for ${res.hostname} but validation found ${res.lines_changed} line(s) changed.\n\n${res.diff_text || ''}`;
           void alert(msg);
         },
-        onError: (err) => {
-          void alert({ message: (err as Error).message, variant: 'error' });
-        },
+        onError: (err) => setSaveError((err as Error).message),
       },
     );
   };
 
   return (
-    <Modal isOpen onClose={onClose} title="Restore from Backup">
-      <form onSubmit={handleSubmit}>
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Restore from Backup"
+      size="small"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="submit"
+            form={formId}
+            className="btn btn-primary"
+            disabled={!credId || restore.isPending}
+          >
+            {restore.isPending ? 'Restoring…' : 'Restore'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={handleSubmit}>
+        {saveError && <Callout tone="danger">{saveError}</Callout>}
         <p style={{ color: 'var(--warning)', marginBottom: '1rem' }}>
           This will push the backup configuration to the device and validate
           the result.
@@ -61,25 +84,6 @@ export function RestoreBackupModal({ backupId, onClose }: Props) {
             </option>
           ))}
         </select>
-        <div
-          style={{
-            marginTop: '1rem',
-            display: 'flex',
-            justifyContent: 'flex-end',
-            gap: '0.5rem',
-          }}
-        >
-          <button type="button" className="btn btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            type="submit"
-            className="btn btn-primary"
-            disabled={!credId || restore.isPending}
-          >
-            {restore.isPending ? 'Restoring…' : 'Restore'}
-          </button>
-        </div>
       </form>
     </Modal>
   );

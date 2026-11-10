@@ -1,8 +1,9 @@
-import { useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent } from 'react';
 
 import { Callout } from '@/components/Callout';
 import { DeleteButton } from '@/components/DeleteButton';
 import { EmptyState } from '@/components/EmptyState';
+import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -20,9 +21,14 @@ export function CredentialsList() {
   const deleteMut = useDeleteCredential();
   const [showCreate, setShowCreate] = useState(false);
 
-  async function handleDelete(id: number) {
-    if (!(await confirm('Delete this credential?'))) return;
-    deleteMut.mutate(id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
+  async function handleDelete(c: Credential) {
+    const ok = await confirm({
+      title: 'Delete credential',
+      message: `Delete credential "${c.name}"?`,
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
+    deleteMut.mutate(c.id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
   }
 
   return (
@@ -39,7 +45,7 @@ export function CredentialsList() {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {query.data.map((c) => (
-            <CredentialRow key={c.id} credential={c} onDelete={() => handleDelete(c.id)} />
+            <CredentialRow key={c.id} credential={c} onDelete={() => handleDelete(c)} />
           ))}
         </div>
       ))}
@@ -104,19 +110,25 @@ function CredentialRow({ credential, onDelete }: { credential: Credential; onDel
 }
 
 function CreateCredentialModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
-  const { alert } = useDialogs();
   const createMut = useCreateCredential();
+  const formId = useId();
   const [name, setName] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [secret, setSecret] = useState('');
+  const [errors, setErrors] = useState<{ name?: string; username?: string; password?: string }>({});
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!name.trim() || !username.trim() || !password) {
-      void alert('Name, username, and password are required');
-      return;
-    }
+    setSaveError(null);
+    const next = {
+      name: name.trim() ? undefined : 'Name is required',
+      username: username.trim() ? undefined : 'Username is required',
+      password: password ? undefined : 'Password is required',
+    };
+    setErrors(next);
+    if (next.name || next.username || next.password) return;
     createMut.mutate(
       { name: name.trim(), username: username.trim(), password, secret: secret || undefined },
       {
@@ -124,35 +136,64 @@ function CreateCredentialModal({ isOpen, onClose }: { isOpen: boolean; onClose: 
           setName(''); setUsername(''); setPassword(''); setSecret('');
           onClose();
         },
-        onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
+        onError: (e) => { setSaveError((e as Error).message); },
       },
     );
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Create Credential">
-      <form onSubmit={handleSubmit}>
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Create Credential"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={createMut.isPending}>
+            {createMut.isPending ? 'Creating…' : 'Create'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={handleSubmit}>
+        {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
           <label className="form-label">Name</label>
-          <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} required />
+          <input
+            className="form-input"
+            value={name}
+            onChange={(e) => { setName(e.target.value); setErrors((p) => ({ ...p, name: undefined })); }}
+            aria-invalid={!!errors.name}
+            required
+          />
+          <FieldError>{errors.name}</FieldError>
         </div>
         <div className="form-group">
           <label className="form-label">Username</label>
-          <input className="form-input" value={username} onChange={(e) => setUsername(e.target.value)} required />
+          <input
+            className="form-input"
+            value={username}
+            onChange={(e) => { setUsername(e.target.value); setErrors((p) => ({ ...p, username: undefined })); }}
+            aria-invalid={!!errors.username}
+            required
+          />
+          <FieldError>{errors.username}</FieldError>
         </div>
         <div className="form-group">
           <label className="form-label">Password</label>
-          <input className="form-input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+          <input
+            className="form-input"
+            type="password"
+            value={password}
+            onChange={(e) => { setPassword(e.target.value); setErrors((p) => ({ ...p, password: undefined })); }}
+            aria-invalid={!!errors.password}
+            required
+          />
+          <FieldError>{errors.password}</FieldError>
         </div>
         <div className="form-group">
           <label className="form-label">Secret (Enable Password)</label>
           <input className="form-input" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} />
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={createMut.isPending}>
-            {createMut.isPending ? 'Creating…' : 'Create'}
-          </button>
         </div>
       </form>
     </Modal>

@@ -81,7 +81,7 @@ export function AccessGroupsTab({
               </button>
               <DeleteButton
                 onClick={async () => {
-                  if (!(await confirm(`Delete group '${g.name}'?`))) return;
+                  if (!(await confirm({ title: 'Delete access group', message: `Delete group '${g.name}'?`, confirmLabel: 'Delete' }))) return;
                   remove.mutate(g.id, {
                     onError: (e) => {
                       void alert({ message: `Failed to delete group: ${(e as Error).message}`, variant: 'error' });

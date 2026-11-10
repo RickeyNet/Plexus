@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 
 import {
@@ -343,22 +343,25 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
         isOpen={Boolean(confirmDelete)}
         onClose={() => setConfirmDelete(null)}
         title={`Delete ${deleteTerms.scopeTitle}`}
-      >
-        {confirmDelete && (
-          <div>
-            <p>
-              Delete <strong>{confirmDelete.name}</strong> and everything discovered from this {deleteTerms.scope}{' '}
-              (resources, connections, policy rules and traffic metrics)?
-            </p>
-            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-              <button className="btn btn-secondary" onClick={() => setConfirmDelete(null)}>Cancel</button>
+        size="small"
+        footer={
+          confirmDelete && (
+            <>
+              <button type="button" className="btn btn-secondary" onClick={() => setConfirmDelete(null)}>Cancel</button>
               <DeleteButton
                 size="md"
                 onClick={() => runDelete(confirmDelete)}
                 disabled={deleteAcct.isPending}
               />
-            </div>
-          </div>
+            </>
+          )
+        }
+      >
+        {confirmDelete && (
+          <p>
+            Delete <strong>{confirmDelete.name}</strong> and everything discovered from this {deleteTerms.scope}{' '}
+            (resources, connections, policy rules and traffic metrics)?
+          </p>
         )}
       </Modal>
 
@@ -368,23 +371,26 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
           if (!discover.isPending) setConfirmDiscover(null);
         }}
         title={`Discover ${discoverTerms.scopeTitle}`}
-      >
-        {confirmDiscover && (
-          <div>
-            <p>
-              Read <strong>{confirmDiscover.name}</strong> through {discoverTerms.api} and refresh its{' '}
-              {discoverTerms.networks}, gateways and connections? If discovery fails, the last snapshot is kept and the
-              error is reported.
-            </p>
-            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-              <button className="btn btn-secondary" onClick={() => setConfirmDiscover(null)} disabled={discover.isPending}>
+        size="small"
+        footer={
+          confirmDiscover && (
+            <>
+              <button type="button" className="btn btn-secondary" onClick={() => setConfirmDiscover(null)} disabled={discover.isPending}>
                 Cancel
               </button>
-              <button className="btn btn-primary" onClick={() => runDiscover(confirmDiscover)} disabled={discover.isPending}>
+              <button type="button" className="btn btn-primary" onClick={() => runDiscover(confirmDiscover)} disabled={discover.isPending}>
                 {discover.isPending ? 'Discovering…' : 'Discover'}
               </button>
-            </div>
-          </div>
+            </>
+          )
+        }
+      >
+        {confirmDiscover && (
+          <p>
+            Read <strong>{confirmDiscover.name}</strong> through {discoverTerms.api} and refresh its{' '}
+            {discoverTerms.networks}, gateways and connections? If discovery fails, the last snapshot is kept and the
+            error is reported.
+          </p>
         )}
       </Modal>
     </div>
@@ -474,9 +480,23 @@ function AccountFormModal({ account, provider: providerProp, providerOptions, on
     }
   }
 
+  const formId = useId();
+
   return (
-    <Modal isOpen onClose={onClose} title={`${account?.id ? 'Edit' : 'Add'} ${terms.scopeTitle}`} size="large">
-      <form onSubmit={submit} style={{ display: 'grid', gap: '0.75rem' }}>
+    <Modal
+      isOpen
+      onClose={onClose}
+      title={`${account?.id ? 'Edit' : 'Add'} ${terms.scopeTitle}`}
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={create.isPending || update.isPending}>
+            {account?.id ? 'Save' : 'Create'}
+          </button>
+        </>
+      }
+    >
+      <form id={formId} onSubmit={submit} style={{ display: 'grid', gap: '0.75rem' }}>
         {account?.id ? (
           <div>
             Provider: {terms.fullName === terms.label ? terms.label : `${terms.fullName} (${terms.label})`}
@@ -629,13 +649,7 @@ function AccountFormModal({ account, provider: providerProp, providerOptions, on
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
           Enabled
         </label>
-        {error && <div style={{ color: 'var(--danger)' }}>{error}</div>}
-        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={create.isPending || update.isPending}>
-            {account?.id ? 'Save' : 'Create'}
-          </button>
-        </div>
+        {error && <Callout tone="danger">{error}</Callout>}
       </form>
     </Modal>
   );

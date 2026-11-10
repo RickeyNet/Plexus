@@ -1,8 +1,9 @@
-import { useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
-import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useCreateHostTemplate,
   useHostTemplate,
@@ -16,7 +17,7 @@ interface Props {
 }
 
 export function HostTemplateModal({ mode, templateId, onClose }: Props) {
-  const { alert } = useDialogs();
+  const formId = useId();
   const isOpen = mode != null;
   const query = useHostTemplate(mode === 'edit' ? templateId : null);
   const createMut = useCreateHostTemplate();
@@ -26,6 +27,8 @@ export function HostTemplateModal({ mode, templateId, onClose }: Props) {
   const [description, setDescription] = useState('');
   const [deviceTypes, setDeviceTypes] = useState('');
   const [autoApply, setAutoApply] = useState(true);
+  const [nameError, setNameError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Seed form fields from mode / loaded template data; re-seed when either changes.
   const [prevSeed, setPrevSeed] = useState<{ mode: typeof mode; data: typeof query.data }>({
@@ -34,6 +37,8 @@ export function HostTemplateModal({ mode, templateId, onClose }: Props) {
   });
   if (prevSeed.mode !== mode || prevSeed.data !== query.data) {
     setPrevSeed({ mode, data: query.data });
+    setNameError(null);
+    setSaveError(null);
     if (mode === 'create') {
       setName(''); setDescription(''); setDeviceTypes(''); setAutoApply(true);
     } else if (mode === 'edit' && query.data) {
@@ -51,8 +56,9 @@ export function HostTemplateModal({ mode, templateId, onClose }: Props) {
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    setSaveError(null);
     if (!name.trim()) {
-      void alert('Name is required');
+      setNameError('Name is required');
       return;
     }
     const dts = deviceTypes.trim()
@@ -64,7 +70,7 @@ export function HostTemplateModal({ mode, templateId, onClose }: Props) {
       device_types: JSON.stringify(dts),
       auto_apply: autoApply,
     };
-    const onError = (err: unknown) => { void alert({ message: (err as Error).message, variant: 'error' }); };
+    const onError = (err: unknown) => { setSaveError((err as Error).message); };
     if (mode === 'edit' && templateId != null) {
       updateMut.mutate({ id: templateId, data }, { onSuccess: onClose, onError });
     } else {
@@ -73,16 +79,42 @@ export function HostTemplateModal({ mode, templateId, onClose }: Props) {
   }
 
   const pending = createMut.isPending || updateMut.isPending;
+  const loading = mode === 'edit' && query.isPending;
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={mode === 'edit' ? 'Edit Host Template' : 'New Host Template'}>
-      {mode === 'edit' && query.isPending ? (
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={mode === 'edit' ? 'Edit Host Template' : 'New Host Template'}
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          {!loading && (
+            <button type="submit" form={formId} className="btn btn-primary" disabled={pending}>
+              {pending ? 'Saving…' : mode === 'edit' ? 'Save' : 'Create'}
+            </button>
+          )}
+        </>
+      }
+    >
+      {loading ? (
         <LoadingState />
       ) : (
-        <form onSubmit={handleSubmit}>
+        <form id={formId} onSubmit={handleSubmit}>
+          {saveError && <Callout tone="danger">{saveError}</Callout>}
           <div className="form-group">
             <label className="form-label">Name</label>
-            <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} required />
+            <input
+              className="form-input"
+              value={name}
+              onChange={(e) => {
+                setName(e.target.value);
+                setNameError(null);
+              }}
+              required
+              aria-invalid={!!nameError}
+            />
+            <FieldError>{nameError}</FieldError>
           </div>
           <div className="form-group">
             <label className="form-label">Description</label>
@@ -94,12 +126,6 @@ export function HostTemplateModal({ mode, templateId, onClose }: Props) {
           </div>
           <div className="form-group">
             <label><input type="checkbox" checked={autoApply} onChange={(e) => setAutoApply(e.target.checked)} /> Auto-apply to matching devices</label>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-            <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={pending}>
-              {pending ? 'Saving…' : mode === 'edit' ? 'Save' : 'Create'}
-            </button>
           </div>
         </form>
       )}

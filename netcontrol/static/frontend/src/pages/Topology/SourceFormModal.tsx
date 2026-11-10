@@ -114,7 +114,22 @@ export function SourceFormModal({ provider, existing, defaultOptions, onClose }:
   };
 
   return (
-    <Modal isOpen onClose={onClose} title={`${isEdit ? 'Edit' : 'Add'} ${config.noun}`} size="large">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title={`${isEdit ? 'Edit' : 'Add'} ${config.noun}`}
+      size="medium"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="button" className="btn btn-primary" disabled={!ready || pending} onClick={submit}>
+            {isEdit ? 'Save' : config.addLabel}
+          </button>
+        </>
+      }
+    >
       {config.blocks.map((block, i) => {
         switch (block.kind) {
           case 'heading':
@@ -152,15 +167,6 @@ export function SourceFormModal({ provider, existing, defaultOptions, onClose }:
           <strong>{isEdit ? 'Update failed' : 'Create failed'}:</strong> {errMsg}
         </Callout>
       )}
-
-      <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
-        <button type="button" className="btn btn-primary" disabled={!ready || pending} onClick={submit}>
-          {isEdit ? 'Save' : config.addLabel}
-        </button>
-        <button type="button" className="btn btn-ghost" onClick={onClose}>
-          Cancel
-        </button>
-      </div>
     </Modal>
   );
 }

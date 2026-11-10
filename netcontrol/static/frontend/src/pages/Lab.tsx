@@ -246,7 +246,29 @@ function CreateEnvironmentModal({ onClose }: { onClose: () => void }) {
   const create = useCreateEnvironment();
 
   return (
-    <Modal isOpen onClose={onClose} title="Create lab environment">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Create lab environment"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={!name.trim() || create.isPending}
+            onClick={async () => {
+              await create.mutateAsync({ name: name.trim(), description, shared });
+              onClose();
+            }}
+          >
+            Create
+          </button>
+        </>
+      }
+    >
       <div className="form-group">
         <label className="form-label" htmlFor="env-name">
           Name <span style={{ color: 'var(--danger)' }}>*</span>
@@ -282,22 +304,6 @@ function CreateEnvironmentModal({ onClose }: { onClose: () => void }) {
       {create.error && (
         <ErrorBox title="Failed" message={(create.error as Error).message} />
       )}
-      <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={!name.trim() || create.isPending}
-          onClick={async () => {
-            await create.mutateAsync({ name: name.trim(), description, shared });
-            onClose();
-          }}
-        >
-          Create
-        </button>
-        <button type="button" className="btn btn-ghost" onClick={onClose}>
-          Cancel
-        </button>
-      </div>
     </Modal>
   );
 }
@@ -357,9 +363,11 @@ function EnvironmentDetail({
             className="btn btn-danger"
             onClick={async () => {
               if (
-                !(await confirm(
-                  `Delete environment "${env.name}"? This removes all devices and runs.`,
-                ))
+                !(await confirm({
+                  title: 'Delete lab environment',
+                  message: `Delete environment "${env.name}"? This removes all devices and runs.`,
+                  confirmLabel: 'Delete',
+                }))
               )
                 return;
               await deleteEnv.mutateAsync(env.id);
@@ -414,7 +422,14 @@ function EnvironmentDetail({
                     <td onClick={(e) => e.stopPropagation()}>
                       <DeleteButton
                         onClick={async () => {
-                          if (!(await confirm(`Delete device "${d.hostname}"?`))) return;
+                          if (
+                            !(await confirm({
+                              title: 'Delete lab device',
+                              message: `Delete device "${d.hostname}"?`,
+                              confirmLabel: 'Delete',
+                            }))
+                          )
+                            return;
                           if (selectedDeviceId === d.id) onSelectDevice(null);
                           await deleteDevice.mutateAsync(d.id);
                         }}
@@ -442,7 +457,6 @@ function EnvironmentDetail({
 // ── Create device modal ────────────────────────────────────────────────────
 
 function CreateDeviceModal({ envId, onClose }: { envId: number; onClose: () => void }) {
-  const { alert } = useDialogs();
   const [hostname, setHostname] = useState('');
   const [ip, setIp] = useState('');
   const [deviceType, setDeviceType] = useState('cisco_ios');
@@ -452,7 +466,49 @@ function CreateDeviceModal({ envId, onClose }: { envId: number; onClose: () => v
   const clone = useCloneHost(envId);
 
   return (
-    <Modal isOpen onClose={onClose} title="Add lab device">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Add lab device"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={!cloneHostId || Number.isNaN(Number(cloneHostId)) || clone.isPending}
+            onClick={async () => {
+              try {
+                await clone.mutateAsync({ host_id: Number(cloneHostId) });
+                onClose();
+              } catch {
+                // Shown in the modal from clone.error.
+              }
+            }}
+          >
+            Clone from inventory host ID
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={!hostname.trim() || create.isPending}
+            onClick={async () => {
+              await create.mutateAsync({
+                hostname: hostname.trim(),
+                ip_address: ip,
+                device_type: deviceType || 'cisco_ios',
+                running_config: config,
+              });
+              onClose();
+            }}
+          >
+            Create blank
+          </button>
+        </>
+      }
+    >
       <div className="form-group">
         <label className="form-label" htmlFor="dev-name">
           Hostname <span style={{ color: 'var(--danger)' }}>*</span>
@@ -510,53 +566,9 @@ function CreateDeviceModal({ envId, onClose }: { envId: number; onClose: () => v
       {create.error && (
         <ErrorBox title="Failed" message={(create.error as Error).message} />
       )}
-      <div
-        style={{
-          display: 'flex',
-          gap: '0.5rem',
-          justifyContent: 'flex-end',
-          marginTop: '1rem',
-          flexWrap: 'wrap',
-        }}
-      >
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={!hostname.trim() || create.isPending}
-          onClick={async () => {
-            await create.mutateAsync({
-              hostname: hostname.trim(),
-              ip_address: ip,
-              device_type: deviceType || 'cisco_ios',
-              running_config: config,
-            });
-            onClose();
-          }}
-        >
-          Create blank
-        </button>
-        <button
-          type="button"
-          className="btn btn-secondary"
-          disabled={!cloneHostId || Number.isNaN(Number(cloneHostId)) || clone.isPending}
-          onClick={async () => {
-            try {
-              await clone.mutateAsync({ host_id: Number(cloneHostId) });
-              onClose();
-            } catch (err) {
-              void alert({
-                message: `Clone failed: ${(err as Error).message}`,
-                variant: 'error',
-              });
-            }
-          }}
-        >
-          Clone from inventory host ID
-        </button>
-        <button type="button" className="btn btn-ghost" onClick={onClose}>
-          Cancel
-        </button>
-      </div>
+      {clone.error && (
+        <ErrorBox title="Clone failed" message={(clone.error as Error).message} />
+      )}
     </Modal>
   );
 }
@@ -911,7 +923,14 @@ function RuntimeCard({ deviceId }: { deviceId: number }) {
             className="btn btn-danger"
             disabled={destroy.isPending}
             onClick={async () => {
-              if (!(await confirm('Destroy the containerlab runtime for this device?'))) return;
+              if (
+                !(await confirm({
+                  title: 'Destroy containerlab runtime',
+                  message: `Destroy the containerlab runtime for ${dev?.hostname ? `device "${dev.hostname}"` : 'this device'}?`,
+                  confirmLabel: 'Destroy',
+                }))
+              )
+                return;
               await destroy.mutateAsync();
             }}
           >
@@ -1066,7 +1085,14 @@ function TopologiesCard({
                   <DeleteButton
                     disabled={t.status === 'running'}
                     onClick={async () => {
-                      if (!(await confirm(`Delete topology "${t.name}"?`))) return;
+                      if (
+                        !(await confirm({
+                          title: 'Delete topology',
+                          message: `Delete topology "${t.name}"?`,
+                          confirmLabel: 'Delete',
+                        }))
+                      )
+                        return;
                       if (openId === t.id) setOpenId(null);
                       await remove.mutateAsync(t.id);
                     }}
@@ -1155,7 +1181,14 @@ function TopologyEditor({
           className="btn btn-danger"
           disabled={destroy.isPending || t.status === 'destroyed' || t.status === ''}
           onClick={async () => {
-            if (!(await confirm('Destroy topology?'))) return;
+            if (
+              !(await confirm({
+                title: 'Destroy topology',
+                message: `Destroy topology "${t.name}"?`,
+                confirmLabel: 'Destroy',
+              }))
+            )
+              return;
             await destroy.mutateAsync();
           }}
         >

@@ -774,9 +774,11 @@ function SourcesCard({
 
   const handleDelete = async (id: number, name: string) => {
     if (
-      !(await confirm(
-        `Delete IPAM source "${name}"? This also removes all synced prefixes and allocations.`,
-      ))
+      !(await confirm({
+        title: 'Delete IPAM source',
+        message: `Delete IPAM source "${name}"? This also removes all synced prefixes and allocations.`,
+        confirmLabel: 'Delete',
+      }))
     )
       return;
     remove.mutate(id, {
@@ -1136,8 +1138,14 @@ function DhcpCard({
     });
   };
 
-  const handleDelete = async (id: number) => {
-    if (!(await confirm('Delete this DHCP server and all cached scope/lease data?')))
+  const handleDelete = async (id: number, name: string) => {
+    if (
+      !(await confirm({
+        title: 'Delete DHCP server',
+        message: `Delete DHCP server "${name}" and all cached scope/lease data?`,
+        confirmLabel: 'Delete',
+      }))
+    )
       return;
     remove.mutate(id, {
       onError: (e) => {
@@ -1234,7 +1242,7 @@ function DhcpCard({
                       <KebabMenu label={`Actions for ${s.name}`}>
                         <MenuItem onSelect={() => onEdit(s)}>Edit</MenuItem>
                         <MenuSeparator />
-                        <MenuItem danger onSelect={() => handleDelete(s.id)}>
+                        <MenuItem danger onSelect={() => handleDelete(s.id, s.name)}>
                           Delete
                         </MenuItem>
                       </KebabMenu>

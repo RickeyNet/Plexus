@@ -1,7 +1,8 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useId, useState } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
-import { useDialogs } from '@/components/DialogProvider-context';
 import {
   type InventoryGroupFull,
   type InventoryHost,
@@ -22,7 +23,7 @@ interface Props {
 }
 
 export function HostModal({ host, groupId, groups, onClose }: Props) {
-  const { alert } = useDialogs();
+  const formId = useId();
   const isEdit = host != null;
   const add = useAddHost();
   const update = useUpdateHost();
@@ -38,6 +39,12 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
   const [awsInstanceId, setAwsInstanceId] = useState(
     host?.aws_instance_id ?? '',
   );
+  const [errors, setErrors] = useState<{
+    hostname?: string;
+    ip?: string;
+    awsInstanceId?: string;
+    save?: string;
+  }>({});
 
   const isPending = add.isPending || update.isPending;
 
@@ -46,14 +53,14 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
     const h = hostname.trim();
     const ip = ipAddress.trim();
     const instanceId = awsInstanceId.trim();
-    if (!h || !ip) {
-      void alert('Hostname and IP address are required.');
-      return;
-    }
+    const next: typeof errors = {};
+    if (!h) next.hostname = 'Hostname is required.';
+    if (!ip) next.ip = 'IP address is required.';
     if (instanceId && !isAwsInstanceId(instanceId)) {
-      void alert('AWS instance ID must look like i-0123456789abcdef0.');
-      return;
+      next.awsInstanceId = 'AWS instance ID must look like i-0123456789abcdef0.';
     }
+    setErrors(next);
+    if (next.hostname || next.ip || next.awsInstanceId) return;
     try {
       if (isEdit && host) {
         await update.mutateAsync({
@@ -75,7 +82,7 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
       }
       onClose();
     } catch (err) {
-      void alert({ message: (err as Error).message, variant: 'error' });
+      setErrors({ save: (err as Error).message });
     }
   };
 
@@ -84,26 +91,47 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
       isOpen
       onClose={onClose}
       title={isEdit ? 'Edit Host' : 'Add Host'}
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={isPending}>
+            {isPending ? 'Saving…' : isEdit ? 'Save' : 'Add Host'}
+          </button>
+        </>
+      }
     >
-      <form onSubmit={submit}>
+      <form id={formId} onSubmit={submit}>
+        {errors.save && <Callout tone="danger">{errors.save}</Callout>}
         <div className="form-group">
           <label className="form-label">Hostname</label>
           <input
             className="form-input"
             value={hostname}
-            onChange={(e) => setHostname(e.target.value)}
+            onChange={(e) => {
+              setHostname(e.target.value);
+              setErrors((prev) => ({ ...prev, hostname: undefined }));
+            }}
             required
             autoFocus
+            aria-invalid={!!errors.hostname}
           />
+          <FieldError>{errors.hostname}</FieldError>
         </div>
         <div className="form-group">
           <label className="form-label">IP Address</label>
           <input
             className="form-input"
             value={ipAddress}
-            onChange={(e) => setIpAddress(e.target.value)}
+            onChange={(e) => {
+              setIpAddress(e.target.value);
+              setErrors((prev) => ({ ...prev, ip: undefined }));
+            }}
             required
+            aria-invalid={!!errors.ip}
           />
+          <FieldError>{errors.ip}</FieldError>
         </div>
         <div className="form-group">
           <label className="form-label">Device Type</label>
@@ -124,11 +152,16 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
           <input
             className="form-input"
             value={awsInstanceId}
-            onChange={(e) => setAwsInstanceId(e.target.value)}
+            onChange={(e) => {
+              setAwsInstanceId(e.target.value);
+              setErrors((prev) => ({ ...prev, awsInstanceId: undefined }));
+            }}
             placeholder="i-0123456789abcdef0"
             spellCheck={false}
             autoComplete="off"
+            aria-invalid={!!errors.awsInstanceId}
           />
+          <FieldError>{errors.awsInstanceId}</FieldError>
           <div
             className="text-muted"
             style={{ fontSize: '0.78rem', marginTop: '0.25rem' }}
@@ -153,21 +186,6 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
             </select>
           </div>
         )}
-        <div
-          style={{
-            display: 'flex',
-            gap: '0.5rem',
-            justifyContent: 'flex-end',
-            marginTop: '1rem',
-          }}
-        >
-          <button type="button" className="btn btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" className="btn btn-primary" disabled={isPending}>
-            {isPending ? 'Saving…' : isEdit ? 'Save' : 'Add Host'}
-          </button>
-        </div>
       </form>
     </Modal>
   );

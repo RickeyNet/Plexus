@@ -5,6 +5,7 @@ import {
   useAcknowledgeTopologyChanges,
   type TopologyChange,
 } from '@/api/topology';
+import { Callout } from '@/components/Callout';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
@@ -69,9 +70,9 @@ export function ChangesModal({ isOpen, onClose, onAcknowledged }: Props) {
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Topology Changes" size="large">
+    <Modal isOpen={isOpen} onClose={onClose} title="Topology Changes">
       {loading && <LoadingState />}
-      {error && <div style={{ color: 'var(--danger)' }}>Error: {error}</div>}
+      {error && <Callout tone="danger">Error: {error}</Callout>}
       {!loading && !changes.length && (
         <EmptyState compact message="No topology changes recorded." />
       )}

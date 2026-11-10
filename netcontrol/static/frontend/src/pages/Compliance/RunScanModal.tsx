@@ -214,7 +214,26 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <Modal isOpen onClose={onClose} title="Run Compliance Scan">
+    <Modal
+      isOpen
+      onClose={onClose}
+      title="Run Compliance Scan"
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            {merakiJobId ? 'Close' : 'Cancel'}
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={onSubmit}
+            disabled={isPending || (scope === 'meraki' && merakiJobId != null)}
+          >
+            {isPending ? 'Scanning…' : submitLabel}
+          </button>
+        </>
+      }
+    >
       <div className="form-group">
         <label className="form-label">Scope</label>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -351,27 +370,6 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
         </div>
       )}
       {error && <Callout tone="danger">{error}</Callout>}
-
-      <div
-        style={{
-          display: 'flex',
-          gap: '0.5rem',
-          justifyContent: 'flex-end',
-          marginTop: '1rem',
-        }}
-      >
-        <button type="button" className="btn btn-secondary" onClick={onClose}>
-          {merakiJobId ? 'Close' : 'Cancel'}
-        </button>
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={onSubmit}
-          disabled={isPending || (scope === 'meraki' && merakiJobId != null)}
-        >
-          {isPending ? 'Scanning…' : submitLabel}
-        </button>
-      </div>
     </Modal>
   );
 }

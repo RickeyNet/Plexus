@@ -106,7 +106,13 @@ export function SiemTab() {
   };
 
   const onDelete = async (s: SiemSink) => {
-    if (!(await confirm(`Delete SIEM sink "${s.name || s.id}"? Audit events will stop being forwarded to this target.`)))
+    if (
+      !(await confirm({
+        title: 'Delete SIEM sink',
+        message: `Delete SIEM sink "${s.name || s.id}"? Audit events will stop being forwarded to this target.`,
+        confirmLabel: 'Delete',
+      }))
+    )
       return;
     deleteMut.mutate(s.id, {
       onSuccess: () =>
