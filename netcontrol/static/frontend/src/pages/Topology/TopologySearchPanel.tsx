@@ -242,7 +242,7 @@ function ResultList({
     return (
       <div>
         <Heading>{vlanRows.length} device(s)</Heading>
-        <table className="data-table table-sm" style={{ fontSize: '0.78rem' }}>
+        <table className="data-table table-sm">
           <thead>
             <tr>
               <th>Host</th>
@@ -278,7 +278,7 @@ function ResultList({
   return (
     <div>
       <Heading>{macRows.length} entry(s)</Heading>
-      <table className="data-table table-sm" style={{ fontSize: '0.78rem' }}>
+      <table className="data-table table-sm">
         <thead>
           <tr>
             <th>MAC</th>

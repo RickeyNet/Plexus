@@ -1,11 +1,15 @@
 import { useState } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useDeleteHostTemplate,
   useHostTemplates,
   type HostTemplate,
 } from '@/api/graphTemplates';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 
 import { HostTemplateModal } from './HostTemplateModal';
 
@@ -38,10 +42,10 @@ export function HostTemplatesTab() {
         <button className="btn btn-primary" onClick={() => setModalId('new')}>+ New Host Template</button>
       </div>
 
-      {query.isPending && <p className="text-muted">Loading…</p>}
-      {query.error && <p style={{ color: 'var(--danger)' }}>Failed: {(query.error as Error).message}</p>}
+      {query.isPending && <LoadingState />}
+      {query.error && <Callout tone="danger">Failed: {(query.error as Error).message}</Callout>}
       {query.data && (items.length === 0 ? (
-        <div className="empty-state">No host templates configured.</div>
+        <EmptyState message="No host templates configured." />
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1rem' }}>
           {items.map((ht) => {
@@ -70,7 +74,7 @@ export function HostTemplatesTab() {
                 )}
                 <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
                   <button className="btn btn-sm btn-secondary" onClick={() => setModalId(ht.id)}>Edit</button>
-                  <button className="btn btn-sm btn-danger" onClick={() => handleDelete(ht.id)}>Delete</button>
+                  <DeleteButton onClick={() => handleDelete(ht.id)} />
                 </div>
               </div>
             );

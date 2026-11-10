@@ -6,6 +6,9 @@ import {
   useInterfaceErrorSummary,
   useResolveErrorEvent,
 } from '@/api/deviceDetail';
+import { SeverityBadge } from '@/components/Badge';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { formatBackendDateTime } from '@/lib/datetime';
 import type { TimeRangePreset } from '@/lib/timeRange-context';
 import { toDays } from '@/lib/timeRangeMap';
@@ -20,7 +23,7 @@ export function ErrorTrendingTab({ hostId, range }: { hostId: number; range: Tim
   const resolve = useResolveErrorEvent();
 
   if (summary.isLoading || events.isLoading) {
-    return <p className="text-muted">Loading error trending…</p>;
+    return <LoadingState text="Loading error trending…" />;
   }
   if (summary.isError && events.isError) {
     return <p className="text-muted">Could not load interface error data</p>;
@@ -33,10 +36,8 @@ export function ErrorTrendingTab({ hostId, range }: { hostId: number; range: Tim
 
   if (!interfaces.length && !errorEvents.length) {
     return (
-      <p className="text-muted">
-        No interface error data available. Error counters are collected during SNMP polls
-        and will appear here after two or more polling cycles.
-      </p>
+      <EmptyState compact message="No interface error data available. Error counters are collected during SNMP polls
+        and will appear here after two or more polling cycles." />
     );
   }
 
@@ -111,7 +112,7 @@ function ActiveEventsTable({
   onResolve: (id: number) => void;
 }) {
   return (
-    <table className="chart-table" style={{ fontSize: '0.82rem' }}>
+    <table className="data-table table-sm">
       <thead>
         <tr>
           <th>Time</th>
@@ -125,7 +126,6 @@ function ActiveEventsTable({
       </thead>
       <tbody>
         {events.map((e) => {
-          const sevClass = e.severity === 'critical' ? 'danger' : 'warning';
           return (
             <tr key={e.id}>
               <td style={{ whiteSpace: 'nowrap' }}>{formatBackendDateTime(e.created_at)}</td>
@@ -140,7 +140,7 @@ function ActiveEventsTable({
                 </span>
               </td>
               <td>
-                <span className={`badge badge-${sevClass}`}>{e.severity}</span>
+                <SeverityBadge severity={e.severity} />
               </td>
               <td style={{ maxWidth: 300 }}>
                 {e.root_cause_hint || e.root_cause_category || 'unknown'}
@@ -184,7 +184,7 @@ function ErrorSummaryTable({
     );
   };
   return (
-    <table className="chart-table" style={{ fontSize: '0.82rem' }}>
+    <table className="data-table table-sm">
       <thead>
         <tr>
           <th>Interface</th>
@@ -213,7 +213,7 @@ function ErrorSummaryTable({
 
 function ResolvedEventsTable({ events }: { events: InterfaceErrorEvent[] }) {
   return (
-    <table className="chart-table" style={{ fontSize: '0.82rem' }}>
+    <table className="data-table table-sm">
       <thead>
         <tr>
           <th>Time</th>
@@ -227,7 +227,7 @@ function ResolvedEventsTable({ events }: { events: InterfaceErrorEvent[] }) {
       <tbody>
         {events.map((e) => (
           <tr key={e.id}>
-            <td style={{ whiteSpace: 'nowrap' }}>{new Date(e.created_at).toLocaleString()}</td>
+            <td style={{ whiteSpace: 'nowrap' }}>{formatBackendDateTime(e.created_at)}</td>
             <td>{e.if_name}</td>
             <td>{e.metric_name}</td>
             <td>

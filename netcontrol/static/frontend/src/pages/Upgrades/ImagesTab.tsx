@@ -6,11 +6,15 @@ import {
   useUpgradeImages,
 } from '@/api/upgrades';
 import { AlertDialog } from '@/components/AlertDialog';
+import { Callout } from '@/components/Callout';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { DeleteButton } from '@/components/DeleteButton';
+import { LoadingState } from '@/components/LoadingState';
+import { formatBackendDateTime } from '@/lib/datetime';
 
 import { EditImageModal } from './EditImageModal';
 import { NewImageModal } from './NewImageModal';
-import { formatBackupTimestamp, formatBytes } from './helpers';
+import { formatBytes } from './helpers';
 
 export function ImagesTab() {
   const query = useUpgradeImages();
@@ -22,12 +26,12 @@ export function ImagesTab() {
     null,
   );
 
-  if (query.isPending) return <p className="text-muted">Loading…</p>;
+  if (query.isPending) return <LoadingState />;
   if (query.error) {
     return (
-      <p style={{ color: 'var(--danger)' }}>
+      <Callout tone="danger">
         Failed to load images: {(query.error as Error).message}
-      </p>
+      </Callout>
     );
   }
 
@@ -65,16 +69,16 @@ export function ImagesTab() {
           No software images uploaded yet.
         </div>
       ) : (
-        <table className="data-table" style={{ width: '100%' }}>
+        <table className="data-table">
           <thead>
             <tr>
-              <th style={{ textAlign: 'left' }}>Filename</th>
-              <th style={{ textAlign: 'left' }}>Version</th>
-              <th style={{ textAlign: 'left' }}>Model Pattern</th>
-              <th style={{ textAlign: 'left' }}>Size</th>
-              <th style={{ textAlign: 'left' }}>MD5</th>
-              <th style={{ textAlign: 'left' }}>Uploaded</th>
-              <th style={{ textAlign: 'left' }}>Actions</th>
+              <th>Filename</th>
+              <th>Version</th>
+              <th>Model Pattern</th>
+              <th>Size</th>
+              <th>MD5</th>
+              <th>Uploaded</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -92,7 +96,7 @@ export function ImagesTab() {
                   <code>{img.md5_hash ? `${img.md5_hash.slice(0, 12)}…` : ''}</code>
                 </td>
                 <td style={{ textAlign: 'left', whiteSpace: 'nowrap' }}>
-                  {formatBackupTimestamp(img.created_at)}
+                  {formatBackendDateTime(img.created_at, '')}
                 </td>
                 <td style={{ textAlign: 'left', whiteSpace: 'nowrap' }}>
                   <button
@@ -102,14 +106,7 @@ export function ImagesTab() {
                   >
                     Edit
                   </button>{' '}
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-danger"
-                    onClick={() => setDeleteTarget(img)}
-                    disabled={remove.isPending}
-                  >
-                    Delete
-                  </button>
+                  <DeleteButton onClick={() => setDeleteTarget(img)} disabled={remove.isPending} />
                 </td>
               </tr>
             ))}

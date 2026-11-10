@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 
 import type { DashboardGroup, DashboardMonitoring, DeviceHealth } from '@/api/dashboard';
+import { formatRelativeTime } from '@/lib/datetime';
 
 import {
   HEALTH_COLORS,
@@ -9,7 +10,6 @@ import {
   type HealthStatus,
   sortDevices,
   type SortBy,
-  timeAgo,
 } from './helpers';
 
 interface HealthSectionProps {
@@ -163,7 +163,7 @@ function DeviceHealthTable({ devices }: { devices: DeviceHealth[] }) {
   }
 
   return (
-    <table className="device-health-table">
+    <table className="data-table table-sticky">
       <thead>
         <tr>
           <th>Status</th>
@@ -227,7 +227,7 @@ function DeviceHealthTable({ devices }: { devices: DeviceHealth[] }) {
               </td>
               <td>{d.response_time_ms != null ? `${Math.round(d.response_time_ms)}ms` : '-'}</td>
               <td>{formatUptime(d.uptime_seconds)}</td>
-              <td title={d.polled_at ?? ''}>{timeAgo(d.polled_at)}</td>
+              <td title={d.polled_at ?? ''}>{formatRelativeTime(d.polled_at)}</td>
             </tr>
           );
         })}

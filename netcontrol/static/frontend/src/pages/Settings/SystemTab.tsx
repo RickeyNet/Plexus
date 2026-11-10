@@ -16,7 +16,10 @@ import {
   useUpdatesConfig,
   useUpdatesStatus,
 } from '@/api/adminUpdates';
+import { Callout } from '@/components/Callout';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { LoadingState } from '@/components/LoadingState';
+import { formatBackendDateTime } from '@/lib/datetime';
 
 const CHANNEL_LABELS: Record<UpdateChannel, string> = {
   release: 'GitHub Releases (stable)',
@@ -88,20 +91,20 @@ export function SystemTab() {
   }
 
   if (status.isLoading || configQ.isLoading || !draft) {
-    return <p className="text-muted">Loading…</p>;
+    return <LoadingState />;
   }
   if (status.isError) {
     return (
-      <div className="error">
+      <Callout tone="danger">
         Failed to load update status: {(status.error as Error).message}
-      </div>
+      </Callout>
     );
   }
   if (configQ.isError) {
     return (
-      <div className="error">
+      <Callout tone="danger">
         Failed to load update config: {(configQ.error as Error).message}
-      </div>
+      </Callout>
     );
   }
 
@@ -420,7 +423,7 @@ function CheckResultBox({
       )}
       {last.published_at && (
         <div className="text-muted" style={{ ...mutedSmall, marginBottom: '0.25rem' }}>
-          Published {new Date(last.published_at).toLocaleString()}
+          Published {formatBackendDateTime(last.published_at)}
         </div>
       )}
       {last.html_url && /^https?:\/\//i.test(last.html_url) && (
@@ -470,12 +473,6 @@ function CheckResultBox({
   );
 }
 
-function formatTime(iso: string | null | undefined): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
-}
-
 function UpdateProgressPanel({
   progress,
   busy,
@@ -510,8 +507,8 @@ function UpdateProgressPanel({
   }
   const tone =
     busy ? 'var(--primary)' : result?.status === 'failed' ? 'var(--danger)' : 'var(--border)';
-  const started = formatTime(result?.started_at);
-  const finished = formatTime(result?.finished_at);
+  const started = formatBackendDateTime(result?.started_at, '');
+  const finished = formatBackendDateTime(result?.finished_at, '');
 
   return (
     <section>

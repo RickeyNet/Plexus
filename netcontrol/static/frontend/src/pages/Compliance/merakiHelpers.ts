@@ -8,13 +8,6 @@ export const MERAKI_KIND_LABEL: Record<string, string> = {
   ssid: 'SSID',
 };
 
-/** CSS colour token for a scan status. */
-export function statusColor(status: string): string {
-  if (status === 'compliant') return 'success';
-  if (status === 'error') return 'warning';
-  return 'danger';
-}
-
 /** True when a profile carries at least one rule of type "meraki". */
 export function profileHasMerakiRules(profile: ComplianceProfile): boolean {
   try {

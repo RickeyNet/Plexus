@@ -1,3 +1,7 @@
+import { Callout } from '@/components/Callout';
+import { DeleteButton } from '@/components/DeleteButton';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -26,8 +30,8 @@ export function GraphTemplateDetailModal({ templateId, onClose }: Props) {
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={query.data?.name ?? 'Graph Template'} size="large">
-      {query.isPending && <p className="text-muted">Loading…</p>}
-      {query.error && <p style={{ color: 'var(--danger)' }}>Failed: {(query.error as Error).message}</p>}
+      {query.isPending && <LoadingState />}
+      {query.error && <Callout tone="danger">Failed: {(query.error as Error).message}</Callout>}
       {query.data && (() => {
         const tpl = query.data;
         const items = tpl.items ?? [];
@@ -65,12 +69,15 @@ export function GraphTemplateDetailModal({ templateId, onClose }: Props) {
                   ))}
                 </tbody>
               </table>
-            ) : <p className="text-muted">No data series defined.</p>}
+            ) : <EmptyState compact message="No data series defined." />}
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1rem' }}>
               {!tpl.built_in ? (
-                <button className="btn btn-danger" onClick={() => handleDelete(tpl.id)} disabled={deleteMut.isPending}>
-                  {deleteMut.isPending ? 'Deleting…' : 'Delete'}
-                </button>
+                <DeleteButton
+                  size="md"
+                  onClick={() => handleDelete(tpl.id)}
+                  disabled={deleteMut.isPending}
+                  busy={deleteMut.isPending}
+                />
               ) : <span />}
               <button className="btn btn-secondary" onClick={onClose}>Close</button>
             </div>

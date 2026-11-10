@@ -10,8 +10,12 @@ import {
   useTriggerCloudTrafficPull,
   useUpdateCloudTrafficSyncConfig,
 } from '@/api/cloud';
+import { Callout } from '@/components/Callout';
+import { LoadingState } from '@/components/LoadingState';
+import { StatGrid, StatTile } from '@/components/StatTile';
+import { formatBackendDateTime, formatBackendTime } from '@/lib/datetime';
 import type { CloudFilterState } from './CloudVisibility';
-import { formatCount, formatMetricValue, formatTimestamp, pullOutcome } from './helpers';
+import { formatCount, formatMetricValue, pullOutcome } from './helpers';
 import { SyncControls } from './SyncControls';
 
 interface Props {
@@ -127,9 +131,7 @@ export function TrafficTab({ filter }: Props) {
         />
       </div>
       {actionMsg && (
-        <div className="card card-sm" style={{ borderLeft: `3px solid var(--${actionMsg.kind === 'success' ? 'success' : 'danger'})` }}>
-          {actionMsg.text}
-        </div>
+        <Callout tone={actionMsg.kind === 'success' ? 'success' : 'danger'}>{actionMsg.text}</Callout>
       )}
 
       <div className="stack stack-sm">
@@ -137,34 +139,34 @@ export function TrafficTab({ filter }: Props) {
           Cloud Traffic Metrics
           {summary.dataUpdatedAt > 0 && (
             <small className="text-muted" style={{ marginLeft: '0.6rem', fontWeight: 400 }}>
-              Updated {new Date(summary.dataUpdatedAt).toLocaleTimeString()}
+              Updated {formatBackendTime(summary.dataUpdatedAt)}
             </small>
           )}
         </h3>
-        {summary.isPending && <div className="text-muted">Loading…</div>}
+        {summary.isPending && <LoadingState />}
         {summary.error && <div style={{ color: 'var(--danger)' }}>Error: {(summary.error as Error).message}</div>}
-        <div className="drift-summary-grid">
-          <Card label="Samples" value={formatCount(s.sample_count)} />
-          <Card label="Metric Names" value={formatCount(s.metric_count)} />
-          <Card label="Resources" value={formatCount(s.resource_count)} />
-          <Card label="Total Value" value={formatMetricValue(s.total_value)} />
-          <Card label="Average Value" value={formatMetricValue(s.avg_value)} />
-          <Card label="Last Seen" value={formatTimestamp(s.last_seen)} small />
-        </div>
+        <StatGrid compact>
+          <StatTile label="Samples" value={formatCount(s.sample_count)} />
+          <StatTile label="Metric Names" value={formatCount(s.metric_count)} />
+          <StatTile label="Resources" value={formatCount(s.resource_count)} />
+          <StatTile label="Total Value" value={formatMetricValue(s.total_value)} />
+          <StatTile label="Average Value" value={formatMetricValue(s.avg_value)} />
+          <StatTile label="Last Seen" value={formatBackendDateTime(s.last_seen)} />
+        </StatGrid>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 'var(--space-4)' }}>
         <div>
           <h4 style={{ margin: '0 0 0.45rem' }}>Top Resources</h4>
           {resources.isPending ? (
-            <div className="card"><p className="text-muted" style={{ margin: 0 }}>Loading…</p></div>
+            <div className="card"><LoadingState variant="inline" /></div>
           ) : resources.error ? (
             <div className="card"><p style={{ margin: 0, color: 'var(--danger)' }}>Failed to load top resources: {(resources.error as Error).message}</p></div>
           ) : !rList.length ? (
             <div className="card"><p className="text-muted" style={{ margin: 0 }}>No traffic metric resources for current filters.</p></div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table className="chart-table">
+              <table className="data-table">
                 <thead>
                   <tr><th>Resource</th><th>Total Value</th><th>Average</th><th>Samples</th></tr>
                 </thead>
@@ -185,21 +187,21 @@ export function TrafficTab({ filter }: Props) {
         <div>
           <h4 style={{ margin: '0 0 0.45rem' }}>Metric Timeline</h4>
           {timeline.isPending ? (
-            <div className="card"><p className="text-muted" style={{ margin: 0 }}>Loading…</p></div>
+            <div className="card"><LoadingState variant="inline" /></div>
           ) : timeline.error ? (
             <div className="card"><p style={{ margin: 0, color: 'var(--danger)' }}>Failed to load timeline: {(timeline.error as Error).message}</p></div>
           ) : !tlList.length ? (
             <div className="card"><p className="text-muted" style={{ margin: 0 }}>No timeline data available for current filters.</p></div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table className="chart-table">
+              <table className="data-table">
                 <thead>
                   <tr><th>Bucket</th><th>Total Value</th><th>Average</th><th>Samples</th></tr>
                 </thead>
                 <tbody>
                   {tlList.map((row, i) => (
                     <tr key={i}>
-                      <td>{formatTimestamp(row.bucket)}</td>
+                      <td>{formatBackendDateTime(row.bucket)}</td>
                       <td>{formatMetricValue(row.total_value)}</td>
                       <td>{formatMetricValue(row.avg_value)}</td>
                       <td>{formatCount(row.sample_count)}</td>
@@ -215,11 +217,3 @@ export function TrafficTab({ filter }: Props) {
   );
 }
 
-function Card({ label, value, small }: { label: string; value: string | number; small?: boolean }) {
-  return (
-    <div className="drift-summary-card">
-      <div className="drift-summary-value" style={small ? { fontSize: '1rem' } : undefined}>{value}</div>
-      <div className="drift-summary-label">{label}</div>
-    </div>
-  );
-}

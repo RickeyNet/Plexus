@@ -27,6 +27,7 @@ import {
 } from '@/api/topology';
 import { groupLabel } from '@/api/inventory';
 import { topologyExportUrl, useMerakiSubnets, useTopologyDeepSearch, type MerakiSubnet, type TopologyExportPath } from '@/api/meraki';
+import { LoadingState } from '@/components/LoadingState';
 import { Menu, MenuCheckboxItem, MenuItem, MenuSeparator } from '@/components/Menu';
 import { PageHelp } from '@/components/PageHelp';
 import { mixColors, withAlpha } from '@/lib/themeColors';
@@ -2320,7 +2321,7 @@ export function Topology() {
           </div>
         )}
 
-        {topologyQuery.isPending && <div className="text-muted">Loading topology…</div>}
+        {topologyQuery.isPending && <LoadingState text="Loading topology…" />}
         {topologyQuery.error && <div style={{ color: 'var(--danger)' }}>Error: {(topologyQuery.error as Error).message}</div>}
 
         {data && !data.nodes.length && (

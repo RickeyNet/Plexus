@@ -7,10 +7,10 @@ import {
   useAnnotations,
   useMetricsQuery,
 } from '@/api/dashboard';
+import { formatBackendDateTime, formatBackendTime } from '@/lib/datetime';
 import { BarChart, GaugeChart, HeatmapChart, TimeSeriesChart } from '@/lib/echart';
 import type { TimeRangePreset } from '@/lib/timeRange-context';
 
-import { parseBackendDate } from './helpers';
 
 interface PanelMetricQuery {
   metric?: string;
@@ -194,10 +194,7 @@ function HeatmapPanelBody({ items }: { items: MetricSample[] }) {
       });
     });
     return {
-      xLabels: times.map((t) => {
-        const d = parseBackendDate(t);
-        return d ? d.toLocaleTimeString() : t;
-      }),
+      xLabels: times.map((t) => formatBackendTime(t)),
       yLabels: hostNames,
       data: cells,
     };
@@ -215,7 +212,7 @@ function TablePanelBody({ items, metric }: { items: MetricSample[]; metric: stri
   }
   return (
     <div style={{ overflow: 'auto', height: '100%' }}>
-      <table className="data-table" style={{ width: '100%' }}>
+      <table className="data-table">
         <thead>
           <tr>
             <th>Host</th>
@@ -228,10 +225,7 @@ function TablePanelBody({ items, metric }: { items: MetricSample[]; metric: stri
             <tr key={`${d.host_id ?? d.hostname ?? '-'}-${d.sampled_at ?? d.period_start ?? i}`}>
               <td>{d.hostname ?? `host-${d.host_id ?? '?'}`}</td>
               <td>
-                {(() => {
-                  const parsed = parseBackendDate(d.sampled_at ?? d.period_start);
-                  return parsed ? parsed.toLocaleString() : '-';
-                })()}
+                {formatBackendDateTime(d.sampled_at ?? d.period_start)}
               </td>
               <td>{(d.val_avg ?? d.value ?? 0).toFixed(2)}</td>
             </tr>

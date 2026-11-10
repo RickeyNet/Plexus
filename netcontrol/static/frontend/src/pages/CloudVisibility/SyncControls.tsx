@@ -1,7 +1,8 @@
 import { useState } from 'react';
 
 import type { CloudSyncConfig, CloudSyncCursor, CloudSyncStatus } from '@/api/cloud';
-import { formatTimestamp, providerLabel } from './helpers';
+import { formatBackendDateTime } from '@/lib/datetime';
+import { providerLabel } from './helpers';
 
 interface Props {
   kind: 'Flow' | 'Traffic';
@@ -39,7 +40,7 @@ export function SyncControls({ kind, config, status, cursors, selectedAccountId,
     const ingested = Number(status.ingested ?? 0).toLocaleString();
     const errCount = Array.isArray(status.errors) ? status.errors.length : 0;
     const outcome = status.ok === false ? 'failed' : 'completed';
-    return `${formatTimestamp(status.last_run_at)}: ${source} ${kind.toLowerCase()} sync ${outcome} for ${scope}. Ingested ${ingested}.${errCount ? ` Errors: ${errCount}.` : ''}`;
+    return `${formatBackendDateTime(status.last_run_at)}: ${source} ${kind.toLowerCase()} sync ${outcome} for ${scope}. Ingested ${ingested}.${errCount ? ` Errors: ${errCount}.` : ''}`;
   }
 
   const cfgEnabled = Boolean(config?.enabled);
@@ -109,7 +110,7 @@ export function SyncControls({ kind, config, status, cursors, selectedAccountId,
       )}
       {cursors.length > 0 ? (
         <div style={{ marginTop: '0.75rem', overflowX: 'auto' }}>
-          <table className="chart-table">
+          <table className="data-table">
             <thead>
               <tr><th>Account / subscription / project</th><th>Provider</th><th>Last Pull End</th><th>Updated</th></tr>
             </thead>
@@ -118,8 +119,8 @@ export function SyncControls({ kind, config, status, cursors, selectedAccountId,
                 <tr key={i}>
                   <td>{c.account_name || `Account #${c.account_id}`}</td>
                   <td>{providerLabel(c.provider)}</td>
-                  <td>{formatTimestamp(c.last_pull_end)}</td>
-                  <td>{formatTimestamp(c.updated_at)}</td>
+                  <td>{formatBackendDateTime(c.last_pull_end)}</td>
+                  <td>{formatBackendDateTime(c.updated_at)}</td>
                 </tr>
               ))}
             </tbody>

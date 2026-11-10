@@ -1,5 +1,7 @@
 import { FormEvent, useState } from 'react';
 
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { useCredentials } from '@/api/compliance';
@@ -82,11 +84,9 @@ export function SerialModal({ target, onClose }: Props) {
         )}
       </p>
       {credentials.isPending ? (
-        <p className="text-muted">Loading credentials…</p>
+        <LoadingState text="Loading credentials…" />
       ) : list.length === 0 ? (
-        <p className="text-muted">
-          No credentials configured. Add one under Settings → Credentials.
-        </p>
+        <EmptyState compact message="No credentials configured. Add one under Settings → Credentials." />
       ) : (
         <form onSubmit={submit}>
           <div className="form-group">

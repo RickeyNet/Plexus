@@ -9,8 +9,13 @@ import {
   useDeleteMaintenanceWindow,
   useMaintenanceWindows,
 } from '@/api/maintenanceWindows';
+import { Callout } from '@/components/Callout';
+import { DeleteButton } from '@/components/DeleteButton';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { PageHelp } from '@/components/PageHelp';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { formatBackendDateTime } from '@/lib/datetime';
 
 import { MaintenanceWindowModal } from './MaintenanceWindowModal';
 
@@ -30,15 +35,6 @@ function policyColor(policy: WindowPolicy): string {
   if (policy === 'block_outside_window') return 'danger';
   if (policy === 'warn_outside_window') return 'warning';
   return 'success';
-}
-
-function formatStamp(iso?: string | null): string {
-  if (!iso) return '-';
-  try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return iso;
-  }
 }
 
 function describeScope(w: MaintenanceWindow): string {
@@ -98,38 +94,36 @@ export function MaintenanceWindows() {
         </button>
       </div>
 
-      {windows.isPending && <p className="text-muted">Loading…</p>}
+      {windows.isPending && <LoadingState />}
       {windows.error && (
-        <p style={{ color: 'var(--danger)' }}>
+        <Callout tone="danger">
           Failed to load: {(windows.error as Error).message}
-        </p>
+        </Callout>
       )}
 
       {sorted.length === 0 && !windows.isPending && (
-        <p className="text-muted">
-          No maintenance windows defined. Changes will proceed without time
+        <EmptyState compact message="No maintenance windows defined. Changes will proceed without time
           restrictions; the approval gate still applies for production
-          groups and high-risk changes.
-        </p>
+          groups and high-risk changes." />
       )}
 
       {sorted.length > 0 && (
-        <table style={{ width: '100%', fontSize: '0.88em', borderCollapse: 'collapse' }}>
+        <table className="data-table table-sm">
           <thead>
-            <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border)' }}>
-              <th style={{ padding: '6px 8px' }}>Name</th>
-              <th style={{ padding: '6px 8px' }}>Window</th>
-              <th style={{ padding: '6px 8px' }}>Recurrence</th>
-              <th style={{ padding: '6px 8px' }}>Scope</th>
-              <th style={{ padding: '6px 8px' }}>Policy</th>
-              <th style={{ padding: '6px 8px' }}>State</th>
-              <th style={{ padding: '6px 8px' }}></th>
+            <tr>
+              <th>Name</th>
+              <th>Window</th>
+              <th>Recurrence</th>
+              <th>Scope</th>
+              <th>Policy</th>
+              <th>State</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
             {sorted.map((w) => (
-              <tr key={w.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                <td style={{ padding: '6px 8px' }}>
+              <tr key={w.id}>
+                <td>
                   <strong>{w.name}</strong>
                   {w.description && (
                     <div style={{ color: 'var(--text-muted)', fontSize: '0.85em' }}>
@@ -137,13 +131,13 @@ export function MaintenanceWindows() {
                     </div>
                   )}
                 </td>
-                <td style={{ padding: '6px 8px', fontSize: '0.85em' }}>
-                  <div>{formatStamp(w.start_at)}</div>
+                <td style={{ fontSize: '0.85em' }}>
+                  <div>{formatBackendDateTime(w.start_at)}</div>
                   <div style={{ color: 'var(--text-muted)' }}>
-                    → {formatStamp(w.end_at)}
+                    → {formatBackendDateTime(w.end_at)}
                   </div>
                 </td>
-                <td style={{ padding: '6px 8px' }}>
+                <td>
                   {RECURRENCE_LABEL[w.recurrence] || w.recurrence}
                   {w.recurrence === 'weekly' && w.weekday_mask > 0 && (
                     <div style={{ color: 'var(--text-muted)', fontSize: '0.85em' }}>
@@ -151,8 +145,8 @@ export function MaintenanceWindows() {
                     </div>
                   )}
                 </td>
-                <td style={{ padding: '6px 8px', fontSize: '0.85em' }}>{describeScope(w)}</td>
-                <td style={{ padding: '6px 8px' }}>
+                <td style={{ fontSize: '0.85em' }}>{describeScope(w)}</td>
+                <td>
                   <span
                     style={{
                       color: `var(--${policyColor(w.policy)})`,
@@ -162,7 +156,7 @@ export function MaintenanceWindows() {
                     {POLICY_LABEL[w.policy] || w.policy}
                   </span>
                 </td>
-                <td style={{ padding: '6px 8px' }}>
+                <td>
                   {!w.enabled ? (
                     <span style={{ color: 'var(--text-muted)' }}>disabled</span>
                   ) : w.is_active ? (
@@ -171,7 +165,7 @@ export function MaintenanceWindows() {
                     <span style={{ color: 'var(--text-muted)' }}>idle</span>
                   )}
                 </td>
-                <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                <td style={{ textAlign: 'right' }}>
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm"
@@ -179,15 +173,7 @@ export function MaintenanceWindows() {
                   >
                     Edit
                   </button>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    style={{ color: 'var(--danger)' }}
-                    disabled={deleteMut.isPending}
-                    onClick={() => handleDelete(w)}
-                  >
-                    Delete
-                  </button>
+                  <DeleteButton disabled={deleteMut.isPending} onClick={() => handleDelete(w)} />
                 </td>
               </tr>
             ))}

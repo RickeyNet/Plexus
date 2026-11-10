@@ -5,7 +5,10 @@ import {
   useAcknowledgeTopologyChanges,
   type TopologyChange,
 } from '@/api/topology';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { formatBackendDateTime } from '@/lib/datetime';
 
 interface Props {
   isOpen: boolean;
@@ -67,10 +70,10 @@ export function ChangesModal({ isOpen, onClose, onAcknowledged }: Props) {
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Topology Changes" size="large">
-      {loading && <div className="text-muted">Loading…</div>}
+      {loading && <LoadingState />}
       {error && <div style={{ color: 'var(--danger)' }}>Error: {error}</div>}
       {!loading && !changes.length && (
-        <p className="text-muted">No topology changes recorded.</p>
+        <EmptyState compact message="No topology changes recorded." />
       )}
       {!loading && changes.length > 0 && (
         <>
@@ -104,7 +107,7 @@ export function ChangesModal({ isOpen, onClose, onAcknowledged }: Props) {
                       {isAdded ? '+' : '−'} {c.change_type.toUpperCase()}
                     </span>
                     <span className="text-muted" style={{ fontSize: '0.7rem' }}>
-                      {new Date((c.detected_at || '') + 'Z').toLocaleString()}
+                      {formatBackendDateTime(c.detected_at)}
                     </span>
                   </div>
                   <div style={{ fontSize: '0.82rem', marginTop: '0.2rem' }}>

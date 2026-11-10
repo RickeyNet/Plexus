@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 
+import { EmptyState } from '@/components/EmptyState';
 import { TimeSeriesChart, BarChart } from '@/lib/echart';
 import {
   InterfaceTimeSeriesEntry,
@@ -81,10 +82,8 @@ export function InterfaceTab({ ifData, latestPoll }: Props) {
 
   if (!merged.length && !tsInterfaces.length) {
     return (
-      <p className="text-muted">
-        No interface data available. Ensure SNMP is configured and at least one poll has
-        completed.
-      </p>
+      <EmptyState compact message="No interface data available. Ensure SNMP is configured and at least one poll has
+        completed." />
     );
   }
 
@@ -303,7 +302,7 @@ function FullInterfaceTable({ interfaces }: { interfaces: MergedInterface[] }) {
     );
   return (
     <div style={{ overflowX: 'auto' }}>
-      <table className="chart-table" style={{ width: '100%', fontSize: '0.82rem' }}>
+      <table className="data-table table-sm">
         <thead>
           <tr>
             <th>Name</th>
@@ -360,7 +359,7 @@ function VlanTable({ interfaces }: { interfaces: MergedInterface[] }) {
         {vlanDown > 0 && <span className="badge badge-danger">{vlanDown} down</span>}
       </div>
       <div style={{ overflowY: 'auto', maxHeight: 400 }}>
-        <table className="chart-table" style={{ width: '100%', fontSize: '0.82rem' }}>
+        <table className="data-table table-sm">
           <thead>
             <tr>
               <th>VLAN</th>
@@ -393,7 +392,7 @@ function CompactInterfaceTable({ interfaces }: { interfaces: MergedInterface[] }
   if (!interfaces.length) return null;
   return (
     <div style={{ overflowX: 'auto' }}>
-      <table className="chart-table" style={{ width: '100%', fontSize: '0.82rem' }}>
+      <table className="data-table table-sm">
         <thead>
           <tr>
             <th>Name</th>

@@ -3,6 +3,8 @@ import { useState } from 'react';
 import { groupLabel } from '@/api/inventory';
 import { useInventoryGroups } from '@/api/compliance';
 import { useCapacityPlanning, type CapacityPlanningPoint } from '@/api/monitoring';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 
 const METRIC_LABELS: Record<string, string> = {
   cpu_percent: 'CPU %',
@@ -59,11 +61,11 @@ export function CapacityTab() {
         </select>
       </div>
 
-      {data.isPending && <div className="text-muted">Loading…</div>}
+      {data.isPending && <LoadingState />}
       {data.error && <div style={{ color: 'var(--danger)' }}>Error: {(data.error as Error).message}</div>}
 
       {data.data && points.length === 0 ? (
-        <div className="empty-state">No capacity data - run polls to collect metrics.</div>
+        <EmptyState message="No capacity data - run polls to collect metrics." />
       ) : data.data && (
         <div className="stack">
           <div className="card">
@@ -78,12 +80,12 @@ export function CapacityTab() {
           {Object.keys(estimates).length > 0 && (
             <div className="card">
               <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>Threshold Estimates</div>
-              <table style={{ width: '100%', fontSize: '0.9em', borderCollapse: 'collapse' }}>
+              <table className="data-table table-sm">
                 <thead>
-                  <tr style={{ borderBottom: '2px solid var(--border)' }}>
-                    <th style={{ textAlign: 'left', padding: '6px 12px' }}>Threshold</th>
-                    <th style={{ textAlign: 'left', padding: '6px 12px' }}>Days Until</th>
-                    <th style={{ textAlign: 'left', padding: '6px 12px' }}>Est. Date</th>
+                  <tr>
+                    <th>Threshold</th>
+                    <th>Days Until</th>
+                    <th>Est. Date</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -91,12 +93,12 @@ export function CapacityTab() {
                     const days = info.days_until;
                     const color = days != null && days <= 30 ? 'danger' : days != null && days <= 90 ? 'warning' : 'success';
                     return (
-                      <tr key={thresh} style={{ borderBottom: '1px solid var(--border)' }}>
-                        <td style={{ padding: '6px 12px' }}>{thresh}%</td>
-                        <td style={{ padding: '6px 12px', color: `var(--${color})`, fontWeight: 600 }}>
+                      <tr key={thresh}>
+                        <td>{thresh}%</td>
+                        <td style={{ color: `var(--${color})`, fontWeight: 600 }}>
                           {days != null ? `${days} days` : 'N/A'}
                         </td>
-                        <td style={{ padding: '6px 12px' }}>{info.estimated_date ?? 'N/A'}</td>
+                        <td>{info.estimated_date ?? 'N/A'}</td>
                       </tr>
                     );
                   })}

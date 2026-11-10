@@ -3,6 +3,8 @@ import { useState } from "react";
 import { useSourceSchedule, useUpdateSourceSchedule } from "@/api/meraki";
 import { useDialogs } from "@/components/DialogProvider-context";
 
+import { Callout } from "@/components/Callout";
+
 /**
  * The schedule that collects every Meraki, Cato, Cisco FMC, Palo Alto
  * Panorama and Appgate SDP source on its own (administrators only). Each
@@ -47,10 +49,10 @@ export function SourceScheduleBar() {
 
   if (schedule.error) {
     return (
-      <div className="error">
+      <Callout tone="danger">
         <strong>Failed to load the collection schedule:</strong>{" "}
         {schedule.error.message}
-      </div>
+      </Callout>
     );
   }
 

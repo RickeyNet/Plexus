@@ -1,5 +1,9 @@
 import { useState, type FormEvent } from 'react';
 
+import { SeverityBadge } from '@/components/Badge';
+import { DeleteButton } from '@/components/DeleteButton';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { groupLabel, useInventoryGroupsFull } from '@/api/inventory';
@@ -12,7 +16,6 @@ import {
   type AlertRuleCreate,
 } from '@/api/monitoring';
 import { useNotificationChannels } from '@/api/settings';
-import { severityColor } from './helpers';
 
 function parseChannelIds(raw?: string | null): string[] {
   if (!raw) return [];
@@ -53,25 +56,19 @@ export function RulesTab() {
         <button className="btn btn-primary" onClick={() => setShowCreate(true)}>+ New Rule</button>
       </div>
 
-      {rules.isPending && <div className="text-muted">Loading…</div>}
+      {rules.isPending && <LoadingState />}
       {rules.error && <div style={{ color: 'var(--danger)' }}>Error: {(rules.error as Error).message}</div>}
       {rules.data && (rules.data.length === 0 ? (
-        <div className="empty-state">No alert rules defined</div>
+        <EmptyState message="No alert rules defined" />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
           {rules.data.map((r) => {
-            const sev = severityColor(r.severity);
             const scope = r.hostname ? `Host: ${r.hostname}` : r.group_name ? `Group: ${r.group_name}` : 'All hosts';
             return (
               <div key={r.id} className="card card-sm" style={{ opacity: r.enabled ? 1 : 0.5 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
                   <div>
-                    <span
-                      className="badge"
-                      style={{ background: `var(--${sev})`, color: 'var(--on-primary)', fontSize: '0.75em', padding: '2px 8px', borderRadius: 3, textTransform: 'uppercase' }}
-                    >
-                      {r.severity}
-                    </span>
+                    <SeverityBadge severity={r.severity} />
                     <strong style={{ marginLeft: '0.4rem' }}>{r.name || 'Unnamed'}</strong>
                     <span className="text-muted" style={{ fontSize: '0.85em', marginLeft: '0.5rem' }}>
                       {r.metric} {r.operator} {r.value}
@@ -82,7 +79,7 @@ export function RulesTab() {
                     <button className="btn btn-sm btn-secondary" onClick={() => toggleEnabled(r)}>
                       {r.enabled ? 'Disable' : 'Enable'}
                     </button>
-                    <button className="btn btn-sm btn-danger" onClick={() => handleDelete(r)}>Delete</button>
+                    <DeleteButton onClick={() => handleDelete(r)} />
                   </div>
                 </div>
                 <div className="text-muted" style={{ marginTop: '0.3rem', fontSize: '0.85em' }}>

@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -164,7 +166,7 @@ export function FindingsModal({ resultId, onClose, onRescan }: Props) {
 
   return (
     <Modal isOpen onClose={onClose} title={title}>
-      {result.isLoading && <p className="text-muted">Loading findings…</p>}
+      {result.isLoading && <LoadingState text="Loading findings…" />}
       {result.data && (
         <>
           <div style={{ marginBottom: '1rem' }}>
@@ -201,16 +203,16 @@ export function FindingsModal({ resultId, onClose, onRescan }: Props) {
               </button>
             </div>
           )}
-          {error && <div className="error">{error}</div>}
+          {error && <Callout tone="danger">{error}</Callout>}
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9em' }}>
+            <table className="data-table table-sm">
               <thead>
-                <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                  <th style={{ textAlign: 'left', padding: '0.5rem' }}>Result</th>
-                  <th style={{ textAlign: 'left', padding: '0.5rem' }}>Rule</th>
-                  <th style={{ textAlign: 'left', padding: '0.5rem' }}>Type</th>
-                  <th style={{ textAlign: 'left', padding: '0.5rem' }}>Detail</th>
-                  <th style={{ textAlign: 'left', padding: '0.5rem' }}>Action</th>
+                <tr>
+                  <th>Result</th>
+                  <th>Rule</th>
+                  <th>Type</th>
+                  <th>Detail</th>
+                  <th>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -219,17 +221,17 @@ export function FindingsModal({ resultId, onClose, onRescan }: Props) {
                   const hasFix = !f.passed && f.remediation && f.remediation.length > 0;
                   return (
                     <tr key={idx}>
-                      <td style={{ color: `var(--${color})`, padding: '0.5rem' }}>
+                      <td style={{ color: `var(--${color})` }}>
                         {f.passed ? 'PASS' : 'FAIL'}
                       </td>
-                      <td style={{ padding: '0.5rem' }}>{f.name || '-'}</td>
-                      <td style={{ padding: '0.5rem' }}>
+                      <td>{f.name || '-'}</td>
+                      <td>
                         <code>{f.type || '-'}</code>
                       </td>
-                      <td style={{ padding: '0.5rem', fontSize: '0.85em' }}>
+                      <td style={{ fontSize: '0.85em' }}>
                         {f.detail || '-'}
                       </td>
-                      <td style={{ padding: '0.5rem', whiteSpace: 'nowrap' }}>
+                      <td style={{ whiteSpace: 'nowrap' }}>
                         {hasFix ? (
                           <>
                             <button

@@ -2,9 +2,10 @@ import {
   useConfigDriftEvent,
   useConfigDriftEventHistory,
 } from '@/api/configuration';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { formatBackendDateTime } from '@/lib/datetime';
 
-import { formatStamp } from './helpers';
 
 interface Props {
   eventId: number | null;
@@ -23,7 +24,7 @@ export function DriftEventLogModal({ eventId, onClose }: Props) {
 
   return (
     <Modal isOpen={eventId != null} onClose={onClose} title={title} size="large">
-      {isPending && <p className="text-muted">Loading…</p>}
+      {isPending && <LoadingState />}
       {ev.data && (
         <>
           <div
@@ -39,7 +40,7 @@ export function DriftEventLogModal({ eventId, onClose }: Props) {
             <span style={{ opacity: 0.4 }}>|</span>
             <span>Status: {ev.data.status}</span>
             <span style={{ opacity: 0.4 }}>|</span>
-            <span>Detected: {formatStamp(ev.data.detected_at)}</span>
+            <span>Detected: {formatBackendDateTime(ev.data.detected_at, '')}</span>
           </div>
           <div className="stack stack-sm" style={{ maxHeight: '60vh', overflow: 'auto' }}>
             {entries.length === 0 ? (
@@ -70,7 +71,7 @@ export function DriftEventLogModal({ eventId, onClose }: Props) {
                         color: 'var(--text-muted)',
                       }}
                     >
-                      {formatStamp(item.created_at) || '-'}
+                      {formatBackendDateTime(item.created_at, '') || '-'}
                     </span>
                   </div>
                   <div

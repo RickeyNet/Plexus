@@ -1,7 +1,12 @@
 import { useMemo, useState } from 'react';
 
 import { useSyslogEvents, type SyslogEvent } from '@/api/monitoring';
-import { severityBadgeClass } from '@/pages/Reports/helpers';
+import { SeverityBadge } from '@/components/Badge';
+import { Callout } from '@/components/Callout';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
+import { StatGrid, StatTile } from '@/components/StatTile';
+import { formatBackendTimestamp } from '@/lib/datetime';
 
 const SEVERITIES = [
   { value: '', label: 'All severities' },
@@ -69,15 +74,15 @@ export function EventsTab() {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.75rem', marginBottom: '0.75rem' }}>
-        <Card label="Total Events" value={String(total)} />
-        <Card label="Critical+" value={String(critCount)} color="var(--danger)" />
-        <Card label="Errors" value={String(errCount)} color="var(--danger)" />
-        <Card label="Warnings" value={String(warnCount)} color="var(--warning)" />
-      </div>
+      <StatGrid compact>
+        <StatTile label="Total Events" value={String(total)} />
+        <StatTile label="Critical+" value={String(critCount)} tone="danger" />
+        <StatTile label="Errors" value={String(errCount)} tone="danger" />
+        <StatTile label="Warnings" value={String(warnCount)} tone="warning" />
+      </StatGrid>
 
-      {query.isPending && <p className="text-muted">Loading…</p>}
-      {query.error && <p style={{ color: 'var(--danger)' }}>Failed: {(query.error as Error).message}</p>}
+      {query.isPending && <LoadingState />}
+      {query.error && <Callout tone="danger">Failed: {(query.error as Error).message}</Callout>}
       {query.data && (
         items.length ? (
           <table className="data-table">
@@ -87,26 +92,18 @@ export function EventsTab() {
             <tbody>
               {items.map((e, i) => (
                 <tr key={i}>
-                  <td style={{ whiteSpace: 'nowrap' }}>{e.timestamp ? new Date(e.timestamp).toLocaleString() : '-'}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{formatBackendTimestamp(e.received_at)}</td>
                   <td>{e.hostname || e.host_id || '-'}</td>
-                  <td><span className={`badge ${severityBadgeClass(e.severity)}`}>{e.severity || '-'}</span></td>
+                  <td><SeverityBadge severity={e.severity} /></td>
                   <td>{e.event_type || '-'}</td>
                   <td style={{ maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.message || e.event_data || '-'}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        ) : <div className="empty-state">No syslog events found.</div>
+        ) : <EmptyState message="No syslog events found." />
       )}
     </div>
   );
 }
 
-function Card({ label, value, color }: { label: string; value: string; color?: string }) {
-  return (
-    <div className="card card-sm stat-card">
-      <div className="stat-value" style={color ? { color } : undefined}>{value}</div>
-      <div className="stat-label">{label}</div>
-    </div>
-  );
-}

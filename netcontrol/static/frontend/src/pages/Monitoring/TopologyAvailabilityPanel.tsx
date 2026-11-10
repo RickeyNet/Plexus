@@ -6,12 +6,16 @@ import {
   useTopologyAvailabilitySummary,
   useTopologyAvailabilityTransitions,
 } from '@/api/monitoring';
+import { StatusBadge } from '@/components/Badge';
+import { Callout } from '@/components/Callout';
+import { StatGrid, StatTile } from '@/components/StatTile';
 import { TabBar } from '@/components/TabBar';
-import { availabilityBadgeClass } from '@/pages/Reports/helpers';
+import { type Tone } from '@/lib/severity';
 import { TOPOLOGY_AVAILABILITY_ANCHOR } from '@/pages/Dashboard/sourceHealth';
 import { sourceTypeLabel } from '@/pages/Topology/merakiHelpers';
+import { formatBackendDateTime } from '@/lib/datetime';
 
-import { formatTimestamp, formatUptime } from './helpers';
+import { formatUptime } from './helpers';
 
 type SubTab = 'entities' | 'outages' | 'transitions';
 
@@ -60,11 +64,11 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
   const s = summary.data;
   const orgs = s?.orgs ?? [];
   const providers = [...new Set(orgs.map((o) => o.provider))];
-  const cards = [
+  const cards: { label: string; value: string | number; tone?: Tone }[] = [
     { label: 'Entities Tracked', value: s?.entity_count ?? '-' },
-    { label: 'Up', value: s?.up ?? '-', color: 'success' },
-    { label: 'Degraded', value: s?.degraded ?? '-', color: 'warning' },
-    { label: 'Down', value: s?.down ?? '-', color: 'danger' },
+    { label: 'Up', value: s?.up ?? '-', tone: 'success' },
+    { label: 'Degraded', value: s?.degraded ?? '-', tone: 'warning' },
+    { label: 'Down', value: s?.down ?? '-', tone: 'danger' },
     { label: 'Avg Uptime', value: s?.avg_uptime_pct != null ? `${s.avg_uptime_pct.toFixed(2)}%` : '-' },
     { label: `Outages (${days}d)`, value: s?.total_outages ?? '-' },
   ];
@@ -123,18 +127,15 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
         </select>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.5rem', marginBottom: '0.75rem' }}>
+      <StatGrid compact>
         {cards.map((c) => (
-          <div key={c.label} className="card card-sm" style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '1.4em', fontWeight: 600, color: c.color ? `var(--${c.color})` : '' }}>{c.value}</div>
-            <div className="text-muted" style={{ fontSize: '0.85em' }}>{c.label}</div>
-          </div>
+          <StatTile key={c.label} center label={c.label} value={c.value} tone={c.tone} />
         ))}
-      </div>
+      </StatGrid>
 
       <TabBar tabs={SUB_TABS} active={subTab} onChange={setSubTab} size="sm" aria-label="Integration availability views" />
 
-      {summary.error && <p style={{ color: 'var(--danger)' }}>Failed to load availability.</p>}
+      {summary.error && <Callout tone="danger">Failed to load availability.</Callout>}
 
       {subTab === 'entities' && (
         !s?.entities.length ? (
@@ -167,11 +168,11 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
                     <td>{entityTypeLabel(e.entity_type)}</td>
                     <td>{e.site || '-'}</td>
                     <td>
-                      <span className={`badge ${availabilityBadgeClass(e.current_state)}`}>{e.current_state}</span>
+                      <StatusBadge status={e.current_state} />
                       {e.missing && <span className="text-muted" style={{ fontSize: '0.8em', marginLeft: '0.3rem' }}>not in last collection</span>}
                     </td>
                     <td style={{ textAlign: 'right' }}>{e.uptime_pct != null ? `${e.uptime_pct.toFixed(2)}%` : '-'}</td>
-                    <td style={{ whiteSpace: 'nowrap' }}>{formatTimestamp(e.last_change)}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>{formatBackendDateTime(e.last_change)}</td>
                     <td style={{ textAlign: 'right' }}>{e.outage_count}</td>
                   </tr>
                 ))}
@@ -203,9 +204,9 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
                     <td>{o.name}</td>
                     <td>{sourceTypeLabel(o.provider)}</td>
                     <td>{entityTypeLabel(o.entity_type)}</td>
-                    <td style={{ whiteSpace: 'nowrap' }}>{formatTimestamp(o.started_at)}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>{formatBackendDateTime(o.started_at)}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>
-                      {o.ended_at ? formatTimestamp(o.ended_at) : <span style={{ color: 'var(--danger)' }}>Ongoing</span>}
+                      {o.ended_at ? formatBackendDateTime(o.ended_at) : <span style={{ color: 'var(--danger)' }}>Ongoing</span>}
                     </td>
                     <td style={{ textAlign: 'right' }}>{formatUptime(o.duration_seconds)}</td>
                   </tr>
@@ -235,12 +236,12 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
               <tbody>
                 {transitions.data.transitions.map((t) => (
                   <tr key={t.id}>
-                    <td style={{ whiteSpace: 'nowrap' }}>{formatTimestamp(t.transition_at)}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>{formatBackendDateTime(t.transition_at)}</td>
                     <td>{t.name}</td>
                     <td>{sourceTypeLabel(t.provider)}</td>
                     <td>{entityTypeLabel(t.entity_type)}</td>
-                    <td><span className={`badge ${availabilityBadgeClass(t.old_state)}`}>{t.old_state}</span></td>
-                    <td><span className={`badge ${availabilityBadgeClass(t.new_state)}`}>{t.new_state}</span></td>
+                    <td><StatusBadge status={t.old_state} /></td>
+                    <td><StatusBadge status={t.new_state} /></td>
                   </tr>
                 ))}
               </tbody>

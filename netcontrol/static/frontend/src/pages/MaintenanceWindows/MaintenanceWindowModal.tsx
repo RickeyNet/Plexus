@@ -12,6 +12,7 @@ import {
   useUpdateMaintenanceWindow,
 } from '@/api/maintenanceWindows';
 import { Modal } from '@/components/Modal';
+import { localInputToIso, toLocalInputValue } from '@/lib/datetime';
 
 interface Props {
   isOpen: boolean;
@@ -31,27 +32,6 @@ const DEFAULT_PAYLOAD: MaintenanceWindowPayload = {
   enabled: true,
   group_ids: [],
 };
-
-// HTML <input type="datetime-local"> uses "YYYY-MM-DDTHH:MM" (no zone,
-// no seconds). We serialize the user's local time as UTC ISO when sending
-// to the backend so the round-trip is unambiguous.
-function localInputToIso(value: string): string {
-  if (!value) return '';
-  const dt = new Date(value);
-  if (Number.isNaN(dt.getTime())) return '';
-  return dt.toISOString();
-}
-
-function isoToLocalInput(iso: string): string {
-  if (!iso) return '';
-  const dt = new Date(iso);
-  if (Number.isNaN(dt.getTime())) return '';
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return (
-    `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}` +
-    `T${pad(dt.getHours())}:${pad(dt.getMinutes())}`
-  );
-}
 
 export function MaintenanceWindowModal({ isOpen, onClose, editingId, groups }: Props) {
   const existing = useMaintenanceWindow(editingId ?? null);
@@ -84,8 +64,8 @@ export function MaintenanceWindowModal({ isOpen, onClose, editingId, groups }: P
           enabled: !!existing.data.enabled,
           group_ids: existing.data.group_ids || [],
         });
-        setStartLocal(isoToLocalInput(existing.data.start_at));
-        setEndLocal(isoToLocalInput(existing.data.end_at));
+        setStartLocal(toLocalInputValue(existing.data.start_at));
+        setEndLocal(toLocalInputValue(existing.data.end_at));
       } else if (!editingId) {
         setForm(DEFAULT_PAYLOAD);
         setStartLocal('');

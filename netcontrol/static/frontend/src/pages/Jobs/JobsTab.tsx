@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
 
+import { Badge, StatusBadge } from '@/components/Badge';
+import { Callout } from '@/components/Callout';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useCancelJob,
@@ -8,13 +10,15 @@ import {
   useRetryJob,
   type Job,
 } from '@/api/jobs';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
+import { formatBackendDateTime } from '@/lib/datetime';
 
 import {
   compareJobsDesc,
-  formatTimestamp,
   parseDeps,
-  priorityColor,
   priorityLabel,
+  priorityTone,
   withinDateRange,
 } from './helpers';
 import { JobOutputModal } from './JobOutputModal';
@@ -99,10 +103,10 @@ export function JobsTab() {
 
       <QueuePanel data={queueQuery.data} />
 
-      {jobsQuery.isPending && <p className="text-muted">Loading…</p>}
-      {jobsQuery.error && <p style={{ color: 'var(--danger)' }}>Failed: {(jobsQuery.error as Error).message}</p>}
+      {jobsQuery.isPending && <LoadingState />}
+      {jobsQuery.error && <Callout tone="danger">Failed: {(jobsQuery.error as Error).message}</Callout>}
       {jobsQuery.data && (filtered.length === 0 ? (
-        <div className="empty-state">No matching jobs</div>
+        <EmptyState message="No matching jobs" />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {filtered.map((j) => (
@@ -144,15 +148,15 @@ function QueuePanel({ data }: { data: ReturnType<typeof useJobQueue>['data'] }) 
         {(data.jobs || []).map((j) => {
           const isRunning = j.status === 'running';
           return (
-            <span
+            <Badge
               key={j.id}
-              className={`status-badge`}
+              tone={isRunning ? 'info' : 'neutral'}
+              live={isRunning}
               title={`${j.playbook_name ?? ''} - ${priorityLabel(j.priority)}`}
-              style={{ background: isRunning ? 'var(--success)' : 'var(--bg-secondary)', color: isRunning ? 'var(--on-primary)' : 'inherit' }}
             >
               {(j.playbook_name ?? 'Job').substring(0, 20)}
               {!isRunning && ` - ${priorityLabel(j.priority)}`}
-            </span>
+            </Badge>
           );
         })}
       </div>
@@ -163,23 +167,21 @@ function QueuePanel({ data }: { data: ReturnType<typeof useJobQueue>['data'] }) 
 function JobRow({ job, onView, onCancel, onRetry }: { job: Job; onView: () => void; onCancel: () => void; onRetry: () => void }) {
   const showPri = job.priority != null && job.priority !== 2;
   const deps = parseDeps(job.depends_on);
-  const timeLabel = job.started_at ? `Started: ${formatTimestamp(job.started_at)}` :
-    job.queued_at ? `Queued: ${formatTimestamp(job.queued_at)}` : '';
+  const timeLabel = job.started_at ? `Started: ${formatBackendDateTime(job.started_at)}` :
+    job.queued_at ? `Queued: ${formatBackendDateTime(job.queued_at)}` : '';
   return (
     <div className="card card-sm" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 'var(--space-4)' }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
           {job.playbook_name || 'Unknown'}
           {showPri && (
-            <span className="badge" style={{ background: `var(--${priorityColor(job.priority)})`, color: 'var(--on-primary)' }}>
-              {priorityLabel(job.priority)}
-            </span>
+            <Badge tone={priorityTone(job.priority)}>{priorityLabel(job.priority)}</Badge>
           )}
-          {deps.length > 0 && <span className="badge badge-secondary" title={`Depends on jobs: ${deps.join(', ')}`}>deps: {deps.join(', ')}</span>}
+          {deps.length > 0 && <Badge title={`Depends on jobs: ${deps.join(', ')}`}>deps: {deps.join(', ')}</Badge>}
         </div>
         <div className="text-muted" style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>
           Group: {job.group_name || 'Unknown'} • {timeLabel} •{' '}
-          <span className={`status-badge status-${job.status}`}>{job.status}</span>
+          <StatusBadge status={job.status} size="sm" />
           {job.dry_run && <> • <span style={{ color: 'var(--warning)' }}>DRY RUN</span></>}
           {job.launched_by && <> • by {job.launched_by}</>}
         </div>

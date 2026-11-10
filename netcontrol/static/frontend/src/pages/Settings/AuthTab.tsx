@@ -1,5 +1,7 @@
 import { useState } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
   AccessGroup,
@@ -19,6 +21,7 @@ import {
   useUpdateLoginRules,
   useUpdateServiceCredential,
 } from '@/api/settings';
+import { LoadingState } from '@/components/LoadingState';
 
 import { SectionCard } from './SectionCard';
 
@@ -52,12 +55,12 @@ function LoginRulesForm() {
     if (query.data) setDraft(query.data);
   }
 
-  if (query.isLoading || !draft) return <p className="text-muted">Loading…</p>;
+  if (query.isLoading || !draft) return <LoadingState />;
   if (query.isError)
     return (
-      <div className="error">
+      <Callout tone="danger">
         Failed to load login rules: {(query.error as Error).message}
-      </div>
+      </Callout>
     );
 
   const numField = (
@@ -131,12 +134,12 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
     if (query.data) setDraft(query.data);
   }
 
-  if (query.isLoading || !draft) return <p className="text-muted">Loading…</p>;
+  if (query.isLoading || !draft) return <LoadingState />;
   if (query.isError)
     return (
-      <div className="error">
+      <Callout tone="danger">
         Failed to load auth config: {(query.error as Error).message}
-      </div>
+      </Callout>
     );
 
   const radiusGroupSet = new Set(draft.radius.default_group_ids);
@@ -870,12 +873,12 @@ function ServiceCredentialsSection() {
     });
   };
 
-  if (list.isLoading) return <p className="text-muted">Loading…</p>;
+  if (list.isLoading) return <LoadingState />;
   if (list.isError)
     return (
-      <div className="error">
+      <Callout tone="danger">
         Failed to load service credentials: {(list.error as Error).message}
-      </div>
+      </Callout>
     );
 
   const submitting = create.isPending || updateMut.isPending;
@@ -917,14 +920,7 @@ function ServiceCredentialsSection() {
                   >
                     Edit
                   </button>
-                  <button
-                    type="button"
-                    className="btn btn-danger"
-                    onClick={() => onDelete(c)}
-                    disabled={remove.isPending}
-                  >
-                    Delete
-                  </button>
+                  <DeleteButton size="md" onClick={() => onDelete(c)} disabled={remove.isPending} />
                 </td>
               </tr>
             ))

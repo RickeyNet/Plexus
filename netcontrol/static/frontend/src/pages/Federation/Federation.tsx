@@ -1,5 +1,9 @@
 import { useState } from 'react';
 
+import { StatusBadge } from '@/components/Badge';
+import { Callout } from '@/components/Callout';
+import { DeleteButton } from '@/components/DeleteButton';
+import { LoadingState } from '@/components/LoadingState';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { UntestedBanner } from '@/components/UntestedBanner';
@@ -15,6 +19,7 @@ import {
   useSyncFederationPeer,
   useTestFederationPeer,
 } from '@/api/federation';
+import { formatBackendDateTime } from '@/lib/datetime';
 
 import { PeerFormModal } from './PeerFormModal';
 
@@ -96,11 +101,11 @@ export function Federation() {
 
       <h3 style={{ marginTop: '1.5rem' }}>Registered Peers</h3>
 
-      {peers.isPending && <div className="loading">Loading peers…</div>}
+      {peers.isPending && <LoadingState text="Loading peers…" />}
       {peers.error && (
-        <div className="error">
+        <Callout tone="danger">
           <strong>Failed to load peers:</strong> {peers.error.message}
-        </div>
+        </Callout>
       )}
       {peers.data && (
         <PeerTable
@@ -253,7 +258,7 @@ function PeerRow({ peer, onEdit }: { peer: FederationPeer; onEdit: () => void })
       <td><SyncStatusBadge status={peer.last_sync_status} /></td>
       <td>
         {peer.last_sync_at ? (
-          formatDate(peer.last_sync_at)
+          formatBackendDateTime(peer.last_sync_at)
         ) : (
           <span style={{ color: 'var(--text-muted)' }}>-</span>
         )}
@@ -318,9 +323,7 @@ function PeerRow({ peer, onEdit }: { peer: FederationPeer; onEdit: () => void })
           >
             Edit
           </button>
-          <button
-            type="button"
-            className="btn btn-sm btn-danger"
+          <DeleteButton
             disabled={remove.isPending}
             title="Delete"
             onClick={async () => {
@@ -339,9 +342,7 @@ function PeerRow({ peer, onEdit }: { peer: FederationPeer; onEdit: () => void })
                 });
               }
             }}
-          >
-            Del
-          </button>
+          />
         </div>
       </td>
     </tr>
@@ -358,10 +359,8 @@ function EnabledBadge({ enabled }: { enabled: boolean }) {
 
 function SyncStatusBadge({ status }: { status?: string | null }) {
   const s = String(status || 'never').toLowerCase();
-  if (s === 'ok') return <span className="badge badge-success">Synced</span>;
-  if (s === 'partial') return <span className="badge badge-warning">Partial</span>;
-  if (s === 'error') return <span className="badge badge-danger">Error</span>;
-  return <span className="badge badge-secondary">Never</span>;
+  const label = s === 'ok' ? 'Synced' : s === 'partial' ? 'Partial' : s === 'error' ? 'Error' : 'Never';
+  return <StatusBadge status={s}>{label}</StatusBadge>;
 }
 
 // ── Per-peer detail cards ──────────────────────────────────────────────────
@@ -413,7 +412,7 @@ function PeerDetailCards({ peers }: { peers: FederationPeerDetail[] }) {
             </div>
             <div style={{ color: 'var(--text-muted)', marginTop: '0.5rem', fontSize: '0.85em' }}>
               <SyncStatusBadge status={p.last_sync_status} />
-              {p.last_sync_at ? ` - ${formatDate(p.last_sync_at)}` : ''}
+              {p.last_sync_at ? ` - ${formatBackendDateTime(p.last_sync_at)}` : ''}
             </div>
           </div>
         );
@@ -423,12 +422,6 @@ function PeerDetailCards({ peers }: { peers: FederationPeerDetail[] }) {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-
-function formatDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString();
-}
 
 function InfoIcon() {
   return (

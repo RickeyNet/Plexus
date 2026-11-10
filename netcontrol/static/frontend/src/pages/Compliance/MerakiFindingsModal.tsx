@@ -1,7 +1,10 @@
+import { Callout } from '@/components/Callout';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { MerakiFinding, useMerakiResult } from '@/api/compliance';
+import { complianceStatusTone, toneColor } from '@/lib/severity';
 
-import { MERAKI_KIND_LABEL as KIND_LABEL, statusColor } from './merakiHelpers';
+import { MERAKI_KIND_LABEL as KIND_LABEL } from './merakiHelpers';
 
 /**
  * Findings of one Meraki compliance target. Read-only: Plexus never writes to
@@ -18,8 +21,8 @@ export function MerakiFindingsModal({ resultId, onClose }: { resultId: number; o
 
   return (
     <Modal isOpen onClose={onClose} title={title} size="large">
-      {result.isLoading && <p className="text-muted">Loading findings…</p>}
-      {result.isError && <div className="error">Could not load this result.</div>}
+      {result.isLoading && <LoadingState text="Loading findings…" />}
+      {result.isError && <Callout tone="danger">Could not load this result.</Callout>}
       {data && (
         <>
           <div style={{ marginBottom: '1rem', fontSize: '0.9em' }}>
@@ -31,7 +34,7 @@ export function MerakiFindingsModal({ resultId, onClose }: { resultId: number; o
             ·{' '}
             <strong>Organization:</strong> {data.org_name || '?'} · <strong>Profile:</strong>{' '}
             {data.profile_name || '?'} · <strong>Status:</strong>{' '}
-            <span style={{ color: `var(--${statusColor(data.status)})`, fontWeight: 600 }}>{data.status}</span> ·{' '}
+            <span style={{ color: toneColor(complianceStatusTone(data.status)), fontWeight: 600 }}>{data.status}</span> ·{' '}
             <strong>Score:</strong> {data.passed_rules}/{data.total_rules} passed
             {data.unreadable_rules > 0 ? ` (${data.unreadable_rules} unreadable)` : ''}
           </div>
@@ -40,13 +43,13 @@ export function MerakiFindingsModal({ resultId, onClose }: { resultId: number; o
             Dashboard. Re-run the scan afterwards to confirm.
           </p>
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9em' }}>
+            <table className="data-table table-sm">
               <thead>
-                <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                  <th style={{ textAlign: 'left', padding: '0.5rem' }}>Result</th>
-                  <th style={{ textAlign: 'left', padding: '0.5rem' }}>Check</th>
-                  <th style={{ textAlign: 'left', padding: '0.5rem' }}>Detail</th>
-                  <th style={{ textAlign: 'left', padding: '0.5rem' }}>IOS equivalent</th>
+                <tr>
+                  <th>Result</th>
+                  <th>Check</th>
+                  <th>Detail</th>
+                  <th>IOS equivalent</th>
                 </tr>
               </thead>
               <tbody>
@@ -54,17 +57,17 @@ export function MerakiFindingsModal({ resultId, onClose }: { resultId: number; o
                   const label = f.unreadable ? 'UNREADABLE' : f.passed ? 'PASS' : 'FAIL';
                   const color = f.unreadable ? 'warning' : f.passed ? 'success' : 'danger';
                   return (
-                    <tr key={idx} style={{ borderBottom: '1px solid var(--border)' }}>
-                      <td style={{ color: `var(--${color})`, padding: '0.5rem', whiteSpace: 'nowrap', fontWeight: 600 }}>
+                    <tr key={idx}>
+                      <td style={{ color: `var(--${color})`, whiteSpace: 'nowrap', fontWeight: 600 }}>
                         {label}
                       </td>
-                      <td style={{ padding: '0.5rem' }}>
+                      <td>
                         {f.name || '-'}
                         <div style={{ fontSize: '0.8em', color: 'var(--text-muted)' }}>
                           <code>{f.check}</code>
                         </div>
                       </td>
-                      <td style={{ padding: '0.5rem', fontSize: '0.9em' }}>
+                      <td style={{ fontSize: '0.9em' }}>
                         {f.detail || '-'}
                         {f.evidence && f.evidence.length > 0 && (
                           <details style={{ marginTop: '0.3rem' }}>
@@ -79,7 +82,7 @@ export function MerakiFindingsModal({ resultId, onClose }: { resultId: number; o
                           </details>
                         )}
                       </td>
-                      <td style={{ padding: '0.5rem', fontSize: '0.85em', color: 'var(--text-muted)' }}>
+                      <td style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>
                         {f.ios_equivalent ? <code>{f.ios_equivalent}</code> : '-'}
                       </td>
                     </tr>

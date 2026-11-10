@@ -1,5 +1,6 @@
 import { FormEvent, useState } from 'react';
 
+import { EmptyState } from '@/components/EmptyState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { groupLabel, type InventoryGroupFull, useMoveHosts } from '@/api/inventory';
@@ -38,9 +39,7 @@ export function BulkMoveModal({ hostIds, sourceGroupId, groups, onClose }: Props
     >
       {candidates.length === 0 ? (
         <>
-          <p className="text-muted">
-            No other groups available to move hosts to.
-          </p>
+          <EmptyState compact message="No other groups available to move hosts to." />
           <div
             style={{
               display: 'flex',

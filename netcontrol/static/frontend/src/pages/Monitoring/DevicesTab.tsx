@@ -1,6 +1,8 @@
 import { useMemo, useState, useSyncExternalStore } from 'react';
 import { useNavigate } from 'react-router';
 
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import {
   useMonitoringPollHistory,
@@ -8,7 +10,9 @@ import {
   useMonitoringSummary,
   type MonitoringPoll,
 } from '@/api/monitoring';
-import { formatTimestamp, formatUptime } from './helpers';
+import { StatGrid, StatTile } from '@/components/StatTile';
+import { formatBackendDateTime } from '@/lib/datetime';
+import { formatUptime } from './helpers';
 import {
   dismissPollProgress,
   getPollProgress,
@@ -99,10 +103,10 @@ export function DevicesTab() {
         </div>
       )}
 
-      {polls.isPending && <div className="text-muted">Loading…</div>}
+      {polls.isPending && <LoadingState />}
       {polls.error && <div style={{ color: 'var(--danger)' }}>Error: {(polls.error as Error).message}</div>}
       {polls.data && filtered.length === 0 && (
-        <div className="empty-state">No monitoring data - click Poll Now to begin.</div>
+        <EmptyState message="No monitoring data - click Poll Now to begin." />
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -141,16 +145,17 @@ function SummaryCards() {
     { label: 'Open Alerts', value: s?.open_alerts ?? '-', danger: (s?.open_alerts ?? 0) > 0 },
   ];
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 'var(--space-2)' }}>
+    <StatGrid compact minTileWidth={110}>
       {items.map((it) => (
-        <div key={it.label} className="card card-sm" style={{ textAlign: 'center' }}>
-          <div className="text-muted" style={{ fontSize: '0.75em' }}>{it.label}</div>
-          <div style={{ fontWeight: 600, fontSize: '1.1em', color: it.danger ? 'var(--danger)' : it.warning ? 'var(--warning)' : '' }}>
-            {it.value}
-          </div>
-        </div>
+        <StatTile
+          key={it.label}
+          center
+          label={it.label}
+          value={it.value}
+          tone={it.danger ? 'danger' : it.warning ? 'warning' : undefined}
+        />
       ))}
-    </div>
+    </StatGrid>
   );
 }
 
@@ -197,7 +202,7 @@ function PollRow({ poll, onDetail, onHistory }: { poll: MonitoringPoll; onDetail
         <div><span className="text-muted">Routes:</span> {poll.route_count}</div>
         <div><span className="text-muted">Uptime:</span> {formatUptime(poll.uptime_seconds)}</div>
       </div>
-      <div className="text-muted" style={{ marginTop: '0.4rem', fontSize: '0.8em' }}>Last poll: {formatTimestamp(poll.polled_at)}</div>
+      <div className="text-muted" style={{ marginTop: '0.4rem', fontSize: '0.8em' }}>Last poll: {formatBackendDateTime(poll.polled_at)}</div>
     </div>
   );
 }
@@ -206,34 +211,34 @@ function HostHistoryModal({ hostId, hostname, onClose }: { hostId: number; hostn
   const history = useMonitoringPollHistory(hostId, 50);
   return (
     <Modal isOpen onClose={onClose} title={`${hostname} - Poll History`} size="large">
-      {history.isPending && <div className="text-muted">Loading…</div>}
+      {history.isPending && <LoadingState />}
       {history.error && <div style={{ color: 'var(--danger)' }}>Error: {(history.error as Error).message}</div>}
       {history.data && (history.data.length === 0 ? (
-        <div className="empty-state">No history available</div>
+        <EmptyState message="No history available" />
       ) : (
         <div style={{ maxHeight: 400, overflow: 'auto' }}>
-          <table style={{ width: '100%', fontSize: '0.85em', borderCollapse: 'collapse' }}>
+          <table className="data-table table-sm">
             <thead>
-              <tr style={{ borderBottom: '2px solid var(--border)' }}>
-                <th style={{ textAlign: 'left', padding: '4px 8px' }}>Time</th>
-                <th style={{ textAlign: 'right', padding: '4px 8px' }}>CPU</th>
-                <th style={{ textAlign: 'right', padding: '4px 8px' }}>Memory</th>
-                <th style={{ textAlign: 'center', padding: '4px 8px' }}>IF Up/Down</th>
-                <th style={{ textAlign: 'center', padding: '4px 8px' }}>VPN Up/Down</th>
-                <th style={{ textAlign: 'right', padding: '4px 8px' }}>Routes</th>
-                <th style={{ textAlign: 'center', padding: '4px 8px' }}>Status</th>
+              <tr>
+                <th>Time</th>
+                <th style={{ textAlign: 'right' }}>CPU</th>
+                <th style={{ textAlign: 'right' }}>Memory</th>
+                <th style={{ textAlign: 'center' }}>IF Up/Down</th>
+                <th style={{ textAlign: 'center' }}>VPN Up/Down</th>
+                <th style={{ textAlign: 'right' }}>Routes</th>
+                <th style={{ textAlign: 'center' }}>Status</th>
               </tr>
             </thead>
             <tbody>
               {history.data.map((p, idx) => (
-                <tr key={idx} style={{ borderBottom: '1px solid var(--border)' }}>
-                  <td style={{ padding: '4px 8px' }}>{formatTimestamp(p.polled_at)}</td>
-                  <td style={{ padding: '4px 8px', textAlign: 'right' }}>{p.cpu_percent != null ? `${p.cpu_percent}%` : '-'}</td>
-                  <td style={{ padding: '4px 8px', textAlign: 'right' }}>{p.memory_percent != null ? `${p.memory_percent}%` : '-'}</td>
-                  <td style={{ padding: '4px 8px', textAlign: 'center' }}>{p.if_up_count}/{p.if_down_count}</td>
-                  <td style={{ padding: '4px 8px', textAlign: 'center' }}>{p.vpn_tunnels_up}/{p.vpn_tunnels_down}</td>
-                  <td style={{ padding: '4px 8px', textAlign: 'right' }}>{p.route_count}</td>
-                  <td style={{ padding: '4px 8px', textAlign: 'center', color: p.poll_status === 'error' ? 'var(--danger)' : 'var(--success)' }}>
+                <tr key={idx}>
+                  <td>{formatBackendDateTime(p.polled_at)}</td>
+                  <td style={{ textAlign: 'right' }}>{p.cpu_percent != null ? `${p.cpu_percent}%` : '-'}</td>
+                  <td style={{ textAlign: 'right' }}>{p.memory_percent != null ? `${p.memory_percent}%` : '-'}</td>
+                  <td style={{ textAlign: 'center' }}>{p.if_up_count}/{p.if_down_count}</td>
+                  <td style={{ textAlign: 'center' }}>{p.vpn_tunnels_up}/{p.vpn_tunnels_down}</td>
+                  <td style={{ textAlign: 'right' }}>{p.route_count}</td>
+                  <td style={{ textAlign: 'center', color: p.poll_status === 'error' ? 'var(--danger)' : 'var(--success)' }}>
                     {p.poll_status === 'error' ? 'err' : 'ok'}
                   </td>
                 </tr>

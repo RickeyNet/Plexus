@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Modal } from '@/components/Modal';
 import { PageHelp } from '@/components/PageHelp';
 import { SegmentedControl } from '@/components/SegmentedControl';
+import { StatGrid, StatTile } from '@/components/StatTile';
 import { TabBar } from '@/components/TabBar';
 import {
   MacEntry,
@@ -24,8 +25,8 @@ import {
 } from '@/api/networkTools';
 
 import { useShowMore } from '@/lib/useShowMore';
+import { formatBackendDateTime } from '@/lib/datetime';
 
-import { formatTimestamp } from './formatting';
 
 type Tab = 'search' | 'moves' | 'hosts';
 
@@ -180,7 +181,7 @@ function SearchTab() {
 
   return (
     <>
-      <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
+      <StatGrid minTileWidth={130}>
         <SummaryCard label="Total Entries" value={stats.data?.total_entries} />
         <SummaryCard
           label="Unique MACs"
@@ -196,9 +197,9 @@ function SearchTab() {
         )}
         <SummaryCard
           label="Last Collected"
-          textValue={formatTimestamp(stats.data?.last_collected_at ?? null) || '-'}
+          textValue={formatBackendDateTime(stats.data?.last_collected_at ?? null) || '-'}
         />
-      </div>
+      </StatGrid>
 
       <form onSubmit={submit} className="toolbar">
         <input
@@ -319,7 +320,7 @@ function MovesTab() {
 
   return (
     <>
-      <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
+      <StatGrid minTileWidth={130}>
         <SummaryCard label="Open" value={summary.data?.open} accent="warning" />
         <SummaryCard
           label="Acknowledged"
@@ -327,7 +328,7 @@ function MovesTab() {
           accent="success"
         />
         <SummaryCard label="Total" value={summary.data?.total} />
-      </div>
+      </StatGrid>
 
       <div className="toolbar">
         <select
@@ -490,7 +491,7 @@ function HostsTab() {
 
   return (
     <>
-      <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
+      <StatGrid minTileWidth={130}>
         <SummaryCard
           label="Reporting"
           value={reporting.length}
@@ -503,7 +504,7 @@ function HostsTab() {
         />
         <SummaryCard label="SNMP disabled" value={noSnmp.length} />
         <SummaryCard label="Hosts total" value={rows.length} />
-      </div>
+      </StatGrid>
 
       <div className="toolbar">
         <SegmentedControl options={filterOptions} value={filter} onChange={setFilter} aria-label="Host filter" />
@@ -558,7 +559,7 @@ function HostRollupTable({
   onCollect: (hostId: number) => void;
 }) {
   return (
-    <table className="data-table" style={{ width: '100%' }}>
+    <table className="data-table">
       <thead>
         <tr>
           <th>Host</th>
@@ -607,7 +608,7 @@ function HostRollupTable({
                 <td>{r.unique_macs.toLocaleString()}</td>
                 <td>{r.arp_count.toLocaleString()}</td>
                 <td style={{ fontSize: '0.85em' }}>
-                  {formatTimestamp(r.last_mac_seen)}
+                  {formatBackendDateTime(r.last_mac_seen)}
                 </td>
                 <td style={{ whiteSpace: 'nowrap' }}>
                   <button
@@ -627,7 +628,7 @@ function HostRollupTable({
               </tr>
               {attempt && (
                 <tr>
-                  <td colSpan={9} style={{ padding: '0.5rem 1rem' }}>
+                  <td colSpan={9}>
                     <CollectAttemptDetail attempt={attempt} />
                   </td>
                 </tr>
@@ -711,30 +712,13 @@ function SummaryCard({
   textValue?: string;
   accent?: 'warning' | 'success';
 }) {
-  const color =
-    accent === 'warning'
-      ? 'var(--warning)'
-      : accent === 'success'
-        ? 'var(--success)'
-        : 'var(--text)';
   const display =
     textValue !== undefined
       ? textValue
       : value !== undefined
         ? value.toLocaleString()
         : '-';
-  // Timestamps need a smaller font so they fit in the tile next to the
-  // numeric cards without wrapping awkwardly.
-  const fontSize = textValue !== undefined ? '0.95rem' : '1.75rem';
-  return (
-    <div
-      className="glass-card card"
-      style={{ minWidth: '8rem', textAlign: 'center' }}
-    >
-      <div style={{ fontSize, fontWeight: 600, color }}>{display}</div>
-      <div style={{ fontSize: '0.85em', opacity: 0.7 }}>{label}</div>
-    </div>
-  );
+  return <StatTile center compact={textValue !== undefined} label={label} value={display} tone={accent} />;
 }
 
 function loc(
@@ -764,7 +748,7 @@ function MoveEventsTable({
   const { visible, hiddenCount, showMore } = useShowMore(rows);
   return (
     <>
-    <table className="data-table" style={{ width: '100%' }}>
+    <table className="data-table">
       <thead>
         <tr>
           <th>MAC Address</th>
@@ -798,7 +782,7 @@ function MoveEventsTable({
               {loc(r.to_hostname, r.to_host_id, r.to_port, r.to_vlan, r.to_ip)}
             </td>
             <td style={{ fontSize: '0.85em' }}>
-              {formatTimestamp(r.detected_at)}
+              {formatBackendDateTime(r.detected_at)}
             </td>
             <td>
               <span
@@ -874,7 +858,7 @@ function MoveEventLogBody({ eventId }: { eventId: number | null }) {
           >
             <strong>{item.action}</strong>
             <span style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>
-              {formatTimestamp(item.created_at) || '-'}
+              {formatBackendDateTime(item.created_at) || '-'}
             </span>
           </div>
           <div
@@ -908,7 +892,7 @@ function ResultsTable({
   const { visible, hiddenCount, showMore } = useShowMore(rows);
   return (
     <>
-    <table className="data-table" style={{ width: '100%' }}>
+    <table className="data-table">
       <thead>
         <tr>
           <th>MAC Address</th>
@@ -956,8 +940,8 @@ function ResultsTable({
             <td>
               <span className="badge badge-sm">{r.entry_type || 'dynamic'}</span>
             </td>
-            <td style={{ fontSize: '0.85em' }}>{formatTimestamp(r.first_seen)}</td>
-            <td style={{ fontSize: '0.85em' }}>{formatTimestamp(r.last_seen)}</td>
+            <td style={{ fontSize: '0.85em' }}>{formatBackendDateTime(r.first_seen)}</td>
+            <td style={{ fontSize: '0.85em' }}>{formatBackendDateTime(r.last_seen)}</td>
             <td>
               {r.source !== 'meraki' && (
                 <button
@@ -998,7 +982,7 @@ function MacHistoryBody({ macAddress }: { macAddress: string | null }) {
 
   return (
     <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
-      <table className="data-table" style={{ width: '100%' }}>
+      <table className="data-table">
         <thead>
           <tr>
             <th>Time</th>
@@ -1011,7 +995,7 @@ function MacHistoryBody({ macAddress }: { macAddress: string | null }) {
         <tbody>
           {data.map((h, idx) => (
             <tr key={`${h.seen_at}-${idx}`}>
-              <td style={{ fontSize: '0.85em' }}>{formatTimestamp(h.seen_at)}</td>
+              <td style={{ fontSize: '0.85em' }}>{formatBackendDateTime(h.seen_at)}</td>
               <td>{h.hostname || `host-${h.host_id}`}</td>
               <td>{h.port_name || '-'}</td>
               <td>{h.vlan ?? '-'}</td>

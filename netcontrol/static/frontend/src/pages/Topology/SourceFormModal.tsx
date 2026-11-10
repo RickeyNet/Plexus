@@ -7,6 +7,7 @@ import {
   useCreateMerakiOrg,
   useUpdateMerakiOrg,
 } from '@/api/meraki';
+import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
 
 import { isSourceFormReady, type SourceFormValues } from './sourceForm';
@@ -147,9 +148,9 @@ export function SourceFormModal({ provider, existing, defaultOptions, onClose }:
       })}
 
       {errMsg && (
-        <div className="error">
+        <Callout tone="danger">
           <strong>{isEdit ? 'Update failed' : 'Create failed'}:</strong> {errMsg}
-        </div>
+        </Callout>
       )}
 
       <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1rem' }}>

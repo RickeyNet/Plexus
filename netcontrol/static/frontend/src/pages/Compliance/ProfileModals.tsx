@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 
 import { groupLabel } from '@/api/inventory';
+import { Callout } from '@/components/Callout';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -53,7 +55,7 @@ export function NewProfileModal({ onClose }: { onClose: () => void }) {
         rulesText={rulesText}
         setRulesText={setRulesText}
       />
-      {error && <div className="error">{error}</div>}
+      {error && <Callout tone="danger">{error}</Callout>}
       <ModalActions
         onClose={onClose}
         primaryLabel="Create"
@@ -118,7 +120,7 @@ export function EditProfileModal({
   return (
     <Modal isOpen onClose={onClose} title="Edit Compliance Profile">
       {isLoading || !hydrated ? (
-        <p className="text-muted">Loading…</p>
+        <LoadingState />
       ) : (
         <FormBody
           name={name}
@@ -131,7 +133,7 @@ export function EditProfileModal({
           setRulesText={setRulesText}
         />
       )}
-      {error && <div className="error">{error}</div>}
+      {error && <Callout tone="danger">{error}</Callout>}
       <ModalActions
         onClose={onClose}
         primaryLabel="Save"
@@ -305,7 +307,7 @@ export function AssignProfileModal({
           onChange={(e) => setHours(parseInt(e.target.value, 10) || 24)}
         />
       </div>
-      {error && <div className="error">{error}</div>}
+      {error && <Callout tone="danger">{error}</Callout>}
       <ModalActions
         onClose={onClose}
         primaryLabel="Assign"

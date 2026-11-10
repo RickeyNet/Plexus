@@ -7,9 +7,13 @@ import {
   useUpgradeBackups,
 } from '@/api/upgrades';
 import { AlertDialog } from '@/components/AlertDialog';
+import { Callout } from '@/components/Callout';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { DeleteButton } from '@/components/DeleteButton';
+import { LoadingState } from '@/components/LoadingState';
+import { formatBackendDateTime } from '@/lib/datetime';
 
-import { formatBackupTimestamp, formatBytes } from './helpers';
+import { formatBytes } from './helpers';
 
 export function BackupsTab() {
   const query = useUpgradeBackups();
@@ -19,12 +23,12 @@ export function BackupsTab() {
     null,
   );
 
-  if (query.isPending) return <p className="text-muted">Loading…</p>;
+  if (query.isPending) return <LoadingState />;
   if (query.error) {
     return (
-      <p style={{ color: 'var(--danger)' }}>
+      <Callout tone="danger">
         Failed to load backups: {(query.error as Error).message}
-      </p>
+      </Callout>
     );
   }
 
@@ -54,13 +58,13 @@ export function BackupsTab() {
 
   return (
     <>
-    <table className="data-table" style={{ width: '100%' }}>
+    <table className="data-table">
       <thead>
         <tr>
-          <th style={{ textAlign: 'left' }}>Filename</th>
-          <th style={{ textAlign: 'left' }}>Size</th>
-          <th style={{ textAlign: 'left' }}>Date</th>
-          <th style={{ textAlign: 'left' }}>Actions</th>
+          <th>Filename</th>
+          <th>Size</th>
+          <th>Date</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -71,7 +75,7 @@ export function BackupsTab() {
             </td>
             <td style={{ textAlign: 'left' }}>{formatBytes(b.size)}</td>
             <td style={{ textAlign: 'left', whiteSpace: 'nowrap' }}>
-              {formatBackupTimestamp(b.modified)}
+              {formatBackendDateTime(b.modified, '')}
             </td>
             <td style={{ textAlign: 'left', whiteSpace: 'nowrap' }}>
               <a
@@ -81,14 +85,7 @@ export function BackupsTab() {
               >
                 Download
               </a>{' '}
-              <button
-                type="button"
-                className="btn btn-sm btn-danger"
-                onClick={() => setDeleteTarget(b)}
-                disabled={remove.isPending}
-              >
-                Delete
-              </button>
+              <DeleteButton onClick={() => setDeleteTarget(b)} disabled={remove.isPending} />
             </td>
           </tr>
         ))}

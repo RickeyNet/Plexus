@@ -18,26 +18,26 @@ import {
   useScanAssignmentNow,
   useUpdateAssignment,
 } from '@/api/compliance';
+import { SeverityBadge } from '@/components/Badge';
+import { DeleteButton } from '@/components/DeleteButton';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { SummaryStrip } from '@/components/SummaryStrip';
 import { TabBar } from '@/components/TabBar';
+import { complianceStatusTone, toneColor } from '@/lib/severity';
 import { visibleTabs } from '@/lib/tabGating';
 import { usePathTab } from '@/lib/usePathTab';
 
 import { AuditContent } from '@/pages/Audit/Audit';
-import { parseBackendDate } from '@/pages/Dashboard/helpers';
+import { formatBackendDateTime, parseBackendDate } from '@/lib/datetime';
 
 import { AssignProfileModal, EditProfileModal, NewProfileModal } from './ProfileModals';
 import { FindingsModal } from './FindingsModal';
 import { MerakiTab } from './MerakiTab';
 import { RunScanModal } from './RunScanModal';
-
-function formatBackendStamp(iso: string | null | undefined, fallback = '-'): string {
-  const d = parseBackendDate(iso);
-  return d ? d.toLocaleString() : fallback;
-}
 
 type Tab = 'profiles' | 'assignments' | 'results' | 'status' | 'meraki' | 'audit';
 
@@ -273,7 +273,7 @@ function ComplianceSummaryStrip({
     { label: 'Meraki non-compliant', value: String(meraki?.targets_non_compliant ?? '-') },
     {
       label: 'Last scan',
-      value: last ? last.toLocaleString() : 'Never',
+      value: formatBackendDateTime(last, 'Never'),
     },
   ];
   return <SummaryStrip items={items} />;
@@ -304,7 +304,7 @@ function ProfilesTab({
     );
   }, [profiles, query]);
 
-  if (loading) return <p className="text-muted">Loading profiles…</p>;
+  if (loading) return <LoadingState text="Loading profiles…" />;
   if (!filtered.length) {
     return (
       <p className="text-muted">No compliance profiles. Click "New Profile" to create one.</p>
@@ -320,8 +320,6 @@ function ProfilesTab({
         } catch {
           rules = [];
         }
-        const sevClass =
-          p.severity === 'critical' ? 'danger' : p.severity === 'high' ? 'warning' : 'success';
         return (
           <div key={p.id} className="card">
             <div
@@ -335,12 +333,7 @@ function ProfilesTab({
             >
               <div>
                 <strong>{p.name}</strong>
-                <span
-                  className={`badge badge-${sevClass}`}
-                  style={{ marginLeft: '0.5rem' }}
-                >
-                  {p.severity}
-                </span>
+                <SeverityBadge severity={p.severity} style={{ marginLeft: '0.5rem' }} />
                 <span
                   style={{
                     marginLeft: '0.5rem',
@@ -358,9 +351,7 @@ function ProfilesTab({
                 <button className="btn btn-sm btn-secondary" onClick={() => onAssign(p.id)}>
                   Assign
                 </button>
-                <button
-                  className="btn btn-sm"
-                  style={{ color: 'var(--danger)' }}
+                <DeleteButton
                   onClick={async () => {
                     if (
                       await confirm({
@@ -380,9 +371,7 @@ function ProfilesTab({
                       });
                     }
                   }}
-                >
-                  Delete
-                </button>
+                />
               </div>
             </div>
             {p.description && (
@@ -438,19 +427,17 @@ function AssignmentsTab({
     );
   }, [assignments, query]);
 
-  if (loading) return <p className="text-muted">Loading assignments…</p>;
+  if (loading) return <LoadingState text="Loading assignments…" />;
   if (!filtered.length) {
     return (
-      <p className="text-muted">
-        No compliance assignments. Assign a profile to an inventory group to start scanning.
-      </p>
+      <EmptyState compact message="No compliance assignments. Assign a profile to an inventory group to start scanning." />
     );
   }
 
   return (
     <>
       {filtered.map((a) => {
-        const lastScan = formatBackendStamp(a.last_scan_at, 'Never');
+        const lastScan = formatBackendDateTime(a.last_scan_at, 'Never');
         return (
           <div key={a.id} className="card">
             <div
@@ -538,9 +525,7 @@ function AssignmentsTab({
                 >
                   {a.enabled ? 'Disable' : 'Enable'}
                 </button>
-                <button
-                  className="btn btn-sm"
-                  style={{ color: 'var(--danger)' }}
+                <DeleteButton
                   onClick={async () => {
                     if (
                       await confirm({
@@ -559,9 +544,7 @@ function AssignmentsTab({
                       });
                     }
                   }}
-                >
-                  Delete
-                </button>
+                />
               </div>
             </div>
             <div
@@ -606,21 +589,16 @@ function ResultsTab({
     );
   }, [results, query]);
 
-  if (loading) return <p className="text-muted">Loading scan results…</p>;
+  if (loading) return <LoadingState text="Loading scan results…" />;
   if (!filtered.length) {
-    return <p className="text-muted">No scan results yet. Run a compliance scan.</p>;
+    return <EmptyState compact message="No scan results yet. Run a compliance scan." />;
   }
 
   return (
     <>
       {filtered.map((r) => {
-        const color =
-          r.status === 'compliant'
-            ? 'success'
-            : r.status === 'error'
-              ? 'danger'
-              : 'warning';
-        const scanned = formatBackendStamp(r.scanned_at);
+        const color = toneColor(complianceStatusTone(r.status));
+        const scanned = formatBackendDateTime(r.scanned_at);
         return (
           <div key={r.id} className="card">
             <div
@@ -633,7 +611,7 @@ function ResultsTab({
               }}
             >
               <div>
-                <span style={{ color: `var(--${color})`, fontWeight: 600 }}>{r.status}</span>
+                <span style={{ color: color, fontWeight: 600 }}>{r.status}</span>
                 <strong style={{ marginLeft: '0.5rem' }}>{r.hostname || '?'}</strong>
                 <span
                   style={{
@@ -694,21 +672,16 @@ function StatusTab({
     );
   }, [status, query]);
 
-  if (loading) return <p className="text-muted">Loading host status…</p>;
+  if (loading) return <LoadingState text="Loading host status…" />;
   if (!filtered.length) {
-    return <p className="text-muted">No compliance status data. Scan some hosts first.</p>;
+    return <EmptyState compact message="No compliance status data. Scan some hosts first." />;
   }
 
   return (
     <>
       {filtered.map((s, i) => {
-        const color =
-          s.status === 'compliant'
-            ? 'success'
-            : s.status === 'error'
-              ? 'danger'
-              : 'warning';
-        const scanned = formatBackendStamp(s.scanned_at);
+        const color = toneColor(complianceStatusTone(s.status));
+        const scanned = formatBackendDateTime(s.scanned_at);
         return (
           <div key={i} className="card">
             <div
@@ -727,7 +700,7 @@ function StatusTab({
                     width: 10,
                     height: 10,
                     borderRadius: '50%',
-                    background: `var(--${color})`,
+                    background: color,
                     marginRight: '0.5rem',
                   }}
                 />
@@ -752,7 +725,7 @@ function StatusTab({
                 </span>
               </div>
               <div style={{ fontSize: '0.85em' }}>
-                <span style={{ color: `var(--${color})`, fontWeight: 600 }}>{s.status}</span>{' '}
+                <span style={{ color: color, fontWeight: 600 }}>{s.status}</span>{' '}
                 · {s.passed_rules}/{s.total_rules} passed · {scanned}
               </div>
             </div>

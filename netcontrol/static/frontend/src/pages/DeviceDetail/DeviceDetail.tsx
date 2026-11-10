@@ -2,6 +2,10 @@ import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 
 import { useAuthStatus } from '@/api/auth';
+import { SeverityBadge } from '@/components/Badge';
+import { Callout } from '@/components/Callout';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { PageHelp } from '@/components/PageHelp';
 import { TabBar } from '@/components/TabBar';
 import { formatBackendDateTime } from '@/lib/datetime';
@@ -115,7 +119,7 @@ export function DeviceDetail() {
   if (hostId == null || Number.isNaN(hostId)) {
     return (
       <div>
-        <p className="error">Invalid host id.</p>
+        <Callout tone="danger">Invalid host id.</Callout>
         <button className="btn btn-secondary" onClick={() => navigate('/monitoring')}>
           Back to device list
         </button>
@@ -466,13 +470,11 @@ interface MonitoringAlert {
 function AlertsTab({ alerts, loading }: { alerts: MonitoringAlert[]; loading: boolean }) {
   const [correlateId, setCorrelateId] = useState<number | null>(null);
 
-  if (loading) return <p className="text-muted">Loading alerts…</p>;
-  if (!alerts.length) return <p className="text-muted">No alerts for this device</p>;
-  const sevClass = (s: string) =>
-    s === 'critical' ? 'danger' : s === 'warning' ? 'warning' : 'info';
+  if (loading) return <LoadingState text="Loading alerts…" />;
+  if (!alerts.length) return <EmptyState compact message="No alerts for this device" />;
   return (
     <>
-      <table className="chart-table">
+      <table className="data-table">
         <thead>
           <tr>
             <th>Time</th>
@@ -488,7 +490,7 @@ function AlertsTab({ alerts, loading }: { alerts: MonitoringAlert[]; loading: bo
             <tr key={a.id}>
               <td>{formatBackendDateTime(a.created_at)}</td>
               <td>
-                <span className={`badge badge-${sevClass(a.severity)}`}>{a.severity}</span>
+                <SeverityBadge severity={a.severity} />
               </td>
               <td>{a.metric || ''}</td>
               <td>{a.message || ''}</td>
@@ -530,10 +532,10 @@ function ComplianceTab({
   results: ComplianceResult[];
   loading: boolean;
 }) {
-  if (loading) return <p className="text-muted">Loading compliance…</p>;
-  if (!results.length) return <p className="text-muted">No compliance data for this device</p>;
+  if (loading) return <LoadingState text="Loading compliance…" />;
+  if (!results.length) return <EmptyState compact message="No compliance data for this device" />;
   return (
-    <table className="chart-table">
+    <table className="data-table">
       <thead>
         <tr>
           <th>Profile</th>
@@ -570,10 +572,10 @@ interface SyslogEvent {
 }
 
 function SyslogTab({ events, loading }: { events: SyslogEvent[]; loading: boolean }) {
-  if (loading) return <p className="text-muted">Loading syslog…</p>;
-  if (!events.length) return <p className="text-muted">No syslog events for this device</p>;
+  if (loading) return <LoadingState text="Loading syslog…" />;
+  if (!events.length) return <EmptyState compact message="No syslog events for this device" />;
   return (
-    <table className="chart-table">
+    <table className="data-table">
       <thead>
         <tr>
           <th>Time</th>
@@ -584,18 +586,13 @@ function SyslogTab({ events, loading }: { events: SyslogEvent[]; loading: boolea
       <tbody>
         {events.map((e, i) => {
           const sev = e.severity || '';
-          const sevClass = ['emergency', 'alert', 'critical', 'error'].includes(sev)
-            ? 'danger'
-            : sev === 'warning'
-              ? 'warning'
-              : 'info';
           return (
             <tr key={i}>
               <td style={{ whiteSpace: 'nowrap' }}>
                 {formatBackendDateTime(e.timestamp, '-')}
               </td>
               <td>
-                <span className={`badge badge-${sevClass}`}>{sev || '-'}</span>
+                <SeverityBadge severity={sev} />
               </td>
               <td>{e.message || e.event_data || '-'}</td>
             </tr>
