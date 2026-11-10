@@ -13,7 +13,42 @@ import {
   useUpdateAdminUser,
 } from '@/api/settings';
 
-function GroupCheckboxes({
+import { CheckboxField } from './FormFields';
+
+const MIN_USERNAME = 3;
+const MIN_PASSWORD = 8;
+
+/**
+ * A field's requirement: a quiet hint, or an inline error once `invalid`
+ * (callers usually wait until the user has typed something).
+ */
+function Requirement({
+  id,
+  invalid,
+  hint,
+  error,
+}: {
+  id: string;
+  invalid: boolean;
+  hint: string;
+  error: string;
+}) {
+  if (invalid) return <FieldError id={id}>{error}</FieldError>;
+  return <div className="form-help" id={id}>{hint}</div>;
+}
+
+/** Says why the primary button is disabled; nothing once every requirement is met. */
+function StillNeeded({ items }: { items: string[] }) {
+  if (items.length === 0) return null;
+  return (
+    <p className="form-help" role="status">
+      Still needed: {items.join('; ')}.
+    </p>
+  );
+}
+
+/** Checkbox list of access groups, shared with the auth providers' default groups. */
+export function GroupCheckboxes({
   groups,
   selected,
   onChange,
@@ -85,13 +120,14 @@ export function CreateUserModal({
   const [error, setError] = useState<string | null>(null);
 
   const passwordsMatch = password === confirm;
+  const usernameOk = username.trim().length >= MIN_USERNAME;
+  const passwordOk = password.length >= MIN_PASSWORD;
   const saving = create.isPending || setGroups.isPending;
-  const submitDisabled =
-    !username.trim() ||
-    username.trim().length < 3 ||
-    password.length < 8 ||
-    !passwordsMatch ||
-    saving;
+  const stillNeeded: string[] = [];
+  if (!usernameOk) stillNeeded.push(`a username of at least ${MIN_USERNAME} characters`);
+  if (!passwordOk) stillNeeded.push(`a password of at least ${MIN_PASSWORD} characters`);
+  else if (!passwordsMatch) stillNeeded.push('matching passwords');
+  const submitDisabled = stillNeeded.length > 0 || saving;
 
   return (
     <Modal
@@ -140,7 +176,15 @@ export function CreateUserModal({
           className="form-input"
           value={username}
           onChange={(e) => setUsername(e.target.value)}
-          minLength={3}
+          minLength={MIN_USERNAME}
+          aria-invalid={!!username && !usernameOk}
+          aria-describedby={`${fid}-username-req`}
+        />
+        <Requirement
+          id={`${fid}-username-req`}
+          invalid={!!username && !usernameOk}
+          hint={`At least ${MIN_USERNAME} characters.`}
+          error={`Username must be at least ${MIN_USERNAME} characters`}
         />
       </div>
       <div className="form-group">
@@ -160,7 +204,16 @@ export function CreateUserModal({
           className="form-input"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          minLength={8}
+          minLength={MIN_PASSWORD}
+          aria-invalid={!!password && !passwordOk}
+          aria-describedby={`${fid}-password-req`}
+          autoComplete="new-password"
+        />
+        <Requirement
+          id={`${fid}-password-req`}
+          invalid={!!password && !passwordOk}
+          hint={`At least ${MIN_PASSWORD} characters.`}
+          error={`Password must be at least ${MIN_PASSWORD} characters`}
         />
       </div>
       <div className="form-group">
@@ -171,20 +224,21 @@ export function CreateUserModal({
           className="form-input"
           value={confirm}
           onChange={(e) => setConfirm(e.target.value)}
-          minLength={8}
+          minLength={MIN_PASSWORD}
           aria-invalid={!!confirm && !passwordsMatch}
+          aria-describedby={`${fid}-confirm-err`}
+          autoComplete="new-password"
         />
-        <FieldError>{confirm && !passwordsMatch && 'Passwords do not match'}</FieldError>
+        <FieldError id={`${fid}-confirm-err`}>
+          {confirm && !passwordsMatch && 'Passwords do not match'}
+        </FieldError>
       </div>
       <div className="form-group">
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
-          <input
-            type="checkbox"
-            checked={showPasswords}
-            onChange={(e) => setShowPasswords(e.target.checked)}
-          />
-          <span>Show passwords</span>
-        </label>
+        <CheckboxField
+          label="Show passwords"
+          checked={showPasswords}
+          onChange={setShowPasswords}
+        />
       </div>
       <div className="form-group">
         <label className="form-label" htmlFor={`${fid}-role`}>Role</label>
@@ -207,6 +261,7 @@ export function CreateUserModal({
           labelledBy={`${fid}-groups`}
         />
       </div>
+      <StillNeeded items={stillNeeded} />
       {error && <Callout tone="danger">{error}</Callout>}
     </Modal>
   );
@@ -234,9 +289,9 @@ export function EditUserModal({
   const [neverExpires, setNeverExpires] = useState<boolean>(!!user.session_never_expires);
   const [error, setError] = useState<string | null>(null);
 
+  const usernameOk = username.trim().length >= MIN_USERNAME;
   const saving = update.isPending || setGroups.isPending;
-  const submitDisabled =
-    !username.trim() || username.trim().length < 3 || saving;
+  const submitDisabled = !usernameOk || saving;
 
   return (
     <Modal
@@ -286,7 +341,15 @@ export function EditUserModal({
           className="form-input"
           value={username}
           onChange={(e) => setUsername(e.target.value)}
-          minLength={3}
+          minLength={MIN_USERNAME}
+          aria-invalid={!usernameOk}
+          aria-describedby={`${fid}-username-req`}
+        />
+        <Requirement
+          id={`${fid}-username-req`}
+          invalid={!usernameOk}
+          hint={`At least ${MIN_USERNAME} characters.`}
+          error={`Username must be at least ${MIN_USERNAME} characters`}
         />
       </div>
       <div className="form-group">
@@ -319,20 +382,12 @@ export function EditUserModal({
           labelledBy={`${fid}-groups`}
         />
       </div>
-      <div className="form-group">
-        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-          <input
-            type="checkbox"
-            checked={neverExpires}
-            onChange={(e) => setNeverExpires(e.target.checked)}
-          />
-          <span>Session never expires</span>
-        </label>
-        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-          Bypasses the global idle timeout. Use only for read-only kiosk
-          accounts (smart boards, NOC walls).
-        </div>
-      </div>
+      <CheckboxField
+        label="Session never expires"
+        checked={neverExpires}
+        onChange={setNeverExpires}
+        help="Bypasses the global idle timeout. Use only for read-only kiosk accounts (smart boards, NOC walls)."
+      />
       {error && <Callout tone="danger">{error}</Callout>}
     </Modal>
   );
@@ -350,7 +405,8 @@ export function ResetPasswordModal({
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  const submitDisabled = password.length < 8 || reset.isPending;
+  const passwordOk = password.length >= MIN_PASSWORD;
+  const submitDisabled = !passwordOk || reset.isPending;
 
   return (
     <Modal
@@ -389,7 +445,16 @@ export function ResetPasswordModal({
           className="form-input"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          minLength={8}
+          minLength={MIN_PASSWORD}
+          aria-invalid={!!password && !passwordOk}
+          aria-describedby={`${fid}-new-password-req`}
+          autoComplete="new-password"
+        />
+        <Requirement
+          id={`${fid}-new-password-req`}
+          invalid={!!password && !passwordOk}
+          hint={`At least ${MIN_PASSWORD} characters.`}
+          error={`Password must be at least ${MIN_PASSWORD} characters`}
         />
       </div>
       {error && <Callout tone="danger">{error}</Callout>}

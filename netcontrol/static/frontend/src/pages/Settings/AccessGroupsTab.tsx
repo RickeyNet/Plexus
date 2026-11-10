@@ -30,14 +30,7 @@ export function AccessGroupsTab({
 
   return (
     <div className="stack stack-sm">
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <h3 style={{ margin: 0 }}>Access Groups</h3>
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
         <button className="btn btn-sm btn-primary" onClick={() => setShowCreate(true)}>
           + New Group
         </button>

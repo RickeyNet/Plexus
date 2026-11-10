@@ -12,6 +12,8 @@ import {
   VALID_THEMES,
 } from '@/lib/appearance';
 
+import { AutoSaveNote } from './SaveBar';
+
 const INTENSITY_LABELS: Record<SpaceIntensity, string> = {
   off: 'Off',
   low: 'Low',
@@ -35,10 +37,7 @@ export function AppearanceTab() {
 
   return (
     <div>
-      <h3 style={{ margin: '0 0 0.5rem 0' }}>Appearance</h3>
-      <p className="card-description" style={{ marginBottom: '0.75rem' }}>
-        Theme and background-depth preferences are saved to this browser.
-      </p>
+      <AutoSaveNote>Changes apply immediately and are saved to this browser.</AutoSaveNote>
 
       <div style={{ display: 'grid', gap: '1rem', maxWidth: 320 }}>
         <div>
@@ -67,6 +66,7 @@ export function AppearanceTab() {
               <option key={i} value={i}>{INTENSITY_LABELS[i]}</option>
             ))}
           </select>
+          <div className="form-help">How strongly the space-depth background effect shows behind the page.</div>
         </div>
       </div>
     </div>

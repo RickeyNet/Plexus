@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -20,6 +20,49 @@ import {
   ResetPasswordModal,
 } from './UserModals';
 
+/** A user's effective features, collapsed to a count until expanded. */
+function EffectiveFeatures({ features }: { features: string[] }) {
+  const [open, setOpen] = useState(false);
+  const listId = useId();
+  const count = `${features.length} ${features.length === 1 ? 'feature' : 'features'}`;
+  return (
+    <>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.5rem',
+          fontSize: '0.8rem',
+          color: 'var(--text-muted)',
+          marginTop: '0.25rem',
+        }}
+      >
+        <span>Effective Features: {count}</span>
+        {features.length > 0 && (
+          <button
+            type="button"
+            className="btn btn-xs btn-ghost"
+            aria-expanded={open}
+            aria-controls={open ? listId : undefined}
+            onClick={() => setOpen((v) => !v)}
+          >
+            {open ? 'Hide' : 'Show'}
+          </button>
+        )}
+      </div>
+      {open && (
+        <div id={listId} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+          {features.map((name) => (
+            <span key={name} className="badge badge-success">
+              {name}
+            </span>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
 export function UsersTab() {
   const { confirm, alert } = useDialogs();
   const users = useAdminUsers();
@@ -38,15 +81,12 @@ export function UsersTab() {
 
   return (
     <div className="stack stack-sm">
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <h3 style={{ margin: 0 }}>User Accounts</h3>
-        <button className="btn btn-sm btn-primary" onClick={() => setShowCreate(true)}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <button
+          type="button"
+          className="btn btn-sm btn-primary"
+          onClick={() => setShowCreate(true)}
+        >
           + New User
         </button>
       </div>
@@ -127,22 +167,7 @@ export function UsersTab() {
                 ))
               )}
             </div>
-            <div
-              style={{
-                fontSize: '0.8rem',
-                color: 'var(--text-muted)',
-                marginTop: '0.25rem',
-              }}
-            >
-              Effective Features
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
-              {u.feature_access.map((name) => (
-                <span key={name} className="badge badge-success">
-                  {name}
-                </span>
-              ))}
-            </div>
+            <EffectiveFeatures features={u.feature_access} />
           </div>
         </div>
       ))}

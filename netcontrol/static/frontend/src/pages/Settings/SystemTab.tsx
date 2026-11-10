@@ -22,6 +22,10 @@ import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
 import { formatBackendDateTime } from '@/lib/datetime';
 
+import { SaveBar } from './SaveBar';
+import { FormStatus } from './StatusLine';
+import { useSavedDraft } from './useSavedDraft';
+
 const CHANNEL_LABELS: Record<UpdateChannel, string> = {
   release: 'GitHub Releases (stable)',
   edge: 'Edge (latest build of main)',
@@ -55,18 +59,14 @@ export function SystemTab() {
   const apply = useApplyUpdate();
   const rollback = useRollbackUpdate();
 
-  const [draft, setDraft] = useState<UpdatesConfig | null>(null);
-  const [savedMsg, setSavedMsg] = useState<string | null>(null);
+  const { draft, setDraft, dirty: draftChanged, discard, markSaved } =
+    useSavedDraft<UpdatesConfig>(configQ.data);
+  const [saveStatus, setSaveStatus] = useState<FormStatus | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   // The queued request plus the version running when it was queued. The
   // restarted container shows up as /api/version moving off that version;
   // the updater's result.json for this request ends the watch either way.
   const [watch, setWatch] = useState<{ id: string; base: CurrentVersion } | null>(null);
-  const [prevData, setPrevData] = useState(configQ.data);
-  if (configQ.data !== prevData) {
-    setPrevData(configQ.data);
-    if (configQ.data) setDraft(configQ.data);
-  }
 
   const appVersion = useAppVersion(watch != null);
   const progress = progressQ.data;
@@ -109,20 +109,14 @@ export function SystemTab() {
   const saved = configQ.data;
   const last = check.data ?? status.data.last_check ?? null;
   const busy = isUpdateBusy(progress);
-  const draftChanged =
-    draft.channel !== saved.channel ||
-    draft.repo !== saved.repo ||
-    draft.git_remote !== saved.git_remote ||
-    draft.git_branch !== saved.git_branch ||
-    draft.image_repo !== saved.image_repo;
 
   const onSave = async () => {
-    setSavedMsg(null);
+    setSaveStatus(null);
     try {
-      await save.mutateAsync(draft);
-      setSavedMsg('Saved.');
+      markSaved(await save.mutateAsync(draft));
+      setSaveStatus({ kind: 'success', message: 'Channel settings saved' });
     } catch (e) {
-      setSavedMsg(`Save failed: ${(e as Error).message}`);
+      setSaveStatus({ kind: 'error', message: `Save failed: ${(e as Error).message}` });
     }
   };
 
@@ -194,9 +188,7 @@ export function SystemTab() {
               </option>
             ))}
           </select>
-          <div className="text-muted" style={{ ...mutedSmall, marginTop: '0.25rem' }}>
-            {CHANNEL_HELP[draft.channel]}
-          </div>
+          <div className="form-help">{CHANNEL_HELP[draft.channel]}</div>
         </div>
 
         {showRepo && (
@@ -224,7 +216,7 @@ export function SystemTab() {
                 onChange={(e) => setDraft({ ...draft, image_repo: e.target.value })}
                 placeholder="ghcr.io/rickeynet/plexus"
               />
-              <div className="text-muted" style={{ ...mutedSmall, marginTop: '0.25rem' }}>
+              <div className="form-help">
                 Must match PLEXUS_UPDATE_IMAGE_REPO in the server&apos;s .env.
               </div>
             </div>
@@ -260,25 +252,15 @@ export function SystemTab() {
           </div>
         )}
 
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-          <BusyButton
-            className="btn btn-primary btn-sm"
-            busy={save.isPending}
-            busyLabel="Saving…"
-            disabled={!draftChanged}
-            onClick={onSave}
-          >
-            Save channel settings
-          </BusyButton>
-          {savedMsg && (
-            <span
-              className={savedMsg.startsWith('Save failed') ? 'error' : 'text-muted'}
-              style={{ fontSize: '0.85rem' }}
-            >
-              {savedMsg}
-            </span>
-          )}
-        </div>
+        <SaveBar
+          name="Update channel"
+          dirty={draftChanged}
+          busy={save.isPending}
+          label="Save channel settings"
+          status={saveStatus}
+          onDiscard={discard}
+          onSave={onSave}
+        />
       </section>
 
       <section>

@@ -1,29 +1,30 @@
-import { useId, useState } from 'react';
+import { useState } from 'react';
 
 import {
-  FlowCollectorConfig,
   useFlowCollectorConfig,
   useUpdateFlowCollectorConfig,
 } from '@/api/settings';
 import { Badge } from '@/components/Badge';
-import { BusyButton } from '@/components/BusyButton';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
 
-import { FormStatus, StatusLine } from './StatusLine';
+import { CheckboxRow, CheckboxField, FormRow, NumberField } from './FormFields';
+import { SaveBar } from './SaveBar';
+import { FormStatus } from './StatusLine';
+import { useSavedDraft } from './useSavedDraft';
+
+type NumKey =
+  | 'netflow_port'
+  | 'sflow_port'
+  | 'retention_hours'
+  | 'summary_retention_days'
+  | 'aggregation_interval_seconds';
 
 export function NetFlowTab() {
   const query = useFlowCollectorConfig();
   const update = useUpdateFlowCollectorConfig();
-  const fid = useId();
-
-  const [draft, setDraft] = useState<FlowCollectorConfig | null>(null);
+  const { draft, setDraft, dirty, discard, markSaved } = useSavedDraft(query.data);
   const [status, setStatus] = useState<FormStatus | null>(null);
-  const [prevData, setPrevData] = useState(query.data);
-  if (query.data !== prevData) {
-    setPrevData(query.data);
-    if (query.data) setDraft(query.data);
-  }
 
   if (!draft) {
     if (query.isError)
@@ -33,29 +34,15 @@ export function NetFlowTab() {
     return <LoadingState />;
   }
 
-  const num = (
-    label: string,
-    key: keyof FlowCollectorConfig,
-    min: number,
-    flex = '0 1 180px',
-    help?: string,
-  ) => (
-    <div className="form-group" style={{ flex }}>
-      <label className="form-label" htmlFor={`${fid}-${key}`}>{label}</label>
-      <input
-        id={`${fid}-${key}`}
-        type="number"
-        min={min}
-        className="form-input"
-        value={draft[key] as number}
-        onChange={(e) => setDraft({ ...draft, [key]: Number(e.target.value) })}
-      />
-      {help && (
-        <div className="text-muted" style={{ fontSize: '0.78rem', marginTop: '0.2rem' }}>
-          {help}
-        </div>
-      )}
-    </div>
+  const num = (label: string, key: NumKey, min: number, help: string) => (
+    <NumberField
+      label={label}
+      value={draft[key]}
+      min={min}
+      flex="0 1 200px"
+      help={help}
+      onChange={(v) => setDraft({ ...draft, [key]: v })}
+    />
   );
 
   const running = query.data?.netflow_running ?? false;
@@ -63,21 +50,9 @@ export function NetFlowTab() {
 
   return (
     <div>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: '0.75rem',
-          flexWrap: 'wrap',
-          gap: '0.5rem',
-        }}
-      >
-        <h3 style={{ margin: 0 }}>NetFlow / sFlow Collector</h3>
-        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-          <Badge tone={running ? 'success' : 'neutral'}>NetFlow {running ? 'running' : 'stopped'}</Badge>
-          <Badge tone={sflowRunning ? 'success' : 'neutral'}>sFlow {sflowRunning ? 'running' : 'stopped'}</Badge>
-        </div>
+      <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+        <Badge tone={running ? 'success' : 'neutral'}>NetFlow {running ? 'running' : 'stopped'}</Badge>
+        <Badge tone={sflowRunning ? 'success' : 'neutral'}>sFlow {sflowRunning ? 'running' : 'stopped'}</Badge>
       </div>
 
       <form
@@ -86,7 +61,7 @@ export function NetFlowTab() {
           setStatus(null);
           update.mutate(draft, {
             onSuccess: (saved) => {
-              setDraft(saved);
+              markSaved(saved);
               setStatus({
                 kind: 'success',
                 message:
@@ -106,61 +81,42 @@ export function NetFlowTab() {
           });
         }}
       >
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
-          <label
-            className="form-group"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
-          >
-            <input
-              type="checkbox"
-              checked={draft.enabled}
-              onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })}
-            />
-            <span>Enabled</span>
-          </label>
-        </div>
+        <CheckboxRow>
+          <CheckboxField
+            label="Enabled"
+            checked={draft.enabled}
+            onChange={(v) => setDraft({ ...draft, enabled: v })}
+          />
+        </CheckboxRow>
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.5rem' }}>
-          {num('NetFlow / IPFIX port', 'netflow_port', 1, '0 1 180px', 'UDP, default 2055')}
-          {num('sFlow port', 'sflow_port', 0, '0 1 180px', 'UDP, default 6343 (set 0 to disable)')}
-        </div>
+        <FormRow>
+          {num('NetFlow / IPFIX port', 'netflow_port', 1, 'UDP, default 2055')}
+          {num('sFlow port', 'sflow_port', 0, 'UDP, default 6343 (set 0 to disable)')}
+        </FormRow>
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.5rem' }}>
-          {num(
-            'Raw retention (hours)',
-            'retention_hours',
-            1,
-            '0 1 200px',
-            'Raw flow_records older than this are purged.',
-          )}
-          {num(
-            'Summary retention (days)',
-            'summary_retention_days',
-            1,
-            '0 1 200px',
-            'Hourly aggregates kept this long.',
-          )}
+        <FormRow>
+          {num('Raw retention (hours)', 'retention_hours', 1, 'Raw flow records older than this are purged.')}
+          {num('Summary retention (days)', 'summary_retention_days', 1, 'Hourly aggregates kept this long.')}
           {num(
             'Aggregation interval (s)',
             'aggregation_interval_seconds',
             60,
-            '0 1 200px',
             'How often raw records roll up into summaries.',
           )}
-        </div>
+        </FormRow>
 
-        <div className="text-muted" style={{ fontSize: '0.78rem', marginTop: '0.5rem' }}>
-          Saving here applies the change immediately - port/toggle edits rebind the UDP
-          listeners on the fly, so no restart is required.
-        </div>
+        <p className="form-help">
+          Saving rebinds the UDP listeners right away, so port and toggle changes need no restart.
+        </p>
 
-        <div style={{ marginTop: '0.75rem' }}>
-          <BusyButton type="submit" className="btn btn-primary" busy={update.isPending} busyLabel="Saving…">
-            Save NetFlow Settings
-          </BusyButton>
-        </div>
-
-        <StatusLine status={status} />
+        <SaveBar
+          name="NetFlow"
+          dirty={dirty}
+          busy={update.isPending}
+          label="Save NetFlow Settings"
+          status={status}
+          onDiscard={discard}
+        />
       </form>
     </div>
   );

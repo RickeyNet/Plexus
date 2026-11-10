@@ -1,6 +1,5 @@
-import { useId, useState } from 'react';
+import { type ReactNode, useId, useState } from 'react';
 
-import { BusyButton } from '@/components/BusyButton';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -21,28 +20,70 @@ import {
   useUpdateLoginRules,
   useUpdateServiceCredential,
 } from '@/api/settings';
+import { Callout } from '@/components/Callout';
+import { DataTable } from '@/components/DataTable';
+import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
+import { Modal } from '@/components/Modal';
+import { ModalActions } from '@/components/ModalActions';
 import { QueryError } from '@/components/QueryError';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 
+import { CheckboxField, CheckboxRow, FormRow, NumberField, TextField } from './FormFields';
+import { SaveBar } from './SaveBar';
 import { SectionCard } from './SectionCard';
 import { FormStatus, StatusLine } from './StatusLine';
+import { useReportUnsaved } from './unsaved-context';
+import { GroupCheckboxes } from './UserModals';
+import { useSavedDraft } from './useSavedDraft';
+
+// Help texts follow the login handler in routes/auth.py: only failed logins
+// are counted, per client IP, over a sliding window.
+const LOGIN_RULE_FIELDS: Array<{
+  key: keyof LoginRules;
+  label: string;
+  min: number;
+  max?: number;
+  help: string;
+}> = [
+  {
+    key: 'max_attempts',
+    label: 'Max attempts',
+    min: 1,
+    help: 'Failed logins from one client IP within the rate window that lock it out.',
+  },
+  {
+    key: 'lockout_time',
+    label: 'Lockout time (s)',
+    min: 1,
+    help: 'How long a locked-out client IP is refused.',
+  },
+  {
+    key: 'rate_limit_window',
+    label: 'Rate window (s)',
+    min: 1,
+    help: 'Sliding window over which failed logins per client IP are counted.',
+  },
+  {
+    key: 'rate_limit_max',
+    label: 'Rate limit max',
+    min: 1,
+    help: 'Failed logins in the window after which new attempts from that IP are refused, without a lockout.',
+  },
+  {
+    key: 'session_idle_timeout',
+    label: 'Idle timeout (s, 0 = off)',
+    min: 0,
+    max: 86400,
+    help: 'Signs a session out after this long without a request; at most 86400 (24 h).',
+  },
+];
 
 function LoginRulesForm() {
   const query = useLoginRules();
   const update = useUpdateLoginRules();
-  const fid = useId();
-  const [draft, setDraft] = useState<LoginRules | null>(null);
+  const { draft, setDraft, dirty, discard, markSaved } = useSavedDraft(query.data);
   const [status, setStatus] = useState<FormStatus | null>(null);
-  const [prevData, setPrevData] = useState(query.data);
-
-  // Seed the editable draft from server data; re-seed when it changes.
-  // Adjusting state during render (guarded by the previous value) is React's
-  // recommended alternative to a setState-in-effect.
-  if (query.data !== prevData) {
-    setPrevData(query.data);
-    if (query.data) setDraft(query.data);
-  }
 
   if (!draft) {
     if (query.isError)
@@ -52,34 +93,16 @@ function LoginRulesForm() {
     return <LoadingState />;
   }
 
-  const numField = (
-    label: string,
-    key: keyof LoginRules,
-    min: number,
-  ) => (
-    <div className="form-group" style={{ flex: '1 1 180px' }}>
-      <label className="form-label" htmlFor={`${fid}-${key}`}>{label}</label>
-      <input
-        id={`${fid}-${key}`}
-        type="number"
-        className="form-input"
-        min={min}
-        value={draft[key]}
-        onChange={(e) =>
-          setDraft({ ...draft, [key]: Number(e.target.value) })
-        }
-      />
-    </div>
-  );
-
   return (
     <form
       onSubmit={(e) => {
         e.preventDefault();
         setStatus(null);
         update.mutate(draft, {
-          onSuccess: () =>
-            setStatus({ kind: 'success', message: 'Login rules updated' }),
+          onSuccess: (saved) => {
+            markSaved(saved);
+            setStatus({ kind: 'success', message: 'Login rules updated' });
+          },
           onError: (err) =>
             setStatus({
               kind: 'error',
@@ -88,24 +111,28 @@ function LoginRulesForm() {
         });
       }}
     >
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
-        {numField('Max attempts', 'max_attempts', 1)}
-        {numField('Lockout time (s)', 'lockout_time', 0)}
-        {numField('Rate window (s)', 'rate_limit_window', 1)}
-        {numField('Rate limit max', 'rate_limit_max', 1)}
-        {numField('Idle timeout (s, 0 = off)', 'session_idle_timeout', 0)}
-      </div>
-      <div style={{ marginTop: '0.5rem' }}>
-        <BusyButton
-          type="submit"
-          className="btn btn-primary"
-          busy={update.isPending}
-          busyLabel="Saving…"
-        >
-          Save Login Rules
-        </BusyButton>
-      </div>
-      <StatusLine status={status} />
+      <FormRow>
+        {LOGIN_RULE_FIELDS.map((f) => (
+          <NumberField
+            key={f.key}
+            label={f.label}
+            value={draft[f.key]}
+            min={f.min}
+            max={f.max}
+            flex="1 1 180px"
+            help={f.help}
+            onChange={(v) => setDraft({ ...draft, [f.key]: v })}
+          />
+        ))}
+      </FormRow>
+      <SaveBar
+        name="Login Rules"
+        dirty={dirty}
+        busy={update.isPending}
+        label="Save Login Rules"
+        status={status}
+        onDiscard={discard}
+      />
     </form>
   );
 }
@@ -116,15 +143,11 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
   const credentials = useCredentialsList();
   const serviceCredentials = useServiceCredentialsList();
   const fid = useId();
-  const [draft, setDraft] = useState<AuthConfig | null>(null);
+  // Job retention rides on the same payload but is edited by
+  // JobRetentionSection; each form re-seeds only while it is clean, so a
+  // save in one never discards unsaved edits in the other.
+  const { draft, setDraft, dirty, discard, markSaved } = useSavedDraft(query.data);
   const [status, setStatus] = useState<FormStatus | null>(null);
-  const [prevData, setPrevData] = useState(query.data);
-
-  // Seed the editable draft from server data; re-seed when it changes.
-  if (query.data !== prevData) {
-    setPrevData(query.data);
-    if (query.data) setDraft(query.data);
-  }
 
   if (!draft) {
     if (query.isError)
@@ -134,25 +157,20 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
     return <LoadingState />;
   }
 
-  const radiusGroupSet = new Set(draft.radius.default_group_ids);
-  const tacacsGroupSet = new Set(draft.tacacs.default_group_ids);
-  const ldapGroupSet = new Set(draft.ldap.default_group_ids);
-
   return (
     <form
       onSubmit={(e) => {
         e.preventDefault();
         setStatus(null);
-        if (draft.job_retention_days < 30) {
-          setStatus({
-            kind: 'error',
-            message: 'Job retention must be at least 30 days',
-          });
-          return;
-        }
-        update.mutate(draft, {
+        // Submit the server's current retention, never the copy this draft
+        // was seeded with, so a retention change saved meanwhile survives.
+        const payload: AuthConfig = {
+          ...draft,
+          job_retention_days: query.data?.job_retention_days ?? draft.job_retention_days,
+        };
+        update.mutate(payload, {
           onSuccess: (saved) => {
-            setDraft(saved);
+            markSaved(saved);
             setStatus({ kind: 'success', message: 'Authentication settings saved' });
           },
           onError: (err) =>
@@ -166,7 +184,7 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
       {credentials.isError && !credentials.data && (
         <QueryError what="credentials" query={credentials} />
       )}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+      <FormRow>
         <div className="form-group" style={{ flex: '1 1 200px' }}>
           <label className="form-label" htmlFor={`${fid}-provider`}>Auth Provider</label>
           <select
@@ -187,6 +205,7 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
             id={`${fid}-default-credential`}
             className="form-select"
             value={draft.default_credential_id ?? ''}
+            aria-describedby={`${fid}-default-credential-help`}
             onChange={(e) =>
               setDraft({
                 ...draft,
@@ -202,9 +221,9 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
               </option>
             ))}
           </select>
-          <small className="card-description">
+          <div className="form-help" id={`${fid}-default-credential-help`}>
             Per-user fallback for jobs launched without selecting a credential.
-          </small>
+          </div>
         </div>
         <div className="form-group" style={{ flex: '1 1 200px' }}>
           <label className="form-label" htmlFor={`${fid}-service-credential`}>Service Credential</label>
@@ -212,6 +231,7 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
             id={`${fid}-service-credential`}
             className="form-select"
             value={draft.service_credential_id ?? ''}
+            aria-describedby={`${fid}-service-credential-help`}
             onChange={(e) =>
               setDraft({
                 ...draft,
@@ -227,65 +247,47 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
               </option>
             ))}
           </select>
-          <small className="card-description">
+          <div className="form-help" id={`${fid}-service-credential-help`}>
             Used by Plexus internals (monitoring polls, scheduled discovery).
-          </small>
+          </div>
         </div>
-        <div className="form-group" style={{ flex: '1 1 160px' }}>
-          <label className="form-label" htmlFor={`${fid}-retention`}>Job Retention (days)</label>
-          <input
-            id={`${fid}-retention`}
-            type="number"
-            className="form-input"
-            min={30}
-            value={draft.job_retention_days}
-            onChange={(e) =>
-              setDraft({ ...draft, job_retention_days: Number(e.target.value) })
-            }
-          />
-        </div>
-      </div>
+      </FormRow>
 
       {draft.provider === 'radius' && (
-        <RadiusPanel draft={draft} setDraft={setDraft} groups={groups} groupSet={radiusGroupSet} />
+        <RadiusPanel draft={draft} setDraft={setDraft} groups={groups} />
       )}
       {draft.provider === 'tacacs' && (
-        <TacacsPanel draft={draft} setDraft={setDraft} groups={groups} groupSet={tacacsGroupSet} />
+        <TacacsPanel draft={draft} setDraft={setDraft} groups={groups} />
       )}
       {draft.provider === 'ldap' && (
-        <LdapPanel draft={draft} setDraft={setDraft} groups={groups} groupSet={ldapGroupSet} />
+        <LdapPanel draft={draft} setDraft={setDraft} groups={groups} />
       )}
 
-      <div style={{ marginTop: '0.75rem' }}>
-        <BusyButton
-          type="submit"
-          className="btn btn-primary"
-          busy={update.isPending}
-          busyLabel="Saving…"
-        >
-          Save Authentication
-        </BusyButton>
-      </div>
-      <StatusLine status={status} />
+      <SaveBar
+        name="Authentication"
+        dirty={dirty}
+        busy={update.isPending}
+        label="Save Authentication"
+        status={status}
+        onDiscard={discard}
+      />
     </form>
   );
 }
 
-function RadiusPanel({
-  draft,
-  setDraft,
-  groups,
-  groupSet,
-}: {
+interface PanelProps {
   draft: AuthConfig;
   setDraft: (next: AuthConfig) => void;
   groups: AccessGroup[];
-  groupSet: Set<number>;
-}) {
-  const r = draft.radius;
-  const setR = (patch: Partial<typeof r>) =>
-    setDraft({ ...draft, radius: { ...r, ...patch } });
+}
 
+// Shared by the three providers (routes/auth.py _auth_identity): an
+// unreachable server falls back to local accounts when "Fallback to local"
+// is on; a rejected password does so only when "Fallback on reject" is on too.
+const FALLBACK_LOCAL_HELP = 'Try local accounts when the server cannot be reached.';
+const FALLBACK_REJECT_HELP = 'Also try local accounts when the server rejects the login.';
+
+function ProviderFieldset({ legend, children }: { legend: string; children: ReactNode }) {
   return (
     <fieldset
       style={{
@@ -295,8 +297,20 @@ function RadiusPanel({
         borderRadius: '0.375rem',
       }}
     >
-      <legend style={{ padding: '0 0.4rem' }}>RADIUS</legend>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+      <legend style={{ padding: '0 0.4rem' }}>{legend}</legend>
+      {children}
+    </fieldset>
+  );
+}
+
+function RadiusPanel({ draft, setDraft, groups }: PanelProps) {
+  const r = draft.radius;
+  const setR = (patch: Partial<typeof r>) =>
+    setDraft({ ...draft, radius: { ...r, ...patch } });
+
+  return (
+    <ProviderFieldset legend="RADIUS">
+      <CheckboxRow>
         <CheckboxField
           label="Enabled"
           checked={r.enabled}
@@ -306,19 +320,22 @@ function RadiusPanel({
           label="Fallback to local"
           checked={r.fallback_to_local}
           onChange={(v) => setR({ fallback_to_local: v })}
+          help={FALLBACK_LOCAL_HELP}
         />
         <CheckboxField
           label="Fallback on reject"
           checked={r.fallback_on_reject}
           onChange={(v) => setR({ fallback_on_reject: v })}
+          help={FALLBACK_REJECT_HELP}
         />
         <CheckboxField
           label="Require Message-Authenticator"
           checked={r.enforce_message_authenticator}
           onChange={(v) => setR({ enforce_message_authenticator: v })}
+          help="Blast-RADIUS (CVE-2024-3596) mitigation; the server must echo it in replies."
         />
-      </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+      </CheckboxRow>
+      <FormRow>
         <TextField
           label="Server"
           value={r.server}
@@ -342,48 +359,30 @@ function RadiusPanel({
           value={r.timeout}
           onChange={(v) => setR({ timeout: v })}
         />
-      </div>
+      </FormRow>
       <DefaultGroupsField
         groups={groups}
-        groupSet={groupSet}
+        selected={r.default_group_ids}
         onChange={(ids) => setR({ default_group_ids: ids })}
       />
-    </fieldset>
+    </ProviderFieldset>
   );
 }
 
-function TacacsPanel({
-  draft,
-  setDraft,
-  groups,
-  groupSet,
-}: {
-  draft: AuthConfig;
-  setDraft: (next: AuthConfig) => void;
-  groups: AccessGroup[];
-  groupSet: Set<number>;
-}) {
+function TacacsPanel({ draft, setDraft, groups }: PanelProps) {
   const t = draft.tacacs;
   const fid = useId();
   const setT = (patch: Partial<typeof t>) =>
     setDraft({ ...draft, tacacs: { ...t, ...patch } });
 
   return (
-    <fieldset
-      style={{
-        marginTop: '1rem',
-        padding: '0.75rem',
-        border: '1px solid var(--border)',
-        borderRadius: '0.375rem',
-      }}
-    >
-      <legend style={{ padding: '0 0.4rem' }}>TACACS+</legend>
-      <small className="card-description">
+    <ProviderFieldset legend="TACACS+">
+      <p className="form-help" style={{ marginTop: 0 }}>
         Cisco ISE Device Admin style login: the whole exchange is obfuscated under the
         shared secret and an ISE shell profile can assert the Plexus role. Register the
         Plexus host as a Network Device in ISE with TACACS+ enabled.
-      </small>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+      </p>
+      <CheckboxRow>
         <CheckboxField
           label="Enabled"
           checked={t.enabled}
@@ -393,19 +392,22 @@ function TacacsPanel({
           label="Fallback to local"
           checked={t.fallback_to_local}
           onChange={(v) => setT({ fallback_to_local: v })}
+          help={FALLBACK_LOCAL_HELP}
         />
         <CheckboxField
           label="Fallback on reject"
           checked={t.fallback_on_reject}
           onChange={(v) => setT({ fallback_on_reject: v })}
+          help={FALLBACK_REJECT_HELP}
         />
         <CheckboxField
           label="Authorize (map ISE shell profile to role)"
           checked={t.authorize}
           onChange={(v) => setT({ authorize: v })}
+          help="Off: authenticate only, without setting the role."
         />
-      </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+      </CheckboxRow>
+      <FormRow>
         <TextField
           label="Server"
           value={t.server}
@@ -441,9 +443,9 @@ function TacacsPanel({
             <option value="pap">PAP</option>
           </select>
         </div>
-      </div>
+      </FormRow>
       {t.authorize && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <FormRow>
           <TextField
             label="Authorization Service"
             value={t.service}
@@ -455,6 +457,7 @@ function TacacsPanel({
             value={t.role_attribute}
             onChange={(v) => setT({ role_attribute: v })}
             flex="1 1 200px"
+            help="Custom attribute on the ISE shell profile; its value (admin or user) sets the role."
           />
           <NumberField
             label="Admin priv-lvl (0 = off)"
@@ -473,51 +476,33 @@ function TacacsPanel({
               <option value="admin">admin</option>
             </select>
           </div>
-        </div>
+        </FormRow>
       )}
       {t.authorize && (
-        <small className="card-description">
+        <p className="form-help" style={{ marginTop: 0 }}>
           Role precedence: <code>{t.role_attribute || 'plexus-role'}=admin|user</code> from the
           shell profile&apos;s custom attributes, then <code>priv-lvl</code> &ge;{' '}
           {t.admin_priv_lvl || '(off)'}, then the default role. Re-synced on every login.
-        </small>
+        </p>
       )}
       <DefaultGroupsField
         groups={groups}
-        groupSet={groupSet}
+        selected={t.default_group_ids}
         onChange={(ids) => setT({ default_group_ids: ids })}
       />
-    </fieldset>
+    </ProviderFieldset>
   );
 }
 
-function LdapPanel({
-  draft,
-  setDraft,
-  groups,
-  groupSet,
-}: {
-  draft: AuthConfig;
-  setDraft: (next: AuthConfig) => void;
-  groups: AccessGroup[];
-  groupSet: Set<number>;
-}) {
+function LdapPanel({ draft, setDraft, groups }: PanelProps) {
   const l = draft.ldap;
   const fid = useId();
   const setL = (patch: Partial<typeof l>) =>
     setDraft({ ...draft, ldap: { ...l, ...patch } });
 
   return (
-    <fieldset
-      style={{
-        marginTop: '1rem',
-        padding: '0.75rem',
-        border: '1px solid var(--border)',
-        borderRadius: '0.375rem',
-      }}
-    >
-      <legend style={{ padding: '0 0.4rem' }}>LDAP</legend>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+    <ProviderFieldset legend="LDAP">
+      <CheckboxRow>
         <CheckboxField
           label="Enabled"
           checked={l.enabled}
@@ -532,19 +517,22 @@ function LdapPanel({
           label="Use STARTTLS"
           checked={l.use_starttls}
           onChange={(v) => setL({ use_starttls: v })}
+          help="Ignored when Use SSL is on."
         />
         <CheckboxField
           label="Fallback to local"
           checked={l.fallback_to_local}
           onChange={(v) => setL({ fallback_to_local: v })}
+          help={FALLBACK_LOCAL_HELP}
         />
         <CheckboxField
           label="Fallback on reject"
           checked={l.fallback_on_reject}
           onChange={(v) => setL({ fallback_on_reject: v })}
+          help={FALLBACK_REJECT_HELP}
         />
-      </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+      </CheckboxRow>
+      <FormRow>
         <TextField
           label="Server"
           value={l.server}
@@ -581,12 +569,14 @@ function LdapPanel({
           value={l.ca_cert_file}
           onChange={(v) => setL({ ca_cert_file: v })}
           flex="1 1 220px"
+          help="Path on the Plexus host; blank uses the system trust store."
         />
-      </div>
+      </FormRow>
       <TextField
         label="Bind DN"
         value={l.bind_dn}
         onChange={(v) => setL({ bind_dn: v })}
+        help="Service account Plexus binds as to search for users."
       />
       <TextField
         label="Bind Password"
@@ -598,220 +588,108 @@ function LdapPanel({
         label="Base DN"
         value={l.base_dn}
         onChange={(v) => setL({ base_dn: v })}
+        help="Subtree searched for user entries."
       />
       <TextField
         label="User Search Filter"
         value={l.user_search_filter}
         onChange={(v) => setL({ user_search_filter: v })}
+        help="{username} is replaced by the login name, e.g. (sAMAccountName={username}). Must match exactly one entry."
       />
       <TextField
         label="Admin Group DN"
         value={l.admin_group_dn}
         onChange={(v) => setL({ admin_group_dn: v })}
+        help="Members of this group get the admin role; re-checked on every login."
       />
       <DefaultGroupsField
         groups={groups}
-        groupSet={groupSet}
+        selected={l.default_group_ids}
         onChange={(ids) => setL({ default_group_ids: ids })}
       />
-    </fieldset>
+    </ProviderFieldset>
   );
 }
 
 function DefaultGroupsField({
   groups,
-  groupSet,
+  selected,
   onChange,
 }: {
   groups: AccessGroup[];
-  groupSet: Set<number>;
+  selected: number[];
   onChange: (ids: number[]) => void;
 }) {
   const id = useId();
   return (
     <div className="form-group">
       <span className="form-label" id={id}>Default Access Groups</span>
-      {groups.length === 0 ? (
-        <span className="card-description">Create access groups first.</span>
-      ) : (
-        <div
-          role="group"
-          aria-labelledby={id}
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-            gap: '0.4rem',
-          }}
-        >
-          {groups.map((g) => (
-            <label
-              key={g.id}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
-            >
-              <input
-                type="checkbox"
-                checked={groupSet.has(g.id)}
-                onChange={(e) => {
-                  const next = new Set(groupSet);
-                  if (e.target.checked) next.add(g.id);
-                  else next.delete(g.id);
-                  onChange(Array.from(next));
-                }}
-              />
-              <span>{g.name}</span>
-            </label>
-          ))}
-        </div>
-      )}
+      <GroupCheckboxes
+        groups={groups}
+        selected={selected}
+        onChange={onChange}
+        labelledBy={id}
+      />
+      <div className="form-help">
+        Given to accounts created on their first login through this provider.
+      </div>
     </div>
   );
 }
 
-function CheckboxField({
-  label,
-  checked,
-  onChange,
-}: {
-  label: string;
-  checked: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  return (
-    <label
-      className="form-group"
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: '0.4rem',
-        marginBottom: 0,
-      }}
-    >
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-      <span>{label}</span>
-    </label>
-  );
-}
+const EMPTY_SERVICE_CREDENTIAL: ServiceCredentialPayload = {
+  name: '',
+  username: '',
+  password: '',
+  secret: '',
+};
 
-function TextField({
-  label,
-  value,
-  onChange,
-  type = 'text',
-  flex,
+/** Create (cred = null) or edit one service credential. */
+function ServiceCredentialModal({
+  cred,
+  onClose,
+  onSaved,
 }: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  type?: string;
-  flex?: string;
+  cred: CredentialSummary | null;
+  onClose: () => void;
+  onSaved: (message: string) => void;
 }) {
-  const id = useId();
-  return (
-    <div className="form-group" style={flex ? { flex } : undefined}>
-      <label className="form-label" htmlFor={id}>{label}</label>
-      <input
-        id={id}
-        className="form-input"
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    </div>
-  );
-}
-
-function NumberField({
-  label,
-  value,
-  onChange,
-  min,
-}: {
-  label: string;
-  value: number;
-  onChange: (v: number) => void;
-  min?: number;
-}) {
-  const id = useId();
-  return (
-    <div className="form-group" style={{ flex: '0 1 140px' }}>
-      <label className="form-label" htmlFor={id}>{label}</label>
-      <input
-        id={id}
-        type="number"
-        className="form-input"
-        min={min}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-      />
-    </div>
-  );
-}
-
-function ServiceCredentialsSection() {
-  const { confirm } = useDialogs();
-  const list = useServiceCredentialsList();
+  const isEdit = cred !== null;
   const create = useCreateServiceCredential();
   const updateMut = useUpdateServiceCredential();
-  const remove = useDeleteServiceCredential();
-  const deleting = usePendingKeys<number>();
+  const [initial] = useState<ServiceCredentialPayload>(() =>
+    cred
+      ? { name: cred.name, username: cred.username || '', password: '', secret: '' }
+      : EMPTY_SERVICE_CREDENTIAL,
+  );
+  const [form, setForm] = useState<ServiceCredentialPayload>(initial);
+  const [error, setError] = useState<string | null>(null);
 
-  const [form, setForm] = useState<ServiceCredentialPayload>({
-    name: '',
-    username: '',
-    password: '',
-    secret: '',
-  });
-  const [editId, setEditId] = useState<number | null>(null);
-  const [status, setStatus] = useState<FormStatus | null>(null);
+  const touched =
+    form.name !== initial.name ||
+    form.username !== initial.username ||
+    !!form.password ||
+    !!form.secret;
+  useReportUnsaved('Service Credential', touched);
 
-  const resetForm = () => {
-    setForm({ name: '', username: '', password: '', secret: '' });
-    setEditId(null);
-  };
+  const missing: string[] = [];
+  if (!form.name.trim()) missing.push('a name');
+  if (!form.username.trim()) missing.push('a username');
+  if (!isEdit && !form.password) missing.push('a password');
 
-  const beginEdit = (cred: CredentialSummary) => {
-    setEditId(cred.id);
-    setForm({
-      name: cred.name,
-      username: cred.username || '',
-      password: '',
-      secret: '',
-    });
-    setStatus(null);
-  };
+  const submitting = create.isPending || updateMut.isPending;
+  const name = form.name.trim();
 
-  const onSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setStatus(null);
-
-    if (!form.name.trim() || !form.username.trim()) {
-      setStatus({ kind: 'error', message: 'Name and username are required' });
-      return;
-    }
-
-    if (editId === null) {
-      if (!form.password) {
-        setStatus({ kind: 'error', message: 'Password is required for new credentials' });
-        return;
-      }
+  const onSubmit = () => {
+    if (missing.length > 0) return;
+    setError(null);
+    if (!isEdit) {
       create.mutate(form, {
-        onSuccess: () => {
-          setStatus({ kind: 'success', message: `Service credential “${form.name}” created` });
-          resetForm();
-        },
-        onError: (err) =>
-          setStatus({
-            kind: 'error',
-            message: `Failed to create service credential: ${(err as Error).message}`,
-          }),
+        onSuccess: () => onSaved(`Service credential “${name}” created`),
+        onError: (err) => setError(`Failed to create service credential: ${(err as Error).message}`),
       });
       return;
     }
-
     // Update: send only fields the user changed; empty password/secret means leave alone.
     const data: Partial<ServiceCredentialPayload> = {
       name: form.name,
@@ -820,19 +698,95 @@ function ServiceCredentialsSection() {
     if (form.password) data.password = form.password;
     if (form.secret) data.secret = form.secret;
     updateMut.mutate(
-      { id: editId, data },
+      { id: cred.id, data },
       {
-        onSuccess: () => {
-          setStatus({ kind: 'success', message: `Service credential “${form.name}” updated` });
-          resetForm();
-        },
-        onError: (err) =>
-          setStatus({
-            kind: 'error',
-            message: `Failed to update service credential: ${(err as Error).message}`,
-          }),
+        onSuccess: () => onSaved(`Service credential “${name}” updated`),
+        onError: (err) => setError(`Failed to update service credential: ${(err as Error).message}`),
       },
     );
+  };
+
+  return (
+    <Modal
+      isOpen
+      onClose={onClose}
+      title={isEdit ? `Edit Service Credential: ${cred.name}` : 'New Service Credential'}
+      footer={
+        <ModalActions
+          onClose={onClose}
+          primaryLabel={isEdit ? 'Save Changes' : 'Create'}
+          primaryBusy={submitting}
+          primaryBusyLabel="Saving…"
+          primaryDisabled={missing.length > 0}
+          onPrimary={onSubmit}
+        />
+      }
+    >
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSubmit();
+        }}
+      >
+        <FormRow>
+          <TextField
+            label="Name"
+            value={form.name}
+            onChange={(v) => setForm({ ...form, name: v })}
+            flex="1 1 200px"
+          />
+          <TextField
+            label="Username"
+            value={form.username}
+            onChange={(v) => setForm({ ...form, username: v })}
+            flex="1 1 200px"
+            autoComplete="off"
+          />
+        </FormRow>
+        <FormRow>
+          <TextField
+            label={isEdit ? 'Password (blank = unchanged)' : 'Password'}
+            type="password"
+            value={form.password}
+            onChange={(v) => setForm({ ...form, password: v })}
+            flex="1 1 200px"
+            autoComplete="new-password"
+          />
+          <TextField
+            label={isEdit ? 'Enable Secret (blank = unchanged)' : 'Enable Secret (optional)'}
+            type="password"
+            value={form.secret ?? ''}
+            onChange={(v) => setForm({ ...form, secret: v })}
+            flex="1 1 200px"
+            autoComplete="new-password"
+          />
+        </FormRow>
+        {/* Lets Enter submit; the visible button is in the modal footer. */}
+        <button type="submit" hidden />
+      </form>
+      {missing.length > 0 && (
+        <p className="form-help" role="status">
+          Still needed: {missing.join(', ')}.
+        </p>
+      )}
+      {error && <Callout tone="danger">{error}</Callout>}
+    </Modal>
+  );
+}
+
+function ServiceCredentialsSection() {
+  const { confirm } = useDialogs();
+  const list = useServiceCredentialsList();
+  const remove = useDeleteServiceCredential();
+  const deleting = usePendingKeys<number>();
+
+  // undefined = editor closed, null = new credential, else the row being edited.
+  const [editing, setEditing] = useState<CredentialSummary | null | undefined>(undefined);
+  const [status, setStatus] = useState<FormStatus | null>(null);
+
+  const openEditor = (cred: CredentialSummary | null) => {
+    setStatus(null);
+    setEditing(cred);
   };
 
   const onDelete = async (cred: CredentialSummary) => {
@@ -860,102 +814,84 @@ function ServiceCredentialsSection() {
     );
   if (!list.data) return <LoadingState />;
 
-  const submitting = create.isPending || updateMut.isPending;
-
   return (
     <div>
-      <p className="card-description" style={{ marginTop: 0 }}>
-        Service credentials are used by Plexus itself for monitoring polls and
-        scheduled discovery. They are administered separately from per-user
-        credentials and can only be created or modified by admins.
-      </p>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          gap: '0.75rem',
+          marginBottom: '0.75rem',
+        }}
+      >
+        <p className="card-description" style={{ margin: 0 }}>
+          Service credentials are used by Plexus itself for monitoring polls and
+          scheduled discovery. They are administered separately from per-user
+          credentials and can only be created or modified by admins.
+        </p>
+        <button
+          type="button"
+          className="btn btn-sm btn-primary"
+          style={{ flex: '0 0 auto' }}
+          onClick={() => openEditor(null)}
+        >
+          + Add Service Credential
+        </button>
+      </div>
 
-      <table className="data-table" style={{ marginBottom: '1rem' }}>
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Username</th>
-            <th style={{ width: '12rem' }}>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(list.data || []).length === 0 ? (
+      {list.data.length === 0 ? (
+        <EmptyState compact message="No service credentials yet." />
+      ) : (
+        <DataTable compact aria-label="Service credentials">
+          <thead>
             <tr>
-              <td colSpan={3} className="text-muted" style={{ textAlign: 'center' }}>
-                No service credentials yet.
-              </td>
+              <th>Name</th>
+              <th>Username</th>
+              <th style={{ textAlign: 'right' }}>Actions</th>
             </tr>
-          ) : (
-            (list.data || []).map((c) => (
+          </thead>
+          <tbody>
+            {list.data.map((c) => (
               <tr key={c.id}>
                 <td>{c.name}</td>
                 <td>{c.username || '-'}</td>
                 <td>
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    style={{ marginRight: '0.4rem' }}
-                    onClick={() => beginEdit(c)}
-                  >
-                    Edit
-                  </button>
-                  <DeleteButton size="md" onClick={() => void onDelete(c)} busy={deleting.isPending(c.id)} />
+                  <div className="table-actions">
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-secondary"
+                      aria-label={`Edit service credential ${c.name}`}
+                      onClick={() => openEditor(c)}
+                    >
+                      Edit
+                    </button>
+                    <DeleteButton
+                      size="sm"
+                      aria-label={`Delete service credential ${c.name}`}
+                      onClick={() => void onDelete(c)}
+                      busy={deleting.isPending(c.id)}
+                    />
+                  </div>
                 </td>
               </tr>
-            ))
-          )}
-        </tbody>
-      </table>
+            ))}
+          </tbody>
+        </DataTable>
+      )}
+      <StatusLine status={status} />
 
-      <form onSubmit={onSubmit}>
-        <h4 style={{ margin: '0 0 0.5rem 0' }}>
-          {editId === null ? 'New Service Credential' : `Edit Service Credential #${editId}`}
-        </h4>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
-          <TextField
-            label="Name"
-            value={form.name}
-            onChange={(v) => setForm({ ...form, name: v })}
-            flex="1 1 200px"
-          />
-          <TextField
-            label="Username"
-            value={form.username}
-            onChange={(v) => setForm({ ...form, username: v })}
-            flex="1 1 200px"
-          />
-          <TextField
-            label={editId === null ? 'Password' : 'Password (blank = unchanged)'}
-            type="password"
-            value={form.password}
-            onChange={(v) => setForm({ ...form, password: v })}
-            flex="1 1 200px"
-          />
-          <TextField
-            label={editId === null ? 'Enable Secret (optional)' : 'Enable Secret (blank = unchanged)'}
-            type="password"
-            value={form.secret ?? ''}
-            onChange={(v) => setForm({ ...form, secret: v })}
-            flex="1 1 200px"
-          />
-        </div>
-        <div style={{ marginTop: '0.5rem' }}>
-          <BusyButton type="submit" className="btn btn-primary" busy={submitting} busyLabel="Saving…">
-            {editId === null ? 'Create Service Credential' : 'Save Changes'}
-          </BusyButton>
-          {editId !== null && (
-            <button
-              type="button"
-              className="btn btn-secondary"
-              style={{ marginLeft: '0.5rem' }}
-              onClick={resetForm}
-            >
-              Cancel
-            </button>
-          )}
-        </div>
-        <StatusLine status={status} />
-      </form>
+      {editing !== undefined && (
+        <ServiceCredentialModal
+          key={editing?.id ?? 'new'}
+          cred={editing}
+          onClose={() => setEditing(undefined)}
+          onSaved={(message) => {
+            setEditing(undefined);
+            setStatus({ kind: 'success', message });
+          }}
+        />
+      )}
     </div>
   );
 }
