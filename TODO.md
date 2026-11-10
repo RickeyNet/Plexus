@@ -689,7 +689,7 @@ per-page **H** items.
 
 ### GraphTemplates
 
-- [ ] **M: Templates, tree nodes and host-template assignments can be created but not edited or completed** (`pages/GraphTemplates/GraphTemplateDetailModal.tsx:69`, `GraphTreeDetailModal.tsx:62`, `HostTemplateModal.tsx:81`).
+- [x] **M: Templates, tree nodes and host-template assignments can be created but not edited or completed** (`pages/GraphTemplates/GraphTemplateDetailModal.tsx:69`, `GraphTreeDetailModal.tsx:62`, `HostTemplateModal.tsx:81`). *Done 2026-11: graph templates have an edit form and add/edit/delete for data series (built-ins stay read-only); host templates assign graph templates from a checklist; tree nodes can be edited, deleted, nested and pointed at a host or host graph. The item and node routes now check the parent template/tree, refuse built-in templates and reject parent cycles.*
 
 ### Topology
 
