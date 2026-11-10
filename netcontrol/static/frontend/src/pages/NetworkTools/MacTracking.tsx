@@ -207,6 +207,7 @@ function SearchTab() {
 
       <form onSubmit={submit} className="toolbar">
         <input
+          aria-label="Search MAC tracking"
           id="mac-tracking-search"
           className="form-input form-input-sm list-control-search"
           type="search"
@@ -359,6 +360,7 @@ function MovesTab() {
 
       <div className="toolbar">
         <select
+          aria-label="Filter by status"
           className="form-select form-select-sm"
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
@@ -369,6 +371,7 @@ function MovesTab() {
           <option value="acknowledged">Acknowledged</option>
         </select>
         <select
+          aria-label="Filter by switch"
           className="form-select form-select-sm"
           value={hostFilter ?? ''}
           onChange={(e) =>

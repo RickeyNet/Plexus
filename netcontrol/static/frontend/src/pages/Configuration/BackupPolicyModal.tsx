@@ -157,8 +157,9 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
         {creds.isError && !creds.data && (
           <QueryError what="credentials" query={creds} />
         )}
-        <label className="form-label">Policy Name</label>
+        <label className="form-label" htmlFor={`${formId}-name`}>Policy Name</label>
         <input
+          id={`${formId}-name`}
           className="form-input"
           placeholder="Daily backup"
           value={name}
@@ -172,10 +173,11 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
         <FieldError>{nameError}</FieldError>
         {isEdit ? (
           <>
-            <label className="form-label" style={{ marginTop: '0.75rem' }}>
+            <label className="form-label" htmlFor={`${formId}-enabled`} style={{ marginTop: '0.75rem' }}>
               Enabled
             </label>
             <select
+              id={`${formId}-enabled`}
               className="form-select"
               value={enabled ? 'true' : 'false'}
               onChange={(e) => setEnabled(e.target.value === 'true')}
@@ -186,10 +188,11 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
           </>
         ) : (
           <>
-            <label className="form-label" style={{ marginTop: '0.75rem' }}>
+            <label className="form-label" htmlFor={`${formId}-group`} style={{ marginTop: '0.75rem' }}>
               Inventory Group
             </label>
             <select
+              id={`${formId}-group`}
               className="form-select"
               value={groupId ?? ''}
               onChange={(e) =>
@@ -205,10 +208,11 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
             </select>
           </>
         )}
-        <label className="form-label" style={{ marginTop: '0.75rem' }}>
+        <label className="form-label" htmlFor={`${formId}-credential`} style={{ marginTop: '0.75rem' }}>
           Credential
         </label>
         <select
+          id={`${formId}-credential`}
           className="form-select"
           value={staleCred ? '' : (credId ?? '')}
           onChange={(e) => {
@@ -262,10 +266,11 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
             replacement before saving.
           </p>
         )}
-        <label className="form-label" style={{ marginTop: '0.75rem' }}>
+        <label className="form-label" htmlFor={`${formId}-interval`} style={{ marginTop: '0.75rem' }}>
           Interval (hours)
         </label>
         <input
+          id={`${formId}-interval`}
           className="form-input"
           type="number"
           min={1}
@@ -273,10 +278,11 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
           value={hours}
           onChange={(e) => setHours(Number(e.target.value || '24'))}
         />
-        <label className="form-label" style={{ marginTop: '0.75rem' }}>
+        <label className="form-label" htmlFor={`${formId}-retention`} style={{ marginTop: '0.75rem' }}>
           Retention (days)
         </label>
         <input
+          id={`${formId}-retention`}
           className="form-input"
           type="number"
           min={1}

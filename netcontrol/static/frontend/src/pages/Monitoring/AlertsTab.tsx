@@ -102,17 +102,18 @@ export function AlertsTab() {
         <input
           className="form-input form-input-sm"
           placeholder="Search alerts…"
+          aria-label="Search alerts"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           style={{ flex: 1, minWidth: 200 }}
         />
-        <select className="form-select form-select-sm" value={severity} onChange={(e) => setSeverity(e.target.value)}>
+        <select className="form-select form-select-sm" aria-label="Filter by severity" value={severity} onChange={(e) => setSeverity(e.target.value)}>
           <option value="">All severities</option>
           <option value="critical">Critical</option>
           <option value="warning">Warning</option>
           <option value="info">Info</option>
         </select>
-        <select className="form-select form-select-sm" value={ackFilter} onChange={(e) => setAckFilter(e.target.value as 'all' | 'open' | 'ack')}>
+        <select className="form-select form-select-sm" aria-label="Filter by acknowledgement" value={ackFilter} onChange={(e) => setAckFilter(e.target.value as 'all' | 'open' | 'ack')}>
           <option value="open">Unacknowledged</option>
           <option value="ack">Acknowledged</option>
           <option value="all">All</option>
@@ -219,7 +220,12 @@ function AlertRow({
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
           {!alert.acknowledged && (
-            <input type="checkbox" checked={checked} onChange={(e) => onToggle(e.target.checked)} />
+            <input
+              type="checkbox"
+              checked={checked}
+              onChange={(e) => onToggle(e.target.checked)}
+              aria-label={`Select alert: ${alert.hostname ?? 'host'} ${alert.metric}`}
+            />
           )}
           <SeverityBadge severity={alert.severity} />
           {alert.escalated && (

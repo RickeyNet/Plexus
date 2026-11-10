@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 
 import { Badge, SeverityBadge, StatusBadge } from '@/components/Badge';
 import { BusyButton } from '@/components/BusyButton';
@@ -28,6 +28,7 @@ import {
   type AuditOverrideMode,
   type AuditSeverity,
 } from '@/api/audit';
+import { clickableProps } from '@/lib/clickable';
 import { formatBackendDateTime } from '@/lib/datetime';
 import { isCriticalSeverity, SEVERITY_LEVELS, severityRank, severityTone } from '@/lib/severity';
 import { usePendingKeys } from '@/lib/usePendingKeys';
@@ -122,6 +123,8 @@ export function AuditContent() {
               {runList.map((r) => (
                 <tr
                   key={r.id}
+                  {...clickableProps(() => setSelectedRunId(r.id), { role: null })}
+                  aria-current={selectedRunId === r.id ? 'true' : undefined}
                   style={{
                     cursor: 'pointer',
                     background:
@@ -129,7 +132,6 @@ export function AuditContent() {
                         ? 'var(--primary-soft)'
                         : undefined,
                   }}
-                  onClick={() => setSelectedRunId(r.id)}
                 >
                   <td>#{r.id}</td>
                   <td>
@@ -364,6 +366,7 @@ function FilterChip(props: {
   return (
     <Badge
       onClick={props.onClick}
+      pressed={props.active}
       tone={severityTone(props.severity)}
       solid={isCriticalSeverity(props.severity)}
       style={{
@@ -409,7 +412,8 @@ function CategorySection(props: {
       }}
     >
       <div
-        onClick={onToggle}
+        {...clickableProps(onToggle)}
+        aria-expanded={!collapsed}
         style={{
           padding: '0.6rem 0.75rem',
           display: 'flex',
@@ -422,7 +426,7 @@ function CategorySection(props: {
             : '1px solid var(--border)',
         }}
       >
-        <span style={{ fontFamily: 'monospace', width: '1rem' }}>
+        <span aria-hidden style={{ fontFamily: 'monospace', width: '1rem' }}>
           {collapsed ? '▶' : '▼'}
         </span>
         <strong style={{ flex: '0 0 auto' }}>{label}</strong>
@@ -613,6 +617,7 @@ function ScheduleEditor({
   const [enabled, setEnabled] = useState(schedule?.enabled ?? true);
   const [nameError, setNameError] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const fid = useId();
 
   const isNew = schedule === null;
   const pending = create.isPending || update.isPending;
@@ -690,9 +695,9 @@ function ScheduleEditor({
           <FieldError>{nameError}</FieldError>
         </label>
 
-        <label style={{ display: 'grid', gap: '0.25rem' }}>
-          <span>Cadence</span>
-          <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+        <div style={{ display: 'grid', gap: '0.25rem' }}>
+          <span id={`${fid}-cadence`}>Cadence</span>
+          <div role="group" aria-labelledby={`${fid}-cadence`} style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
             {SCHEDULE_PRESETS.map((p) => (
               <button
                 type="button"
@@ -701,6 +706,7 @@ function ScheduleEditor({
                   cadence === p.value ? 'badge-info' : 'badge-secondary'
                 }`}
                 style={{ cursor: 'pointer' }}
+                aria-pressed={cadence === p.value}
                 onClick={() => setCadence(p.value)}
               >
                 {p.label}
@@ -709,6 +715,7 @@ function ScheduleEditor({
           </div>
           <input
             type="text"
+            aria-labelledby={`${fid}-cadence`}
             value={cadence}
             onChange={(e) => setCadence(e.target.value)}
             placeholder="@daily, 6h, 30m, ..."
@@ -716,7 +723,7 @@ function ScheduleEditor({
           <small className="text-muted">
             Accepts @hourly / @daily / @weekly / @monthly, or N[s|m|h|d|w].
           </small>
-        </label>
+        </div>
 
         <label
           style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
@@ -907,6 +914,7 @@ function MuteFindingDialog({
   const [scope, setScope] = useState<'host' | 'global'>('host');
   const [reason, setReason] = useState('');
   const [expiresAt, setExpiresAt] = useState('');
+  const fid = useId();
 
   const hostId = finding.host_id ?? null;
 
@@ -947,14 +955,15 @@ function MuteFindingDialog({
       </p>
 
       <div style={{ display: 'grid', gap: '0.75rem' }}>
-        <label style={{ display: 'grid', gap: '0.25rem' }}>
-          <span>Scope</span>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <div style={{ display: 'grid', gap: '0.25rem' }}>
+          <span id={`${fid}-scope`}>Scope</span>
+          <div role="group" aria-labelledby={`${fid}-scope`} style={{ display: 'flex', gap: '0.5rem' }}>
             <button
               type="button"
               className={`btn btn-sm ${
                 scope === 'host' ? 'btn-primary' : ''
               }`}
+              aria-pressed={scope === 'host'}
               disabled={hostId == null}
               onClick={() => setScope('host')}
             >
@@ -965,21 +974,23 @@ function MuteFindingDialog({
               className={`btn btn-sm ${
                 scope === 'global' ? 'btn-primary' : ''
               }`}
+              aria-pressed={scope === 'global'}
               onClick={() => setScope('global')}
             >
               All hosts
             </button>
           </div>
-        </label>
+        </div>
 
-        <label style={{ display: 'grid', gap: '0.25rem' }}>
-          <span>Mode</span>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <div style={{ display: 'grid', gap: '0.25rem' }}>
+          <span id={`${fid}-mode`}>Mode</span>
+          <div role="group" aria-labelledby={`${fid}-mode`} style={{ display: 'flex', gap: '0.5rem' }}>
             <button
               type="button"
               className={`btn btn-sm ${
                 mode === 'mute' ? 'btn-primary' : ''
               }`}
+              aria-pressed={mode === 'mute'}
               onClick={() => setMode('mute')}
             >
               Mute (false positive)
@@ -989,12 +1000,13 @@ function MuteFindingDialog({
               className={`btn btn-sm ${
                 mode === 'accept_risk' ? 'btn-primary' : ''
               }`}
+              aria-pressed={mode === 'accept_risk'}
               onClick={() => setMode('accept_risk')}
             >
               Accept risk
             </button>
           </div>
-        </label>
+        </div>
 
         <label style={{ display: 'grid', gap: '0.25rem' }}>
           <span>Reason</span>

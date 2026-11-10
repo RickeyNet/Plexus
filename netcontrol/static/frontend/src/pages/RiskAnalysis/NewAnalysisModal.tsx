@@ -104,8 +104,9 @@ export function NewAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
           <QueryError what="templates" query={templates} />
         )}
         <div className="form-group">
-          <label className="form-label">Change Type</label>
+          <label className="form-label" htmlFor={`${formId}-change-type`}>Change Type</label>
           <select
+            id={`${formId}-change-type`}
             className="form-select"
             value={changeType}
             onChange={(e) => setChangeType(e.target.value)}
@@ -118,8 +119,9 @@ export function NewAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
           </select>
         </div>
         <div className="form-group">
-          <label className="form-label">Target Group</label>
+          <label className="form-label" htmlFor={`${formId}-target-group`}>Target Group</label>
           <select
+            id={`${formId}-target-group`}
             className="form-select"
             value={groupId}
             onChange={(e) => setGroupId(e.target.value)}
@@ -133,8 +135,9 @@ export function NewAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
           </select>
         </div>
         <div className="form-group">
-          <label className="form-label">Credential</label>
+          <label className="form-label" htmlFor={`${formId}-credential`}>Credential</label>
           <select
+            id={`${formId}-credential`}
             className="form-select"
             value={credentialId}
             onChange={(e) => {
@@ -154,8 +157,9 @@ export function NewAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
           <FieldError>{errors.credential}</FieldError>
         </div>
         <div className="form-group">
-          <label className="form-label">Source</label>
+          <label className="form-label" htmlFor={`${formId}-source`}>Source</label>
           <select
+            id={`${formId}-source`}
             className="form-select"
             value={templateId}
             onChange={(e) => {
@@ -173,8 +177,9 @@ export function NewAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
         </div>
         {!templateId && (
           <div className="form-group">
-            <label className="form-label">Proposed Commands (one per line)</label>
+            <label className="form-label" htmlFor={`${formId}-proposed-commands`}>Proposed Commands (one per line)</label>
             <textarea
+              id={`${formId}-proposed-commands`}
               className="form-input"
               rows={8}
               value={commands}

@@ -152,13 +152,14 @@ function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
       <form id={formId} onSubmit={handleSubmit}>
         {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
-          <label className="form-label">Name</label>
-          <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Maintenance Window" required />
+          <label className="form-label" htmlFor={`${formId}-name`}>Name</label>
+          <input id={`${formId}-name`} className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Maintenance Window" required />
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <div className="form-group" style={{ flex: 1 }}>
-            <label className="form-label">Starts At</label>
+            <label className="form-label" htmlFor={`${formId}-starts-at`}>Starts At</label>
             <input
+              id={`${formId}-starts-at`}
               className="form-input"
               type="datetime-local"
               value={starts}
@@ -168,8 +169,9 @@ function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
             <FieldError>{startsError}</FieldError>
           </div>
           <div className="form-group" style={{ flex: 1 }}>
-            <label className="form-label">Ends At</label>
+            <label className="form-label" htmlFor={`${formId}-ends-at`}>Ends At</label>
             <input
+              id={`${formId}-ends-at`}
               className="form-input"
               type="datetime-local"
               value={ends}
@@ -181,8 +183,8 @@ function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
           </div>
         </div>
         <div className="form-group">
-          <label className="form-label">Scope: Group</label>
-          <select className="form-select" value={groupId} onChange={(e) => setGroupId(e.target.value)}>
+          <label className="form-label" htmlFor={`${formId}-scope-group`}>Scope: Group</label>
+          <select id={`${formId}-scope-group`} className="form-select" value={groupId} onChange={(e) => setGroupId(e.target.value)}>
             <option value="">All Groups</option>
             {(groups.data ?? []).map((g) => (
               <option key={g.id} value={g.id}>{groupLabel(g)}</option>
@@ -190,8 +192,8 @@ function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
           </select>
         </div>
         <div className="form-group">
-          <label className="form-label">Scope: Host (overrides group)</label>
-          <select className="form-select" value={hostId} onChange={(e) => setHostId(e.target.value)}>
+          <label className="form-label" htmlFor={`${formId}-scope-host`}>Scope: Host (overrides group)</label>
+          <select id={`${formId}-scope-host`} className="form-select" value={hostId} onChange={(e) => setHostId(e.target.value)}>
             <option value="">All Hosts</option>
             {allHosts.map((h) => (
               <option key={h.id} value={h.id}>{h.hostname} ({h.ip_address})</option>
@@ -199,8 +201,8 @@ function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
           </select>
         </div>
         <div className="form-group">
-          <label className="form-label">Metric (blank = all)</label>
-          <select className="form-select" value={metric} onChange={(e) => setMetric(e.target.value)}>
+          <label className="form-label" htmlFor={`${formId}-metric`}>Metric (blank = all)</label>
+          <select id={`${formId}-metric`} className="form-select" value={metric} onChange={(e) => setMetric(e.target.value)}>
             <option value="">All Metrics</option>
             <option value="cpu">CPU</option>
             <option value="memory">Memory</option>
@@ -210,8 +212,8 @@ function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
           </select>
         </div>
         <div className="form-group">
-          <label className="form-label">Reason</label>
-          <textarea className="form-input" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} />
+          <label className="form-label" htmlFor={`${formId}-reason`}>Reason</label>
+          <textarea id={`${formId}-reason`} className="form-input" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} />
         </div>
       </form>
     </Modal>

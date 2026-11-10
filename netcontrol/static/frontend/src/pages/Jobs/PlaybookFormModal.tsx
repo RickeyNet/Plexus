@@ -1,6 +1,6 @@
 import { useId, useMemo, useState, type FormEvent } from 'react';
 
-import CodeMirror from '@uiw/react-codemirror';
+import CodeMirror, { EditorView } from '@uiw/react-codemirror';
 import { python } from '@codemirror/lang-python';
 import { yaml } from '@codemirror/lang-yaml';
 import { dracula } from '@uiw/codemirror-theme-dracula';
@@ -94,7 +94,13 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
   const [errors, setErrors] = useState<{ name?: string; filename?: string; content?: string }>({});
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  const editorExtensions = useMemo(() => [type === 'ansible' ? yaml() : python()], [type]);
+  const editorExtensions = useMemo(
+    () => [
+      type === 'ansible' ? yaml() : python(),
+      EditorView.contentAttributes.of({ 'aria-labelledby': `${formId}-content` }),
+    ],
+    [type, formId],
+  );
 
   const [prevMode, setPrevMode] = useState(mode);
   const [prevData, setPrevData] = useState(detailQuery.data);
@@ -189,21 +195,22 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
         <form id={formId} onSubmit={handleSubmit}>
           {saveError && <Callout tone="danger">{saveError}</Callout>}
           <div className="form-group">
-            <label className="form-label">Type</label>
+            <label className="form-label" htmlFor={mode === 'edit' ? undefined : `${formId}-type`}>Type</label>
             {mode === 'edit' ? (
               <div>
                 <Badge tone={type === 'ansible' ? 'info' : 'primary'}>{type === 'ansible' ? 'Ansible' : 'Python'}</Badge>
               </div>
             ) : (
-              <select className="form-select" value={type} onChange={(e) => handleTypeChange(e.target.value as PlaybookType)}>
+              <select id={`${formId}-type`} className="form-select" value={type} onChange={(e) => handleTypeChange(e.target.value as PlaybookType)}>
                 <option value="python">Python (Netmiko)</option>
                 <option value="ansible">Ansible (YAML)</option>
               </select>
             )}
           </div>
           <div className="form-group">
-            <label className="form-label">Name</label>
+            <label className="form-label" htmlFor={`${formId}-name`}>Name</label>
             <input
+              id={`${formId}-name`}
               className="form-input"
               value={name}
               onChange={(e) => { setName(e.target.value); setErrors((p) => ({ ...p, name: undefined })); }}
@@ -213,8 +220,9 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
             <FieldError>{errors.name}</FieldError>
           </div>
           <div className="form-group">
-            <label className="form-label">Filename</label>
+            <label className="form-label" htmlFor={`${formId}-filename`}>Filename</label>
             <input
+              id={`${formId}-filename`}
               className="form-input"
               value={filename}
               onChange={(e) => { setFilename(e.target.value); setErrors((p) => ({ ...p, filename: undefined })); }}
@@ -225,15 +233,15 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
             <FieldError>{errors.filename}</FieldError>
           </div>
           <div className="form-group">
-            <label className="form-label">Description</label>
-            <textarea className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
+            <label className="form-label" htmlFor={`${formId}-description`}>Description</label>
+            <textarea id={`${formId}-description`} className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
           </div>
           <div className="form-group">
-            <label className="form-label">Tags (comma-separated)</label>
-            <input className="form-input" value={tagsStr} onChange={(e) => setTagsStr(e.target.value)} placeholder="example, automation" />
+            <label className="form-label" htmlFor={`${formId}-tags`}>Tags (comma-separated)</label>
+            <input id={`${formId}-tags`} className="form-input" value={tagsStr} onChange={(e) => setTagsStr(e.target.value)} placeholder="example, automation" />
           </div>
           <div className="form-group">
-            <label className="form-label">{type === 'ansible' ? 'Ansible YAML' : 'Python Code'}</label>
+            <span className="form-label" id={`${formId}-content`}>{type === 'ansible' ? 'Ansible YAML' : 'Python Code'}</span>
             <CodeMirror
               value={content}
               theme={dracula}

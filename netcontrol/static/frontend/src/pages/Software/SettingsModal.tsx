@@ -100,8 +100,9 @@ export function SettingsModal({ settings, severities, onClose }: Props) {
         {saveError && <Callout tone="danger">{saveError}</Callout>}
         <h4 style={{ margin: '0 0 0.5rem' }}>Refresh</h4>
         <div className="form-group">
-          <label className="form-label">Refresh the tracked versions every (hours)</label>
+          <label className="form-label" htmlFor={`${formId}-refresh-tracked-versions`}>Refresh the tracked versions every (hours)</label>
           <input
+            id={`${formId}-refresh-tracked-versions`}
             className="form-input"
             type="number"
             min={1}
@@ -122,8 +123,9 @@ export function SettingsModal({ settings, severities, onClose }: Props) {
           Send new vulnerability alerts to the notification channels (Settings → Notifications)
         </label>
         <div className="form-group">
-          <label className="form-label">Only notify for severity at or above</label>
+          <label className="form-label" htmlFor={`${formId}-only-notify-for`}>Only notify for severity at or above</label>
           <select
+            id={`${formId}-only-notify-for`}
             className="form-select"
             value={notifyMin}
             onChange={(e) => setNotifyMin(e.target.value)}
@@ -150,8 +152,9 @@ export function SettingsModal({ settings, severities, onClose }: Props) {
         </label>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 1rem' }}>
           <div className="form-group">
-            <label className="form-label">Client ID</label>
+            <label className="form-label" htmlFor={`${formId}-client-id`}>Client ID</label>
             <input
+              id={`${formId}-client-id`}
               className="form-input"
               value={clientId}
               onChange={(e) => setClientId(e.target.value)}
@@ -160,13 +163,14 @@ export function SettingsModal({ settings, severities, onClose }: Props) {
             />
           </div>
           <div className="form-group">
-            <label className="form-label">
+            <label className="form-label" htmlFor={`${formId}-client-secret`}>
               Client secret{' '}
               <span className="text-muted">
                 {settings.has_psirt_secret ? '(stored; leave blank to keep)' : '(not stored)'}
               </span>
             </label>
             <input
+              id={`${formId}-client-secret`}
               className="form-input"
               type="password"
               value={clientSecret}
@@ -189,8 +193,9 @@ export function SettingsModal({ settings, severities, onClose }: Props) {
           </div>
         </div>
         <div className="form-group">
-          <label className="form-label">Sync every (hours)</label>
+          <label className="form-label" htmlFor={`${formId}-sync-every`}>Sync every (hours)</label>
           <input
+            id={`${formId}-sync-every`}
             className="form-input"
             type="number"
             min={1}

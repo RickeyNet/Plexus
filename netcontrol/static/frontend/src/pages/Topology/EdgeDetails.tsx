@@ -59,6 +59,7 @@ export function EdgeDetails({ edge, fromNode, toNode, onClose }: Props) {
         <button
           type="button"
           className="modal-close"
+          aria-label="Close link details"
           onClick={onClose}
           style={{ fontSize: '1.2rem' }}
         >

@@ -114,6 +114,7 @@ function WarningsBadge({
       className="badge badge-warning"
       style={{ border: "none", cursor: "pointer" }}
       title={title}
+      aria-label={`${title} (${text})`}
       onClick={onClick}
     >
       {text}

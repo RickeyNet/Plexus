@@ -86,6 +86,7 @@ export function RiskAnalysis() {
           }}
         >
           <select
+            aria-label="Filter by risk level"
             className="form-select form-select-sm"
             value={level}
             onChange={(e) => setLevel(e.target.value)}
@@ -98,6 +99,7 @@ export function RiskAnalysis() {
             ))}
           </select>
           <input
+            aria-label="Search analyses"
             className="form-input form-input-sm"
             placeholder="Search hostname, group, or change type…"
             value={query}

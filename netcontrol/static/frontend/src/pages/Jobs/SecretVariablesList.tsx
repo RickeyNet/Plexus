@@ -148,8 +148,9 @@ function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =
       <form id={formId} onSubmit={handleSubmit}>
         {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
-          <label className="form-label">Name</label>
+          <label className="form-label" htmlFor={`${formId}-name`}>Name</label>
           <input
+            id={`${formId}-name`}
             className="form-input"
             value={name}
             onChange={(e) => { setName(e.target.value); setErrors((p) => ({ ...p, name: undefined })); }}
@@ -181,8 +182,9 @@ function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =
           <FieldError>{errors.name}</FieldError>
         </div>
         <div className="form-group">
-          <label className="form-label">Value</label>
+          <label className="form-label" htmlFor={`${formId}-value`}>Value</label>
           <input
+            id={`${formId}-value`}
             className="form-input"
             type="password"
             value={value}
@@ -195,8 +197,8 @@ function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =
           <FieldError>{errors.value}</FieldError>
         </div>
         <div className="form-group">
-          <label className="form-label">Description (optional)</label>
-          <input className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} />
+          <label className="form-label" htmlFor={`${formId}-description`}>Description (optional)</label>
+          <input id={`${formId}-description`} className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} />
         </div>
       </form>
     </Modal>
@@ -249,16 +251,16 @@ function EditSecretModal({ secret, onClose }: { secret: SecretVariable | null; o
       <form id={formId} onSubmit={handleSubmit}>
         {saveError && <Callout tone="danger">{saveError}</Callout>}
         <div className="form-group">
-          <label className="form-label">Name</label>
-          <input className="form-input" value={secret?.name ?? ''} disabled />
+          <label className="form-label" htmlFor={`${formId}-name`}>Name</label>
+          <input id={`${formId}-name`} className="form-input" value={secret?.name ?? ''} disabled />
         </div>
         <div className="form-group">
-          <label className="form-label">New Value (leave blank to keep current)</label>
-          <input className="form-input" type="password" value={value} onChange={(e) => setValue(e.target.value)} />
+          <label className="form-label" htmlFor={`${formId}-value`}>New Value (leave blank to keep current)</label>
+          <input id={`${formId}-value`} className="form-input" type="password" value={value} onChange={(e) => setValue(e.target.value)} />
         </div>
         <div className="form-group">
-          <label className="form-label">Description</label>
-          <input className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} />
+          <label className="form-label" htmlFor={`${formId}-description`}>Description</label>
+          <input id={`${formId}-description`} className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} />
         </div>
       </form>
     </Modal>

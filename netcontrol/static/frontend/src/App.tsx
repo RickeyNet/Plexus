@@ -189,7 +189,7 @@ export function App() {
         onOpenUserMenu={() => setUserMenuOpen(true)}
       />
 
-      <main className="main-content" aria-live="polite">
+      <main className="main-content">
         <Breadcrumb />
         <MetricTimeRangeBar />
         <ErrorBoundary resetKey={pathname}>

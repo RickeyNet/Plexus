@@ -25,6 +25,7 @@ import {
 import { useConfigBackupDetail } from '@/api/configuration';
 import { SeverityBadge } from '@/components/Badge';
 import { Modal } from '@/components/Modal';
+import { TabBar } from '@/components/TabBar';
 import {
   abbreviateInterface,
   DETAIL_CELL_STYLE,
@@ -290,6 +291,7 @@ export function NodeDetails({
           <button
             type="button"
             className="modal-close"
+            aria-label="Close device details"
             onClick={onClose}
             style={{ fontSize: '1.2rem' }}
           >
@@ -297,7 +299,23 @@ export function NodeDetails({
           </button>
         </div>
 
-        <TabBar tabs={tabs} active={shownTab} onChange={setActiveTab} />
+        <TabBar
+          size="sm"
+          aria-label="Device details sections"
+          tabs={tabs.map((t) => ({
+            key: t.key,
+            disabled: t.disabled,
+            title: t.matched ? 'Contains rows matching the map search' : undefined,
+            label: (
+              <>
+                {t.label}
+                {t.matched && <span style={{ color: 'var(--warning)', marginLeft: '0.25rem' }}>●</span>}
+              </>
+            ),
+          }))}
+          active={shownTab}
+          onChange={setActiveTab}
+        />
 
         <div style={{ marginTop: '0.6rem' }}>
           {shownTab === 'overview' && (
@@ -343,57 +361,6 @@ export function NodeDetails({
         </div>
       </div>
     </aside>
-  );
-}
-
-// ── Tab bar ────────────────────────────────────────────────────────────────
-
-function TabBar(props: {
-  tabs: { key: TabKey; label: string; disabled: boolean; matched: boolean }[];
-  active: TabKey;
-  onChange: (t: TabKey) => void;
-}) {
-  return (
-    <div
-      style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: '0.2rem',
-        borderBottom: '1px solid var(--border)',
-        paddingBottom: '0.3rem',
-      }}
-    >
-      {props.tabs.map((t) => {
-        const disabled = t.disabled;
-        const isActive = props.active === t.key;
-        return (
-          <button
-            key={t.key}
-            type="button"
-            onClick={() => !disabled && props.onChange(t.key)}
-            disabled={disabled}
-            title={t.matched ? 'Contains rows matching the map search' : undefined}
-            style={{
-              fontSize: '0.75rem',
-              padding: '0.2rem 0.55rem',
-              border: '1px solid transparent',
-              borderBottom: isActive
-                ? '2px solid var(--primary)'
-                : '2px solid transparent',
-              background: isActive
-                ? 'var(--primary-soft)'
-                : 'transparent',
-              color: disabled ? 'var(--text-muted)' : 'inherit',
-              cursor: disabled ? 'not-allowed' : 'pointer',
-              borderRadius: '0.2rem 0.2rem 0 0',
-            }}
-          >
-            {t.label}
-            {t.matched && <span style={{ color: 'var(--warning)', marginLeft: '0.25rem' }}>●</span>}
-          </button>
-        );
-      })}
-    </div>
   );
 }
 
@@ -457,8 +424,8 @@ function OverviewTab(props: {
         <span className="text-muted">Role</span>
         {node.in_inventory ? (
           <select
-            className="form-select"
-            style={{ fontSize: '0.8rem', padding: '0.15rem 0.3rem' }}
+            aria-label="Device role"
+            className="form-select form-select-sm"
             value={category}
             onChange={(e) => handleCategoryChange(e.target.value)}
             disabled={updateCategory.isPending}

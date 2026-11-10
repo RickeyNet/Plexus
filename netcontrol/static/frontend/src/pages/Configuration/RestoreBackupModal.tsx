@@ -72,8 +72,9 @@ export function RestoreBackupModal({ backupId, onClose }: Props) {
           This will push the backup configuration to the device and validate
           the result.
         </p>
-        <label className="form-label">Credential for SSH</label>
+        <label className="form-label" htmlFor={`${formId}-credential`}>Credential for SSH</label>
         <select
+          id={`${formId}-credential`}
           className="form-select"
           value={credId ?? ''}
           onChange={(e) =>

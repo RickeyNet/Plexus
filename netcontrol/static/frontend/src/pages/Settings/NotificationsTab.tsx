@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import { BusyButton } from '@/components/BusyButton';
 import { DeleteButton } from '@/components/DeleteButton';
@@ -350,6 +350,7 @@ export function NotificationsTab() {
                         disabled={defaultsMut.isPending}
                         onChange={() => toggleDefault(c.id)}
                         title="Use this channel for alerts not tied to a rule"
+                        aria-label={`Default channel: ${c.name || c.id}`}
                       />
                     </td>
                     <td>{c.name || c.id}</td>
@@ -450,6 +451,7 @@ interface ChannelEditorProps {
 
 function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }: ChannelEditorProps) {
   const isEdit = Boolean(channel.id) && existing.some((c) => c.id === channel.id);
+  const fid = useId();
   const set = <K extends keyof NotificationChannel>(key: K, value: NotificationChannel[K]) =>
     onChange({ ...channel, [key]: value });
 
@@ -459,8 +461,9 @@ function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
         <div className="form-group" style={{ flex: '1 1 220px' }}>
-          <label className="form-label">Name</label>
+          <label className="form-label" htmlFor={`${fid}-name`}>Name</label>
           <input
+            id={`${fid}-name`}
             className="form-input"
             value={channel.name}
             onChange={(e) => set('name', e.target.value)}
@@ -468,8 +471,9 @@ function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }
           />
         </div>
         <div className="form-group" style={{ flex: '0 1 200px' }}>
-          <label className="form-label">Type</label>
+          <label className="form-label" htmlFor={`${fid}-type`}>Type</label>
           <select
+            id={`${fid}-type`}
             className="form-input"
             value={channel.type}
             onChange={(e) => set('type', e.target.value as NotificationChannelType)}
@@ -483,8 +487,9 @@ function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }
           </select>
         </div>
         <div className="form-group" style={{ flex: '0 1 160px' }}>
-          <label className="form-label">Severity floor</label>
+          <label className="form-label" htmlFor={`${fid}-severity-floor`}>Severity floor</label>
           <select
+            id={`${fid}-severity-floor`}
             className="form-input"
             value={channel.severity_floor}
             onChange={(e) => set('severity_floor', e.target.value)}
@@ -512,8 +517,9 @@ function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }
       {channel.type === 'email' && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.5rem' }}>
           <div className="form-group" style={{ flex: '1 1 240px' }}>
-            <label className="form-label">SMTP host</label>
+            <label className="form-label" htmlFor={`${fid}-smtp-host`}>SMTP host</label>
             <input
+              id={`${fid}-smtp-host`}
               className="form-input"
               value={channel.smtp_host}
               onChange={(e) => set('smtp_host', e.target.value)}
@@ -521,8 +527,9 @@ function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }
             />
           </div>
           <div className="form-group" style={{ flex: '0 1 120px' }}>
-            <label className="form-label">SMTP port</label>
+            <label className="form-label" htmlFor={`${fid}-smtp-port`}>SMTP port</label>
             <input
+              id={`${fid}-smtp-port`}
               type="number"
               className="form-input"
               min={1}
@@ -532,8 +539,9 @@ function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }
             />
           </div>
           <div className="form-group" style={{ flex: '1 1 240px' }}>
-            <label className="form-label">From address</label>
+            <label className="form-label" htmlFor={`${fid}-from-address`}>From address</label>
             <input
+              id={`${fid}-from-address`}
               className="form-input"
               value={channel.mail_from}
               onChange={(e) => set('mail_from', e.target.value)}
@@ -541,8 +549,9 @@ function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }
             />
           </div>
           <div className="form-group" style={{ flex: '1 1 100%' }}>
-            <label className="form-label">Recipients (comma separated)</label>
+            <label className="form-label" htmlFor={`${fid}-recipients`}>Recipients (comma separated)</label>
             <input
+              id={`${fid}-recipients`}
               className="form-input"
               value={channel.mail_to}
               onChange={(e) => set('mail_to', e.target.value)}
@@ -550,8 +559,9 @@ function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }
             />
           </div>
           <div className="form-group" style={{ flex: '1 1 240px' }}>
-            <label className="form-label">SMTP username (optional)</label>
+            <label className="form-label" htmlFor={`${fid}-smtp-username`}>SMTP username (optional)</label>
             <input
+              id={`${fid}-smtp-username`}
               className="form-input"
               value={channel.smtp_username}
               onChange={(e) => set('smtp_username', e.target.value)}
@@ -559,8 +569,9 @@ function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }
             />
           </div>
           <div className="form-group" style={{ flex: '1 1 240px' }}>
-            <label className="form-label">SMTP password (optional)</label>
+            <label className="form-label" htmlFor={`${fid}-smtp-password`}>SMTP password (optional)</label>
             <input
+              id={`${fid}-smtp-password`}
               type="password"
               className="form-input"
               value={channel.smtp_password}
@@ -597,8 +608,9 @@ function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }
       {channel.type === 'pagerduty' && (
         <div style={{ marginTop: '0.5rem' }}>
           <div className="form-group" style={{ flex: '1 1 100%' }}>
-            <label className="form-label">Integration / routing key</label>
+            <label className="form-label" htmlFor={`${fid}-integration-routing-key`}>Integration / routing key</label>
             <input
+              id={`${fid}-integration-routing-key`}
               className="form-input"
               type="password"
               value={channel.routing_key}
@@ -618,8 +630,9 @@ function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }
       {channel.type === 'webhook' && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.5rem' }}>
           <div className="form-group" style={{ flex: '1 1 100%' }}>
-            <label className="form-label">Webhook URL</label>
+            <label className="form-label" htmlFor={`${fid}-webhook-url`}>Webhook URL</label>
             <input
+              id={`${fid}-webhook-url`}
               className="form-input"
               value={channel.webhook_url}
               onChange={(e) => set('webhook_url', e.target.value)}
@@ -627,8 +640,9 @@ function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }
             />
           </div>
           <div className="form-group" style={{ flex: '1 1 220px' }}>
-            <label className="form-label">Auth header name (optional)</label>
+            <label className="form-label" htmlFor={`${fid}-auth-header-name`}>Auth header name (optional)</label>
             <input
+              id={`${fid}-auth-header-name`}
               className="form-input"
               value={channel.webhook_auth_header}
               onChange={(e) => set('webhook_auth_header', e.target.value)}
@@ -636,8 +650,9 @@ function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }
             />
           </div>
           <div className="form-group" style={{ flex: '1 1 220px' }}>
-            <label className="form-label">Auth header value (optional)</label>
+            <label className="form-label" htmlFor={`${fid}-auth-header-value`}>Auth header value (optional)</label>
             <input
+              id={`${fid}-auth-header-value`}
               type="password"
               className="form-input"
               value={channel.webhook_auth_value}
@@ -663,8 +678,9 @@ function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }
       {channel.type === 'teams' && (
         <div style={{ marginTop: '0.5rem' }}>
           <div className="form-group" style={{ flex: '1 1 100%' }}>
-            <label className="form-label">Teams incoming webhook URL</label>
+            <label className="form-label" htmlFor={`${fid}-teams-incoming-webhook-url`}>Teams incoming webhook URL</label>
             <input
+              id={`${fid}-teams-incoming-webhook-url`}
               className="form-input"
               value={channel.teams_webhook_url}
               onChange={(e) => set('teams_webhook_url', e.target.value)}
@@ -682,8 +698,9 @@ function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }
         <summary style={{ cursor: 'pointer' }}>Advanced (queue, retry, backoff)</summary>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.5rem' }}>
           <div className="form-group" style={{ flex: '0 1 160px' }}>
-            <label className="form-label">Queue size</label>
+            <label className="form-label" htmlFor={`${fid}-queue-size`}>Queue size</label>
             <input
+              id={`${fid}-queue-size`}
               type="number"
               className="form-input"
               min={10}
@@ -693,8 +710,9 @@ function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }
             />
           </div>
           <div className="form-group" style={{ flex: '0 1 160px' }}>
-            <label className="form-label">Max retries</label>
+            <label className="form-label" htmlFor={`${fid}-max-retries`}>Max retries</label>
             <input
+              id={`${fid}-max-retries`}
               type="number"
               className="form-input"
               min={0}
@@ -704,8 +722,9 @@ function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }
             />
           </div>
           <div className="form-group" style={{ flex: '0 1 160px' }}>
-            <label className="form-label">Backoff base (s)</label>
+            <label className="form-label" htmlFor={`${fid}-backoff-base`}>Backoff base (s)</label>
             <input
+              id={`${fid}-backoff-base`}
               type="number"
               className="form-input"
               min={0.1}
@@ -716,8 +735,9 @@ function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }
             />
           </div>
           <div className="form-group" style={{ flex: '0 1 160px' }}>
-            <label className="form-label">Backoff cap (s)</label>
+            <label className="form-label" htmlFor={`${fid}-backoff-cap`}>Backoff cap (s)</label>
             <input
+              id={`${fid}-backoff-cap`}
               type="number"
               className="form-input"
               min={1}

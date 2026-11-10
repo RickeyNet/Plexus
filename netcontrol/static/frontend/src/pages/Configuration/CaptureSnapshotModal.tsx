@@ -89,8 +89,9 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
           <QueryError what="credentials" query={creds} />
         )}
         <div className="form-group">
-          <label className="form-label">Single Host</label>
+          <label className="form-label" htmlFor={`${formId}-host`}>Single Host</label>
           <select
+            id={`${formId}-host`}
             className="form-select"
             value={hostId ?? ''}
             onChange={(e) => {
@@ -109,8 +110,9 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
           </select>
         </div>
         <div className="form-group">
-          <label className="form-label">Or Entire Group</label>
+          <label className="form-label" htmlFor={`${formId}-group`}>Or Entire Group</label>
           <select
+            id={`${formId}-group`}
             className="form-select"
             value={groupId ?? ''}
             onChange={(e) => {
@@ -130,8 +132,9 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
           <FieldError>{targetError}</FieldError>
         </div>
         <div className="form-group">
-          <label className="form-label">Credentials</label>
+          <label className="form-label" htmlFor={`${formId}-credential`}>Credentials</label>
           <select
+            id={`${formId}-credential`}
             className="form-select"
             value={credId ?? ''}
             onChange={(e) =>

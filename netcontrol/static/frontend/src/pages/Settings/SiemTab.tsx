@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import { BusyButton } from '@/components/BusyButton';
 import { DeleteButton } from '@/components/DeleteButton';
@@ -279,6 +279,7 @@ interface SinkEditorProps {
 
 function SinkEditor({ sink, existing, onChange, onCancel, onSave, saving }: SinkEditorProps) {
   const isEdit = Boolean(sink.id) && existing.some((s) => s.id === sink.id);
+  const fid = useId();
   const set = <K extends keyof SiemSink>(key: K, value: SiemSink[K]) =>
     onChange({ ...sink, [key]: value });
 
@@ -291,8 +292,9 @@ function SinkEditor({ sink, existing, onChange, onCancel, onSave, saving }: Sink
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
         <div className="form-group" style={{ flex: '1 1 220px' }}>
-          <label className="form-label">Name</label>
+          <label className="form-label" htmlFor={`${fid}-name`}>Name</label>
           <input
+            id={`${fid}-name`}
             className="form-input"
             value={sink.name}
             onChange={(e) => set('name', e.target.value)}
@@ -300,8 +302,9 @@ function SinkEditor({ sink, existing, onChange, onCancel, onSave, saving }: Sink
           />
         </div>
         <div className="form-group" style={{ flex: '0 1 160px' }}>
-          <label className="form-label">Protocol</label>
+          <label className="form-label" htmlFor={`${fid}-protocol`}>Protocol</label>
           <select
+            id={`${fid}-protocol`}
             className="form-input"
             value={sink.protocol}
             onChange={(e) => set('protocol', e.target.value as SiemSink['protocol'])}
@@ -314,8 +317,9 @@ function SinkEditor({ sink, existing, onChange, onCancel, onSave, saving }: Sink
           </select>
         </div>
         <div className="form-group" style={{ flex: '0 1 140px' }}>
-          <label className="form-label">Format</label>
+          <label className="form-label" htmlFor={`${fid}-format`}>Format</label>
           <select
+            id={`${fid}-format`}
             className="form-input"
             value={sink.format}
             onChange={(e) => set('format', e.target.value as SiemSink['format'])}
@@ -328,8 +332,9 @@ function SinkEditor({ sink, existing, onChange, onCancel, onSave, saving }: Sink
           </select>
         </div>
         <div className="form-group" style={{ flex: '0 1 160px' }}>
-          <label className="form-label">Severity floor</label>
+          <label className="form-label" htmlFor={`${fid}-severity-floor`}>Severity floor</label>
           <select
+            id={`${fid}-severity-floor`}
             className="form-input"
             value={sink.severity_floor}
             onChange={(e) => set('severity_floor', e.target.value)}
@@ -362,8 +367,9 @@ function SinkEditor({ sink, existing, onChange, onCancel, onSave, saving }: Sink
       {!showHttps && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.5rem' }}>
           <div className="form-group" style={{ flex: '1 1 240px' }}>
-            <label className="form-label">Host</label>
+            <label className="form-label" htmlFor={`${fid}-host`}>Host</label>
             <input
+              id={`${fid}-host`}
               className="form-input"
               value={sink.host}
               onChange={(e) => set('host', e.target.value)}
@@ -371,8 +377,9 @@ function SinkEditor({ sink, existing, onChange, onCancel, onSave, saving }: Sink
             />
           </div>
           <div className="form-group" style={{ flex: '0 1 140px' }}>
-            <label className="form-label">Port</label>
+            <label className="form-label" htmlFor={`${fid}-port`}>Port</label>
             <input
+              id={`${fid}-port`}
               type="number"
               className="form-input"
               min={1}
@@ -387,8 +394,9 @@ function SinkEditor({ sink, existing, onChange, onCancel, onSave, saving }: Sink
       {showHttps && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.5rem' }}>
           <div className="form-group" style={{ flex: '1 1 100%' }}>
-            <label className="form-label">URL</label>
+            <label className="form-label" htmlFor={`${fid}-url`}>URL</label>
             <input
+              id={`${fid}-url`}
               className="form-input"
               value={sink.url}
               onChange={(e) => set('url', e.target.value)}
@@ -396,8 +404,9 @@ function SinkEditor({ sink, existing, onChange, onCancel, onSave, saving }: Sink
             />
           </div>
           <div className="form-group" style={{ flex: '1 1 100%' }}>
-            <label className="form-label">Bearer token (optional)</label>
+            <label className="form-label" htmlFor={`${fid}-bearer-token`}>Bearer token (optional)</label>
             <input
+              id={`${fid}-bearer-token`}
               className="form-input"
               type="password"
               value={sink.bearer_token}
@@ -426,8 +435,9 @@ function SinkEditor({ sink, existing, onChange, onCancel, onSave, saving }: Sink
             <span>Verify TLS certificate</span>
           </label>
           <div className="form-group" style={{ marginTop: '0.4rem' }}>
-            <label className="form-label">CA PEM (optional, pins trust)</label>
+            <label className="form-label" htmlFor={`${fid}-ca-pem`}>CA PEM (optional, pins trust)</label>
             <textarea
+              id={`${fid}-ca-pem`}
               className="form-input"
               rows={4}
               value={sink.tls_ca_pem}
@@ -438,8 +448,9 @@ function SinkEditor({ sink, existing, onChange, onCancel, onSave, saving }: Sink
           {sink.protocol === 'tls' && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
               <div className="form-group" style={{ flex: '1 1 320px' }}>
-                <label className="form-label">Client cert PEM (mutual TLS)</label>
+                <label className="form-label" htmlFor={`${fid}-client-cert-pem`}>Client cert PEM (mutual TLS)</label>
                 <textarea
+                  id={`${fid}-client-cert-pem`}
                   className="form-input"
                   rows={4}
                   value={sink.tls_client_cert_pem}
@@ -447,8 +458,9 @@ function SinkEditor({ sink, existing, onChange, onCancel, onSave, saving }: Sink
                 />
               </div>
               <div className="form-group" style={{ flex: '1 1 320px' }}>
-                <label className="form-label">Client key PEM</label>
+                <label className="form-label" htmlFor={`${fid}-client-key-pem`}>Client key PEM</label>
                 <textarea
+                  id={`${fid}-client-key-pem`}
                   className="form-input"
                   rows={4}
                   value={sink.tls_client_key_pem}
@@ -465,8 +477,9 @@ function SinkEditor({ sink, existing, onChange, onCancel, onSave, saving }: Sink
         <summary style={{ cursor: 'pointer' }}>Advanced (queue, retry, backoff)</summary>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.5rem' }}>
           <div className="form-group" style={{ flex: '0 1 160px' }}>
-            <label className="form-label">Queue size</label>
+            <label className="form-label" htmlFor={`${fid}-queue-size`}>Queue size</label>
             <input
+              id={`${fid}-queue-size`}
               type="number"
               className="form-input"
               min={10}
@@ -476,8 +489,9 @@ function SinkEditor({ sink, existing, onChange, onCancel, onSave, saving }: Sink
             />
           </div>
           <div className="form-group" style={{ flex: '0 1 160px' }}>
-            <label className="form-label">Max retries</label>
+            <label className="form-label" htmlFor={`${fid}-max-retries`}>Max retries</label>
             <input
+              id={`${fid}-max-retries`}
               type="number"
               className="form-input"
               min={0}
@@ -487,8 +501,9 @@ function SinkEditor({ sink, existing, onChange, onCancel, onSave, saving }: Sink
             />
           </div>
           <div className="form-group" style={{ flex: '0 1 160px' }}>
-            <label className="form-label">Backoff base (s)</label>
+            <label className="form-label" htmlFor={`${fid}-backoff-base`}>Backoff base (s)</label>
             <input
+              id={`${fid}-backoff-base`}
               type="number"
               className="form-input"
               min={0.1}
@@ -499,8 +514,9 @@ function SinkEditor({ sink, existing, onChange, onCancel, onSave, saving }: Sink
             />
           </div>
           <div className="form-group" style={{ flex: '0 1 160px' }}>
-            <label className="form-label">Backoff cap (s)</label>
+            <label className="form-label" htmlFor={`${fid}-backoff-cap`}>Backoff cap (s)</label>
             <input
+              id={`${fid}-backoff-cap`}
               type="number"
               className="form-input"
               min={1}

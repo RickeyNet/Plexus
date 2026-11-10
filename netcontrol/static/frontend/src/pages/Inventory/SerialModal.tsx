@@ -115,8 +115,9 @@ export function SerialModal({ target, onClose }: Props) {
         <form id={formId} onSubmit={submit}>
           {runError && <Callout tone="danger">{runError}</Callout>}
           <div className="form-group">
-            <label className="form-label">Credential</label>
+            <label className="form-label" htmlFor={`${formId}-credential`}>Credential</label>
             <select
+              id={`${formId}-credential`}
               className="form-select"
               value={credentialId == null ? '' : String(credentialId)}
               onChange={(e) => {

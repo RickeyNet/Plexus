@@ -156,8 +156,9 @@ export function PhaseConfirmModal({
         <p style={{ margin: '0 0 0.75rem', opacity: 0.85 }}>{body}</p>
         {schedule && (
           <div className="form-group">
-            <label className="form-label">Run At ({timezone})</label>
+            <label className="form-label" htmlFor={`${formId}-run-at`}>Run At ({timezone})</label>
             <input
+              id={`${formId}-run-at`}
               type="datetime-local"
               className="form-input"
               required

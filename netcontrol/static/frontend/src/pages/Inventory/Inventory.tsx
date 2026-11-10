@@ -8,6 +8,7 @@ import { PageHelp } from '@/components/PageHelp';
 import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
+import { clickableProps } from '@/lib/clickable';
 
 import {
   groupLabel,
@@ -282,6 +283,7 @@ export function Inventory() {
         <input
           className="form-input form-input-sm"
           placeholder="Search groups, hosts, IPs…"
+          aria-label="Search inventory"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           style={{ maxWidth: 280, flex: '1 1 200px' }}
@@ -292,6 +294,7 @@ export function Inventory() {
           onChange={(e) => setSort(e.target.value as InventorySort)}
           style={{ maxWidth: 200 }}
           title="Sort"
+          aria-label="Sort groups"
         >
           <option value="custom">Custom order</option>
           <option value="name_asc">Name A→Z</option>
@@ -588,7 +591,8 @@ function GroupCard({
         }}
       >
         <div
-          onClick={onToggleCollapse}
+          {...clickableProps(onToggleCollapse)}
+          aria-expanded={!collapsed}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -646,6 +650,7 @@ function GroupCard({
             value={assignedProfileId}
             onChange={(e) => onAssignProfile(e.target.value)}
             title="SNMP Profile"
+            aria-label={`SNMP profile for ${groupLabel(group)}`}
           >
             <option value="">No SNMP Profile</option>
             {snmpProfiles.map((p) => (
@@ -693,6 +698,7 @@ function GroupCard({
                   }}
                   onChange={(e) => onToggleSelectAll(e.target.checked)}
                   title="Select all hosts"
+                  aria-label={`Select all hosts in ${groupLabel(group)}`}
                 />
               )}
               <strong>Hosts</strong>
@@ -796,6 +802,7 @@ function GroupCard({
                                   onChange={(e) =>
                                     onToggleHost(host.id, e.target.checked)
                                   }
+                                  aria-label={`Select ${host.hostname}`}
                                 />
                               </td>
                               <td>{host.hostname}</td>

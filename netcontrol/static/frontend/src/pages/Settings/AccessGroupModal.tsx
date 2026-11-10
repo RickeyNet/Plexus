@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import { BusyButton } from '@/components/BusyButton';
 import { Callout } from '@/components/Callout';
@@ -52,6 +52,7 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
   const pending = isEdit ? update.isPending : create.isPending;
   const submitDisabled = name.trim().length < 2;
   const featureSet = new Set(featureKeys);
+  const fid = useId();
 
   return (
     <Modal
@@ -92,8 +93,9 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
       }
     >
       <div className="form-group">
-        <label className="form-label">Group Name</label>
+        <label className="form-label" htmlFor={`${fid}-name`}>Group Name</label>
         <input
+          id={`${fid}-name`}
           className="form-input"
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -101,19 +103,22 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
         />
       </div>
       <div className="form-group">
-        <label className="form-label">Description</label>
+        <label className="form-label" htmlFor={`${fid}-description`}>Description</label>
         <input
+          id={`${fid}-description`}
           className="form-input"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
         />
       </div>
       <div className="form-group">
-        <label className="form-label">Feature Access</label>
+        <span className="form-label" id={`${fid}-features`}>Feature Access</span>
         <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.4rem' }}>
           View grants read-only access. Modify also allows POST/PUT/DELETE.
         </div>
         <div
+          role="group"
+          aria-labelledby={`${fid}-features`}
           style={{
             display: 'grid',
             gridTemplateColumns: '1fr auto auto',
@@ -135,6 +140,7 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
                 key={`${base}-view`}
                 type="checkbox"
                 checked={baseChecked}
+                aria-label={`View ${featureLabel(base)}`}
                 style={{ justifySelf: 'center' }}
                 onChange={(e) => {
                   const next = new Set(featureSet);
@@ -151,6 +157,7 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
                 key={`${base}-write`}
                 type="checkbox"
                 checked={writeChecked}
+                aria-label={`Modify ${featureLabel(base)}`}
                 disabled={!hasWrite || !baseChecked}
                 title={!hasWrite ? 'No modify actions for this feature' : ''}
                 style={{ justifySelf: 'center' }}

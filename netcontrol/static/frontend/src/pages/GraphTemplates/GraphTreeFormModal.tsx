@@ -87,8 +87,9 @@ export function GraphTreeFormModal({ mode, treeId, onClose }: Props) {
         <form id={formId} onSubmit={handleSubmit}>
           {saveError && <Callout tone="danger">{saveError}</Callout>}
           <div className="form-group">
-            <label className="form-label">Name</label>
+            <label className="form-label" htmlFor={`${formId}-name`}>Name</label>
             <input
+              id={`${formId}-name`}
               className="form-input"
               value={name}
               onChange={(e) => {
@@ -101,8 +102,8 @@ export function GraphTreeFormModal({ mode, treeId, onClose }: Props) {
             <FieldError>{nameError}</FieldError>
           </div>
           <div className="form-group">
-            <label className="form-label">Description</label>
-            <input className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} />
+            <label className="form-label" htmlFor={`${formId}-description`}>Description</label>
+            <input id={`${formId}-description`} className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} />
           </div>
         </form>
       )}

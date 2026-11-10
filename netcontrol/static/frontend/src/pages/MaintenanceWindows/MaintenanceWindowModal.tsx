@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 
 import { groupLabel, type InventoryGroupFull } from '@/api/inventory';
 import {
@@ -38,6 +38,7 @@ export function MaintenanceWindowModal({ isOpen, onClose, editingId, groups }: P
   const existing = useMaintenanceWindow(editingId ?? null);
   const create = useCreateMaintenanceWindow();
   const update = useUpdateMaintenanceWindow();
+  const fid = useId();
 
   const [form, setForm] = useState<MaintenanceWindowPayload>(DEFAULT_PAYLOAD);
   const [startLocal, setStartLocal] = useState('');
@@ -231,10 +232,14 @@ export function MaintenanceWindowModal({ isOpen, onClose, editingId, groups }: P
 
         {form.recurrence === 'weekly' && (
           <div>
-            <div style={{ fontWeight: 600, fontSize: '0.85em', marginBottom: '0.25rem' }}>
+            <div id={`${fid}-weekdays`} style={{ fontWeight: 600, fontSize: '0.85em', marginBottom: '0.25rem' }}>
               Weekdays
             </div>
-            <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+            <div
+              role="group"
+              aria-labelledby={`${fid}-weekdays`}
+              style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}
+            >
               {WEEKDAYS.map((d) => {
                 const on = !!(form.weekday_mask & d.bit);
                 return (
@@ -242,6 +247,7 @@ export function MaintenanceWindowModal({ isOpen, onClose, editingId, groups }: P
                     key={d.bit}
                     type="button"
                     className={`btn btn-sm ${on ? 'btn-primary' : 'btn-ghost'}`}
+                    aria-pressed={on}
                     onClick={() =>
                       setForm({ ...form, weekday_mask: toggleWeekdayBit(form.weekday_mask, d.bit) })
                     }
@@ -255,13 +261,15 @@ export function MaintenanceWindowModal({ isOpen, onClose, editingId, groups }: P
         )}
 
         <div>
-          <div style={{ fontWeight: 600, fontSize: '0.85em', marginBottom: '0.25rem' }}>
+          <div id={`${fid}-scope`} style={{ fontWeight: 600, fontSize: '0.85em', marginBottom: '0.25rem' }}>
             Scope
           </div>
           <p style={{ margin: '0 0 0.4rem', fontSize: '0.82em', color: 'var(--text-muted)' }}>
             Pick the inventory groups this window applies to. Leave empty to apply globally.
           </p>
           <div
+            role="group"
+            aria-labelledby={`${fid}-scope`}
             style={{
               display: 'flex',
               gap: '0.35rem',
@@ -282,6 +290,7 @@ export function MaintenanceWindowModal({ isOpen, onClose, editingId, groups }: P
                   key={g.id}
                   type="button"
                   className={`btn btn-sm ${on ? 'btn-primary' : 'btn-ghost'}`}
+                  aria-pressed={on}
                   onClick={() => toggleGroup(g.id)}
                 >
                   {groupLabel(g)}

@@ -768,8 +768,9 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
         {error && <Callout tone="danger">{error}</Callout>}
         {isGlobal && (
           <div className="form-group">
-            <label className="form-label">Target Inventory Group</label>
+            <label className="form-label" htmlFor={`${formId}-group`}>Target Inventory Group</label>
             <select
+              id={`${formId}-group`}
               className="form-select"
               value={String(groupId)}
               onChange={(e) => setGroupId(Number(e.target.value))}
@@ -787,8 +788,9 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
           </div>
         )}
         <div className="form-group">
-          <label className="form-label">CIDR Targets</label>
+          <label className="form-label" htmlFor={`${formId}-cidrs`}>CIDR Targets</label>
           <textarea
+            id={`${formId}-cidrs`}
             className="form-textarea"
             value={cidrs}
             onChange={(e) => setCidrs(e.target.value)}
@@ -810,8 +812,9 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
           }}
         >
           <div>
-            <label className="form-label">Timeout Seconds</label>
+            <label className="form-label" htmlFor={`${formId}-timeout`}>Timeout Seconds</label>
             <input
+              id={`${formId}-timeout`}
               className="form-input"
               type="number"
               min={0.05}
@@ -822,8 +825,9 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
             />
           </div>
           <div>
-            <label className="form-label">Max Hosts</label>
+            <label className="form-label" htmlFor={`${formId}-max-hosts`}>Max Hosts</label>
             <input
+              id={`${formId}-max-hosts`}
               className="form-input"
               type="number"
               min={1}
@@ -842,16 +846,18 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
           }}
         >
           <div>
-            <label className="form-label">Device Type</label>
+            <label className="form-label" htmlFor={`${formId}-device-type`}>Device Type</label>
             <input
+              id={`${formId}-device-type`}
               className="form-input"
               value={deviceType}
               onChange={(e) => setDeviceType(e.target.value)}
             />
           </div>
           <div>
-            <label className="form-label">Hostname Prefix</label>
+            <label className="form-label" htmlFor={`${formId}-hostname-prefix`}>Hostname Prefix</label>
             <input
+              id={`${formId}-hostname-prefix`}
               className="form-input"
               value={hostnamePrefix}
               onChange={(e) => setHostnamePrefix(e.target.value)}
@@ -963,8 +969,9 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
             </label>
             {testOnly && (
               <div className="form-group" style={{ marginTop: '0.5rem' }}>
-                <label className="form-label">Test Target IP</label>
+                <label className="form-label" htmlFor={`${formId}-test-ip`}>Test Target IP</label>
                 <input
+                  id={`${formId}-test-ip`}
                   className="form-input"
                   value={testTargetIp}
                   onChange={(e) => setTestTargetIp(e.target.value)}
