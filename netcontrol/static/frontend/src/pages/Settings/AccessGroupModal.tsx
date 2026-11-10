@@ -87,7 +87,7 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
               }
             }}
           >
-            {isEdit ? 'Save' : 'Create Group'}
+            {isEdit ? 'Save Group' : 'Create Group'}
           </BusyButton>
         </>
       }
@@ -113,8 +113,8 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
       </div>
       <div className="form-group">
         <span className="form-label" id={`${fid}-features`}>Feature Access</span>
-        <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.4rem' }}>
-          View grants read-only access. Modify also allows POST/PUT/DELETE.
+        <div className="form-help" style={{ marginBottom: '0.4rem' }}>
+          View grants read-only access. Modify also allows creating, changing and deleting.
         </div>
         <div
           role="group"

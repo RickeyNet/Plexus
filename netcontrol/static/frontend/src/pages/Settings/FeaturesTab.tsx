@@ -1,13 +1,15 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import {
   AdminCapabilities,
   useUpdateFeatureVisibility,
 } from '@/api/settings';
-import { BusyButton } from '@/components/BusyButton';
 import { EmptyState } from '@/components/EmptyState';
 
-import { FormStatus, StatusLine } from './StatusLine';
+import { CheckboxField } from './FormFields';
+import { SaveBar } from './SaveBar';
+import { FormStatus } from './StatusLine';
+import { useSavedDraft } from './useSavedDraft';
 
 export function FeaturesTab({
   capabilities,
@@ -15,80 +17,62 @@ export function FeaturesTab({
   capabilities: AdminCapabilities;
 }) {
   const update = useUpdateFeatureVisibility();
-  const [hidden, setHidden] = useState<Set<string>>(
-    () => new Set(capabilities.feature_visibility.hidden),
-  );
+  // Sorted so toggling a feature off and on again compares equal to the
+  // saved list. A refetch (another admin saved) re-seeds the draft while it
+  // holds no unsaved toggles.
+  const savedHidden = capabilities.feature_visibility.hidden;
+  const serverHidden = useMemo(() => [...savedHidden].sort(), [savedHidden]);
+  const { draft, setDraft, dirty, discard, markSaved } = useSavedDraft(serverHidden);
   const [status, setStatus] = useState<FormStatus | null>(null);
 
-  // If the capabilities query refetches with a different hidden list (e.g.
-  // another admin saved changes), fold the server state back into the local
-  // draft so we don't display stale toggles.
-  const [prevHidden, setPrevHidden] = useState(capabilities.feature_visibility.hidden);
-  if (capabilities.feature_visibility.hidden !== prevHidden) {
-    setPrevHidden(capabilities.feature_visibility.hidden);
-    setHidden(new Set(capabilities.feature_visibility.hidden));
-  }
-
+  const hidden = new Set(draft ?? serverHidden);
   const catalog = capabilities.feature_visibility.catalog;
 
   return (
     <div>
-      <h3 style={{ margin: '0 0 0.5rem 0' }}>Feature Visibility</h3>
-      <p className="card-description" style={{ marginBottom: '0.75rem' }}>
-        Hide nav entries from non-admin users without removing the feature itself.
-      </p>
-
       {catalog.length === 0 ? (
         <EmptyState compact message="No toggleable features available." />
       ) : (
-        <div style={{ display: 'grid', gap: '0.4rem' }}>
-          {catalog.map((entry) => {
-            const isVisible = !hidden.has(entry.key);
-            return (
-              <label
-                key={entry.key}
-                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-              >
-                <input
-                  type="checkbox"
-                  checked={isVisible}
-                  onChange={(e) => {
-                    const next = new Set(hidden);
-                    if (e.target.checked) next.delete(entry.key);
-                    else next.add(entry.key);
-                    setHidden(next);
-                  }}
-                />
-                <span>{entry.label}</span>
-              </label>
-            );
-          })}
+        <div style={{ display: 'grid', gap: '0.4rem', justifyItems: 'start' }}>
+          {catalog.map((entry) => (
+            <CheckboxField
+              key={entry.key}
+              label={entry.label}
+              checked={!hidden.has(entry.key)}
+              onChange={(visible) => {
+                const next = new Set(hidden);
+                if (visible) next.delete(entry.key);
+                else next.add(entry.key);
+                setDraft(Array.from(next).sort());
+              }}
+            />
+          ))}
         </div>
       )}
 
-      <div style={{ marginTop: '0.75rem' }}>
-        <BusyButton
-          className="btn btn-primary"
-          busy={update.isPending}
-          busyLabel="Saving…"
-          onClick={() => {
-            setStatus(null);
-            update.mutate(Array.from(hidden), {
-              onSuccess: () =>
-                setStatus({ kind: 'success', message: 'Feature visibility saved' }),
-              onError: (err) =>
-                setStatus({
-                  kind: 'error',
-                  message: `Failed to save feature visibility: ${(err as Error).message}`,
-                }),
-            });
-          }}
-        >
-          Save Visibility
-        </BusyButton>
-      </div>
-
-      <StatusLine status={status} />
+      <SaveBar
+        name="Feature Visibility"
+        dirty={dirty}
+        busy={update.isPending}
+        label="Save Visibility"
+        status={status}
+        onDiscard={discard}
+        onSave={() => {
+          setStatus(null);
+          const next = Array.from(hidden).sort();
+          update.mutate(next, {
+            onSuccess: () => {
+              markSaved(next);
+              setStatus({ kind: 'success', message: 'Feature visibility saved' });
+            },
+            onError: (err) =>
+              setStatus({
+                kind: 'error',
+                message: `Failed to save feature visibility: ${(err as Error).message}`,
+              }),
+          });
+        }}
+      />
     </div>
   );
 }

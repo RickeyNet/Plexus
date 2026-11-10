@@ -1,7 +1,7 @@
 import { useId, useState } from 'react';
 
-import { BusyButton } from '@/components/BusyButton';
-import { DeleteButton } from '@/components/DeleteButton';
+import { Badge } from '@/components/Badge';
+import { DataTable } from '@/components/DataTable';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
@@ -20,7 +20,19 @@ import {
   useUpdateNotificationChannel,
 } from '@/api/settings';
 
+import {
+  DeliveryStatsCells,
+  NoticeCallout,
+  RetryFields,
+  RowActionsCell,
+  TargetEditorModal,
+  TargetTestsProvider,
+  TestResultBadge,
+} from './DeliveryTargets';
+import { CheckboxField, CheckboxRow, FormRow, NumberField, TextField } from './FormFields';
+import { AutoSaveNote } from './SaveBar';
 import type { FormStatus } from './StatusLine';
+import { isDirty } from './unsaved-context';
 
 const TYPES: NotificationChannelType[] = ['email', 'pagerduty', 'webhook', 'teams'];
 const TYPE_LABELS: Record<string, string> = {
@@ -196,6 +208,11 @@ function channelTarget(c: NotificationChannel): string {
   }
 }
 
+interface EditorState {
+  draft: NotificationChannel;
+  saved: NotificationChannel;
+}
+
 export function NotificationsTab() {
   const { confirm } = useDialogs();
   const query = useNotificationChannels();
@@ -204,13 +221,10 @@ export function NotificationsTab() {
   const deleteMut = useDeleteNotificationChannel();
   const testMut = useTestNotificationChannel();
   const defaultsMut = useSetNotificationDefaults();
-  const testing = usePendingKeys<string>();
   const deleting = usePendingKeys<string>();
-  const [editing, setEditing] = useState<NotificationChannel | null>(null);
-  const [status, setStatus] = useState<FormStatus | null>(null);
-  const [testResults, setTestResults] = useState<Record<string, { ok: boolean; error: string }>>(
-    {},
-  );
+  const [editor, setEditor] = useState<EditorState | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<FormStatus | null>(null);
 
   if (query.isError && !query.data)
     return (
@@ -224,30 +238,34 @@ export function NotificationsTab() {
     (query.data.stats ?? []).map((s) => [s.id, s]),
   );
 
+  const openEditor = (c: NotificationChannel) => {
+    setSaveError(null);
+    setEditor({ draft: { ...c }, saved: { ...c } });
+  };
+
   const onSave = () => {
-    if (!editing) return;
-    setStatus(null);
+    if (!editor) return;
+    const editing = editor.draft;
+    setSaveError(null);
     const isEdit = Boolean(editing.id) && channels.some((c) => c.id === editing.id);
     if (isEdit) {
       updateMut.mutate(
         { id: editing.id, data: editing },
         {
           onSuccess: () => {
-            setEditing(null);
-            setStatus({ kind: 'success', message: `Channel ${editing.name || editing.id} saved.` });
+            setEditor(null);
+            setNotice({ kind: 'success', message: `Channel ${editing.name || editing.id} saved.` });
           },
-          onError: (err) =>
-            setStatus({ kind: 'error', message: `Failed to save channel: ${(err as Error).message}` }),
+          onError: (err) => setSaveError(`Failed to save channel: ${(err as Error).message}`),
         },
       );
     } else {
       createMut.mutate(editing, {
         onSuccess: (saved) => {
-          setEditing(null);
-          setStatus({ kind: 'success', message: `Channel ${saved?.name || saved?.id || ''} created.` });
+          setEditor(null);
+          setNotice({ kind: 'success', message: `Channel ${saved?.name || saved?.id || ''} created.` });
         },
-        onError: (err) =>
-          setStatus({ kind: 'error', message: `Failed to create channel: ${(err as Error).message}` }),
+        onError: (err) => setSaveError(`Failed to create channel: ${(err as Error).message}`),
       });
     }
   };
@@ -264,176 +282,135 @@ export function NotificationsTab() {
     await deleting.run(c.id, async () => {
       try {
         await deleteMut.mutateAsync(c.id);
-        setStatus({ kind: 'success', message: `Channel ${c.name || c.id} deleted.` });
+        setNotice({ kind: 'success', message: `Channel ${c.name || c.id} deleted.` });
       } catch (err) {
-        setStatus({ kind: 'error', message: `Failed to delete channel: ${(err as Error).message}` });
+        setNotice({ kind: 'error', message: `Failed to delete channel: ${(err as Error).message}` });
       }
     });
   };
 
-  const onTest = (c: NotificationChannel) =>
-    testing.run(c.id, async () => {
-      try {
-        const res = await testMut.mutateAsync(c.id);
-        setTestResults((prev) => ({ ...prev, [c.id]: res }));
-      } catch (err) {
-        setTestResults((prev) => ({ ...prev, [c.id]: { ok: false, error: (err as Error).message } }));
-      }
-    });
-
-  const toggleDefault = (id: string) => {
-    const next = defaults.includes(id) ? defaults.filter((d) => d !== id) : [...defaults, id];
+  const toggleDefault = (c: NotificationChannel) => {
+    const name = c.name || c.id;
+    const adding = !defaults.includes(c.id);
+    const next = adding ? [...defaults, c.id] : defaults.filter((d) => d !== c.id);
     defaultsMut.mutate(next, {
+      onSuccess: () =>
+        setNotice({
+          kind: 'success',
+          message: adding
+            ? `Default channels updated: ${name} now receives alerts not tied to a rule.`
+            : `Default channels updated: ${name} no longer receives alerts not tied to a rule.`,
+        }),
       onError: (err) =>
-        setStatus({ kind: 'error', message: `Failed to update defaults: ${(err as Error).message}` }),
+        setNotice({ kind: 'error', message: `Failed to update default channels: ${(err as Error).message}` }),
     });
   };
 
   return (
     <div>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: '0.75rem',
-          flexWrap: 'wrap',
-          gap: '0.5rem',
-        }}
-      >
-        <h3 style={{ margin: 0 }}>Alert Notification Channels</h3>
-        <button className="btn btn-sm btn-primary" onClick={() => setEditing({ ...EMPTY_CHANNEL })}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 'var(--space-3)' }}>
+        <button className="btn btn-sm btn-primary" onClick={() => openEditor({ ...EMPTY_CHANNEL })}>
           Add Channel
         </button>
       </div>
 
-      <p className="text-muted" style={{ fontSize: '0.85rem', marginBottom: '0.75rem' }}>
-        Deliver monitoring alerts to email, PagerDuty, a generic JSON webhook, or a Microsoft Teams
-        incoming webhook. Each newly raised alert is fanned out to its rule&apos;s assigned channels
-        (set per rule under Monitoring → Rules); alerts with no rule — built-in thresholds, baseline
-        deviations, route churn — go to the <strong>default</strong> channels selected below.
-        Repeated occurrences of the same alert are de-duplicated and do not re-notify.
-      </p>
-
       <SetupInstructions />
+
+      <NoticeCallout notice={notice} onDismiss={() => setNotice(null)} />
 
       {channels.length === 0 ? (
         <EmptyState compact message="No channels configured. Add one to start delivering alerts." />
       ) : (
-        <div style={{ overflowX: 'auto' }}>
-          <table className="data-table" style={{ minWidth: '760px' }}>
-            <thead>
-              <tr>
-                <th>Default</th>
-                <th>Name</th>
-                <th>Type</th>
-                <th>Target</th>
-                <th>Floor</th>
-                <th>State</th>
-                <th>Queue</th>
-                <th>Delivered</th>
-                <th>Dropped</th>
-                <th style={{ minWidth: '160px' }}>Last Error / Test</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {channels.map((c) => {
-                const st = statsById.get(c.id);
-                const result = testResults[c.id];
-                return (
-                  <tr key={c.id}>
-                    <td style={{ textAlign: 'center' }}>
-                      <input
-                        type="checkbox"
-                        checked={defaults.includes(c.id)}
-                        disabled={defaultsMut.isPending}
-                        onChange={() => toggleDefault(c.id)}
-                        title="Use this channel for alerts not tied to a rule"
-                        aria-label={`Default channel: ${c.name || c.id}`}
-                      />
-                    </td>
-                    <td>{c.name || c.id}</td>
-                    <td>{TYPE_LABELS[c.type] ?? c.type}</td>
-                    <td
-                      style={{
-                        fontFamily: 'monospace',
-                        fontSize: '0.8rem',
-                        maxWidth: '240px',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                      title={channelTarget(c)}
-                    >
-                      {channelTarget(c)}
-                    </td>
-                    <td>{c.severity_floor}</td>
-                    <td>
-                      <span className={`badge ${c.enabled ? 'badge-success' : 'badge-info'}`}>
-                        {c.enabled ? 'Enabled' : 'Disabled'}
-                      </span>
-                    </td>
-                    <td>{st ? `${st.queue_depth}/${st.queue_size}` : '-'}</td>
-                    <td>{st?.delivered ?? 0}</td>
-                    <td>{(st?.dropped_queue_full ?? 0) + (st?.dropped_below_severity ?? 0)}</td>
-                    <td
-                      style={{
-                        fontFamily: 'monospace',
-                        fontSize: '0.78rem',
-                        color: result && result.ok ? 'var(--success)' : 'var(--text-muted)',
-                        maxWidth: '220px',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                      title={result ? result.error : st?.last_error || ''}
-                    >
-                      {result
-                        ? result.ok
-                          ? 'Test OK'
-                          : `Test failed: ${result.error}`
-                        : st?.last_error || ''}
-                    </td>
-                    <td style={{ whiteSpace: 'nowrap' }}>
-                      <BusyButton
-                        className="btn btn-xs btn-ghost"
-                        busy={testing.isPending(c.id)}
-                        busyLabel="Testing…"
-                        onClick={() => void onTest(c)}
-                      >
-                        Test
-                      </BusyButton>{' '}
-                      <button className="btn btn-xs btn-ghost" onClick={() => setEditing({ ...c })}>
-                        Edit
-                      </button>{' '}
-                      <DeleteButton size="xs" onClick={() => void onDelete(c)} busy={deleting.isPending(c.id)} />
-                    </td>
+        <>
+          <AutoSaveNote>
+            The Default checkbox applies immediately. Other changes are saved from each
+            channel&apos;s Edit dialog.
+          </AutoSaveNote>
+          <TargetTestsProvider
+            send={(id) => testMut.mutateAsync(id)}
+            sentMessage={(name) => `Test notification sent to ${name}.`}
+            onOutcome={setNotice}
+          >
+            {(tests) => (
+              <DataTable compact aria-label="Notification channels">
+                <thead>
+                  <tr>
+                    <th title="Applies immediately: default channels receive alerts not tied to a rule">
+                      Default
+                    </th>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>Target</th>
+                    <th>Floor</th>
+                    <th>State</th>
+                    <th>Queue</th>
+                    <th>Delivered</th>
+                    <th>Dropped</th>
+                    <th>Last error</th>
+                    <th>Last test</th>
+                    <th aria-label="Actions"></th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                </thead>
+                <tbody>
+                  {channels.map((c) => {
+                    const name = c.name || c.id;
+                    return (
+                      <tr key={c.id}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={defaults.includes(c.id)}
+                            disabled={defaultsMut.isPending}
+                            onChange={() => toggleDefault(c)}
+                            title="Use this channel for alerts not tied to a rule (applies immediately)"
+                            aria-label={`Default channel: ${name}`}
+                          />
+                        </td>
+                        <td>{name}</td>
+                        <td>{TYPE_LABELS[c.type] ?? c.type}</td>
+                        <td>
+                          <span className="form-mono delivery-cell-truncate" title={channelTarget(c)}>
+                            {channelTarget(c)}
+                          </span>
+                        </td>
+                        <td>{c.severity_floor}</td>
+                        <td>
+                          <Badge tone={c.enabled ? 'success' : 'info'} size="sm">
+                            {c.enabled ? 'Enabled' : 'Disabled'}
+                          </Badge>
+                        </td>
+                        <DeliveryStatsCells stats={statsById.get(c.id)} />
+                        <td>
+                          <TestResultBadge result={tests.result(c.id)} />
+                        </td>
+                        <RowActionsCell
+                          name={name}
+                          testing={tests.isPending(c.id)}
+                          deleting={deleting.isPending(c.id)}
+                          onTest={() => void tests.test(c.id, name)}
+                          onEdit={() => openEditor(c)}
+                          onDelete={() => void onDelete(c)}
+                        />
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </DataTable>
+            )}
+          </TargetTestsProvider>
+        </>
       )}
 
-      {status && (
-        <div
-          className={status.kind === 'success' ? 'success' : 'error'}
-          style={{ marginTop: '0.75rem' }}
-        >
-          {status.message}
-        </div>
-      )}
-
-      {editing && (
+      {editor && (
         <ChannelEditor
-          channel={editing}
+          channel={editor.draft}
+          dirty={isDirty(editor.draft, editor.saved)}
           existing={channels}
-          onChange={setEditing}
-          onCancel={() => setEditing(null)}
+          onChange={(draft) => setEditor({ ...editor, draft })}
+          onClose={() => setEditor(null)}
           onSave={onSave}
           saving={createMut.isPending || updateMut.isPending}
+          error={saveError}
         />
       )}
     </div>
@@ -442,39 +419,45 @@ export function NotificationsTab() {
 
 interface ChannelEditorProps {
   channel: NotificationChannel;
+  dirty: boolean;
   existing: NotificationChannel[];
   onChange: (next: NotificationChannel) => void;
-  onCancel: () => void;
+  onClose: () => void;
   onSave: () => void;
   saving: boolean;
+  error: string | null;
 }
 
-function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }: ChannelEditorProps) {
+function ChannelEditor({ channel, dirty, existing, onChange, onClose, onSave, saving, error }: ChannelEditorProps) {
   const isEdit = Boolean(channel.id) && existing.some((c) => c.id === channel.id);
   const fid = useId();
   const set = <K extends keyof NotificationChannel>(key: K, value: NotificationChannel[K]) =>
     onChange({ ...channel, [key]: value });
 
   return (
-    <div className="card-inset" style={{ marginTop: 'var(--space-4)' }}>
-      <h4 style={{ marginTop: 0 }}>{isEdit ? 'Edit Channel' : 'New Channel'}</h4>
-
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
-        <div className="form-group" style={{ flex: '1 1 220px' }}>
-          <label className="form-label" htmlFor={`${fid}-name`}>Name</label>
-          <input
-            id={`${fid}-name`}
-            className="form-input"
-            value={channel.name}
-            onChange={(e) => set('name', e.target.value)}
-            placeholder="e.g. On-call PagerDuty"
-          />
-        </div>
+    <TargetEditorModal
+      title={isEdit ? 'Edit Channel' : 'New Channel'}
+      formName="Notification channel"
+      dirty={dirty}
+      saving={saving}
+      primaryLabel={isEdit ? 'Save Changes' : 'Create Channel'}
+      error={error}
+      onSave={onSave}
+      onClose={onClose}
+    >
+      <FormRow>
+        <TextField
+          label="Name"
+          flex="1 1 220px"
+          value={channel.name}
+          onChange={(v) => set('name', v)}
+          placeholder="e.g. On-call PagerDuty"
+        />
         <div className="form-group" style={{ flex: '0 1 200px' }}>
           <label className="form-label" htmlFor={`${fid}-type`}>Type</label>
           <select
             id={`${fid}-type`}
-            className="form-input"
+            className="form-select"
             value={channel.type}
             onChange={(e) => set('type', e.target.value as NotificationChannelType)}
             disabled={isEdit}
@@ -490,7 +473,7 @@ function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }
           <label className="form-label" htmlFor={`${fid}-severity-floor`}>Severity floor</label>
           <select
             id={`${fid}-severity-floor`}
-            className="form-input"
+            className="form-select"
             value={channel.severity_floor}
             onChange={(e) => set('severity_floor', e.target.value)}
           >
@@ -501,262 +484,140 @@ function ChannelEditor({ channel, existing, onChange, onCancel, onSave, saving }
             ))}
           </select>
         </div>
-        <label
-          className="form-group"
-          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', marginTop: '1.4rem' }}
-        >
-          <input
-            type="checkbox"
-            checked={channel.enabled}
-            onChange={(e) => set('enabled', e.target.checked)}
-          />
-          <span>Enabled</span>
-        </label>
-      </div>
+        <CheckboxField inRow label="Enabled" checked={channel.enabled} onChange={(v) => set('enabled', v)} />
+      </FormRow>
 
       {channel.type === 'email' && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.5rem' }}>
-          <div className="form-group" style={{ flex: '1 1 240px' }}>
-            <label className="form-label" htmlFor={`${fid}-smtp-host`}>SMTP host</label>
-            <input
-              id={`${fid}-smtp-host`}
-              className="form-input"
+        <>
+          <FormRow>
+            <TextField
+              label="SMTP host"
+              flex="1 1 240px"
               value={channel.smtp_host}
-              onChange={(e) => set('smtp_host', e.target.value)}
+              onChange={(v) => set('smtp_host', v)}
               placeholder="smtp.example.com"
             />
-          </div>
-          <div className="form-group" style={{ flex: '0 1 120px' }}>
-            <label className="form-label" htmlFor={`${fid}-smtp-port`}>SMTP port</label>
-            <input
-              id={`${fid}-smtp-port`}
-              type="number"
-              className="form-input"
+            <NumberField
+              label="SMTP port"
+              flex="0 1 120px"
               min={1}
               max={65535}
               value={channel.smtp_port}
-              onChange={(e) => set('smtp_port', Number(e.target.value))}
+              onChange={(v) => set('smtp_port', v)}
             />
-          </div>
-          <div className="form-group" style={{ flex: '1 1 240px' }}>
-            <label className="form-label" htmlFor={`${fid}-from-address`}>From address</label>
-            <input
-              id={`${fid}-from-address`}
-              className="form-input"
+            <TextField
+              label="From address"
+              flex="1 1 240px"
               value={channel.mail_from}
-              onChange={(e) => set('mail_from', e.target.value)}
+              onChange={(v) => set('mail_from', v)}
               placeholder="plexus-alerts@example.com"
             />
-          </div>
-          <div className="form-group" style={{ flex: '1 1 100%' }}>
-            <label className="form-label" htmlFor={`${fid}-recipients`}>Recipients (comma separated)</label>
-            <input
-              id={`${fid}-recipients`}
-              className="form-input"
-              value={channel.mail_to}
-              onChange={(e) => set('mail_to', e.target.value)}
-              placeholder="oncall@example.com, noc@example.com"
-            />
-          </div>
-          <div className="form-group" style={{ flex: '1 1 240px' }}>
-            <label className="form-label" htmlFor={`${fid}-smtp-username`}>SMTP username (optional)</label>
-            <input
-              id={`${fid}-smtp-username`}
-              className="form-input"
+          </FormRow>
+          <TextField
+            label="Recipients (comma separated)"
+            value={channel.mail_to}
+            onChange={(v) => set('mail_to', v)}
+            placeholder="oncall@example.com, noc@example.com"
+          />
+          <FormRow>
+            <TextField
+              label="SMTP username (optional)"
+              flex="1 1 240px"
               value={channel.smtp_username}
-              onChange={(e) => set('smtp_username', e.target.value)}
+              onChange={(v) => set('smtp_username', v)}
               autoComplete="off"
             />
-          </div>
-          <div className="form-group" style={{ flex: '1 1 240px' }}>
-            <label className="form-label" htmlFor={`${fid}-smtp-password`}>SMTP password (optional)</label>
-            <input
-              id={`${fid}-smtp-password`}
+            <TextField
+              label="SMTP password (optional)"
               type="password"
-              className="form-input"
+              flex="1 1 240px"
               value={channel.smtp_password}
-              onChange={(e) => set('smtp_password', e.target.value)}
+              onChange={(v) => set('smtp_password', v)}
               placeholder="Leave masked (••••••••) to keep existing"
               autoComplete="new-password"
             />
-          </div>
-          <label
-            className="form-group"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', marginTop: '1.4rem' }}
-          >
-            <input
-              type="checkbox"
-              checked={channel.smtp_use_tls}
-              onChange={(e) => set('smtp_use_tls', e.target.checked)}
-            />
-            <span>STARTTLS</span>
-          </label>
-          <label
-            className="form-group"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', marginTop: '1.4rem' }}
-          >
-            <input
-              type="checkbox"
+          </FormRow>
+          <CheckboxRow>
+            <CheckboxField label="STARTTLS" checked={channel.smtp_use_tls} onChange={(v) => set('smtp_use_tls', v)} />
+            <CheckboxField
+              label="Implicit TLS (SMTPS)"
               checked={channel.smtp_use_ssl}
-              onChange={(e) => set('smtp_use_ssl', e.target.checked)}
+              onChange={(v) => set('smtp_use_ssl', v)}
             />
-            <span>Implicit TLS (SMTPS)</span>
-          </label>
-        </div>
+          </CheckboxRow>
+        </>
       )}
 
       {channel.type === 'pagerduty' && (
-        <div style={{ marginTop: '0.5rem' }}>
-          <div className="form-group" style={{ flex: '1 1 100%' }}>
-            <label className="form-label" htmlFor={`${fid}-integration-routing-key`}>Integration / routing key</label>
-            <input
-              id={`${fid}-integration-routing-key`}
-              className="form-input"
-              type="password"
-              value={channel.routing_key}
-              onChange={(e) => set('routing_key', e.target.value)}
-              placeholder="Events API v2 integration key (32 chars)"
-              autoComplete="off"
-            />
-            <div className="text-muted" style={{ fontSize: '0.78rem', marginTop: '0.2rem' }}>
+        <TextField
+          label="Integration / routing key"
+          type="password"
+          value={channel.routing_key}
+          onChange={(v) => set('routing_key', v)}
+          placeholder="Events API v2 integration key (32 chars)"
+          autoComplete="off"
+          help={
+            <>
               From a PagerDuty service&apos;s Events API v2 integration. The alert dedup key is reused
               so repeated alerts collapse onto one incident. Leave masked (••••••••) to keep the
               stored key.
-            </div>
-          </div>
-        </div>
+            </>
+          }
+        />
       )}
 
       {channel.type === 'webhook' && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.5rem' }}>
-          <div className="form-group" style={{ flex: '1 1 100%' }}>
-            <label className="form-label" htmlFor={`${fid}-webhook-url`}>Webhook URL</label>
-            <input
-              id={`${fid}-webhook-url`}
-              className="form-input"
-              value={channel.webhook_url}
-              onChange={(e) => set('webhook_url', e.target.value)}
-              placeholder="https://example.com/hooks/plexus"
-            />
-          </div>
-          <div className="form-group" style={{ flex: '1 1 220px' }}>
-            <label className="form-label" htmlFor={`${fid}-auth-header-name`}>Auth header name (optional)</label>
-            <input
-              id={`${fid}-auth-header-name`}
-              className="form-input"
+        <>
+          <TextField
+            label="Webhook URL"
+            value={channel.webhook_url}
+            onChange={(v) => set('webhook_url', v)}
+            placeholder="https://example.com/hooks/plexus"
+          />
+          <FormRow>
+            <TextField
+              label="Auth header name (optional)"
+              flex="1 1 220px"
               value={channel.webhook_auth_header}
-              onChange={(e) => set('webhook_auth_header', e.target.value)}
+              onChange={(v) => set('webhook_auth_header', v)}
               placeholder="Authorization"
             />
-          </div>
-          <div className="form-group" style={{ flex: '1 1 220px' }}>
-            <label className="form-label" htmlFor={`${fid}-auth-header-value`}>Auth header value (optional)</label>
-            <input
-              id={`${fid}-auth-header-value`}
+            <TextField
+              label="Auth header value (optional)"
               type="password"
-              className="form-input"
+              flex="1 1 220px"
               value={channel.webhook_auth_value}
-              onChange={(e) => set('webhook_auth_value', e.target.value)}
+              onChange={(v) => set('webhook_auth_value', v)}
               placeholder="Bearer … (leave masked to keep)"
               autoComplete="off"
             />
-          </div>
-          <label
-            className="form-group"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', marginTop: '1.4rem' }}
-          >
-            <input
-              type="checkbox"
+          </FormRow>
+          <CheckboxRow>
+            <CheckboxField
+              label="Verify TLS certificate"
               checked={channel.verify_tls}
-              onChange={(e) => set('verify_tls', e.target.checked)}
+              onChange={(v) => set('verify_tls', v)}
             />
-            <span>Verify TLS certificate</span>
-          </label>
-        </div>
+          </CheckboxRow>
+        </>
       )}
 
       {channel.type === 'teams' && (
-        <div style={{ marginTop: '0.5rem' }}>
-          <div className="form-group" style={{ flex: '1 1 100%' }}>
-            <label className="form-label" htmlFor={`${fid}-teams-incoming-webhook-url`}>Teams incoming webhook URL</label>
-            <input
-              id={`${fid}-teams-incoming-webhook-url`}
-              className="form-input"
-              value={channel.teams_webhook_url}
-              onChange={(e) => set('teams_webhook_url', e.target.value)}
-              placeholder="https://outlook.office.com/webhook/…"
-            />
-            <div className="text-muted" style={{ fontSize: '0.78rem', marginTop: '0.2rem' }}>
+        <TextField
+          label="Teams incoming webhook URL"
+          value={channel.teams_webhook_url}
+          onChange={(v) => set('teams_webhook_url', v)}
+          placeholder="https://outlook.office.com/webhook/…"
+          help={
+            <>
               Create an &quot;Incoming Webhook&quot; connector on the target Teams channel and paste
               its URL here. Posts a MessageCard.
-            </div>
-          </div>
-        </div>
+            </>
+          }
+        />
       )}
 
-      <details style={{ marginTop: '0.5rem' }}>
-        <summary style={{ cursor: 'pointer' }}>Advanced (queue, retry, backoff)</summary>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.5rem' }}>
-          <div className="form-group" style={{ flex: '0 1 160px' }}>
-            <label className="form-label" htmlFor={`${fid}-queue-size`}>Queue size</label>
-            <input
-              id={`${fid}-queue-size`}
-              type="number"
-              className="form-input"
-              min={10}
-              max={100000}
-              value={channel.queue_size}
-              onChange={(e) => set('queue_size', Number(e.target.value))}
-            />
-          </div>
-          <div className="form-group" style={{ flex: '0 1 160px' }}>
-            <label className="form-label" htmlFor={`${fid}-max-retries`}>Max retries</label>
-            <input
-              id={`${fid}-max-retries`}
-              type="number"
-              className="form-input"
-              min={0}
-              max={20}
-              value={channel.max_retries}
-              onChange={(e) => set('max_retries', Number(e.target.value))}
-            />
-          </div>
-          <div className="form-group" style={{ flex: '0 1 160px' }}>
-            <label className="form-label" htmlFor={`${fid}-backoff-base`}>Backoff base (s)</label>
-            <input
-              id={`${fid}-backoff-base`}
-              type="number"
-              className="form-input"
-              min={0.1}
-              max={30}
-              step="0.1"
-              value={channel.backoff_base}
-              onChange={(e) => set('backoff_base', Number(e.target.value))}
-            />
-          </div>
-          <div className="form-group" style={{ flex: '0 1 160px' }}>
-            <label className="form-label" htmlFor={`${fid}-backoff-cap`}>Backoff cap (s)</label>
-            <input
-              id={`${fid}-backoff-cap`}
-              type="number"
-              className="form-input"
-              min={1}
-              max={600}
-              value={channel.backoff_cap}
-              onChange={(e) => set('backoff_cap', Number(e.target.value))}
-            />
-          </div>
-        </div>
-      </details>
-
-      <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
-        <BusyButton className="btn btn-primary" onClick={onSave} busy={saving} busyLabel="Saving…">
-          {isEdit ? 'Save Changes' : 'Create Channel'}
-        </BusyButton>
-        <button className="btn btn-ghost" onClick={onCancel} disabled={saving}>
-          Cancel
-        </button>
-      </div>
-    </div>
+      <RetryFields value={channel} onChange={(k, v) => set(k, v)} noun="alert" />
+    </TargetEditorModal>
   );
 }

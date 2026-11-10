@@ -10,7 +10,10 @@ import { BusyButton } from '@/components/BusyButton';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
 
-import { FormStatus, StatusLine } from './StatusLine';
+import { CheckboxField, CheckboxRow, FormRow } from './FormFields';
+import { SaveBar } from './SaveBar';
+import { FormStatus } from './StatusLine';
+import { useSavedDraft } from './useSavedDraft';
 
 const PROTOCOLS = ['udp', 'tcp'];
 const FACILITIES = [
@@ -25,13 +28,8 @@ export function LoggingTab() {
   const update = useUpdateSyslogConfig();
   const test = useTestSyslog();
   const fid = useId();
-  const [draft, setDraft] = useState<SyslogConfig | null>(null);
+  const { draft, setDraft, dirty, discard, markSaved } = useSavedDraft<SyslogConfig>(query.data);
   const [status, setStatus] = useState<FormStatus | null>(null);
-  const [prevData, setPrevData] = useState(query.data);
-  if (query.data !== prevData) {
-    setPrevData(query.data);
-    if (query.data) setDraft(query.data);
-  }
 
   if (!draft) {
     if (query.isError)
@@ -46,17 +44,7 @@ export function LoggingTab() {
 
   return (
     <div>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: '0.75rem',
-          flexWrap: 'wrap',
-          gap: '0.5rem',
-        }}
-      >
-        <h3 style={{ margin: 0 }}>Syslog Forwarding</h3>
+      <div style={{ marginBottom: '0.75rem' }}>
         <span className={`badge ${statusBadge}`}>{statusLabel}</span>
       </div>
 
@@ -77,7 +65,7 @@ export function LoggingTab() {
             { ...payload, app_name: payload.app_name.trim() || 'plexus' },
             {
               onSuccess: (saved) => {
-                setDraft(saved);
+                markSaved(saved);
                 setStatus({ kind: 'success', message: 'Syslog settings saved' });
               },
               onError: (err) =>
@@ -89,23 +77,15 @@ export function LoggingTab() {
           );
         }}
       >
-        <label
-          className="form-group"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '0.4rem',
-          }}
-        >
-          <input
-            type="checkbox"
+        <CheckboxRow>
+          <CheckboxField
+            label="Enable Syslog Forwarding"
             checked={draft.enabled}
-            onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })}
+            onChange={(v) => setDraft({ ...draft, enabled: v })}
           />
-          <span>Enable Syslog Forwarding</span>
-        </label>
+        </CheckboxRow>
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <FormRow>
           <div className="form-group" style={{ flex: '1 1 220px' }}>
             <label className="form-label" htmlFor={`${fid}-host`}>Host</label>
             <input
@@ -156,6 +136,7 @@ export function LoggingTab() {
                 </option>
               ))}
             </select>
+            <div className="form-help">Syslog facility stamped on each message.</div>
           </div>
           <div className="form-group" style={{ flex: '0 1 140px' }}>
             <label className="form-label" htmlFor={`${fid}-level`}>Level</label>
@@ -171,6 +152,7 @@ export function LoggingTab() {
                 </option>
               ))}
             </select>
+            <div className="form-help">Lowest log level that is forwarded.</div>
           </div>
           <div className="form-group" style={{ flex: '1 1 200px' }}>
             <label className="form-label" htmlFor={`${fid}-app-name`}>App Name</label>
@@ -180,18 +162,18 @@ export function LoggingTab() {
               value={draft.app_name}
               onChange={(e) => setDraft({ ...draft, app_name: e.target.value })}
             />
+            <div className="form-help">Tag that names Plexus in each message; blank means plexus.</div>
           </div>
-        </div>
+        </FormRow>
 
-        <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-          <BusyButton
-            type="submit"
-            className="btn btn-primary"
-            busy={update.isPending}
-            busyLabel="Saving…"
-          >
-            Save Syslog Settings
-          </BusyButton>
+        <SaveBar
+          name="Syslog Forwarding"
+          dirty={dirty}
+          busy={update.isPending}
+          label="Save Syslog Settings"
+          status={status}
+          onDiscard={discard}
+        >
           <BusyButton
             className="btn btn-secondary"
             busy={test.isPending}
@@ -220,9 +202,7 @@ export function LoggingTab() {
           >
             Send Test Message
           </BusyButton>
-        </div>
-
-        <StatusLine status={status} />
+        </SaveBar>
       </form>
     </div>
   );

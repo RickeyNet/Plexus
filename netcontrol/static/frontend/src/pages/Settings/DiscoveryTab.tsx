@@ -5,8 +5,6 @@ import { BusyButton } from '@/components/BusyButton';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
-  StpDiscoveryConfig,
-  TopologyDiscoveryConfig,
   useDeleteStpRootPolicy,
   useInventoryGroupsList,
   useRunStpDiscovery,
@@ -22,21 +20,19 @@ import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 
+import { CheckboxField, FormRow, NumberField, TextField } from './FormFields';
+import { SaveBar } from './SaveBar';
 import { SectionCard } from './SectionCard';
 import { FormStatus, StatusLine } from './StatusLine';
+import { useReportUnsaved } from './unsaved-context';
+import { useSavedDraft } from './useSavedDraft';
 
 function TopologyDiscoverySection() {
   const query = useTopologyDiscoveryConfig();
   const update = useUpdateTopologyDiscoveryConfig();
   const runNow = useRunTopologyDiscovery();
-  const fid = useId();
-  const [draft, setDraft] = useState<TopologyDiscoveryConfig | null>(null);
+  const { draft, setDraft, dirty, discard, markSaved } = useSavedDraft(query.data);
   const [status, setStatus] = useState<FormStatus | null>(null);
-  const [prevData, setPrevData] = useState(query.data);
-  if (query.data !== prevData) {
-    setPrevData(query.data);
-    if (query.data) setDraft(query.data);
-  }
 
   if (!draft) {
     if (query.isError)
@@ -52,11 +48,13 @@ function TopologyDiscoverySection() {
         e.preventDefault();
         setStatus(null);
         update.mutate(draft, {
-          onSuccess: () =>
+          onSuccess: (saved) => {
+            markSaved(saved);
             setStatus({
               kind: 'success',
               message: 'Topology discovery schedule saved',
-            }),
+            });
+          },
           onError: (err) =>
             setStatus({
               kind: 'error',
@@ -65,45 +63,29 @@ function TopologyDiscoverySection() {
         });
       }}
     >
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
-        <label
-          className="form-group"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '0.4rem',
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={draft.enabled}
-            onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })}
-          />
-          <span>Enable scheduled topology discovery</span>
-        </label>
-        <div className="form-group" style={{ flex: '0 1 200px' }}>
-          <label className="form-label" htmlFor={`${fid}-interval`}>Interval (seconds)</label>
-          <input
-            id={`${fid}-interval`}
-            type="number"
-            min={60}
-            className="form-input"
-            value={draft.interval_seconds}
-            onChange={(e) =>
-              setDraft({ ...draft, interval_seconds: Number(e.target.value) })
-            }
-          />
-        </div>
-      </div>
-      <div style={{ display: 'flex', gap: '0.5rem' }}>
-        <BusyButton
-          type="submit"
-          className="btn btn-primary"
-          busy={update.isPending}
-          busyLabel="Saving…"
-        >
-          Save Schedule
-        </BusyButton>
+      <FormRow>
+        <CheckboxField
+          inRow
+          label="Enable scheduled topology discovery"
+          checked={draft.enabled}
+          onChange={(v) => setDraft({ ...draft, enabled: v })}
+        />
+        <NumberField
+          label="Interval (seconds)"
+          value={draft.interval_seconds}
+          min={60}
+          flex="0 1 200px"
+          onChange={(v) => setDraft({ ...draft, interval_seconds: v })}
+        />
+      </FormRow>
+      <SaveBar
+        name="Topology Discovery"
+        dirty={dirty}
+        busy={update.isPending}
+        label="Save Schedule"
+        status={status}
+        onDiscard={discard}
+      >
         <BusyButton
           className="btn btn-secondary"
           busy={runNow.isPending}
@@ -129,8 +111,7 @@ function TopologyDiscoverySection() {
         >
           Run Now
         </BusyButton>
-      </div>
-      <StatusLine status={status} />
+      </SaveBar>
     </form>
   );
 }
@@ -139,14 +120,8 @@ function StpDiscoverySection() {
   const query = useStpDiscoveryConfig();
   const update = useUpdateStpDiscoveryConfig();
   const runNow = useRunStpDiscovery();
-  const fid = useId();
-  const [draft, setDraft] = useState<StpDiscoveryConfig | null>(null);
+  const { draft, setDraft, dirty, discard, markSaved } = useSavedDraft(query.data);
   const [status, setStatus] = useState<FormStatus | null>(null);
-  const [prevData, setPrevData] = useState(query.data);
-  if (query.data !== prevData) {
-    setPrevData(query.data);
-    if (query.data) setDraft(query.data);
-  }
 
   if (!draft) {
     if (query.isError)
@@ -162,11 +137,13 @@ function StpDiscoverySection() {
         e.preventDefault();
         setStatus(null);
         update.mutate(draft, {
-          onSuccess: () =>
+          onSuccess: (saved) => {
+            markSaved(saved);
             setStatus({
               kind: 'success',
               message: 'STP polling schedule saved',
-            }),
+            });
+          },
           onError: (err) =>
             setStatus({
               kind: 'error',
@@ -175,85 +152,48 @@ function StpDiscoverySection() {
         });
       }}
     >
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
-        <label
-          className="form-group"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '0.4rem',
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={draft.enabled}
-            onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })}
-          />
-          <span>Enable scheduled STP polling</span>
-        </label>
-        <label
-          className="form-group"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '0.4rem',
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={draft.all_vlans}
-            onChange={(e) => setDraft({ ...draft, all_vlans: e.target.checked })}
-          />
-          <span>Poll all VLANs</span>
-        </label>
-        <div className="form-group" style={{ flex: '0 1 160px' }}>
-          <label className="form-label" htmlFor={`${fid}-interval`}>Interval (seconds)</label>
-          <input
-            id={`${fid}-interval`}
-            type="number"
-            min={60}
-            className="form-input"
-            value={draft.interval_seconds}
-            onChange={(e) =>
-              setDraft({ ...draft, interval_seconds: Number(e.target.value) })
-            }
-          />
-        </div>
-        <div className="form-group" style={{ flex: '0 1 140px' }}>
-          <label className="form-label" htmlFor={`${fid}-vlan-id`}>VLAN ID</label>
-          <input
-            id={`${fid}-vlan-id`}
-            type="number"
-            min={1}
-            disabled={draft.all_vlans}
-            className="form-input"
-            value={draft.vlan_id}
-            onChange={(e) => setDraft({ ...draft, vlan_id: Number(e.target.value) })}
-          />
-        </div>
-        <div className="form-group" style={{ flex: '0 1 140px' }}>
-          <label className="form-label" htmlFor={`${fid}-max-vlans`}>Max VLANs</label>
-          <input
-            id={`${fid}-max-vlans`}
-            type="number"
-            min={1}
-            className="form-input"
-            value={draft.max_vlans}
-            onChange={(e) =>
-              setDraft({ ...draft, max_vlans: Number(e.target.value) })
-            }
-          />
-        </div>
-      </div>
-      <div style={{ display: 'flex', gap: '0.5rem' }}>
-        <BusyButton
-          type="submit"
-          className="btn btn-primary"
-          busy={update.isPending}
-          busyLabel="Saving…"
-        >
-          Save Schedule
-        </BusyButton>
+      <FormRow>
+        <CheckboxField
+          inRow
+          label="Enable scheduled STP polling"
+          checked={draft.enabled}
+          onChange={(v) => setDraft({ ...draft, enabled: v })}
+        />
+        <CheckboxField
+          inRow
+          label="Poll all VLANs"
+          checked={draft.all_vlans}
+          onChange={(v) => setDraft({ ...draft, all_vlans: v })}
+        />
+        <NumberField
+          label="Interval (seconds)"
+          value={draft.interval_seconds}
+          min={60}
+          flex="0 1 160px"
+          onChange={(v) => setDraft({ ...draft, interval_seconds: v })}
+        />
+        <NumberField
+          label="VLAN ID"
+          value={draft.vlan_id}
+          min={1}
+          disabled={draft.all_vlans}
+          onChange={(v) => setDraft({ ...draft, vlan_id: v })}
+        />
+        <NumberField
+          label="Max VLANs"
+          value={draft.max_vlans}
+          min={1}
+          onChange={(v) => setDraft({ ...draft, max_vlans: v })}
+        />
+      </FormRow>
+      <SaveBar
+        name="STP Polling"
+        dirty={dirty}
+        busy={update.isPending}
+        label="Save Schedule"
+        status={status}
+        onDiscard={discard}
+      >
         <BusyButton
           className="btn btn-secondary"
           busy={runNow.isPending}
@@ -287,8 +227,7 @@ function StpDiscoverySection() {
         >
           Run Now
         </BusyButton>
-      </div>
-      <StatusLine status={status} />
+      </SaveBar>
     </form>
   );
 }
@@ -315,6 +254,9 @@ function StpRootPoliciesSection() {
       setGroupId(groups.data[0].id);
     }
   }
+
+  // A half-typed policy counts as unsaved; the group/VLAN pickers alone do not.
+  useReportUnsaved('STP Root Policy', bridgeId.trim() !== '' || hostname.trim() !== '');
 
   return (
     <div>
@@ -355,7 +297,7 @@ function StpRootPoliciesSection() {
           );
         }}
       >
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <FormRow>
           <div className="form-group" style={{ flex: '1 1 200px' }}>
             <label className="form-label" htmlFor={`${fid}-group`}>Group</label>
             <select
@@ -373,52 +315,33 @@ function StpRootPoliciesSection() {
               ))}
             </select>
           </div>
-          <div className="form-group" style={{ flex: '0 1 120px' }}>
-            <label className="form-label" htmlFor={`${fid}-vlan`}>VLAN</label>
-            <input
-              id={`${fid}-vlan`}
-              type="number"
-              min={1}
-              className="form-input"
-              value={vlanId}
-              onChange={(e) => setVlanId(Number(e.target.value))}
-            />
-          </div>
-          <div className="form-group" style={{ flex: '1 1 220px' }}>
-            <label className="form-label" htmlFor={`${fid}-expected-root-bridge-id`}>Expected Root Bridge ID</label>
-            <input
-              id={`${fid}-expected-root-bridge-id`}
-              className="form-input"
-              placeholder="32768.aabb.ccdd.eeff"
-              value={bridgeId}
-              onChange={(e) => setBridgeId(e.target.value)}
-            />
-          </div>
-          <div className="form-group" style={{ flex: '1 1 180px' }}>
-            <label className="form-label" htmlFor={`${fid}-expected-hostname`}>Expected Hostname</label>
-            <input
-              id={`${fid}-expected-hostname`}
-              className="form-input"
-              value={hostname}
-              onChange={(e) => setHostname(e.target.value)}
-            />
-          </div>
-          <label
-            className="form-group"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '0.4rem',
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={enabled}
-              onChange={(e) => setEnabled(e.target.checked)}
-            />
-            <span>Enabled</span>
-          </label>
-        </div>
+          <NumberField
+            label="VLAN"
+            value={vlanId}
+            min={1}
+            flex="0 1 120px"
+            onChange={setVlanId}
+          />
+          <TextField
+            label="Expected Root Bridge ID"
+            value={bridgeId}
+            placeholder="32768.aabb.ccdd.eeff"
+            flex="1 1 220px"
+            onChange={setBridgeId}
+          />
+          <TextField
+            label="Expected Hostname"
+            value={hostname}
+            flex="1 1 180px"
+            onChange={setHostname}
+          />
+          <CheckboxField
+            inRow
+            label="Enabled"
+            checked={enabled}
+            onChange={setEnabled}
+          />
+        </FormRow>
         <div>
           <BusyButton
             type="submit"

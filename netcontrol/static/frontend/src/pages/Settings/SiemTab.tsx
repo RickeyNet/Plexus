@@ -1,7 +1,7 @@
 import { useId, useState } from 'react';
 
-import { BusyButton } from '@/components/BusyButton';
-import { DeleteButton } from '@/components/DeleteButton';
+import { Badge } from '@/components/Badge';
+import { DataTable } from '@/components/DataTable';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
   SiemSink,
@@ -17,7 +17,18 @@ import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 
+import {
+  DeliveryStatsCells,
+  NoticeCallout,
+  RetryFields,
+  RowActionsCell,
+  TargetEditorModal,
+  TargetTestsProvider,
+  TestResultBadge,
+} from './DeliveryTargets';
+import { CheckboxField, CheckboxRow, FormRow, NumberField, TextField } from './FormFields';
 import type { FormStatus } from './StatusLine';
+import { isDirty } from './unsaved-context';
 
 const PROTOCOLS: SiemSink['protocol'][] = ['udp', 'tcp', 'tls', 'https'];
 const FORMATS: SiemSink['format'][] = ['cef', 'json'];
@@ -44,6 +55,11 @@ const EMPTY_SINK: SiemSink = {
   backoff_cap: 60.0,
 };
 
+interface EditorState {
+  draft: SiemSink;
+  saved: SiemSink;
+}
+
 export function SiemTab() {
   const { confirm } = useDialogs();
   const query = useSiemSinks();
@@ -51,13 +67,10 @@ export function SiemTab() {
   const updateMut = useUpdateSiemSink();
   const deleteMut = useDeleteSiemSink();
   const testMut = useTestSiemSink();
-  const testing = usePendingKeys<string>();
   const deleting = usePendingKeys<string>();
-  const [editing, setEditing] = useState<SiemSink | null>(null);
-  const [status, setStatus] = useState<FormStatus | null>(null);
-  const [testResults, setTestResults] = useState<Record<string, { ok: boolean; error: string }>>(
-    {},
-  );
+  const [editor, setEditor] = useState<EditorState | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<FormStatus | null>(null);
 
   if (query.isError && !query.data)
     return (
@@ -73,38 +86,36 @@ export function SiemTab() {
   const target = (s: SiemSink) =>
     s.protocol === 'https' ? s.url : `${s.host}:${s.port}`;
 
+  const openEditor = (s: SiemSink) => {
+    setSaveError(null);
+    setEditor({ draft: { ...s }, saved: { ...s } });
+  };
+
   const onSave = () => {
-    if (!editing) return;
-    setStatus(null);
+    if (!editor) return;
+    const editing = editor.draft;
+    setSaveError(null);
     if (editing.id && sinks.some((s) => s.id === editing.id)) {
       updateMut.mutate(
         { id: editing.id, data: editing },
         {
           onSuccess: () => {
-            setEditing(null);
-            setStatus({ kind: 'success', message: `Sink ${editing.name || editing.id} saved.` });
+            setEditor(null);
+            setNotice({ kind: 'success', message: `Sink ${editing.name || editing.id} saved.` });
           },
-          onError: (err) =>
-            setStatus({
-              kind: 'error',
-              message: `Failed to save sink: ${(err as Error).message}`,
-            }),
+          onError: (err) => setSaveError(`Failed to save sink: ${(err as Error).message}`),
         },
       );
     } else {
       createMut.mutate(editing, {
         onSuccess: (saved) => {
-          setEditing(null);
-          setStatus({
+          setEditor(null);
+          setNotice({
             kind: 'success',
             message: `Sink ${saved?.name || saved?.id || ''} created.`,
           });
         },
-        onError: (err) =>
-          setStatus({
-            kind: 'error',
-            message: `Failed to create sink: ${(err as Error).message}`,
-          }),
+        onError: (err) => setSaveError(`Failed to create sink: ${(err as Error).message}`),
       });
     }
   };
@@ -121,9 +132,9 @@ export function SiemTab() {
     await deleting.run(s.id, async () => {
       try {
         await deleteMut.mutateAsync(s.id);
-        setStatus({ kind: 'success', message: `Sink ${s.name || s.id} deleted.` });
+        setNotice({ kind: 'success', message: `Sink ${s.name || s.id} deleted.` });
       } catch (err) {
-        setStatus({
+        setNotice({
           kind: 'error',
           message: `Failed to delete sink: ${(err as Error).message}`,
         });
@@ -131,153 +142,141 @@ export function SiemTab() {
     });
   };
 
-  const onTest = (s: SiemSink) =>
-    testing.run(s.id, async () => {
-      try {
-        const res = await testMut.mutateAsync(s.id);
-        setTestResults((prev) => ({ ...prev, [s.id]: res }));
-      } catch (err) {
-        setTestResults((prev) => ({
-          ...prev,
-          [s.id]: { ok: false, error: (err as Error).message },
-        }));
-      }
-    });
-
   return (
     <div>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: '0.75rem',
-          flexWrap: 'wrap',
-          gap: '0.5rem',
-        }}
-      >
-        <h3 style={{ margin: 0 }}>SIEM Audit-Event Forwarding</h3>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 'var(--space-3)' }}>
         <button
           className="btn btn-sm btn-primary"
-          onClick={() => setEditing({ ...EMPTY_SINK })}
+          onClick={() => openEditor({ ...EMPTY_SINK })}
         >
           Add Sink
         </button>
       </div>
 
-      <p className="text-muted" style={{ fontSize: '0.85rem', marginBottom: '0.75rem' }}>
-        Configure one or more destinations for audit events. Each enabled sink receives
-        every event that meets its severity floor. Delivery failures retry with exponential
-        backoff; events are dropped from the oldest end of the queue when full.
-      </p>
+      <NoticeCallout notice={notice} onDismiss={() => setNotice(null)} />
 
       {sinks.length === 0 ? (
         <EmptyState compact message="No sinks configured. Add one to start forwarding audit events." />
       ) : (
-        <div style={{ overflowX: 'auto' }}>
-          <table className="data-table" style={{ minWidth: '720px' }}>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Target</th>
-                <th>Proto</th>
-                <th>Fmt</th>
-                <th>State</th>
-                <th>Queue</th>
-                <th>Delivered</th>
-                <th>Dropped</th>
-                <th style={{ minWidth: '180px' }}>Last Error</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {sinks.map((s) => {
-                const st = statsById.get(s.id);
-                const result = testResults[s.id];
-                return (
-                  <tr key={s.id}>
-                    <td>{s.name || s.id}</td>
-                    <td style={{ fontFamily: 'monospace', fontSize: '0.85rem' }}>{target(s)}</td>
-                    <td>{s.protocol}</td>
-                    <td>{s.format}</td>
-                    <td>
-                      <span className={`badge ${s.enabled ? 'badge-success' : 'badge-info'}`}>
-                        {s.enabled ? 'Enabled' : 'Disabled'}
-                      </span>
-                    </td>
-                    <td>{st ? `${st.queue_depth}/${st.queue_size}` : '-'}</td>
-                    <td>{st?.delivered ?? 0}</td>
-                    <td>{(st?.dropped_queue_full ?? 0) + (st?.dropped_below_severity ?? 0)}</td>
-                    <td
-                      style={{
-                        fontFamily: 'monospace',
-                        fontSize: '0.78rem',
-                        color: 'var(--text-muted)',
-                        maxWidth: '240px',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                      title={st?.last_error || ''}
-                    >
-                      {result
-                        ? result.ok
-                          ? 'Test OK'
-                          : `Test failed: ${result.error}`
-                        : st?.last_error || ''}
-                    </td>
-                    <td style={{ whiteSpace: 'nowrap' }}>
-                      <BusyButton
-                        className="btn btn-xs btn-ghost"
-                        busy={testing.isPending(s.id)}
-                        busyLabel="Testing…"
-                        onClick={() => void onTest(s)}
-                      >
-                        Test
-                      </BusyButton>{' '}
-                      <button className="btn btn-xs btn-ghost" onClick={() => setEditing({ ...s })}>
-                        Edit
-                      </button>{' '}
-                      <DeleteButton size="xs" onClick={() => void onDelete(s)} busy={deleting.isPending(s.id)} />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <TargetTestsProvider
+          send={(id) => testMut.mutateAsync(id)}
+          sentMessage={(name) => `Test event sent to ${name}.`}
+          onOutcome={setNotice}
+        >
+          {(tests) => (
+            <DataTable compact aria-label="SIEM sinks">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Target</th>
+                  <th>Proto</th>
+                  <th>Fmt</th>
+                  <th>State</th>
+                  <th>Queue</th>
+                  <th>Delivered</th>
+                  <th>Dropped</th>
+                  <th>Last error</th>
+                  <th>Last test</th>
+                  <th aria-label="Actions"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {sinks.map((s) => {
+                  const name = s.name || s.id;
+                  return (
+                    <tr key={s.id}>
+                      <td>{name}</td>
+                      <td>
+                        <span className="form-mono delivery-cell-truncate" title={target(s)}>
+                          {target(s)}
+                        </span>
+                      </td>
+                      <td>{s.protocol}</td>
+                      <td>{s.format}</td>
+                      <td>
+                        <Badge tone={s.enabled ? 'success' : 'info'} size="sm">
+                          {s.enabled ? 'Enabled' : 'Disabled'}
+                        </Badge>
+                      </td>
+                      <DeliveryStatsCells stats={statsById.get(s.id)} />
+                      <td>
+                        <TestResultBadge result={tests.result(s.id)} />
+                      </td>
+                      <RowActionsCell
+                        name={name}
+                        testing={tests.isPending(s.id)}
+                        deleting={deleting.isPending(s.id)}
+                        onTest={() => void tests.test(s.id, name)}
+                        onEdit={() => openEditor(s)}
+                        onDelete={() => void onDelete(s)}
+                      />
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </DataTable>
+          )}
+        </TargetTestsProvider>
       )}
 
-      {status && (
-        <div className={status.kind === 'success' ? 'success' : 'error'} style={{ marginTop: '0.75rem' }}>
-          {status.message}
-        </div>
-      )}
-
-      {editing && (
+      {editor && (
         <SinkEditor
-          sink={editing}
+          sink={editor.draft}
+          dirty={isDirty(editor.draft, editor.saved)}
           existing={sinks}
-          onChange={setEditing}
-          onCancel={() => setEditing(null)}
+          onChange={(draft) => setEditor({ ...editor, draft })}
+          onClose={() => setEditor(null)}
           onSave={onSave}
           saving={createMut.isPending || updateMut.isPending}
+          error={saveError}
         />
       )}
     </div>
   );
 }
 
-interface SinkEditorProps {
-  sink: SiemSink;
-  existing: SiemSink[];
-  onChange: (next: SiemSink) => void;
-  onCancel: () => void;
-  onSave: () => void;
-  saving: boolean;
+/** A PEM textarea: monospace, no spellcheck. */
+function PemField({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  const id = useId();
+  return (
+    <div className="form-group" style={{ flex: '1 1 320px' }}>
+      <label className="form-label" htmlFor={id}>{label}</label>
+      <textarea
+        id={id}
+        className="form-textarea"
+        rows={6}
+        spellCheck={false}
+        autoComplete="off"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+      />
+    </div>
+  );
 }
 
-function SinkEditor({ sink, existing, onChange, onCancel, onSave, saving }: SinkEditorProps) {
+interface SinkEditorProps {
+  sink: SiemSink;
+  dirty: boolean;
+  existing: SiemSink[];
+  onChange: (next: SiemSink) => void;
+  onClose: () => void;
+  onSave: () => void;
+  saving: boolean;
+  error: string | null;
+}
+
+function SinkEditor({ sink, dirty, existing, onChange, onClose, onSave, saving, error }: SinkEditorProps) {
   const isEdit = Boolean(sink.id) && existing.some((s) => s.id === sink.id);
   const fid = useId();
   const set = <K extends keyof SiemSink>(key: K, value: SiemSink[K]) =>
@@ -287,25 +286,29 @@ function SinkEditor({ sink, existing, onChange, onCancel, onSave, saving }: Sink
   const showTls = sink.protocol === 'tls' || sink.protocol === 'https';
 
   return (
-    <div className="card-inset" style={{ marginTop: 'var(--space-4)' }}>
-      <h4 style={{ marginTop: 0 }}>{isEdit ? 'Edit Sink' : 'New Sink'}</h4>
-
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
-        <div className="form-group" style={{ flex: '1 1 220px' }}>
-          <label className="form-label" htmlFor={`${fid}-name`}>Name</label>
-          <input
-            id={`${fid}-name`}
-            className="form-input"
-            value={sink.name}
-            onChange={(e) => set('name', e.target.value)}
-            placeholder="e.g. Splunk HEC (prod)"
-          />
-        </div>
-        <div className="form-group" style={{ flex: '0 1 160px' }}>
+    <TargetEditorModal
+      title={isEdit ? 'Edit Sink' : 'New Sink'}
+      formName="SIEM sink"
+      dirty={dirty}
+      saving={saving}
+      primaryLabel={isEdit ? 'Save Changes' : 'Create Sink'}
+      error={error}
+      onSave={onSave}
+      onClose={onClose}
+    >
+      <FormRow>
+        <TextField
+          label="Name"
+          flex="1 1 220px"
+          value={sink.name}
+          onChange={(v) => set('name', v)}
+          placeholder="e.g. Splunk HEC (prod)"
+        />
+        <div className="form-group" style={{ flex: '0 1 140px' }}>
           <label className="form-label" htmlFor={`${fid}-protocol`}>Protocol</label>
           <select
             id={`${fid}-protocol`}
-            className="form-input"
+            className="form-select"
             value={sink.protocol}
             onChange={(e) => set('protocol', e.target.value as SiemSink['protocol'])}
           >
@@ -316,11 +319,11 @@ function SinkEditor({ sink, existing, onChange, onCancel, onSave, saving }: Sink
             ))}
           </select>
         </div>
-        <div className="form-group" style={{ flex: '0 1 140px' }}>
+        <div className="form-group" style={{ flex: '0 1 120px' }}>
           <label className="form-label" htmlFor={`${fid}-format`}>Format</label>
           <select
             id={`${fid}-format`}
-            className="form-input"
+            className="form-select"
             value={sink.format}
             onChange={(e) => set('format', e.target.value as SiemSink['format'])}
           >
@@ -331,11 +334,11 @@ function SinkEditor({ sink, existing, onChange, onCancel, onSave, saving }: Sink
             ))}
           </select>
         </div>
-        <div className="form-group" style={{ flex: '0 1 160px' }}>
+        <div className="form-group" style={{ flex: '0 1 140px' }}>
           <label className="form-label" htmlFor={`${fid}-severity-floor`}>Severity floor</label>
           <select
             id={`${fid}-severity-floor`}
-            className="form-input"
+            className="form-select"
             value={sink.severity_floor}
             onChange={(e) => set('severity_floor', e.target.value)}
           >
@@ -346,196 +349,87 @@ function SinkEditor({ sink, existing, onChange, onCancel, onSave, saving }: Sink
             ))}
           </select>
         </div>
-        <label
-          className="form-group"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '0.4rem',
-            marginTop: '1.4rem',
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={sink.enabled}
-            onChange={(e) => set('enabled', e.target.checked)}
-          />
-          <span>Enabled</span>
-        </label>
-      </div>
+        <CheckboxField inRow label="Enabled" checked={sink.enabled} onChange={(v) => set('enabled', v)} />
+      </FormRow>
 
       {!showHttps && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.5rem' }}>
-          <div className="form-group" style={{ flex: '1 1 240px' }}>
-            <label className="form-label" htmlFor={`${fid}-host`}>Host</label>
-            <input
-              id={`${fid}-host`}
-              className="form-input"
-              value={sink.host}
-              onChange={(e) => set('host', e.target.value)}
-              placeholder="siem.internal"
-            />
-          </div>
-          <div className="form-group" style={{ flex: '0 1 140px' }}>
-            <label className="form-label" htmlFor={`${fid}-port`}>Port</label>
-            <input
-              id={`${fid}-port`}
-              type="number"
-              className="form-input"
-              min={1}
-              max={65535}
-              value={sink.port}
-              onChange={(e) => set('port', Number(e.target.value))}
-            />
-          </div>
-        </div>
+        <FormRow>
+          <TextField
+            label="Host"
+            flex="1 1 240px"
+            value={sink.host}
+            onChange={(v) => set('host', v)}
+            placeholder="siem.example.com"
+          />
+          <NumberField
+            label="Port"
+            flex="0 1 140px"
+            min={1}
+            max={65535}
+            value={sink.port}
+            onChange={(v) => set('port', v)}
+          />
+        </FormRow>
       )}
 
       {showHttps && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.5rem' }}>
-          <div className="form-group" style={{ flex: '1 1 100%' }}>
-            <label className="form-label" htmlFor={`${fid}-url`}>URL</label>
-            <input
-              id={`${fid}-url`}
-              className="form-input"
-              value={sink.url}
-              onChange={(e) => set('url', e.target.value)}
-              placeholder="https://splunk.example.com:8088/services/collector"
-            />
-          </div>
-          <div className="form-group" style={{ flex: '1 1 100%' }}>
-            <label className="form-label" htmlFor={`${fid}-bearer-token`}>Bearer token (optional)</label>
-            <input
-              id={`${fid}-bearer-token`}
-              className="form-input"
-              type="password"
-              value={sink.bearer_token}
-              onChange={(e) => set('bearer_token', e.target.value)}
-              placeholder="Leave blank or keep the existing token"
-            />
-            <div className="text-muted" style={{ fontSize: '0.78rem', marginTop: '0.2rem' }}>
-              Sent as <code>Authorization: Bearer …</code>. Leave the masked value (••••••••)
-              to keep the currently stored token.
-            </div>
-          </div>
-        </div>
+        <>
+          <TextField
+            label="URL"
+            value={sink.url}
+            onChange={(v) => set('url', v)}
+            placeholder="https://splunk.example.com:8088/services/collector"
+          />
+          <TextField
+            label="Bearer token (optional)"
+            type="password"
+            value={sink.bearer_token}
+            onChange={(v) => set('bearer_token', v)}
+            placeholder="Leave blank or keep the existing token"
+            help={
+              <>
+                Sent as <code>Authorization: Bearer …</code>. Leave the masked value (••••••••)
+                to keep the currently stored token.
+              </>
+            }
+          />
+        </>
       )}
 
       {showTls && (
-        <div style={{ marginTop: '0.5rem' }}>
-          <label
-            className="form-group"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
-          >
-            <input
-              type="checkbox"
+        <>
+          <CheckboxRow>
+            <CheckboxField
+              label="Verify TLS certificate"
               checked={sink.tls_verify}
-              onChange={(e) => set('tls_verify', e.target.checked)}
+              onChange={(v) => set('tls_verify', v)}
             />
-            <span>Verify TLS certificate</span>
-          </label>
-          <div className="form-group" style={{ marginTop: '0.4rem' }}>
-            <label className="form-label" htmlFor={`${fid}-ca-pem`}>CA PEM (optional, pins trust)</label>
-            <textarea
-              id={`${fid}-ca-pem`}
-              className="form-input"
-              rows={4}
-              value={sink.tls_ca_pem}
-              onChange={(e) => set('tls_ca_pem', e.target.value)}
-              placeholder={'-----BEGIN CERTIFICATE-----\n…'}
-            />
-          </div>
+          </CheckboxRow>
+          <PemField
+            label="CA PEM (optional, pins trust)"
+            value={sink.tls_ca_pem}
+            onChange={(v) => set('tls_ca_pem', v)}
+            placeholder={'-----BEGIN CERTIFICATE-----\n…'}
+          />
           {sink.protocol === 'tls' && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
-              <div className="form-group" style={{ flex: '1 1 320px' }}>
-                <label className="form-label" htmlFor={`${fid}-client-cert-pem`}>Client cert PEM (mutual TLS)</label>
-                <textarea
-                  id={`${fid}-client-cert-pem`}
-                  className="form-input"
-                  rows={4}
-                  value={sink.tls_client_cert_pem}
-                  onChange={(e) => set('tls_client_cert_pem', e.target.value)}
-                />
-              </div>
-              <div className="form-group" style={{ flex: '1 1 320px' }}>
-                <label className="form-label" htmlFor={`${fid}-client-key-pem`}>Client key PEM</label>
-                <textarea
-                  id={`${fid}-client-key-pem`}
-                  className="form-input"
-                  rows={4}
-                  value={sink.tls_client_key_pem}
-                  onChange={(e) => set('tls_client_key_pem', e.target.value)}
-                  placeholder="Leave the masked value (••••••••) to keep the existing key"
-                />
-              </div>
-            </div>
+            <FormRow>
+              <PemField
+                label="Client cert PEM (mutual TLS)"
+                value={sink.tls_client_cert_pem}
+                onChange={(v) => set('tls_client_cert_pem', v)}
+              />
+              <PemField
+                label="Client key PEM"
+                value={sink.tls_client_key_pem}
+                onChange={(v) => set('tls_client_key_pem', v)}
+                placeholder="Leave the masked value (••••••••) to keep the existing key"
+              />
+            </FormRow>
           )}
-        </div>
+        </>
       )}
 
-      <details style={{ marginTop: '0.5rem' }}>
-        <summary style={{ cursor: 'pointer' }}>Advanced (queue, retry, backoff)</summary>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.5rem' }}>
-          <div className="form-group" style={{ flex: '0 1 160px' }}>
-            <label className="form-label" htmlFor={`${fid}-queue-size`}>Queue size</label>
-            <input
-              id={`${fid}-queue-size`}
-              type="number"
-              className="form-input"
-              min={10}
-              max={100000}
-              value={sink.queue_size}
-              onChange={(e) => set('queue_size', Number(e.target.value))}
-            />
-          </div>
-          <div className="form-group" style={{ flex: '0 1 160px' }}>
-            <label className="form-label" htmlFor={`${fid}-max-retries`}>Max retries</label>
-            <input
-              id={`${fid}-max-retries`}
-              type="number"
-              className="form-input"
-              min={0}
-              max={20}
-              value={sink.max_retries}
-              onChange={(e) => set('max_retries', Number(e.target.value))}
-            />
-          </div>
-          <div className="form-group" style={{ flex: '0 1 160px' }}>
-            <label className="form-label" htmlFor={`${fid}-backoff-base`}>Backoff base (s)</label>
-            <input
-              id={`${fid}-backoff-base`}
-              type="number"
-              className="form-input"
-              min={0.1}
-              max={30}
-              step="0.1"
-              value={sink.backoff_base}
-              onChange={(e) => set('backoff_base', Number(e.target.value))}
-            />
-          </div>
-          <div className="form-group" style={{ flex: '0 1 160px' }}>
-            <label className="form-label" htmlFor={`${fid}-backoff-cap`}>Backoff cap (s)</label>
-            <input
-              id={`${fid}-backoff-cap`}
-              type="number"
-              className="form-input"
-              min={1}
-              max={600}
-              value={sink.backoff_cap}
-              onChange={(e) => set('backoff_cap', Number(e.target.value))}
-            />
-          </div>
-        </div>
-      </details>
-
-      <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
-        <BusyButton className="btn btn-primary" onClick={onSave} busy={saving} busyLabel="Saving…">
-          {isEdit ? 'Save Changes' : 'Create Sink'}
-        </BusyButton>
-        <button className="btn btn-ghost" onClick={onCancel} disabled={saving}>
-          Cancel
-        </button>
-      </div>
-    </div>
+      <RetryFields value={sink} onChange={(k, v) => set(k, v)} noun="audit event" />
+    </TargetEditorModal>
   );
 }
