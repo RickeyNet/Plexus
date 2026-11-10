@@ -1,5 +1,7 @@
+import { useState, type ReactNode } from 'react';
+
 import { FIELD_STYLE, NOTE_STYLE, providerLabel } from './helpers';
-import { SWEEP_KINDS, vlanTextError, type SweepFilters, type SweepSourceOption } from './sweep';
+import { SWEEP_KINDS, activeFilterCount, vlanTextError, type SweepFilters, type SweepSourceOption } from './sweep';
 
 // The filter block of the sweep's source (or destination) networks, shared by
 // the Reachability and Summarize tabs.
@@ -23,23 +25,59 @@ interface FilterFieldsProps {
   /** Dimmed and not editable (a side's block while that side's end is typed). */
   disabled?: boolean;
   note?: string;
+  /**
+   * Fold the fields under the title. The title then shows how many filters
+   * are set, and the block starts open when any is.
+   */
+  collapsible?: boolean;
+}
+
+/** The fields of a block, folded under its heading when `collapsible`. */
+function Block({ collapsible, startOpen, heading, children }: { collapsible: boolean; startOpen: boolean; heading: ReactNode; children: ReactNode }) {
+  // null: not toggled by hand yet, so it follows whether a filter is set (a preset opens it).
+  const [toggled, setToggled] = useState<boolean | null>(null);
+  if (!collapsible) {
+    return (
+      <>
+        {heading}
+        {children}
+      </>
+    );
+  }
+  return (
+    <details open={toggled ?? startOpen} onToggle={(e) => setToggled(e.currentTarget.open)}>
+      <summary style={{ cursor: 'pointer' }}>{heading}</summary>
+      {children}
+    </details>
+  );
 }
 
 /** The filters of one side of a sweep: which source (or destination) networks are kept. */
-export function FilterFields({ title, idPrefix, filters, onChange, sources, providers, disabled, note }: FilterFieldsProps) {
+export function FilterFields({ title, idPrefix, filters, onChange, sources, providers, disabled, note, collapsible = false }: FilterFieldsProps) {
   const vlanError = vlanTextError(filters.vlans);
   const titleId = `${idPrefix}-title`;
+  const active = activeFilterCount(filters);
   return (
     <fieldset
       disabled={disabled}
       aria-labelledby={titleId}
       style={{ ...BLOCK_STYLE, opacity: disabled ? 0.55 : undefined }}
     >
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'baseline' }}>
-        <span id={titleId} style={BLOCK_TITLE_STYLE}>{title}</span>
-        {note && <span className="text-muted" style={NOTE_STYLE}>{note}</span>}
-      </div>
-
+      <Block
+        collapsible={collapsible}
+        startOpen={active > 0}
+        heading={
+          <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'baseline' }}>
+            <span id={titleId} style={BLOCK_TITLE_STYLE}>{title}</span>
+            {collapsible && (
+              <span className={`badge ${active ? 'badge-info' : 'badge-secondary'}`}>
+                {active ? `${active} filter${active === 1 ? '' : 's'} set` : 'no filters'}
+              </span>
+            )}
+            {note && <span className="text-muted" style={NOTE_STYLE}>{note}</span>}
+          </span>
+        }
+      >
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.4rem', alignItems: 'flex-start' }}>
         <label style={FIELD_STYLE}>
           <span className="form-label">Sources</span>
@@ -111,6 +149,7 @@ export function FilterFields({ title, idPrefix, filters, onChange, sources, prov
             placeholder="user, data or /^VLAN 1\d\d /"
             value={filters.name}
             onChange={(e) => onChange({ name: e.target.value })}
+            title="Any term matches; a term in /slashes/ is a regular expression"
           />
         </label>
         <label style={FIELD_STYLE}>
@@ -138,6 +177,7 @@ export function FilterFields({ title, idPrefix, filters, onChange, sources, prov
             placeholder="10.0.0.0/8, 172.16.0.0/12"
             value={filters.within}
             onChange={(e) => onChange({ within: e.target.value })}
+            title="Networks inside one of these ranges"
           />
         </label>
         <label style={FIELD_STYLE}>
@@ -163,6 +203,7 @@ export function FilterFields({ title, idPrefix, filters, onChange, sources, prov
           </select>
         </label>
       </div>
+      </Block>
     </fieldset>
   );
 }

@@ -16,6 +16,7 @@ import {
 import { EmptyState } from '@/components/EmptyState';
 import { PageHelp } from '@/components/PageHelp';
 import { formatBackendDateTime } from '@/lib/datetime';
+import { useShowMore } from '@/lib/useShowMore';
 
 import {
   DETAIL_CELL_STYLE,
@@ -175,7 +176,7 @@ export function Reachability() {
       <PageHelp
         pageKey="topology.reachability"
         title="Reachability sweep"
-        text="Check which networks can reach one destination with the same traffic, for example which user VLANs cannot reach a file server on tcp/445. Every network the filters keep is traced hop by hop like a Path Mode trace. Narrow the sources with kinds, VLAN ids, names (a term in /slashes/ is a regular expression), exclusions such as voice or guest, sites and address ranges (Within keeps networks inside a range, Overlapping any network that shares an address with it, wider ones included). A typed Source (an IP address, network or subnet) replaces the source filters and is traced alone. List networks shows the networks the Source networks filters keep, without tracing them, as a table and a spreadsheet. To trace many destinations at once, leave Destination empty and narrow the Destination networks: every source network is then traced to every destination network, for example every cloud subnet to every Meraki network. With the Traffic box empty each row lists the ports allowed end to end. Click a verdict to show only those networks, group the results by site, open any row's full trace, and download the list as a spreadsheet or CSV."
+        text="Check which networks can reach a destination with the same traffic, for example which user VLANs cannot reach a file server on tcp/445. Every source network the filters keep is traced hop by hop, as in Path Mode. Leave Destination empty to trace every source network to every destination network. Click a verdict to filter the results; open a row for its full trace."
       />
 
       <div className="stack stack-sm">
@@ -194,6 +195,11 @@ export function Reachability() {
                   side === 'source'
                     ? 'IP address, network or subnet; empty: use the filters'
                     : 'IP address, network or subnet; empty: many'
+                }
+                title={
+                  side === 'source'
+                    ? 'A typed source replaces the Source networks filters and is traced alone'
+                    : 'Empty: every source network is traced to every network the Destination networks filters keep'
                 }
                 value={form[side]}
                 onChange={(value) => setEnd(side, value)}
@@ -252,6 +258,7 @@ export function Reachability() {
             providers={providers}
             disabled={typedSource}
             note={typedSource ? 'Used when Source is empty.' : 'Every network these filters keep is traced.'}
+            collapsible
           />
           <FilterFields
             title="Destination networks"
@@ -266,6 +273,7 @@ export function Reachability() {
                 ? 'Every source network is traced to every network these filters keep.'
                 : 'Used when Destination is empty.'
             }
+            collapsible
           />
 
           <div className="text-muted" style={{ ...NOTE_STYLE, marginTop: '0.5rem' }}>
@@ -308,6 +316,7 @@ export function Reachability() {
 interface EndFieldProps {
   label: string;
   placeholder: string;
+  title: string;
   value: string;
   onChange: (value: string) => void;
   onEnter: () => void;
@@ -319,7 +328,7 @@ interface EndFieldProps {
 }
 
 /** One typed end of a sweep (Source or Destination), with the subnet suggestions and its "is at" owner picker. */
-function EndField({ label, placeholder, value, onChange, onEnter, owners, picked, onPick }: EndFieldProps) {
+function EndField({ label, placeholder, title, value, onChange, onEnter, owners, picked, onPick }: EndFieldProps) {
   return (
     <>
       <label style={{ ...FIELD_STYLE, minWidth: 280 }}>
@@ -328,6 +337,7 @@ function EndField({ label, placeholder, value, onChange, onEnter, owners, picked
           className="form-input form-input-sm"
           list={SUBNETS_LIST_ID}
           placeholder={placeholder}
+          title={title}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') onEnter(); }}
@@ -471,9 +481,10 @@ function Results({
               aria-pressed={active}
               title={active ? 'Show every verdict' : `Show only ${label.label}`}
               onClick={() => onVerdict(v)}
-              style={{ borderColor: label.color }}
+              style={{ borderColor: label.color, opacity: verdict && !active ? 0.55 : undefined }}
             >
-              <span style={{ color: label.color, fontWeight: 600 }}>{label.label}</span> {report.counts[v] ?? 0}
+              {/* The active chip is filled (.btn.active), so its label takes the button's text colour. */}
+              <span style={{ color: active ? undefined : label.color, fontWeight: 600 }}>{label.label}</span> {report.counts[v] ?? 0}
             </button>
           );
         })}
@@ -630,6 +641,8 @@ function RowTable({
   const matrix = report.mode === 'matrix';
   const listed = report.mode === 'list';
   const columns = matrix ? 12 : 10;
+  // A matrix sweep returns up to 20,000 rows: render a page of them at a time.
+  const { visible, hiddenCount, showMore } = useShowMore(rows);
   return (
     <div style={SCROLL_X_STYLE}>
       <table className="data-table">
@@ -660,7 +673,7 @@ function RowTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => {
+          {visible.map((row) => {
             const key = rowKey(row);
             const networkCells = (
               <>
@@ -735,6 +748,16 @@ function RowTable({
         </tbody>
       </table>
       {!rows.length && <EmptyState compact message="No network has this verdict." />}
+      {hiddenCount > 0 && (
+        <div className="toolbar" style={{ marginTop: '0.5rem', marginBottom: 0 }}>
+          <span className="text-muted">
+            Showing {visible.length.toLocaleString()} of {rows.length.toLocaleString()} rows; the downloads have all of them.
+          </span>
+          <button type="button" className="btn btn-sm btn-secondary" onClick={showMore}>
+            Show more ({hiddenCount.toLocaleString()} hidden)
+          </button>
+        </div>
+      )}
     </div>
   );
 }

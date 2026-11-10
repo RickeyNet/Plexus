@@ -242,6 +242,36 @@ export function draggedPanelWidth(startWidth: number, startX: number, clientX: n
   return Math.round(Math.min(max, Math.max(DETAILS_PANEL_MIN_WIDTH, wanted)));
 }
 
+/**
+ * Widest a panel floating over the map gets at its default width: the map
+ * minus its margins, and on a narrow map about three fifths of it, so part of
+ * the map stays in view. A width the operator dragged is not capped this way.
+ */
+export const MAP_PANEL_MAX_WIDTH = 'min(calc(100% - 1.5rem), max(320px, 62%))';
+
+const SEARCH_PANEL_WIDTH = 380;
+const DETAILS_PANEL_MAX_DEFAULT_WIDTH = 480;
+
+/**
+ * True when the map is too narrow for the search panel (left) and a details
+ * panel (right) side by side with a strip of map between them. The search
+ * panel then steps aside while a details panel is open.
+ */
+export function mapPanelsCollide(mapWidth: number): boolean {
+  return mapWidth > 0 && mapWidth < SEARCH_PANEL_WIDTH + DETAILS_PANEL_MAX_DEFAULT_WIDTH + 160;
+}
+
+export const MAP_MIN_HEIGHT = 320;
+
+/**
+ * Height of the map so it ends at the bottom of the window: the window minus
+ * what is above the map (its top edge in the page) and what must stay in view
+ * below it (the legend and the page padding), never under the minimum.
+ */
+export function mapFillHeight(viewportHeight: number, mapTop: number, below: number): number {
+  return Math.max(MAP_MIN_HEIGHT, Math.floor(viewportHeight - mapTop - below));
+}
+
 /** Where the integration's data is read from. */
 export function providerSourceName(provider?: string | null): string {
   if (provider === PROVIDER_INVENTORY) return 'Inventory';
@@ -441,9 +471,20 @@ function solidEdge(color: string, opacity: number): EdgeColor {
   return { color, highlight: color, hover: color, opacity };
 }
 
-export function stpStyle(state: string | null | undefined, status: TopoStatusColors): StpStyle | null {
+export type StpTone = 'success' | 'warning' | 'danger';
+
+/** The status tone of an STP port state: forwarding is fine, learning is in transition, blocking is not passing traffic. Null for a state that is not known. */
+export function stpTone(state: string | null | undefined): StpTone | null {
   const s = String(state || '').toLowerCase();
-  if (s === 'forwarding') {
+  if (s === 'forwarding') return 'success';
+  if (s === 'learning' || s === 'listening') return 'warning';
+  if (s === 'blocking' || s === 'discarding' || s === 'disabled' || s === 'broken') return 'danger';
+  return null;
+}
+
+export function stpStyle(state: string | null | undefined, status: TopoStatusColors): StpStyle | null {
+  const tone = stpTone(state);
+  if (tone === 'success') {
     return {
       color: solidEdge(status.success, 0.9),
       width: 4,
@@ -451,7 +492,7 @@ export function stpStyle(state: string | null | undefined, status: TopoStatusCol
       shadow: withAlpha(status.success, 0.35),
     };
   }
-  if (s === 'learning' || s === 'listening') {
+  if (tone === 'warning') {
     return {
       color: solidEdge(status.warning, 0.95),
       width: 4,
@@ -459,7 +500,7 @@ export function stpStyle(state: string | null | undefined, status: TopoStatusCol
       shadow: withAlpha(status.warning, 0.35),
     };
   }
-  if (s === 'blocking' || s === 'discarding' || s === 'disabled' || s === 'broken') {
+  if (tone === 'danger') {
     return {
       color: solidEdge(status.danger, 0.95),
       width: 6,

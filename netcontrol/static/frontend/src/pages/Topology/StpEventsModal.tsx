@@ -102,7 +102,7 @@ export function StpEventsModal({ isOpen, onClose, onAcknowledged }: Props) {
                     marginBottom: '0.45rem',
                     borderRadius: '0.35rem',
                     borderLeft: `3px solid ${sevColor}`,
-                    background: `${sevColor}14`,
+                    background: `color-mix(in srgb, ${sevColor} 8%, transparent)`,
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem' }}>
