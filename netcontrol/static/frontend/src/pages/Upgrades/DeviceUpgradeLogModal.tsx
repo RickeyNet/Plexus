@@ -1,6 +1,8 @@
 import { useUpgradeDeviceEvents } from '@/api/upgrades';
+import { Callout } from '@/components/Callout';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
-import { formatLogTimestamp } from './helpers';
+import { formatBackendTimestamp } from '@/lib/datetime';
 
 interface Props {
   campaignId: number;
@@ -21,11 +23,11 @@ export function DeviceUpgradeLogModal({
   return (
     <Modal isOpen onClose={onClose} title={`Upgrade Log: ${ip}`} size="large">
       {query.isPending ? (
-        <p className="text-muted">Loading…</p>
+        <LoadingState />
       ) : query.error ? (
-        <p style={{ color: 'var(--danger)' }}>
+        <Callout tone="danger">
           Failed to load events: {(query.error as Error).message}
-        </p>
+        </Callout>
       ) : events.length === 0 ? (
         <p style={{ opacity: 0.5 }}>No events yet for this device</p>
       ) : (
@@ -45,7 +47,7 @@ export function DeviceUpgradeLogModal({
         >
           {events
             .map((ev) => {
-              const ts = formatLogTimestamp(ev.timestamp);
+              const ts = formatBackendTimestamp(ev.timestamp, '');
               return `[${ts}] ${ev.message}`;
             })
             .join('\n')}

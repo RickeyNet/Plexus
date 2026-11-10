@@ -10,7 +10,11 @@ import {
   type BillingCircuit,
   type BillingPeriod,
 } from '@/api/reports';
+import { Callout } from '@/components/Callout';
+import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { LoadingState } from '@/components/LoadingState';
+import { StatGrid, StatTile } from '@/components/StatTile';
 
 import { CircuitFormModal } from './CircuitFormModal';
 import { GenerateBillingModal } from './GenerateBillingModal';
@@ -63,24 +67,24 @@ export function BillingTab() {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 'var(--space-3)', marginBottom: 'var(--space-3)' }}>
-        <Card label="Total Circuits" value={String(summary?.total_circuits ?? 0)} />
-        <Card label="Enabled" value={String(summary?.enabled_circuits ?? 0)} />
-        <Card label="Billing Periods" value={String(summary?.total_periods ?? 0)} />
-        <Card
+      <StatGrid compact>
+        <StatTile label="Total Circuits" value={String(summary?.total_circuits ?? 0)} />
+        <StatTile label="Enabled" value={String(summary?.enabled_circuits ?? 0)} />
+        <StatTile label="Billing Periods" value={String(summary?.total_periods ?? 0)} />
+        <StatTile
           label="Overages"
           value={String(summary?.overage_periods ?? 0)}
-          color={(summary?.overage_periods ?? 0) > 0 ? 'var(--danger)' : 'var(--success)'}
+          tone={(summary?.overage_periods ?? 0) > 0 ? 'danger' : 'success'}
         />
-        <Card
+        <StatTile
           label="Total Overage Cost"
           value={summary?.total_overage_cost ? `$${summary.total_overage_cost.toLocaleString()}` : '$0'}
         />
-      </div>
+      </StatGrid>
 
       <h4>Circuits</h4>
-      {circuitsQuery.isPending && <p className="text-muted">Loading…</p>}
-      {circuitsQuery.error && <p style={{ color: 'var(--danger)' }}>Failed: {(circuitsQuery.error as Error).message}</p>}
+      {circuitsQuery.isPending && <LoadingState />}
+      {circuitsQuery.error && <Callout tone="danger">Failed: {(circuitsQuery.error as Error).message}</Callout>}
       {circuitsQuery.data && (circuits.length === 0 ? (
         <div className="empty-state">
           <h4>No billing circuits defined</h4>
@@ -111,7 +115,7 @@ export function BillingTab() {
                   </td>
                   <td style={{ display: 'flex', gap: '0.25rem' }}>
                     <button className="btn btn-sm btn-secondary" onClick={() => setEditingId(c.id)}>Edit</button>
-                    <button className="btn btn-sm btn-danger" onClick={() => handleDelete(c.id)}>Delete</button>
+                    <DeleteButton onClick={() => handleDelete(c.id)} />
                   </td>
                 </tr>
               ))}
@@ -121,8 +125,8 @@ export function BillingTab() {
       ))}
 
       <h4 style={{ marginTop: '1rem' }}>Billing Periods</h4>
-      {periodsQuery.isPending && <p className="text-muted">Loading…</p>}
-      {periodsQuery.error && <p style={{ color: 'var(--danger)' }}>Failed: {(periodsQuery.error as Error).message}</p>}
+      {periodsQuery.isPending && <LoadingState />}
+      {periodsQuery.error && <Callout tone="danger">Failed: {(periodsQuery.error as Error).message}</Callout>}
       {periodsQuery.data && (periods.length === 0 ? (
         <div className="empty-state">
           <h4>No billing periods generated</h4>
@@ -174,11 +178,3 @@ export function BillingTab() {
   );
 }
 
-function Card({ label, value, color }: { label: string; value: string; color?: string }) {
-  return (
-    <div className="card-inset">
-      <div className="stat-value" style={color ? { color } : undefined}>{value}</div>
-      <div className="stat-label">{label}</div>
-    </div>
-  );
-}

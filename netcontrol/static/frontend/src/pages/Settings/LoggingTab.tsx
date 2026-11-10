@@ -6,6 +6,8 @@ import {
   useTestSyslog,
   useUpdateSyslogConfig,
 } from '@/api/settings';
+import { Callout } from '@/components/Callout';
+import { LoadingState } from '@/components/LoadingState';
 
 const PROTOCOLS = ['udp', 'tcp'];
 const FACILITIES = [
@@ -27,12 +29,12 @@ export function LoggingTab() {
     if (query.data) setDraft(query.data);
   }
 
-  if (query.isLoading || !draft) return <p className="text-muted">Loading…</p>;
+  if (query.isLoading || !draft) return <LoadingState />;
   if (query.isError)
     return (
-      <div className="error">
+      <Callout tone="danger">
         Failed to load syslog config: {(query.error as Error).message}
-      </div>
+      </Callout>
     );
 
   const statusLabel = draft.active ? 'Active' : draft.enabled ? 'Configured' : 'Disabled';

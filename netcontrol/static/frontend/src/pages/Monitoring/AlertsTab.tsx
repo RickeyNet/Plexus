@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 
+import { Badge, SeverityBadge } from '@/components/Badge';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useAcknowledgeAlert,
@@ -7,7 +8,9 @@ import {
   useMonitoringAlerts,
   type MonitoringAlert,
 } from '@/api/monitoring';
-import { formatTimestamp, severityColor } from './helpers';
+import { LoadingState } from '@/components/LoadingState';
+import { formatBackendDateTime } from '@/lib/datetime';
+import { severityTone, toneColor } from '@/lib/severity';
 import { RouteSnapshotsModal } from './RouteSnapshotsModal';
 
 // Route churn used to be its own tab; it is the alert list filtered to this
@@ -99,7 +102,7 @@ export function AlertsTab() {
         </button>
       </div>
 
-      {alerts.isPending && <div className="text-muted">Loading…</div>}
+      {alerts.isPending && <LoadingState />}
       {alerts.error && <div style={{ color: 'var(--danger)' }}>Error: {(alerts.error as Error).message}</div>}
       {alerts.data && filtered.length === 0 && (
         <div className="empty-state">
@@ -178,34 +181,24 @@ function AlertRow({
   /** Set for route_churn alerts: opens the host's route-table history. */
   onRouteHistory?: () => void;
 }) {
-  const sev = severityColor(alert.severity);
   const occurrences = alert.occurrence_count ?? 1;
   return (
-    <div className="card card-sm" style={{ borderLeft: `3px solid var(--${sev})` }}>
+    <div className="card card-sm" style={{ borderLeft: `3px solid ${toneColor(severityTone(alert.severity))}` }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
           {!alert.acknowledged && (
             <input type="checkbox" checked={checked} onChange={(e) => onToggle(e.target.checked)} />
           )}
-          <span
-            className="badge"
-            style={{ background: `var(--${sev})`, color: 'var(--on-primary)', fontSize: '0.75em', padding: '2px 8px', borderRadius: 3, textTransform: 'uppercase' }}
-          >
-            {alert.severity}
-          </span>
+          <SeverityBadge severity={alert.severity} />
           {alert.escalated && (
-            <span style={{ background: 'var(--danger)', color: 'var(--on-primary)', fontSize: '0.7em', padding: '2px 6px', borderRadius: 3 }}>
-              ESCALATED
-            </span>
+            <Badge tone="danger" solid size="sm">
+              Escalated
+            </Badge>
           )}
           {occurrences > 1 && (
-            <span
-              className="text-muted"
-              style={{ background: 'var(--bg-secondary)', fontSize: '0.75em', padding: '2px 6px', borderRadius: 3 }}
-              title={`Seen ${occurrences} times`}
-            >
+            <Badge size="sm" title={`Seen ${occurrences} times`}>
               {occurrences}x
-            </span>
+            </Badge>
           )}
           <strong>{alert.hostname}</strong>
           <span className="text-muted" style={{ fontSize: '0.85em' }}>{alert.metric}</span>
@@ -225,8 +218,8 @@ function AlertRow({
       </div>
       <div style={{ marginTop: '0.3rem', fontSize: '0.9em' }}>{alert.message}</div>
       <div className="text-muted" style={{ marginTop: '0.2rem', fontSize: '0.8em' }}>
-        Created: {formatTimestamp(alert.created_at)}
-        {occurrences > 1 && ` · Last seen: ${formatTimestamp(alert.last_seen_at)}`}
+        Created: {formatBackendDateTime(alert.created_at)}
+        {occurrences > 1 && ` · Last seen: ${formatBackendDateTime(alert.last_seen_at)}`}
         {alert.rule_id ? ` · Rule #${alert.rule_id}` : ''}
       </div>
     </div>

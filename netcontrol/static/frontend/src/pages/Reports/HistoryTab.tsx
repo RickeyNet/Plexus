@@ -1,7 +1,11 @@
 import { useState } from 'react';
 
+import { StatusBadge } from '@/components/Badge';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { useReportRuns, type ReportRun } from '@/api/reports';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
+import { formatBackendDateTime } from '@/lib/datetime';
 
 import { ArtifactsModal } from './ArtifactsModal';
 import { downloadReportExport } from './helpers';
@@ -11,7 +15,7 @@ export function HistoryTab() {
   const query = useReportRuns();
   const [artifactsRunId, setArtifactsRunId] = useState<number | null>(null);
 
-  if (query.isPending) return <p className="text-muted">Loading…</p>;
+  if (query.isPending) return <LoadingState />;
   if (query.error) {
     return <div className="card-inset" style={{ color: 'var(--danger)' }}>Error loading reports: {(query.error as Error).message}</div>;
   }
@@ -22,15 +26,9 @@ export function HistoryTab() {
   if (!runs.length) {
     return (
       <div className="card-inset">
-        <p className="text-muted">No reports generated yet.</p>
+        <EmptyState compact message="No reports generated yet." />
       </div>
     );
-  }
-
-  function statusBadge(status?: string) {
-    if (status === 'completed') return 'badge-success';
-    if (status === 'error') return 'badge-danger';
-    return 'badge-warning';
   }
 
   function downloadCsv(runId: number) {
@@ -57,9 +55,9 @@ export function HistoryTab() {
             <tr key={r.id}>
               <td>#{r.id}</td>
               <td>{r.report_type ?? ''}</td>
-              <td><span className={`badge ${statusBadge(r.status)}`}>{r.status ?? ''}</span></td>
+              <td><StatusBadge status={r.status} /></td>
               <td>{r.row_count ?? '-'}</td>
-              <td>{r.started_at ? new Date(r.started_at).toLocaleString() : '-'}</td>
+              <td>{formatBackendDateTime(r.started_at)}</td>
               <td style={{ display: 'flex', gap: '0.35rem' }}>
                 {r.status === 'completed' && (
                   <>

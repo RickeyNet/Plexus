@@ -25,20 +25,6 @@ export function formatBps(bps: number | null | undefined): string {
   return bps.toFixed(0) + ' bps';
 }
 
-export function severityBadgeClass(severity: string | null | undefined): string {
-  const s = (severity || '').toLowerCase();
-  if (s === 'emergency' || s === 'alert' || s === 'critical' || s === 'error') return 'badge-danger';
-  if (s === 'warning') return 'badge-warning';
-  return 'badge-info';
-}
-
-export function availabilityBadgeClass(state: string | null | undefined): string {
-  const s = (state || '').toLowerCase();
-  if (s === 'up') return 'badge-success';
-  if (s === 'down') return 'badge-danger';
-  return 'badge-warning';
-}
-
 function extractFilename(disposition: string, fallback: string): string {
   const utf8 = disposition.match(/filename\*=UTF-8''([^;]+)/i);
   if (utf8 && utf8[1]) {

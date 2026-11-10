@@ -6,9 +6,9 @@ import {
   useLatestConfigBackupsPerHost,
 } from '@/api/configuration';
 import type { DeviceHealth } from '@/api/dashboard';
+import { formatRelativeTime } from '@/lib/datetime';
 
 import { type BackupState, type HostRollup, rollUpBackups } from './backupRollup';
-import { timeAgo } from './helpers';
 
 const STATE_COLORS: Record<BackupState, string> = {
   success: 'var(--success)',
@@ -146,7 +146,7 @@ function ProblemRow({ rollup }: { rollup: HostRollup }) {
       ? 'no backup recorded'
       : rollup.state === 'failed'
       ? rollup.errorMessage || 'last attempt failed'
-      : `last success ${timeAgo(rollup.capturedAt)}`;
+      : `last success ${formatRelativeTime(rollup.capturedAt)}`;
 
   return (
     <div

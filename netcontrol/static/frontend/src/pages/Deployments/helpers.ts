@@ -1,41 +1,5 @@
 import type { Deployment, DeploymentStatus } from '@/api/deployments';
 
-export const STATUS_COLORS: Record<string, string> = {
-  planning: 'text-muted',
-  'pre-check': 'warning',
-  executing: 'warning',
-  'post-check': 'warning',
-  completed: 'success',
-  failed: 'danger',
-  'rolled-back': 'warning',
-  'rolling-back': 'warning',
-  verifying: 'warning',
-  verified: 'success',
-  verification_failed: 'danger',
-};
-
-export function statusColor(status: DeploymentStatus | string | undefined): string {
-  return STATUS_COLORS[status || ''] || 'text-muted';
-}
-
-export function rollbackStatusColor(status: string | null | undefined): string {
-  if (status === 'completed') return 'success';
-  if (status === 'failed') return 'danger';
-  return 'warning';
-}
-
-export function formatStamp(iso: string | null | undefined): string {
-  if (!iso) return '';
-  const hasZone = iso.includes('Z') || iso.includes('+');
-  return new Date(iso + (hasZone ? '' : 'Z')).toLocaleString();
-}
-
-export function formatTime(iso: string | null | undefined): string {
-  if (!iso) return '';
-  const hasZone = iso.includes('Z') || iso.includes('+');
-  return new Date(iso + (hasZone ? '' : 'Z')).toLocaleTimeString();
-}
-
 export function commandCount(commands: string | null | undefined): number {
   if (!commands) return 0;
   return commands.split('\n').filter((l) => l.trim()).length;

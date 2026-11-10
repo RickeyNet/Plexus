@@ -1,7 +1,7 @@
 import type { ConfigBackup } from '@/api/configuration';
 import type { DeviceHealth } from '@/api/dashboard';
+import { parseBackendDate } from '@/lib/datetime';
 
-import { parseBackendDate } from './helpers';
 
 // Pure backup-status roll-up shared by BackupStatusPanel and the dashboard's
 // CriticalIssuesBanner. Kept out of the (lazy-loaded) panel module so the

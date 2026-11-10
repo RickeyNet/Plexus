@@ -1,5 +1,7 @@
 import { useState } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
   AccessGroup,
@@ -7,6 +9,8 @@ import {
   useAccessGroups,
   useDeleteAccessGroup,
 } from '@/api/settings';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 
 import { AccessGroupModal } from './AccessGroupModal';
 
@@ -37,14 +41,14 @@ export function AccessGroupsTab({
         </button>
       </div>
 
-      {groups.isLoading && <p className="text-muted">Loading groups…</p>}
+      {groups.isLoading && <LoadingState text="Loading groups…" />}
       {groups.isError && (
-        <div className="error">
+        <Callout tone="danger">
           Failed to load groups: {(groups.error as Error).message}
-        </div>
+        </Callout>
       )}
       {groups.data && groups.data.length === 0 && (
-        <p className="text-muted">No access groups defined.</p>
+        <EmptyState compact message="No access groups defined." />
       )}
 
       {(groups.data || []).map((g) => (
@@ -75,9 +79,7 @@ export function AccessGroupsTab({
               >
                 Edit
               </button>
-              <button
-                className="btn btn-sm"
-                style={{ color: 'var(--danger)' }}
+              <DeleteButton
                 onClick={async () => {
                   if (!(await confirm(`Delete group '${g.name}'?`))) return;
                   remove.mutate(g.id, {
@@ -86,9 +88,7 @@ export function AccessGroupsTab({
                     },
                   });
                 }}
-              >
-                Delete
-              </button>
+              />
             </div>
           </div>
           <div

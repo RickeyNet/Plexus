@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 
+import { LoadingState } from './LoadingState';
+
 // Suspense fallback shown while a lazy route chunk downloads. The spinner is
 // delayed so prefetched or already-cached chunks (which resolve in well under
 // delayMs) never flash it - only a genuinely slow first load shows feedback,
@@ -14,13 +16,5 @@ export function PageLoader({ delayMs = 150 }: { delayMs?: number }) {
 
   if (!show) return null;
 
-  return (
-    <div className="loading" role="status" aria-live="polite" aria-busy="true">
-      <span
-        className="backup-spinner"
-        style={{ width: 20, height: 20, borderWidth: 3 }}
-        aria-hidden="true"
-      />
-    </div>
-  );
+  return <LoadingState text="" size="lg" />;
 }

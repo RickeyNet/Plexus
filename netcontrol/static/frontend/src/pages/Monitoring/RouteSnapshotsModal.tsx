@@ -1,8 +1,10 @@
 import { useState } from 'react';
 
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useMonitoringRouteSnapshots } from '@/api/monitoring';
-import { formatTimestamp } from './helpers';
+import { formatBackendDateTime } from '@/lib/datetime';
 
 // Route-table history for one host. Opened from a route_churn alert row on
 // the Alerts tab (this used to be its own "Route Churn" tab, which was the
@@ -13,10 +15,10 @@ export function RouteSnapshotsModal({ hostId, hostname, onClose }: { hostId: num
 
   return (
     <Modal isOpen onClose={onClose} title={`${hostname} - Route Snapshots`} size="large">
-      {snapshots.isPending && <div className="text-muted">Loading…</div>}
+      {snapshots.isPending && <LoadingState />}
       {snapshots.error && <div style={{ color: 'var(--danger)' }}>Error: {(snapshots.error as Error).message}</div>}
       {snapshots.data && (snapshots.data.length === 0 ? (
-        <div className="empty-state">No route snapshots available</div>
+        <EmptyState message="No route snapshots available" />
       ) : (
         <div style={{ maxHeight: 400, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
           {snapshots.data.map((s, i) => {
@@ -26,7 +28,7 @@ export function RouteSnapshotsModal({ hostId, hostname, onClose }: { hostId: num
               <div key={s.id} className="card card-sm">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
-                    <span className="text-muted" style={{ fontSize: '0.85em' }}>{formatTimestamp(s.captured_at)}</span>
+                    <span className="text-muted" style={{ fontSize: '0.85em' }}>{formatBackendDateTime(s.captured_at)}</span>
                     <span style={{ marginLeft: '0.75rem' }}>Routes: <strong>{s.route_count}</strong></span>
                     <span style={{ marginLeft: '0.5rem', fontSize: '0.85em' }}>
                       Delta:{' '}
@@ -37,7 +39,7 @@ export function RouteSnapshotsModal({ hostId, hostname, onClose }: { hostId: num
                   </div>
                   <button
                     className="btn btn-sm btn-secondary"
-                    onClick={() => setSelected({ text: s.routes_text ?? '', ts: formatTimestamp(s.captured_at) })}
+                    onClick={() => setSelected({ text: s.routes_text ?? '', ts: formatBackendDateTime(s.captured_at) })}
                   >
                     View
                   </button>

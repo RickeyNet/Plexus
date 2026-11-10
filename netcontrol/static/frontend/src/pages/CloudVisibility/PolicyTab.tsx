@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 
 import { useCloudPolicyEffective, useCloudPolicyRules } from '@/api/cloud';
+import { LoadingState } from '@/components/LoadingState';
+import { StatGrid, StatTile } from '@/components/StatTile';
 import type { CloudFilterState } from './CloudVisibility';
 import { formatCount, providerLabel, topologyResourceTypeLabel } from './helpers';
 
@@ -108,7 +110,7 @@ export function PolicyTab({ filter }: Props) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1rem' }}>
         <div>
           <h4 style={{ margin: '0 0 0.45rem' }}>Effective Policy Views</h4>
-          {effective.isPending && <div className="text-muted">Loading…</div>}
+          {effective.isPending && <LoadingState />}
           {effective.error && <div style={{ color: 'var(--danger)' }}>Error: {(effective.error as Error).message}</div>}
           {!views.length ? (
             <div className="card">
@@ -116,15 +118,15 @@ export function PolicyTab({ filter }: Props) {
             </div>
           ) : (
             <>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.75rem', marginBottom: '0.75rem' }}>
-                <Stat label="Policy Resources" value={formatCount(totals.resources)} />
-                <Stat label="Rules" value={formatCount(totals.rules)} />
-                <Stat label="Public Ingress" value={formatCount(totals.publicIngress)} />
-                <Stat label="Open Egress" value={formatCount(totals.openEgress)} />
-                <Stat label="Deny Rules" value={formatCount(totals.denies)} />
-              </div>
+              <StatGrid compact>
+                <StatTile label="Policy Resources" value={formatCount(totals.resources)} />
+                <StatTile label="Rules" value={formatCount(totals.rules)} />
+                <StatTile label="Public Ingress" value={formatCount(totals.publicIngress)} />
+                <StatTile label="Open Egress" value={formatCount(totals.openEgress)} />
+                <StatTile label="Deny Rules" value={formatCount(totals.denies)} />
+              </StatGrid>
               <div style={{ overflowX: 'auto' }}>
-                <table className="chart-table">
+                <table className="data-table">
                   <thead>
                     <tr><th>Resource</th><th>Provider</th><th>Rules</th><th>Public Ingress</th><th>Open Egress</th><th>Deny</th><th></th></tr>
                   </thead>
@@ -168,7 +170,7 @@ export function PolicyTab({ filter }: Props) {
 
         <div>
           <h4 style={{ margin: '0 0 0.45rem' }}>Rule Inventory</h4>
-          {rulesQuery.isPending && <div className="text-muted">Loading…</div>}
+          {rulesQuery.isPending && <LoadingState />}
           {rulesQuery.error && <div style={{ color: 'var(--danger)' }}>Error: {(rulesQuery.error as Error).message}</div>}
           {!rules.length ? (
             <div className="card">
@@ -176,7 +178,7 @@ export function PolicyTab({ filter }: Props) {
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table className="chart-table">
+              <table className="data-table">
                 <thead>
                   <tr><th>Resource</th><th>Rule</th><th>Direction</th><th>Action</th><th>Protocol / Ports</th><th>Selectors</th></tr>
                 </thead>
@@ -218,11 +220,3 @@ export function PolicyTab({ filter }: Props) {
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="card card-sm">
-      <div className="text-muted" style={{ fontSize: '0.75rem' }}>{label}</div>
-      <div style={{ fontSize: '1.35rem', fontWeight: 700 }}>{value}</div>
-    </div>
-  );
-}

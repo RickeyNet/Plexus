@@ -9,9 +9,12 @@ import {
   useCancelUpgradeDevices,
   useUpgradeCampaign,
 } from '@/api/upgrades';
+import { Callout } from '@/components/Callout';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { AlertDialog } from '@/components/AlertDialog';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { formatBackendDateTime, formatBackendTimestamp } from '@/lib/datetime';
 
 import { DeviceUpgradeLogModal } from './DeviceUpgradeLogModal';
 import { PhaseConfirmModal } from './PhaseConfirmModal';
@@ -21,8 +24,6 @@ import {
   campaignStatusLabel,
   formatBytes,
   formatEta,
-  formatLogTimestamp,
-  formatOperationTime,
   formatScheduledTime,
   phaseLabel,
 } from './helpers';
@@ -230,7 +231,7 @@ function statusLabel(s: string): string {
 
 function operationBadgeClass(status: string | null | undefined): string {
   if (!status) return 'badge-secondary';
-  if (status.includes('failed')) return 'badge-error';
+  if (status.includes('failed')) return 'badge-danger';
   if (status.includes('missed') || status === 'scheduled') return 'badge-warning';
   if (status === 'running' || status.startsWith('running_')) return 'badge-info';
   if (status === 'cancelled') return 'badge-secondary';
@@ -261,7 +262,7 @@ function OperationHistory({ operations }: { operations: UpgradeOperation[] }) {
 
   return (
     <div style={{ overflowX: 'auto' }}>
-      <table className="data-table" style={{ width: '100%', fontSize: '0.84em' }}>
+      <table className="data-table table-sm">
         <thead>
           <tr>
             <th>Operation</th>
@@ -282,9 +283,9 @@ function OperationHistory({ operations }: { operations: UpgradeOperation[] }) {
                   {operationStatusLabel(op.status)}
                 </span>
               </td>
-              <td>{formatOperationTime(op.scheduled_at)}</td>
-              <td>{formatOperationTime(op.started_at)}</td>
-              <td>{formatOperationTime(op.completed_at)}</td>
+              <td>{formatBackendDateTime(op.scheduled_at)}</td>
+              <td>{formatBackendDateTime(op.started_at)}</td>
+              <td>{formatBackendDateTime(op.completed_at)}</td>
               <td>
                 <span style={{ display: 'inline-flex', gap: '0.35rem', flexWrap: 'wrap' }}>
                   <span>{op.succeeded}/{op.device_count} ok</span>
@@ -328,7 +329,7 @@ function StepStatus({ c }: { c: PhaseCount }) {
   return (
     <span style={{ display: 'inline-flex', gap: '0.35rem', alignItems: 'center' }}>
       {c.failed > 0 && (
-        <span className="badge badge-error">{c.failed} failed</span>
+        <span className="badge badge-danger">{c.failed} failed</span>
       )}
       <span className="text-muted" style={{ fontSize: '0.78em' }}>
         {c.done}/{c.total} done
@@ -543,7 +544,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
         for (const ev of msg.events) {
           if (ev.type !== 'upgrade_event') continue;
           if (typeof ev.message !== 'string' || !ev.message) continue;
-          const ts = formatLogTimestamp(ev.timestamp);
+          const ts = formatBackendTimestamp(ev.timestamp, '');
           const host = ev.host ? `${ev.host}: ` : '';
           lines.push(`[${ts}] ${host}${ev.message}`);
         }
@@ -595,7 +596,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
       }
 
       if (msg.type === 'upgrade_event' && typeof msg.message === 'string') {
-        const ts = formatLogTimestamp(msg.timestamp);
+        const ts = formatBackendTimestamp(msg.timestamp, '');
         const host = msg.host ? `${msg.host}: ` : '';
         setLiveLines((prev) => [...prev, `[${ts}] ${host}${msg.message}`]);
       }
@@ -753,11 +754,11 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
     <>
       <Modal isOpen onClose={onClose} title={title} size="large">
         {query.isPending ? (
-          <p className="text-muted">Loading…</p>
+          <LoadingState />
         ) : query.error ? (
-          <p style={{ color: 'var(--danger)' }}>
+          <Callout tone="danger">
             Failed to load: {(query.error as Error).message}
-          </p>
+          </Callout>
         ) : campaign ? (
           <div>
             <div style={{ marginBottom: '1rem' }}>
@@ -1010,7 +1011,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
             <div style={{ overflowX: 'auto' }}>
               <table
                 className="data-table"
-                style={{ width: '100%', fontSize: '0.85em' }}
+                style={{ fontSize: '0.85em' }}
               >
                 <thead>
                   <tr>

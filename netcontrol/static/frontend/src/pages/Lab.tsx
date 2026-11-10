@@ -1,5 +1,9 @@
 import { useMemo, useState, ReactNode } from 'react';
 
+import { Badge } from '@/components/Badge';
+import { Callout } from '@/components/Callout';
+import { DeleteButton } from '@/components/DeleteButton';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
@@ -55,67 +59,57 @@ const PRE_STYLE: React.CSSProperties = {
 
 // ── Badge helpers ──────────────────────────────────────────────────────────
 
-function Badge({
-  variant,
-  children,
-}: {
-  variant: 'success' | 'warning' | 'danger' | 'info' | 'secondary' | 'error';
-  children: ReactNode;
-}) {
-  return <span className={`badge badge-${variant}`}>{children}</span>;
-}
-
 function riskBadge(level: string) {
   switch (level) {
     case 'critical':
-      return <Badge variant="danger">{level}</Badge>;
+      return <Badge tone="danger">{level}</Badge>;
     case 'high':
-      return <Badge variant="error">{level}</Badge>;
+      return <Badge tone="danger">{level}</Badge>;
     case 'medium':
-      return <Badge variant="warning">{level}</Badge>;
+      return <Badge tone="warning">{level}</Badge>;
     case 'low':
-      return <Badge variant="success">{level}</Badge>;
+      return <Badge tone="success">{level}</Badge>;
     default:
-      return <Badge variant="secondary">{level || 'unknown'}</Badge>;
+      return <Badge>{level || 'unknown'}</Badge>;
   }
 }
 
 function driftBadge(status: string | undefined) {
   switch (status) {
     case 'in_sync':
-      return <Badge variant="success">in sync</Badge>;
+      return <Badge tone="success">in sync</Badge>;
     case 'drifted':
-      return <Badge variant="danger">drifted</Badge>;
+      return <Badge tone="danger">drifted</Badge>;
     case 'missing_source':
-      return <Badge variant="secondary">no source</Badge>;
+      return <Badge>no source</Badge>;
     case 'error':
-      return <Badge variant="warning">error</Badge>;
+      return <Badge tone="warning">error</Badge>;
     case 'never_checked':
     case undefined:
     case '':
-      return <Badge variant="secondary">not yet checked</Badge>;
+      return <Badge>not yet checked</Badge>;
     default:
-      return <Badge variant="secondary">{status}</Badge>;
+      return <Badge>{status}</Badge>;
   }
 }
 
 function runtimeBadge(status: string | undefined, kind?: string) {
   if (!kind || kind === 'config_only') {
-    return <Badge variant="secondary">offline</Badge>;
+    return <Badge>offline</Badge>;
   }
   switch (status) {
     case 'running':
-      return <Badge variant="success">running</Badge>;
+      return <Badge tone="success">running</Badge>;
     case 'provisioning':
-      return <Badge variant="info">provisioning</Badge>;
+      return <Badge tone="info">provisioning</Badge>;
     case 'stopped':
-      return <Badge variant="secondary">stopped</Badge>;
+      return <Badge>stopped</Badge>;
     case 'destroyed':
-      return <Badge variant="secondary">destroyed</Badge>;
+      return <Badge>destroyed</Badge>;
     case 'error':
-      return <Badge variant="danger">error</Badge>;
+      return <Badge tone="danger">error</Badge>;
     default:
-      return <Badge variant="secondary">{status || '-'}</Badge>;
+      return <Badge>{status || '-'}</Badge>;
   }
 }
 
@@ -123,14 +117,10 @@ function runtimeBadge(status: string | undefined, kind?: string) {
 
 function ErrorBox({ title, message }: { title: string; message: string }) {
   return (
-    <div className="error">
+    <Callout tone="danger">
       <strong>{title}:</strong> {message}
-    </div>
+    </Callout>
   );
-}
-
-function Loading({ label }: { label?: string }) {
-  return <div className="loading">{label ?? 'Loading…'}</div>;
 }
 
 function EmptyBox({ title, body }: { title: string; body: ReactNode }) {
@@ -176,7 +166,7 @@ export function Lab() {
             <div className="card-title" style={{ marginBottom: '0.75rem' }}>
               Environments
             </div>
-            {envs.isPending && <Loading />}
+            {envs.isPending && <LoadingState />}
             {envs.error && (
               <ErrorBox title="Failed to load" message={(envs.error as Error).message} />
             )}
@@ -334,7 +324,7 @@ function EnvironmentDetail({
   const deleteDevice = useDeleteDevice(envId);
   const [createDeviceOpen, setCreateDeviceOpen] = useState(false);
 
-  if (envQuery.isPending) return <Loading label="Loading environment…" />;
+  if (envQuery.isPending) return <LoadingState text="Loading environment…" />;
   if (envQuery.error)
     return (
       <ErrorBox
@@ -389,7 +379,7 @@ function EnvironmentDetail({
             body="Add a blank device or clone one from inventory to start simulating changes."
           />
         ) : (
-          <table className="data-table" style={{ width: '100%' }}>
+          <table className="data-table">
             <thead>
               <tr>
                 <th>Hostname</th>
@@ -422,17 +412,13 @@ function EnvironmentDetail({
                     <td>{d.run_count}</td>
                     <td>{d.source_host_id ? `#${d.source_host_id}` : '-'}</td>
                     <td onClick={(e) => e.stopPropagation()}>
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-danger"
+                      <DeleteButton
                         onClick={async () => {
                           if (!(await confirm(`Delete device "${d.hostname}"?`))) return;
                           if (selectedDeviceId === d.id) onSelectDevice(null);
                           await deleteDevice.mutateAsync(d.id);
                         }}
-                      >
-                        Delete
-                      </button>
+                      />
                     </td>
                   </tr>
                 );
@@ -705,7 +691,7 @@ function DevicePanel({ deviceId }: { deviceId: number }) {
 
       <div className="glass-card card">
         <div className="card-title">Run history</div>
-        {runs.isPending && <Loading />}
+        {runs.isPending && <LoadingState />}
         {runs.data && runs.data.length === 0 && (
           <EmptyBox
             title="No runs yet"
@@ -713,7 +699,7 @@ function DevicePanel({ deviceId }: { deviceId: number }) {
           />
         )}
         {runs.data && runs.data.length > 0 && (
-          <table className="data-table" style={{ width: '100%' }}>
+          <table className="data-table">
             <thead>
               <tr>
                 <th>ID</th>
@@ -757,7 +743,7 @@ function RunDetailModal({ runId, onClose }: { runId: number; onClose: () => void
   const run = useRun(runId);
   return (
     <Modal isOpen onClose={onClose} title={`Lab run #${runId}`} size="large">
-      {run.isPending && <Loading />}
+      {run.isPending && <LoadingState />}
       {run.error && (
         <ErrorBox title="Failed" message={(run.error as Error).message} />
       )}
@@ -815,7 +801,7 @@ function RuntimeCard({ deviceId }: { deviceId: number }) {
         Containerlab runtime · {runtimeBadge(runtimeStatus, runtimeKind)}
       </div>
 
-      {status.isPending && <Loading label="Checking runtime…" />}
+      {status.isPending && <LoadingState text="Checking runtime…" />}
       {status.data && !status.data.available && (
         <div style={{
           background: 'rgba(from var(--warning) r g b / 0.1)',
@@ -939,7 +925,7 @@ function RuntimeCard({ deviceId }: { deviceId: number }) {
           <summary style={{ cursor: 'pointer', color: 'var(--text-light)' }}>
             Runtime event log
           </summary>
-          <table className="data-table" style={{ width: '100%', marginTop: 8 }}>
+          <table className="data-table" style={{ marginTop: 8 }}>
             <thead>
               <tr>
                 <th>When</th>
@@ -1044,7 +1030,7 @@ function TopologiesCard({
         </div>
       )}
 
-      {list.isPending && <Loading />}
+      {list.isPending && <LoadingState />}
       {list.data && list.data.length === 0 && (
         <EmptyBox
           title="No topologies yet"
@@ -1052,7 +1038,7 @@ function TopologiesCard({
         />
       )}
       {list.data && list.data.length > 0 && (
-        <table className="data-table" style={{ width: '100%', marginTop: 12 }}>
+        <table className="data-table" style={{ marginTop: 12 }}>
           <thead>
             <tr>
               <th>Name</th>
@@ -1077,18 +1063,14 @@ function TopologiesCard({
                 <td>{t.link_count ?? 0}</td>
                 <td>{runtimeBadge(t.status, 'containerlab')}</td>
                 <td onClick={(e) => e.stopPropagation()}>
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-danger"
+                  <DeleteButton
                     disabled={t.status === 'running'}
                     onClick={async () => {
                       if (!(await confirm(`Delete topology "${t.name}"?`))) return;
                       if (openId === t.id) setOpenId(null);
                       await remove.mutateAsync(t.id);
                     }}
-                  >
-                    Delete
-                  </button>
+                  />
                 </td>
               </tr>
             ))}
@@ -1134,7 +1116,7 @@ function TopologyEditor({
   const [proposalA, setProposalA] = useState('eth1');
   const [proposalB, setProposalB] = useState('eth1');
 
-  if (topo.isPending) return <Loading label="Loading topology…" />;
+  if (topo.isPending) return <LoadingState text="Loading topology…" />;
   if (topo.error)
     return <ErrorBox title="Failed" message={(topo.error as Error).message} />;
   if (!topo.data) return null;
@@ -1293,7 +1275,7 @@ function TopologyEditor({
       <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>
         Members ({t.devices.length})
       </h4>
-      <table className="data-table" style={{ width: '100%', marginBottom: 12 }}>
+      <table className="data-table" style={{ marginBottom: 12 }}>
         <thead>
           <tr>
             <th>Hostname</th>
@@ -1362,7 +1344,7 @@ function TopologyEditor({
       <h4 style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>
         Links ({t.links.length})
       </h4>
-      <table className="data-table" style={{ width: '100%', marginBottom: 12 }}>
+      <table className="data-table" style={{ marginBottom: 12 }}>
         <thead>
           <tr>
             <th>A device</th>
@@ -1559,7 +1541,7 @@ function DriftCard({ deviceId }: { deviceId: number }) {
           <summary style={{ cursor: 'pointer', color: 'var(--text-light)' }}>
             Drift history ({runs.data.length})
           </summary>
-          <table className="data-table" style={{ width: '100%', marginTop: 8 }}>
+          <table className="data-table" style={{ marginTop: 8 }}>
             <thead>
               <tr>
                 <th>When</th>

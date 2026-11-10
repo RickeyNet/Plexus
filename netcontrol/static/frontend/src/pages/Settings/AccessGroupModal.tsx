@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
 import {
   AccessGroup,
@@ -131,7 +132,7 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
           })}
         </div>
       </div>
-      {error && <div className="error">{error}</div>}
+      {error && <Callout tone="danger">{error}</Callout>}
       <div
         style={{
           display: 'flex',

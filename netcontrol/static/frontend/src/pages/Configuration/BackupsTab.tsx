@@ -13,9 +13,12 @@ import {
   useDeleteBackupPolicy,
   useRunBackupPolicy,
 } from '@/api/configuration';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
 import { SegmentedControl } from '@/components/SegmentedControl';
 import { SummaryStrip } from '@/components/SummaryStrip';
+import { formatBackendDateTime, formatRelativeTime } from '@/lib/datetime';
 
 import { BackupModal } from './BackupModal';
 import { BackupPolicyModal } from './BackupPolicyModal';
@@ -23,8 +26,6 @@ import { RestoreBackupModal } from './RestoreBackupModal';
 import {
   type BackupView,
   formatInterval,
-  formatRelative,
-  formatStamp,
 } from './helpers';
 
 type SubTab = 'policies' | 'history';
@@ -137,7 +138,7 @@ function BackupSummaryStrip({
     { label: 'Policies', value: String(summary?.total_policies ?? '-') },
     { label: 'Backups', value: String(summary?.total_backups ?? '-') },
     { label: 'Hosts', value: String(summary?.hosts_backed_up ?? '-') },
-    { label: 'Last backup', value: formatRelative(summary?.last_backup_at) },
+    { label: 'Last backup', value: formatRelativeTime(summary?.last_backup_at, undefined, 'Never') },
   ];
   return <SummaryStrip items={items} />;
 }
@@ -166,7 +167,7 @@ function PoliciesList({
     );
   }, [policies, query]);
 
-  if (loading) return <p className="text-muted">Loading policies…</p>;
+  if (loading) return <LoadingState text="Loading policies…" />;
   if (!filtered.length) {
     return (
       <p className="text-muted">
@@ -269,7 +270,7 @@ function PoliciesList({
               }}
             >
               Interval: {formatInterval(p.interval_seconds)} • Retention:{' '}
-              {p.retention_days}d • Last Run: {formatStamp(p.last_run_at) || 'Never'}
+              {p.retention_days}d • Last Run: {formatBackendDateTime(p.last_run_at, '') || 'Never'}
             </div>
           </div>
         );
@@ -305,9 +306,9 @@ function HistoryList({
     );
   }, [backups, query]);
 
-  if (loading) return <p className="text-muted">Loading backups…</p>;
+  if (loading) return <LoadingState text="Loading backups…" />;
   if (!filtered.length) {
-    return <p className="text-muted">No backups yet.</p>;
+    return <EmptyState compact message="No backups yet." />;
   }
 
   return (
@@ -410,7 +411,7 @@ function HistoryList({
                 color: 'var(--text-muted)',
               }}
             >
-              {formatStamp(b.captured_at)} • {b.capture_method || '-'} • {sizeKb}
+              {formatBackendDateTime(b.captured_at, '')} • {b.capture_method || '-'} • {sizeKb}
               {b.error_message && (
                 <span style={{ color: 'var(--danger)' }}>
                   {' '}

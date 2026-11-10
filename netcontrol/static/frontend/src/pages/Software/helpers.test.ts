@@ -2,30 +2,17 @@ import { describe, expect, it } from 'vitest';
 
 import {
   barWidth,
-  formatTime,
   parseAdvisoryImport,
   parseVersionList,
-  severityBadgeClass,
   severityLabel,
-  severityRank,
   sourceLabel,
 } from './helpers';
 
 describe('severity helpers', () => {
-  it('maps severities to badge classes', () => {
-    expect(severityBadgeClass('critical')).toBe('badge badge-danger');
-    expect(severityBadgeClass('High')).toBe('badge badge-danger');
-    expect(severityBadgeClass('medium')).toBe('badge badge-warning');
-    expect(severityBadgeClass('low')).toBe('badge badge-info');
-    expect(severityBadgeClass(undefined)).toBe('badge badge-secondary');
-  });
-
-  it('labels and ranks severities', () => {
+  it('labels severities', () => {
     expect(severityLabel('critical')).toBe('Critical');
     expect(severityLabel('info')).toBe('Info');
     expect(severityLabel('')).toBe('');
-    expect(severityRank('critical')).toBeLessThan(severityRank('high'));
-    expect(severityRank('bogus')).toBeGreaterThan(severityRank('info'));
   });
 });
 
@@ -38,18 +25,6 @@ describe('sourceLabel', () => {
     expect(sourceLabel('appgate')).toBe('Appgate SDP');
     expect(sourceLabel('custom')).toBe('custom');
     expect(sourceLabel(null)).toBe('');
-  });
-});
-
-describe('formatTime', () => {
-  it('treats the backend UTC text as UTC', () => {
-    expect(formatTime('')).toBe('Never');
-    const out = formatTime('2026-10-05 21:49:53');
-    expect(out).toBe(new Date('2026-10-05T21:49:53Z').toLocaleString());
-  });
-
-  it('returns unparseable values unchanged', () => {
-    expect(formatTime('soon')).toBe('soon');
   });
 });
 

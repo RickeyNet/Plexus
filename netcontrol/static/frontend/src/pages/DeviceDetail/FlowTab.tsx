@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { LoadingState } from '@/components/LoadingState';
 import { SegmentedControl } from '@/components/SegmentedControl';
 import { TabBar } from '@/components/TabBar';
 import { ClampedRangeHint } from '@/components/TimeRangeBar';
@@ -79,13 +81,13 @@ function ExporterStatus({ hostId }: { hostId: number }) {
   );
 
   if (exporters.isPending) {
-    return <p className="text-muted">Loading exporter status…</p>;
+    return <LoadingState text="Loading exporter status…" />;
   }
   if (exporters.error) {
     return (
-      <div className="error">
+      <Callout tone="danger">
         Failed to load exporter status: {(exporters.error as Error).message}
-      </div>
+      </Callout>
     );
   }
   if (rows.length === 0) {
@@ -119,7 +121,7 @@ function ExporterStatus({ hostId }: { hostId: number }) {
                 Sampling: {r.sampling_rate ? `1:${r.sampling_rate}` : '-'}
               </span>
               <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                Last record: {formatTimestamp(r.last_record_at ?? r.last_seen)}
+                Last record: {formatBackendDateTime(r.last_record_at ?? r.last_seen)}
               </span>
             </div>
           </Item>
@@ -184,7 +186,7 @@ function TalkersBody({ query }: { query: QueryShape<FlowTalker> }) {
       />
       <table
         className="data-table"
-        style={{ width: '100%', fontSize: '0.85em', marginTop: '0.5rem' }}
+        style={{ fontSize: '0.85em', marginTop: '0.5rem' }}
       >
         <thead>
           <tr>
@@ -235,7 +237,7 @@ function ApplicationsView({ hostId, hours }: { hostId: number; hours: number }) 
       />
       <table
         className="data-table"
-        style={{ width: '100%', fontSize: '0.85em', marginTop: '0.5rem' }}
+        style={{ fontSize: '0.85em', marginTop: '0.5rem' }}
       >
         <thead>
           <tr>
@@ -273,7 +275,7 @@ function ConversationsView({ hostId, hours }: { hostId: number; hours: number })
   return (
     <div className="card-inset">
       <h4 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem' }}>Top Conversations</h4>
-      <table className="data-table" style={{ width: '100%', fontSize: '0.85em' }}>
+      <table className="data-table table-sm">
         <thead>
           <tr>
             <th>Source</th>
@@ -369,6 +371,3 @@ function formatBytes(bytes: number | null | undefined): string {
   return `${(bytes / Math.pow(1024, idx)).toFixed(1)} ${units[idx]}`;
 }
 
-function formatTimestamp(value: string | null | undefined): string {
-  return formatBackendDateTime(value);
-}

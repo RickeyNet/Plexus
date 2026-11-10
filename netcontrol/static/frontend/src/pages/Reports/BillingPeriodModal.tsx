@@ -1,7 +1,11 @@
 import { useMemo } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useBillingPeriodUsage } from '@/api/reports';
+import { StatGrid, StatTile } from '@/components/StatTile';
 import { TimeSeriesChart, type TimeSeries } from '@/lib/echart';
 
 import { formatBps } from './helpers';
@@ -32,8 +36,8 @@ export function BillingPeriodModal({ periodId, onClose }: Props) {
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Billing Period Detail" size="large">
-      {query.isPending && <p className="text-muted">Loading…</p>}
-      {query.error && <p style={{ color: 'var(--danger)' }}>Failed: {(query.error as Error).message}</p>}
+      {query.isPending && <LoadingState />}
+      {query.error && <Callout tone="danger">Failed: {(query.error as Error).message}</Callout>}
       {query.data && (() => {
         const p = query.data.period ?? {};
         const isOverage = p.status === 'overage';
@@ -47,16 +51,16 @@ export function BillingPeriodModal({ periodId, onClose }: Props) {
               <div><strong>Period:</strong> {(p.period_start ?? '').slice(0, 10)} – {(p.period_end ?? '').slice(0, 10)}</div>
               <div><strong>Samples:</strong> {p.total_samples ?? 0}</div>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem', marginBottom: '1rem' }}>
-              <Stat label="P95 In" value={formatBps(p.p95_in_bps)} />
-              <Stat label="P95 Out" value={formatBps(p.p95_out_bps)} />
-              <Stat
+            <StatGrid compact>
+              <StatTile center label="P95 In" value={formatBps(p.p95_in_bps)} />
+              <StatTile center label="P95 Out" value={formatBps(p.p95_out_bps)} />
+              <StatTile center
                 label="P95 Billing"
                 value={formatBps(p.p95_billing_bps)}
-                color={isOverage ? 'var(--danger)' : 'var(--success)'}
+                tone={isOverage ? 'danger' : 'success'}
               />
-              <Stat label="Commit Rate" value={formatBps(p.commit_rate_bps)} />
-            </div>
+              <StatTile center label="Commit Rate" value={formatBps(p.commit_rate_bps)} />
+            </StatGrid>
             {isOverage && (
               <div className="card card-sm" style={{ background: 'rgba(from var(--danger) r g b / 0.1)', marginBottom: 'var(--space-4)' }}>
                 <strong style={{ color: 'var(--danger)' }}>Overage Detected:</strong>{' '}
@@ -66,7 +70,7 @@ export function BillingPeriodModal({ periodId, onClose }: Props) {
             {series.length ? (
               <TimeSeriesChart series={series} yAxisName="Mbps" height={300} />
             ) : (
-              <p className="text-muted">No usage samples for this period.</p>
+              <EmptyState compact message="No usage samples for this period." />
             )}
           </>
         );
@@ -78,11 +82,3 @@ export function BillingPeriodModal({ periodId, onClose }: Props) {
   );
 }
 
-function Stat({ label, value, color }: { label: string; value: string; color?: string }) {
-  return (
-    <div className="card card-sm stat-card" style={{ textAlign: 'center' }}>
-      <div className="stat-value" style={{ fontSize: '1.1rem', ...(color ? { color } : null) }}>{value}</div>
-      <div className="stat-label">{label}</div>
-    </div>
-  );
-}

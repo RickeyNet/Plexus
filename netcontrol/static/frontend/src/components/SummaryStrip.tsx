@@ -1,27 +1,26 @@
+import type { ReactNode } from 'react';
+
+import type { Tone } from '@/lib/severity';
+
+import { StatGrid, StatTile } from './StatTile';
+
 export interface SummaryStripItem {
   label: string;
-  value: string;
+  value: ReactNode;
+  hint?: ReactNode;
+  tone?: Tone;
 }
 
-/** Compact label/value counters shown above a list (Compliance, Configuration, Change Management). */
+/**
+ * Compact label/value counters shown above a list (Compliance, Configuration,
+ * Change Management): the compact variant of StatGrid/StatTile.
+ */
 export function SummaryStrip({ items }: { items: SummaryStripItem[] }) {
   return (
-    <div className="card card-sm">
-      <div
-        className="card-body"
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-          gap: 'var(--space-2)',
-        }}
-      >
-        {items.map((it) => (
-          <div key={it.label} style={{ display: 'flex', flexDirection: 'column' }}>
-            <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>{it.label}</span>
-            <span style={{ fontWeight: 600 }}>{it.value}</span>
-          </div>
-        ))}
-      </div>
-    </div>
+    <StatGrid compact>
+      {items.map((it) => (
+        <StatTile key={it.label} label={it.label} value={it.value} hint={it.hint} tone={it.tone} />
+      ))}
+    </StatGrid>
   );
 }

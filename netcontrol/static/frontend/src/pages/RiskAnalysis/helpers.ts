@@ -1,25 +1,7 @@
 import type { RiskAnalysis, RiskLevel } from '@/api/riskAnalysis';
 
-export const LEVEL_COLORS: Record<string, string> = {
-  low: 'success',
-  medium: 'warning',
-  high: 'warning',
-  critical: 'danger',
-  unknown: 'text-muted',
-};
-
-export function levelColor(level: string | undefined): string {
-  if (!level) return 'text-muted';
-  return LEVEL_COLORS[level] || 'text-muted';
-}
-
 export function scorePercent(score: number | undefined): number {
   return Math.round((score || 0) * 100);
-}
-
-export function formatStamp(iso: string | null | undefined): string {
-  if (!iso) return '-';
-  return new Date(iso + 'Z').toLocaleString();
 }
 
 export function parseJsonArray<T = unknown>(raw: string | null | undefined): T[] {

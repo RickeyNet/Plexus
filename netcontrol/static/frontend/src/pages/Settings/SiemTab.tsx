@@ -1,5 +1,7 @@
 import { useState } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
   SiemSink,
@@ -10,6 +12,8 @@ import {
   useTestSiemSink,
   useUpdateSiemSink,
 } from '@/api/settings';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 
 const PROTOCOLS: SiemSink['protocol'][] = ['udp', 'tcp', 'tls', 'https'];
 const FORMATS: SiemSink['format'][] = ['cef', 'json'];
@@ -49,12 +53,12 @@ export function SiemTab() {
     {},
   );
 
-  if (query.isLoading) return <p className="text-muted">Loading…</p>;
+  if (query.isLoading) return <LoadingState />;
   if (query.isError)
     return (
-      <div className="error">
+      <Callout tone="danger">
         Failed to load SIEM sinks: {(query.error as Error).message}
-      </div>
+      </Callout>
     );
 
   const sinks = query.data?.sinks ?? [];
@@ -154,10 +158,10 @@ export function SiemTab() {
       </p>
 
       {sinks.length === 0 ? (
-        <p className="text-muted">No sinks configured. Add one to start forwarding audit events.</p>
+        <EmptyState compact message="No sinks configured. Add one to start forwarding audit events." />
       ) : (
         <div style={{ overflowX: 'auto' }}>
-          <table className="data-table" style={{ width: '100%', minWidth: '720px' }}>
+          <table className="data-table" style={{ minWidth: '720px' }}>
             <thead>
               <tr>
                 <th>Name</th>
@@ -215,9 +219,7 @@ export function SiemTab() {
                       <button className="btn btn-xs btn-ghost" onClick={() => setEditing({ ...s })}>
                         Edit
                       </button>{' '}
-                      <button className="btn btn-xs btn-danger" onClick={() => onDelete(s)}>
-                        Delete
-                      </button>
+                      <DeleteButton size="xs" onClick={() => onDelete(s)} />
                     </td>
                   </tr>
                 );

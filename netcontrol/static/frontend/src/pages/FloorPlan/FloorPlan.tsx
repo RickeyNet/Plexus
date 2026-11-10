@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 
+import { LoadingState } from '@/components/LoadingState';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -183,7 +184,7 @@ function SitesPanel({
         padding: '0.5rem',
       }}
     >
-      {loading && <div className="loading">Loading sites…</div>}
+      {loading && <LoadingState text="Loading sites…" />}
       {!loading && (!sites || sites.length === 0) && (
         <div style={{ padding: '0.75rem', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
           No sites yet.
@@ -437,7 +438,7 @@ function CanvasPanel({
           </div>
         )}
         {floor && placementsLoading && (
-          <div className="loading">Loading floor…</div>
+          <LoadingState text="Loading floor…" />
         )}
         {floor && !placementsLoading && (
           <FloorCanvas

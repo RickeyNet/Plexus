@@ -7,9 +7,12 @@ import {
   useConfigDriftSummary,
   useUpdateDriftEventStatus,
 } from '@/api/configuration';
+import { Callout } from '@/components/Callout';
+import { LoadingState } from '@/components/LoadingState';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
 import { SegmentedControl } from '@/components/SegmentedControl';
 import { SummaryStrip } from '@/components/SummaryStrip';
+import { formatBackendDateTime } from '@/lib/datetime';
 
 import { CaptureSnapshotModal } from './CaptureSnapshotModal';
 import { DriftDiffModal } from './DriftDiffModal';
@@ -20,7 +23,6 @@ import { UnifiedDiff } from './UnifiedDiff';
 import {
   type DriftGroup,
   filterDriftEvents,
-  formatStamp,
   groupDriftEvents,
   statusColor,
 } from './helpers';
@@ -135,11 +137,11 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
         </div>
       </div>
 
-      {events.isPending && <p className="text-muted">Loading drift events…</p>}
+      {events.isPending && <LoadingState text="Loading drift events…" />}
       {events.error && (
-        <p style={{ color: 'var(--danger)' }}>
+        <Callout tone="danger">
           Failed to load: {(events.error as Error).message}
-        </p>
+        </Callout>
       )}
       {!events.isPending && !filtered.length && (
         <p className="text-muted">
@@ -293,7 +295,7 @@ function DriftEventCard({
           color: 'var(--text-muted)',
         }}
       >
-        {ev.device_type || ''} • {formatStamp(ev.detected_at)}
+        {ev.device_type || ''} • {formatBackendDateTime(ev.detected_at, '')}
       </div>
       <div
         style={{

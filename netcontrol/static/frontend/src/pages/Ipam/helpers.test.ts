@@ -4,9 +4,7 @@ import {
   driftBadgeClass,
   driftLabel,
   formatSubnetPreview,
-  formatSyncTime,
   providerLabel,
-  statusBadgeClass,
 } from './helpers';
 
 describe('formatSubnetPreview', () => {
@@ -85,25 +83,3 @@ describe('driftBadgeClass', () => {
   });
 });
 
-describe('statusBadgeClass', () => {
-  it('returns success/danger/secondary based on status', () => {
-    expect(statusBadgeClass('success')).toBe('badge-success');
-    expect(statusBadgeClass('error')).toBe('badge-danger');
-    expect(statusBadgeClass('never')).toBe('badge-secondary');
-    expect(statusBadgeClass(undefined)).toBe('badge-secondary');
-  });
-});
-
-describe('formatSyncTime', () => {
-  it('returns "Never" for null/empty', () => {
-    expect(formatSyncTime(null)).toBe('Never');
-    expect(formatSyncTime(undefined)).toBe('Never');
-    expect(formatSyncTime('')).toBe('Never');
-  });
-
-  it('treats input without Z suffix as UTC', () => {
-    const out = formatSyncTime('2026-01-02T03:04:05');
-    expect(out).not.toBe('2026-01-02T03:04:05');
-    expect(out.length).toBeGreaterThan(0);
-  });
-});

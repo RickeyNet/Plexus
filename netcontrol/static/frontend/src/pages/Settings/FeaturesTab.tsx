@@ -4,6 +4,7 @@ import {
   AdminCapabilities,
   useUpdateFeatureVisibility,
 } from '@/api/settings';
+import { EmptyState } from '@/components/EmptyState';
 
 export function FeaturesTab({
   capabilities,
@@ -35,7 +36,7 @@ export function FeaturesTab({
       </p>
 
       {catalog.length === 0 ? (
-        <p className="text-muted">No toggleable features available.</p>
+        <EmptyState compact message="No toggleable features available." />
       ) : (
         <div style={{ display: 'grid', gap: '0.4rem' }}>
           {catalog.map((entry) => {

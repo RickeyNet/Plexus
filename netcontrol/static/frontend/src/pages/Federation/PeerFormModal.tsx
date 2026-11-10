@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
 import {
   FederationPeer,
@@ -137,9 +138,9 @@ export function PeerFormModal({ existing, onClose, onSaved }: PeerFormModalProps
       </div>
 
       {errMsg && (
-        <div className="error">
+        <Callout tone="danger">
           <strong>{isEdit ? 'Update failed' : 'Create failed'}:</strong> {errMsg}
-        </div>
+        </Callout>
       )}
 
       <div

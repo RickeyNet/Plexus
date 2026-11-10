@@ -4,8 +4,8 @@ import { useAnnotations, type Annotation } from '@/api/dashboard';
 import { SegmentedControl } from '@/components/SegmentedControl';
 import { EVENT_CATEGORY_COLORS } from '@/lib/themeColors';
 import { useTimeRange } from '@/lib/timeRange-context';
+import { formatRelativeTime } from '@/lib/datetime';
 
-import { timeAgo } from './helpers';
 
 type Category = 'deployment' | 'config' | 'alert';
 type Filter = 'all' | Category;
@@ -101,7 +101,7 @@ function EventRow({ event }: { event: Annotation }) {
       {event.description ? (
         <span className="dashboard-events-desc">{event.description}</span>
       ) : null}
-      <span className="dashboard-events-time">{timeAgo(event.timestamp)}</span>
+      <span className="dashboard-events-time">{formatRelativeTime(event.timestamp)}</span>
     </div>
   );
 }

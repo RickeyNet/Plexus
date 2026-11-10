@@ -1,5 +1,9 @@
 import { useState, type FormEvent } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { DeleteButton } from '@/components/DeleteButton';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -32,10 +36,10 @@ export function SecretVariablesList() {
         <button className="btn btn-primary" onClick={() => setShowCreate(true)}>+ New Secret</button>
       </div>
 
-      {query.isPending && <p className="text-muted">Loading…</p>}
-      {query.error && <p style={{ color: 'var(--danger)' }}>Failed: {(query.error as Error).message}</p>}
+      {query.isPending && <LoadingState />}
+      {query.error && <Callout tone="danger">Failed: {(query.error as Error).message}</Callout>}
       {query.data && (query.data.length === 0 ? (
-        <div className="empty-state">No secret variables yet</div>
+        <EmptyState message="No secret variables yet" />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {query.data.map((v) => (
@@ -50,7 +54,7 @@ export function SecretVariablesList() {
               </div>
               <div style={{ display: 'flex', gap: '0.4rem' }}>
                 <button className="btn btn-sm btn-secondary" onClick={() => setEditing(v)}>Edit</button>
-                <button className="btn btn-sm btn-danger" onClick={() => handleDelete(v)}>Delete</button>
+                <DeleteButton onClick={() => handleDelete(v)} />
               </div>
             </div>
           ))}

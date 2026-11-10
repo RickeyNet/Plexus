@@ -1,5 +1,7 @@
 import { useMemo, useState, type FormEvent } from 'react';
 
+import { DeleteButton } from '@/components/DeleteButton';
+import { EmptyState } from '@/components/EmptyState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { useAuthStatus } from '@/api/auth';
@@ -63,7 +65,7 @@ export function SlaTargetsTab() {
         <button className="btn btn-primary" onClick={() => setCreating(true)}>+ New Target</button>
       </div>
       {targets.length === 0 ? (
-        <div className="empty-state">No SLA targets defined</div>
+        <EmptyState message="No SLA targets defined" />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {targets.map((t) => {
@@ -77,7 +79,7 @@ export function SlaTargetsTab() {
                   </div>
                   <div style={{ display: 'flex', gap: '0.4rem' }}>
                     <button className="btn btn-sm btn-secondary" onClick={() => setEditing(t)}>Edit</button>
-                    <button className="btn btn-sm btn-danger" onClick={() => handleDelete(t)}>Delete</button>
+                    <DeleteButton onClick={() => handleDelete(t)} />
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: '1.5rem', marginTop: '0.5rem', fontSize: '0.9em', flexWrap: 'wrap' }}>

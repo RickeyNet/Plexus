@@ -1,5 +1,9 @@
 import { useState, type FormEvent } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { DeleteButton } from '@/components/DeleteButton';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -28,10 +32,10 @@ export function CredentialsList() {
         <button className="btn btn-primary" onClick={() => setShowCreate(true)}>+ New Credential</button>
       </div>
 
-      {query.isPending && <p className="text-muted">Loading…</p>}
-      {query.error && <p style={{ color: 'var(--danger)' }}>Failed: {(query.error as Error).message}</p>}
+      {query.isPending && <LoadingState />}
+      {query.error && <Callout tone="danger">Failed: {(query.error as Error).message}</Callout>}
       {query.data && (query.data.length === 0 ? (
-        <div className="empty-state">No credentials</div>
+        <EmptyState message="No credentials" />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {query.data.map((c) => (
@@ -93,7 +97,7 @@ function CredentialRow({ credential, onDelete }: { credential: Credential; onDel
             {updateMut.isPending ? 'Saving…' : 'Save'}
           </button>
         )}
-        <button className="btn btn-sm btn-danger" onClick={onDelete}>Delete</button>
+        <DeleteButton onClick={onDelete} />
       </div>
     </div>
   );

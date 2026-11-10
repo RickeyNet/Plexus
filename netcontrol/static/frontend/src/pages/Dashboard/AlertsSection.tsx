@@ -1,9 +1,9 @@
 import { Link } from 'react-router';
 
 import type { DashboardAlert, TopologyProblem } from '@/api/dashboard';
-import { formatBackendDateTime } from '@/lib/datetime';
+import { Badge, SeverityBadge } from '@/components/Badge';
+import { formatBackendDateTime, formatRelativeTime } from '@/lib/datetime';
 
-import { timeAgo } from './helpers';
 import { TOPOLOGY_AVAILABILITY_LINK, describeProblem, problemLocation } from './sourceHealth';
 
 interface Props {
@@ -42,10 +42,10 @@ export function AlertsSection({ alerts, topologyProblems = [], topologyProblemCo
             const sev = (a.severity ?? 'info').toLowerCase();
             return (
               <div className="dashboard-alert-item" key={`${a.created_at ?? ''}-${i}`}>
-                <span className={`alert-severity-badge ${sev}`}>{sev}</span>
+                <SeverityBadge severity={sev} size="sm" />
                 <span className="dashboard-alert-host">{a.hostname ?? '-'}</span>
                 <span className="dashboard-alert-msg">{a.message ?? a.metric ?? '-'}</span>
-                <span className="dashboard-alert-time">{a.created_at ? timeAgo(a.created_at) : ''}</span>
+                <span className="dashboard-alert-time">{a.created_at ? formatRelativeTime(a.created_at) : ''}</span>
               </div>
             );
           })}
@@ -63,9 +63,9 @@ export function AlertsSection({ alerts, topologyProblems = [], topologyProblemCo
                   key={`${p.provider}:${p.org_ref}:${p.entity_type}:${p.entity_id}`}
                   title={describeProblem(p)}
                 >
-                  <span className={`alert-severity-badge ${p.state === 'down' ? 'critical' : 'warning'}`}>
+                  <Badge tone={p.state === 'down' ? 'danger' : 'warning'} solid={p.state === 'down'} size="sm">
                     {p.state}
-                  </span>
+                  </Badge>
                   <span className="dashboard-alert-host">
                     {p.provider_label} {p.type_label}
                   </span>
@@ -78,7 +78,7 @@ export function AlertsSection({ alerts, topologyProblems = [], topologyProblemCo
                     className="dashboard-alert-time"
                     title={p.since ? `${p.state} since ${formatBackendDateTime(p.since)}` : undefined}
                   >
-                    {p.since ? timeAgo(p.since) : ''}
+                    {p.since ? formatRelativeTime(p.since) : ''}
                   </span>
                 </div>
               ))}

@@ -6,6 +6,8 @@ import {
   useRunMonitoringPoll,
   useUpdateMonitoringConfig,
 } from '@/api/settings';
+import { Callout } from '@/components/Callout';
+import { LoadingState } from '@/components/LoadingState';
 
 export function MonitoringTab() {
   const query = useMonitoringConfig();
@@ -20,12 +22,12 @@ export function MonitoringTab() {
     if (query.data) setDraft(query.data);
   }
 
-  if (query.isLoading || !draft) return <p className="text-muted">Loading…</p>;
+  if (query.isLoading || !draft) return <LoadingState />;
   if (query.isError)
     return (
-      <div className="error">
+      <Callout tone="danger">
         Failed to load monitoring config: {(query.error as Error).message}
-      </div>
+      </Callout>
     );
 
   const num = (

@@ -675,7 +675,7 @@ export async function streamPollNow(
 // ── Syslog Events ──────────────────────────────────────────────────────────
 
 export interface SyslogEvent {
-  timestamp?: string;
+  received_at?: string;
   host_id?: number;
   hostname?: string;
   severity?: string;

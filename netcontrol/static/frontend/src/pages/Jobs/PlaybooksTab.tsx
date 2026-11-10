@@ -1,7 +1,12 @@
 import { lazy, Suspense, useMemo, useState } from 'react';
 
+import { Badge } from '@/components/Badge';
+import { Callout } from '@/components/Callout';
+import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { useDeletePlaybook, usePlaybooks, type Playbook } from '@/api/jobs';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 
 import { parseTags } from './helpers';
 
@@ -52,10 +57,10 @@ export function PlaybooksTab() {
         <button className="btn btn-primary" onClick={() => setEditing({ mode: 'create' })}>+ New Playbook</button>
       </div>
 
-      {query.isPending && <p className="text-muted">Loading…</p>}
-      {query.error && <p style={{ color: 'var(--danger)' }}>Failed: {(query.error as Error).message}</p>}
+      {query.isPending && <LoadingState />}
+      {query.error && <Callout tone="danger">Failed: {(query.error as Error).message}</Callout>}
       {query.data && (filtered.length === 0 ? (
-        <div className="empty-state">No playbooks</div>
+        <EmptyState message="No playbooks" />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {filtered.map((pb) => (
@@ -89,9 +94,7 @@ function PlaybookRow({ pb, onEdit, onDelete }: { pb: Playbook; onEdit: () => voi
     <div className="card card-sm" style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-4)', alignItems: 'center' }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <span className="badge" style={{ background: isAnsible ? 'var(--info)' : 'var(--primary)', color: 'var(--on-primary)' }}>
-            {isAnsible ? 'Ansible' : 'Python'}
-          </span>
+          <Badge tone={isAnsible ? 'info' : 'primary'}>{isAnsible ? 'Ansible' : 'Python'}</Badge>
           <span style={{ fontWeight: 600 }}>{pb.name}</span>
           {tags.map((tag) => (
             <span key={tag} className="badge badge-secondary">{tag}</span>
@@ -102,7 +105,7 @@ function PlaybookRow({ pb, onEdit, onDelete }: { pb: Playbook; onEdit: () => voi
       </div>
       <div style={{ display: 'flex', gap: '0.4rem' }}>
         <button className="btn btn-sm btn-secondary" onClick={onEdit}>Edit</button>
-        <button className="btn btn-sm btn-danger" onClick={onDelete}>Delete</button>
+        <DeleteButton onClick={onDelete} />
       </div>
     </div>
   );

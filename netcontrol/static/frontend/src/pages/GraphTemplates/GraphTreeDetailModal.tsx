@@ -1,5 +1,8 @@
 import { useState, type FormEvent } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -50,8 +53,8 @@ export function GraphTreeDetailModal({ treeId, onClose }: Props) {
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={query.data?.name ?? 'Graph Tree'} size="large">
-      {query.isPending && <p className="text-muted">Loading…</p>}
-      {query.error && <p style={{ color: 'var(--danger)' }}>Failed: {(query.error as Error).message}</p>}
+      {query.isPending && <LoadingState />}
+      {query.error && <Callout tone="danger">Failed: {(query.error as Error).message}</Callout>}
       {query.data && (() => {
         const tree = query.data;
         const nodes = tree.nodes ?? [];
@@ -72,7 +75,7 @@ export function GraphTreeDetailModal({ treeId, onClose }: Props) {
                   ))}
                 </tbody>
               </table>
-            ) : <p className="text-muted">No nodes yet. Add nodes to organize your graph hierarchy.</p>}
+            ) : <EmptyState compact message="No nodes yet. Add nodes to organize your graph hierarchy." />}
 
             {addingNode ? (
               <form onSubmit={handleAddNode} style={{ marginTop: '0.75rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'flex-end' }}>

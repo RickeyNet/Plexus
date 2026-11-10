@@ -117,19 +117,6 @@ export function formatMetricValue(value: unknown): string {
   return numeric.toFixed(2);
 }
 
-export function formatTimestamp(raw: unknown): string {
-  if (!raw) return '-';
-  try {
-    const text = String(raw);
-    const iso = text.includes('T') || text.endsWith('Z') ? text : text.replace(' ', 'T') + 'Z';
-    const d = new Date(iso);
-    if (isNaN(d.getTime())) return text;
-    return d.toLocaleString();
-  } catch {
-    return String(raw);
-  }
-}
-
 export function topologyLabel(value: unknown): string {
   const normalized = String(value ?? '').trim();
   if (!normalized) return '';

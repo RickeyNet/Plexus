@@ -5,6 +5,8 @@ import { python } from '@codemirror/lang-python';
 import { yaml } from '@codemirror/lang-yaml';
 import { dracula } from '@uiw/codemirror-theme-dracula';
 
+import { Badge } from '@/components/Badge';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -152,16 +154,14 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={mode === 'edit' ? 'Edit Playbook' : 'New Playbook'} size="large">
       {mode === 'edit' && detailQuery.isPending ? (
-        <p className="text-muted">Loading…</p>
+        <LoadingState />
       ) : (
         <form onSubmit={handleSubmit}>
           <div className="form-group">
             <label className="form-label">Type</label>
             {mode === 'edit' ? (
               <div>
-                <span className="badge" style={{ background: type === 'ansible' ? 'var(--info)' : 'var(--primary)', color: 'var(--on-primary)' }}>
-                  {type === 'ansible' ? 'Ansible' : 'Python'}
-                </span>
+                <Badge tone={type === 'ansible' ? 'info' : 'primary'}>{type === 'ansible' ? 'Ansible' : 'Python'}</Badge>
               </div>
             ) : (
               <select className="form-select" value={type} onChange={(e) => handleTypeChange(e.target.value as PlaybookType)}>

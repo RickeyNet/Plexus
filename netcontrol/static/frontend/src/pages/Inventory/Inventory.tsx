@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
+import { Callout } from '@/components/Callout';
+import { DeleteButton } from '@/components/DeleteButton';
+import { LoadingState } from '@/components/LoadingState';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -307,11 +310,11 @@ export function Inventory() {
         </button>
       </div>
 
-      {groupsQ.isPending && <p className="text-muted">Loading inventory…</p>}
+      {groupsQ.isPending && <LoadingState text="Loading inventory…" />}
       {groupsQ.error && (
-        <p style={{ color: 'var(--danger)' }}>
+        <Callout tone="danger">
           Error loading inventory: {(groupsQ.error as Error).message}
-        </p>
+        </Callout>
       )}
       <div className="stack stack-sm">
         {!groupsQ.isPending && filtered.length === 0 && (
@@ -702,13 +705,7 @@ function GroupCard({
                   >
                     Move
                   </button>
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-danger"
-                    onClick={onBulkDelete}
-                  >
-                    Delete
-                  </button>
+                  <DeleteButton onClick={onBulkDelete} />
                 </>
               )}
               <button
@@ -733,7 +730,7 @@ function GroupCard({
             </div>
           ) : (
             <div ref={scrollRef} style={{ overflow: 'auto', maxHeight: 480 }}>
-              <table className="chart-table" style={{ width: '100%' }}>
+              <table className="data-table">
                 <thead
                   style={{
                     position: 'sticky',
@@ -816,13 +813,7 @@ function GroupCard({
                                   >
                                     Edit
                                   </button>
-                                  <button
-                                    type="button"
-                                    className="btn btn-sm btn-danger"
-                                    onClick={() => onDeleteHost(host)}
-                                  >
-                                    Del
-                                  </button>
+                                  <DeleteButton onClick={() => onDeleteHost(host)} />
                                 </div>
                               </td>
                             </tr>

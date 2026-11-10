@@ -1,5 +1,8 @@
 import { FormEvent, useState } from 'react';
 
+import { DeleteButton } from '@/components/DeleteButton';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -44,11 +47,9 @@ export function SnmpProfilesModal({ onClose }: Props) {
         style={{ maxHeight: 360, overflow: 'auto', marginBottom: 'var(--space-3)' }}
       >
         {profiles.isPending ? (
-          <p className="text-muted">Loading…</p>
+          <LoadingState />
         ) : list.length === 0 ? (
-          <p className="text-muted">
-            No SNMP profiles configured. Create one to get started.
-          </p>
+          <EmptyState compact message="No SNMP profiles configured. Create one to get started." />
         ) : (
           list.map((p) => (
             <div
@@ -80,9 +81,7 @@ export function SnmpProfilesModal({ onClose }: Props) {
                 >
                   Edit
                 </button>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-danger"
+                <DeleteButton
                   onClick={async () => {
                     if (
                       !(await confirm(
@@ -96,9 +95,7 @@ export function SnmpProfilesModal({ onClose }: Props) {
                       },
                     });
                   }}
-                >
-                  Delete
-                </button>
+                />
               </div>
             </div>
           ))

@@ -1,6 +1,10 @@
 import { useMemo, useState } from 'react';
 
+import { Badge, SeverityBadge, StatusBadge } from '@/components/Badge';
+import { Callout } from '@/components/Callout';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
 import {
   useAuditRuns,
@@ -21,33 +25,8 @@ import {
   type AuditSeverity,
 } from '@/api/audit';
 import { formatBackendDateTime } from '@/lib/datetime';
+import { isCriticalSeverity, SEVERITY_LEVELS, severityRank, severityTone } from '@/lib/severity';
 import { useShowMore } from '@/lib/useShowMore';
-
-const SEVERITY_BADGE: Record<AuditSeverity, string> = {
-  critical: 'badge-danger',
-  high: 'badge-danger',
-  medium: 'badge-warning',
-  low: 'badge-info',
-  info: 'badge-secondary',
-};
-
-// Display order for severities (critical first). Used to sort within a
-// category group and to render the filter chips in a stable order.
-const SEVERITY_ORDER: AuditSeverity[] = [
-  'critical',
-  'high',
-  'medium',
-  'low',
-  'info',
-];
-
-const SEVERITY_RANK: Record<AuditSeverity, number> = {
-  critical: 0,
-  high: 1,
-  medium: 2,
-  low: 3,
-  info: 4,
-};
 
 const CATEGORY_LABEL: Record<string, string> = {
   config: 'Configuration drift',
@@ -56,21 +35,13 @@ const CATEGORY_LABEL: Record<string, string> = {
   security: 'Security posture',
 };
 
-function statusBadge(status?: string) {
-  if (status === 'success') return 'badge-success';
-  if (status === 'partial') return 'badge-warning';
-  if (status === 'failed') return 'badge-danger';
-  if (status === 'running') return 'badge-info';
-  return 'badge-secondary';
-}
-
 function severityCounts(run: AuditRunSummary) {
-  const parts: { label: string; count: number; cls: string }[] = [
-    { label: 'Critical', count: run.findings_critical, cls: 'badge-danger' },
-    { label: 'High', count: run.findings_high, cls: 'badge-danger' },
-    { label: 'Medium', count: run.findings_medium, cls: 'badge-warning' },
-    { label: 'Low', count: run.findings_low, cls: 'badge-info' },
-    { label: 'Info', count: run.findings_info, cls: 'badge-secondary' },
+  const parts: { label: string; count: number; severity: AuditSeverity }[] = [
+    { label: 'Critical', count: run.findings_critical, severity: 'critical' },
+    { label: 'High', count: run.findings_high, severity: 'high' },
+    { label: 'Medium', count: run.findings_medium, severity: 'medium' },
+    { label: 'Low', count: run.findings_low, severity: 'low' },
+    { label: 'Info', count: run.findings_info, severity: 'info' },
   ];
   return parts.filter((p) => p.count > 0);
 }
@@ -121,11 +92,11 @@ export function AuditContent() {
 
       <section className="card">
         <h3 style={{ marginTop: 0 }}>Recent runs</h3>
-        {runs.isPending && <p className="text-muted">Loading…</p>}
+        {runs.isPending && <LoadingState />}
         {runs.error && (
-          <p style={{ color: 'var(--danger)' }}>
+          <Callout tone="danger">
             Error: {(runs.error as Error).message}
-          </p>
+          </Callout>
         )}
         {!runs.isPending && runList.length === 0 && (
           <p className="text-muted">
@@ -159,9 +130,7 @@ export function AuditContent() {
                 >
                   <td>#{r.id}</td>
                   <td>
-                    <span className={`badge ${statusBadge(r.status)}`}>
-                      {r.status}
-                    </span>
+                    <StatusBadge status={r.status} />
                   </td>
                   <td>
                     {r.started_at
@@ -173,9 +142,9 @@ export function AuditContent() {
                   <td>
                     <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
                       {severityCounts(r).map((p) => (
-                        <span key={p.label} className={`badge ${p.cls}`}>
+                        <SeverityBadge key={p.label} severity={p.severity}>
                           {p.label}: {p.count}
-                        </span>
+                        </SeverityBadge>
                       ))}
                     </div>
                   </td>
@@ -189,14 +158,14 @@ export function AuditContent() {
       {selectedRunId != null && (
         <section className="card">
           <h3 style={{ marginTop: 0 }}>Findings - run #{selectedRunId}</h3>
-          {findings.isPending && <p className="text-muted">Loading findings…</p>}
+          {findings.isPending && <LoadingState text="Loading findings…" />}
           {findings.error && (
-            <p style={{ color: 'var(--danger)' }}>
+            <Callout tone="danger">
               Error: {(findings.error as Error).message}
-            </p>
+            </Callout>
           )}
           {findings.data && findings.data.findings.length === 0 && (
-            <p className="text-muted">No findings for this run.</p>
+            <EmptyState compact message="No findings for this run." />
           )}
           {findings.data && findings.data.findings.length > 0 && (
             <FindingsView findings={findings.data.findings} />
@@ -259,7 +228,7 @@ function FindingsView({ findings }: { findings: AuditFinding[] }) {
     }
     for (const arr of buckets.values()) {
       arr.sort((a, b) => {
-        const sev = SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity];
+        const sev = severityRank(a.severity) - severityRank(b.severity);
         if (sev !== 0) return sev;
         return (a.rule_id || '').localeCompare(b.rule_id || '');
       });
@@ -284,7 +253,7 @@ function FindingsView({ findings }: { findings: AuditFinding[] }) {
       />
 
       {filtered.length === 0 ? (
-        <p className="text-muted">No findings match the current filters.</p>
+        <EmptyState compact message="No findings match the current filters." />
       ) : (
         categories
           .filter((cat) => byCategory.has(cat))
@@ -342,11 +311,11 @@ function FilterBar(props: {
           active={severityFilter === null}
           onClick={() => onSeverityChange(null)}
         />
-        {SEVERITY_ORDER.filter((s) => severityTotals[s] > 0).map((s) => (
+        {SEVERITY_LEVELS.filter((s) => severityTotals[s] > 0).map((s) => (
           <FilterChip
             key={s}
             label={`${s} (${severityTotals[s]})`}
-            badgeClass={SEVERITY_BADGE[s]}
+            severity={s}
             active={severityFilter === s}
             onClick={() =>
               onSeverityChange(severityFilter === s ? null : s)
@@ -389,13 +358,13 @@ function FilterChip(props: {
   label: string;
   active: boolean;
   onClick: () => void;
-  badgeClass?: string;
+  severity?: AuditSeverity;
 }) {
   return (
-    <button
-      type="button"
+    <Badge
       onClick={props.onClick}
-      className={`badge ${props.badgeClass ?? 'badge-secondary'}`}
+      tone={severityTone(props.severity)}
+      solid={isCriticalSeverity(props.severity)}
       style={{
         cursor: 'pointer',
         border: props.active
@@ -406,7 +375,7 @@ function FilterChip(props: {
       }}
     >
       {props.label}
-    </button>
+    </Badge>
   );
 }
 
@@ -425,7 +394,7 @@ function CategorySection(props: {
       critical: 0, high: 0, medium: 0, low: 0, info: 0,
     };
     for (const f of findings) counts[f.severity]++;
-    return SEVERITY_ORDER.filter((s) => counts[s] > 0).map((s) => ({
+    return SEVERITY_LEVELS.filter((s) => counts[s] > 0).map((s) => ({
       sev: s,
       count: counts[s],
     }));
@@ -468,9 +437,9 @@ function CategorySection(props: {
           }}
         >
           {sevSummary.map(({ sev, count }) => (
-            <span key={sev} className={`badge ${SEVERITY_BADGE[sev]}`}>
+            <SeverityBadge key={sev} severity={sev}>
               {sev}: {count}
-            </span>
+            </SeverityBadge>
           ))}
         </div>
       </div>
@@ -519,17 +488,15 @@ function SchedulesCard() {
         </button>
       </div>
 
-      {schedules.isPending && <p className="text-muted">Loading…</p>}
+      {schedules.isPending && <LoadingState />}
       {schedules.error && (
-        <p style={{ color: 'var(--danger)' }}>
+        <Callout tone="danger">
           Error: {(schedules.error as Error).message}
-        </p>
+        </Callout>
       )}
       {!schedules.isPending && rows.length === 0 && (
-        <p className="text-muted">
-          No schedules configured. Schedules enqueue an audit run on a
-          recurring cadence (e.g., daily, every 6 hours).
-        </p>
+        <EmptyState compact message="No schedules configured. Schedules enqueue an audit run on a
+          recurring cadence (e.g., daily, every 6 hours)." />
       )}
 
       {rows.length > 0 && (
@@ -792,9 +759,7 @@ function FindingsTable({ findings }: { findings: AuditFinding[] }) {
         {visible.map((f) => (
           <tr key={f.id}>
             <td>
-              <span className={`badge ${SEVERITY_BADGE[f.severity]}`}>
-                {f.severity}
-              </span>
+              <SeverityBadge severity={f.severity} />
             </td>
             <td><code>{f.rule_id}</code></td>
             <td>{(f.evidence?.hostname as string | undefined) ?? f.host_id ?? '-'}</td>
@@ -847,18 +812,16 @@ function OverridesCard() {
   return (
     <section className="card">
       <h3 style={{ marginTop: 0 }}>Suppressed findings</h3>
-      {overrides.isPending && <p className="text-muted">Loading…</p>}
+      {overrides.isPending && <LoadingState />}
       {overrides.error && (
-        <p style={{ color: 'var(--danger)' }}>
+        <Callout tone="danger">
           Error: {(overrides.error as Error).message}
-        </p>
+        </Callout>
       )}
       {!overrides.isPending && rows.length === 0 && (
-        <p className="text-muted">
-          No active overrides. Mute a finding from a run to silence a chronic
+        <EmptyState compact message="No active overrides. Mute a finding from a run to silence a chronic
           false positive; muted findings still log to the summary so the count
-          stays auditable.
-        </p>
+          stays auditable." />
       )}
       {rows.length > 0 && (
         <table className="data-table">
@@ -1043,9 +1006,9 @@ function MuteFindingDialog({
         </div>
 
         {create.error && (
-          <p style={{ color: 'var(--danger)' }}>
+          <Callout tone="danger">
             {(create.error as Error).message}
-          </p>
+          </Callout>
         )}
 
         <div

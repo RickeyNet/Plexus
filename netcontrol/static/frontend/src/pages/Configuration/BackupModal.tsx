@@ -1,9 +1,12 @@
 import { useConfigBackupDetail, useConfigBackupDiff } from '@/api/configuration';
+import { Callout } from '@/components/Callout';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { SegmentedControl } from '@/components/SegmentedControl';
+import { formatBackendDateTime } from '@/lib/datetime';
 
 import { UnifiedDiff } from './UnifiedDiff';
-import { type BackupView, backupDiffAvailable, formatStamp } from './helpers';
+import { type BackupView, backupDiffAvailable } from './helpers';
 
 interface Props {
   backupId: number | null;
@@ -56,15 +59,15 @@ export function BackupModal({ backupId, view, onViewChange, onClose }: Props) {
 }
 
 function ConfigView({ query }: { query: ReturnType<typeof useConfigBackupDetail> }) {
-  if (query.isPending) return <p className="text-muted">Loading…</p>;
+  if (query.isPending) return <LoadingState />;
   if (query.error) {
-    return <p style={{ color: 'var(--danger)' }}>Failed to load: {(query.error as Error).message}</p>;
+    return <Callout tone="danger">Failed to load: {(query.error as Error).message}</Callout>;
   }
   const data = query.data;
   return (
     <>
       <div style={{ fontSize: '0.85em', marginBottom: '0.75rem', color: 'var(--text-muted)' }}>
-        Captured: {formatStamp(data.captured_at)} • Method: {data.capture_method || '-'} • Status:{' '}
+        Captured: {formatBackendDateTime(data.captured_at, '')} • Method: {data.capture_method || '-'} • Status:{' '}
         {data.status}
       </div>
       <pre
@@ -88,9 +91,9 @@ function ConfigView({ query }: { query: ReturnType<typeof useConfigBackupDetail>
 
 function DiffView({ backupId }: { backupId: number | null }) {
   const query = useConfigBackupDiff(backupId);
-  if (query.isPending) return <p className="text-muted">Loading…</p>;
+  if (query.isPending) return <LoadingState />;
   if (query.error) {
-    return <p style={{ color: 'var(--danger)' }}>Failed to load: {(query.error as Error).message}</p>;
+    return <Callout tone="danger">Failed to load: {(query.error as Error).message}</Callout>;
   }
   const data = query.data;
   return (
@@ -101,9 +104,9 @@ function DiffView({ backupId }: { backupId: number | null }) {
       >
         <span>{data.ip_address || ''}</span>
         <span style={{ opacity: 0.4 }}>|</span>
-        <span>Current: {formatStamp(data.captured_at)}</span>
+        <span>Current: {formatBackendDateTime(data.captured_at, '')}</span>
         <span style={{ opacity: 0.4 }}>|</span>
-        <span>Previous: {formatStamp(data.previous_captured_at) || 'none'}</span>
+        <span>Previous: {formatBackendDateTime(data.previous_captured_at, '') || 'none'}</span>
         <span style={{ opacity: 0.4 }}>|</span>
         <span className="drift-diff-added">+{data.diff_lines_added || 0}</span>
         <span className="drift-diff-removed">-{data.diff_lines_removed || 0}</span>

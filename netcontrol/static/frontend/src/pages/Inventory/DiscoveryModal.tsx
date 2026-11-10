@@ -329,7 +329,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
           style={{ borderLeft: '3px solid var(--success)' }}
         >
           <strong>Sync complete</strong>
-          <table style={{ width: '100%', marginTop: '0.5rem', fontSize: '0.85rem' }}>
+          <table className="data-table table-sm" style={{ marginTop: '0.5rem' }}>
             <tbody>
               <tr>
                 <td style={{ opacity: 0.7 }}>Added</td>
@@ -366,7 +366,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
           style={{ borderLeft: '3px solid var(--success)' }}
         >
           <strong>Onboard complete</strong>
-          <table style={{ width: '100%', marginTop: '0.5rem', fontSize: '0.85rem' }}>
+          <table className="data-table table-sm" style={{ marginTop: '0.5rem' }}>
             <tbody>
               <tr>
                 <td style={{ opacity: 0.7 }}>Added</td>
@@ -399,7 +399,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
             style={{ borderLeft: '3px solid var(--success)' }}
           >
             <strong>SNMP OK</strong> - credentials validated
-            <table style={{ width: '100%', marginTop: '0.5rem', fontSize: '0.85rem' }}>
+            <table className="data-table table-sm" style={{ marginTop: '0.5rem' }}>
               <tbody>
                 <tr>
                   <td style={{ opacity: 0.7 }}>Hostname</td>

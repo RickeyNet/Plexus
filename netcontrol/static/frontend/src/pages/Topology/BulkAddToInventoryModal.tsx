@@ -197,7 +197,7 @@ export function BulkAddToInventoryModal({ isOpen, nodes, edges, onClose, onAdded
             </label>
           </div>
           <div style={{ overflow: 'auto', maxHeight: '50vh' }}>
-            <table className="data-table" style={{ width: '100%' }}>
+            <table className="data-table">
               <thead>
                 <tr>
                   <th aria-label="Selected" />

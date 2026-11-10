@@ -1,5 +1,8 @@
 import { useState, type FormEvent } from 'react';
 
+import { DeleteButton } from '@/components/DeleteButton';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { groupLabel, useInventoryGroupsFull } from '@/api/inventory';
@@ -10,8 +13,7 @@ import {
   type AlertSuppression,
   type SuppressionCreate,
 } from '@/api/monitoring';
-import { parseBackendDate } from '@/pages/Dashboard/helpers';
-import { formatTimestamp } from './helpers';
+import { formatBackendDateTime, parseBackendDate, toLocalInputValue } from '@/lib/datetime';
 
 export function SuppressionsTab() {
   const { confirm, alert } = useDialogs();
@@ -31,10 +33,10 @@ export function SuppressionsTab() {
         <button className="btn btn-primary" onClick={() => setShowCreate(true)}>+ New Suppression</button>
       </div>
 
-      {suppressions.isPending && <div className="text-muted">Loading…</div>}
+      {suppressions.isPending && <LoadingState />}
       {suppressions.error && <div style={{ color: 'var(--danger)' }}>Error: {(suppressions.error as Error).message}</div>}
       {suppressions.data && (suppressions.data.length === 0 ? (
-        <div className="empty-state">No suppressions</div>
+        <EmptyState message="No suppressions" />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
           {suppressions.data.map((s) => {
@@ -54,10 +56,10 @@ export function SuppressionsTab() {
                       {scope} · {s.metric ? `Metric: ${s.metric}` : 'All metrics'}
                     </span>
                   </div>
-                  <button className="btn btn-sm btn-danger" onClick={() => handleDelete(s)}>Delete</button>
+                  <DeleteButton onClick={() => handleDelete(s)} />
                 </div>
                 <div className="text-muted" style={{ marginTop: '0.3rem', fontSize: '0.85em' }}>
-                  {formatTimestamp(s.starts_at)} - {formatTimestamp(s.ends_at)}
+                  {formatBackendDateTime(s.starts_at)} - {formatBackendDateTime(s.ends_at)}
                   {s.reason && ` · Reason: ${s.reason}`}
                   {s.created_by && ` · By ${s.created_by}`}
                 </div>
@@ -72,11 +74,6 @@ export function SuppressionsTab() {
   );
 }
 
-function toLocalInput(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
 function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const { alert } = useDialogs();
   const createMut = useCreateSuppression();
@@ -85,8 +82,8 @@ function CreateSuppressionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
 
   const now = new Date();
   const [name, setName] = useState('');
-  const [starts, setStarts] = useState(toLocalInput(now));
-  const [ends, setEnds] = useState(toLocalInput(new Date(now.getTime() + 2 * 3600_000)));
+  const [starts, setStarts] = useState(toLocalInputValue(now));
+  const [ends, setEnds] = useState(toLocalInputValue(new Date(now.getTime() + 2 * 3600_000)));
   const [groupId, setGroupId] = useState('');
   const [hostId, setHostId] = useState('');
   const [metric, setMetric] = useState('');

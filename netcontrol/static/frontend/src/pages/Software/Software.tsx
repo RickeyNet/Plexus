@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
+import { SeverityBadge } from '@/components/Badge';
+import { DeleteButton } from '@/components/DeleteButton';
+import { LoadingState } from '@/components/LoadingState';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -22,6 +25,7 @@ import {
 import { visibleTabs } from '@/lib/tabGating';
 import { usePathTab } from '@/lib/usePathTab';
 import { UpgradesContent } from '@/pages/Upgrades/Upgrades';
+import { formatBackendDateTime } from '@/lib/datetime';
 
 import { AdvisoryModal } from './AdvisoryModal';
 import { DeviceHistoryModal } from './DeviceHistoryModal';
@@ -30,8 +34,6 @@ import { SettingsModal } from './SettingsModal';
 import {
   type SoftwareTab,
   barWidth,
-  formatTime,
-  severityBadgeClass,
   severityLabel,
   sourceLabel,
 } from './helpers';
@@ -202,8 +204,8 @@ function VersionsTab() {
     <div>
       <div className="toolbar">
         <div className="text-muted" style={{ fontSize: '0.88em' }}>
-          Last refresh: {formatTime(summary?.last_refresh_at)}
-          {settings?.psirt_last_sync_at ? ` · Cisco PSIRT sync: ${formatTime(settings.psirt_last_sync_at)}` : ''}
+          Last refresh: {formatBackendDateTime(summary?.last_refresh_at, 'Never')}
+          {settings?.psirt_last_sync_at ? ` · Cisco PSIRT sync: ${formatBackendDateTime(settings.psirt_last_sync_at, 'Never')}` : ''}
         </div>
         <span className="toolbar-spacer" />
         <label>
@@ -387,7 +389,7 @@ function DevicesCard({ devices, loading, filtered, onHistory }: DevicesCardProps
         </div>
       </div>
       {loading ? (
-        <div className="text-muted">Loading devices…</div>
+        <LoadingState text="Loading devices…" />
       ) : devices.length === 0 ? (
         <div className="empty-state">
           <p>
@@ -433,19 +435,19 @@ function DevicesCard({ devices, loading, filtered, onHistory }: DevicesCardProps
                     </span>
                   )}
                   {d.changed_at && (
-                    <div className="text-muted" style={{ fontSize: '0.8em' }} title={formatTime(d.changed_at)}>
+                    <div className="text-muted" style={{ fontSize: '0.8em' }} title={formatBackendDateTime(d.changed_at, 'Never')}>
                       was {d.previous_version || '?'}
                     </div>
                   )}
                 </td>
                 <td>
                   {(d.alert_count ?? 0) > 0 ? (
-                    <span
-                      className={severityBadgeClass(d.worst_severity)}
+                    <SeverityBadge
+                      severity={d.worst_severity}
                       title={`${d.unacknowledged_alerts ?? 0} unacknowledged`}
                     >
                       {d.alert_count} {severityLabel(d.worst_severity).toLowerCase()}
-                    </span>
+                    </SeverityBadge>
                   ) : (
                     <span className="text-muted">-</span>
                   )}
@@ -537,10 +539,10 @@ function AlertsCard({ alerts, canWrite, onAcknowledge }: AlertsCardProps) {
             <div key={a.id} style={{ padding: '0.7rem 0', borderBottom: '1px solid var(--border)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'flex-start' }}>
                 <div>
-                  <span className={severityBadgeClass(a.severity)} style={{ marginRight: '0.4rem' }}>
+                  <SeverityBadge severity={a.severity} style={{ marginRight: '0.4rem' }}>
                     {severityLabel(a.severity)}
                     {a.cvss != null ? ` ${a.cvss}` : ''}
-                  </span>
+                  </SeverityBadge>
                   {a.url ? (
                     <a href={a.url} target="_blank" rel="noreferrer">
                       {a.advisory_id}
@@ -557,7 +559,7 @@ function AlertsCard({ alerts, canWrite, onAcknowledge }: AlertsCardProps) {
                   </div>
                   {a.acknowledged && (
                     <div className="text-muted" style={{ fontSize: '0.8em' }}>
-                      Acknowledged by {a.acknowledged_by || 'someone'} {formatTime(a.acknowledged_at)}
+                      Acknowledged by {a.acknowledged_by || 'someone'} {formatBackendDateTime(a.acknowledged_at, 'Never')}
                     </div>
                   )}
                 </div>
@@ -610,9 +612,9 @@ function AdvisoriesCard({ advisories, canWrite, platformLabel, onAdd, onImport, 
           <div key={adv.advisory_id} style={{ padding: '0.6rem 0', borderBottom: '1px solid var(--border)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', alignItems: 'flex-start' }}>
               <div style={{ minWidth: 0 }}>
-                <span className={severityBadgeClass(adv.severity)} style={{ marginRight: '0.4rem' }}>
+                <SeverityBadge severity={adv.severity} style={{ marginRight: '0.4rem' }}>
                   {severityLabel(adv.severity)}
-                </span>
+                </SeverityBadge>
                 {adv.url ? (
                   <a href={adv.url} target="_blank" rel="noreferrer">
                     {adv.advisory_id}
@@ -641,9 +643,7 @@ function AdvisoriesCard({ advisories, canWrite, platformLabel, onAdd, onImport, 
                   <button type="button" className="btn btn-secondary btn-sm" onClick={() => onEdit(adv)}>
                     Edit
                   </button>
-                  <button type="button" className="btn btn-danger btn-sm" onClick={() => onDelete(adv)}>
-                    Delete
-                  </button>
+                  <DeleteButton onClick={() => onDelete(adv)} />
                 </div>
               )}
             </div>
@@ -684,7 +684,7 @@ function ChangesCard({ changes, platformLabel }: { changes: SoftwareVersionChang
                 <td>
                   <span className="text-muted">{c.previous_version || '?'}</span> → <strong>{c.version}</strong>
                 </td>
-                <td style={{ whiteSpace: 'nowrap' }}>{formatTime(c.changed_at)}</td>
+                <td style={{ whiteSpace: 'nowrap' }}>{formatBackendDateTime(c.changed_at, 'Never')}</td>
               </tr>
             ))}
           </tbody>

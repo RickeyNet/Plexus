@@ -12,18 +12,19 @@ import {
   useRequestDeploymentApproval,
   useRollbackDeployment,
 } from '@/api/deployments';
+import { StatusBadge } from '@/components/Badge';
+import { Callout } from '@/components/Callout';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { formatBackendDateTime, formatBackendTime } from '@/lib/datetime';
+import { statusTone, toneColor } from '@/lib/severity';
 
 import {
   canExecute,
   canRollback,
   commandCount,
-  formatStamp,
-  formatTime,
   isApprovalBlocking,
-  rollbackStatusColor,
-  statusColor,
 } from './helpers';
 
 interface Props {
@@ -59,11 +60,11 @@ export function DeploymentDetailModal({
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Deployment Details" size="large">
-      {query.isPending && <p className="text-muted">Loading…</p>}
+      {query.isPending && <LoadingState />}
       {query.error && (
-        <p style={{ color: 'var(--danger)' }}>
+        <Callout tone="danger">
           Failed to load: {(query.error as Error).message}
-        </p>
+        </Callout>
       )}
       {query.data && (
         <DetailBody
@@ -100,7 +101,6 @@ function DetailBody({
   const { data: auth } = useAuthStatus();
   const [approvalComment, setApprovalComment] = useState('');
 
-  const color = statusColor(deployment.status);
   const requiresApproval = !!deployment.requires_approval;
   const approvalStatus = deployment.approval_status || 'not_required';
   const approvalBlocking = isApprovalBlocking(deployment);
@@ -156,15 +156,7 @@ function DetailBody({
         <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
           <div>
             <strong>Status:</strong>{' '}
-            <span
-              style={{
-                color: `var(--${color})`,
-                fontWeight: 600,
-                textTransform: 'uppercase',
-              }}
-            >
-              {deployment.status}
-            </span>
+            <StatusBadge status={deployment.status} />
           </div>
           <div>
             <strong>Group:</strong> {deployment.group_name || 'N/A'}
@@ -175,9 +167,7 @@ function DetailBody({
           {deployment.rollback_status && (
             <div>
               <strong>Rollback:</strong>{' '}
-              <span style={{ color: `var(--${rollbackStatusColor(deployment.rollback_status)})` }}>
-                {deployment.rollback_status}
-              </span>
+              <StatusBadge status={deployment.rollback_status} />
             </div>
           )}
         </div>
@@ -191,9 +181,9 @@ function DetailBody({
             color: 'var(--text-muted)',
           }}
         >
-          <span>Created: {formatStamp(deployment.created_at) || '-'}</span>
-          <span>Started: {formatStamp(deployment.started_at) || '-'}</span>
-          <span>Finished: {formatStamp(deployment.finished_at) || '-'}</span>
+          <span>Created: {formatBackendDateTime(deployment.created_at, '') || '-'}</span>
+          <span>Started: {formatBackendDateTime(deployment.started_at, '') || '-'}</span>
+          <span>Finished: {formatBackendDateTime(deployment.finished_at, '') || '-'}</span>
           {deployment.created_by && <span>By: {deployment.created_by}</span>}
         </div>
 
@@ -360,15 +350,11 @@ function ApprovalSection({
   onApprove: () => void;
   onReject: () => void;
 }) {
-  const color =
-    status === 'approved' ? 'success' :
-    status === 'rejected' ? 'danger' :
-    status === 'pending' ? 'warning' :
-    'text-muted';
+  const color = toneColor(statusTone(status));
   return (
     <div
       style={{
-        border: `1px solid var(--${color})`,
+        border: `1px solid ${color}`,
         background: 'var(--bg-secondary)',
         padding: '0.75rem',
         borderRadius: 6,
@@ -376,24 +362,22 @@ function ApprovalSection({
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
         <strong>Approval gate:</strong>
-        <span style={{ color: `var(--${color})`, textTransform: 'uppercase', fontWeight: 600 }}>
-          {status}
-        </span>
+        <StatusBadge status={status} />
         {requestedAt && status === 'pending' && (
           <span style={{ color: 'var(--text-muted)', fontSize: '0.85em' }}>
-            requested {formatStamp(requestedAt)}
+            requested {formatBackendDateTime(requestedAt, '')}
           </span>
         )}
       </div>
       {status === 'approved' && (
         <div style={{ marginTop: '0.4rem', fontSize: '0.85em', color: 'var(--text-muted)' }}>
-          Approved by {approvedBy || 'unknown'} at {formatStamp(approvedAt)}.
+          Approved by {approvedBy || 'unknown'} at {formatBackendDateTime(approvedAt, '')}.
           {comment && <div>"{comment}"</div>}
         </div>
       )}
       {status === 'rejected' && (
         <div style={{ marginTop: '0.4rem', fontSize: '0.85em', color: 'var(--text-muted)' }}>
-          Rejected by {approvedBy || 'unknown'} at {formatStamp(approvedAt)}.
+          Rejected by {approvedBy || 'unknown'} at {formatBackendDateTime(approvedAt, '')}.
           {comment && <div>"{comment}"</div>}
         </div>
       )}
@@ -470,35 +454,25 @@ function CheckpointTable({
     );
   }
   return (
-    <table style={{ width: '100%', fontSize: '0.85em', borderCollapse: 'collapse' }}>
+    <table className="data-table table-sm">
       <thead>
-        <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border)' }}>
-          <th style={{ padding: '4px 8px' }}>Host</th>
-          <th style={{ padding: '4px 8px' }}>Check</th>
-          <th style={{ padding: '4px 8px' }}>Status</th>
-          <th style={{ padding: '4px 8px' }}>Time</th>
+        <tr>
+          <th>Host</th>
+          <th>Check</th>
+          <th>Status</th>
+          <th>Time</th>
         </tr>
       </thead>
       <tbody>
         {checks.map((c) => {
-          const cpColor =
-            c.status === 'passed' ? 'success' : c.status === 'failed' ? 'danger' : 'text-muted';
           return (
-            <tr key={c.id} style={{ borderBottom: '1px solid var(--border)' }}>
-              <td style={{ padding: '4px 8px' }}>{c.hostname || c.ip_address || '-'}</td>
-              <td style={{ padding: '4px 8px' }}>{c.check_type}</td>
-              <td style={{ padding: '4px 8px' }}>
-                <span
-                  style={{
-                    color: `var(--${cpColor})`,
-                    fontWeight: 600,
-                    textTransform: 'uppercase',
-                  }}
-                >
-                  {c.status}
-                </span>
+            <tr key={c.id}>
+              <td>{c.hostname || c.ip_address || '-'}</td>
+              <td>{c.check_type}</td>
+              <td>
+                <StatusBadge status={c.status} size="sm" />
               </td>
-              <td style={{ padding: '4px 8px' }}>{formatTime(c.executed_at) || '-'}</td>
+              <td>{formatBackendTime(c.executed_at, '') || '-'}</td>
             </tr>
           );
         })}
@@ -548,41 +522,32 @@ function VerificationMetricsTable({ checks }: { checks: DeploymentCheckpoint[] }
   if (!rows.length) return null;
 
   return (
-    <table
-      style={{
-        width: '100%',
-        fontSize: '0.85em',
-        borderCollapse: 'collapse',
-        marginTop: '0.5rem',
-      }}
+    <table className="data-table table-sm"
+      style={{ marginTop: '0.5rem' }}
     >
       <thead>
-        <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border)' }}>
-          <th style={{ padding: '4px 8px' }}>Host</th>
-          <th style={{ padding: '4px 8px' }}>Metric</th>
-          <th style={{ padding: '4px 8px' }}>Pre</th>
-          <th style={{ padding: '4px 8px' }}>Post</th>
-          <th style={{ padding: '4px 8px' }}>Delta</th>
-          <th style={{ padding: '4px 8px' }}>Status</th>
+        <tr>
+          <th>Host</th>
+          <th>Metric</th>
+          <th>Pre</th>
+          <th>Post</th>
+          <th>Delta</th>
+          <th>Status</th>
         </tr>
       </thead>
       <tbody>
         {rows.map((r, i) => (
-          <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
-            <td style={{ padding: '4px 8px' }}>{r.host}</td>
-            <td style={{ padding: '4px 8px' }}>{r.metric}</td>
-            <td style={{ padding: '4px 8px' }}>{r.pre}</td>
-            <td style={{ padding: '4px 8px' }}>{r.post}</td>
+          <tr key={i}>
+            <td>{r.host}</td>
+            <td>{r.metric}</td>
+            <td>{r.pre}</td>
+            <td>{r.post}</td>
             <td
-              style={{
-                padding: '4px 8px',
-                color: r.concern ? 'var(--danger)' : 'var(--success)',
-                fontWeight: 600,
-              }}
+              style={{ color: r.concern ? 'var(--danger)' : 'var(--success)', fontWeight: 600 }}
             >
               {r.delta}
             </td>
-            <td style={{ padding: '4px 8px' }}>
+            <td>
               {r.concern ? (
                 <span style={{ color: 'var(--danger)' }}>CONCERN</span>
               ) : (

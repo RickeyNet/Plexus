@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 
 import { MerakiScanJob, useMerakiScanJob } from '@/api/compliance';
+import { Callout } from '@/components/Callout';
 
 /**
  * Live view of one Meraki compliance scan job: the collection phase while it
@@ -82,25 +83,18 @@ function Banner({
   children: ReactNode;
   onDismiss?: () => void;
 }) {
-  const color = tone === 'info' ? 'var(--primary)' : `var(--${tone})`;
   return (
-    <div
-      className="card card-sm"
-      style={{
-        borderLeft: `4px solid ${color}`,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 'var(--space-2)',
-        flexWrap: 'wrap',
-        fontSize: '0.9em',
-      }}
+    <Callout
+      tone={tone}
+      action={
+        onDismiss && (
+          <button type="button" className="btn btn-sm btn-ghost" onClick={onDismiss}>
+            Dismiss
+          </button>
+        )
+      }
     >
-      <div style={{ flex: 1 }}>{children}</div>
-      {onDismiss && (
-        <button type="button" className="btn btn-sm btn-ghost" onClick={onDismiss}>
-          Dismiss
-        </button>
-      )}
-    </div>
+      {children}
+    </Callout>
   );
 }

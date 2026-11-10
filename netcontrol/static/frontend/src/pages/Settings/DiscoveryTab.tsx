@@ -1,6 +1,8 @@
 import { useState } from 'react';
 
 import { groupLabel } from '@/api/inventory';
+import { Callout } from '@/components/Callout';
+import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
   StpDiscoveryConfig,
@@ -16,6 +18,7 @@ import {
   useUpdateTopologyDiscoveryConfig,
   useUpsertStpRootPolicy,
 } from '@/api/settings';
+import { LoadingState } from '@/components/LoadingState';
 
 import { SectionCard } from './SectionCard';
 
@@ -50,12 +53,12 @@ function TopologyDiscoverySection() {
     if (query.data) setDraft(query.data);
   }
 
-  if (query.isLoading || !draft) return <p className="text-muted">Loading…</p>;
+  if (query.isLoading || !draft) return <LoadingState />;
   if (query.isError)
     return (
-      <div className="error">
+      <Callout tone="danger">
         Failed to load topology discovery: {(query.error as Error).message}
-      </div>
+      </Callout>
     );
 
   return (
@@ -157,12 +160,12 @@ function StpDiscoverySection() {
     if (query.data) setDraft(query.data);
   }
 
-  if (query.isLoading || !draft) return <p className="text-muted">Loading…</p>;
+  if (query.isLoading || !draft) return <LoadingState />;
   if (query.isError)
     return (
-      <div className="error">
+      <Callout tone="danger">
         Failed to load STP discovery: {(query.error as Error).message}
-      </div>
+      </Callout>
     );
 
   return (
@@ -428,12 +431,12 @@ function StpRootPoliciesSection() {
       </form>
 
       <div className="stack stack-sm" style={{ marginTop: 'var(--space-4)' }}>
-        {policies.isLoading && <p className="text-muted">Loading policies…</p>}
+        {policies.isLoading && <LoadingState text="Loading policies…" />}
         {policies.isError && (
-          <div className="error">
+          <Callout tone="danger">
             Failed to load STP root policies:{' '}
             {(policies.error as Error).message}
-          </div>
+          </Callout>
         )}
         {policies.data?.policies?.length === 0 && (
           <p className="card-description">No STP root policies defined yet.</p>
@@ -480,9 +483,7 @@ function StpRootPoliciesSection() {
                 <span className={`badge ${p.enabled ? 'badge-success' : 'badge-info'}`}>
                   {p.enabled ? 'Enabled' : 'Disabled'}
                 </span>
-                <button
-                  className="btn btn-sm"
-                  style={{ color: 'var(--danger)' }}
+                <DeleteButton
                   onClick={async () => {
                     if (!(await confirm('Delete this STP root policy?'))) return;
                     remove.mutate(p.id, {
@@ -491,9 +492,7 @@ function StpRootPoliciesSection() {
                       },
                     });
                   }}
-                >
-                  Delete
-                </button>
+                />
               </div>
             </div>
           </div>

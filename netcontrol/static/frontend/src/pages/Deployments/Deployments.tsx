@@ -10,9 +10,14 @@ import {
   useExecuteDeployment,
   useRollbackDeployment,
 } from '@/api/deployments';
+import { StatusBadge } from '@/components/Badge';
+import { Callout } from '@/components/Callout';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { LoadingState } from '@/components/LoadingState';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
 import { SummaryStrip, type SummaryStripItem } from '@/components/SummaryStrip';
+import { formatBackendDateTime } from '@/lib/datetime';
+import { statusTone, toneColor } from '@/lib/severity';
 
 import { DeploymentCorrelationModal } from './DeploymentCorrelationModal';
 import { DeploymentDetailModal } from './DeploymentDetailModal';
@@ -23,10 +28,7 @@ import {
   canExecute,
   canRollback,
   filterDeployments,
-  formatStamp,
   isApprovalBlocking,
-  rollbackStatusColor,
-  statusColor,
 } from './helpers';
 
 const STATUS_FILTERS = [
@@ -196,12 +198,12 @@ function DeploymentList({
   onExecuted: (r: DeploymentJobStartResult) => void;
   onRolledBack: (r: DeploymentJobStartResult) => void;
 }) {
-  if (loading) return <p className="text-muted">Loading deployments…</p>;
+  if (loading) return <LoadingState text="Loading deployments…" />;
   if (error) {
     return (
-      <p style={{ color: 'var(--danger)' }}>
+      <Callout tone="danger">
         Failed to load deployments: {(error as Error).message}
-      </p>
+      </Callout>
     );
   }
   if (!items.length) {
@@ -246,9 +248,8 @@ function DeploymentRow({
   const rollback = useRollbackDeployment();
   const remove = useDeleteDeployment();
 
-  const color = statusColor(deployment.status);
-  const created = formatStamp(deployment.created_at);
-  const finished = formatStamp(deployment.finished_at);
+  const created = formatBackendDateTime(deployment.created_at, '');
+  const finished = formatBackendDateTime(deployment.finished_at, '');
   const approvalBlocking = isApprovalBlocking(deployment);
   const showRollback = canRollback(deployment.status);
   const showDelete = canDelete(deployment.status);
@@ -304,26 +305,13 @@ function DeploymentRow({
         }}
       >
         <div>
-          <span
-            className="badge"
-            style={{
-              background: `var(--${color})`,
-              color: 'var(--on-primary)',
-              fontSize: '0.8em',
-              padding: '3px 10px',
-              borderRadius: 4,
-              textTransform: 'uppercase',
-              fontWeight: 600,
-            }}
-          >
-            {deployment.status}
-          </span>
+          <StatusBadge status={deployment.status} />
           {deployment.rollback_status && (
             <span
               style={{
                 marginLeft: '0.5rem',
                 fontSize: '0.75em',
-                color: `var(--${rollbackStatusColor(deployment.rollback_status)})`,
+                color: toneColor(statusTone(deployment.rollback_status)),
               }}
             >
               (rollback: {deployment.rollback_status})

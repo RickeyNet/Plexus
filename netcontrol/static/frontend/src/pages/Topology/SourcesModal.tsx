@@ -31,8 +31,14 @@ import {
   isCloudAccountProvider,
   isInventoryCollectionResult,
 } from "@/api/meraki";
+import { StatusBadge } from "@/components/Badge";
+import { Callout } from "@/components/Callout";
+import { DeleteButton } from "@/components/DeleteButton";
 import { useDialogs } from "@/components/DialogProvider-context";
+import { EmptyState } from "@/components/EmptyState";
+import { LoadingState } from "@/components/LoadingState";
 import { Modal } from "@/components/Modal";
+import { formatBackendDateTime } from "@/lib/datetime";
 
 import {
   providerLabel,
@@ -41,11 +47,9 @@ import {
 } from "./helpers";
 import { InventoryCollectModal } from "./InventoryCollectModal";
 import {
-  buildStatusBadge,
   describeInventoryResult,
   describeNextCollection,
   describeProgress,
-  formatWhen,
   sourceTypeLabel,
 } from "./merakiHelpers";
 import { SourceFormModal } from "./SourceFormModal";
@@ -533,11 +537,11 @@ export function SourcesModal({
           </div>
         )}
 
-        {sources.isPending && <div className="loading">Loading sources…</div>}
+        {sources.isPending && <LoadingState text="Loading sources…" />}
         {sources.error && (
-          <div className="error">
+          <Callout tone="danger">
             <strong>Failed to load sources:</strong> {sources.error.message}
-          </div>
+          </Callout>
         )}
         {sources.data && (
           <table className="data-table">
@@ -624,11 +628,11 @@ export function SourcesModal({
         Collection history (Meraki, Cato, Cisco FMC, Palo Alto Panorama and
         Appgate SDP)
       </h4>
-      {snapshots.isPending && <div className="loading">Loading history…</div>}
+      {snapshots.isPending && <LoadingState text="Loading history…" />}
       {snapshots.error && (
-        <div className="error">
+        <Callout tone="danger">
           <strong>Failed to load history:</strong> {snapshots.error.message}
-        </div>
+        </Callout>
       )}
       {snapshots.data && (
         <SnapshotTable
@@ -808,12 +812,10 @@ function SourceRow({
           <span className="badge badge-info">Collecting…</span>
         ) : (
           <>
-            <span className={buildStatusBadge(source.status)}>
-              {source.status || "never"}
-            </span>{" "}
+            <StatusBadge status={source.status || "never"} />{" "}
             <span className="text-muted">
               {source.last_collected_at
-                ? formatWhen(source.last_collected_at)
+                ? formatBackendDateTime(source.last_collected_at)
                 : ""}
             </span>
             {source.warning_count > 0 && (
@@ -898,14 +900,10 @@ function SourceRow({
               >
                 Edit
               </button>
-              <button
-                type="button"
-                className="btn btn-sm btn-danger"
+              <DeleteButton
                 disabled={remove.isPending || source.collecting}
                 onClick={handleDelete}
-              >
-                Del
-              </button>
+              />
             </>
           )}
           {isCloudSource(source) && (
@@ -1195,7 +1193,7 @@ function SnapshotTable({
   const remove = useDeleteMerakiSnapshot();
 
   if (snapshots.length === 0) {
-    return <p className="text-muted">Nothing collected yet.</p>;
+    return <EmptyState compact message="Nothing collected yet." />;
   }
 
   // The map always shows the newest snapshot of each organization.
@@ -1208,7 +1206,7 @@ function SnapshotTable({
   const handleDelete = async (snapshot: MerakiSnapshot) => {
     if (
       !(await confirm(
-        `Delete the ${formatWhen(snapshot.created_at)} collection of "${snapshot.org_name}"?`,
+        `Delete the ${formatBackendDateTime(snapshot.created_at)} collection of "${snapshot.org_name}"?`,
       ))
     )
       return;
@@ -1245,7 +1243,7 @@ function SnapshotTable({
               )}
             </td>
             <td>
-              {formatWhen(s.created_at)}
+              {formatBackendDateTime(s.created_at)}
               {s.built_by && (
                 <span className="text-muted"> by {s.built_by}</span>
               )}
@@ -1260,7 +1258,7 @@ function SnapshotTable({
                   onClick={() =>
                     onShowWarnings({
                       snapshotId: s.id,
-                      name: `${s.org_name ?? "Collection"} - ${formatWhen(s.created_at)}`,
+                      name: `${s.org_name ?? "Collection"} - ${formatBackendDateTime(s.created_at)}`,
                     })
                   }
                 />
@@ -1270,14 +1268,7 @@ function SnapshotTable({
             </td>
             <td>
               {canWrite && (
-                <button
-                  type="button"
-                  className="btn btn-sm btn-danger"
-                  disabled={remove.isPending}
-                  onClick={() => handleDelete(s)}
-                >
-                  Del
-                </button>
+                <DeleteButton disabled={remove.isPending} onClick={() => handleDelete(s)} />
               )}
             </td>
           </tr>
@@ -1309,14 +1300,14 @@ function WarningsModal({
         of the map was built; what these calls would have added (users, subnets,
         WAN links...) is missing from it.
       </p>
-      {warnings.isPending && <div className="loading">Loading warnings…</div>}
+      {warnings.isPending && <LoadingState text="Loading warnings…" />}
       {warnings.error && (
-        <div className="error">
+        <Callout tone="danger">
           <strong>Failed to load warnings:</strong> {warnings.error.message}
-        </div>
+        </Callout>
       )}
       {warnings.data && rows.length === 0 && (
-        <p className="text-muted">No warnings recorded.</p>
+        <EmptyState compact message="No warnings recorded." />
       )}
       {rows.length > 0 && (
         <table className="data-table">

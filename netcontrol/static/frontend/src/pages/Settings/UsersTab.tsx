@@ -1,5 +1,7 @@
 import { useState } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
   AdminUser,
@@ -7,19 +9,15 @@ import {
   useAdminUsers,
   useDeleteAdminUser,
 } from '@/api/settings';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
+import { formatBackendDate } from '@/lib/datetime';
 
 import {
   CreateUserModal,
   EditUserModal,
   ResetPasswordModal,
 } from './UserModals';
-
-const formatDate = (raw?: string): string => {
-  if (!raw) return '-';
-  const date = new Date(raw.endsWith('Z') ? raw : raw + 'Z');
-  if (Number.isNaN(date.getTime())) return raw;
-  return date.toLocaleDateString();
-};
 
 export function UsersTab() {
   const { confirm, alert } = useDialogs();
@@ -51,14 +49,14 @@ export function UsersTab() {
         </button>
       </div>
 
-      {users.isLoading && <p className="text-muted">Loading users…</p>}
+      {users.isLoading && <LoadingState text="Loading users…" />}
       {users.isError && (
-        <div className="error">
+        <Callout tone="danger">
           Failed to load users: {(users.error as Error).message}
-        </div>
+        </Callout>
       )}
       {users.data && users.data.length === 0 && (
-        <p className="text-muted">No user accounts found.</p>
+        <EmptyState compact message="No user accounts found." />
       )}
 
       {(users.data || []).map((u) => (
@@ -78,7 +76,7 @@ export function UsersTab() {
             <div>
               <strong>{u.display_name || u.username}</strong>
               <div className="card-description">
-                @{u.username} · {u.role} · Created {formatDate(u.created_at)}
+                @{u.username} · {u.role} · Created {formatBackendDate(u.created_at)}
               </div>
             </div>
             <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
@@ -94,9 +92,7 @@ export function UsersTab() {
               >
                 Reset Password
               </button>
-              <button
-                className="btn btn-sm"
-                style={{ color: 'var(--danger)' }}
+              <DeleteButton
                 onClick={async () => {
                   if (!(await confirm(`Delete @${u.username}?`))) return;
                   remove.mutate(u.id, {
@@ -105,9 +101,7 @@ export function UsersTab() {
                     },
                   });
                 }}
-              >
-                Delete
-              </button>
+              />
             </div>
           </div>
           <div style={{ display: 'grid', gap: '0.4rem', marginTop: '0.5rem' }}>

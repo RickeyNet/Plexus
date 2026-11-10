@@ -5,7 +5,10 @@ import {
   useAcknowledgeStpEvents,
   type StpEvent,
 } from '@/api/topology';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { formatBackendDateTime } from '@/lib/datetime';
 
 interface Props {
   isOpen: boolean;
@@ -50,9 +53,9 @@ export function StpEventsModal({ isOpen, onClose, onAcknowledged }: Props) {
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="STP Topology Events" size="large">
-      {loading && <div className="text-muted">Loading…</div>}
+      {loading && <LoadingState />}
       {error && <div style={{ color: 'var(--danger)' }}>Error: {error}</div>}
-      {!loading && !events.length && <p className="text-muted">No unacknowledged STP events.</p>}
+      {!loading && !events.length && <EmptyState compact message="No unacknowledged STP events." />}
       {!loading && events.length > 0 && (
         <>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
@@ -83,7 +86,7 @@ export function StpEventsModal({ isOpen, onClose, onAcknowledged }: Props) {
                       {(ev.event_type ?? 'event').replaceAll('_', ' ').toUpperCase()}
                     </strong>
                     <span className="text-muted" style={{ fontSize: '0.72rem' }}>
-                      {new Date((ev.created_at || '') + 'Z').toLocaleString()}
+                      {formatBackendDateTime(ev.created_at)}
                     </span>
                   </div>
                   <div style={{ fontSize: '0.8rem', marginTop: '0.2rem' }}>

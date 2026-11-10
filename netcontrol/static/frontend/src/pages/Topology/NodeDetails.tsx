@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 
+import { useMerakiNodeDetails } from '@/api/meraki';
 import {
   type StpState,
   type TopologyEdge,
@@ -22,6 +23,7 @@ import {
   useHostVlans,
 } from '@/api/host-details';
 import { useConfigBackupDetail } from '@/api/configuration';
+import { SeverityBadge } from '@/components/Badge';
 import { Modal } from '@/components/Modal';
 import {
   abbreviateInterface,
@@ -36,7 +38,6 @@ import {
   SCROLL_X_STYLE,
   stpPortKey,
 } from './helpers';
-import { useMerakiNodeDetails } from '@/api/meraki';
 import { MerakiDetails } from './MerakiDetails';
 import {
   type MerakiView,
@@ -122,14 +123,6 @@ function writeStoredPanelWidth(width: number | null): void {
     // Storage unavailable (private mode, quota): the width just isn't remembered.
   }
 }
-
-const SEVERITY_BADGE: Record<HostAuditFinding['severity'], string> = {
-  critical: 'badge-danger',
-  high: 'badge-danger',
-  medium: 'badge-warning',
-  low: 'badge-info',
-  info: 'badge-secondary',
-};
 
 export function NodeDetails({
   node,
@@ -886,7 +879,7 @@ function AuditTab({ hostId }: { hostId: number }) {
       <CompactTable
         columns={['Severity', 'Rule', 'Title']}
         rows={latest.map((f: HostAuditFinding) => [
-          <span className={`badge ${SEVERITY_BADGE[f.severity]}`}>{f.severity}</span>,
+          <SeverityBadge severity={f.severity} />,
           <code style={{ fontSize: '0.7rem' }}>{f.rule_id}</code>,
           f.title,
         ])}
@@ -957,12 +950,12 @@ function CompactTable(props: {
       <div style={SCROLL_X_STYLE}>
         <table
           className="data-table"
-          style={{ fontSize: '0.75rem', width: '100%' }}
+          style={{ fontSize: '0.75rem' }}
         >
           <thead>
             <tr>
               {props.columns.map((c) => (
-                <th key={c} style={{ ...DETAIL_CELL_STYLE, textAlign: 'left', whiteSpace: 'nowrap' }}>
+                <th key={c} style={{ ...DETAIL_CELL_STYLE, whiteSpace: 'nowrap' }}>
                   {c}
                 </th>
               ))}

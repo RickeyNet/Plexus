@@ -1,6 +1,10 @@
 import { useState } from 'react';
 
+import { Callout } from '@/components/Callout';
+import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { TabBar } from '@/components/TabBar';
 import {
   NotificationChannel,
@@ -202,12 +206,12 @@ export function NotificationsTab() {
     {},
   );
 
-  if (query.isLoading) return <p className="text-muted">Loading…</p>;
+  if (query.isLoading) return <LoadingState />;
   if (query.isError)
     return (
-      <div className="error">
+      <Callout tone="danger">
         Failed to load notification channels: {(query.error as Error).message}
-      </div>
+      </Callout>
     );
 
   const channels = query.data?.channels ?? [];
@@ -303,10 +307,10 @@ export function NotificationsTab() {
       <SetupInstructions />
 
       {channels.length === 0 ? (
-        <p className="text-muted">No channels configured. Add one to start delivering alerts.</p>
+        <EmptyState compact message="No channels configured. Add one to start delivering alerts." />
       ) : (
         <div style={{ overflowX: 'auto' }}>
-          <table className="data-table" style={{ width: '100%', minWidth: '760px' }}>
+          <table className="data-table" style={{ minWidth: '760px' }}>
             <thead>
               <tr>
                 <th>Default</th>
@@ -385,9 +389,7 @@ export function NotificationsTab() {
                       <button className="btn btn-xs btn-ghost" onClick={() => setEditing({ ...c })}>
                         Edit
                       </button>{' '}
-                      <button className="btn btn-xs btn-danger" onClick={() => onDelete(c)}>
-                        Delete
-                      </button>
+                      <DeleteButton size="xs" onClick={() => onDelete(c)} />
                     </td>
                   </tr>
                 );

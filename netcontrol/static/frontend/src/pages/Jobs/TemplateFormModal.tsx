@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -85,7 +86,7 @@ export function TemplateFormModal({ mode, templateId, onClose }: Props) {
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={mode === 'edit' ? 'Edit Template' : 'New Template'} size="large">
       {mode === 'edit' && detailQuery.isPending ? (
-        <p className="text-muted">Loading…</p>
+        <LoadingState />
       ) : (
         <form onSubmit={handleSubmit}>
           <div className="form-group">

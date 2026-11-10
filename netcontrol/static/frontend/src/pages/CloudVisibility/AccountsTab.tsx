@@ -9,8 +9,12 @@ import {
   useDiscoverCloudAccount,
   useUpdateCloudAccount,
 } from '@/api/cloud';
+import { Callout } from '@/components/Callout';
+import { DeleteButton } from '@/components/DeleteButton';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { capitalize, cloudProviderTerms } from '@/lib/cloudProviderTerms';
+import { formatBackendDateTime } from '@/lib/datetime';
 import {
   ALL_REGIONS,
   type AuthField,
@@ -23,7 +27,6 @@ import {
 import {
   addProviderFromSearch,
   discoverOutcome,
-  formatTimestamp,
   liveMissingDependencies,
   liveUnavailableReason,
   providerLabel,
@@ -166,23 +169,19 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
       </div>
 
       {actionMsg && (
-        <div
-          className="card card-sm"
-          style={{
-            borderLeft: `3px solid var(--${actionMsg.kind === 'success' ? 'success' : 'danger'})`,
-            display: 'flex',
-            alignItems: 'flex-start',
-            gap: 'var(--space-2)',
-          }}
+        <Callout
+          tone={actionMsg.kind === 'success' ? 'success' : 'danger'}
+          action={
+            <button type="button" className="btn btn-sm btn-ghost" onClick={dismissMsg}>
+              Dismiss
+            </button>
+          }
         >
-          <span style={{ flex: 1 }}>{actionMsg.text}</span>
-          <button type="button" className="btn btn-sm btn-secondary" aria-label="Dismiss" title="Dismiss" onClick={dismissMsg}>
-            ×
-          </button>
-        </div>
+          {actionMsg.text}
+        </Callout>
       )}
 
-      {isLoading && <div className="text-muted">Loading…</div>}
+      {isLoading && <LoadingState />}
 
       {!isLoading && accounts.length === 0 && (
         <div className="card">
@@ -194,7 +193,7 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
 
       {accounts.length > 0 && (
         <div style={{ overflowX: 'auto' }}>
-          <table className="chart-table">
+          <table className="data-table">
             <thead>
               <tr>
                 <th>Name</th>
@@ -272,7 +271,7 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
                           {a.last_sync_message}
                         </small>
                       )}
-                      <small className="text-muted">{a.last_sync_at ? formatTimestamp(a.last_sync_at) : 'Never'}</small>
+                      <small className="text-muted">{a.last_sync_at ? formatBackendDateTime(a.last_sync_at) : 'Never'}</small>
                     </td>
                     <td>
                       <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
@@ -307,9 +306,7 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
                       <button className="btn btn-sm btn-secondary" onClick={() => setModal({ account: a, provider: a.provider })}>
                         Edit
                       </button>{' '}
-                      <button className="btn btn-sm btn-danger" onClick={() => setConfirmDelete(a)}>
-                        Delete
-                      </button>
+                      <DeleteButton onClick={() => setConfirmDelete(a)} />
                       {liveBlocked && (
                         <small
                           className="text-muted"
@@ -355,9 +352,11 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
             </p>
             <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
               <button className="btn btn-secondary" onClick={() => setConfirmDelete(null)}>Cancel</button>
-              <button className="btn btn-danger" onClick={() => runDelete(confirmDelete)} disabled={deleteAcct.isPending}>
-                Delete
-              </button>
+              <DeleteButton
+                size="md"
+                onClick={() => runDelete(confirmDelete)}
+                disabled={deleteAcct.isPending}
+              />
             </div>
           </div>
         )}

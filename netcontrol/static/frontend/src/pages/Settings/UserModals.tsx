@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
 import {
   AccessGroup,
@@ -188,7 +189,7 @@ export function CreateUserModal({
         <label className="form-label">Access Groups</label>
         <GroupCheckboxes groups={groups} selected={groupIds} onChange={setGroupIds} />
       </div>
-      {error && <div className="error">{error}</div>}
+      {error && <Callout tone="danger">{error}</Callout>}
       <ModalActions
         onClose={onClose}
         primaryLabel={create.isPending ? 'Creating…' : 'Create'}
@@ -295,7 +296,7 @@ export function EditUserModal({
           accounts (smart boards, NOC walls).
         </div>
       </div>
-      {error && <div className="error">{error}</div>}
+      {error && <Callout tone="danger">{error}</Callout>}
       <ModalActions
         onClose={onClose}
         primaryLabel={update.isPending ? 'Saving…' : 'Save'}
@@ -359,7 +360,7 @@ export function ResetPasswordModal({
           minLength={8}
         />
       </div>
-      {error && <div className="error">{error}</div>}
+      {error && <Callout tone="danger">{error}</Callout>}
       <ModalActions
         onClose={onClose}
         primaryLabel={reset.isPending ? 'Resetting…' : 'Reset Password'}

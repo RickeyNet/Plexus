@@ -4,10 +4,12 @@ import {
   type ConfigBackupSearchResult,
   useSearchConfigBackups,
 } from '@/api/configuration';
+import { Callout } from '@/components/Callout';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { formatBackendDateTime } from '@/lib/datetime';
 
 import { BackupModal } from './BackupModal';
-import { type BackupView, formatStamp } from './helpers';
+import { type BackupView } from './helpers';
 
 type Mode = 'fulltext' | 'substring' | 'regex';
 
@@ -110,9 +112,9 @@ export function SearchTab() {
 
       {search.isPending && <p className="text-muted">Searching…</p>}
       {search.error && (
-        <p style={{ color: 'var(--danger)' }}>
+        <Callout tone="danger">
           Search failed: {(search.error as Error).message}
-        </p>
+        </Callout>
       )}
       {search.data && (
         <Results
@@ -232,7 +234,7 @@ function Results({
               color: 'var(--text-muted)',
             }}
           >
-            Captured: {formatStamp(r.captured_at)} • Method:{' '}
+            Captured: {formatBackendDateTime(r.captured_at, '')} • Method:{' '}
             {r.capture_method || 'unknown'} •{' '}
             {r.config_length
               ? `${(r.config_length / 1024).toFixed(1)} KB`

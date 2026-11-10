@@ -6,6 +6,8 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
+import type { Tone } from '@/lib/severity';
+
 import { apiRequest } from './client';
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -411,9 +413,9 @@ export const JOB_PRIORITY_LABELS: Record<number, string> = {
   4: 'Critical',
 };
 
-export const JOB_PRIORITY_COLORS: Record<number, string> = {
-  0: 'text-muted',
-  1: 'text-muted',
+export const JOB_PRIORITY_TONES: Record<number, Tone> = {
+  0: 'neutral',
+  1: 'neutral',
   2: 'primary',
   3: 'warning',
   4: 'danger',

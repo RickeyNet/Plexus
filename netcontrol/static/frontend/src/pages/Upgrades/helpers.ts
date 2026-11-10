@@ -1,3 +1,5 @@
+import { formatBackendDateTime, formatRelativeTime, parseBackendDate } from '@/lib/datetime';
+
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -22,7 +24,7 @@ export function bootModeDisplay(mode: string | null | undefined): {
   if (mode === 'bundle') {
     return {
       label: 'BUNDLE',
-      badgeClass: 'badge-error',
+      badgeClass: 'badge-danger',
       title:
         'Bundle mode: install-mode upgrades and ISSU are blocked. Convert the switch to install mode (boot flash:packages.conf) first.',
     };
@@ -44,13 +46,6 @@ export function formatEta(seconds: number | null | undefined): string {
   const sec = s % 60;
   const pad = (n: number) => String(n).padStart(2, '0');
   return h ? `${h}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
-}
-
-export function formatBackupTimestamp(iso: string | null | undefined): string {
-  if (!iso) return '';
-  // Backend emits naive local time without a Z suffix. Match the legacy
-  // module's display by stripping the T and trimming sub-second precision.
-  return iso.replace('T', ' ').slice(0, 19);
 }
 
 export type UpgradePhase =
@@ -79,7 +74,7 @@ export function campaignStatusBadgeClass(
   status: string | null | undefined,
   isRunning: boolean,
 ): string {
-  if (status?.includes('failed')) return 'badge-error';
+  if (status?.includes('failed')) return 'badge-danger';
   // Pending or missed schedules take precedence over the running flag: a
   // scheduled campaign keeps an armed (sleeping) task, so isRunning is true,
   // but we want it to read as "waiting", not "in progress".
@@ -134,29 +129,6 @@ export function campaignStatusLabel(
   return status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-// "in 2h 15m", "in 45m", "3d 4h ago" — coarse, two-unit relative span used
-// alongside the absolute scheduled time. `now` is injectable for tests.
-export function formatRelativeTime(
-  targetMs: number,
-  now: number = Date.now(),
-): string {
-  const delta = targetMs - now;
-  if (Math.abs(delta) < 60_000) return delta < 0 ? 'just now' : 'in <1m';
-  const past = delta < 0;
-  let secs = Math.floor(Math.abs(delta) / 1000);
-  const days = Math.floor(secs / 86_400);
-  secs -= days * 86_400;
-  const hours = Math.floor(secs / 3_600);
-  secs -= hours * 3_600;
-  const mins = Math.floor(secs / 60);
-  const parts: string[] = [];
-  if (days) parts.push(`${days}d`);
-  if (hours) parts.push(`${hours}h`);
-  if (!days && mins) parts.push(`${mins}m`);
-  const span = parts.slice(0, 2).join(' ') || '<1m';
-  return past ? `${span} ago` : `in ${span}`;
-}
-
 // Parse a stored scheduled_at (ISO 8601, UTC offset) and render it in the
 // viewer's local timezone plus a relative span. Returns null for missing or
 // unparseable input so callers can simply skip rendering.
@@ -164,50 +136,8 @@ export function formatScheduledTime(
   iso: string | null | undefined,
   now: number = Date.now(),
 ): { absolute: string; relative: string } | null {
-  if (!iso) return null;
-  const when = new Date(iso);
-  const ms = when.getTime();
-  if (Number.isNaN(ms)) return null;
-  const absolute = when.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-  return { absolute, relative: formatRelativeTime(ms, now) };
+  const when = parseBackendDate(iso);
+  if (!when) return null;
+  return { absolute: formatBackendDateTime(when), relative: formatRelativeTime(when, now) };
 }
 
-export function formatOperationTime(
-  value: string | null | undefined,
-): string {
-  if (!value) return '-';
-  const normalized = value.includes('T') ? value : value.replace(' ', 'T');
-  const when = new Date(normalized);
-  if (Number.isNaN(when.getTime())) {
-    return value.replace('T', ' ').slice(0, 19);
-  }
-  return when.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
-
-export function formatLogTimestamp(value: string | null | undefined): string {
-  if (!value) return '';
-  const normalized = value.includes('T') ? value : value.replace(' ', 'T');
-  const when = new Date(normalized);
-  if (Number.isNaN(when.getTime())) {
-    return value.replace('T', ' ').slice(0, 19);
-  }
-  return when.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    second: '2-digit',
-  });
-}

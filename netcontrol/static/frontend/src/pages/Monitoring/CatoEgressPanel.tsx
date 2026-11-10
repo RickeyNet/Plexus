@@ -1,11 +1,12 @@
 import { useState } from 'react';
 
 import { useCatoEgressFindings, useRunCatoEgressCheck } from '@/api/monitoring';
+import { SeverityBadge } from '@/components/Badge';
+import { Callout } from '@/components/Callout';
 import { useDialogs } from '@/components/DialogProvider-context';
-import { severityBadgeClass } from '@/pages/Reports/helpers';
 import { sourceTypeLabel } from '@/pages/Topology/merakiHelpers';
+import { formatBackendDateTime } from '@/lib/datetime';
 
-import { formatTimestamp } from './helpers';
 
 /**
  * Cato egress vs cloud allow-lists: cloud filter rules (AWS security groups,
@@ -50,7 +51,7 @@ export function CatoEgressPanel() {
         </button>
       </div>
 
-      {findings.error && <p style={{ color: 'var(--danger)' }}>Failed to load the findings.</p>}
+      {findings.error && <Callout tone="danger">Failed to load the findings.</Callout>}
 
       {!rows.length ? (
         <div className="empty-state">
@@ -75,7 +76,7 @@ export function CatoEgressPanel() {
               {rows.map((f) => (
                 <tr key={f.finding_key} style={f.status === 'resolved' ? { opacity: 0.6 } : undefined}>
                   <td>
-                    <span className={`badge ${severityBadgeClass(f.severity)}`}>{f.severity}</span>
+                    <SeverityBadge severity={f.severity} />
                     {f.status === 'resolved' && <span className="text-muted" style={{ fontSize: '0.8em', marginLeft: '0.3rem' }}>resolved</span>}
                   </td>
                   <td>{f.kind_label}</td>
@@ -91,7 +92,7 @@ export function CatoEgressPanel() {
                   <td>{f.provider ? `${f.protocol} ${f.ports}` : '-'}</td>
                   <td>{f.filter_name ? `${f.filter_name}: ${f.rule_name}` : '-'}</td>
                   <td style={{ fontSize: '0.85em', minWidth: 320 }}>{f.message}</td>
-                  <td style={{ whiteSpace: 'nowrap' }}>{formatTimestamp(f.last_seen)}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{formatBackendDateTime(f.last_seen)}</td>
                 </tr>
               ))}
             </tbody>

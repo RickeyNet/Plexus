@@ -2,6 +2,8 @@ import { FormEvent, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { groupLabel } from '@/api/inventory';
+import { StatusBadge } from '@/components/Badge';
+import { LoadingState } from '@/components/LoadingState';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -32,6 +34,7 @@ import {
   useUpdateIpamSyncConfig,
 } from '@/api/ipam';
 import { useInventoryGroups } from '@/api/compliance';
+import { formatBackendDateTime } from '@/lib/datetime';
 
 import { DefineSubnetModal } from './DefineSubnetModal';
 import { DhcpServerModal } from './DhcpServerModal';
@@ -41,9 +44,7 @@ import {
   driftBadgeClass,
   driftLabel,
   formatSubnetPreview,
-  formatSyncTime,
   providerLabel,
-  statusBadgeClass,
 } from './helpers';
 
 type ModalState =
@@ -234,7 +235,7 @@ export function Ipam() {
             </button>
           </div>
           {overview.isPending ? (
-            <div className="text-muted">Loading subnet inventory...</div>
+            <LoadingState text="Loading subnet inventory…" />
           ) : subnets.length === 0 ? (
             <div className="empty-state">
               <p>No IPAM data found for the current filter.</p>
@@ -843,9 +844,7 @@ function SourcesCard({
                   alignItems: 'center',
                 }}
               >
-                <span className={`badge ${statusBadgeClass(src.last_sync_status)}`}>
-                  {src.last_sync_status || 'never'}
-                </span>
+                <StatusBadge status={src.last_sync_status || 'never'} />
                 {!src.enabled && (
                   <span className="badge badge-secondary">Disabled</span>
                 )}
@@ -858,7 +857,7 @@ function SourcesCard({
               className="text-muted"
               style={{ fontSize: '0.82em', margin: '0.3rem 0' }}
             >
-              {formatSyncTime(src.last_sync_at)}
+              {formatBackendDateTime(src.last_sync_at, 'Never')}
               {src.last_sync_message ? ` · ${src.last_sync_message}` : ''}
             </div>
             <div
@@ -970,7 +969,7 @@ function ReconcileCard({ runs, diffs, sources }: ReconcileCardProps) {
             >
               Recent Runs
             </div>
-            <table className="data-table" style={{ fontSize: '0.85em' }}>
+            <table className="data-table table-sm">
               <thead>
                 <tr>
                   <th>Source</th>
@@ -986,11 +985,9 @@ function ReconcileCard({ runs, diffs, sources }: ReconcileCardProps) {
                   return (
                     <tr key={run.id}>
                       <td>{src ? src.name : `Source #${run.source_id}`}</td>
-                      <td>{formatSyncTime(run.started_at)}</td>
+                      <td>{formatBackendDateTime(run.started_at, 'Never')}</td>
                       <td>
-                        <span className={`badge ${statusBadgeClass(run.status)}`}>
-                          {run.status}
-                        </span>
+                        <StatusBadge status={run.status} />
                       </td>
                       <td>{run.diff_count ?? 0}</td>
                       <td>{run.resolved_count ?? 0}</td>
@@ -1018,7 +1015,7 @@ function ReconcileCard({ runs, diffs, sources }: ReconcileCardProps) {
           >
             Open Drifts ({diffs.length})
           </div>
-          <table className="data-table" style={{ fontSize: '0.85em' }}>
+          <table className="data-table table-sm">
             <thead>
               <tr>
                 <th>Address</th>
@@ -1214,9 +1211,7 @@ function DhcpCard({
                     )}
                   </td>
                   <td>
-                    <span className={`badge ${statusBadgeClass(s.last_sync_status)}`}>
-                      {s.last_sync_status || 'never'}
-                    </span>
+                    <StatusBadge status={s.last_sync_status || 'never'} />
                     {s.last_sync_message && (
                       <div className="text-muted" style={{ fontSize: '0.8em' }}>
                         {s.last_sync_message}
@@ -1225,7 +1220,7 @@ function DhcpCard({
                   </td>
                   <td>{s.scope_count ?? 0}</td>
                   <td>{s.lease_count ?? 0}</td>
-                  <td>{formatSyncTime(s.last_sync_at)}</td>
+                  <td>{formatBackendDateTime(s.last_sync_at, 'Never')}</td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <button
                       type="button"

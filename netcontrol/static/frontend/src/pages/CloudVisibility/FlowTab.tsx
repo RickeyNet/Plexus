@@ -10,8 +10,12 @@ import {
   useTriggerCloudFlowPull,
   useUpdateCloudFlowSyncConfig,
 } from '@/api/cloud';
+import { Callout } from '@/components/Callout';
+import { LoadingState } from '@/components/LoadingState';
+import { StatGrid, StatTile } from '@/components/StatTile';
+import { formatBackendDateTime, formatBackendTime } from '@/lib/datetime';
 import type { CloudFilterState } from './CloudVisibility';
-import { formatBytes, formatCount, formatTimestamp, pullOutcome } from './helpers';
+import { formatBytes, formatCount, pullOutcome } from './helpers';
 import { SyncControls } from './SyncControls';
 
 interface Props {
@@ -135,9 +139,7 @@ export function FlowTab({ filter }: Props) {
         />
       </div>
       {actionMsg && (
-        <div className="card card-sm" style={{ borderLeft: `3px solid var(--${actionMsg.kind === 'success' ? 'success' : 'danger'})` }}>
-          {actionMsg.text}
-        </div>
+        <Callout tone={actionMsg.kind === 'success' ? 'success' : 'danger'}>{actionMsg.text}</Callout>
       )}
 
       <div className="stack stack-sm">
@@ -145,34 +147,34 @@ export function FlowTab({ filter }: Props) {
           Cloud Flow Analytics
           {summary.dataUpdatedAt > 0 && (
             <small className="text-muted" style={{ marginLeft: '0.6rem', fontWeight: 400 }}>
-              Updated {new Date(summary.dataUpdatedAt).toLocaleTimeString()}
+              Updated {formatBackendTime(summary.dataUpdatedAt)}
             </small>
           )}
         </h3>
-        {summary.isPending && <div className="text-muted">Loading…</div>}
+        {summary.isPending && <LoadingState />}
         {summary.error && <div style={{ color: 'var(--danger)' }}>Error: {(summary.error as Error).message}</div>}
-        <div className="drift-summary-grid">
-          <Card label="Flows" value={formatCount(s.flow_count)} />
-          <Card label="Total Bytes" value={formatBytes(s.total_bytes)} />
-          <Card label="Total Packets" value={formatCount(s.total_packets)} />
-          <Card label="Unique Sources" value={formatCount(s.unique_sources)} />
-          <Card label="Unique Destinations" value={formatCount(s.unique_destinations)} />
-          <Card label="Last Seen" value={formatTimestamp(s.last_seen)} small />
-        </div>
+        <StatGrid compact>
+          <StatTile label="Flows" value={formatCount(s.flow_count)} />
+          <StatTile label="Total Bytes" value={formatBytes(s.total_bytes)} />
+          <StatTile label="Total Packets" value={formatCount(s.total_packets)} />
+          <StatTile label="Unique Sources" value={formatCount(s.unique_sources)} />
+          <StatTile label="Unique Destinations" value={formatCount(s.unique_destinations)} />
+          <StatTile label="Last Seen" value={formatBackendDateTime(s.last_seen)} />
+        </StatGrid>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 'var(--space-4)' }}>
         <div>
           <h4 style={{ margin: '0 0 0.45rem' }}>Top Talkers</h4>
           {talkers.isPending ? (
-            <div className="card"><p className="text-muted" style={{ margin: 0 }}>Loading…</p></div>
+            <div className="card"><LoadingState variant="inline" /></div>
           ) : talkers.error ? (
             <div className="card"><p style={{ margin: 0, color: 'var(--danger)' }}>Failed to load top talkers: {(talkers.error as Error).message}</p></div>
           ) : !tList.length ? (
             <div className="card"><p className="text-muted" style={{ margin: 0 }}>No flow talkers found for current filters.</p></div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table className="chart-table">
+              <table className="data-table">
                 <thead>
                   <tr><th>{direction === 'dst' ? 'Destination IP' : 'Source IP'}</th><th>Bytes</th><th>Packets</th><th>Flows</th></tr>
                 </thead>
@@ -193,21 +195,21 @@ export function FlowTab({ filter }: Props) {
         <div>
           <h4 style={{ margin: '0 0 0.45rem' }}>Traffic Timeline</h4>
           {timeline.isPending ? (
-            <div className="card"><p className="text-muted" style={{ margin: 0 }}>Loading…</p></div>
+            <div className="card"><LoadingState variant="inline" /></div>
           ) : timeline.error ? (
             <div className="card"><p style={{ margin: 0, color: 'var(--danger)' }}>Failed to load timeline: {(timeline.error as Error).message}</p></div>
           ) : !tlList.length ? (
             <div className="card"><p className="text-muted" style={{ margin: 0 }}>No timeline data available for current filters.</p></div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table className="chart-table">
+              <table className="data-table">
                 <thead>
                   <tr><th>Bucket</th><th>Bytes</th><th>Packets</th><th>Flows</th></tr>
                 </thead>
                 <tbody>
                   {tlList.map((row, i) => (
                     <tr key={i}>
-                      <td>{formatTimestamp(row.bucket)}</td>
+                      <td>{formatBackendDateTime(row.bucket)}</td>
                       <td>{formatBytes(row.total_bytes)}</td>
                       <td>{formatCount(row.total_packets)}</td>
                       <td>{formatCount(row.flow_count)}</td>
@@ -223,11 +225,3 @@ export function FlowTab({ filter }: Props) {
   );
 }
 
-function Card({ label, value, small }: { label: string; value: string | number; small?: boolean }) {
-  return (
-    <div className="drift-summary-card">
-      <div className="drift-summary-value" style={small ? { fontSize: '1rem' } : undefined}>{value}</div>
-      <div className="drift-summary-label">{label}</div>
-    </div>
-  );
-}

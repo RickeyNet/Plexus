@@ -1,5 +1,8 @@
 import { useState } from 'react';
 
+import { DataTable } from '@/components/DataTable';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { TabBar } from '@/components/TabBar';
 import {
@@ -11,7 +14,8 @@ import {
   type SlaDailyPoint,
   type SlaHostSummary,
 } from '@/api/monitoring';
-import { formatMinutes, formatTimestamp, slaStatusBadge } from './helpers';
+import { formatBackendDateTime } from '@/lib/datetime';
+import { formatMinutes, slaStatusBadge } from './helpers';
 
 type SubTab = 'hosts' | 'trends';
 
@@ -101,7 +105,7 @@ function SlaComplianceStrip({ compliance }: { compliance?: SlaComplianceCounts }
         </div>
       ))}
       <div className="text-muted" style={{ fontSize: '0.85em', marginLeft: 'auto' }}>
-        {compliance.hosts} host{compliance.hosts === 1 ? '' : 's'} with targets, evaluated {formatTimestamp(compliance.evaluated_at)}
+        {compliance.hosts} host{compliance.hosts === 1 ? '' : 's'} with targets, evaluated {formatBackendDateTime(compliance.evaluated_at)}
       </div>
     </div>
   );
@@ -168,42 +172,42 @@ function SlaHostsList({
     : hosts;
 
   if (filtered.length === 0) {
-    return <div className="empty-state">No SLA data available - run monitoring polls to collect metrics.</div>;
+    return <EmptyState message="No SLA data available - run monitoring polls to collect metrics." />;
   }
   return (
-    <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr', padding: '0.5rem 1rem', background: 'var(--bg-secondary)', fontSize: '0.85em', fontWeight: 600 }}>
-        <div>Host</div>
-        <div>Uptime</div>
-        <div>Latency</div>
-        <div>Jitter</div>
-        <div>Pkt Loss</div>
-        <div>Status</div>
-      </div>
+    <DataTable>
+      <thead>
+        <tr>
+          <th>Host</th>
+          <th>Uptime</th>
+          <th>Latency</th>
+          <th>Jitter</th>
+          <th>Pkt Loss</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
       {filtered.map((h) => {
         const uptimeColor = (h.uptime_pct ?? 0) >= 99.9 ? 'success' : (h.uptime_pct ?? 0) >= 99 ? 'warning' : 'danger';
         const badge = slaStatusBadge(h.sla_status);
         return (
-          <div
-            key={h.host_id}
-            style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr 1fr', padding: '0.5rem 1rem', borderTop: '1px solid var(--border)', cursor: 'pointer', fontSize: '0.9em' }}
-            onClick={() => onSelect(h.host_id)}
-          >
-            <div>
+          <tr key={h.host_id} className="row-clickable" onClick={() => onSelect(h.host_id)}>
+            <td>
               <strong>{h.hostname}</strong>
               <span className="text-muted" style={{ fontSize: '0.8em', marginLeft: '0.4rem' }}>{h.ip_address}</span>
-            </div>
-            <div style={{ color: `var(--${uptimeColor})`, fontWeight: 600 }}>{h.uptime_pct != null ? `${h.uptime_pct.toFixed(2)}%` : '-'}</div>
-            <div>{h.avg_latency_ms != null ? `${h.avg_latency_ms.toFixed(1)}ms` : '-'}</div>
-            <div>{h.jitter_ms != null ? `${h.jitter_ms.toFixed(1)}ms` : '-'}</div>
-            <div>{h.avg_packet_loss_pct != null ? `${h.avg_packet_loss_pct.toFixed(2)}%` : '-'}</div>
-            <div>
+            </td>
+            <td style={{ color: `var(--${uptimeColor})`, fontWeight: 600 }}>{h.uptime_pct != null ? `${h.uptime_pct.toFixed(2)}%` : '-'}</td>
+            <td>{h.avg_latency_ms != null ? `${h.avg_latency_ms.toFixed(1)}ms` : '-'}</td>
+            <td>{h.jitter_ms != null ? `${h.jitter_ms.toFixed(1)}ms` : '-'}</td>
+            <td>{h.avg_packet_loss_pct != null ? `${h.avg_packet_loss_pct.toFixed(2)}%` : '-'}</td>
+            <td>
               <span className={badge.cls}>{badge.label}</span>
-            </div>
-          </div>
+            </td>
+          </tr>
         );
       })}
-    </div>
+      </tbody>
+    </DataTable>
   );
 }
 
@@ -234,7 +238,7 @@ function SlaTrends({ summary, days }: { summary?: { hosts: SlaHostSummary[] }; d
   if (!firstHostId) {
     return <div className="card text-muted">No trend data available.</div>;
   }
-  if (detail.isPending) return <div className="text-muted">Loading…</div>;
+  if (detail.isPending) return <LoadingState />;
   if (detail.error) return <div style={{ color: 'var(--danger)' }}>Error: {(detail.error as Error).message}</div>;
   const daily = detail.data?.daily ?? [];
   return (
@@ -274,7 +278,7 @@ function SlaChart({
     return (
       <div className="card">
         <div style={{ fontWeight: 600 }}>{label}</div>
-        <div className="text-muted">No data</div>
+        <EmptyState compact message="No data" />
       </div>
     );
   }
@@ -347,7 +351,7 @@ function SlaHostDetailModal({ hostId, days, onClose }: { hostId: number; days: n
   const detail = useSlaHostDetail(hostId, days);
   return (
     <Modal isOpen onClose={onClose} title={`SLA Detail: ${detail.data?.hostname ?? `Host #${hostId}`}`} size="large">
-      {detail.isPending && <div className="text-muted">Loading…</div>}
+      {detail.isPending && <LoadingState />}
       {detail.error && <div style={{ color: 'var(--danger)' }}>Error: {(detail.error as Error).message}</div>}
       {detail.data && (
         <div className="stack">
@@ -368,7 +372,7 @@ function SlaHostDetailModal({ hostId, days, onClose }: { hostId: number; days: n
               <SlaChart daily={detail.data.daily} field="avg_packet_loss_pct" label="Daily Packet Loss %" color="var(--danger)" minY={0} maxY={null} />
             </>
           ) : (
-            <div className="text-muted">No daily trend data available.</div>
+            <EmptyState compact message="No daily trend data available." />
           )}
         </div>
       )}
@@ -416,7 +420,7 @@ function SlaHostTargets({ hostId }: { hostId: number }) {
                   <td>{formatSlaValue(r.metric, r.target_value)} / {formatSlaValue(r.metric, r.warning_value)}</td>
                   <td>{r.window_days} days</td>
                   <td><span className={badge.cls}>{badge.label}</span></td>
-                  <td>{formatTimestamp(r.status_since)}</td>
+                  <td>{formatBackendDateTime(r.status_since)}</td>
                 </tr>
               );
             })}
@@ -428,7 +432,7 @@ function SlaHostTargets({ hostId }: { hostId: number }) {
           <div className="text-muted" style={{ fontSize: '0.85em', margin: '0.75rem 0 0.25rem' }}>Recent status changes</div>
           {changes.map((c) => (
             <div key={c.id} style={{ fontSize: '0.85em', display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-              <span className="text-muted">{formatTimestamp(c.evaluated_at)}</span>
+              <span className="text-muted">{formatBackendDateTime(c.evaluated_at)}</span>
               <span>{c.target_name}:</span>
               {c.previous_status && <span className={slaStatusBadge(c.previous_status).cls}>{slaStatusBadge(c.previous_status).label}</span>}
               {c.previous_status && <span className="text-muted">to</span>}

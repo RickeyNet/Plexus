@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 
+import { Badge, StatusBadge } from '@/components/Badge';
+import { Callout } from '@/components/Callout';
+import { EmptyState } from '@/components/EmptyState';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -10,8 +14,9 @@ import {
   useRetryJob,
   type JobEvent,
 } from '@/api/jobs';
+import { formatBackendTime } from '@/lib/datetime';
 
-import { formatTime, priorityColor, priorityLabel } from './helpers';
+import { priorityLabel, priorityTone } from './helpers';
 
 interface Props {
   jobId: number | null;
@@ -170,26 +175,24 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
     // duplicated history+live concatenation either.
     const src = showLive ? liveEvents : historicalEvents;
     const lines = src
-      .map((e) => `[${formatTime(e.timestamp)}] ${e.host ? e.host + ': ' : ''}${e.message}`)
+      .map((e) => `[${formatBackendTime(e.timestamp, '')}] ${e.host ? e.host + ': ' : ''}${e.message}`)
       .join('\n');
     navigator.clipboard.writeText(lines).catch(() => { void alert('Copy failed'); });
   }
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={`Job #${jobId ?? ''}`} size="large">
-      {jobQuery.isPending && <p className="text-muted">Loading…</p>}
-      {jobQuery.error && <p style={{ color: 'var(--danger)' }}>Failed: {(jobQuery.error as Error).message}</p>}
+      {jobQuery.isPending && <LoadingState />}
+      {jobQuery.error && <Callout tone="danger">Failed: {(jobQuery.error as Error).message}</Callout>}
       {job && (
         <>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
-            <span className="badge" style={{ background: isDry ? 'var(--warning)' : 'var(--danger)', color: 'var(--on-primary)', fontWeight: 600 }}>
-              {isDry ? 'DRY RUN' : 'LIVE'}
-            </span>
-            <span className={`status-badge status-${effectiveStatus}`}>{effectiveStatus}</span>
+            <Badge tone={isDry ? 'warning' : 'danger'} solid>
+              {isDry ? 'Dry run' : 'Live'}
+            </Badge>
+            <StatusBadge status={effectiveStatus} />
             {job.priority != null && job.priority !== 2 && (
-              <span className="badge" style={{ background: `var(--${priorityColor(job.priority)})`, color: 'var(--on-primary)' }}>
-                {priorityLabel(job.priority)}
-              </span>
+              <Badge tone={priorityTone(job.priority)}>{priorityLabel(job.priority)}</Badge>
             )}
             {wsState === 'connecting' && <span className="text-muted">Connecting…</span>}
             {wsState === 'open' && <span style={{ color: 'var(--success)' }}>Streaming</span>}
@@ -213,12 +216,12 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
             {showLive
               ? liveEvents.map((e, i) => (
                   <div key={`l-${i}`} className={`job-output-line ${e.level || 'info'}`}>
-                    [{formatTime(e.timestamp)}] {e.host ? `${e.host}: ` : ''}{e.message}
+                    [{formatBackendTime(e.timestamp, '')}] {e.host ? `${e.host}: ` : ''}{e.message}
                   </div>
                 ))
               : historicalEvents.map((e, i) => (
                   <div key={`h-${i}`} className={`job-output-line ${e.level || 'info'}`}>
-                    [{formatTime(e.timestamp)}] {e.host ? `${e.host}: ` : ''}{e.message}
+                    [{formatBackendTime(e.timestamp, '')}] {e.host ? `${e.host}: ` : ''}{e.message}
                   </div>
                 ))}
             {liveStatus && (
@@ -227,7 +230,7 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
               </div>
             )}
             {(showLive ? liveEvents.length === 0 : historicalEvents.length === 0) && (
-              <div className="text-muted">No output yet…</div>
+              <EmptyState compact message="No output yet…" />
             )}
           </div>
 

@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 
 import { type CloudConnection, type CloudResource, useCloudTopology } from '@/api/cloud';
+import { LoadingState } from '@/components/LoadingState';
+import { StatGrid, StatTile } from '@/components/StatTile';
 import { capitalize, cloudTerms } from '@/lib/cloudProviderTerms';
 import {
   attachmentBucketLabel,
@@ -265,20 +267,20 @@ export function TopologyTab({ filter }: Props) {
   const gatewayResourceCount = resources.filter((r) => isGatewayResourceType(r.resource_type)).length;
   const attachmentLinkCount = connections.filter((c) => isAttachmentConnection(c.connection_type)).length;
 
-  if (isPending) return <div className="text-muted">Loading topology…</div>;
+  if (isPending) return <LoadingState text="Loading topology…" />;
   if (error) return <div style={{ color: 'var(--danger)' }}>Error: {(error as Error).message}</div>;
 
   return (
     <div className="stack">
-      <div className="drift-summary-grid">
-        <SummaryCard label={capitalize(cloudTerms(filter.provider).scopeTitlePlural)} value={summary.account_count ?? 0} />
-        <SummaryCard label="Cloud Resources" value={summary.resource_count ?? 0} />
-        <SummaryCard label="Cloud Links" value={summary.connection_count ?? 0} />
-        <SummaryCard label="Route Objects" value={routeResourceCount} />
-        <SummaryCard label="Gateways" value={gatewayResourceCount} />
-        <SummaryCard label="Attachment Links" value={attachmentLinkCount} />
-        <SummaryCard label="Hybrid Links" value={summary.hybrid_link_count ?? 0} />
-      </div>
+      <StatGrid compact>
+        <StatTile label={capitalize(cloudTerms(filter.provider).scopeTitlePlural)} value={summary.account_count ?? 0} />
+        <StatTile label="Cloud Resources" value={summary.resource_count ?? 0} />
+        <StatTile label="Cloud Links" value={summary.connection_count ?? 0} />
+        <StatTile label="Route Objects" value={routeResourceCount} />
+        <StatTile label="Gateways" value={gatewayResourceCount} />
+        <StatTile label="Attachment Links" value={attachmentLinkCount} />
+        <StatTile label="Hybrid Links" value={summary.hybrid_link_count ?? 0} />
+      </StatGrid>
 
       {providerGroups.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 'var(--space-3)' }}>
@@ -348,7 +350,7 @@ export function TopologyTab({ filter }: Props) {
                 <strong>{providerLabel(g.provider)} Route Paths</strong>
                 <span className="text-muted" style={{ fontSize: '0.8rem' }}>{formatCount(g.routeRows?.length ?? 0)} route objects</span>
               </div>
-              <table className="chart-table">
+              <table className="data-table">
                 <thead>
                   <tr>
                     <th>Route Object</th>
@@ -400,7 +402,7 @@ export function TopologyTab({ filter }: Props) {
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table className="chart-table">
+            <table className="data-table">
               <thead>
                 <tr>
                   <th>Provider</th><th>Type</th><th>Name</th><th>Region</th><th>CIDR</th><th>Status</th><th>Details</th>
@@ -432,7 +434,7 @@ export function TopologyTab({ filter }: Props) {
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table className="chart-table">
+            <table className="data-table">
               <thead>
                 <tr>
                   <th>Provider</th><th>From</th><th>To</th><th>Type</th><th>State</th><th>Details</th>
@@ -463,7 +465,7 @@ export function TopologyTab({ filter }: Props) {
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table className="chart-table">
+            <table className="data-table">
               <thead>
                 <tr>
                   <th>On-Prem Host</th><th>Cloud Resource</th><th>Type</th><th>State</th>
@@ -483,15 +485,6 @@ export function TopologyTab({ filter }: Props) {
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-function SummaryCard({ label, value }: { label: string; value: number | string }) {
-  return (
-    <div className="drift-summary-card">
-      <div className="drift-summary-value">{value}</div>
-      <div className="drift-summary-label">{label}</div>
     </div>
   );
 }

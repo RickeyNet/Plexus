@@ -1,5 +1,6 @@
 import { FormEvent, useState } from 'react';
 
+import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
   type IpamSubnetDetail,
@@ -8,6 +9,8 @@ import {
   useDeleteIpamAllocation,
   useDeleteIpamReservation,
 } from '@/api/ipam';
+import { LoadingState } from '@/components/LoadingState';
+import { StatGrid, StatTile } from '@/components/StatTile';
 
 interface Props {
   subnet: string;
@@ -19,9 +22,7 @@ interface Props {
 export function SubnetDrilldown({ subnet, detail, isLoading, onRefresh }: Props) {
   if (isLoading) {
     return (
-      <div className="text-muted">
-        Loading subnet allocations and reservation data...
-      </div>
+      <LoadingState text="Loading subnet allocations and reservation data…" />
     );
   }
   if (!detail) {
@@ -50,18 +51,12 @@ export function SubnetDrilldown({ subnet, detail, isLoading, onRefresh }: Props)
           {summary.usable_address_count ?? 0} usable
         </div>
       </div>
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-          gap: '0.75rem',
-        }}
-      >
-        <StatCard label="Available" value={summary.available_address_count ?? 0} />
-        <StatCard label="Allocated" value={summary.allocated_address_count ?? 0} />
-        <StatCard label="Reserved" value={summary.reserved_address_count ?? 0} />
-        <StatCard label="Utilized" value={`${summary.utilization_pct ?? 0}%`} />
-      </div>
+      <StatGrid compact minTileWidth={120}>
+        <StatTile label="Available" value={summary.available_address_count ?? 0} />
+        <StatTile label="Allocated" value={summary.allocated_address_count ?? 0} />
+        <StatTile label="Reserved" value={summary.reserved_address_count ?? 0} />
+        <StatTile label="Utilized" value={`${summary.utilization_pct ?? 0}%`} />
+      </StatGrid>
 
       <div>
         <div style={{ fontWeight: 600, marginBottom: '0.45rem' }}>
@@ -127,15 +122,6 @@ export function SubnetDrilldown({ subnet, detail, isLoading, onRefresh }: Props)
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-function StatCard({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="card-inset">
-      <div className="stat-value">{value}</div>
-      <div className="stat-label">{label}</div>
     </div>
   );
 }
@@ -234,14 +220,7 @@ function ReservationsSection({
                   {item.kind || 'reserved'}
                 </span>
                 {item.kind === 'custom' && (
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    style={{ padding: '0.2rem 0.55rem', fontSize: '0.8em' }}
-                    onClick={() => handleDelete(item.id)}
-                  >
-                    Delete
-                  </button>
+                  <DeleteButton size="xs" onClick={() => handleDelete(item.id)} />
                 )}
               </div>
             </div>

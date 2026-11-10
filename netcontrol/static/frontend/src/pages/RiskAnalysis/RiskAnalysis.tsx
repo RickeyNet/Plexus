@@ -8,16 +8,20 @@ import {
   useRiskAnalyses,
   useRiskAnalysisSummary,
 } from '@/api/riskAnalysis';
+import { SeverityBadge } from '@/components/Badge';
+import { Callout } from '@/components/Callout';
+import { DeleteButton } from '@/components/DeleteButton';
 import { type DialogApi, useDialogs } from '@/components/DialogProvider-context';
+import { LoadingState } from '@/components/LoadingState';
 import { SummaryStrip, type SummaryStripItem } from '@/components/SummaryStrip';
+import { formatBackendDateTime } from '@/lib/datetime';
+import { severityTone, toneColor } from '@/lib/severity';
 
 import { AnalysisDetailModal } from './AnalysisDetailModal';
 import { NewAnalysisModal } from './NewAnalysisModal';
 import { OfflineAnalysisModal } from './OfflineAnalysisModal';
 import {
   filterAnalyses,
-  formatStamp,
-  levelColor,
   parseJsonArray,
   scorePercent,
   targetLabel,
@@ -151,7 +155,7 @@ function RiskSummary({ summary }: { summary?: RiskAnalysisSummary }) {
     { label: 'High risk', value: String(summary?.high_risk ?? '-') },
     { label: 'Approved', value: String(summary?.approved ?? '-') },
     { label: 'Pending', value: String(summary?.pending ?? '-') },
-    { label: 'Last analysis', value: formatStamp(summary?.last_analysis_at) || 'Never' },
+    { label: 'Last analysis', value: formatBackendDateTime(summary?.last_analysis_at) || 'Never' },
   ];
   return <SummaryStrip items={items} />;
 }
@@ -169,12 +173,12 @@ function AnalysisList({
   onView: (id: number) => void;
   onNew: () => void;
 }) {
-  if (loading) return <p className="text-muted">Loading risk analyses…</p>;
+  if (loading) return <LoadingState text="Loading risk analyses…" />;
   if (error) {
     return (
-      <p style={{ color: 'var(--danger)' }}>
+      <Callout tone="danger">
         Failed to load risk analyses: {(error as Error).message}
-      </p>
+      </Callout>
     );
   }
   if (!items.length) {
@@ -202,7 +206,7 @@ function AnalysisList({
 function AnalysisRow({ analysis, onView }: { analysis: RiskAnalysisRow; onView: () => void }) {
   const { confirm, alert } = useDialogs();
   const remove = useDeleteRiskAnalysis();
-  const color = levelColor(analysis.risk_level);
+  const color = toneColor(severityTone(analysis.risk_level));
   const percent = scorePercent(analysis.risk_score);
   const areas = parseJsonArray<string>(analysis.affected_areas);
   const isApproved = !!analysis.approved;
@@ -219,20 +223,7 @@ function AnalysisRow({ analysis, onView }: { analysis: RiskAnalysisRow; onView: 
         }}
       >
         <div>
-          <span
-            className="badge"
-            style={{
-              background: `var(--${color})`,
-              color: 'var(--on-primary)',
-              fontSize: '0.8em',
-              padding: '3px 10px',
-              borderRadius: 4,
-              textTransform: 'uppercase',
-              fontWeight: 600,
-            }}
-          >
-            {analysis.risk_level}
-          </span>
+          <SeverityBadge severity={analysis.risk_level} />
           <span
             style={{
               marginLeft: '0.5rem',
@@ -262,9 +253,7 @@ function AnalysisRow({ analysis, onView }: { analysis: RiskAnalysisRow; onView: 
           <button className="btn btn-sm btn-secondary" onClick={onView}>
             Details
           </button>
-          <button
-            className="btn btn-sm"
-            style={{ color: 'var(--danger)' }}
+          <DeleteButton
             onClick={async () => {
               if (!(await confirm('Delete this risk analysis?'))) return;
               remove.mutate(analysis.id, {
@@ -273,14 +262,12 @@ function AnalysisRow({ analysis, onView }: { analysis: RiskAnalysisRow; onView: 
                 },
               });
             }}
-          >
-            Delete
-          </button>
+          />
         </div>
       </div>
       <div style={{ marginTop: '0.5rem', fontSize: '0.85em', color: 'var(--text-muted)' }}>
         {areas.length > 0 ? `Areas: ${areas.join(', ')} · ` : ''}
-        {formatStamp(analysis.created_at)}
+        {formatBackendDateTime(analysis.created_at)}
         {analysis.created_by ? ` by ${analysis.created_by}` : ''}
       </div>
       <div
@@ -296,7 +283,7 @@ function AnalysisRow({ analysis, onView }: { analysis: RiskAnalysisRow; onView: 
           style={{
             width: `${percent}%`,
             height: '100%',
-            background: `var(--${color})`,
+            background: color,
             borderRadius: 4,
             transition: 'width 0.3s',
           }}
