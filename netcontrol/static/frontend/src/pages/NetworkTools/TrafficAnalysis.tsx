@@ -202,7 +202,7 @@ function TalkerSection({ query, what }: { query: QueryShape<FlowTalker>; what: s
 
   return (
     <>
-      <BarChart categories={categories} values={values} rotateLabels={45} height={220} />
+      <BarChart categories={categories} values={values} valueFormatter={formatBytes} rotateLabels={45} height={220} />
       <table className="data-table table-sm" style={{ marginTop: '0.5rem' }}>
         <thead>
           <tr>
@@ -247,7 +247,7 @@ function ApplicationsView({ hours, hostId }: { hours: number; hostId: number | n
   return (
     <div className="glass-card card">
       <h4 style={{ margin: '0 0 0.5rem' }}>Top Applications by Traffic</h4>
-      <BarChart categories={categories} values={values} rotateLabels={45} height={260} />
+      <BarChart categories={categories} values={values} valueFormatter={formatBytes} rotateLabels={45} height={260} />
       <table className="data-table table-sm" style={{ marginTop: '0.5rem' }}>
         <thead>
           <tr>
