@@ -24,23 +24,31 @@ export function OidProfilesTab() {
   const { confirm, alert } = useDialogs();
   const fid = useId();
   const [vendor, setVendor] = useState('');
-  const query = useOidProfiles(vendor || null);
+  // One unfiltered fetch, filtered here: the vendor list must keep every
+  // vendor while one of them is selected.
+  const query = useOidProfiles(null);
   const del = useDeleteOidProfile();
   const deleting = usePendingKeys<number>();
 
   const [modalId, setModalId] = useState<number | null | 'new'>(null);
 
   const data = query.data;
-  const profiles: OidProfile[] = useMemo(
+  const allProfiles: OidProfile[] = useMemo(
     () => (Array.isArray(data) ? data : (data?.profiles ?? [])),
     [data],
   );
 
   const allVendors = useMemo(() => {
     const set = new Set<string>();
-    for (const p of profiles) if (p.vendor) set.add(p.vendor);
-    return [...set];
-  }, [profiles]);
+    for (const p of allProfiles) if (p.vendor) set.add(p.vendor);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [allProfiles]);
+  // A vendor whose last profile was deleted or renamed falls back to all vendors.
+  const activeVendor = allVendors.includes(vendor) ? vendor : '';
+  const profiles = useMemo(
+    () => (activeVendor ? allProfiles.filter((p) => p.vendor === activeVendor) : allProfiles),
+    [allProfiles, activeVendor],
+  );
 
   async function handleDelete(p: OidProfile) {
     if (!(await confirm({ title: 'Delete OID profile', message: `Delete OID profile "${p.name}"?`, confirmLabel: 'Delete' }))) return;
@@ -58,7 +66,7 @@ export function OidProfilesTab() {
       <div className="toolbar" style={{ justifyContent: 'space-between', alignItems: 'flex-end' }}>
         <div className="form-group" style={{ marginBottom: 0 }}>
           <label className="form-label" htmlFor={`${fid}-vendor`}>Vendor</label>
-          <select id={`${fid}-vendor`} className="form-select" value={vendor} onChange={(e) => setVendor(e.target.value)}>
+          <select id={`${fid}-vendor`} className="form-select" value={activeVendor} onChange={(e) => setVendor(e.target.value)}>
             <option value="">All vendors</option>
             {allVendors.map((v) => <option key={v} value={v}>{v}</option>)}
           </select>
@@ -72,7 +80,9 @@ export function OidProfilesTab() {
         query.isPending && <LoadingState />
       )}
       {query.data && (profiles.length === 0 ? (
-        <div className="empty-state">No custom OID profiles. Click "+ New Profile" to create one.</div>
+        <div className="empty-state">
+          {activeVendor ? `No custom OID profiles for ${activeVendor}.` : 'No custom OID profiles. Click "+ New Profile" to create one.'}
+        </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {profiles.map((p) => {
