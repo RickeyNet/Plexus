@@ -41,25 +41,20 @@ export function DriftEventLogModal({ eventId, onClose }: Props) {
             <span style={{ opacity: 0.4 }}>|</span>
             <span>Detected: {formatStamp(ev.data.detected_at)}</span>
           </div>
-          <div style={{ maxHeight: '60vh', overflow: 'auto' }}>
+          <div className="stack stack-sm" style={{ maxHeight: '60vh', overflow: 'auto' }}>
             {entries.length === 0 ? (
               <div
                 className="card"
                 style={{
                   textAlign: 'center',
                   color: 'var(--text-muted)',
-                  padding: '1rem',
                 }}
               >
                 No history entries recorded yet.
               </div>
             ) : (
               entries.map((item, i) => (
-                <div
-                  key={i}
-                  className="card"
-                  style={{ marginBottom: '0.5rem', padding: '0.75rem' }}
-                >
+                <div key={i} className="card card-sm">
                   <div
                     style={{
                       display: 'flex',

@@ -28,8 +28,8 @@ export function SlaTab() {
   const [detailHostId, setDetailHostId] = useState<number | null>(null);
 
   return (
-    <div>
-      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+    <div className="stack stack-sm">
+      <div className="toolbar">
         <label className="text-muted">Period:</label>
         <select className="form-select" value={days} onChange={(e) => setDays(parseInt(e.target.value, 10))}>
           <option value={7}>Last 7 days</option>
@@ -52,7 +52,6 @@ export function SlaTab() {
             placeholder="Search hosts…"
             value={hostQuery}
             onChange={(e) => setHostQuery(e.target.value)}
-            style={{ marginBottom: '0.5rem' }}
           />
           <SlaHostsList
             summary={summary.data}
@@ -81,7 +80,7 @@ export function SlaTab() {
 function SlaComplianceStrip({ compliance }: { compliance?: SlaComplianceCounts }) {
   if (!compliance || compliance.hosts === 0) {
     return (
-      <div className="card text-muted" style={{ padding: '0.6rem 1rem', marginBottom: '0.75rem', fontSize: '0.9em' }}>
+      <div className="card card-sm text-muted" style={{ fontSize: '0.9em' }}>
         No SLA target has been evaluated yet. Define targets under Configure, SLA Targets.
       </div>
     );
@@ -93,7 +92,7 @@ function SlaComplianceStrip({ compliance }: { compliance?: SlaComplianceCounts }
     { key: 'no_data', color: 'var(--text-muted)' },
   ];
   return (
-    <div className="card" style={{ padding: '0.6rem 1rem', marginBottom: '0.75rem', display: 'flex', gap: '1.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+    <div className="card card-sm" style={{ display: 'flex', gap: 'var(--space-5)', flexWrap: 'wrap', alignItems: 'center' }}>
       <strong>SLA compliance</strong>
       {items.map(({ key, color }) => (
         <div key={key}>
@@ -114,7 +113,7 @@ function Gauge({ value, label, scale, format }: { value: number | null | undefin
   const v = value ?? 0;
   const pct = Math.min(v / scale, 1);
   return (
-    <div className="card" style={{ padding: '0.75rem', textAlign: 'center', minWidth: 130 }}>
+    <div className="card card-sm" style={{ textAlign: 'center', minWidth: 130 }}>
       <svg viewBox="0 0 120 120" width="100" height="100">
         <circle cx="60" cy="60" r="52" fill="none" stroke="var(--bg-secondary)" strokeWidth="10" />
         <circle
@@ -138,12 +137,12 @@ function Gauge({ value, label, scale, format }: { value: number | null | undefin
 
 function SlaGauges({ summary }: { summary?: { avg_uptime_pct?: number | null; avg_latency_ms?: number | null; avg_jitter_ms?: number | null; avg_packet_loss_pct?: number | null; mttr_minutes?: number | null; mttd_minutes?: number | null } }) {
   return (
-    <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.75rem', alignItems: 'center' }}>
+    <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap', alignItems: 'center' }}>
       <Gauge value={summary?.avg_uptime_pct} label="Avg Uptime" scale={100} format={(v) => `${v.toFixed(2)}%`} />
       <Gauge value={summary?.avg_latency_ms} label="Avg Latency" scale={500} format={(v) => `${v.toFixed(1)}ms`} />
       <Gauge value={summary?.avg_jitter_ms} label="Avg Jitter" scale={100} format={(v) => `${v.toFixed(1)}ms`} />
       <Gauge value={summary?.avg_packet_loss_pct} label="Avg Pkt Loss" scale={100} format={(v) => `${v.toFixed(2)}%`} />
-      <div className="card" style={{ padding: '0.75rem', minWidth: 110 }}>
+      <div className="card card-sm" style={{ minWidth: 110 }}>
         <div className="text-muted" style={{ fontSize: '0.8em' }}>MTTR</div>
         <div style={{ fontWeight: 600, fontSize: '1.1em' }}>{formatMinutes(summary?.mttr_minutes)}</div>
         <div className="text-muted" style={{ fontSize: '0.8em', marginTop: '0.4rem' }}>MTTD</div>
@@ -213,7 +212,7 @@ function SlaIncidents({ summary }: { summary?: { total_alerts?: number; resolved
   const resolved = summary?.resolved_alerts ?? 0;
   const open = total - resolved;
   return (
-    <div className="card" style={{ padding: '1rem', marginTop: '0.75rem' }}>
+    <div className="card">
       <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
         <div><span className="text-muted">Total Alerts:</span> <strong>{total}</strong></div>
         <div><span className="text-muted">Resolved:</span> <strong style={{ color: 'var(--success)' }}>{resolved}</strong></div>
@@ -233,18 +232,18 @@ function SlaTrends({ summary, days }: { summary?: { hosts: SlaHostSummary[] }; d
   const firstHostId = summary?.hosts?.[0]?.host_id ?? null;
   const detail = useSlaHostDetail(firstHostId, days);
   if (!firstHostId) {
-    return <div className="card text-muted" style={{ padding: '1rem' }}>No trend data available.</div>;
+    return <div className="card text-muted">No trend data available.</div>;
   }
   if (detail.isPending) return <div className="text-muted">Loading…</div>;
   if (detail.error) return <div style={{ color: 'var(--danger)' }}>Error: {(detail.error as Error).message}</div>;
   const daily = detail.data?.daily ?? [];
   return (
-    <div>
+    <div className="stack stack-sm">
       <SlaChart daily={daily} field="uptime_pct" label="Uptime %" color="var(--success)" minY={95} maxY={100} />
       <SlaChart daily={daily} field="avg_latency_ms" label="Latency (ms)" color="var(--primary)" minY={0} maxY={null} />
       <SlaChart daily={daily} field="jitter_ms" label="Jitter (ms)" color="var(--warning)" minY={0} maxY={null} />
       <SlaChart daily={daily} field="avg_packet_loss_pct" label="Packet Loss %" color="var(--danger)" minY={0} maxY={null} />
-      <div className="text-muted" style={{ fontSize: '0.8em', marginTop: '0.5rem' }}>
+      <div className="text-muted" style={{ fontSize: '0.8em' }}>
         Showing trends for <strong>{detail.data?.hostname}</strong>. Click a host to view its specific trends.
       </div>
     </div>
@@ -273,7 +272,7 @@ function SlaChart({
   const values = daily.map((d) => d[field]).filter((v): v is number => typeof v === 'number');
   if (values.length === 0) {
     return (
-      <div className="card" style={{ padding: '1rem', marginBottom: '0.75rem' }}>
+      <div className="card">
         <div style={{ fontWeight: 600 }}>{label}</div>
         <div className="text-muted">No data</div>
       </div>
@@ -327,7 +326,7 @@ function SlaChart({
   }
 
   return (
-    <div className="card" style={{ padding: '1rem', marginBottom: '0.75rem' }}>
+    <div className="card">
       <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>{label}</div>
       <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" style={{ width: '100%', height: 'auto' }}>
         {gridLines}
@@ -351,8 +350,8 @@ function SlaHostDetailModal({ hostId, days, onClose }: { hostId: number; days: n
       {detail.isPending && <div className="text-muted">Loading…</div>}
       {detail.error && <div style={{ color: 'var(--danger)' }}>Error: {(detail.error as Error).message}</div>}
       {detail.data && (
-        <>
-          <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', marginBottom: '1rem', fontSize: '0.9em' }}>
+        <div className="stack">
+          <div style={{ display: 'flex', gap: 'var(--space-5)', flexWrap: 'wrap', fontSize: '0.9em' }}>
             <div><span className="text-muted">Host:</span> <strong>{detail.data.hostname}</strong></div>
             <div><span className="text-muted">IP:</span> {detail.data.ip_address}</div>
             <div><span className="text-muted">Type:</span> {detail.data.device_type ?? '-'}</div>
@@ -371,7 +370,7 @@ function SlaHostDetailModal({ hostId, days, onClose }: { hostId: number; days: n
           ) : (
             <div className="text-muted">No daily trend data available.</div>
           )}
-        </>
+        </div>
       )}
     </Modal>
   );
@@ -393,7 +392,7 @@ function SlaHostTargets({ hostId }: { hostId: number }) {
   const changes = history.data ?? [];
   if (rows.length === 0 && changes.length === 0) return null;
   return (
-    <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
+    <div className="card card-sm">
       <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>SLA targets</div>
       {rows.length > 0 && (
         <table className="data-table">

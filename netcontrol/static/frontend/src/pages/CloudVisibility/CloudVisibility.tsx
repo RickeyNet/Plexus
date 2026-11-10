@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import { useCloudAccounts, useCloudProviders } from '@/api/cloud';
+import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { TabBar } from '@/components/TabBar';
 import { UntestedBanner } from '@/components/UntestedBanner';
@@ -86,9 +87,7 @@ export function CloudVisibility() {
 
   return (
     <div className="page">
-      <div className="page-header">
-        <h2>Cloud Visibility</h2>
-      </div>
+      <PageHeader title="Cloud Visibility" />
 
       <UntestedBanner feature="Cloud Visibility" />
 
@@ -98,34 +97,34 @@ export function CloudVisibility() {
         text="Track AWS, Azure and GCP network constructs alongside on-prem devices. Manage accounts, subscriptions and projects, refresh their topology, and view cloud and hybrid connectivity paths."
       />
 
-      {/* Provider capability hints */}
-      {(providers.data?.providers ?? []).length > 0 && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.5rem', marginBottom: '0.75rem' }}>
-          {(providers.data?.providers ?? []).map((p) => (
-            <div key={p.id} className="card" style={{ padding: '0.65rem 0.85rem' }}>
-              <strong>{providerLabel(p.id)}</strong>
-              <span className="text-muted" style={{ marginLeft: '0.45rem' }}>
-                {p.name || cloudProviderTerms(p.id).fullName}
-              </span>
-              <span
-                className={`badge badge-${p.live_supported ? 'success' : 'warning'}`}
-                style={{ marginLeft: '0.45rem' }}
-              >
-                {p.live_supported ? 'Live ready' : 'Live unavailable'}
-              </span>
-              {p.missing_dependencies?.length ? (
-                <div className="text-muted" style={{ marginTop: '0.35rem', fontSize: '0.85em' }}>
-                  Missing: {p.missing_dependencies.join(', ')}
-                </div>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      )}
+      <div className="stack stack-sm" style={{ marginBottom: 'var(--space-3)' }}>
+        {/* Provider capability hints */}
+        {(providers.data?.providers ?? []).length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--space-2)' }}>
+            {(providers.data?.providers ?? []).map((p) => (
+              <div key={p.id} className="card card-sm">
+                <strong>{providerLabel(p.id)}</strong>
+                <span className="text-muted" style={{ marginLeft: '0.45rem' }}>
+                  {p.name || cloudProviderTerms(p.id).fullName}
+                </span>
+                <span
+                  className={`badge badge-${p.live_supported ? 'success' : 'warning'}`}
+                  style={{ marginLeft: '0.45rem' }}
+                >
+                  {p.live_supported ? 'Live ready' : 'Live unavailable'}
+                </span>
+                {p.missing_dependencies?.length ? (
+                  <div className="text-muted" style={{ marginTop: '0.35rem', fontSize: '0.85em' }}>
+                    Missing: {p.missing_dependencies.join(', ')}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
 
-      {/* Provider + Account filters (apply to most tabs) */}
-      <div className="card" style={{ padding: '0.75rem', marginBottom: '0.75rem' }}>
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        {/* Provider + Account filters (apply to most tabs) */}
+        <div className="card card-sm toolbar">
           <label className="text-muted">Provider:</label>
           <select
             className="form-select"

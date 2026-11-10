@@ -1,6 +1,7 @@
 import { useMemo, useState, ReactNode } from 'react';
 
 import { Modal } from '@/components/Modal';
+import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { TopologyCanvas } from '@/pages/TopologyCanvas';
@@ -153,8 +154,7 @@ export function Lab() {
 
   return (
     <>
-      <div className="page-header">
-        <h2 style={{ margin: 0 }}>Lab / Digital Twin</h2>
+      <PageHeader title="Lab / Digital Twin">
         <button
           type="button"
           className="btn btn-primary"
@@ -162,7 +162,7 @@ export function Lab() {
         >
           New environment
         </button>
-      </div>
+      </PageHeader>
 
       <PageHelp
         pageKey="lab"
@@ -348,7 +348,7 @@ function EnvironmentDetail({
   const devices: LabDeviceSummary[] = env.devices ?? [];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+    <div className="stack">
       <div className="glass-card card">
         <div className="card-title">{env.name}</div>
         <p style={{ color: 'var(--text-light)' }}>
@@ -604,7 +604,7 @@ function DevicePanel({ deviceId }: { deviceId: number }) {
   );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+    <div className="stack">
       <RuntimeCard deviceId={deviceId} />
 
       <div className="glass-card card">
@@ -1145,7 +1145,7 @@ function TopologyEditor({
   const candidates = envDevices.filter((d) => !memberIds.has(d.id));
 
   return (
-    <div className="card" style={{ background: 'transparent', border: '1px solid var(--border)' }}>
+    <div className="card-inset">
       <div className="card-title">
         Editing: {t.name} · {runtimeBadge(t.status, 'containerlab')}
       </div>
@@ -1326,7 +1326,7 @@ function TopologyEditor({
       </table>
 
       {!isRunning && (
-        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        <div className="toolbar">
           <select
             className="form-select"
             value={memberPick}

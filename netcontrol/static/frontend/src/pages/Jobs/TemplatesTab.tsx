@@ -48,7 +48,7 @@ export function TemplatesTab() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
+      <div className="toolbar">
         <input
           className="form-input"
           placeholder="Search templates…"
@@ -56,6 +56,7 @@ export function TemplatesTab() {
           onChange={(e) => setSearch(e.target.value)}
           style={{ width: 240 }}
         />
+        <span className="toolbar-spacer" />
         <button className="btn btn-primary" onClick={() => setEditing({ mode: 'create' })}>+ New Template</button>
       </div>
 
@@ -102,7 +103,7 @@ function TemplateRow({
   const isLong = lines.length > 3;
   const visible = expanded || !isLong ? template.content : lines.slice(0, 3).join('\n');
   return (
-    <div className="card" style={{ padding: '0.75rem 1rem' }}>
+    <div className="card card-sm">
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 600 }}>

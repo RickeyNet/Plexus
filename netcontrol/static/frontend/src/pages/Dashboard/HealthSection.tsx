@@ -28,40 +28,39 @@ export function HealthSection({ monitoring, devices, groups }: HealthSectionProp
   }, [devices, groupFilter, sortBy]);
 
   return (
-    <div className="section" id="network-health-section">
-      <div className="page-header" style={{ marginBottom: '1rem' }}>
-        <h3>Network Health Overview</h3>
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-          <select
-            className="form-select"
-            style={{ minWidth: '160px', fontSize: '0.85rem' }}
-            value={groupFilter}
-            onChange={(e) => setGroupFilter(e.target.value)}
-          >
-            <option value="">All Groups</option>
-            {groups.map((g) => (
-              <option key={g.id} value={String(g.id)}>
-                {g.name}
-              </option>
-            ))}
-          </select>
-          <select
-            className="form-select"
-            style={{ minWidth: '140px', fontSize: '0.85rem' }}
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as SortBy)}
-          >
-            <option value="severity">Severity</option>
-            <option value="name">Name A-Z</option>
-            <option value="cpu">CPU Usage</option>
-            <option value="memory">Memory Usage</option>
-          </select>
-        </div>
+    <div className="section stack" id="network-health-section">
+      <div className="toolbar">
+        <h3 style={{ margin: 0 }}>Network Health Overview</h3>
+        <span className="toolbar-spacer" />
+        <select
+          className="form-select form-select-sm"
+          style={{ minWidth: '160px' }}
+          value={groupFilter}
+          onChange={(e) => setGroupFilter(e.target.value)}
+        >
+          <option value="">All Groups</option>
+          {groups.map((g) => (
+            <option key={g.id} value={String(g.id)}>
+              {g.name}
+            </option>
+          ))}
+        </select>
+        <select
+          className="form-select form-select-sm"
+          style={{ minWidth: '140px' }}
+          value={sortBy}
+          onChange={(e) => setSortBy(e.target.value as SortBy)}
+        >
+          <option value="severity">Severity</option>
+          <option value="name">Name A-Z</option>
+          <option value="cpu">CPU Usage</option>
+          <option value="memory">Memory Usage</option>
+        </select>
       </div>
 
       <HealthSummaryTiles monitoring={monitoring} devices={filtered} />
 
-      <div className="device-health-table-wrap" style={{ marginTop: '1rem' }}>
+      <div className="device-health-table-wrap">
         <DeviceHealthTable devices={filtered} />
       </div>
     </div>

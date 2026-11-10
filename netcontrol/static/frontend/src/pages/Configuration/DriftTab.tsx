@@ -9,6 +9,7 @@ import {
 } from '@/api/configuration';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
 import { SegmentedControl } from '@/components/SegmentedControl';
+import { SummaryStrip } from '@/components/SummaryStrip';
 
 import { CaptureSnapshotModal } from './CaptureSnapshotModal';
 import { DriftDiffModal } from './DriftDiffModal';
@@ -66,19 +67,11 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
 
   return (
     <>
-      <SummaryStrip summary={summary.data} />
+      <DriftSummaryStrip summary={summary.data} />
 
-      <div
-        style={{
-          display: 'flex',
-          gap: '0.5rem',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          margin: '0.75rem 0',
-        }}
-      >
+      <div className="toolbar">
         <select
-          className="form-select"
+          className="form-select form-select-sm"
           style={{ maxWidth: 160 }}
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value as DriftStatusFilter)}
@@ -88,7 +81,7 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
           <option value="resolved">Resolved</option>
         </select>
         <input
-          className="form-input"
+          className="form-input form-input-sm"
           placeholder="Search hosts…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -100,7 +93,7 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
           onChange={setViewMode}
           aria-label="Drift view"
         />
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.4rem' }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 'var(--space-2)' }}>
           <button
             type="button"
             className="btn btn-sm btn-secondary"
@@ -156,38 +149,42 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
         </p>
       )}
 
-      {viewMode === 'grouped'
-        ? groups.map((group) => (
-            <DriftGroupCard
-              key={group.representative_id}
-              group={group}
-              onShowDiff={(id) => setDiffEventId(id)}
-              onShowLog={(id) => setLogEventId(id)}
-              onShowRevert={(id) => setRevertEventId(id)}
-              onAccept={(id) =>
-                updateStatus.mutate({ id, status: 'accepted' })
-              }
-              onResolve={(id) =>
-                updateStatus.mutate({ id, status: 'resolved' })
-              }
-              onAcceptGroup={(ids) => bulkAccept.mutate(ids)}
-            />
-          ))
-        : filtered.map((ev) => (
-            <DriftEventCard
-              key={ev.id}
-              ev={ev}
-              onShowDiff={(id) => setDiffEventId(id)}
-              onShowLog={(id) => setLogEventId(id)}
-              onShowRevert={(id) => setRevertEventId(id)}
-              onAccept={(id) =>
-                updateStatus.mutate({ id, status: 'accepted' })
-              }
-              onResolve={(id) =>
-                updateStatus.mutate({ id, status: 'resolved' })
-              }
-            />
-          ))}
+      {filtered.length > 0 && (
+        <div className="stack stack-sm">
+          {viewMode === 'grouped'
+            ? groups.map((group) => (
+                <DriftGroupCard
+                  key={group.representative_id}
+                  group={group}
+                  onShowDiff={(id) => setDiffEventId(id)}
+                  onShowLog={(id) => setLogEventId(id)}
+                  onShowRevert={(id) => setRevertEventId(id)}
+                  onAccept={(id) =>
+                    updateStatus.mutate({ id, status: 'accepted' })
+                  }
+                  onResolve={(id) =>
+                    updateStatus.mutate({ id, status: 'resolved' })
+                  }
+                  onAcceptGroup={(ids) => bulkAccept.mutate(ids)}
+                />
+              ))
+            : filtered.map((ev) => (
+                <DriftEventCard
+                  key={ev.id}
+                  ev={ev}
+                  onShowDiff={(id) => setDiffEventId(id)}
+                  onShowLog={(id) => setLogEventId(id)}
+                  onShowRevert={(id) => setRevertEventId(id)}
+                  onAccept={(id) =>
+                    updateStatus.mutate({ id, status: 'accepted' })
+                  }
+                  onResolve={(id) =>
+                    updateStatus.mutate({ id, status: 'resolved' })
+                  }
+                />
+              ))}
+        </div>
+      )}
 
       <DriftDiffModal
         eventId={diffEventId}
@@ -215,7 +212,7 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
   );
 }
 
-function SummaryStrip({
+function DriftSummaryStrip({
   summary,
 }: {
   summary?: {
@@ -231,35 +228,13 @@ function SummaryStrip({
     { label: 'Drifted', value: String(summary?.drifted ?? '-') },
     { label: 'Open events', value: String(summary?.open_events ?? '-') },
   ];
-  return (
-    <div className="card">
-      <div
-        className="card-body"
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-          gap: '0.5rem',
-          padding: '0.75rem',
-        }}
-      >
-        {items.map((it) => (
-          <div
-            key={it.label}
-            style={{ display: 'flex', flexDirection: 'column' }}
-          >
-            <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>
-              {it.label}
-            </span>
-            <span style={{ fontWeight: 600 }}>{it.value}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+  return <SummaryStrip items={items} />;
 }
 
 interface CardProps {
   ev: ConfigDriftEvent;
+  /** Rendered inside a group card, so it is an inset panel, not a second card. */
+  inset?: boolean;
   onShowDiff: (id: number) => void;
   onShowLog: (id: number) => void;
   onShowRevert: (id: number) => void;
@@ -269,6 +244,7 @@ interface CardProps {
 
 function DriftEventCard({
   ev,
+  inset = false,
   onShowDiff,
   onShowLog,
   onShowRevert,
@@ -276,7 +252,7 @@ function DriftEventCard({
   onResolve,
 }: CardProps) {
   return (
-    <div className="card" style={{ marginBottom: '0.75rem', padding: '1rem' }}>
+    <div className={inset ? 'card-inset' : 'card'}>
       <div
         style={{
           display: 'flex',
@@ -395,7 +371,7 @@ function DriftGroupCard({
     );
 
   return (
-    <div className="card" style={{ marginBottom: '0.75rem', padding: '1rem' }}>
+    <div className="card">
       <div
         style={{
           display: 'flex',
@@ -543,6 +519,7 @@ function DriftGroupCard({
                 <DriftEventCard
                   key={ev.id}
                   ev={ev}
+                  inset
                   onShowDiff={onShowDiff}
                   onShowLog={onShowLog}
                   onShowRevert={onShowRevert}

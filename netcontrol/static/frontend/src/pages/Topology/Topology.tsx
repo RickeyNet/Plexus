@@ -1915,467 +1915,469 @@ export function Topology() {
         text="Visualize your network as an interactive graph. Drag nodes to rearrange, zoom in/out, and click devices to view details. Connections are discovered from device data (CDP/LLDP/OSPF/BGP) and, for Meraki organizations, Cato accounts, Cisco FMCs, Palo Alto Panoramas, Appgate SDP collectives, AWS accounts, Azure subscriptions and GCP projects, from their APIs. Search finds devices by name or address and Meraki devices by anything collected for them - VLANs, subnets, routes, VPN peers, firewall rules. Sources lists everything that feeds the map and collects it again. Export HTML saves the whole map as one shareable interactive file."
       />
 
-      {actionMsg && (
-        <div className="card" style={{ padding: '0.5rem 0.85rem', marginBottom: '0.6rem', borderLeft: '3px solid var(--success)' }}>
-          {actionMsg}
-        </div>
-      )}
+      <div className="stack stack-sm">
+        {actionMsg && (
+          <div className="card card-sm" style={{ borderLeft: '3px solid var(--success)' }}>
+            {actionMsg}
+          </div>
+        )}
 
-      <div className="card" style={{ padding: '0.6rem 0.75rem', marginBottom: '0.75rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
-        <select className="form-select" style={{ minWidth: 160 }} value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)}>
-          <option value="">All Groups</option>
-          {groupsQuery.data?.map((g) => (
-            <option key={g.id} value={g.id}>{groupLabel(g)}</option>
-          ))}
-        </select>
-        {hasMeraki && (
-          <select
-            className="form-select"
-            style={{ minWidth: 150 }}
-            value={activeFilter}
-            title="Which devices to show"
-            onChange={(e) => setSourceFilter(e.target.value as SourceFilter)}
-          >
-            <option value="all">All sources</option>
-            <option value="inventory">Inventory only</option>
-            <option value="meraki">All integrations</option>
-            {providersOnMap.map((p) => (
-              <option key={p} value={`provider:${p}`}>{providerLabel(p)} only</option>
+        <div className="card card-sm toolbar">
+          <select className="form-select form-select-sm" style={{ minWidth: 160 }} value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)}>
+            <option value="">All Groups</option>
+            {groupsQuery.data?.map((g) => (
+              <option key={g.id} value={g.id}>{groupLabel(g)}</option>
             ))}
           </select>
+          {hasMeraki && (
+            <select
+              className="form-select form-select-sm"
+              style={{ minWidth: 150 }}
+              value={activeFilter}
+              title="Which devices to show"
+              onChange={(e) => setSourceFilter(e.target.value as SourceFilter)}
+            >
+              <option value="all">All sources</option>
+              <option value="inventory">Inventory only</option>
+              <option value="meraki">All integrations</option>
+              {providersOnMap.map((p) => (
+                <option key={p} value={`provider:${p}`}>{providerLabel(p)} only</option>
+              ))}
+            </select>
+          )}
+
+          <div style={{ position: 'relative' }} className="topology-search-wrap">
+            <input
+              type="text"
+              className="form-input form-input-sm"
+              placeholder={hasMeraki ? 'Search devices, IPs, VLANs, subnets, routes…' : 'Search nodes...'}
+              style={{ minWidth: hasMeraki ? 300 : 200 }}
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setSearchResultsVisible(true); setSearchHighlightIdx(-1); }}
+              onFocus={() => {
+                if (searchBlurTimerRef.current) {
+                  clearTimeout(searchBlurTimerRef.current);
+                  searchBlurTimerRef.current = null;
+                }
+                setSearchResultsVisible(true);
+              }}
+              onBlur={() => {
+                if (searchBlurTimerRef.current) clearTimeout(searchBlurTimerRef.current);
+                searchBlurTimerRef.current = setTimeout(() => {
+                  searchBlurTimerRef.current = null;
+                  setSearchResultsVisible(false);
+                }, 200);
+              }}
+              onKeyDown={handleSearchKey}
+            />
+            {searchResultsVisible && search && (
+              <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10, background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: '0.3rem', maxHeight: 340, overflowY: 'auto', marginTop: '0.2rem' }}>
+                {searchResults.length > 1 && (
+                  <div
+                    onMouseDown={(e) => { e.preventDefault(); highlightAllSearchResults(); }}
+                    style={{ padding: '0.4rem 0.65rem', cursor: 'pointer', fontSize: '0.8rem', borderBottom: '1px solid var(--border)', color: 'var(--primary)' }}
+                  >
+                    Highlight all {searchResults.length} matches on the map (Enter)
+                  </div>
+                )}
+                {searchResults.length === 0 ? (
+                  <div className="text-muted" style={{ padding: '0.5rem 0.75rem' }}>
+                    {deepSearch.isFetching || debouncedSearch !== search ? 'Searching…' : 'No matches'}
+                  </div>
+                ) : searchResults.slice(0, MAX_SEARCH_RESULTS).map((r, i) => (
+                  <div
+                    key={String(r.node.id)}
+                    onMouseDown={(e) => { e.preventDefault(); selectSearchResult(r); }}
+                    style={{
+                      padding: '0.4rem 0.65rem',
+                      cursor: 'pointer',
+                      background: i === searchHighlightIdx ? 'var(--bg-secondary)' : 'transparent',
+                      fontSize: '0.85rem',
+                    }}
+                  >
+                    <div>{r.node.label}</div>
+                    <div className="text-muted" style={{ fontSize: '0.75rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {r.snippet || [r.node.ip, r.node.meraki?.site_name || r.node.group_name].filter(Boolean).join(' · ')}
+                    </div>
+                  </div>
+                ))}
+                {searchResults.length > MAX_SEARCH_RESULTS && (
+                  <div className="text-muted" style={{ padding: '0.4rem 0.65rem', fontSize: '0.75rem' }}>
+                    {searchResults.length - MAX_SEARCH_RESULTS} more - refine the search or highlight all.
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <button className="btn btn-primary btn-sm" onClick={() => setSourcesOpen(true)} title="Everything that feeds the map - neighbor discovery, Meraki, Cato, Cisco FMC, Palo Alto Panorama, Appgate SDP, AWS, Azure, GCP: add, collect, history">Sources</button>
+          <button className="btn btn-secondary btn-sm" onClick={handleRefresh}>Refresh</button>
+          <button className={`btn btn-sm ${pathMode ? 'btn-primary' : 'btn-secondary'}`} onClick={togglePathMode} title="Pick devices or sites and see how they reach one another">{pathMode ? 'Exit Path' : 'Path Mode'}</button>
+          <button className={`btn btn-sm ${searchPanelOpen ? 'btn-primary' : 'btn-secondary'}`} onClick={toggleSearchPanel}>{searchPanelOpen ? 'Close Search' : 'Find MAC/IP/VLAN'}</button>
+          <button
+            type="button"
+            className="btn btn-sm btn-secondary"
+            onClick={() => setBulkAddOpen(true)}
+            disabled={addableCount === 0}
+            title="Add devices on the map that are not inventory hosts (CDP/LLDP neighbors, cloud instances) to an inventory group"
+          >
+            Add to inventory…{addableBadge && <span className="badge badge-info topo-toolbar-badge">{addableBadge}</span>}
+          </button>
+          <Menu
+            label="View"
+            align="start"
+            width={240}
+            trigger={(isOpen) => (
+              <button type="button" className={`btn btn-sm ${isOpen ? 'btn-primary' : 'btn-secondary'}`} title="Labels and map overlays">
+                View{overlayCount > 0 && <span className="badge badge-info topo-toolbar-badge">{overlayCount}</span>} ▾
+              </button>
+            )}
+          >
+            <MenuCheckboxItem checked={labelsVisible} onChange={setLabelsVisible}>Labels</MenuCheckboxItem>
+            {tunnelCount > 0 && (
+              <MenuCheckboxItem
+                checked={showAllTunnels}
+                onChange={setTunnelPref}
+                title={
+                  showAllTunnels
+                    ? `Showing all ${tunnelCount} VPN tunnels. Click to show only the tunnels of the selected device.`
+                    : `Showing only the VPN tunnels of the selected device. Click to draw all ${tunnelCount}.`
+                }
+              >
+                VPN Tunnels
+              </MenuCheckboxItem>
+            )}
+            {endDeviceCount > 0 && (
+              <MenuCheckboxItem
+                checked={showEndDevices}
+                onChange={setShowEndDevices}
+                title={
+                  showEndDevices
+                    ? `Showing the ${endDeviceCount} phones, servers and cameras CDP / LLDP found on access ports. Click to leave them off the map.`
+                    : `${endDeviceCount} phones, servers and cameras CDP / LLDP found on access ports are left off the map. Click to draw them.`
+                }
+              >
+                End Devices
+              </MenuCheckboxItem>
+            )}
+            <MenuSeparator />
+            <MenuCheckboxItem checked={utilOverlay} onChange={setUtilOverlay}>Util Overlay</MenuCheckboxItem>
+            <MenuCheckboxItem checked={stpOverlay} onChange={setStpOverlay}>STP Overlay</MenuCheckboxItem>
+            <MenuCheckboxItem checked={statusOverlay} onChange={setStatusOverlay}>Status Overlay</MenuCheckboxItem>
+          </Menu>
+          <Menu
+            label="Layout"
+            align="start"
+            width={240}
+            trigger={(isOpen) => (
+              <button type="button" className={`btn btn-sm ${isOpen ? 'btn-primary' : 'btn-secondary'}`} title={`Layout: ${layoutLabel(layout)}`}>
+                Layout ▾
+              </button>
+            )}
+          >
+            {LAYOUT_OPTIONS.map((o) => (
+              <MenuCheckboxItem key={o.value} checked={layout === o.value} onChange={() => setLayout(o.value)}>
+                {o.label}
+              </MenuCheckboxItem>
+            ))}
+            <MenuSeparator />
+            <MenuItem onSelect={handleFit}>Fit to screen</MenuItem>
+            <MenuItem onSelect={handleResetPositions}>Reset Positions</MenuItem>
+            <MenuCheckboxItem checked={settingsOpen} onChange={setSettingsOpen}>Layout settings</MenuCheckboxItem>
+          </Menu>
+          <Menu
+            label="Events"
+            align="start"
+            width={220}
+            trigger={(isOpen) => (
+              <button
+                type="button"
+                className={`btn btn-sm ${isOpen ? 'btn-primary' : 'btn-secondary'}`}
+                title="Unacknowledged STP events and topology changes"
+              >
+                Events
+                {eventsBadge && (
+                  <span className={`badge ${stpBadge > 0 ? 'badge-danger' : 'badge-warning'} topo-toolbar-badge`}>{eventsBadge}</span>
+                )}{' '}
+                ▾
+              </button>
+            )}
+          >
+            <MenuItem onSelect={() => setStpEventsOpen(true)}>
+              <span className="topo-menu-row">
+                STP Events…
+                {badgeText(stpBadge) && <span className="badge badge-danger">{badgeText(stpBadge)}</span>}
+              </span>
+            </MenuItem>
+            <MenuItem onSelect={() => setChangesOpen(true)}>
+              <span className="topo-menu-row">
+                Changes…
+                {badgeText(changeBadge) && <span className="badge badge-warning">{badgeText(changeBadge)}</span>}
+              </span>
+            </MenuItem>
+          </Menu>
+          <ExportMenu
+            onPNG={handleExportPNG}
+            onSVG={handleExportSVG}
+            onJSON={handleExportJSON}
+            htmlDownloadUrl={topologyExportUrl(groupId, true, exportPath)}
+            htmlOpenUrl={topologyExportUrl(groupId, false, exportPath)}
+            withPath={exportPath !== null}
+          />
+        </div>
+
+        {highlightCount > 0 && (
+          <div className="card card-sm" style={{ borderLeft: '3px solid var(--primary)' }}>
+            {highlightCount} device{highlightCount === 1 ? '' : 's'} matching “{appliedSearch}” highlighted. Click one to see the matching details.
+            <button type="button" className="btn btn-sm btn-secondary" onClick={clearSearchHighlight} style={{ marginLeft: '0.6rem' }}>Clear</button>
+          </div>
         )}
 
-        <div style={{ position: 'relative' }} className="topology-search-wrap">
-          <input
-            type="text"
-            className="form-input"
-            placeholder={hasMeraki ? 'Search devices, IPs, VLANs, subnets, routes…' : 'Search nodes...'}
-            style={{ minWidth: hasMeraki ? 300 : 200 }}
-            value={search}
-            onChange={(e) => { setSearch(e.target.value); setSearchResultsVisible(true); setSearchHighlightIdx(-1); }}
-            onFocus={() => {
-              if (searchBlurTimerRef.current) {
-                clearTimeout(searchBlurTimerRef.current);
-                searchBlurTimerRef.current = null;
-              }
-              setSearchResultsVisible(true);
-            }}
-            onBlur={() => {
-              if (searchBlurTimerRef.current) clearTimeout(searchBlurTimerRef.current);
-              searchBlurTimerRef.current = setTimeout(() => {
-                searchBlurTimerRef.current = null;
-                setSearchResultsVisible(false);
-              }, 200);
-            }}
-            onKeyDown={handleSearchKey}
-          />
-          {searchResultsVisible && search && (
-            <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10, background: 'var(--card-bg)', border: '1px solid var(--border)', borderRadius: '0.3rem', maxHeight: 340, overflowY: 'auto', marginTop: '0.2rem' }}>
-              {searchResults.length > 1 && (
-                <div
-                  onMouseDown={(e) => { e.preventDefault(); highlightAllSearchResults(); }}
-                  style={{ padding: '0.4rem 0.65rem', cursor: 'pointer', fontSize: '0.8rem', borderBottom: '1px solid var(--border)', color: 'var(--primary)' }}
-                >
-                  Highlight all {searchResults.length} matches on the map (Enter)
-                </div>
-              )}
-              {searchResults.length === 0 ? (
-                <div className="text-muted" style={{ padding: '0.5rem 0.75rem' }}>
-                  {deepSearch.isFetching || debouncedSearch !== search ? 'Searching…' : 'No matches'}
-                </div>
-              ) : searchResults.slice(0, MAX_SEARCH_RESULTS).map((r, i) => (
-                <div
-                  key={String(r.node.id)}
-                  onMouseDown={(e) => { e.preventDefault(); selectSearchResult(r); }}
-                  style={{
-                    padding: '0.4rem 0.65rem',
-                    cursor: 'pointer',
-                    background: i === searchHighlightIdx ? 'var(--bg-secondary)' : 'transparent',
-                    fontSize: '0.85rem',
-                  }}
-                >
-                  <div>{r.node.label}</div>
-                  <div className="text-muted" style={{ fontSize: '0.75rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {r.snippet || [r.node.ip, r.node.meraki?.site_name || r.node.group_name].filter(Boolean).join(' · ')}
-                  </div>
-                </div>
-              ))}
-              {searchResults.length > MAX_SEARCH_RESULTS && (
-                <div className="text-muted" style={{ padding: '0.4rem 0.65rem', fontSize: '0.75rem' }}>
-                  {searchResults.length - MAX_SEARCH_RESULTS} more - refine the search or highlight all.
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        <button className="btn btn-primary btn-sm" onClick={() => setSourcesOpen(true)} title="Everything that feeds the map - neighbor discovery, Meraki, Cato, Cisco FMC, Palo Alto Panorama, Appgate SDP, AWS, Azure, GCP: add, collect, history">Sources</button>
-        <button className="btn btn-secondary btn-sm" onClick={handleRefresh}>Refresh</button>
-        <button className={`btn btn-sm ${pathMode ? 'btn-primary' : 'btn-secondary'}`} onClick={togglePathMode} title="Pick devices or sites and see how they reach one another">{pathMode ? 'Exit Path' : 'Path Mode'}</button>
-        <button className={`btn btn-sm ${searchPanelOpen ? 'btn-primary' : 'btn-secondary'}`} onClick={toggleSearchPanel}>{searchPanelOpen ? 'Close Search' : 'Find MAC/IP/VLAN'}</button>
-        <button
-          type="button"
-          className="btn btn-sm btn-secondary"
-          onClick={() => setBulkAddOpen(true)}
-          disabled={addableCount === 0}
-          title="Add devices on the map that are not inventory hosts (CDP/LLDP neighbors, cloud instances) to an inventory group"
-        >
-          Add to inventory…{addableBadge && <span className="badge badge-info topo-toolbar-badge">{addableBadge}</span>}
-        </button>
-        <Menu
-          label="View"
-          align="start"
-          width={240}
-          trigger={(isOpen) => (
-            <button type="button" className={`btn btn-sm ${isOpen ? 'btn-primary' : 'btn-secondary'}`} title="Labels and map overlays">
-              View{overlayCount > 0 && <span className="badge badge-info topo-toolbar-badge">{overlayCount}</span>} ▾
-            </button>
-          )}
-        >
-          <MenuCheckboxItem checked={labelsVisible} onChange={setLabelsVisible}>Labels</MenuCheckboxItem>
-          {tunnelCount > 0 && (
-            <MenuCheckboxItem
-              checked={showAllTunnels}
-              onChange={setTunnelPref}
-              title={
-                showAllTunnels
-                  ? `Showing all ${tunnelCount} VPN tunnels. Click to show only the tunnels of the selected device.`
-                  : `Showing only the VPN tunnels of the selected device. Click to draw all ${tunnelCount}.`
-              }
-            >
-              VPN Tunnels
-            </MenuCheckboxItem>
-          )}
-          {endDeviceCount > 0 && (
-            <MenuCheckboxItem
-              checked={showEndDevices}
-              onChange={setShowEndDevices}
-              title={
-                showEndDevices
-                  ? `Showing the ${endDeviceCount} phones, servers and cameras CDP / LLDP found on access ports. Click to leave them off the map.`
-                  : `${endDeviceCount} phones, servers and cameras CDP / LLDP found on access ports are left off the map. Click to draw them.`
-              }
-            >
-              End Devices
-            </MenuCheckboxItem>
-          )}
-          <MenuSeparator />
-          <MenuCheckboxItem checked={utilOverlay} onChange={setUtilOverlay}>Util Overlay</MenuCheckboxItem>
-          <MenuCheckboxItem checked={stpOverlay} onChange={setStpOverlay}>STP Overlay</MenuCheckboxItem>
-          <MenuCheckboxItem checked={statusOverlay} onChange={setStatusOverlay}>Status Overlay</MenuCheckboxItem>
-        </Menu>
-        <Menu
-          label="Layout"
-          align="start"
-          width={240}
-          trigger={(isOpen) => (
-            <button type="button" className={`btn btn-sm ${isOpen ? 'btn-primary' : 'btn-secondary'}`} title={`Layout: ${layoutLabel(layout)}`}>
-              Layout ▾
-            </button>
-          )}
-        >
-          {LAYOUT_OPTIONS.map((o) => (
-            <MenuCheckboxItem key={o.value} checked={layout === o.value} onChange={() => setLayout(o.value)}>
-              {o.label}
-            </MenuCheckboxItem>
-          ))}
-          <MenuSeparator />
-          <MenuItem onSelect={handleFit}>Fit to screen</MenuItem>
-          <MenuItem onSelect={handleResetPositions}>Reset Positions</MenuItem>
-          <MenuCheckboxItem checked={settingsOpen} onChange={setSettingsOpen}>Layout settings</MenuCheckboxItem>
-        </Menu>
-        <Menu
-          label="Events"
-          align="start"
-          width={220}
-          trigger={(isOpen) => (
-            <button
-              type="button"
-              className={`btn btn-sm ${isOpen ? 'btn-primary' : 'btn-secondary'}`}
-              title="Unacknowledged STP events and topology changes"
-            >
-              Events
-              {eventsBadge && (
-                <span className={`badge ${stpBadge > 0 ? 'badge-danger' : 'badge-warning'} topo-toolbar-badge`}>{eventsBadge}</span>
-              )}{' '}
-              ▾
-            </button>
-          )}
-        >
-          <MenuItem onSelect={() => setStpEventsOpen(true)}>
-            <span className="topo-menu-row">
-              STP Events…
-              {badgeText(stpBadge) && <span className="badge badge-danger">{badgeText(stpBadge)}</span>}
-            </span>
-          </MenuItem>
-          <MenuItem onSelect={() => setChangesOpen(true)}>
-            <span className="topo-menu-row">
-              Changes…
-              {badgeText(changeBadge) && <span className="badge badge-warning">{badgeText(changeBadge)}</span>}
-            </span>
-          </MenuItem>
-        </Menu>
-        <ExportMenu
-          onPNG={handleExportPNG}
-          onSVG={handleExportSVG}
-          onJSON={handleExportJSON}
-          htmlDownloadUrl={topologyExportUrl(groupId, true, exportPath)}
-          htmlOpenUrl={topologyExportUrl(groupId, false, exportPath)}
-          withPath={exportPath !== null}
-        />
-      </div>
-
-      {highlightCount > 0 && (
-        <div className="card" style={{ padding: '0.5rem 0.85rem', marginBottom: '0.6rem', borderLeft: '3px solid var(--primary)' }}>
-          {highlightCount} device{highlightCount === 1 ? '' : 's'} matching “{appliedSearch}” highlighted. Click one to see the matching details.
-          <button type="button" className="btn btn-sm btn-secondary" onClick={clearSearchHighlight} style={{ marginLeft: '0.6rem' }}>Clear</button>
-        </div>
-      )}
-
-      {(stpOverlay || stpScan.isPending) && (
-        <div className="card" style={{ padding: '0.5rem 0.75rem', marginBottom: '0.6rem', display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <button className="btn btn-secondary btn-sm" onClick={handleScanStp} disabled={stpScan.isPending}>{stpScan.isPending ? 'Scanning…' : 'Scan STP'}</button>
-          <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', fontSize: '0.85rem' }}>
-            <input type="checkbox" checked={stpAllVlans} onChange={(e) => setStpAllVlans(e.target.checked)} />
-            All VLANs
-          </label>
-          <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', fontSize: '0.85rem' }}>
-            VLAN
-            <input
-              type="number"
-              className="form-input"
-              style={{ width: 80 }}
-              min={1}
-              max={4094}
-              value={stpVlan}
-              disabled={stpAllVlans}
-              onChange={(e) => setStpVlan(Math.max(1, Math.min(4094, parseInt(e.target.value, 10) || 1)))}
-            />
-          </label>
-        </div>
-      )}
-
-      {settingsOpen && (
-        <div className="card" style={{ padding: '0.6rem 0.75rem', marginBottom: '0.6rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem' }}>
-          <label style={{ fontSize: '0.85rem' }}>
-            Node Spacing: {spacing}
-            <input type="range" min={120} max={400} value={spacing} onChange={(e) => setSpacing(parseInt(e.target.value, 10))} style={{ width: '100%' }} />
-          </label>
-          <label style={{ fontSize: '0.85rem' }}>
-            Repulsion: {repulsion}
-            <input type="range" min={2000} max={20000} step={500} value={repulsion} onChange={(e) => setRepulsion(parseInt(e.target.value, 10))} style={{ width: '100%' }} />
-          </label>
-          <label style={{ fontSize: '0.85rem' }}>
-            Edge Length: {edgeLen}
-            <input type="range" min={120} max={500} value={edgeLen} onChange={(e) => setEdgeLen(parseInt(e.target.value, 10))} style={{ width: '100%' }} />
-          </label>
-        </div>
-      )}
-
-      {pathMode && (
-        <div className="card" style={{ padding: '0.5rem 0.85rem', marginBottom: '0.6rem', borderLeft: '3px solid var(--primary)', fontSize: '0.85rem' }}>
-          <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
-            <strong>Path</strong>
-            {!pathSiteInput && !pathSubnetInput && (
-              <span className="text-muted">
-                {pathModeHint(pathSiteList.length > 0, showPathSubnets)}
-              </span>
-            )}
-            {/* The placeholders are dropped once there is text: inside this
-                blurred card Chromium can leave a placeholder painted under the
-                typed value, so the attribute goes rather than relying on the
-                browser to hide it. */}
-            {pathSiteList.length > 0 && (
-              <>
-                <input
-                  className="form-input"
-                  list="topology-path-sites"
-                  placeholder={pathSiteInput ? undefined : 'Add a site…'}
-                  aria-label="Add a site to the path"
-                  title="Pick a site from the list, or type part of its name and press Enter"
-                  value={pathSiteInput}
-                  onChange={(e) => handlePathSiteInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') handlePathSiteInput(e.currentTarget.value, true); }}
-                  style={{ minWidth: 200 }}
-                />
-                <datalist id="topology-path-sites">
-                  {pathSiteList.map((s) => <option key={s.key} value={s.name} />)}
-                </datalist>
-              </>
-            )}
-            {showPathSubnets && (
-              <>
-                <input
-                  className="form-input"
-                  list="topology-path-subnets"
-                  placeholder={pathSubnetInput ? undefined : subnetsQuery.isPending ? 'Loading subnets…' : 'Add a subnet or IP address…'}
-                  aria-label="Add a subnet to the path"
-                  title="Pick a subnet from the list, or type an IP address or network and press Enter"
-                  value={pathSubnetInput}
-                  onChange={(e) => handlePathSubnetInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') handlePathSubnetInput(e.currentTarget.value, true); }}
-                  style={{ minWidth: 260 }}
-                />
-                <datalist id="topology-path-subnets">
-                  {pathSubnets.list.map((s) => {
-                    const text = subnetOptionLabel(s);
-                    return <option key={`${s.org_ref}|${s.node_id}|${s.cidr}`} value={text} />;
-                  })}
-                </datalist>
-                {pathSubnetChoices.length > 1 && (
-                  <select
-                    className="form-select"
-                    aria-label={`${pathSubnetInput.trim()} is at`}
-                    title="The typed address is in a subnet that several sites have: pick the one you mean"
-                    value=""
-                    onChange={(e) => pickPathSubnetChoice(e.target.value)}
-                    style={{ minWidth: 260 }}
-                  >
-                    <option value="">{pathSubnetInput.trim()} is at…</option>
-                    {pathSubnetChoices.map((s) => (
-                      <option key={`${s.org_ref}|${s.node_id}|${s.cidr}`} value={`${s.org_ref}|${s.node_id}|${s.cidr}`}>{subnetOptionLabel(s)}</option>
-                    ))}
-                  </select>
-                )}
-              </>
-            )}
-            {pathHasTraceLeg && (
+        {(stpOverlay || stpScan.isPending) && (
+          <div className="card card-sm toolbar">
+            <button className="btn btn-secondary btn-sm" onClick={handleScanStp} disabled={stpScan.isPending}>{stpScan.isPending ? 'Scanning…' : 'Scan STP'}</button>
+            <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', fontSize: '0.85rem' }}>
+              <input type="checkbox" checked={stpAllVlans} onChange={(e) => setStpAllVlans(e.target.checked)} />
+              All VLANs
+            </label>
+            <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', fontSize: '0.85rem' }}>
+              VLAN
               <input
-                className="form-input"
-                placeholder={pathTraffic ? undefined : 'Traffic: any, or tcp/443'}
-                aria-label="Traffic traced through the routes, policies and NAT on the path"
-                title="Traffic the trace is asked about, from the first of two picks to the second: tcp/443, udp/53, icmp, or empty for any traffic"
-                value={pathTraffic}
-                onChange={(e) => setPathTraffic(e.target.value)}
-                aria-invalid={trafficFilter === null}
-                style={{ width: 190, borderColor: trafficFilter === null ? 'var(--danger)' : undefined }}
+                type="number"
+                className="form-input form-input-sm"
+                style={{ width: 80 }}
+                min={1}
+                max={4094}
+                value={stpVlan}
+                disabled={stpAllVlans}
+                onChange={(e) => setStpVlan(Math.max(1, Math.min(4094, parseInt(e.target.value, 10) || 1)))}
               />
-            )}
-            <button type="button" className="btn btn-sm btn-secondary" onClick={() => { setPathPicks([]); setPathNote(''); setPathSubnetChoices([]); }} disabled={!pathPicks.length}>Clear</button>
+            </label>
           </div>
-          {pathNote && (
-            <div role="status" style={{ marginTop: '0.45rem', color: 'var(--warning)' }}>{pathNote}</div>
-          )}
-          {pathPicks.length === 1 && (
-            <div className="text-muted" style={{ marginTop: '0.45rem' }}>Add one more to see the path.</div>
-          )}
-          {pathPicks.length > 0 && (
-            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.45rem' }}>
-              {pathPicks.map((pick) => (
-                <button key={pick.key} type="button" className="btn btn-sm btn-secondary" onClick={() => togglePathPick(pick)} title="Remove from the path">
-                  {pick.label} ×
-                </button>
-              ))}
-            </div>
-          )}
-          {pathResult.legs.map((leg) => (
-            <div key={legKey(leg)} style={{ marginTop: '0.35rem' }}>
-              {(leg.from.subnet || leg.to.subnet) && (
-                <strong>{leg.from.address ?? leg.from.subnet?.cidr ?? leg.from.label} ↔ {leg.to.address ?? leg.to.subnet?.cidr ?? leg.to.label}: </strong>
-              )}
-              {/* A traced leg lists the hops of its trace (PathTrace below) instead of the drawn path. */}
-              {leg.sameDevice ? (
-                <>Same device - routed locally by {pathLabel(leg.from.node)}.</>
-              ) : leg.path && traceHighlights[legKey(leg)]?.nodeIds.size ? null : leg.path ? (
-                <>
-                  {leg.path.map((id) => pathLabel(id)).join(' → ')}{' '}
-                  <span className="text-muted">({leg.path.length - 1} hop{leg.path.length - 1 !== 1 ? 's' : ''})</span>
-                </>
-              ) : (
-                <span style={{ color: 'var(--danger)' }}>
-                  {pathLabel(leg.from.node)} and {pathLabel(leg.to.node)}: no path over links that are up.
+        )}
+
+        {settingsOpen && (
+          <div className="card card-sm" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem' }}>
+            <label style={{ fontSize: '0.85rem' }}>
+              Node Spacing: {spacing}
+              <input type="range" min={120} max={400} value={spacing} onChange={(e) => setSpacing(parseInt(e.target.value, 10))} style={{ width: '100%' }} />
+            </label>
+            <label style={{ fontSize: '0.85rem' }}>
+              Repulsion: {repulsion}
+              <input type="range" min={2000} max={20000} step={500} value={repulsion} onChange={(e) => setRepulsion(parseInt(e.target.value, 10))} style={{ width: '100%' }} />
+            </label>
+            <label style={{ fontSize: '0.85rem' }}>
+              Edge Length: {edgeLen}
+              <input type="range" min={120} max={500} value={edgeLen} onChange={(e) => setEdgeLen(parseInt(e.target.value, 10))} style={{ width: '100%' }} />
+            </label>
+          </div>
+        )}
+
+        {pathMode && (
+          <div className="card card-sm" style={{ borderLeft: '3px solid var(--primary)', fontSize: '0.85rem' }}>
+            <div className="toolbar" style={{ marginBottom: 0 }}>
+              <strong>Path</strong>
+              {!pathSiteInput && !pathSubnetInput && (
+                <span className="text-muted">
+                  {pathModeHint(pathSiteList.length > 0, showPathSubnets)}
                 </span>
               )}
-              {leg.notes.map((note) => (
-                <div key={note} style={{ color: 'var(--warning)' }}>⚠ {note}</div>
-              ))}
-              {(() => {
-                const key = legKey(leg);
-                const query = trafficFilter ? pathTraceQuery(leg.from, leg.to, trafficFilter) : null;
-                if (query) {
-                  return (
-                    <PathTrace
-                      forward={query}
-                      backward={reverseTraceQuery(query)}
-                      onHighlight={(highlight) => setLegHighlight(key, highlight)}
-                    />
-                  );
-                }
-                const note = leg.sameDevice ? null : uncheckedTraceNote(leg.from, leg.to);
-                return note && <div className="text-muted">ⓘ {note}</div>;
-              })()}
+              {/* The placeholders are dropped once there is text: inside this
+                  blurred card Chromium can leave a placeholder painted under the
+                  typed value, so the attribute goes rather than relying on the
+                  browser to hide it. */}
+              {pathSiteList.length > 0 && (
+                <>
+                  <input
+                    className="form-input form-input-sm"
+                    list="topology-path-sites"
+                    placeholder={pathSiteInput ? undefined : 'Add a site…'}
+                    aria-label="Add a site to the path"
+                    title="Pick a site from the list, or type part of its name and press Enter"
+                    value={pathSiteInput}
+                    onChange={(e) => handlePathSiteInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handlePathSiteInput(e.currentTarget.value, true); }}
+                    style={{ minWidth: 200 }}
+                  />
+                  <datalist id="topology-path-sites">
+                    {pathSiteList.map((s) => <option key={s.key} value={s.name} />)}
+                  </datalist>
+                </>
+              )}
+              {showPathSubnets && (
+                <>
+                  <input
+                    className="form-input form-input-sm"
+                    list="topology-path-subnets"
+                    placeholder={pathSubnetInput ? undefined : subnetsQuery.isPending ? 'Loading subnets…' : 'Add a subnet or IP address…'}
+                    aria-label="Add a subnet to the path"
+                    title="Pick a subnet from the list, or type an IP address or network and press Enter"
+                    value={pathSubnetInput}
+                    onChange={(e) => handlePathSubnetInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handlePathSubnetInput(e.currentTarget.value, true); }}
+                    style={{ minWidth: 260 }}
+                  />
+                  <datalist id="topology-path-subnets">
+                    {pathSubnets.list.map((s) => {
+                      const text = subnetOptionLabel(s);
+                      return <option key={`${s.org_ref}|${s.node_id}|${s.cidr}`} value={text} />;
+                    })}
+                  </datalist>
+                  {pathSubnetChoices.length > 1 && (
+                    <select
+                      className="form-select form-select-sm"
+                      aria-label={`${pathSubnetInput.trim()} is at`}
+                      title="The typed address is in a subnet that several sites have: pick the one you mean"
+                      value=""
+                      onChange={(e) => pickPathSubnetChoice(e.target.value)}
+                      style={{ minWidth: 260 }}
+                    >
+                      <option value="">{pathSubnetInput.trim()} is at…</option>
+                      {pathSubnetChoices.map((s) => (
+                        <option key={`${s.org_ref}|${s.node_id}|${s.cidr}`} value={`${s.org_ref}|${s.node_id}|${s.cidr}`}>{subnetOptionLabel(s)}</option>
+                      ))}
+                    </select>
+                  )}
+                </>
+              )}
+              {pathHasTraceLeg && (
+                <input
+                  className="form-input form-input-sm"
+                  placeholder={pathTraffic ? undefined : 'Traffic: any, or tcp/443'}
+                  aria-label="Traffic traced through the routes, policies and NAT on the path"
+                  title="Traffic the trace is asked about, from the first of two picks to the second: tcp/443, udp/53, icmp, or empty for any traffic"
+                  value={pathTraffic}
+                  onChange={(e) => setPathTraffic(e.target.value)}
+                  aria-invalid={trafficFilter === null}
+                  style={{ width: 190, borderColor: trafficFilter === null ? 'var(--danger)' : undefined }}
+                />
+              )}
+              <button type="button" className="btn btn-sm btn-secondary" onClick={() => { setPathPicks([]); setPathNote(''); setPathSubnetChoices([]); }} disabled={!pathPicks.length}>Clear</button>
             </div>
-          ))}
-          {pathResult.legs.length > 0 && (
-            <div className="text-muted" style={{ marginTop: '0.35rem', fontSize: '0.78rem' }}>
-              The path drawn is the shortest way over the cables, uplinks and VPN tunnels on the map that are up: it shows how
-              the ends are joined, not the route each device picks.
-              {pathHasTraceLeg && ' A traced leg lists the hops of its trace instead.'} A subnet is placed on the device that
-              owns it (appliance, L3 switch, VPC or VPN peer).
-              {pathHasTraceLeg &&
-                ' Between two subnets or addresses the server traces the flow hop by hop and lists, at every device, the policies, ACLs, security groups, NAT rules and routes it hits, for the request and for the replies, and says whether routing is asymmetric. Reverse swaps the ends. Anything a source does not collect is reported as unknown, never as allowed.'}
-            </div>
+            {pathNote && (
+              <div role="status" style={{ marginTop: '0.45rem', color: 'var(--warning)' }}>{pathNote}</div>
+            )}
+            {pathPicks.length === 1 && (
+              <div className="text-muted" style={{ marginTop: '0.45rem' }}>Add one more to see the path.</div>
+            )}
+            {pathPicks.length > 0 && (
+              <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.45rem' }}>
+                {pathPicks.map((pick) => (
+                  <button key={pick.key} type="button" className="btn btn-sm btn-secondary" onClick={() => togglePathPick(pick)} title="Remove from the path">
+                    {pick.label} ×
+                  </button>
+                ))}
+              </div>
+            )}
+            {pathResult.legs.map((leg) => (
+              <div key={legKey(leg)} style={{ marginTop: '0.35rem' }}>
+                {(leg.from.subnet || leg.to.subnet) && (
+                  <strong>{leg.from.address ?? leg.from.subnet?.cidr ?? leg.from.label} ↔ {leg.to.address ?? leg.to.subnet?.cidr ?? leg.to.label}: </strong>
+                )}
+                {/* A traced leg lists the hops of its trace (PathTrace below) instead of the drawn path. */}
+                {leg.sameDevice ? (
+                  <>Same device - routed locally by {pathLabel(leg.from.node)}.</>
+                ) : leg.path && traceHighlights[legKey(leg)]?.nodeIds.size ? null : leg.path ? (
+                  <>
+                    {leg.path.map((id) => pathLabel(id)).join(' → ')}{' '}
+                    <span className="text-muted">({leg.path.length - 1} hop{leg.path.length - 1 !== 1 ? 's' : ''})</span>
+                  </>
+                ) : (
+                  <span style={{ color: 'var(--danger)' }}>
+                    {pathLabel(leg.from.node)} and {pathLabel(leg.to.node)}: no path over links that are up.
+                  </span>
+                )}
+                {leg.notes.map((note) => (
+                  <div key={note} style={{ color: 'var(--warning)' }}>⚠ {note}</div>
+                ))}
+                {(() => {
+                  const key = legKey(leg);
+                  const query = trafficFilter ? pathTraceQuery(leg.from, leg.to, trafficFilter) : null;
+                  if (query) {
+                    return (
+                      <PathTrace
+                        forward={query}
+                        backward={reverseTraceQuery(query)}
+                        onHighlight={(highlight) => setLegHighlight(key, highlight)}
+                      />
+                    );
+                  }
+                  const note = leg.sameDevice ? null : uncheckedTraceNote(leg.from, leg.to);
+                  return note && <div className="text-muted">ⓘ {note}</div>;
+                })()}
+              </div>
+            ))}
+            {pathResult.legs.length > 0 && (
+              <div className="text-muted" style={{ marginTop: '0.35rem', fontSize: '0.78rem' }}>
+                The path drawn is the shortest way over the cables, uplinks and VPN tunnels on the map that are up: it shows how
+                the ends are joined, not the route each device picks.
+                {pathHasTraceLeg && ' A traced leg lists the hops of its trace instead.'} A subnet is placed on the device that
+                owns it (appliance, L3 switch, VPC or VPN peer).
+                {pathHasTraceLeg &&
+                  ' Between two subnets or addresses the server traces the flow hop by hop and lists, at every device, the policies, ACLs, security groups, NAT rules and routes it hits, for the request and for the replies, and says whether routing is asymmetric. Reverse swaps the ends. Anything a source does not collect is reported as unknown, never as allowed.'}
+              </div>
+            )}
+          </div>
+        )}
+
+        {topologyQuery.isPending && <div className="text-muted">Loading topology…</div>}
+        {topologyQuery.error && <div style={{ color: 'var(--danger)' }}>Error: {(topologyQuery.error as Error).message}</div>}
+
+        {data && !data.nodes.length && (
+          <div className="card" style={{ padding: '1.5rem', textAlign: 'center' }}>
+            <p className="text-muted" style={{ marginTop: 0 }}>No topology data. Open Sources to discover the neighbors of your inventory devices, or to add a Meraki organization, a Cato account, a Cisco FMC, a Palo Alto Panorama, an Appgate SDP collective, an AWS account, an Azure subscription or a GCP project.</p>
+            <button className="btn btn-primary btn-sm" onClick={() => setSourcesOpen(true)}>Sources</button>
+          </div>
+        )}
+
+        <div style={{ position: 'relative', height: 'calc(100vh - 280px)', minHeight: 460, border: '1px solid var(--border)', borderRadius: '0.5rem', overflow: 'hidden', display: data && data.nodes.length ? 'block' : 'none' }}>
+          <div ref={containerRef} id="topology-canvas" style={{ width: '100%', height: '100%' }} />
+          {searchPanelOpen && (
+            <TopologySearchPanel
+              onHighlight={stableApplySearchHighlight}
+              resolveMeraki={resolveMerakiNode}
+              onClose={() => setSearchPanelOpen(false)}
+            />
+          )}
+          {detailsEdge && data && !detailsNode && (
+            <EdgeDetails
+              edge={detailsEdge}
+              fromNode={data.nodes.find((n) => n.id === detailsEdge.from)}
+              toNode={data.nodes.find((n) => n.id === detailsEdge.to)}
+              onClose={() => setDetailsEdge(null)}
+            />
+          )}
+          {detailsNode && data && (
+            <NodeDetails
+              node={detailsNode}
+              edges={data.edges}
+              allNodes={data.nodes}
+              stpStateByPort={stpStateRef.current}
+              onClose={() => setDetailsNode(null)}
+              searchText={appliedSearch}
+              onAddToInventory={(n) => setAddInvTarget(n)}
+              onCategoryUpdated={(hostId, newCategory) => {
+                // Write to the unfiltered graph: `data` may be a source-filtered view.
+                if (!rawData) return;
+                const target = rawData.nodes.find((n) => n.id === hostId);
+                if (!target) return;
+                const updatedNode = { ...target, device_category: newCategory };
+                qc.setQueryData(['topology', groupId ?? null], {
+                  ...rawData,
+                  nodes: rawData.nodes.map((n) => (n.id === hostId ? updatedNode : n)),
+                });
+                const iconUrl = nodeIconUrl(updatedNode);
+                const nodesDS = nodesDSRef.current;
+                nodesDS?.update({
+                  id: hostId,
+                  shape: iconUrl ? 'circularImage' : nodeShape(updatedNode.device_type),
+                  image: iconUrl,
+                } as never);
+                flash(`Role updated to ${newCategory || '(auto)'}`);
+              }}
+            />
           )}
         </div>
-      )}
-
-      {topologyQuery.isPending && <div className="text-muted">Loading topology…</div>}
-      {topologyQuery.error && <div style={{ color: 'var(--danger)' }}>Error: {(topologyQuery.error as Error).message}</div>}
-
-      {data && !data.nodes.length && (
-        <div className="card" style={{ padding: '1.5rem', textAlign: 'center' }}>
-          <p className="text-muted" style={{ marginTop: 0 }}>No topology data. Open Sources to discover the neighbors of your inventory devices, or to add a Meraki organization, a Cato account, a Cisco FMC, a Palo Alto Panorama, an Appgate SDP collective, an AWS account, an Azure subscription or a GCP project.</p>
-          <button className="btn btn-primary btn-sm" onClick={() => setSourcesOpen(true)}>Sources</button>
-        </div>
-      )}
-
-      <div style={{ position: 'relative', height: 'calc(100vh - 280px)', minHeight: 460, border: '1px solid var(--border)', borderRadius: '0.5rem', overflow: 'hidden', display: data && data.nodes.length ? 'block' : 'none' }}>
-        <div ref={containerRef} id="topology-canvas" style={{ width: '100%', height: '100%' }} />
-        {searchPanelOpen && (
-          <TopologySearchPanel
-            onHighlight={stableApplySearchHighlight}
-            resolveMeraki={resolveMerakiNode}
-            onClose={() => setSearchPanelOpen(false)}
-          />
-        )}
-        {detailsEdge && data && !detailsNode && (
-          <EdgeDetails
-            edge={detailsEdge}
-            fromNode={data.nodes.find((n) => n.id === detailsEdge.from)}
-            toNode={data.nodes.find((n) => n.id === detailsEdge.to)}
-            onClose={() => setDetailsEdge(null)}
-          />
-        )}
-        {detailsNode && data && (
-          <NodeDetails
-            node={detailsNode}
-            edges={data.edges}
-            allNodes={data.nodes}
-            stpStateByPort={stpStateRef.current}
-            onClose={() => setDetailsNode(null)}
-            searchText={appliedSearch}
-            onAddToInventory={(n) => setAddInvTarget(n)}
-            onCategoryUpdated={(hostId, newCategory) => {
-              // Write to the unfiltered graph: `data` may be a source-filtered view.
-              if (!rawData) return;
-              const target = rawData.nodes.find((n) => n.id === hostId);
-              if (!target) return;
-              const updatedNode = { ...target, device_category: newCategory };
-              qc.setQueryData(['topology', groupId ?? null], {
-                ...rawData,
-                nodes: rawData.nodes.map((n) => (n.id === hostId ? updatedNode : n)),
-              });
-              const iconUrl = nodeIconUrl(updatedNode);
-              const nodesDS = nodesDSRef.current;
-              nodesDS?.update({
-                id: hostId,
-                shape: iconUrl ? 'circularImage' : nodeShape(updatedNode.device_type),
-                image: iconUrl,
-              } as never);
-              flash(`Role updated to ${newCategory || '(auto)'}`);
-            }}
-          />
-        )}
       </div>
 
       {data && data.nodes.length > 0 && (

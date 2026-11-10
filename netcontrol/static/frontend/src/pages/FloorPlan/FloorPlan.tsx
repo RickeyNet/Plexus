@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 
+import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -61,26 +62,23 @@ export function FloorPlan() {
 
   return (
     <>
-      <div className="page-header">
-        <h2>Floor Plan Mapping</h2>
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => setModal('add-site')}
-          >
-            + Add Site
-          </button>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => sites.refetch()}
-            disabled={sites.isFetching}
-          >
-            Refresh
-          </button>
-        </div>
-      </div>
+      <PageHeader title="Floor Plan Mapping">
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => setModal('add-site')}
+        >
+          + Add Site
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={() => sites.refetch()}
+          disabled={sites.isFetching}
+        >
+          Refresh
+        </button>
+      </PageHeader>
 
       <PageHelp
         pageKey="floor-plan"

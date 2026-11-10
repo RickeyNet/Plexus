@@ -49,19 +49,12 @@ export function SearchTab() {
 
   return (
     <>
-      <div
-        style={{
-          display: 'flex',
-          gap: '0.5rem',
-          alignItems: 'flex-end',
-          flexWrap: 'wrap',
-          marginBottom: '0.75rem',
-        }}
-      >
+      <div className="toolbar" style={{ alignItems: 'flex-end' }}>
         <div style={{ flex: '1 1 280px', minWidth: 240 }}>
           <label className="form-label">Search</label>
           <input
             className="form-input"
+            style={{ width: '100%' }}
             value={query}
             placeholder={hint.placeholder}
             onChange={(e) => setQuery(e.target.value)}
@@ -110,7 +103,6 @@ export function SearchTab() {
         style={{
           fontSize: '0.85em',
           color: 'var(--text-muted)',
-          marginBottom: '0.75rem',
         }}
       >
         {hint.example}
@@ -177,25 +169,14 @@ function Results({
   }
 
   return (
-    <>
-      <div
-        className="card"
-        style={{
-          marginBottom: '0.75rem',
-          padding: '0.75rem 1rem',
-          color: 'var(--text-muted)',
-        }}
-      >
+    <div className="stack stack-sm">
+      <div className="card card-sm" style={{ color: 'var(--text-muted)' }}>
         Found {data.results.length} result(s) using{' '}
         <strong>{data.mode || 'fulltext'}</strong> mode
         {data.has_more ? ' (showing top matches)' : ''}.
       </div>
       {data.results.map((r) => (
-        <div
-          key={r.backup_id}
-          className="card"
-          style={{ marginBottom: '0.75rem', padding: '1rem' }}
-        >
+        <div key={r.backup_id} className="card">
           <div
             style={{
               display: 'flex',
@@ -298,6 +279,6 @@ function Results({
           </pre>
         </div>
       ))}
-    </>
+    </div>
   );
 }

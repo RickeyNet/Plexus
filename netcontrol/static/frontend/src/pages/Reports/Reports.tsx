@@ -1,3 +1,4 @@
+import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { TabBar } from '@/components/TabBar';
 import { usePathTab } from '@/lib/usePathTab';
@@ -37,9 +38,7 @@ export function Reports() {
 
   return (
     <div>
-      <div className="page-header" style={{ marginBottom: '0.75rem' }}>
-        <h2 style={{ margin: 0 }}>Reports</h2>
-      </div>
+      <PageHeader title="Reports" />
 
       <PageHelp
         pageKey="reports"
@@ -51,7 +50,7 @@ export function Reports() {
 
       <PageHelp pageKey={`reports.${tab}`} title={TAB_HELP[tab].title} text={TAB_HELP[tab].text} />
 
-      <div className="card" style={{ padding: '1rem' }}>
+      <div className="card">
         {tab === 'generate' && <GenerateReportTab />}
         {tab === 'history' && <HistoryTab />}
         {tab === 'billing' && <BillingTab />}

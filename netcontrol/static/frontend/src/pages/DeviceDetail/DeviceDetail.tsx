@@ -127,31 +127,21 @@ export function DeviceDetail() {
 
   return (
     <div>
-      <div
-        className="page-header"
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: '0.5rem',
-          marginBottom: '0.75rem',
-        }}
-      >
-        <div>
-          <button
-            className="btn btn-sm btn-ghost"
-            onClick={() => navigate('/monitoring')}
-            style={{ marginRight: '0.5rem' }}
-          >
+      {/* The back button sits beside the title, not inside it: .page-title
+          clips its text to a gradient, which would blank the button label. */}
+      <div className="page-header">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <button className="btn btn-sm btn-ghost" onClick={() => navigate('/monitoring')}>
             ← Devices
           </button>
-          <span style={{ fontSize: '1.25rem', fontWeight: 600 }}>{title}</span>
+          <h2 className="page-title">{title}</h2>
         </div>
       </div>
 
-      <DeviceInfoBar poll={latestPoll} hostId={hostId} />
-      {ipamCtx.data && <IpamContext ctx={ipamCtx.data} vrf={vrf} />}
+      <div className="stack stack-sm" style={{ marginBottom: 'var(--space-4)' }}>
+        <DeviceInfoBar poll={latestPoll} hostId={hostId} />
+        {ipamCtx.data && <IpamContext ctx={ipamCtx.data} vrf={vrf} />}
+      </div>
 
       <PageHelp
         pageKey="device-detail"
@@ -159,39 +149,35 @@ export function DeviceDetail() {
         text="Everything Plexus knows about one device - health metrics, interface stats, alerts, compliance status, and syslog - scoped to the time range above."
       />
 
-      <div style={{ marginTop: '0.75rem' }}>
-        <TabBar
-          tabs={TABS.map((t) => ({ key: t.id, label: t.label }))}
-          active={tab}
-          onChange={setTab}
-          aria-label="Device sections"
-        />
-      </div>
+      <TabBar
+        tabs={TABS.map((t) => ({ key: t.id, label: t.label }))}
+        active={tab}
+        onChange={setTab}
+        aria-label="Device sections"
+      />
 
-      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div style={{ padding: '0.75rem' }}>
-          <PageHelp pageKey={`device-detail.${tab}`} title={TAB_HELP[tab].title} text={TAB_HELP[tab].text} />
-          {tab === 'overview' && (
-            <OverviewTab cpu={cpu.data} mem={mem.data} rt={rt.data} pl={pl.data} />
-          )}
-          {tab === 'interfaces' && (
-            <InterfaceTab ifData={ifData.data} latestPoll={latestPoll} />
-          )}
-          {tab === 'errors' && <ErrorTrendingTab hostId={hostId} range={range} />}
-          {tab === 'flow' && !flowHidden && <FlowTab hostId={hostId} range={range} />}
-          {tab === 'alerts' && (
-            <AlertsTab alerts={alerts.data?.alerts || []} loading={alerts.isLoading} />
-          )}
-          {tab === 'compliance' && (
-            <ComplianceTab
-              results={compliance.data?.results || []}
-              loading={compliance.isLoading}
-            />
-          )}
-          {tab === 'syslog' && (
-            <SyslogTab events={syslog.data?.events || []} loading={syslog.isLoading} />
-          )}
-        </div>
+      <div className="card card-sm" style={{ overflow: 'hidden' }}>
+        <PageHelp pageKey={`device-detail.${tab}`} title={TAB_HELP[tab].title} text={TAB_HELP[tab].text} />
+        {tab === 'overview' && (
+          <OverviewTab cpu={cpu.data} mem={mem.data} rt={rt.data} pl={pl.data} />
+        )}
+        {tab === 'interfaces' && (
+          <InterfaceTab ifData={ifData.data} latestPoll={latestPoll} />
+        )}
+        {tab === 'errors' && <ErrorTrendingTab hostId={hostId} range={range} />}
+        {tab === 'flow' && !flowHidden && <FlowTab hostId={hostId} range={range} />}
+        {tab === 'alerts' && (
+          <AlertsTab alerts={alerts.data?.alerts || []} loading={alerts.isLoading} />
+        )}
+        {tab === 'compliance' && (
+          <ComplianceTab
+            results={compliance.data?.results || []}
+            loading={compliance.isLoading}
+          />
+        )}
+        {tab === 'syslog' && (
+          <SyslogTab events={syslog.data?.events || []} loading={syslog.isLoading} />
+        )}
       </div>
     </div>
   );
@@ -210,14 +196,13 @@ function DeviceInfoBar({ poll, hostId }: { poll: MonitoringPoll | null; hostId: 
   const ifTotal =
     (poll.if_up_count || 0) + (poll.if_down_count || 0) + (poll.if_admin_down || 0);
   return (
-    <div className="card">
+    <div className="card card-sm">
       <div
         className="card-body"
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-          gap: '0.5rem',
-          padding: '0.75rem',
+          gap: 'var(--space-2)',
         }}
       >
         <Item label="Hostname" value={poll.hostname || 'Unknown'} />
@@ -317,8 +302,8 @@ function IpamContext({
   const s = ctx.matched_subnet;
   if (!s) {
     return (
-      <div className="card" style={{ marginTop: '0.5rem' }}>
-        <div className="card-body" style={{ padding: '0.5rem 0.75rem' }}>
+      <div className="card card-sm">
+        <div className="card-body">
           <span className="text-muted" style={{ fontSize: '0.82rem' }}>
             No IPAM subnet match
           </span>
@@ -336,14 +321,13 @@ function IpamContext({
           : 'var(--success)'
       : 'var(--success)';
   return (
-    <div className="card" style={{ marginTop: '0.5rem' }}>
+    <div className="card card-sm">
       <div
         className="card-body"
         style={{
-          padding: '0.5rem 0.75rem',
           display: 'flex',
           alignItems: 'center',
-          gap: '0.75rem',
+          gap: 'var(--space-3)',
           flexWrap: 'wrap',
         }}
       >
@@ -421,7 +405,7 @@ function OverviewTab({
       style={{
         display: 'grid',
         gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
-        gap: '0.75rem',
+        gap: 'var(--space-3)',
       }}
     >
       <ChartCard title="CPU %">
@@ -442,11 +426,14 @@ function OverviewTab({
 
 function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="card" style={{ marginBottom: 0 }}>
-      <div className="card-title" style={{ fontSize: '0.85rem', padding: '0.5rem 0.75rem' }}>
+    <div className="card-inset">
+      <div
+        className="card-title"
+        style={{ fontSize: 'var(--text-base)', marginBottom: 'var(--space-2)' }}
+      >
         {title}
       </div>
-      <div style={{ padding: '0.5rem' }}>{children}</div>
+      {children}
     </div>
   );
 }

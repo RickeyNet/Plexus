@@ -170,7 +170,7 @@ export function SystemTab() {
   const showRepo = draft.channel === 'release' || draft.channel === 'edge';
 
   return (
-    <div className="card" style={{ padding: '1rem', display: 'grid', gap: '1.25rem' }}>
+    <div className="stack">
       <CurrentVersionBox version={cur.version} sha={cur.git_sha} />
 
       <section>

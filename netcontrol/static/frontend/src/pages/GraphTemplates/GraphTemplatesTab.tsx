@@ -36,19 +36,18 @@ export function GraphTemplatesTab() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'flex-end', marginBottom: '0.75rem' }}>
-        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label className="form-label">Category</label>
-            <select className="form-select" value={category} onChange={(e) => setCategory(e.target.value)}>
-              {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-            </select>
-          </div>
-          <div className="form-group" style={{ marginBottom: 0, minWidth: 220 }}>
-            <label className="form-label">Search</label>
-            <input className="form-input" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter…" />
-          </div>
+      <div className="toolbar" style={{ alignItems: 'flex-end' }}>
+        <div className="form-group" style={{ marginBottom: 0 }}>
+          <label className="form-label">Category</label>
+          <select className="form-select" value={category} onChange={(e) => setCategory(e.target.value)}>
+            {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+          </select>
         </div>
+        <div className="form-group" style={{ marginBottom: 0, minWidth: 220 }}>
+          <label className="form-label">Search</label>
+          <input className="form-input" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter…" />
+        </div>
+        <span className="toolbar-spacer" />
         <button className="btn btn-primary" onClick={() => setCreating(true)}>+ New Template</button>
       </div>
 
@@ -63,7 +62,6 @@ export function GraphTemplatesTab() {
               key={t.id}
               type="button"
               className="card card-clickable"
-              style={{ padding: '1rem', marginBottom: 0 }}
               onClick={() => setDetailId(t.id)}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>

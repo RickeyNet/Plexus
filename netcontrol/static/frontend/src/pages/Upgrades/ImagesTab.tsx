@@ -49,13 +49,8 @@ export function ImagesTab() {
 
   return (
     <div>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'flex-end',
-          marginBottom: '0.75rem',
-        }}
-      >
+      <div className="toolbar">
+        <span className="toolbar-spacer" />
         <button
           type="button"
           className="btn btn-sm btn-primary"

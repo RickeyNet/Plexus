@@ -24,10 +24,11 @@ export function SecretVariablesList() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+      <div className="toolbar">
         <p className="text-muted" style={{ margin: 0 }}>
           Use <code>{'{{secret.NAME}}'}</code> in config templates to reference encrypted values.
         </p>
+        <span className="toolbar-spacer" />
         <button className="btn btn-primary" onClick={() => setShowCreate(true)}>+ New Secret</button>
       </div>
 
@@ -38,7 +39,7 @@ export function SecretVariablesList() {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {query.data.map((v) => (
-            <div key={v.id} className="card" style={{ padding: '0.75rem 1rem', display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <div key={v.id} className="card card-sm" style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-4)', alignItems: 'center', flexWrap: 'wrap' }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div><code style={{ fontWeight: 600 }}>{`{{secret.${v.name}}}`}</code></div>
                 {v.description && <div className="text-muted" style={{ fontSize: '0.85rem', marginTop: '0.15rem' }}>{v.description}</div>}

@@ -325,8 +325,8 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
     return (
       <Modal isOpen onClose={onClose} title={title}>
         <div
-          className="card"
-          style={{ borderLeft: '3px solid var(--success)', padding: '0.75rem' }}
+          className="card card-sm"
+          style={{ borderLeft: '3px solid var(--success)' }}
         >
           <strong>Sync complete</strong>
           <table style={{ width: '100%', marginTop: '0.5rem', fontSize: '0.85rem' }}>
@@ -362,8 +362,8 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
     return (
       <Modal isOpen onClose={onClose} title={title}>
         <div
-          className="card"
-          style={{ borderLeft: '3px solid var(--success)', padding: '0.75rem' }}
+          className="card card-sm"
+          style={{ borderLeft: '3px solid var(--success)' }}
         >
           <strong>Onboard complete</strong>
           <table style={{ width: '100%', marginTop: '0.5rem', fontSize: '0.85rem' }}>
@@ -395,8 +395,8 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
       <Modal isOpen onClose={onClose} title="SNMP Test Result">
         {snmpResult.ok ? (
           <div
-            className="card"
-            style={{ borderLeft: '3px solid var(--success)', padding: '0.75rem' }}
+            className="card card-sm"
+            style={{ borderLeft: '3px solid var(--success)' }}
           >
             <strong>SNMP OK</strong> - credentials validated
             <table style={{ width: '100%', marginTop: '0.5rem', fontSize: '0.85rem' }}>
@@ -436,8 +436,8 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
           </div>
         ) : (
           <div
-            className="card"
-            style={{ borderLeft: '3px solid var(--danger)', padding: '0.75rem' }}
+            className="card card-sm"
+            style={{ borderLeft: '3px solid var(--danger)' }}
           >
             <strong>SNMP Failed</strong>
             <br />

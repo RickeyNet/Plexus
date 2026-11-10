@@ -269,8 +269,8 @@ export function TopologyTab({ filter }: Props) {
   if (error) return <div style={{ color: 'var(--danger)' }}>Error: {(error as Error).message}</div>;
 
   return (
-    <div>
-      <div className="drift-summary-grid" style={{ marginBottom: '0.75rem' }}>
+    <div className="stack">
+      <div className="drift-summary-grid">
         <SummaryCard label={capitalize(cloudTerms(filter.provider).scopeTitlePlural)} value={summary.account_count ?? 0} />
         <SummaryCard label="Cloud Resources" value={summary.resource_count ?? 0} />
         <SummaryCard label="Cloud Links" value={summary.connection_count ?? 0} />
@@ -281,7 +281,7 @@ export function TopologyTab({ filter }: Props) {
       </div>
 
       {providerGroups.length > 0 && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '0.75rem', marginBottom: '0.75rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 'var(--space-3)' }}>
           {providerGroups.map((g) => {
             const routeCount = g.resources.filter((r) => isRouteResourceType(r.resource_type)).length;
             const gatewayCount = g.resources.filter((r) => isGatewayResourceType(r.resource_type)).length;
@@ -293,7 +293,7 @@ export function TopologyTab({ filter }: Props) {
                 buckets.set(label, (buckets.get(label) ?? 0) + 1);
               });
             return (
-              <div key={g.provider} className="card" style={{ padding: '0.85rem' }}>
+              <div key={g.provider} className="card card-sm">
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
                   <strong>{providerLabel(g.provider)}</strong>
                   <span className="text-muted" style={{ fontSize: '0.8rem' }}>
@@ -322,7 +322,7 @@ export function TopologyTab({ filter }: Props) {
       )}
 
       {routeGroups.length > 0 && (
-        <div className="card" style={{ padding: '0.85rem', marginBottom: '0.75rem' }}>
+        <div className="card card-sm">
           <div style={{ display: 'flex', alignItems: 'end', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
             <label style={{ minWidth: 220, margin: 0 }}>
               Route Focus
@@ -341,9 +341,9 @@ export function TopologyTab({ filter }: Props) {
       )}
 
       {filteredRouteGroups.length > 0 ? (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 'var(--space-3)' }}>
           {filteredRouteGroups.map((g) => (
-            <div key={g.provider} className="card" style={{ padding: '0.85rem' }}>
+            <div key={g.provider} className="card card-sm">
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
                 <strong>{providerLabel(g.provider)} Route Paths</strong>
                 <span className="text-muted" style={{ fontSize: '0.8rem' }}>{formatCount(g.routeRows?.length ?? 0)} route objects</span>
@@ -387,96 +387,102 @@ export function TopologyTab({ filter }: Props) {
           ))}
         </div>
       ) : routeGroups.length > 0 ? (
-        <div className="card" style={{ padding: '1rem', marginBottom: '0.75rem' }}>
+        <div className="card">
           <p className="text-muted" style={{ margin: 0 }}>No route objects match the current topology filter.</p>
         </div>
       ) : null}
 
-      <h4 style={{ margin: '0.5rem 0 0.45rem' }}>Resources</h4>
-      {!resources.length ? (
-        <div className="card" style={{ padding: '1rem', marginBottom: '0.75rem' }}>
-          <p className="text-muted" style={{ margin: 0 }}>No cloud resources yet. Run discovery on an account, subscription or project.</p>
-        </div>
-      ) : (
-        <div style={{ overflowX: 'auto', marginBottom: '0.75rem' }}>
-          <table className="chart-table">
-            <thead>
-              <tr>
-                <th>Provider</th><th>Type</th><th>Name</th><th>Region</th><th>CIDR</th><th>Status</th><th>Details</th>
-              </tr>
-            </thead>
-            <tbody>
-              {resources.map((r) => (
-                <tr key={`${r.provider}-${r.resource_uid}`}>
-                  <td>{providerLabel(r.provider)}</td>
-                  <td>{topologyResourceTypeLabel(r.resource_type, r.provider)}</td>
-                  <td>{r.name || r.resource_uid}</td>
-                  <td>{r.region ?? '-'}</td>
-                  <td>{r.cidr ?? '-'}</td>
-                  <td>{r.status ?? '-'}</td>
-                  <td>{resourceMetadataSummary(r)}</td>
+      <div>
+        <h4 style={{ margin: '0 0 var(--space-2)' }}>Resources</h4>
+        {!resources.length ? (
+          <div className="card">
+            <p className="text-muted" style={{ margin: 0 }}>No cloud resources yet. Run discovery on an account, subscription or project.</p>
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table className="chart-table">
+              <thead>
+                <tr>
+                  <th>Provider</th><th>Type</th><th>Name</th><th>Region</th><th>CIDR</th><th>Status</th><th>Details</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+              </thead>
+              <tbody>
+                {resources.map((r) => (
+                  <tr key={`${r.provider}-${r.resource_uid}`}>
+                    <td>{providerLabel(r.provider)}</td>
+                    <td>{topologyResourceTypeLabel(r.resource_type, r.provider)}</td>
+                    <td>{r.name || r.resource_uid}</td>
+                    <td>{r.region ?? '-'}</td>
+                    <td>{r.cidr ?? '-'}</td>
+                    <td>{r.status ?? '-'}</td>
+                    <td>{resourceMetadataSummary(r)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
-      <h4 style={{ margin: '0.5rem 0 0.45rem' }}>Connections</h4>
-      {!connections.length ? (
-        <div className="card" style={{ padding: '1rem', marginBottom: '0.75rem' }}>
-          <p className="text-muted" style={{ margin: 0 }}>No cloud-to-cloud links available.</p>
-        </div>
-      ) : (
-        <div style={{ overflowX: 'auto', marginBottom: '0.75rem' }}>
-          <table className="chart-table">
-            <thead>
-              <tr>
-                <th>Provider</th><th>From</th><th>To</th><th>Type</th><th>State</th><th>Details</th>
-              </tr>
-            </thead>
-            <tbody>
-              {connections.map((c, i) => (
-                <tr key={i}>
-                  <td>{providerLabel(c.provider)}</td>
-                  <td>{c.source_name || c.source_resource_uid || ''}</td>
-                  <td>{c.target_name || c.target_resource_uid || ''}</td>
-                  <td>{topologyConnectionLabel(c.connection_type, c.provider, c.metadata)}</td>
-                  <td>{c.state ?? '-'}</td>
-                  <td>{connectionMetadataSummary(c)}</td>
+      <div>
+        <h4 style={{ margin: '0 0 var(--space-2)' }}>Connections</h4>
+        {!connections.length ? (
+          <div className="card">
+            <p className="text-muted" style={{ margin: 0 }}>No cloud-to-cloud links available.</p>
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table className="chart-table">
+              <thead>
+                <tr>
+                  <th>Provider</th><th>From</th><th>To</th><th>Type</th><th>State</th><th>Details</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+              </thead>
+              <tbody>
+                {connections.map((c, i) => (
+                  <tr key={i}>
+                    <td>{providerLabel(c.provider)}</td>
+                    <td>{c.source_name || c.source_resource_uid || ''}</td>
+                    <td>{c.target_name || c.target_resource_uid || ''}</td>
+                    <td>{topologyConnectionLabel(c.connection_type, c.provider, c.metadata)}</td>
+                    <td>{c.state ?? '-'}</td>
+                    <td>{connectionMetadataSummary(c)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
-      <h4 style={{ margin: '0.5rem 0 0.45rem' }}>Hybrid Links</h4>
-      {!hybridLinks.length ? (
-        <div className="card" style={{ padding: '1rem' }}>
-          <p className="text-muted" style={{ margin: 0 }}>No on-prem to cloud links mapped yet.</p>
-        </div>
-      ) : (
-        <div style={{ overflowX: 'auto' }}>
-          <table className="chart-table">
-            <thead>
-              <tr>
-                <th>On-Prem Host</th><th>Cloud Resource</th><th>Type</th><th>State</th>
-              </tr>
-            </thead>
-            <tbody>
-              {hybridLinks.map((l, i) => (
-                <tr key={i}>
-                  <td>{l.host_hostname || l.host_label || '-'}</td>
-                  <td>{l.cloud_resource_name || l.cloud_resource_uid || '-'}</td>
-                  <td>{topologyConnectionLabel(l.connection_type, l.provider)}</td>
-                  <td>{l.state ?? '-'}</td>
+      <div>
+        <h4 style={{ margin: '0 0 var(--space-2)' }}>Hybrid Links</h4>
+        {!hybridLinks.length ? (
+          <div className="card">
+            <p className="text-muted" style={{ margin: 0 }}>No on-prem to cloud links mapped yet.</p>
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table className="chart-table">
+              <thead>
+                <tr>
+                  <th>On-Prem Host</th><th>Cloud Resource</th><th>Type</th><th>State</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+              </thead>
+              <tbody>
+                {hybridLinks.map((l, i) => (
+                  <tr key={i}>
+                    <td>{l.host_hostname || l.host_label || '-'}</td>
+                    <td>{l.cloud_resource_name || l.cloud_resource_uid || '-'}</td>
+                    <td>{topologyConnectionLabel(l.connection_type, l.provider)}</td>
+                    <td>{l.state ?? '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

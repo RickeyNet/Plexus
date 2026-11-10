@@ -18,8 +18,10 @@ import {
   useScanAssignmentNow,
   useUpdateAssignment,
 } from '@/api/compliance';
+import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { SummaryStrip } from '@/components/SummaryStrip';
 import { TabBar } from '@/components/TabBar';
 import { visibleTabs } from '@/lib/tabGating';
 import { usePathTab } from '@/lib/usePathTab';
@@ -116,20 +118,9 @@ export function Compliance() {
 
   return (
     <div>
-      <div
-        className="page-header"
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: '0.5rem',
-          marginBottom: '0.75rem',
-        }}
-      >
-        <h2 style={{ margin: 0 }}>Compliance</h2>
+      <PageHeader title="Compliance">
         {!isAudit && (
-          <div style={{ display: 'flex', gap: '0.4rem' }}>
+          <>
             <button className="btn btn-sm btn-primary" onClick={() => setShowRunScan(true)}>
               Run Scan
             </button>
@@ -165,9 +156,9 @@ export function Compliance() {
             >
               {loadBuiltin.isPending ? 'Loading…' : 'Load Built-in'}
             </button>
-          </div>
+          </>
         )}
-      </div>
+      </PageHeader>
 
       <PageHelp
         pageKey="compliance"
@@ -175,7 +166,11 @@ export function Compliance() {
         text="Define compliance rules and run audits against your devices. Check configurations against security policies, best practices, and industry standards."
       />
 
-      {!isAudit && <SummaryStrip summary={summary.data} meraki={merakiSummary.data} />}
+      {!isAudit && (
+        <div style={{ marginBottom: 'var(--space-4)' }}>
+          <ComplianceSummaryStrip summary={summary.data} meraki={merakiSummary.data} />
+        </div>
+      )}
 
       {/* The audit tab has its own severity / category filters, so no search box. */}
       <TabBar
@@ -198,38 +193,36 @@ export function Compliance() {
 
       <PageHelp pageKey={`compliance.${shownTab}`} title={TAB_HELP[shownTab].title} text={TAB_HELP[shownTab].text} />
 
-      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div style={{ padding: '0.75rem' }}>
-          {shownTab === 'profiles' && (
-            <ProfilesTab
-              profiles={profiles.data || []}
-              loading={profiles.isLoading}
-              query={query}
-              onEdit={setEditProfileId}
-              onAssign={setAssignProfileId}
-            />
-          )}
-          {shownTab === 'assignments' && (
-            <AssignmentsTab
-              assignments={assignments.data || []}
-              loading={assignments.isLoading}
-              query={query}
-            />
-          )}
-          {shownTab === 'results' && (
-            <ResultsTab
-              results={results.data || []}
-              loading={results.isLoading}
-              query={query}
-              onShowFindings={setFindingsResultId}
-            />
-          )}
-          {shownTab === 'status' && (
-            <StatusTab status={status.data || []} loading={status.isLoading} query={query} />
-          )}
-          {shownTab === 'meraki' && <MerakiTab query={query} />}
-          {shownTab === 'audit' && <AuditContent />}
-        </div>
+      <div className="stack stack-sm">
+        {shownTab === 'profiles' && (
+          <ProfilesTab
+            profiles={profiles.data || []}
+            loading={profiles.isLoading}
+            query={query}
+            onEdit={setEditProfileId}
+            onAssign={setAssignProfileId}
+          />
+        )}
+        {shownTab === 'assignments' && (
+          <AssignmentsTab
+            assignments={assignments.data || []}
+            loading={assignments.isLoading}
+            query={query}
+          />
+        )}
+        {shownTab === 'results' && (
+          <ResultsTab
+            results={results.data || []}
+            loading={results.isLoading}
+            query={query}
+            onShowFindings={setFindingsResultId}
+          />
+        )}
+        {shownTab === 'status' && (
+          <StatusTab status={status.data || []} loading={status.isLoading} query={query} />
+        )}
+        {shownTab === 'meraki' && <MerakiTab query={query} />}
+        {shownTab === 'audit' && <AuditContent />}
       </div>
 
       {showNewProfile && <NewProfileModal onClose={() => setShowNewProfile(false)} />}
@@ -257,7 +250,7 @@ export function Compliance() {
   );
 }
 
-function SummaryStrip({
+function ComplianceSummaryStrip({
   summary,
   meraki,
 }: {
@@ -283,26 +276,7 @@ function SummaryStrip({
       value: last ? last.toLocaleString() : 'Never',
     },
   ];
-  return (
-    <div className="card">
-      <div
-        className="card-body"
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-          gap: '0.5rem',
-          padding: '0.75rem',
-        }}
-      >
-        {items.map((it) => (
-          <div key={it.label} style={{ display: 'flex', flexDirection: 'column' }}>
-            <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{it.label}</span>
-            <span style={{ fontWeight: 600 }}>{it.value}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+  return <SummaryStrip items={items} />;
 }
 
 function ProfilesTab({
@@ -349,11 +323,7 @@ function ProfilesTab({
         const sevClass =
           p.severity === 'critical' ? 'danger' : p.severity === 'high' ? 'warning' : 'success';
         return (
-          <div
-            key={p.id}
-            className="card"
-            style={{ marginBottom: '0.75rem', padding: '1rem' }}
-          >
+          <div key={p.id} className="card">
             <div
               style={{
                 display: 'flex',
@@ -482,11 +452,7 @@ function AssignmentsTab({
       {filtered.map((a) => {
         const lastScan = formatBackendStamp(a.last_scan_at, 'Never');
         return (
-          <div
-            key={a.id}
-            className="card"
-            style={{ marginBottom: '0.75rem', padding: '1rem' }}
-          >
+          <div key={a.id} className="card">
             <div
               style={{
                 display: 'flex',
@@ -656,11 +622,7 @@ function ResultsTab({
               : 'warning';
         const scanned = formatBackendStamp(r.scanned_at);
         return (
-          <div
-            key={r.id}
-            className="card"
-            style={{ marginBottom: '0.75rem', padding: '1rem' }}
-          >
+          <div key={r.id} className="card">
             <div
               style={{
                 display: 'flex',
@@ -748,11 +710,7 @@ function StatusTab({
               : 'warning';
         const scanned = formatBackendStamp(s.scanned_at);
         return (
-          <div
-            key={i}
-            className="card"
-            style={{ marginBottom: '0.75rem', padding: '1rem' }}
-          >
+          <div key={i} className="card">
             <div
               style={{
                 display: 'flex',

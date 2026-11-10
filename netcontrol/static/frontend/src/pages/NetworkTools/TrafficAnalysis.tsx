@@ -85,35 +85,33 @@ export function TrafficAnalysis() {
   return (
     <>
       {/* Rendered inside Network Tools, which owns the page header. */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <select
-            className="form-select list-control-select"
-            value={hostId ?? ''}
-            onChange={(e) => setHostId(e.target.value ? Number(e.target.value) : null)}
-            aria-label="Filter by host"
-          >
-            <option value="">All hosts</option>
-            {hostOptions.map((h) => (
-              <option key={h.id} value={h.id}>
-                {h.label}
-              </option>
-            ))}
-          </select>
-          <select
-            className="form-select list-control-select"
-            value={hours}
-            onChange={(e) => setHours(Number(e.target.value))}
-            aria-label="Time range"
-          >
-            {TIME_RANGES.map((r) => (
-              <option key={r.value} value={r.value}>
-                {r.label}
-              </option>
-            ))}
-          </select>
-          <CollectorBadges status={status.data} />
-        </div>
+      <div className="toolbar" style={{ justifyContent: 'flex-end' }}>
+        <select
+          className="form-select list-control-select"
+          value={hostId ?? ''}
+          onChange={(e) => setHostId(e.target.value ? Number(e.target.value) : null)}
+          aria-label="Filter by host"
+        >
+          <option value="">All hosts</option>
+          {hostOptions.map((h) => (
+            <option key={h.id} value={h.id}>
+              {h.label}
+            </option>
+          ))}
+        </select>
+        <select
+          className="form-select list-control-select"
+          value={hours}
+          onChange={(e) => setHours(Number(e.target.value))}
+          aria-label="Time range"
+        >
+          {TIME_RANGES.map((r) => (
+            <option key={r.value} value={r.value}>
+              {r.label}
+            </option>
+          ))}
+        </select>
+        <CollectorBadges status={status.data} />
       </div>
 
       <PageHelp
@@ -124,8 +122,9 @@ export function TrafficAnalysis() {
 
       <TabBar tabs={TABS} active={tab} onChange={setTab} size="sm" aria-label="Traffic views" />
 
-      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <div style={{ padding: '0.75rem' }}>
+      {/* Each view renders its own card, so the tab body is a plain stack. */}
+      <div className="stack">
+        <div>
           <PageHelp
             pageKey={`traffic-analysis.${tab}`}
             title={TAB_HELP[tab].title}
@@ -137,13 +136,13 @@ export function TrafficAnalysis() {
           {tab === 'timeline' && <TimelineView hours={hours} hostId={hostId} />}
           {tab === 'exporters' && <ExportersView />}
         </div>
-      </div>
 
-      {status.error && (
-        <div className="glass-card card" style={{ color: 'var(--warning)', marginTop: '1rem' }}>
-          Could not read collector status: {status.error.message}
-        </div>
-      )}
+        {status.error && (
+          <div className="glass-card card" style={{ color: 'var(--warning)' }}>
+            Could not read collector status: {status.error.message}
+          </div>
+        )}
+      </div>
     </>
   );
 }

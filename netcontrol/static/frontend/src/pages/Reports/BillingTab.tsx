@@ -45,7 +45,7 @@ export function BillingTab() {
 
   return (
     <div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+      <div className="toolbar" style={{ alignItems: 'flex-end' }}>
         <div className="form-group" style={{ marginBottom: 0 }}>
           <label className="form-label">Customer</label>
           <select className="form-select" value={customer} onChange={(e) => setCustomer(e.target.value)}>
@@ -53,7 +53,8 @@ export function BillingTab() {
             {(customersQuery.data?.customers ?? []).map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <span className="toolbar-spacer" />
+        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
           <a className="btn btn-secondary" href={billingExportUrl(customer || undefined)} download>
             Export CSV
           </a>
@@ -62,7 +63,7 @@ export function BillingTab() {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '0.75rem', marginBottom: '0.75rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 'var(--space-3)', marginBottom: 'var(--space-3)' }}>
         <Card label="Total Circuits" value={String(summary?.total_circuits ?? 0)} />
         <Card label="Enabled" value={String(summary?.enabled_circuits ?? 0)} />
         <Card label="Billing Periods" value={String(summary?.total_periods ?? 0)} />
@@ -175,7 +176,7 @@ export function BillingTab() {
 
 function Card({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
-    <div className="card stat-card" style={{ padding: '0.85rem' }}>
+    <div className="card-inset">
       <div className="stat-value" style={color ? { color } : undefined}>{value}</div>
       <div className="stat-label">{label}</div>
     </div>

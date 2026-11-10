@@ -77,7 +77,7 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
         Panorama or Appgate source and each AWS, Azure or GCP discovery.
       </p>
 
-      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+      <div className="toolbar">
         <label className="text-muted" htmlFor="topo-avail-provider">Source:</label>
         <select
           id="topo-avail-provider"
@@ -125,7 +125,7 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.5rem', marginBottom: '0.75rem' }}>
         {cards.map((c) => (
-          <div key={c.label} className="card" style={{ padding: '0.75rem', textAlign: 'center' }}>
+          <div key={c.label} className="card card-sm" style={{ textAlign: 'center' }}>
             <div style={{ fontSize: '1.4em', fontWeight: 600, color: c.color ? `var(--${c.color})` : '' }}>{c.value}</div>
             <div className="text-muted" style={{ fontSize: '0.85em' }}>{c.label}</div>
           </div>

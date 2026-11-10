@@ -372,239 +372,227 @@ export function SourcesModal({
         you want a fresh picture.
       </p>
 
-      {isAdmin && <SourceScheduleBar />}
+      <div className="stack stack-sm">
+        {isAdmin && <SourceScheduleBar />}
 
-      <div
-        style={{
-          display: "flex",
-          gap: "0.5rem",
-          justifyContent: "flex-end",
-          flexWrap: "wrap",
-          marginBottom: "0.75rem",
-        }}
-      >
-        {canWrite && (
-          <>
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              disabled={allBusy || !anyCollectable}
-              title="Collect from every source you are allowed to collect from"
-              onClick={handleCollectAll}
-            >
-              {allBusy ? "Collecting…" : "Collect All"}
-            </button>
-            <button
-              type="button"
-              className={`btn btn-sm ${menu === "sample" ? "btn-primary" : "btn-secondary"}`}
-              title="Preview a source with demo data - no API key needed"
-              onClick={() => setMenu(menu === "sample" ? null : "sample")}
-            >
-              Load Sample
-            </button>
-          </>
-        )}
-        {isAdmin && (
-          <button
-            type="button"
-            className={`btn btn-sm ${menu === "add" ? "btn-primary" : "btn-secondary"}`}
-            onClick={() => setMenu(menu === "add" ? null : "add")}
-          >
-            Add Source
-          </button>
-        )}
-      </div>
-
-      {menu === "add" && (
-        <div
-          className="card"
-          style={{ padding: "0.75rem 1rem", marginBottom: "0.75rem" }}
-        >
-          <div
-            style={{
-              display: "flex",
-              gap: "0.5rem",
-              alignItems: "center",
-              flexWrap: "wrap",
-            }}
-          >
-            <strong>Add:</strong>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => handleAdd("meraki")}
-            >
-              Meraki Organization
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => handleAdd("cato")}
-            >
-              Cato Account
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              title="A Cisco Secure Firewall Management Center and the FTDs it manages"
-              onClick={() => handleAdd("fmc")}
-            >
-              Cisco FMC
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              title="A Palo Alto Networks Panorama and the firewalls it manages"
-              onClick={() => handleAdd("panorama")}
-            >
-              Palo Alto Panorama
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              title="An Appgate SDP collective: its Controllers, Gateways, sites, entitlements and connected users"
-              onClick={() => handleAdd("appgate")}
-            >
-              Appgate SDP
-            </button>
-            <Link
-              className="btn btn-secondary btn-sm"
-              to={`${CLOUD_ACCOUNTS_PATH}?add=aws`}
-              onClick={onClose}
-            >
-              AWS Account
-            </Link>
-            <Link
-              className="btn btn-secondary btn-sm"
-              to={`${CLOUD_ACCOUNTS_PATH}?add=azure`}
-              onClick={onClose}
-            >
-              Azure Subscription
-            </Link>
-            <Link
-              className="btn btn-secondary btn-sm"
-              to={`${CLOUD_ACCOUNTS_PATH}?add=gcp`}
-              onClick={onClose}
-            >
-              GCP Project
-            </Link>
-          </div>
-          <div
-            className="text-muted"
-            style={{ fontSize: "0.85em", marginTop: "0.4rem" }}
-          >
-            AWS accounts, Azure subscriptions and GCP projects are added under
-            Cloud Visibility, which also uses them for flow logs and policy.
-            Inventory devices are added under Inventory.
-          </div>
-        </div>
-      )}
-      {menu === "sample" && (
-        <div
-          className="card"
-          style={{ padding: "0.75rem 1rem", marginBottom: "0.75rem" }}
-        >
-          <div
-            style={{
-              display: "flex",
-              gap: "0.5rem",
-              alignItems: "center",
-              flexWrap: "wrap",
-            }}
-          >
-            <strong>Load demo data for:</strong>
-            {(
-              [
-                "meraki",
-                "cato",
-                "fmc",
-                "panorama",
-                "appgate",
-                "aws",
-                "azure",
-                "gcp",
-              ] as const
-            ).map((provider) => (
+        <div className="toolbar" style={{ justifyContent: "flex-end" }}>
+          {canWrite && (
+            <>
               <button
-                key={provider}
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={allBusy || !anyCollectable}
+                title="Collect from every source you are allowed to collect from"
+                onClick={handleCollectAll}
+              >
+                {allBusy ? "Collecting…" : "Collect All"}
+              </button>
+              <button
+                type="button"
+                className={`btn btn-sm ${menu === "sample" ? "btn-primary" : "btn-secondary"}`}
+                title="Preview a source with demo data - no API key needed"
+                onClick={() => setMenu(menu === "sample" ? null : "sample")}
+              >
+                Load Sample
+              </button>
+            </>
+          )}
+          {isAdmin && (
+            <button
+              type="button"
+              className={`btn btn-sm ${menu === "add" ? "btn-primary" : "btn-secondary"}`}
+              onClick={() => setMenu(menu === "add" ? null : "add")}
+            >
+              Add Source
+            </button>
+          )}
+        </div>
+
+        {menu === "add" && (
+          <div className="card card-sm">
+            <div
+              style={{
+                display: "flex",
+                gap: "0.5rem",
+                alignItems: "center",
+                flexWrap: "wrap",
+              }}
+            >
+              <strong>Add:</strong>
+              <button
                 type="button"
                 className="btn btn-secondary btn-sm"
-                disabled={buildSample.isPending}
-                onClick={() => handleSample(provider)}
+                onClick={() => handleAdd("meraki")}
               >
-                {buildSample.isPending ? "Building…" : providerLabel(provider)}
+                Meraki Organization
               </button>
-            ))}
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => handleAdd("cato")}
+              >
+                Cato Account
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                title="A Cisco Secure Firewall Management Center and the FTDs it manages"
+                onClick={() => handleAdd("fmc")}
+              >
+                Cisco FMC
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                title="A Palo Alto Networks Panorama and the firewalls it manages"
+                onClick={() => handleAdd("panorama")}
+              >
+                Palo Alto Panorama
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                title="An Appgate SDP collective: its Controllers, Gateways, sites, entitlements and connected users"
+                onClick={() => handleAdd("appgate")}
+              >
+                Appgate SDP
+              </button>
+              <Link
+                className="btn btn-secondary btn-sm"
+                to={`${CLOUD_ACCOUNTS_PATH}?add=aws`}
+                onClick={onClose}
+              >
+                AWS Account
+              </Link>
+              <Link
+                className="btn btn-secondary btn-sm"
+                to={`${CLOUD_ACCOUNTS_PATH}?add=azure`}
+                onClick={onClose}
+              >
+                Azure Subscription
+              </Link>
+              <Link
+                className="btn btn-secondary btn-sm"
+                to={`${CLOUD_ACCOUNTS_PATH}?add=gcp`}
+                onClick={onClose}
+              >
+                GCP Project
+              </Link>
+            </div>
+            <div
+              className="text-muted"
+              style={{ fontSize: "0.85em", marginTop: "0.4rem" }}
+            >
+              AWS accounts, Azure subscriptions and GCP projects are added under
+              Cloud Visibility, which also uses them for flow logs and policy.
+              Inventory devices are added under Inventory.
+            </div>
           </div>
-          <div
-            className="text-muted"
-            style={{ fontSize: "0.85em", marginTop: "0.4rem" }}
-          >
-            Each adds a demo source to the map. Delete it from this list when
-            you are done (the AWS, Azure and GCP ones under Cloud Visibility).
+        )}
+        {menu === "sample" && (
+          <div className="card card-sm">
+            <div
+              style={{
+                display: "flex",
+                gap: "0.5rem",
+                alignItems: "center",
+                flexWrap: "wrap",
+              }}
+            >
+              <strong>Load demo data for:</strong>
+              {(
+                [
+                  "meraki",
+                  "cato",
+                  "fmc",
+                  "panorama",
+                  "appgate",
+                  "aws",
+                  "azure",
+                  "gcp",
+                ] as const
+              ).map((provider) => (
+                <button
+                  key={provider}
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={buildSample.isPending}
+                  onClick={() => handleSample(provider)}
+                >
+                  {buildSample.isPending ? "Building…" : providerLabel(provider)}
+                </button>
+              ))}
+            </div>
+            <div
+              className="text-muted"
+              style={{ fontSize: "0.85em", marginTop: "0.4rem" }}
+            >
+              Each adds a demo source to the map. Delete it from this list when
+              you are done (the AWS, Azure and GCP ones under Cloud Visibility).
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {sources.isPending && <div className="loading">Loading sources…</div>}
-      {sources.error && (
-        <div className="error">
-          <strong>Failed to load sources:</strong> {sources.error.message}
-        </div>
-      )}
-      {sources.data && (
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Source</th>
-              <th>Type</th>
-              <th>Last Collection</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((source) => (
-              <SourceRow
-                key={source.key}
-                source={source}
-                org={
-                  source.id != null && !isCloudSource(source)
-                    ? orgById.get(source.id)
-                    : undefined
-                }
-                isAdmin={isAdmin}
-                canWrite={canWrite}
-                canCollect={
-                  canCollect(source) &&
-                  !allBusy &&
-                  // One tracked collection (organization or inventory) at a time, as its progress is shown below.
-                  !(
-                    (isOrgSource(source) || isInventorySource(source)) &&
-                    (isJobRunning ||
-                      startBuild.isPending ||
-                      startInventory.isPending)
-                  )
-                }
-                isBusy={
-                  source.collecting ||
-                  (isCloudSource(source) &&
-                    cloudBusy.includes(source.id as number))
-                }
-                isSampleBusy={buildSample.isPending}
-                onCollect={() => handleCollect(source)}
-                onReloadSample={() =>
-                  handleSample(
-                    source.type as CloudProvider | CloudAccountProvider,
-                  )
-                }
-                onEdit={setEditing}
-                onNavigate={onClose}
-                onShowWarnings={setWarningsFor}
-              />
-            ))}
-          </tbody>
-        </table>
-      )}
+        {sources.isPending && <div className="loading">Loading sources…</div>}
+        {sources.error && (
+          <div className="error">
+            <strong>Failed to load sources:</strong> {sources.error.message}
+          </div>
+        )}
+        {sources.data && (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Source</th>
+                <th>Type</th>
+                <th>Last Collection</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((source) => (
+                <SourceRow
+                  key={source.key}
+                  source={source}
+                  org={
+                    source.id != null && !isCloudSource(source)
+                      ? orgById.get(source.id)
+                      : undefined
+                  }
+                  isAdmin={isAdmin}
+                  canWrite={canWrite}
+                  canCollect={
+                    canCollect(source) &&
+                    !allBusy &&
+                    // One tracked collection (organization or inventory) at a time, as its progress is shown below.
+                    !(
+                      (isOrgSource(source) || isInventorySource(source)) &&
+                      (isJobRunning ||
+                        startBuild.isPending ||
+                        startInventory.isPending)
+                    )
+                  }
+                  isBusy={
+                    source.collecting ||
+                    (isCloudSource(source) &&
+                      cloudBusy.includes(source.id as number))
+                  }
+                  isSampleBusy={buildSample.isPending}
+                  onCollect={() => handleCollect(source)}
+                  onReloadSample={() =>
+                    handleSample(
+                      source.type as CloudProvider | CloudAccountProvider,
+                    )
+                  }
+                  onEdit={setEditing}
+                  onNavigate={onClose}
+                  onShowWarnings={setWarningsFor}
+                />
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
 
       {allNote && (
         <div
@@ -963,7 +951,7 @@ function ProgressCard({
   note: string;
 }) {
   return (
-    <div className="card" style={{ marginTop: "1rem", padding: "1rem" }}>
+    <div className="card" style={{ marginTop: "var(--space-4)" }}>
       <strong>{title}</strong>
       <div className="text-muted" style={{ margin: "0.35rem 0" }}>
         {label}
@@ -1141,10 +1129,7 @@ function InventoryOutcome({
   const [showErrors, setShowErrors] = useState(false);
   const errors = result.errors ?? [];
   return (
-    <div
-      className="card"
-      style={{ marginTop: "1rem", padding: "0.75rem 1rem" }}
-    >
+    <div className="card card-sm" style={{ marginTop: "var(--space-4)" }}>
       <div
         style={{
           display: "flex",

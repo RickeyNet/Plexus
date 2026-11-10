@@ -49,7 +49,7 @@ export function RulesTab() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.75rem' }}>
+      <div className="toolbar" style={{ justifyContent: 'flex-end' }}>
         <button className="btn btn-primary" onClick={() => setShowCreate(true)}>+ New Rule</button>
       </div>
 
@@ -63,7 +63,7 @@ export function RulesTab() {
             const sev = severityColor(r.severity);
             const scope = r.hostname ? `Host: ${r.hostname}` : r.group_name ? `Group: ${r.group_name}` : 'All hosts';
             return (
-              <div key={r.id} className="card" style={{ padding: '0.75rem 1rem', opacity: r.enabled ? 1 : 0.5 }}>
+              <div key={r.id} className="card card-sm" style={{ opacity: r.enabled ? 1 : 0.5 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.4rem' }}>
                   <div>
                     <span

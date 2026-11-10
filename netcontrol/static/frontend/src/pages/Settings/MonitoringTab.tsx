@@ -61,7 +61,7 @@ export function MonitoringTab() {
   );
 
   return (
-    <div className="card" style={{ padding: '1rem' }}>
+    <div>
       <div
         style={{
           display: 'flex',

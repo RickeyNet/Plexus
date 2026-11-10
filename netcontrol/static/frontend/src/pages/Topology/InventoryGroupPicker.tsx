@@ -64,9 +64,9 @@ export function InventoryGroupPicker({ groups, value, onChange, onError }: Props
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
       <label style={{ fontSize: '0.85rem', fontWeight: 500 }}>New Group Name</label>
-      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+      <div className="toolbar" style={{ marginBottom: 0 }}>
         <input
-          className="form-input"
+          className="form-input form-input-sm"
           type="text"
           placeholder="Group name"
           style={{ flex: '1 1 10rem', minWidth: 0 }}
