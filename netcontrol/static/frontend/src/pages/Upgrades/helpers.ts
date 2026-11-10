@@ -1,4 +1,38 @@
 import { formatBackendDateTime, formatRelativeTime, parseBackendDate } from '@/lib/datetime';
+import type { Tone } from '@/lib/severity';
+
+/** State of the campaign viewer's live event stream (its WebSocket). */
+export type LiveStreamState = 'connecting' | 'open' | 'closed' | 'error';
+
+// What the operator is told about the live stream, instead of the raw
+// socket state: a badge label and tone, whether it pulses, and a hint.
+export function liveStreamStatus(state: LiveStreamState): {
+  label: string;
+  tone: Tone;
+  live: boolean;
+  title: string;
+} {
+  switch (state) {
+    case 'open':
+      return { label: 'Live', tone: 'success', live: true, title: 'Events appear here as they happen' };
+    case 'connecting':
+      return { label: 'Connecting…', tone: 'info', live: false, title: 'Opening the live event stream' };
+    case 'error':
+      return {
+        label: 'Not connected',
+        tone: 'danger',
+        live: false,
+        title: 'The live event stream could not be opened. Close and reopen the campaign to retry.',
+      };
+    default:
+      return {
+        label: 'Disconnected',
+        tone: 'neutral',
+        live: false,
+        title: 'The live event stream closed. Close and reopen the campaign to reconnect.',
+      };
+  }
+}
 
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
