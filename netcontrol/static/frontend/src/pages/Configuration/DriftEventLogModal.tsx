@@ -4,6 +4,7 @@ import {
 } from '@/api/configuration';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import { formatBackendDateTime } from '@/lib/datetime';
 
 
@@ -16,7 +17,8 @@ export function DriftEventLogModal({ eventId, onClose }: Props) {
   const ev = useConfigDriftEvent(eventId);
   const history = useConfigDriftEventHistory(eventId, 500);
 
-  const isPending = ev.isPending || history.isPending;
+  const failed = ev.isError && !ev.data ? ev : history.isError && !history.data ? history : null;
+  const isPending = !failed && (ev.isPending || history.isPending);
   const title = ev.data
     ? `Drift Event Log - ${ev.data.hostname || ev.data.ip_address || ''}`
     : 'Drift Event Log';
@@ -34,8 +36,11 @@ export function DriftEventLogModal({ eventId, onClose }: Props) {
         </button>
       }
     >
+      {failed && (
+        <QueryError what="the drift event log" query={failed} />
+      )}
       {isPending && <LoadingState />}
-      {ev.data && (
+      {ev.data && !failed && (
         <>
           <div
             style={{

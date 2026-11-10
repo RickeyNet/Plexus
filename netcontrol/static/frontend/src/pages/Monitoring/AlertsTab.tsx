@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 
 import { Badge, SeverityBadge } from '@/components/Badge';
+import { BusyButton } from '@/components/BusyButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useAcknowledgeAlert,
@@ -9,7 +10,9 @@ import {
   type MonitoringAlert,
 } from '@/api/monitoring';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
 import { formatBackendDateTime } from '@/lib/datetime';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 import { severityTone, toneColor } from '@/lib/severity';
 import { RouteSnapshotsModal } from './RouteSnapshotsModal';
 
@@ -18,7 +21,7 @@ import { RouteSnapshotsModal } from './RouteSnapshotsModal';
 const ROUTE_CHURN = 'route_churn';
 
 export function AlertsTab() {
-  const { alert } = useDialogs();
+  const { alert, confirm } = useDialogs();
   const [severity, setSeverity] = useState('');
   const [ackFilter, setAckFilter] = useState<'all' | 'open' | 'ack'>('open');
   const [query, setQuery] = useState('');
@@ -30,6 +33,7 @@ export function AlertsTab() {
   const alerts = useMonitoringAlerts({ acknowledged: ackParam, severity: severity || undefined, limit: 200 });
   const ackMut = useAcknowledgeAlert();
   const bulkMut = useBulkAcknowledgeAlerts();
+  const pendingAcks = usePendingKeys<number>();
 
   const filtered = useMemo(() => {
     let list = alerts.data ?? [];
@@ -71,6 +75,27 @@ export function AlertsTab() {
     });
   }
 
+  async function ackAll() {
+    const count = unackedIds.length;
+    const ok = await confirm({
+      title: 'Acknowledge all alerts',
+      message: `Acknowledge all ${count} unacknowledged alert${count === 1 ? '' : 's'} shown by the current filters?`,
+      confirmLabel: 'Acknowledge all',
+      confirmVariant: 'primary',
+    });
+    if (ok) bulkAck(unackedIds);
+  }
+
+  function ackOne(id: number) {
+    return pendingAcks.run(id, async () => {
+      try {
+        await ackMut.mutateAsync(id);
+      } catch (e) {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      }
+    });
+  }
+
   return (
     <div>
       <div className="toolbar">
@@ -102,8 +127,11 @@ export function AlertsTab() {
         </button>
       </div>
 
-      {alerts.isPending && <LoadingState />}
-      {alerts.error && <div style={{ color: 'var(--danger)' }}>Error: {(alerts.error as Error).message}</div>}
+      {alerts.error && !alerts.data ? (
+        <QueryError what="alerts" query={alerts} />
+      ) : (
+        alerts.isPending && <LoadingState />
+      )}
       {alerts.data && filtered.length === 0 && (
         <div className="empty-state">
           {routeChurnOnly
@@ -122,20 +150,21 @@ export function AlertsTab() {
             />
             Select all ({unackedIds.length})
           </label>
-          <button
+          <BusyButton
             className="btn btn-sm btn-primary"
-            disabled={visibleSelected.length === 0 || bulkMut.isPending}
+            busy={bulkMut.isPending}
+            disabled={visibleSelected.length === 0}
             onClick={() => bulkAck(visibleSelected)}
           >
             Acknowledge Selected ({visibleSelected.length})
-          </button>
-          <button
+          </BusyButton>
+          <BusyButton
             className="btn btn-sm btn-secondary"
-            disabled={bulkMut.isPending}
-            onClick={() => bulkAck(unackedIds)}
+            busy={bulkMut.isPending}
+            onClick={() => void ackAll()}
           >
             Acknowledge All ({unackedIds.length})
-          </button>
+          </BusyButton>
         </div>
       )}
 
@@ -146,7 +175,8 @@ export function AlertsTab() {
             alert={a}
             checked={selected.has(a.id)}
             onToggle={(c) => toggleSelect(a.id, c)}
-            onAck={() => ackMut.mutate(a.id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } })}
+            isAcking={pendingAcks.isPending(a.id)}
+            onAck={() => void ackOne(a.id)}
             onRouteHistory={
               a.metric === ROUTE_CHURN
                 ? () => setHistoryHost({ id: a.host_id, hostname: a.hostname ?? '' })
@@ -171,12 +201,14 @@ function AlertRow({
   alert,
   checked,
   onToggle,
+  isAcking,
   onAck,
   onRouteHistory,
 }: {
   alert: MonitoringAlert;
   checked: boolean;
   onToggle: (checked: boolean) => void;
+  isAcking: boolean;
   onAck: () => void;
   /** Set for route_churn alerts: opens the host's route-table history. */
   onRouteHistory?: () => void;
@@ -212,7 +244,7 @@ function AlertRow({
               Acknowledged{alert.acknowledged_by ? ` by ${alert.acknowledged_by}` : ''}
             </span>
           ) : (
-            <button className="btn btn-sm btn-secondary" onClick={onAck}>Acknowledge</button>
+            <BusyButton className="btn btn-sm btn-secondary" busy={isAcking} onClick={onAck}>Acknowledge</BusyButton>
           )}
         </div>
       </div>

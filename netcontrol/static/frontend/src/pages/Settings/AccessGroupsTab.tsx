@@ -1,6 +1,5 @@
 import { useState } from 'react';
 
-import { Callout } from '@/components/Callout';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -11,6 +10,8 @@ import {
 } from '@/api/settings';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import { AccessGroupModal } from './AccessGroupModal';
 
@@ -22,6 +23,7 @@ export function AccessGroupsTab({
   const { confirm, alert } = useDialogs();
   const groups = useAccessGroups();
   const remove = useDeleteAccessGroup();
+  const deleting = usePendingKeys<number>();
 
   const [showCreate, setShowCreate] = useState(false);
   const [editGroup, setEditGroup] = useState<AccessGroup | null>(null);
@@ -42,10 +44,8 @@ export function AccessGroupsTab({
       </div>
 
       {groups.isLoading && <LoadingState text="Loading groups…" />}
-      {groups.isError && (
-        <Callout tone="danger">
-          Failed to load groups: {(groups.error as Error).message}
-        </Callout>
+      {groups.isError && !groups.data && (
+        <QueryError what="access groups" query={groups} />
       )}
       {groups.data && groups.data.length === 0 && (
         <EmptyState compact message="No access groups defined." />
@@ -80,12 +80,15 @@ export function AccessGroupsTab({
                 Edit
               </button>
               <DeleteButton
+                busy={deleting.isPending(g.id)}
                 onClick={async () => {
                   if (!(await confirm({ title: 'Delete access group', message: `Delete group '${g.name}'?`, confirmLabel: 'Delete' }))) return;
-                  remove.mutate(g.id, {
-                    onError: (e) => {
+                  await deleting.run(g.id, async () => {
+                    try {
+                      await remove.mutateAsync(g.id);
+                    } catch (e) {
                       void alert({ message: `Failed to delete group: ${(e as Error).message}`, variant: 'error' });
-                    },
+                    }
                   });
                 }}
               />

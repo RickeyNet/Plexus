@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { groupLabel } from '@/api/inventory';
 import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
   useComplianceProfiles,
@@ -234,6 +235,18 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
         </>
       }
     >
+      {profiles.isError && !profiles.data && (
+        <QueryError what="compliance profiles" query={profiles} />
+      )}
+      {scope !== 'meraki' && groups.isError && !groups.data && (
+        <QueryError what="inventory groups" query={groups} />
+      )}
+      {scope !== 'meraki' && credentials.isError && !credentials.data && (
+        <QueryError what="credentials" query={credentials} />
+      )}
+      {scope === 'meraki' && merakiOrgs.isError && !merakiOrgs.data && (
+        <QueryError what="Meraki organizations" query={merakiOrgs} />
+      )}
       <div className="form-group">
         <label className="form-label">Scope</label>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>

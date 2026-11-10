@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 
 import { type CloudConnection, type CloudResource, useCloudTopology } from '@/api/cloud';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
 import { StatGrid, StatTile } from '@/components/StatTile';
 import { capitalize, cloudTerms } from '@/lib/cloudProviderTerms';
 import {
@@ -208,10 +209,11 @@ function buildRouteRowsForGroup(group: ProviderGroup, lookup: Map<string, CloudR
 }
 
 export function TopologyTab({ filter }: Props) {
-  const { data, isPending, error } = useCloudTopology({
+  const topology = useCloudTopology({
     provider: filter.provider || undefined,
     account_id: filter.accountId,
   });
+  const { data } = topology;
   const [routeFilter, setRouteFilter] = useState<RouteFilter>('all');
 
   const resources = useMemo(() => data?.resources ?? [], [data?.resources]);
@@ -267,8 +269,12 @@ export function TopologyTab({ filter }: Props) {
   const gatewayResourceCount = resources.filter((r) => isGatewayResourceType(r.resource_type)).length;
   const attachmentLinkCount = connections.filter((c) => isAttachmentConnection(c.connection_type)).length;
 
-  if (isPending) return <LoadingState text="Loading topology…" />;
-  if (error) return <div style={{ color: 'var(--danger)' }}>Error: {(error as Error).message}</div>;
+  if (topology.isError && !data) {
+    return (
+      <QueryError what="cloud topology" query={topology} />
+    );
+  }
+  if (topology.isPending) return <LoadingState text="Loading topology…" />;
 
   return (
     <div className="stack">

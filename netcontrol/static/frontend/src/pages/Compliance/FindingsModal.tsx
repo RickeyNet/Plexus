@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { Callout } from '@/components/Callout';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
   ComplianceFinding,
@@ -151,6 +152,9 @@ export function FindingsModal({ resultId, onClose, onRescan }: Props) {
 
   return (
     <Modal isOpen onClose={onClose} title={title} size="medium">
+      {result.isError && !result.data && (
+        <QueryError what="scan findings" query={result} />
+      )}
       {result.isLoading && <LoadingState text="Loading findings…" />}
       {result.data && (
         <>
@@ -159,6 +163,9 @@ export function FindingsModal({ resultId, onClose, onRescan }: Props) {
             <strong>Status:</strong> {result.data.status} · <strong>Score:</strong>{' '}
             {result.data.passed_rules}/{result.data.total_rules} passed
           </div>
+          {fixable.length > 0 && credentials.isError && !credentials.data && (
+            <QueryError what="credentials" query={credentials} />
+          )}
           {fixable.length > 0 && (
             <div className="toolbar">
               <label style={{ fontWeight: 600, fontSize: '0.9em' }}>

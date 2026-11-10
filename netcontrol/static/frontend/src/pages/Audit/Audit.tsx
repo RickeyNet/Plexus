@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 
 import { Badge, SeverityBadge, StatusBadge } from '@/components/Badge';
+import { BusyButton } from '@/components/BusyButton';
 import { Callout } from '@/components/Callout';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { EmptyState } from '@/components/EmptyState';
@@ -8,6 +9,7 @@ import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import {
   useAuditRuns,
   useAuditFindings,
@@ -28,6 +30,7 @@ import {
 } from '@/api/audit';
 import { formatBackendDateTime } from '@/lib/datetime';
 import { isCriticalSeverity, SEVERITY_LEVELS, severityRank, severityTone } from '@/lib/severity';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 import { useShowMore } from '@/lib/useShowMore';
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -94,13 +97,11 @@ export function AuditContent() {
 
       <section className="card">
         <h3 style={{ marginTop: 0 }}>Recent runs</h3>
-        {runs.isPending && <LoadingState />}
-        {runs.error && (
-          <Callout tone="danger">
-            Error: {(runs.error as Error).message}
-          </Callout>
+        {runs.isError && !runs.data && (
+          <QueryError what="audit runs" query={runs} />
         )}
-        {!runs.isPending && runList.length === 0 && (
+        {runs.isPending && <LoadingState />}
+        {runs.data && runList.length === 0 && (
           <p className="text-muted">
             No audit runs yet. Click "Run audit now" to evaluate your inventory.
           </p>
@@ -160,12 +161,10 @@ export function AuditContent() {
       {selectedRunId != null && (
         <section className="card">
           <h3 style={{ marginTop: 0 }}>Findings - run #{selectedRunId}</h3>
-          {findings.isPending && <LoadingState text="Loading findings…" />}
-          {findings.error && (
-            <Callout tone="danger">
-              Error: {(findings.error as Error).message}
-            </Callout>
+          {findings.isError && !findings.data && (
+            <QueryError what="audit findings" query={findings} />
           )}
+          {findings.isPending && <LoadingState text="Loading findings…" />}
           {findings.data && findings.data.findings.length === 0 && (
             <EmptyState compact message="No findings for this run." />
           )}
@@ -462,12 +461,22 @@ const SCHEDULE_PRESETS: { label: string; value: string }[] = [
 ];
 
 function SchedulesCard() {
-  const { confirm } = useDialogs();
+  const { confirm, alert } = useDialogs();
   const schedules = useAuditSchedules();
   const update = useUpdateAuditSchedule();
   const remove = useDeleteAuditSchedule();
   const runNow = useRunScheduleNow();
+  const pending = usePendingKeys<string>();
   const [editing, setEditing] = useState<AuditSchedule | 'new' | null>(null);
+
+  const runRow = (key: string, task: () => Promise<unknown>) =>
+    pending.run(key, async () => {
+      try {
+        await task();
+      } catch (e) {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      }
+    });
 
   const rows = schedules.data?.schedules ?? [];
 
@@ -490,13 +499,11 @@ function SchedulesCard() {
         </button>
       </div>
 
-      {schedules.isPending && <LoadingState />}
-      {schedules.error && (
-        <Callout tone="danger">
-          Error: {(schedules.error as Error).message}
-        </Callout>
+      {schedules.isError && !schedules.data && (
+        <QueryError what="audit schedules" query={schedules} />
       )}
-      {!schedules.isPending && rows.length === 0 && (
+      {schedules.isPending && <LoadingState />}
+      {schedules.data && rows.length === 0 && (
         <EmptyState compact message="No schedules configured. Schedules enqueue an audit run on a
           recurring cadence (e.g., daily, every 6 hours)." />
       )}
@@ -532,22 +539,24 @@ function SchedulesCard() {
                     : 'never'}
                 </td>
                 <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                  <button
+                  <BusyButton
                     className="btn btn-sm"
-                    disabled={runNow.isPending}
-                    onClick={() => runNow.mutate(s.id)}
+                    busy={pending.isPending(`run:${s.id}`)}
+                    onClick={() => void runRow(`run:${s.id}`, () => runNow.mutateAsync(s.id))}
                   >
                     Run now
-                  </button>
+                  </BusyButton>
                   <span style={{ marginLeft: '0.25rem' }}>
                     <KebabMenu label={`Actions for ${s.name}`}>
                       <MenuItem
-                        disabled={update.isPending}
+                        disabled={pending.isPending(`toggle:${s.id}`)}
                         onSelect={() =>
-                          update.mutate({
-                            id: s.id,
-                            payload: { enabled: !s.enabled },
-                          })
+                          void runRow(`toggle:${s.id}`, () =>
+                            update.mutateAsync({
+                              id: s.id,
+                              payload: { enabled: !s.enabled },
+                            }),
+                          )
                         }
                       >
                         {s.enabled ? 'Pause' : 'Resume'}
@@ -556,7 +565,7 @@ function SchedulesCard() {
                       <MenuSeparator />
                       <MenuItem
                         danger
-                        disabled={remove.isPending}
+                        disabled={pending.isPending(`delete:${s.id}`)}
                         onSelect={async () => {
                           if (
                             await confirm({
@@ -565,7 +574,7 @@ function SchedulesCard() {
                               confirmLabel: 'Delete',
                             })
                           ) {
-                            remove.mutate(s.id);
+                            await runRow(`delete:${s.id}`, () => remove.mutateAsync(s.id));
                           }
                         }}
                       >
@@ -792,21 +801,20 @@ function FindingsTable({ findings }: { findings: AuditFinding[] }) {
 // ── Overrides card + Mute dialog (Phase 6) ─────────────────────────────────
 
 function OverridesCard() {
-  const { confirm } = useDialogs();
+  const { confirm, alert } = useDialogs();
   const overrides = useAuditOverrides();
   const remove = useDeleteAuditOverride();
+  const removing = usePendingKeys<number>();
   const rows = overrides.data?.overrides ?? [];
 
   return (
     <section className="card">
       <h3 style={{ marginTop: 0 }}>Suppressed findings</h3>
-      {overrides.isPending && <LoadingState />}
-      {overrides.error && (
-        <Callout tone="danger">
-          Error: {(overrides.error as Error).message}
-        </Callout>
+      {overrides.isError && !overrides.data && (
+        <QueryError what="finding overrides" query={overrides} />
       )}
-      {!overrides.isPending && rows.length === 0 && (
+      {overrides.isPending && <LoadingState />}
+      {overrides.data && rows.length === 0 && (
         <EmptyState compact message="No active overrides. Mute a finding from a run to silence a chronic
           false positive; muted findings still log to the summary so the count
           stays auditable." />
@@ -854,9 +862,9 @@ function OverridesCard() {
                     : '-'}
                 </td>
                 <td style={{ textAlign: 'right' }}>
-                  <button
+                  <BusyButton
                     className="btn btn-sm btn-danger"
-                    disabled={remove.isPending}
+                    busy={removing.isPending(o.id)}
                     onClick={async () => {
                       if (
                         await confirm({
@@ -865,12 +873,18 @@ function OverridesCard() {
                           confirmLabel: 'Remove',
                         })
                       ) {
-                        remove.mutate(o.id);
+                        await removing.run(o.id, async () => {
+                          try {
+                            await remove.mutateAsync(o.id);
+                          } catch (e) {
+                            void alert({ message: (e as Error).message, variant: 'error' });
+                          }
+                        });
                       }
                     }}
                   >
                     Remove
-                  </button>
+                  </BusyButton>
                 </td>
               </tr>
             ))}

@@ -2,6 +2,7 @@ import { useState } from 'react';
 
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
 import { Modal } from '@/components/Modal';
 import { useMonitoringRouteSnapshots } from '@/api/monitoring';
 import { formatBackendDateTime } from '@/lib/datetime';
@@ -15,8 +16,11 @@ export function RouteSnapshotsModal({ hostId, hostname, onClose }: { hostId: num
 
   return (
     <Modal isOpen onClose={onClose} title={`${hostname} - Route Snapshots`} size="medium">
-      {snapshots.isPending && <LoadingState />}
-      {snapshots.error && <div style={{ color: 'var(--danger)' }}>Error: {(snapshots.error as Error).message}</div>}
+      {snapshots.error && !snapshots.data ? (
+        <QueryError what="route snapshots" query={snapshots} />
+      ) : (
+        snapshots.isPending && <LoadingState />
+      )}
       {snapshots.data && (snapshots.data.length === 0 ? (
         <EmptyState message="No route snapshots available" />
       ) : (

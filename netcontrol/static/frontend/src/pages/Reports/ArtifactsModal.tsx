@@ -1,9 +1,11 @@
-import { Callout } from '@/components/Callout';
+import { BusyButton } from '@/components/BusyButton';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { reportArtifactUrl, useReportRunArtifacts } from '@/api/reports';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import { downloadReportExport } from './helpers';
 
@@ -16,11 +18,14 @@ interface Props {
 export function ArtifactsModal({ runId, isOpen, onClose }: Props) {
   const { alert } = useDialogs();
   const query = useReportRunArtifacts(runId);
+  const downloading = usePendingKeys<number>();
 
   function handleDownload(id: number) {
-    downloadReportExport(reportArtifactUrl(id), `artifact_${id}`).catch((err) => {
-      void alert({ message: (err as Error).message, variant: 'error' });
-    });
+    void downloading.run(id, () =>
+      downloadReportExport(reportArtifactUrl(id), `artifact_${id}`).catch((err) => {
+        void alert({ message: (err as Error).message, variant: 'error' });
+      }),
+    );
   }
 
   return (
@@ -31,8 +36,8 @@ export function ArtifactsModal({ runId, isOpen, onClose }: Props) {
       footer={<button type="button" className="btn btn-secondary" onClick={onClose}>Close</button>}
     >
       {query.isPending && <LoadingState />}
-      {query.error && (
-        <Callout tone="danger">Failed to load artifacts: {(query.error as Error).message}</Callout>
+      {query.isError && !query.data && (
+        <QueryError what="artifacts" query={query} />
       )}
       {query.data && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
@@ -51,7 +56,13 @@ export function ArtifactsModal({ runId, isOpen, onClose }: Props) {
                     {a.artifact_type ?? ''} · {a.media_type ?? ''} · {Number(a.size_bytes ?? 0).toLocaleString()} bytes
                   </div>
                 </div>
-                <button className="btn btn-sm btn-secondary" onClick={() => handleDownload(a.id)}>Download</button>
+                <BusyButton
+                  className="btn btn-sm btn-secondary"
+                  busy={downloading.isPending(a.id)}
+                  onClick={() => handleDownload(a.id)}
+                >
+                  Download
+                </BusyButton>
               </div>
             ))
           )}

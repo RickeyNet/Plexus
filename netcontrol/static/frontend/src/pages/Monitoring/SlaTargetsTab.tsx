@@ -4,7 +4,9 @@ import { Callout } from '@/components/Callout';
 import { DeleteButton } from '@/components/DeleteButton';
 import { EmptyState } from '@/components/EmptyState';
 import { FieldError } from '@/components/FieldError';
+import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { useAuthStatus } from '@/api/auth';
 import { groupLabel, useInventoryGroupsFull } from '@/api/inventory';
@@ -17,6 +19,7 @@ import {
   type SlaTarget,
   type SlaTargetCreate,
 } from '@/api/monitoring';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 
 // SLA targets are configuration (Monitoring -> Configure -> SLA Targets). The
 // server evaluates every enabled target over its window after each hourly
@@ -33,13 +36,15 @@ const METRIC_LABELS: Record<string, string> = {
 };
 
 export function SlaTargetsTab() {
-  const targets = useSlaTargets().data ?? [];
+  const targetsQuery = useSlaTargets();
+  const targets = targetsQuery.data ?? [];
   const { confirm, alert } = useDialogs();
   const deleteMut = useDeleteSlaTarget();
   const evaluateMut = useEvaluateSla();
   const isAdmin = useAuthStatus().data?.role === 'admin';
   const [editing, setEditing] = useState<SlaTarget | null>(null);
   const [creating, setCreating] = useState(false);
+  const deleting = usePendingKeys<number>();
 
   function handleEvaluate() {
     evaluateMut.mutate(undefined, {
@@ -53,7 +58,13 @@ export function SlaTargetsTab() {
 
   async function handleDelete(t: SlaTarget) {
     if (!(await confirm({ title: 'Delete SLA target', message: `Delete SLA target '${t.name}'?`, confirmLabel: 'Delete' }))) return;
-    deleteMut.mutate(t.id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
+    await deleting.run(t.id, async () => {
+      try {
+        await deleteMut.mutateAsync(t.id);
+      } catch (e) {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      }
+    });
   }
 
   return (
@@ -66,7 +77,11 @@ export function SlaTargetsTab() {
         )}
         <button className="btn btn-primary" onClick={() => setCreating(true)}>+ New Target</button>
       </div>
-      {targets.length === 0 ? (
+      {targetsQuery.error && !targetsQuery.data ? (
+        <QueryError what="SLA targets" query={targetsQuery} />
+      ) : targetsQuery.isPending ? (
+        <LoadingState />
+      ) : targets.length === 0 ? (
         <EmptyState message="No SLA targets defined" />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -81,7 +96,7 @@ export function SlaTargetsTab() {
                   </div>
                   <div style={{ display: 'flex', gap: '0.4rem' }}>
                     <button className="btn btn-sm btn-secondary" onClick={() => setEditing(t)}>Edit</button>
-                    <DeleteButton onClick={() => handleDelete(t)} />
+                    <DeleteButton busy={deleting.isPending(t.id)} onClick={() => void handleDelete(t)} />
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: '1.5rem', marginTop: '0.5rem', fontSize: '0.9em', flexWrap: 'wrap' }}>

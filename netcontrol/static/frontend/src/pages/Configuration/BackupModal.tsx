@@ -1,7 +1,7 @@
 import { useConfigBackupDetail, useConfigBackupDiff } from '@/api/configuration';
-import { Callout } from '@/components/Callout';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import { SegmentedControl } from '@/components/SegmentedControl';
 import { formatBackendDateTime } from '@/lib/datetime';
 
@@ -59,10 +59,12 @@ export function BackupModal({ backupId, view, onViewChange, onClose }: Props) {
 }
 
 function ConfigView({ query }: { query: ReturnType<typeof useConfigBackupDetail> }) {
-  if (query.isPending) return <LoadingState />;
-  if (query.error) {
-    return <Callout tone="danger">Failed to load: {(query.error as Error).message}</Callout>;
+  if (query.isError && !query.data) {
+    return (
+      <QueryError what="the backup" query={query} />
+    );
   }
+  if (query.isPending) return <LoadingState />;
   const data = query.data;
   return (
     <>
@@ -91,10 +93,12 @@ function ConfigView({ query }: { query: ReturnType<typeof useConfigBackupDetail>
 
 function DiffView({ backupId }: { backupId: number | null }) {
   const query = useConfigBackupDiff(backupId);
-  if (query.isPending) return <LoadingState />;
-  if (query.error) {
-    return <Callout tone="danger">Failed to load: {(query.error as Error).message}</Callout>;
+  if (query.isError && !query.data) {
+    return (
+      <QueryError what="the backup diff" query={query} />
+    );
   }
+  if (query.isPending) return <LoadingState />;
   const data = query.data;
   return (
     <>

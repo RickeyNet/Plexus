@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 
 import {
@@ -9,12 +9,14 @@ import {
   useDiscoverCloudAccount,
   useUpdateCloudAccount,
 } from '@/api/cloud';
+import { BusyButton } from '@/components/BusyButton';
 import { Callout } from '@/components/Callout';
 import { DeleteButton } from '@/components/DeleteButton';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { capitalize, cloudProviderTerms } from '@/lib/cloudProviderTerms';
 import { formatBackendDateTime } from '@/lib/datetime';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 import {
   ALL_REGIONS,
   type AuthField,
@@ -36,6 +38,8 @@ interface Props {
   accounts: CloudAccount[];
   providerOptions: string[];
   isLoading: boolean;
+  /** Shown in place of the table when the accounts request failed with nothing cached. */
+  loadError: ReactNode;
   /** Provider capabilities; empty until loaded, which blocks nothing. */
   providers: CloudProvider[];
 }
@@ -67,7 +71,7 @@ function discoverRegionsLabel(a: CloudAccount): string | null {
   return String(a.provider ?? '').toLowerCase() === 'aws' ? 'us-east-1' : 'the default region';
 }
 
-export function AccountsTab({ accounts, providerOptions, isLoading, providers: capabilities }: Props) {
+export function AccountsTab({ accounts, providerOptions, isLoading, loadError, providers: capabilities }: Props) {
   const [modal, setModal] = useState<{ account: CloudAccount | null; provider: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<CloudAccount | null>(null);
   const [confirmDiscover, setConfirmDiscover] = useState<CloudAccount | null>(null);
@@ -75,6 +79,7 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
 
   const discover = useDiscoverCloudAccount();
   const deleteAcct = useDeleteCloudAccount();
+  const discovering = usePendingKeys<number>();
 
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
@@ -100,22 +105,23 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
     setActionMsg(null);
   }
 
-  async function runDiscover(a: CloudAccount) {
-    try {
-      const result = await discover.mutateAsync(a.id);
-      if (result && result.ok === false) {
-        showMsg('error', `${a.name}: discovery did not run, nothing was changed – ${result.message ?? 'Discovery failed'}`);
-      } else if (result?.fallback_used || result?.effective_mode === 'sample') {
-        showMsg('error', `${a.name}: showing SAMPLE data, not live topology (${result?.message ?? ''})`);
-      } else {
-        const outcome = discoverOutcome(a.name, result, discoverRegionsLabel(a));
-        showMsg(outcome.kind, outcome.text);
+  function runDiscover(a: CloudAccount) {
+    setConfirmDiscover(null);
+    void discovering.run(a.id, async () => {
+      try {
+        const result = await discover.mutateAsync(a.id);
+        if (result && result.ok === false) {
+          showMsg('error', `${a.name}: discovery did not run, nothing was changed – ${result.message ?? 'Discovery failed'}`);
+        } else if (result?.fallback_used || result?.effective_mode === 'sample') {
+          showMsg('error', `${a.name}: showing SAMPLE data, not live topology (${result?.message ?? ''})`);
+        } else {
+          const outcome = discoverOutcome(a.name, result, discoverRegionsLabel(a));
+          showMsg(outcome.kind, outcome.text);
+        }
+      } catch (e) {
+        showMsg('error', `${a.name}: discovery failed: ${(e as Error).message}`);
       }
-    } catch (e) {
-      showMsg('error', `Discovery failed: ${(e as Error).message}`);
-    } finally {
-      setConfirmDiscover(null);
-    }
+    });
   }
 
   async function runDelete(a: CloudAccount) {
@@ -181,9 +187,11 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
         </Callout>
       )}
 
+      {loadError}
+
       {isLoading && <LoadingState />}
 
-      {!isLoading && accounts.length === 0 && (
+      {!isLoading && !loadError && accounts.length === 0 && (
         <div className="card">
           <p className="text-muted" style={{ margin: 0 }}>
             No cloud accounts yet. Add {joinOr(providers.map((p) => withArticle(cloudProviderTerms(p).scopeTitle)))} to start.
@@ -295,14 +303,16 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
                       <span className="badge badge-info">{a.connection_count ?? 0} edges</span>
                     </td>
                     <td style={{ whiteSpace: 'nowrap' }}>
-                      <button
+                      <BusyButton
                         className="btn btn-sm btn-secondary"
                         onClick={() => setConfirmDiscover(a)}
-                        disabled={Boolean(liveBlocked) || discover.isPending}
+                        busy={discovering.isPending(a.id)}
+                        busyLabel="Discovering…"
+                        disabled={Boolean(liveBlocked)}
                         title={liveBlocked ?? undefined}
                       >
                         Discover
-                      </button>{' '}
+                      </BusyButton>{' '}
                       <button className="btn btn-sm btn-secondary" onClick={() => setModal({ account: a, provider: a.provider })}>
                         Edit
                       </button>{' '}
@@ -367,19 +377,17 @@ export function AccountsTab({ accounts, providerOptions, isLoading, providers: c
 
       <Modal
         isOpen={Boolean(confirmDiscover)}
-        onClose={() => {
-          if (!discover.isPending) setConfirmDiscover(null);
-        }}
+        onClose={() => setConfirmDiscover(null)}
         title={`Discover ${discoverTerms.scopeTitle}`}
         size="small"
         footer={
           confirmDiscover && (
             <>
-              <button type="button" className="btn btn-secondary" onClick={() => setConfirmDiscover(null)} disabled={discover.isPending}>
+              <button type="button" className="btn btn-secondary" onClick={() => setConfirmDiscover(null)}>
                 Cancel
               </button>
-              <button type="button" className="btn btn-primary" onClick={() => runDiscover(confirmDiscover)} disabled={discover.isPending}>
-                {discover.isPending ? 'Discovering…' : 'Discover'}
+              <button type="button" className="btn btn-primary" onClick={() => runDiscover(confirmDiscover)}>
+                Discover
               </button>
             </>
           )

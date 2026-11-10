@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-import { Callout } from '@/components/Callout';
+import { BusyButton } from '@/components/BusyButton';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -22,29 +22,17 @@ import {
   useUpdateServiceCredential,
 } from '@/api/settings';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import { SectionCard } from './SectionCard';
-
-function ToastSlot({ message, kind }: { message: string | null; kind: 'success' | 'error' }) {
-  if (!message) return null;
-  return (
-    <div
-      className={kind === 'error' ? 'error' : ''}
-      style={{
-        marginTop: '0.5rem',
-        color: kind === 'error' ? undefined : 'var(--success)',
-      }}
-    >
-      {message}
-    </div>
-  );
-}
+import { FormStatus, StatusLine } from './StatusLine';
 
 function LoginRulesForm() {
   const query = useLoginRules();
   const update = useUpdateLoginRules();
   const [draft, setDraft] = useState<LoginRules | null>(null);
-  const [status, setStatus] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+  const [status, setStatus] = useState<FormStatus | null>(null);
   const [prevData, setPrevData] = useState(query.data);
 
   // Seed the editable draft from server data; re-seed when it changes.
@@ -55,13 +43,13 @@ function LoginRulesForm() {
     if (query.data) setDraft(query.data);
   }
 
-  if (query.isLoading || !draft) return <LoadingState />;
-  if (query.isError)
-    return (
-      <Callout tone="danger">
-        Failed to load login rules: {(query.error as Error).message}
-      </Callout>
-    );
+  if (!draft) {
+    if (query.isError)
+      return (
+        <QueryError what="login rules" query={query} />
+      );
+    return <LoadingState />;
+  }
 
   const numField = (
     label: string,
@@ -106,15 +94,16 @@ function LoginRulesForm() {
         {numField('Idle timeout (s, 0 = off)', 'session_idle_timeout', 0)}
       </div>
       <div style={{ marginTop: '0.5rem' }}>
-        <button
+        <BusyButton
           type="submit"
           className="btn btn-primary"
-          disabled={update.isPending}
+          busy={update.isPending}
+          busyLabel="Saving…"
         >
-          {update.isPending ? 'Saving…' : 'Save Login Rules'}
-        </button>
+          Save Login Rules
+        </BusyButton>
       </div>
-      <ToastSlot message={status?.message ?? null} kind={status?.kind ?? 'success'} />
+      <StatusLine status={status} />
     </form>
   );
 }
@@ -125,7 +114,7 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
   const credentials = useCredentialsList();
   const serviceCredentials = useServiceCredentialsList();
   const [draft, setDraft] = useState<AuthConfig | null>(null);
-  const [status, setStatus] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+  const [status, setStatus] = useState<FormStatus | null>(null);
   const [prevData, setPrevData] = useState(query.data);
 
   // Seed the editable draft from server data; re-seed when it changes.
@@ -134,13 +123,13 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
     if (query.data) setDraft(query.data);
   }
 
-  if (query.isLoading || !draft) return <LoadingState />;
-  if (query.isError)
-    return (
-      <Callout tone="danger">
-        Failed to load auth config: {(query.error as Error).message}
-      </Callout>
-    );
+  if (!draft) {
+    if (query.isError)
+      return (
+        <QueryError what="auth config" query={query} />
+      );
+    return <LoadingState />;
+  }
 
   const radiusGroupSet = new Set(draft.radius.default_group_ids);
   const tacacsGroupSet = new Set(draft.tacacs.default_group_ids);
@@ -171,6 +160,9 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
         });
       }}
     >
+      {credentials.isError && !credentials.data && (
+        <QueryError what="credentials" query={credentials} />
+      )}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
         <div className="form-group" style={{ flex: '1 1 200px' }}>
           <label className="form-label">Auth Provider</label>
@@ -258,15 +250,16 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
       )}
 
       <div style={{ marginTop: '0.75rem' }}>
-        <button
+        <BusyButton
           type="submit"
           className="btn btn-primary"
-          disabled={update.isPending}
+          busy={update.isPending}
+          busyLabel="Saving…"
         >
-          {update.isPending ? 'Saving…' : 'Save Authentication'}
-        </button>
+          Save Authentication
+        </BusyButton>
       </div>
-      <ToastSlot message={status?.message ?? null} kind={status?.kind ?? 'success'} />
+      <StatusLine status={status} />
     </form>
   );
 }
@@ -783,6 +776,7 @@ function ServiceCredentialsSection() {
   const create = useCreateServiceCredential();
   const updateMut = useUpdateServiceCredential();
   const remove = useDeleteServiceCredential();
+  const deleting = usePendingKeys<number>();
 
   const [form, setForm] = useState<ServiceCredentialPayload>({
     name: '',
@@ -791,7 +785,7 @@ function ServiceCredentialsSection() {
     secret: '',
   });
   const [editId, setEditId] = useState<number | null>(null);
-  const [status, setStatus] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+  const [status, setStatus] = useState<FormStatus | null>(null);
 
   const resetForm = () => {
     setForm({ name: '', username: '', password: '', secret: '' });
@@ -866,24 +860,24 @@ function ServiceCredentialsSection() {
       message: `Delete service credential “${cred.name}”?`,
       confirmLabel: 'Delete',
     }))) return;
-    remove.mutate(cred.id, {
-      onSuccess: () =>
-        setStatus({ kind: 'success', message: `Service credential “${cred.name}” deleted` }),
-      onError: (err) =>
+    await deleting.run(cred.id, async () => {
+      try {
+        await remove.mutateAsync(cred.id);
+        setStatus({ kind: 'success', message: `Service credential “${cred.name}” deleted` });
+      } catch (err) {
         setStatus({
           kind: 'error',
           message: `Failed to delete service credential: ${(err as Error).message}`,
-        }),
+        });
+      }
     });
   };
 
-  if (list.isLoading) return <LoadingState />;
-  if (list.isError)
+  if (list.isError && !list.data)
     return (
-      <Callout tone="danger">
-        Failed to load service credentials: {(list.error as Error).message}
-      </Callout>
+      <QueryError what="service credentials" query={list} />
     );
+  if (!list.data) return <LoadingState />;
 
   const submitting = create.isPending || updateMut.isPending;
 
@@ -924,7 +918,7 @@ function ServiceCredentialsSection() {
                   >
                     Edit
                   </button>
-                  <DeleteButton size="md" onClick={() => onDelete(c)} disabled={remove.isPending} />
+                  <DeleteButton size="md" onClick={() => void onDelete(c)} busy={deleting.isPending(c.id)} />
                 </td>
               </tr>
             ))
@@ -965,13 +959,9 @@ function ServiceCredentialsSection() {
           />
         </div>
         <div style={{ marginTop: '0.5rem' }}>
-          <button type="submit" className="btn btn-primary" disabled={submitting}>
-            {submitting
-              ? 'Saving…'
-              : editId === null
-                ? 'Create Service Credential'
-                : 'Save Changes'}
-          </button>
+          <BusyButton type="submit" className="btn btn-primary" busy={submitting} busyLabel="Saving…">
+            {editId === null ? 'Create Service Credential' : 'Save Changes'}
+          </BusyButton>
           {editId !== null && (
             <button
               type="button"
@@ -983,7 +973,7 @@ function ServiceCredentialsSection() {
             </button>
           )}
         </div>
-        <ToastSlot message={status?.message ?? null} kind={status?.kind ?? 'success'} />
+        <StatusLine status={status} />
       </form>
     </div>
   );
@@ -1000,6 +990,9 @@ export function AuthTab({ capabilities }: { capabilities: AdminCapabilities }) {
       <SectionCard
         title={`Authentication (providers: ${capabilities.auth_providers.join(', ')})`}
       >
+        {groups.isError && !groups.data && (
+          <QueryError what="access groups" query={groups} />
+        )}
         <AuthConfigForm groups={groups.data || []} />
       </SectionCard>
       <SectionCard title="Service Credentials">

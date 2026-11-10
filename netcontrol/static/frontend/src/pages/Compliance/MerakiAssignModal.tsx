@@ -1,14 +1,17 @@
 import { useMemo, useState } from 'react';
 
+import { BusyButton } from '@/components/BusyButton';
 import { Callout } from '@/components/Callout';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import {
   useComplianceProfiles,
   useCreateMerakiAssignment,
   useMerakiAssignments,
   useMerakiComplianceOrgs,
 } from '@/api/compliance';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import { profileHasMerakiRules } from './merakiHelpers';
 
@@ -27,6 +30,7 @@ export function MerakiAssignModal({
   const profiles = useComplianceProfiles();
   const orgs = useMerakiComplianceOrgs();
   const create = useCreateMerakiAssignment();
+  const submitting = usePendingKeys<'assign'>();
 
   const [profileId, setProfileId] = useState<number | null>(initialProfileId ?? null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -62,39 +66,48 @@ export function MerakiAssignModal({
           <button type="button" className="btn btn-secondary" onClick={onClose}>
             Cancel
           </button>
-          <button
-            type="button"
+          <BusyButton
             className="btn btn-primary"
-            disabled={profileId == null || selected.size === 0 || create.isPending}
-            onClick={async () => {
-              setError(null);
-              if (profileId == null) return;
-              let failed = 0;
-              let lastError = '';
-              for (const orgRef of [...selected]) {
-                try {
-                  await create.mutateAsync({
-                    profile_id: profileId,
-                    org_ref: orgRef,
-                    interval_seconds: hours * 3600,
-                  });
-                } catch (e) {
-                  failed++;
-                  lastError = (e as Error).message;
+            busy={submitting.anyPending}
+            busyLabel="Assigning…"
+            disabled={profileId == null || selected.size === 0}
+            onClick={() =>
+              void submitting.run('assign', async () => {
+                setError(null);
+                if (profileId == null) return;
+                let failed = 0;
+                let lastError = '';
+                for (const orgRef of [...selected]) {
+                  try {
+                    await create.mutateAsync({
+                      profile_id: profileId,
+                      org_ref: orgRef,
+                      interval_seconds: hours * 3600,
+                    });
+                  } catch (e) {
+                    failed++;
+                    lastError = (e as Error).message;
+                  }
                 }
-              }
-              if (failed > 0) {
-                setError(`${failed} assignment(s) failed: ${lastError}`);
-                return;
-              }
-              onClose();
-            }}
+                if (failed > 0) {
+                  setError(`${failed} assignment(s) failed: ${lastError}`);
+                  return;
+                }
+                onClose();
+              })
+            }
           >
-            {create.isPending ? 'Assigning…' : 'Assign'}
-          </button>
+            Assign
+          </BusyButton>
         </>
       }
     >
+      {profiles.isError && !profiles.data && (
+        <QueryError what="compliance profiles" query={profiles} />
+      )}
+      {existing.isError && !existing.data && (
+        <QueryError what="existing Meraki assignments" query={existing} />
+      )}
       <div className="form-group">
         <label className="form-label">Compliance Profile (with Meraki rules)</label>
         <select
@@ -126,7 +139,9 @@ export function MerakiAssignModal({
             padding: '0.5rem 0.75rem',
           }}
         >
-          {orgs.isLoading ? (
+          {orgs.isError && !orgs.data ? (
+            <QueryError what="Meraki organizations" query={orgs} />
+          ) : orgs.isLoading ? (
             <LoadingState variant="inline" />
           ) : orgList.length === 0 ? (
             <span className="text-muted">

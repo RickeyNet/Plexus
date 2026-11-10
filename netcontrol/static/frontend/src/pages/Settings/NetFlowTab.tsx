@@ -6,30 +6,31 @@ import {
   useUpdateFlowCollectorConfig,
 } from '@/api/settings';
 import { Badge } from '@/components/Badge';
-import { Callout } from '@/components/Callout';
+import { BusyButton } from '@/components/BusyButton';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
+
+import { FormStatus, StatusLine } from './StatusLine';
 
 export function NetFlowTab() {
   const query = useFlowCollectorConfig();
   const update = useUpdateFlowCollectorConfig();
 
   const [draft, setDraft] = useState<FlowCollectorConfig | null>(null);
-  const [status, setStatus] = useState<{ kind: 'success' | 'error'; message: string } | null>(
-    null,
-  );
+  const [status, setStatus] = useState<FormStatus | null>(null);
   const [prevData, setPrevData] = useState(query.data);
   if (query.data !== prevData) {
     setPrevData(query.data);
     if (query.data) setDraft(query.data);
   }
 
-  if (query.isLoading || !draft) return <LoadingState />;
-  if (query.isError)
-    return (
-      <Callout tone="danger">
-        Failed to load NetFlow config: {(query.error as Error).message}
-      </Callout>
-    );
+  if (!draft) {
+    if (query.isError)
+      return (
+        <QueryError what="NetFlow config" query={query} />
+      );
+    return <LoadingState />;
+  }
 
   const num = (
     label: string,
@@ -152,22 +153,12 @@ export function NetFlowTab() {
         </div>
 
         <div style={{ marginTop: '0.75rem' }}>
-          <button type="submit" className="btn btn-primary" disabled={update.isPending}>
-            {update.isPending ? 'Saving…' : 'Save NetFlow Settings'}
-          </button>
+          <BusyButton type="submit" className="btn btn-primary" busy={update.isPending} busyLabel="Saving…">
+            Save NetFlow Settings
+          </BusyButton>
         </div>
 
-        {status && (
-          <div
-            className={status.kind === 'error' ? 'error' : ''}
-            style={{
-              marginTop: '0.5rem',
-              color: status.kind === 'error' ? undefined : 'var(--success)',
-            }}
-          >
-            {status.message}
-          </div>
-        )}
+        <StatusLine status={status} />
       </form>
     </div>
   );

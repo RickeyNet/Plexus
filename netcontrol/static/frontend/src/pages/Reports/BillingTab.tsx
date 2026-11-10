@@ -10,10 +10,10 @@ import {
   type BillingCircuit,
   type BillingPeriod,
 } from '@/api/reports';
-import { Callout } from '@/components/Callout';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
 import { StatGrid, StatTile } from '@/components/StatTile';
 
 import { CircuitFormModal } from './CircuitFormModal';
@@ -71,24 +71,30 @@ export function BillingTab() {
         </div>
       </div>
 
-      <StatGrid compact>
-        <StatTile label="Total Circuits" value={String(summary?.total_circuits ?? 0)} />
-        <StatTile label="Enabled" value={String(summary?.enabled_circuits ?? 0)} />
-        <StatTile label="Billing Periods" value={String(summary?.total_periods ?? 0)} />
-        <StatTile
-          label="Overages"
-          value={String(summary?.overage_periods ?? 0)}
-          tone={(summary?.overage_periods ?? 0) > 0 ? 'danger' : 'success'}
-        />
-        <StatTile
-          label="Total Overage Cost"
-          value={summary?.total_overage_cost ? `$${summary.total_overage_cost.toLocaleString()}` : '$0'}
-        />
-      </StatGrid>
+      {summaryQuery.isError && !summaryQuery.data ? (
+        <QueryError what="billing summary" query={summaryQuery} />
+      ) : (
+        <StatGrid compact>
+          <StatTile label="Total Circuits" value={String(summary?.total_circuits ?? 0)} />
+          <StatTile label="Enabled" value={String(summary?.enabled_circuits ?? 0)} />
+          <StatTile label="Billing Periods" value={String(summary?.total_periods ?? 0)} />
+          <StatTile
+            label="Overages"
+            value={String(summary?.overage_periods ?? 0)}
+            tone={(summary?.overage_periods ?? 0) > 0 ? 'danger' : 'success'}
+          />
+          <StatTile
+            label="Total Overage Cost"
+            value={summary?.total_overage_cost ? `$${summary.total_overage_cost.toLocaleString()}` : '$0'}
+          />
+        </StatGrid>
+      )}
 
       <h4>Circuits</h4>
       {circuitsQuery.isPending && <LoadingState />}
-      {circuitsQuery.error && <Callout tone="danger">Failed: {(circuitsQuery.error as Error).message}</Callout>}
+      {circuitsQuery.isError && !circuitsQuery.data && (
+        <QueryError what="billing circuits" query={circuitsQuery} />
+      )}
       {circuitsQuery.data && (circuits.length === 0 ? (
         <div className="empty-state">
           <h4>No billing circuits defined</h4>
@@ -130,7 +136,9 @@ export function BillingTab() {
 
       <h4 style={{ marginTop: '1rem' }}>Billing Periods</h4>
       {periodsQuery.isPending && <LoadingState />}
-      {periodsQuery.error && <Callout tone="danger">Failed: {(periodsQuery.error as Error).message}</Callout>}
+      {periodsQuery.isError && !periodsQuery.data && (
+        <QueryError what="billing periods" query={periodsQuery} />
+      )}
       {periodsQuery.data && (periods.length === 0 ? (
         <div className="empty-state">
           <h4>No billing periods generated</h4>

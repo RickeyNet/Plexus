@@ -11,10 +11,11 @@ import {
   useRollbackDeployment,
 } from '@/api/deployments';
 import { StatusBadge } from '@/components/Badge';
-import { Callout } from '@/components/Callout';
+import { BusyButton } from '@/components/BusyButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { LoadingState } from '@/components/LoadingState';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
+import { QueryError } from '@/components/QueryError';
 import { SummaryStrip, type SummaryStripItem } from '@/components/SummaryStrip';
 import { formatBackendDateTime } from '@/lib/datetime';
 import { statusTone, toneColor } from '@/lib/severity';
@@ -125,7 +126,9 @@ export function Deployments() {
           <DeploymentList
             items={filtered}
             loading={deployments.isLoading}
-            error={deployments.error}
+            error={deployments.isError && !deployments.data ? deployments.error : null}
+            onRetry={() => void deployments.refetch()}
+            isRetrying={deployments.isFetching}
             onView={(id) => setDetailId(id)}
             onNew={() => setShowNew(true)}
             onExecuted={(r) => startStream(r, 'Executing Deployment')}
@@ -187,6 +190,8 @@ function DeploymentList({
   items,
   loading,
   error,
+  onRetry,
+  isRetrying,
   onView,
   onNew,
   onExecuted,
@@ -194,20 +199,19 @@ function DeploymentList({
 }: {
   items: Deployment[];
   loading: boolean;
+  /** Set only when the list failed and there is no data to show. */
   error: unknown;
+  onRetry: () => void;
+  isRetrying: boolean;
   onView: (id: number) => void;
   onNew: () => void;
   onExecuted: (r: DeploymentJobStartResult) => void;
   onRolledBack: (r: DeploymentJobStartResult) => void;
 }) {
-  if (loading) return <LoadingState text="Loading deployments…" />;
   if (error) {
-    return (
-      <Callout tone="danger">
-        Failed to load deployments: {(error as Error).message}
-      </Callout>
-    );
+    return <QueryError what="deployments" error={error} onRetry={onRetry} isRetrying={isRetrying} />;
   }
+  if (loading) return <LoadingState text="Loading deployments…" />;
   if (!items.length) {
     return (
       <div className="empty-state" style={{ padding: '2rem 1rem', textAlign: 'center' }}>
@@ -330,9 +334,11 @@ function DeploymentRow({
             Details
           </button>
           {canExecute(deployment.status) && (
-            <button
+            <BusyButton
               className="btn btn-sm btn-primary"
-              disabled={execute.isPending || approvalBlocking}
+              busy={execute.isPending}
+              busyLabel="Starting…"
+              disabled={approvalBlocking}
               title={
                 approvalBlocking
                   ? 'Awaiting approval - open Details to request or review it'
@@ -340,8 +346,8 @@ function DeploymentRow({
               }
               onClick={handleExecute}
             >
-              {execute.isPending ? 'Starting…' : 'Execute'}
-            </button>
+              Execute
+            </BusyButton>
           )}
           {(showRollback || showDelete) && (
             <KebabMenu label={`Actions for ${deployment.name}`}>
@@ -352,7 +358,7 @@ function DeploymentRow({
               )}
               {showRollback && showDelete && <MenuSeparator />}
               {showDelete && (
-                <MenuItem danger onSelect={handleDelete}>
+                <MenuItem danger disabled={remove.isPending} onSelect={handleDelete}>
                   Delete
                 </MenuItem>
               )}

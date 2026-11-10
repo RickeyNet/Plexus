@@ -1,6 +1,7 @@
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import { type SoftwareDevice, useSoftwareHistory } from '@/api/software';
 import { formatBackendDateTime } from '@/lib/datetime';
 
@@ -38,7 +39,9 @@ export function DeviceHistoryModal({ device, onClose }: Props) {
         ) : null}
         , first seen {formatBackendDateTime(device.first_seen, 'Never')}.
       </div>
-      {history.isPending ? (
+      {history.isError && !history.data ? (
+        <QueryError what="version history" query={history} />
+      ) : history.isPending ? (
         <LoadingState text="Loading history…" />
       ) : rows.length === 0 ? (
         <EmptyState compact message="No history recorded yet." />

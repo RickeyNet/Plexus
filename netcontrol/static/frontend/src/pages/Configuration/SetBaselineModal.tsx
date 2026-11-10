@@ -9,6 +9,7 @@ import { apiRequest } from '@/api/client';
 import { Callout } from '@/components/Callout';
 import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 
 interface Props {
   onClose: () => void;
@@ -107,6 +108,9 @@ export function SetBaselineModal({ onClose }: Props) {
     >
       <form id={formId} onSubmit={handleSubmit}>
         {formError && <Callout tone="danger">{formError}</Callout>}
+        {groups.isError && !groups.data && (
+          <QueryError what="inventory groups" query={groups} />
+        )}
         <div className="form-group">
           <label className="form-label">Host</label>
           <select

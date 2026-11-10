@@ -1,12 +1,13 @@
 import { lazy, Suspense, useMemo, useState } from 'react';
 
 import { Badge } from '@/components/Badge';
-import { Callout } from '@/components/Callout';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { useDeletePlaybook, usePlaybooks, type Playbook } from '@/api/jobs';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import { parseTags } from './helpers';
 
@@ -20,6 +21,7 @@ export function PlaybooksTab() {
   const { confirm, alert } = useDialogs();
   const query = usePlaybooks();
   const deleteMut = useDeletePlaybook();
+  const deleting = usePendingKeys<number>();
   const [search, setSearch] = useState('');
   const [editing, setEditing] = useState<{ mode: 'create' } | { mode: 'edit'; id: number } | null>(null);
 
@@ -45,7 +47,13 @@ export function PlaybooksTab() {
       confirmLabel: 'Delete',
     });
     if (!ok) return;
-    deleteMut.mutate(pb.id, { onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); } });
+    await deleting.run(pb.id, async () => {
+      try {
+        await deleteMut.mutateAsync(pb.id);
+      } catch (e) {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      }
+    });
   }
 
   return (
@@ -62,8 +70,11 @@ export function PlaybooksTab() {
         <button className="btn btn-primary" onClick={() => setEditing({ mode: 'create' })}>+ New Playbook</button>
       </div>
 
-      {query.isPending && <LoadingState />}
-      {query.error && <Callout tone="danger">Failed: {(query.error as Error).message}</Callout>}
+      {query.error && !query.data ? (
+        <QueryError what="playbooks" query={query} />
+      ) : (
+        query.isPending && <LoadingState />
+      )}
       {query.data && (filtered.length === 0 ? (
         <EmptyState message="No playbooks" />
       ) : (
@@ -73,7 +84,8 @@ export function PlaybooksTab() {
               key={pb.id}
               pb={pb}
               onEdit={() => setEditing({ mode: 'edit', id: pb.id })}
-              onDelete={() => handleDelete(pb)}
+              isDeleting={deleting.isPending(pb.id)}
+              onDelete={() => void handleDelete(pb)}
             />
           ))}
         </div>
@@ -92,7 +104,17 @@ export function PlaybooksTab() {
   );
 }
 
-function PlaybookRow({ pb, onEdit, onDelete }: { pb: Playbook; onEdit: () => void; onDelete: () => void }) {
+function PlaybookRow({
+  pb,
+  isDeleting,
+  onEdit,
+  onDelete,
+}: {
+  pb: Playbook;
+  isDeleting: boolean;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
   const tags = parseTags(pb.tags);
   const isAnsible = pb.type === 'ansible';
   return (
@@ -110,7 +132,7 @@ function PlaybookRow({ pb, onEdit, onDelete }: { pb: Playbook; onEdit: () => voi
       </div>
       <div style={{ display: 'flex', gap: '0.4rem' }}>
         <button className="btn btn-sm btn-secondary" onClick={onEdit}>Edit</button>
-        <DeleteButton onClick={onDelete} />
+        <DeleteButton busy={isDeleting} onClick={onDelete} />
       </div>
     </div>
   );

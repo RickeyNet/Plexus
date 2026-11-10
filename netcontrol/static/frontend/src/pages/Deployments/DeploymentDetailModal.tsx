@@ -13,9 +13,10 @@ import {
   useRollbackDeployment,
 } from '@/api/deployments';
 import { StatusBadge } from '@/components/Badge';
-import { Callout } from '@/components/Callout';
+import { BusyButton } from '@/components/BusyButton';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
+import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { formatBackendDateTime, formatBackendTime } from '@/lib/datetime';
 import { statusTone, toneColor } from '@/lib/severity';
@@ -82,12 +83,10 @@ export function DeploymentDetailModal({
         )
       }
     >
-      {query.isPending && <LoadingState />}
-      {query.error && (
-        <Callout tone="danger">
-          Failed to load: {(query.error as Error).message}
-        </Callout>
+      {query.isError && !query.data && (
+        <QueryError what="the deployment" query={query} />
       )}
+      {query.isPending && <LoadingState />}
       {query.data && (
         <DetailBody deployment={query.data} />
       )}
@@ -153,26 +152,27 @@ function DetailActions({
         </button>
       )}
       {canRollback(deployment.status) && (
-        <button
-          type="button"
+        <BusyButton
           className="btn btn-secondary"
           style={{ border: '1px solid var(--warning)', color: 'var(--warning)' }}
-          disabled={rollback.isPending}
+          busy={rollback.isPending}
+          busyLabel="Starting…"
           onClick={handleRollback}
         >
-          {rollback.isPending ? 'Starting…' : 'Rollback'}
-        </button>
+          Rollback
+        </BusyButton>
       )}
       {canExecute(deployment.status) && (
-        <button
-          type="button"
+        <BusyButton
           className="btn btn-primary"
-          disabled={execute.isPending || approvalBlocking}
+          busy={execute.isPending}
+          busyLabel="Starting…"
+          disabled={approvalBlocking}
           title={approvalBlocking ? 'Waiting on approval' : undefined}
           onClick={handleExecute}
         >
-          {execute.isPending ? 'Starting…' : 'Execute'}
-        </button>
+          Execute
+        </BusyButton>
       )}
     </>
   );
@@ -252,7 +252,15 @@ function DetailBody({ deployment }: { deployment: DeploymentDetail }) {
             approverInput={approvalComment}
             onApproverInput={setApprovalComment}
             isPending={approve.isPending || reject.isPending}
-            onApprove={() =>
+            busyAction={approve.isPending ? 'approve' : reject.isPending ? 'reject' : null}
+            onApprove={async () => {
+              const ok = await confirm({
+                title: 'Approve deployment',
+                message: `Approve deployment "${deployment.name}" to ${deployment.group_name || 'its target group'}? Once approved it can be executed, which pushes its commands to every host in the group.`,
+                confirmLabel: 'Approve',
+                confirmVariant: 'primary',
+              });
+              if (!ok) return;
               approve.mutate(
                 { id: deployment.id, comment: approvalComment },
                 {
@@ -260,8 +268,8 @@ function DetailBody({ deployment }: { deployment: DeploymentDetail }) {
                     void alert({ message: (e as Error).message, variant: 'error' });
                   },
                 },
-              )
-            }
+              );
+            }}
             onReject={async () => {
               const ok = await confirm({
                 title: 'Reject deployment',
@@ -352,6 +360,7 @@ function ApprovalSection({
   approverInput,
   onApproverInput,
   isPending,
+  busyAction,
   onApprove,
   onReject,
 }: {
@@ -364,6 +373,8 @@ function ApprovalSection({
   approverInput: string;
   onApproverInput: (v: string) => void;
   isPending: boolean;
+  /** Which approval decision is in flight, for the spinner. */
+  busyAction: 'approve' | 'reject' | null;
   onApprove: () => void;
   onReject: () => void;
 }) {
@@ -409,23 +420,23 @@ function ApprovalSection({
             style={{ width: '100%' }}
           />
           <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-            <button
-              type="button"
+            <BusyButton
               className="btn btn-secondary btn-sm"
               style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }}
+              busy={busyAction === 'reject'}
               disabled={isPending}
               onClick={onReject}
             >
               Reject
-            </button>
-            <button
-              type="button"
+            </BusyButton>
+            <BusyButton
               className="btn btn-primary btn-sm"
+              busy={busyAction === 'approve'}
               disabled={isPending}
               onClick={onApprove}
             >
-              {isPending ? 'Saving…' : 'Approve'}
-            </button>
+              Approve
+            </BusyButton>
           </div>
         </div>
       )}

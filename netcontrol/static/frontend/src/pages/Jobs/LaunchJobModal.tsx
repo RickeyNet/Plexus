@@ -1,6 +1,7 @@
 import { useId, useMemo, useState, type FormEvent } from 'react';
 
 import { Callout } from '@/components/Callout';
+import { useDialogs } from '@/components/DialogProvider-context';
 import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
 import {
@@ -20,6 +21,7 @@ interface Props {
 
 export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
   const formId = useId();
+  const { confirm } = useDialogs();
   const playbooksQuery = usePlaybooks();
   const groupsQuery = useInventoryGroupsFull(true);
   const credsQuery = useJobCredentials();
@@ -91,7 +93,7 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
     });
   }
 
-  function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setLaunchError(null);
     const adHocList = adHocIps.trim()
@@ -113,6 +115,22 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
       const v = paramValues[f.name];
       if (v === '' || v === undefined) continue; // server fills in defaults
       parameters[f.name] = v;
+    }
+
+    if (!dryRun) {
+      const groupNames = (groupsQuery.data ?? [])
+        .filter((g) => (g.hosts ?? []).some((h) => hostIds.has(h.id)))
+        .map((g) => g.name);
+      const targets = [
+        hostIds.size > 0 && `${hostIds.size} inventory host${hostIds.size === 1 ? '' : 's'} (${groupNames.join(', ')})`,
+        adHocList.length > 0 && `${adHocList.length} ad-hoc address${adHocList.length === 1 ? '' : 'es'}`,
+      ].filter(Boolean).join(' and ');
+      const ok = await confirm({
+        title: 'Launch live job',
+        message: `Run '${selectedPb?.name ?? 'the selected playbook'}' live against ${targets}? This is not a dry run: it makes changes on the devices.`,
+        confirmLabel: 'Launch live',
+      });
+      if (!ok) return;
     }
 
     launchMut.mutate(
@@ -152,7 +170,7 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
         </>
       }
     >
-      <form id={formId} onSubmit={handleSubmit}>
+      <form id={formId} onSubmit={(e) => void handleSubmit(e)}>
         {launchError && <Callout tone="danger">{launchError}</Callout>}
         <div className="form-group">
           <label className="form-label">Playbook</label>

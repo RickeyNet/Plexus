@@ -2345,6 +2345,14 @@ button.stat-card {
     box-shadow: none;
 }
 
+/* Spinner inside a button (src/components/BusyButton.tsx) takes the
+   button's text colour so it reads on filled and outlined buttons alike. */
+.btn > .backup-spinner {
+    border-color: rgba(from currentColor r g b / 0.35);
+    border-top-color: currentColor;
+    margin-right: var(--space-2);
+}
+
 /* Page tab buttons (shared <TabBar> renders .page-tab-btn) */
 .tab-bar {
     display: flex;

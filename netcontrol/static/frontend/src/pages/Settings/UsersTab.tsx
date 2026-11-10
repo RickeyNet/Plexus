@@ -1,6 +1,5 @@
 import { useState } from 'react';
 
-import { Callout } from '@/components/Callout';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -11,7 +10,9 @@ import {
 } from '@/api/settings';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
 import { formatBackendDate } from '@/lib/datetime';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import {
   CreateUserModal,
@@ -24,6 +25,7 @@ export function UsersTab() {
   const users = useAdminUsers();
   const groups = useAccessGroups();
   const remove = useDeleteAdminUser();
+  const deleting = usePendingKeys<number>();
 
   const [showCreate, setShowCreate] = useState(false);
   const [editUser, setEditUser] = useState<AdminUser | null>(null);
@@ -50,10 +52,11 @@ export function UsersTab() {
       </div>
 
       {users.isLoading && <LoadingState text="Loading users…" />}
-      {users.isError && (
-        <Callout tone="danger">
-          Failed to load users: {(users.error as Error).message}
-        </Callout>
+      {users.isError && !users.data && (
+        <QueryError what="users" query={users} />
+      )}
+      {groups.isError && !groups.data && (
+        <QueryError what="access groups" query={groups} />
       )}
       {users.data && users.data.length === 0 && (
         <EmptyState compact message="No user accounts found." />
@@ -93,12 +96,15 @@ export function UsersTab() {
                 Reset Password
               </button>
               <DeleteButton
+                busy={deleting.isPending(u.id)}
                 onClick={async () => {
                   if (!(await confirm({ title: 'Delete user account', message: `Delete @${u.username}?`, confirmLabel: 'Delete' }))) return;
-                  remove.mutate(u.id, {
-                    onError: (e) => {
+                  await deleting.run(u.id, async () => {
+                    try {
+                      await remove.mutateAsync(u.id);
+                    } catch (e) {
                       void alert({ message: `Failed to delete user: ${(e as Error).message}`, variant: 'error' });
-                    },
+                    }
                   });
                 }}
               />

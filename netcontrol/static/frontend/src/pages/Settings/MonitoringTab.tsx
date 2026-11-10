@@ -6,8 +6,11 @@ import {
   useRunMonitoringPoll,
   useUpdateMonitoringConfig,
 } from '@/api/settings';
-import { Callout } from '@/components/Callout';
+import { BusyButton } from '@/components/BusyButton';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
+
+import { FormStatus, StatusLine } from './StatusLine';
 
 export function MonitoringTab() {
   const query = useMonitoringConfig();
@@ -15,20 +18,20 @@ export function MonitoringTab() {
   const runNow = useRunMonitoringPoll();
 
   const [draft, setDraft] = useState<MonitoringConfig | null>(null);
-  const [status, setStatus] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+  const [status, setStatus] = useState<FormStatus | null>(null);
   const [prevData, setPrevData] = useState(query.data);
   if (query.data !== prevData) {
     setPrevData(query.data);
     if (query.data) setDraft(query.data);
   }
 
-  if (query.isLoading || !draft) return <LoadingState />;
-  if (query.isError)
-    return (
-      <Callout tone="danger">
-        Failed to load monitoring config: {(query.error as Error).message}
-      </Callout>
-    );
+  if (!draft) {
+    if (query.isError)
+      return (
+        <QueryError what="monitoring config" query={query} />
+      );
+    return <LoadingState />;
+  }
 
   const num = (
     label: string,
@@ -75,10 +78,10 @@ export function MonitoringTab() {
         }}
       >
         <h3 style={{ margin: 0 }}>Monitoring</h3>
-        <button
-          type="button"
+        <BusyButton
           className="btn btn-sm btn-secondary"
-          disabled={runNow.isPending}
+          busy={runNow.isPending}
+          busyLabel="Polling…"
           onClick={() => {
             setStatus(null);
             runNow.mutate(undefined, {
@@ -97,8 +100,8 @@ export function MonitoringTab() {
             });
           }}
         >
-          {runNow.isPending ? 'Polling…' : 'Poll Now'}
-        </button>
+          Poll Now
+        </BusyButton>
       </div>
 
       <form
@@ -135,26 +138,17 @@ export function MonitoringTab() {
         </div>
 
         <div style={{ marginTop: '0.5rem' }}>
-          <button
+          <BusyButton
             type="submit"
             className="btn btn-primary"
-            disabled={update.isPending}
+            busy={update.isPending}
+            busyLabel="Saving…"
           >
-            {update.isPending ? 'Saving…' : 'Save Monitoring Settings'}
-          </button>
+            Save Monitoring Settings
+          </BusyButton>
         </div>
 
-        {status && (
-          <div
-            className={status.kind === 'error' ? 'error' : ''}
-            style={{
-              marginTop: '0.5rem',
-              color: status.kind === 'error' ? undefined : 'var(--success)',
-            }}
-          >
-            {status.message}
-          </div>
-        )}
+        <StatusLine status={status} />
       </form>
     </div>
   );

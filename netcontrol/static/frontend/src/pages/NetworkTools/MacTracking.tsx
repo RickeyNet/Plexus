@@ -1,8 +1,11 @@
 import { Fragment, FormEvent, type ReactNode, useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
+import { BusyButton } from '@/components/BusyButton';
+import { useDialogs } from '@/components/DialogProvider-context';
 import { Modal } from '@/components/Modal';
 import { PageHelp } from '@/components/PageHelp';
+import { QueryError } from '@/components/QueryError';
 import { SegmentedControl } from '@/components/SegmentedControl';
 import { StatGrid, StatTile } from '@/components/StatTile';
 import { TabBar } from '@/components/TabBar';
@@ -26,6 +29,7 @@ import {
 
 import { useShowMore } from '@/lib/useShowMore';
 import { formatBackendDateTime } from '@/lib/datetime';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 
 
 type Tab = 'search' | 'moves' | 'hosts';
@@ -247,10 +251,8 @@ function SearchTab() {
         <div className="skeleton" style={{ height: '200px' }} />
       )}
 
-      {search.error && (
-        <div className="glass-card card" style={{ color: 'var(--danger)' }}>
-          Search error: {search.error.message}
-        </div>
+      {search.error && !search.data && (
+        <QueryError what="MAC search results" query={search} />
       )}
 
       {search.data && search.data.length === 0 && (
@@ -295,6 +297,7 @@ function MovesTab() {
   const [statusFilter, setStatusFilter] = useState('open');
   const [hostFilter, setHostFilter] = useState<number | null>(null);
   const [logEvent, setLogEvent] = useState<number | null>(null);
+  const { alert, confirm } = useDialogs();
 
   const summary = useMacMoveSummary();
   // Two queries: `events` is what we display (status + switch filtered).
@@ -304,6 +307,30 @@ function MovesTab() {
   const allForOptions = useMacMoveEvents(statusFilter, 500);
   const ack = useAcknowledgeMacMove();
   const ackAll = useAcknowledgeAllMacMoves();
+  const acking = usePendingKeys<number>();
+
+  const ackOne = (id: number) =>
+    acking.run(id, async () => {
+      try {
+        await ack.mutateAsync(id);
+      } catch (e) {
+        void alert({ message: (e as Error).message, variant: 'error' });
+      }
+    });
+
+  const handleAckAll = async () => {
+    const count = summary.data?.open ?? 0;
+    const ok = await confirm({
+      title: 'Acknowledge all MAC moves',
+      message: `Acknowledge all ${count} open MAC move event${count === 1 ? '' : 's'}, on every switch?`,
+      confirmLabel: 'Acknowledge all',
+      confirmVariant: 'primary',
+    });
+    if (!ok) return;
+    ackAll.mutate(undefined, {
+      onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
+    });
+  };
 
   // Build a stable, de-duplicated switch list from every host that appears on
   // either side of a move. A move is between two switches, so both count.
@@ -357,24 +384,23 @@ function MovesTab() {
             </option>
           ))}
         </select>
-        <button
-          type="button"
+        <BusyButton
           className="btn btn-sm"
-          onClick={() => ackAll.mutate()}
-          disabled={ackAll.isPending || !summary.data?.open}
+          busy={ackAll.isPending}
+          busyLabel="Acknowledging…"
+          onClick={() => void handleAckAll()}
+          disabled={!summary.data?.open}
         >
-          {ackAll.isPending ? 'Acknowledging…' : 'Acknowledge all open'}
-        </button>
+          Acknowledge all open
+        </BusyButton>
       </div>
 
       {events.isPending && (
         <div className="skeleton" style={{ height: '200px' }} />
       )}
 
-      {events.error && (
-        <div className="glass-card card" style={{ color: 'var(--danger)' }}>
-          Failed to load move events: {events.error.message}
-        </div>
+      {events.error && !events.data && (
+        <QueryError what="move events" query={events} />
       )}
 
       {events.data && events.data.length === 0 && (
@@ -393,8 +419,8 @@ function MovesTab() {
         <div className="glass-card card" style={{ overflowX: 'auto' }}>
           <MoveEventsTable
             rows={events.data}
-            onAck={(id) => ack.mutate(id)}
-            ackPendingId={ack.isPending ? ack.variables ?? null : null}
+            onAck={(id) => void ackOne(id)}
+            isAcking={acking.isPending}
             onShowLog={setLogEvent}
           />
           <div style={{ marginTop: '0.5rem', fontSize: '0.85em', opacity: 0.6 }}>
@@ -517,10 +543,8 @@ function HostsTab() {
         <div className="skeleton" style={{ height: '200px' }} />
       )}
 
-      {rollup.error && (
-        <div className="glass-card card" style={{ color: 'var(--danger)' }}>
-          Failed to load host rollup: {rollup.error.message}
-        </div>
+      {rollup.error && !rollup.data && (
+        <QueryError what="host rollup" query={rollup} />
       )}
 
       {rollup.data && visible.length === 0 && (
@@ -737,12 +761,12 @@ function loc(
 function MoveEventsTable({
   rows,
   onAck,
-  ackPendingId,
+  isAcking,
   onShowLog,
 }: {
   rows: MacMoveEvent[];
   onAck: (id: number) => void;
-  ackPendingId: number | null;
+  isAcking: (id: number) => boolean;
   onShowLog: (id: number) => void;
 }) {
   const { visible, hiddenCount, showMore } = useShowMore(rows);
@@ -795,14 +819,13 @@ function MoveEventsTable({
             </td>
             <td style={{ whiteSpace: 'nowrap' }}>
               {r.status === 'open' && (
-                <button
-                  type="button"
+                <BusyButton
                   className="btn btn-sm"
+                  busy={isAcking(r.id)}
                   onClick={() => onAck(r.id)}
-                  disabled={ackPendingId === r.id}
                 >
-                  {ackPendingId === r.id ? '…' : 'Acknowledge'}
-                </button>
+                  Acknowledge
+                </BusyButton>
               )}{' '}
               <button
                 type="button"
@@ -831,16 +854,12 @@ function MoveEventsTable({
 }
 
 function MoveEventLogBody({ eventId }: { eventId: number | null }) {
-  const { data, isPending, error } = useMacMoveEventHistory(eventId, 500);
+  const { data, isPending, error, refetch, isFetching } = useMacMoveEventHistory(eventId, 500);
 
+  if (error && !data)
+    return <QueryError what="event log" error={error} onRetry={() => void refetch()} isRetrying={isFetching} />;
   if (isPending)
     return <div className="skeleton" style={{ height: '120px' }} />;
-  if (error)
-    return (
-      <div style={{ color: 'var(--danger)' }}>
-        Failed to load log: {error.message}
-      </div>
-    );
   if (!data || data.length === 0)
     return <p style={{ opacity: 0.7 }}>No log entries recorded yet.</p>;
 
@@ -972,10 +991,12 @@ function ResultsTable({
 }
 
 function MacHistoryBody({ macAddress }: { macAddress: string | null }) {
-  const { data, isPending, error } = useMacHistory(macAddress);
+  const { data, isPending, error, refetch, isFetching } = useMacHistory(macAddress);
 
+  if (error && !data) {
+    return <QueryError what="MAC history" error={error} onRetry={() => void refetch()} isRetrying={isFetching} />;
+  }
   if (isPending) return <div className="skeleton" style={{ height: '120px' }} />;
-  if (error) return <div style={{ color: 'var(--danger)' }}>Failed to load history: {error.message}</div>;
   if (!data || data.length === 0) {
     return <p style={{ opacity: 0.7 }}>No movement history found for this MAC.</p>;
   }
