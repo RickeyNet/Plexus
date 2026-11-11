@@ -1,154 +1,6 @@
 # Company-Readiness Plan (3 Weeks)
 
-## Week 1: Baseline Quality & Installability
-- [x] Dependencies: add pinned requirements (`requirements.txt`, `requirements-lock.txt`); choose pip; add `.env.example` with config keys.
-- [x] Tooling: add `ruff` (lint/format), `mypy`, and `pre-commit` hooks (ruff, mypy, trailing whitespace).
-- [x] CI: GitHub Actions pipeline running lint + type check + tests on push/PR.
-- [x] Docs: expand README with quickstart and how to run dev server/CLI + Docker.
-
-## Week 2: Reliability, Security, and UX
-- [x] Error handling/logging: standardize logging with redaction; normalize API/CLI error responses and exit codes.
-- [x] Config validation: startup checks for required env vars/credentials; fail fast with clear messages.
-- [x] UX: add dry-run and diff view for conversions; ensure downloadable artifacts and timestamped backups.
-- [x] Security: dependency scanning (Dependabot/Snyk/OWASP dep-check); secrets never logged; add basic auth/RBAC for UI/API (at least token protection).
-- [x] Observability: emit counters for conversion success/failure and timings; add health endpoint for web app.
-
-## Week 3: Deployability, Docs, and Governance
-- [x] Packaging: add Dockerfile and docker-compose (app + backing services) with healthcheck; env-based config.
-- [x] Versioning/release: adopt semantic versioning; add `--version` flag; start CHANGELOG; tag first internal release.
-- [x] Operator docs: runbook (upload config, review diff, apply), rollback steps, FAQ for mismatch causes.
-- [x] Performance/scale: test large configs; document limits; add timeouts/retries on device/API calls.
-- [x] Compliance: pick a license; document data handling/retention for configs (storage location and duration).
-
-## Week 4: Security Hardening
-- [x] Enforce first-login password reset for default admin account; block privileged operations until password is rotated.
-- [x] Add `APP_ALLOW_SELF_REGISTER` (default `false` in production) and gate `/api/auth/register` behind explicit opt-in.
-- [x] Harden playbook file writes with filename allowlist, path normalization, and extension enforcement.
-- [x] Add CSRF protection for cookie-authenticated API calls; keep token-auth workflows compatible.
-
-## Week 5: Reliability and Observability
-- [x] Add bounded concurrency controls for jobs.
-- [x] Replace remaining `print()` statements with structured logger events and consistent redaction.
-- [x] Add request/job correlation IDs in logs and API responses for traceability.
-- [x] Add audit events for auth changes, playbook CRUD actions, and import/deploy operations.
-
-## Week 6: Test Depth, CI/CD, and Ops Readiness
-- [x] Add integration tests for protected API behavior when `APP_REQUIRE_API_TOKEN=true`.
-- [x] Add tests for playbook filename/path sanitization edge cases and malicious input attempts.
-- [x] Add end-to-end smoke tests for convert -> diff -> import workflow with artifact validation.
-- [x] Enforce minimum test coverage threshold in CI and fail on critical-module regression.
-- [x] Add CI security gates (`pip-audit`, `bandit`, optional CodeQL) and publish SBOM artifacts for releases.
-- [x] Add release automation to validate changelog/version consistency and publish container images.
-- [x] Refine README setup steps (`.venv` consistency, run commands) and add incident-response runbook scenarios.
-
-## UI/UX Modernization
-- [x] Sidebar navigation: collapsible icon+label sidebar replacing top navbar.
-- [x] Glassmorphism cards: translucent backdrop-blur on cards, modals, and panels.
-- [x] Animated gradient background: floating orbs using theme colors on app and login screens.
-- [x] Neon glow accents & gradient borders: glowing hover states, active indicators, and button halos.
-- [x] Modern typography: Inter for body text, JetBrains Mono for code blocks.
-- [x] Micro-interactions & motion: skeleton loaders, animated stat counters, staggered card entrances.
-- [x] 3D perspective card tilt: CSS perspective hover effect on cards.
-- [x] Dashboard visual upgrades: ring charts, pulse dots on running status, activity timeline.
-- [x] Spacing & visual hierarchy: gradient text headings, better rhythm, section dividers.
-- [x] Animated login screen: particle background, card slide-in, logo pulse.
-- [x] Toast notifications: slide-in toasts replacing inline error/success banners.
-- [x] Keyboard shortcuts: Ctrl+K page switcher, Esc modal close, / to focus search.
-- [x] Breadcrumb / page title bar: top bar with current page name and breadcrumb trail.
-- [x] Custom scrollbar styling: thin themed scrollbars matching color palette.
-- [x] Empty state illustrations: SVG illustrations with call-to-action on empty pages.
-- [x] Responsive sidebar overlay: mobile hamburger toggle with slide-in overlay + backdrop.
-
-## UI/UX Improvement Backlog (Post-Modernization)
-- [x] Optimize Inventory load path: remove N+1 group->hosts requests by using a single inventory payload with embedded hosts.
-- [x] Add page-level data cache + stale-while-revalidate behavior so nav switches feel instant and avoid full refetch every time.
-- [x] Add page-level search/filter/sort controls for Inventory, Playbooks, Jobs, Templates, and Credentials.
-- [x] Reduce visual weight on Templates list (snippet/preview by default, full content on expand/edit).
-- [x] Improve Jobs scanability with sticky filters (status/date/dry-run) and denser list/table view.
-- [x] Add reduced-motion/performance mode for blur-heavy and infinite animations.
-- [x] Improve modal accessibility (dialog semantics, focus trap, focus return, keyboard-only flow).
-- [x] Add URL/deep-link support for internal pages (hash or pushState) so refresh/back keeps context.
-- [x] Improve first paint by reducing remote font dependency (self-host or robust fallback stack).
-
-## Week 7: PostgreSQL Optional Deployment (VM/Prod Focus)
-- [x] Add dual-backend database abstraction (`sqlite` + `postgres`) while preserving existing `routes.database` API surface.
-- [x] Add PostgreSQL schema bootstrap + migration-safe startup path (remove SQLite-specific assumptions for Postgres mode).
-- [x] Add Docker Compose PostgreSQL service and env-based backend selection.
-- [x] Add SQLite -> PostgreSQL migration utility with dry-run and parity verification.
-- [x] Add CI matrix coverage for SQLite and PostgreSQL backends on critical API/database tests.
-- [x] Update README and operator runbook for PostgreSQL deployment and backup/restore procedures.
-
 ## Week 8-10: Network Management Platform Maturity
-
-### Now (Core Platform)
-- [x] Add device discovery + continuous inventory sync (TCP reachability + SSH banner enrichment, inventory reconcile API, scheduled profile-based sync loop, and Inventory UI scan/sync controls; deeper SNMP/API enrichment pending).
-- [x] Build topology visualization (L2/L3 neighbors, routing relationships, path view).
-- [x] Add config drift detection against intended state with historical diffs.
-- [x] Add scheduled configuration backup policies with restore validation checks.
-- [x] Add golden templates/compliance profiles with continuous compliance scans.
-- [x] Add pre-change risk analysis and impact simulation for policy/route/NAT changes.
-- [x] Add maintenance windows and approval gates for production changes.
-- [x] Add rollback orchestration with pre/post deployment checkpoints.
-
-### Next (Operations and Observability)
-- [x] Add real-time monitoring (interfaces, CPU/memory, VPN health, route churn).
-- [x] Add alerting engine with threshold/anomaly rules, dedup, suppression, escalation.
-- [x] Add SLA dashboards (uptime, latency, jitter, packet loss, MTTR, MTTD).
-- [x] Improve job orchestration UX (queue visibility, priority, dependencies, resume/cancel).
-
-### Metrics Engine (Prometheus Parity) -- Phase 1 Complete
-- [x] Add multi-vendor OID registry with HOST-RESOURCES-MIB fallback (Cisco, Juniper, Arista, Fortinet, Palo Alto, generic).
-- [x] Add per-interface time-series storage with rate calculation and counter-wrap handling.
-- [x] Add flexible metric_samples table (Prometheus-style gauge model with labels).
-- [x] Add 3-tier data downsampling engine (raw 48h → hourly 30d → daily 365d with min/avg/max/p95).
-- [x] Add structured metrics query API with auto-resolution (`/api/metrics/query`).
-- [x] Add SNMP trap and syslog UDP receivers with host correlation.
-
-### Dashboarding & Visualization (Grafana Parity)
-- [x] Adopt a charting library (ECharts or Chart.js) for line, bar, gauge, heatmap, and table panels.
-- [x] Add per-device detail page with CPU/memory graphs, interface utilization, alert history, compliance status.
-- [x] Add global time range selector (1h / 6h / 24h / 7d / 30d / custom) for all metric views.
-- [x] Add user-defined dashboards with configurable panels (metric query + chart type + grid position).
-- [x] Add dashboard template variables ($group, $host) with dropdown selectors for filtering all panels.
-- [x] Add annotation support to overlay deployment/config change events on metric charts.
-
-### Network Monitoring Breadth (LibreNMS Parity)
-- [x] Add per-port utilization graphs with historical in/out bps time-series.
-- [x] Add availability tracking with up/down state transitions and uptime % calculation.
-- [x] Add topology weathermap (color edges green → yellow → red by utilization %).
-- [x] Add custom SNMP OID profiles (user-defined OID → metric mappings with vendor defaults).
-- [x] Add syslog integration (correlate syslog source IP → device, display in device detail page).
-- [x] Add reporting and export (availability, compliance reports with CSV export).
-
-### Closed-Loop Differentiation (Unique to Plexus)
-- [x] Add correlation views linking config changes → metric anomalies → alerts → rollbacks.
-- [x] Add deployment annotations on metric charts (auto-annotate when deployments execute).
-- [x] Add post-change automated verification with success criteria and health checks.
-- [x] Add capacity planning trends (bandwidth, policy scale, route table growth).
-
-### Cacti Parity (Graphing & Data Collection Engine)
-- [x] Add graph template system (reusable chart definitions that auto-apply to devices by type/metric).
-- [x] Add auto-graph creation on device add/discovery (auto-create graphs for all interfaces and standard metrics).
-- [x] Add host templates mapping device types to sets of graph templates for automatic provisioning.
-- [x] Add per-device and per-data-source configurable poll intervals (30s, 1m, 5m per OID group).
-- [x] Add SNMP table walking with auto-discovery of interfaces as independent data sources.
-- [x] Add calculated data sources / CDEFs (95th percentile billing, in+out totals, averages, custom expressions).
-- [x] Add graph tree hierarchical navigation (Site → Device → Interface with user-scoped permissions).
-- [x] Add live bandwidth utilization overlay on topology weathermap links.
-- [x] Add graph image export (PNG/SVG direct URLs for embedding in wikis, emails, NOC screens).
-- [x] Add MacTrack-style MAC/ARP/port tracking for endpoint location.
-- [x] Add NetFlow/sFlow/IPFIX collection and traffic analysis.
-  - [x] Initial foundation: `netcontrol/routes/flow_collector.py` with NetFlow v5 + v9/IPFIX template-based parsers, UDP listener, batched buffer flush, hourly aggregation, REST endpoints (`/api/flows/top-talkers|top-applications|top-conversations|timeline|status`, `/api/admin/flows/{start,stop}`), `flow_records` + `flow_summaries` tables (`routes/database.py:1164`), DB helpers, and router mounted in `app.py`.
-  - [x] Phase A - wire collector lifecycle: gated by `APP_NETFLOW_ENABLED` (default `false`), `start_flow_collector()` called from `lifespan()` on `APP_NETFLOW_PORT` (default 2055) with retention/aggregation interval from `APP_FLOW_RETENTION_HOURS` + `APP_FLOW_AGGREGATION_INTERVAL_SECONDS`; new `flow_aggregation_loop()` helper in `flow_collector.py` runs `flow_aggregation_cycle()` on the configured cadence (floor 60s) and is created/cancelled alongside the other scheduler tasks; `stop_flow_collector()` runs in shutdown finally. `.env.example` updated with NetFlow keys. Docker UDP/2055 + UDP/6343 ports and UFW/DOCKER-USER rules were already in place in `docker-compose.yml` and `deploy/DEPLOYMENT.md`.
-  - [x] Phase B - exporter→host resolution: in-memory `_exporter_cache: dict[str, int]` in `flow_collector.py` populated from `hosts.ip_address` via `db.get_exporter_host_map()` at `start_flow_collector()` and refreshed from `inventory.py` add/update/remove/bulk-delete and discovery sync via `_notify_flow_collector_host_changed()` → `flow_collector.on_host_changed()`; `datagram_received` now resolves `host_id` from the cache so per-device flow queries actually return rows. New `flow_exporters` table (migration 0036 + canonical SCHEMA) with `(exporter_ip, flow_type)` unique key, upserted on every packet by `_record_exporter_packet()` → `db.upsert_flow_exporter()` (atomic `ON CONFLICT … DO UPDATE` increments `packets_received`, refreshes `last_seen`/`last_record_at`, and resyncs `host_id` so freshly-added inventory hosts get linked without a restart). New `GET /api/flows/exporters` returns the joined exporter list with hostname, packet counters, sampling rate, first/last seen, plus the live cache size.
-  - [x] Phase C - sFlow v5 parser: `parse_sflow(data, addr)` in `flow_collector.py` decodes the v5 datagram header (IPv4/IPv6 agent address, sub-agent, sequence, num_samples), iterates samples, and for `flow_sample`/`expanded_flow_sample` walks each `flow_record`; `flow_data_format=raw_packet_header` (the common case) routes into `_decode_raw_packet_header()` which strips 802.1Q/QinQ tags, validates IPv4, and pulls src/dst IP+port+protocol off TCP/UDP into the same dict shape used by NetFlow. Counter samples are accepted (not parsed into flow_records) so devices that send mixed sample types don't error out. `_FlowCollectorProtocol` now takes a `mode="netflow"|"sflow"` flag and `start_flow_collector(port, sflow_port=...)` opens a second `create_datagram_endpoint` on the sFlow port; sFlow bind failure is logged but doesn't abort NetFlow startup. `bytes`/`packets` are scaled by the observed sampling_rate (frame_length × rate) so top-talker math is consistent with NetFlow. Sampling rate is captured per `(exporter_ip, source_id)` and surfaced into `flow_exporters.sampling_rate` via `_record_exporter_packet()` so the UI can show "this device is sampling 1:1024". `/api/flows/status` now returns `sflow_port`/`sflow_running`; `/api/admin/flows/start` accepts an optional `sflow_port` query param. `app.py` reads `APP_SFLOW_PORT` (set to `0` to disable) and passes it into `start_flow_collector()`.
-  - [x] Phase D - config surface: NetFlow toggle/ports/retention now persist in the `auth_settings` table under the key `flow_collector` (sanitized by `state._sanitize_flow_collector_config`). `_load_persisted_security_settings()` reads the row at boot and, on first boot only, seeds it from the legacy `APP_NETFLOW_*` env vars via `_flow_collector_seed_from_env()` so existing deployments keep working without UI clicks. Lifespan no longer reads env vars directly - it consults the persisted `FLOW_COLLECTOR_CONFIG`. New `GET/PUT /api/admin/flows/config` round-trips `{enabled, netflow_port, sflow_port, retention_hours, summary_retention_days, aggregation_interval_seconds}` plus read-only `netflow_running`/`sflow_running` status. `apply_flow_collector_config()` diffs old vs new and only rebinds UDP listeners when `enabled`/`netflow_port`/`sflow_port` actually changed (start→stop sequence avoids EADDRINUSE on rebind), and `_ensure_aggregation_task()`/`_cancel_aggregation_task()` manage the aggregation loop so disabling the collector stops both the listener and the periodic rollup. React Settings page gains a NetFlow tab (`NetFlowTab.tsx`) with enable toggle, port inputs, retention/aggregation inputs, live running-status badges, and inline page help; wired through `useFlowCollectorConfig`/`useUpdateFlowCollectorConfig` hooks in `api/settings.ts`. Changes apply immediately - no restart required.
-  - [x] Phase E - frontend Traffic Analysis page: `TrafficAnalysis.tsx` now renders five tabs (Top Talkers / Top Applications / Conversations / Timeline / Exporters) inside the standard card+pill-tab layout, with a global host filter (dropdown built from `useInventoryGroupsFull` flattened to a single host list) and time-range selector (1h/6h/24h/7d) in the page header. All `useFlowTop*`/`useFlowTimeline` hooks now accept an optional `hostId` and append `&host_id=N` to the underlying `/api/flows/*` calls. Charts use the existing echarts wrapper (`BarChart` for talkers/apps, `TimeSeriesChart` with `bps` axis for the timeline - normalised from per-bucket totals using the same bucket-minutes logic the hook computes). Exporters tab shows `flow_exporters` rows from `/api/flows/exporters` with hostname (linked to device detail when resolved), flow type, packet counter, sampling rate (`1:N`), and first/last seen. `useFlowStatus` was widened to surface `enabled`/`netflow_port`/`sflow_port`/`sflow_running` so the page header can show separate NetFlow and sFlow status badges. Routing (`/traffic-analysis`) and sidebar nav entry were already in place from the earlier stub.
-  - [x] Phase F - device-detail integration: new `FlowTab.tsx` under `DeviceDetail/` adds a "Flow" tab to the device detail page. Top of the tab is an exporter-status card (one tile per `flow_exporters` row matching `host_id` - flow type, exporter IP, total packets received, sampling rate as `1:N`, last record time) so an operator can see at a glance whether the device is actually exporting and how it's sampling. Below that is a pill-button sub-tab row (Top Talkers / Applications / Conversations / Timeline) - each view reuses the existing `useFlowTop*` / `useFlowTimeline` hooks with `hostId` set to the detail page's host so all flow queries are pre-scoped to this device. The DeviceDetail range selector (`1h`/`6h`/`24h`/`7d`/`30d`) is mapped to the hours param the flow APIs expect, so changing the range at the top of the page filters this tab too. The Flow tab is hidden when the `traffic-analysis` feature is in `feature_visibility_hidden` (matches how the sidebar entry is suppressed), and an effect bounces back to Overview if the feature is hidden while the user is on the Flow tab.
-  - [x] Phase G - playbook to configure exporters: new `templates/playbooks/netflow_enable.py` registers as `NetflowEnabler` and pushes platform-specific NetFlow v9 config to selected hosts. `_platform_builder()` dispatches on `device_type` to one of three command builders: `_build_ios_commands` (classic `ip flow-export destination` + per-interface `ip flow ingress/egress`), `_build_xe_commands` (Flexible NetFlow with `flow record` / `flow exporter` / `flow monitor` and optional `sampler` for IOS-XE), and `_build_nxos_commands` (same Flex shape with NX-OS syntax differences and a leading `feature netflow`). Collector destination resolves in priority order from job parameters (`collector_ip` / `collector_port`), then `PLEXUS_COLLECTOR_IP` + `APP_NETFLOW_PORT` env vars; without an IP the playbook fails fast with a clear error before touching any device. Per-host `netflow_interfaces` override beats the global default. Dry-run prints the exact config lines that would be applied (banner + per-host preview) so an operator can paste them into change control; live mode runs `show running-config | include flow|ip flow-export` first to capture state, applies via `send_config_set`, verifies with `show ip flow export` (IOS) or `show flow exporter PLEXUS-EXPORT` (XE/NX-OS), and `save_config`s on success. Sampling rate is plumbed end-to-end (1:1 default, configurable per job) and wired into the `sampler` block so the collector's `sampling_rate` field gets populated correctly. Simulation mode mirrors the real path when Netmiko isn't installed.
-  - [x] Phase H - tests: new `tests/test_flow_collector.py` (12 tests, all passing). Hand-builds a NetFlow v5 datagram from `struct.pack` and asserts the parser round-trips every flow record field (src/dst IP+port, protocol, bytes, packets, exporter_ip) and rejects wrong-version / truncated packets. NetFlow v9 coverage builds a real `Template flowset (id=0)` followed by a matching `Data flowset (id=256)` with seven fields (src_ip/dst_ip/src_port/dst_port/protocol/in_bytes/in_pkts), verifies template caching + decoding, and confirms a data flowset without its template is dropped silently (the common case right after a collector restart). sFlow v5 coverage builds a full datagram from scratch - `v5 header → flow_sample → raw_packet_header → Ethernet/IPv4/UDP frame` - asserts the inner 5-tuple is extracted, that `bytes` is computed as `frame_length × sampling_rate` (de-sampling math) and that `_latest_sflow_sampling_rate()` captures the rate for the API surface. DB coverage seeds a sqlite DB via `init_db()`, inserts a batch with `create_flow_records_batch`, and validates `get_flow_top_talkers` ordering for both `src` and `dst` directions plus the empty-batch no-op path. Lifecycle test grabs two free UDP ports (via `bind(("127.0.0.1", 0))`), confirms `start_flow_collector` toggles `_flow_transport`/`_sflow_transport`/`FLOW_COLLECTOR_CONFIG['enabled']`, that a second `start_*` while already running returns `False` instead of crashing on EADDRINUSE, and that `stop_flow_collector` is similarly idempotent. Exporter cache tests verify `refresh_exporter_cache()` loads `ip → host_id` from inventory, and that `on_host_changed()` propagates both directions: when a new host is added for an existing exporter IP, the cache and any matching `flow_exporters` rows pick up the `host_id` without a collector restart; when the host is removed, both are cleared.
-  - [x] Phase I - docs: new `NetFlow / sFlow / IPFIX` section in `README.md` (ports table for UDP 2055 / 6343, enable-via-`.env`-or-Settings flow, `GET`/`PUT /api/admin/flows/config` examples, exporter playbook usage across IOS / IOS-XE / NX-OS, Docker host-vs-container IP note, retention summary). New `DEPLOYMENT.md` with the firewall stanza Phase I called for - UFW rules for UDP 2055 / 6343 scoped to a management subnet (not the open internet), `DOCKER-USER` iptables rules (insert ACCEPT for the mgmt subnet before the DROP-everything-else rules so order is correct), the `2055:2055/udp` + `6343:6343/udp` compose `ports:` block (the `/udp` suffix is mandatory or only TCP gets published and the collector silently sees nothing), and verification steps (`ss -lunp`, device-side `show flow exporter PLEXUS-EXPORT statistics`, `GET /api/flows/exporters`). Also covers persistent state volumes and a `systemd` unit for non-Docker installs. New `DATA_RETENTION.md` lists every retention surface in one table (job history 30d, raw flow records 48h, flow summaries 30d, config backups 90d, monitoring polls/alerts/interface counters/SLA metrics/route snapshots/trap+syslog events, IPAM IP history 365d) and dedicates a section to the NetFlow split - why raw flows are short-retention (high write volume, low long-term value) and summaries are long-retention (cheap rollups, week-over-week trending in the Traffic Analysis page), how to tune `retention_hours` / `summary_retention_days` at runtime, and why the persisted `auth_settings("flow_collector")` row is authoritative over env vars after first boot.
-- [x] Add baseline deviation alerting (statistical learning, not just static thresholds).
 
 ### Later (Enterprise and Ecosystem)
 - [ ] Add firmware/OS lifecycle management with staged upgrade workflows.
@@ -165,7 +17,6 @@
   - [x] Phase 10 - Cisco IOS-XR driver (service-provider / core platform, second discrete-prestage driver): new `netcontrol/drivers/cisco_xr.py` is the third Cisco driver after IOS / IOS-XE / NX-OS and the second overall (after IOS-XE) to expose `upgrade_has_discrete_prestage() == True`, giving the upgrade route's operator-approval gate non-XE coverage for the first time. NetFlow uses XR's `flow exporter-map` / `flow monitor-map` / `sampler-map` nouns (with destination + transport + version v9 + interface-table/sampler-table options nested inside the exporter-map stanza, cache timers on the monitor-map, sampler-map's `random 1 out-of N` keyword form, and per-interface `flow ipv4 monitor <name> [sampler <name>] ingress` attachment) rather than IOS-XE's flat `flow exporter` / `flow monitor` triad - feeding XE Flexible NetFlow config at an XR session would parse-error on the very first `flow record` line because XR has no such command. The `ipv4` keyword is required on the per-interface attachment (XR has `flow ipv6 monitor` and `flow mpls monitor` variants and makes the operator pick). Verify command is `show flow exporter-map PLEXUS-EXPORT` (the XE wording without the `-map` suffix does not exist on XR and parse-errors). Config capture is `show running-config`; save uses `["commit"]` because XR is commit-based - edits go into a candidate config and must be committed before they take effect. An empty save_config_commands list (the pattern Junos uses) would leave XR candidate edits pending forever and an operator reviewing the box would see "no changes" - so XR explicitly returns `["commit"]`, with regression-guard asserts that XR must NOT emit IOS's `write memory` or NX-OS's `copy running-config startup-config`. SNMPv3 surface mirrors IOS-XE: XR supports the `snmp-server engineID local` config knob and prints the running engine ID via `show snmp engineid` (note: lowercase `id` on XR vs XE's `engineID` - XR's CLI completion shows the lowercase form). Unlike NX-OS / Junos (which return empty strings because the platform manages the engine ID), the XR driver returns real pin/show commands so the playbook actually pins the engine ID before SNMPv3 user changes - without pinning, an engine-ID regen on XR would localize-invalidate every existing SNMPv3 user, same risk as on IOS-XE. Health-check uses `show version` with the XR-specific include filter `"Serial Number"` (capital N, quoted because XR's include is case-sensitive). The serial parser anchors on the literal `Serial Number` phrase (case-sensitive via `.startswith()`, not `.lower().startswith()`) and splits on `:` - the case-sensitivity is the explicit boundary between this parser and the EOS parser (both platforms label the same field but differ only in the capitalisation of "Number" / "number"); a future refactor that switches to `.lower()` would silently start accepting EOS-shaped lines and the cross-vendor parser-mixup is exactly the bug class the driver framework exists to prevent. Upgrade is two-phase install-mode like IOS-XE but with different verbs: `upgrade_install_add_command()` returns `install add source <path>` (the `source` keyword is required - without it XR interprets the command as `install add` with a missing argument and prompts interactively, hanging every XR upgrade); `upgrade_activate_commands()` returns `["install activate synchronous"]` (bare `install activate` activates all newly-added inactive packages, so no op-ID parsing is needed between phases when staging and activate run back-to-back in the route; the `synchronous` keyword is the XR equivalent of XE's `prompt-level none` - both suppress the interactive prompt that would otherwise hang the route, and XE's `prompt-level` noun is not valid on XR); `upgrade_commit_command()` returns `install commit` (without it XR auto-rolls-back to the prior image on the *next* reload, silently undoing the upgrade - same risk and same fix as IOS-XE install mode). Driver registers under Netmiko's `cisco_xr` device_type, which is already what `routes/inventory.py` and `routes/snmp.py` infer from XR device banners + sysDescr. No route changes were required - Phase 6's multi-command activate loop and Phase 7's prestage gating already handle the discrete-prestage XR shape; this phase just lights up the driver methods so the route's `DriverCapabilityError` exit at activate flips to a successful end-to-end upgrade on XR hosts. 16 new tests in `tests/test_drivers.py`: `test_registry_resolves_cisco_xr` + `test_registered_device_types_includes_cisco_set` updated to assert `cisco_xr` is in the registry and resolves to `CiscoXRDriver` with vendor=`cisco`; `test_cisco_xr_build_netflow_config_uses_xr_nouns` (anchors on the XR `flow exporter-map` / `flow monitor-map` lines and explicitly asserts XE's `flow record` / path-less `flow exporter` / `flow monitor` keywords and `ip flow monitor` per-interface attachment never appear - regression guard against accidentally falling through to an XE template); `test_cisco_xr_netflow_includes_each_interface` (every requested interface gets its own per-interface stanza - guards against the "only-first-interface-bound" regression that would silently lose visibility on every other monitored port); `test_cisco_xr_emits_sampler_when_sampling_gt_1` (sampler-map is only emitted when sampling > 1, mirroring the XE pattern; when sampling fires, the rate flows into `random 1 out-of N` and the per-interface attachment picks up the sampler reference); `test_cisco_xr_verify_command`; `test_cisco_xr_config_capture_and_save` (locks in `["commit"]` and explicitly asserts XR must NOT emit `write memory` or `copy running-config startup-config` - regression guard against someone copy-pasting from cisco_ios / cisco_nxos); `test_cisco_xr_snmpv3_capability_surface` (locks in that XR gets the real pin command not the empty-string short-circuit, and asserts the XR-specific lowercase `show snmp engineid` show form); `test_cisco_xr_health_check_capability_surface` (XR-specific quoted `"Serial Number"` include filter + parser on a realistic XR show-version sample with surrounding noise); `test_cisco_xr_parse_serial_is_case_sensitive_vs_eos` (EOS-shaped lowercase-n line must NOT match the XR parser even though the value looks valid - the case-sensitivity boundary is the explicit guard against cross-vendor parser mixups; IOS / IOS-XE wording must also not match); `test_cisco_xr_parse_serial_rejects_unrelated_lines` (XR show-version lines like `System image file is` / `Configuration register is` must not match - the parser anchors on the leading phrase, not just on the colon); `test_cisco_xr_upgrade_has_discrete_prestage` (locks in True - flipping this to False would collapse the two phases and remove the approval gate from the XR upgrade flow); `test_cisco_xr_install_add_command_uses_source_keyword` (regression guard against dropping the `source` keyword and hanging every XR upgrade at a prompt); `test_cisco_xr_install_add_preserves_caller_path_format` (XR's filesystem is `harddisk:` or `disk0:` rather than IOS-XE's `flash:`, but the driver does not normalize the caller's prefix - if the caller picked `disk0:` for a reason the driver must not change it); `test_cisco_xr_activate_uses_synchronous_keyword` (locks in `["install activate synchronous"]` and explicitly asserts XE's `prompt-level` noun does not leak into XR - it's not a valid XR keyword and would parse-error); `test_cisco_xr_commit_command` (regression guard against returning an empty string here, which would short-circuit the commit step in the route and leave XR pending auto-rollback). 1 new test in `tests/test_upgrades_prestage.py`: `test_run_install_add_prestage_runs_for_cisco_xr` mirrors the existing IOS-XE happy-path test but asserts the XR-specific `install add source <path>` verb actually fires against an XR session (and that the XE wording `install add file` does NOT appear - a regression where the route fell back to XE syntax would silently break every XR upgrade). 173-test regression sweep pass (drivers + upgrades-prestage + snmpv3-playbook + shared-session + inventory_serial + lab_runtime + config_drift + config_backup_search + flow_collector).
   - [x] Phase 11 - Firewall monitoring-only drivers (Palo Alto PAN-OS + Fortinet FortiOS): new `netcontrol/drivers/paloalto_panos.py` and `netcontrol/drivers/fortinet_fortios.py` are the first *monitoring-only* drivers in the framework - firewalls are part of the Plexus inventory but the deployment does not push config, NetFlow, SNMPv3, or software upgrades to them through Plexus (those are owned by the firewall team's own tooling). What Plexus does need from firewalls is monitoring: SNMP polling for CPU / memory / uptime (already handled vendor-agnostically by `netcontrol/routes/metrics_engine.py`'s `VENDOR_OID_DEFAULTS` map, which already shipped `paloalto` and `fortinet` OID presets) and the inventory "fetch serial" flow on `netcontrol/routes/inventory.py` (the only Driver-method consumer in the monitoring path). So both drivers implement just two methods - `serial_number_show_command()` and `parse_serial_number()` - and intentionally leave every other capability at the base `DriverCapabilityError` so a future caller that accidentally points a switch route at a firewall fails loudly instead of silently shipping Cisco syntax over SSH. PAN-OS driver: `serial_number_show_command()` returns `show system info | match serial` - PAN-OS supports the `| match` pipe filter (Cisco's `| include` spelling would parse-error on the firewall), and `match serial` narrows the ~40-line `show system info` output to lines containing the word "serial". `parse_serial_number()` anchors on the exact `serial:` prefix (with colon) - the `| match serial` filter also returns neighbouring keys like `serial-number-status: ok` and `cloud-serial-id: 015351000123-abcd`, so a looser parser that anchored on the bare word "serial" would silently return `ok` as the device serial. FortiOS driver: `serial_number_show_command()` returns `get hardware status` (FortiOS canonical command for chassis identity, prints ~12 lines including model / serial / firmware). No pipe filter is appended because FortiOS does not implement `| include` (Cisco syntax) and `| grep` is not universally available across the FortiGate models Plexus monitors - the parser does the narrowing. `parse_serial_number()` anchors on `Serial number:` with case-sensitive `.startswith()` (capital `S`, lowercase `n`, with colon). The case-sensitivity is the cross-vendor regression guard: IOS-XR's label is `Serial Number:` (capital `N`) and Arista EOS's is `Serial number:` (lexically identical to FortiOS but coming from a switch); the FortiOS parser must reject the XR variant and the per-driver isolation is what catches a future refactor that switches to `.lower()`. Drivers register under Netmiko's `paloalto_panos` and `fortinet` device_type strings, which are what the OID resolver in `metrics_engine.py` already substring-matches against (`paloalto` and `fortinet` keys in `VENDOR_OID_DEFAULTS`), so SNMP polling continues to find the right OID set without inventory schema changes. No route changes needed - `routes/inventory.py:808-895` already handles the `GenericDriver` fallback with a clean HTTP 422 "no driver registered for device_type", and now resolves to the real driver for firewall hosts so fetch-serial Just Works. 14 new tests in `tests/test_drivers.py`: `test_registered_device_types_includes_cisco_set` updated to assert `paloalto_panos` and `fortinet` are in the registry; `test_registry_resolves_paloalto_panos` (asserts class + vendor=`paloalto`); `test_paloalto_panos_serial_command_uses_show_system_info` (regression guard against `| include` leaking in from a Cisco copy-paste); `test_paloalto_panos_parse_serial_extracts_value` (representative `show system info | match serial` output with neighbouring `serial-number-status` / `cloud-serial-id` keys); `test_paloalto_panos_parse_serial_anchors_on_exact_key` (locks in the strict `serial:` anchor - a loose parser would return `ok` from `serial-number-status: ok`); `test_paloalto_panos_parse_serial_returns_none_when_missing` (empty output and unrelated-keys-only output both yield None so the inventory route surfaces a clean 422); `test_paloalto_panos_unsupported_capabilities_raise` (every non-serial method - `build_netflow_config`, `netflow_verify_command`, `capture_running_config_command`, `save_config_commands`, all four SNMPv3 methods, all three upgrade methods - must raise `DriverCapabilityError`); `test_paloalto_panos_upgrade_has_discrete_prestage_default` (locks in inherited False so a defensive caller would correctly skip the prestage call and route through `upgrade_activate_commands` which then raises - the desired failure mode for firewall upgrades). Symmetric Fortinet set: `test_registry_resolves_fortinet_fortios`, `test_fortinet_fortios_serial_command_is_get_hardware_status` (guards against `| include` / `| grep` leaking in), `test_fortinet_fortios_parse_serial_extracts_value` (realistic 13-line `get hardware status` sample), `test_fortinet_fortios_parse_serial_is_case_sensitive_vs_xr` (XR's capital-N `Serial Number:` line must NOT match the FortiOS parser - the cross-vendor regression guard mirroring the Phase 10 XR-vs-EOS one), `test_fortinet_fortios_parse_serial_returns_none_when_missing`, `test_fortinet_fortios_unsupported_capabilities_raise`, `test_fortinet_fortios_upgrade_has_discrete_prestage_default`. Plus a higher-level cross-vendor test `test_firewall_drivers_do_not_collide_with_switch_parsers` that exercises all three labels (`serial:` / `Serial number:` / `Serial Number:`) against both firewall parsers and asserts each one only accepts its own vendor's form - the test fails fast if anyone refactors the parsers to share a helper that loosens the per-vendor anchoring. 97 driver tests pass plus 5 prestage tests = 102 in the driver-adjacent regression sweep. (Phase 11 introduces no upgrade-route changes, so no new `tests/test_upgrades_prestage.py` coverage was needed.)
   - [x] Phase 12 - Firewall SNMPv3 + vendor-specific templates: extends the two firewall drivers with the four-method SNMPv3 capability surface and makes the SNMPv3 playbook genuinely multi-vendor by letting one logical template (keyed by `name`) carry per-vendor command bodies. Rationale for SNMPv3-on-firewalls: SNMPv3 is the credential the metrics poller authenticates with, so it is part of *monitoring* (the one reason Plexus touches a firewall at all), not a firewall-team config concern - so unlike NetFlow/save/upgrade it is in scope. `PaloAltoPANOSDriver` and `FortinetFortiOSDriver` now implement `snmpv3_show_existing_command()` / `snmpv3_engine_id_show_command()` / `snmpv3_engine_id_pin_command()` / `snmpv3_verify_users_command()`; NetFlow/save/capture/upgrade verbs still raise `DriverCapabilityError` (the two `*_unsupported_capabilities_raise` tests were narrowed accordingly and now assert the SNMPv3 methods are *present*, with new `*_snmpv3_capability_surface` tests locking the exact strings). PAN-OS stores SNMP under the `deviceconfig system snmp-setting` config path (not Cisco `snmp-server` lines) and has no `| include` filter, so show/verify scope by the config xpath; FortiOS keeps SNMPv3 users in their own table so both the "before" snapshot and "after" verify are `get system snmp user` (`get` not `show` so defaults render). Both firewalls return empty strings from the engine-ID show+pin methods - the NX-OS/Junos contract: PAN-OS auto-derives the engine ID from the chassis serial and FortiOS deterministically derives it from the hardware serial (fixed Fortinet prefix + serial-as-hex), so neither regenerates the engine ID on SNMP config changes the way Cisco IOS does; the shared `pin_snmp_engine_id` helper short-circuits with its "engine ID is platform-managed; skipping pin" info event instead of running a Cisco-shaped command at the firewall. (The initial scoping note guessed FortiOS was operator-pinnable; a sourced check of the Fortinet engine-ID derivation corrected this before any code was written - FortiOS uses the empty-string short-circuit, same as PAN-OS.) Vendor-specific templates: migration 0040 adds `templates.device_type` and replaces the old column-level `UNIQUE(name)` with composite `UNIQUE(name, device_type)` (SQLite rebuilds the table since it can't drop a column-level UNIQUE in place and copies every existing row forward with `device_type=''`; Postgres drops the auto-named `templates_name_key` and adds the composite constraint). `device_type=''` is the generic body applied to any host; a non-empty Netmiko device_type string is a vendor-specific variant of the same name. New `db.resolve_template_for_device_type(template_id, device_type)` resolves, given the job's selected template: (1) the exact `(name, host.device_type)` row, else (2) the `(name, '')` generic sibling, else (3) the originally-selected row - so an operator picks one template and a mixed-vendor inventory group still gets the right SNMPv3 syntax per host. Resolution keys on `name`, not on which variant the operator clicked, so selecting the PAN-OS row for a job that also targets FortiGates still finds the FortiOS sibling. jobs.py builds a `template_by_device_type` map (only for the device_types actually present in the job's host set), resolves `{{secret.NAME}}` across *every* variant before any device is touched (a single missing secret fails the whole job rather than silently shipping an unresolved placeholder to a subset), and threads the map through `_run_job` → `execute_playbook` → a new `BasePlaybook.template_by_device_type` instance attribute (mirroring how `parameters` is plumbed - no `run()` signature change, so legacy playbooks are untouched and keep using the flat `template_commands`). New `BasePlaybook.commands_for_host(host, template_commands)` returns the per-host body (vendor variant → generic '' → flat fallback); the SNMPv3 playbook calls it per host and skips loudly (no SSH) when nothing resolves rather than push another vendor's syntax. The pre-launch validation path additionally validates secrets across all variants via new `db.get_template_variants(name)`. A shared `_template_lines()` helper replaces the three copy-pasted comment/blank-stripping comprehensions in jobs.py. UI: the React templates editor (`static/frontend/src/pages/Jobs/TemplateFormModal.tsx`) gains a Vendor `<select>` (Generic + every registered driver device_type), the template row shows a vendor badge and is vendor-searchable, and `api/jobs.ts` adds `device_type` to `ConfigTemplate` + a shared `TemplatePayload` for the create/update mutations. Tests: driver-surface tests updated/added in `tests/test_drivers.py`; 5 new playbook tests in `tests/test_snmpv3_playbook.py` (per-vendor body routed to the matching host, generic fallback for an un-variant'd vendor, loud skip when nothing resolves, firewall engine-ID pin short-circuit, PAN-OS driver-supplied show command actually runs); new `tests/test_template_resolution.py` (12 tests) covering the migrated uniqueness contract (same name + different device_type allowed, duplicate `(name, device_type)` still rejected) and all three resolution branches, plus an out-of-band check that migration 0040 upgrades a *populated* pre-0040 DB without data loss (old rows preserved as `device_type=''`, vendor variants then addable, true duplicates still rejected). Full driver-adjacent regression sweep: 202 passed (drivers + template-resolution + snmpv3-playbook + upgrades-prestage + shared-session + inventory_serial + lab_runtime + config_drift + config_backup_search + flow_collector); React `tsc --noEmit` clean on the changed files; ruff clean on every changed Python file (the one pre-existing `UP043` on `routes/runner.py:147` is in the unrelated abstract-`run()` signature from commit b042b14 and was left untouched as out of scope). The 11 failing tests in the full suite (geolocation / cloud_visibility / week4_security / week5_reliability) are the same pre-existing unrelated failures present before Phase 12 - no new failures introduced.
-- [x] Add enterprise auth (LDAP/AD with auto-provisioning, group-to-role mapping, and local fallback).
 - [ ] Add secrets vault integrations (Vault/Azure Key Vault/AWS Secrets Manager) with rotation.
 - [ ] Add multi-tenant boundaries (tenant isolation, quotas, delegated admin).
 - [ ] Add ITSM integrations (ServiceNow/Jira) for change ticket linkage.
@@ -194,18 +45,13 @@ auditors review every tool with credentials, and medical devices have unique net
 
 ### P0 - HIPAA Compliance & Security (Must-Have Before Deployment)
 
-- [x] **Enforce TLS everywhere** - disable HTTP listener in production mode; redirect all plaintext to HTTPS; add HSTS header with long max-age. *Why: HIPAA §164.312(e)(1) requires encryption of ePHI in transit. The NMS carries device credentials and may display config snippets containing sensitive data.*
 - [ ] **Add multi-factor authentication (TOTP)** - implement RFC 6238 TOTP enrollment, QR code provisioning, and per-login verification; allow admin policy to require MFA for all users or admin-only. *Why: username/password alone will not pass a healthcare security review. MFA is a HIPAA addressable safeguard that every hospital CISO will treat as required.*
-- [x] **Configurable session idle timeout** - add server-side idle timeout (default 15 min, configurable per policy); auto-terminate sessions and force re-auth on expiry; show countdown warning toast. *Why: HIPAA §164.312(a)(2)(iii) requires automatic logoff. Shared workstations in nurse stations and NOCs make this critical.* - Implementation: server-side enforcement lives in `require_auth` (`netcontrol/app.py`) and is mirrored in `auth_status` (`netcontrol/routes/auth.py`) so a stale cookie cannot make the SPA think it is still logged in. Timeout is configured via the existing `state.LOGIN_RULES.session_idle_timeout` admin policy (Settings → Authentication → Login Rules); `0` disables enforcement and per-user `session_never_expires=1` accounts (kiosks) bypass the check. Every expiry path emits a `category=auth action=session.idle_timeout` audit event with `idle=<elapsed>s threshold=<limit>s path=<endpoint>` and the request's correlation id. `/api/auth/status` now returns `idle_timeout_seconds`, `session_last_activity`, `session_never_expires`, and `server_time` so the SPA can drive a clock-skew-tolerant countdown. New `POST /api/auth/heartbeat` (calls `require_auth` directly so the cookie's `last_activity` is refreshed) lets a "Stay signed in" button reset the timer without waiting for the next status poll. React `IdleTimeoutWatcher` (mounted in `App.tsx`) renders a fixed-position warning toast when fewer than 60s remain, auto-calls `/api/auth/logout` on expiry, and re-anchors its countdown whenever `session_last_activity` advances. Tests in `tests/test_session_idle_timeout.py` cover the require_auth expiry path, kiosk bypass, `session_idle_timeout=0` disable, cookie refresh on active sessions, the `auth_status` mirror path with audit emission, and the new SPA-facing idle fields.
-- [x] **Immutable audit log with tamper protection** - make audit_events append-only at the database level (no UPDATE/DELETE on audit tables); add cryptographic chaining (hash of previous entry) or write-once export; ensure admins cannot delete their own audit trail. *Why: auditors will ask "can a privileged user cover their tracks?" The answer must be no.* - Implementation: migration 0037 adds `prev_hash` + `row_hash` columns (sha256 chain over timestamp, category, action, user, detail, correlation_id, prev_hash) and `BEFORE UPDATE`/`BEFORE DELETE` triggers (`audit_events_no_update`, `audit_events_no_delete`) that abort with `audit immutable` on SQLite (`RAISE(ABORT)`) and Postgres (`RAISE EXCEPTION` via `audit_events_block_mutation()`). Existing rows are backfilled in a single transaction. `add_audit_event` computes the hash inside an `asyncio.Lock` so concurrent inserts can't fork the chain. New `routes.database.verify_audit_chain()` walks the log and reports the first break (`row_hash_mismatch` or `prev_hash_mismatch`); exposed at `GET /api/admin/audit-events/verify`. Tests in `tests/test_audit_chain.py` cover clean chains, tamper detection (mutation + deletion), trigger blocking, backfill correctness, and the canonical-hash formula.
-- [x] **SIEM log forwarding** - add configurable syslog/webhook forwarding of audit events, auth events, and alert triggers to external SIEM (Splunk, Sentinel, QRadar); support CEF or JSON format. *Why: hospital security teams centralize all logs for correlation and incident response. Plexus events must feed the same pipeline.* - Implementation: `netcontrol/routes/siem_forwarder.py` runs a per-sink async dispatcher fed by an `add_audit_event` hook (`db.set_audit_event_hook`). Sinks support syslog UDP, TCP (RFC 6587 octet-counting), TLS (RFC 5425, optional mTLS + CA pin), and HTTPS POST (bearer token, optional CA pin). Formatters: CEF 1.0 with proper pipe/equals escaping, and ECS-shaped JSON (`@timestamp`, `event.action`, `user.name`, `plexus.row_hash`). Each sink has an `asyncio.Queue` bounded by `queue_size`; on overflow the oldest event is dropped and counted. Failures retry with exponential backoff capped at `backoff_cap`, giving up after `max_retries`. Per-sink config is persisted under the `siem_sinks` `auth_settings` key, reconciled at startup and on every CRUD via `apply_sinks`. Admin API: `GET/POST/PUT/DELETE /api/admin/siem-sinks` plus `/api/admin/siem-sinks/{id}/test` for live probe; runtime stats (`delivered`, `dropped_*`, `last_error`) returned alongside config. Bearer tokens and TLS private keys are masked as `••••••••` in API responses and only overwritten when the client sends a non-mask value. React `SiemTab` in Settings provides full CRUD with live stats refresh every 10s, severity-floor selector, and inline test button. Tests in `tests/test_siem_forwarder.py` cover validation, formatter shape, UDP/TCP delivery against real local listeners, dispatcher fan-out, bounded-queue drop-oldest policy, retry exhaustion, severity-floor filtering, and the audit-event hook (including hook-failure isolation from the insert path).
 - [ ] **Password policy enforcement** - add configurable minimum length, complexity requirements (upper/lower/digit/special), password history (prevent reuse of last N), and maximum age with forced rotation; enforce at registration, reset, and change endpoints. *Why: HIPAA §164.312(d) requires authentication controls. Joint Commission and CMS auditors check password policy configuration.*
 - [ ] **Account lockout after failed attempts** - lock account after N consecutive failures (configurable, default 5); require admin unlock or time-based auto-unlock; log lockout events to audit trail. *Why: brute-force protection is expected by every healthcare security framework (HIPAA, HITRUST, NIST 800-66).*
 - [ ] **User access review reporting** - add API/UI to generate reports showing all users, their roles, last login date, and feature access; flag dormant accounts (no login in N days). *Why: HIPAA requires periodic access reviews. IT directors need a one-click report for quarterly compliance cycles.*
 
 ### P1 - Operational Readiness (Required for Production Use)
 
-- [x] **Alert notification channels (email, PagerDuty, webhook)** - add outbound integrations for alert rules; support email (SMTP), PagerDuty Events API v2, generic webhook (POST JSON), and Microsoft Teams incoming webhook; allow per-rule channel assignment. *Why: critical alerts at 3 AM must reach the on-call engineer's phone, not just a toast notification in a browser tab nobody is watching.* - Implementation: new `netcontrol/routes/notification_channels.py` engine (mirrors `siem_forwarder`) with per-channel async dispatcher tasks, bounded drop-oldest queues, exponential-backoff retry, per-type formatters/drivers (email via stdlib `smtplib` in a thread executor; PagerDuty/webhook/Teams via `httpx`), secret redaction, and `send_test_event`. Channels persist under the `notification_channels` `auth_settings` key (`{channels, default_channel_ids}`), loaded/started in `app.py` lifespan. New alerts fan out via a `db.set_alert_created_hook` registered hook fired by `create_monitoring_alert` ONLY on genuinely new inserts (dedup bumps do not re-notify); the hook resolves the owning rule's `channel_ids` (new `alert_rules` column, migration 0050) or falls back to the default set, then applies each channel's severity floor. Admin CRUD + test + defaults endpoints in `admin.py`; rule create/update endpoints accept `channel_ids`. React `NotificationsTab` (Settings) provides full CRUD, live stats, per-channel test, and default-channel toggles; `RulesTab` gains a per-rule channel multi-select and shows assigned channels. Tests in `tests/test_notification_channels.py` (29 passing) cover validation, redaction/merge-secrets, formatters, severity floor, fan-out/defaults/per-rule override, bounded-queue drop-oldest, retry exhaustion, email + webhook/teams delivery against local listeners, reconcile, and test-event. README "Alert Notification Channels" section added.
 - [ ] **Per-device and per-group polling interval controls** - add configurable SNMP polling interval overrides at group and host level (e.g., biomedical devices at 5 min, core switches at 30 sec); enforce minimum floor to prevent accidental aggressive polling. *Why: medical devices (infusion pumps, MRI controllers, patient monitors) can crash, reboot, or drop clinical sessions if polled too aggressively. This is a patient-safety concern.*
 - [ ] **Scheduled report delivery (email)** - add report scheduling (daily/weekly/monthly) with email delivery of PDF or CSV attachments; support distribution lists. *Why: hospital IT leadership and compliance officers need recurring reports without logging into the tool. Joint Commission auditors expect documented evidence delivered on schedule.*
 - [ ] **ServiceNow / ITSM integration** - add API integration to create/update change requests in ServiceNow (or generic ITSM via REST); link Plexus deployments to change ticket numbers; enforce ticket-required policy before production changes. *Why: hospitals require formal Change Advisory Board (CAB) approval before any network change. Plexus deployments must link to an approved ticket for audit trail.*
@@ -236,11 +82,8 @@ auditors review every tool with credentials, and medical devices have unique net
 
 ### Now - Core Operations Gaps
 
-- [x] **Configuration full-text search** - add full-text search across all backed-up device configurations; support regex and substring matching; return results with device name, match context, and link to full config diff view; index on backup ingest for fast queries. *Why: "which devices still have SNMP community string `public`?" or "which routers have this ACL entry?" are daily questions during audits, incident response, and security hardening. Without cross-device config search, operators resort to SSH-ing into devices one by one.*
 - [ ] **Cross-device configuration diff** - add side-by-side config comparison between any two devices (or any two snapshots of the same device); highlight differences with context lines; support filtering by section (interfaces, routing, ACLs). *Why: validating that redundant pairs (HSRP, stacked switches, HA firewalls) have matching configs is a common task. Manual comparison is error-prone and tedious. A built-in cross-device diff eliminates the need for external diff tools.*
-- [x] **STP topology visualization** - display spanning-tree topology per VLAN showing root bridge, designated/blocked/forwarding port states, and topology change events; alert on unexpected root bridge elections or topology change storms; overlay STP state on physical topology map. *Why: spanning-tree misconfigurations cause broadcast storms and outages that are notoriously difficult to diagnose. Visualizing STP state per-VLAN makes root bridge placement and blocked port logic immediately obvious.*
 - [ ] **BGP/OSPF/EIGRP route table monitoring** - collect and diff routing tables over time; store route history with timestamps; alert on unexpected route withdrawals, prefix hijacks, next-hop changes, or AS-path anomalies; display route table diffs in device detail page. *Why: most NMS tools monitor L2/L3 data plane but ignore the control plane. A silent BGP withdrawal can black-hole traffic for minutes before interface counters show anything wrong. Route-level visibility catches these fast.*
-- [x] **Interface error/discard trending with root-cause correlation** - track CRC errors, input errors, giants, runts, output drops, and discards per interface over time as dedicated metrics; correlate error spikes with config changes, topology events, and cable/optic replacements; surface "likely cause" hints (e.g., CRC spike + no config change → suspect physical layer). *Why: raw error counters exist in SNMP but operators need trends and correlation, not point-in-time numbers. Reduces MTTR by surfacing physical-layer problems before they cascade.*
 - [ ] **QoS policy monitoring and visualization** - collect DSCP/queue statistics per interface via SNMP (cbQos MIB for Cisco, equivalent for other vendors); display queue depth, drop counts, and policer conformance over time; alert when priority queues show sustained drops. *Why: networks carrying voice, video, and clinical telemetry (telemedicine, nurse call, patient monitoring) depend on QoS working correctly. A misconfigured policy is invisible until call quality degrades or a monitor alarm is delayed.*
 - [ ] **Failover and redundancy state validation** - periodically verify HSRP/VRRP active/standby state, spanning-tree root bridge placement, LACP port-channel membership, and BGP primary/backup path preferences match intended design; alert on unexpected state changes (e.g., backup router became active without a maintenance window). *Why: redundancy failures are silent - everything works until the primary fails and the backup isn't actually ready. Proactive validation catches misconfigured standby states before an outage reveals them.*
 - [ ] **Topology view monitoring enrichment** - the topology canvas already discovers devices and links but the node-detail pane only shows basic identity + STP/utilization on connected edges. Surface the rest of the data Plexus already collects directly in the topology view so operators can investigate without leaving the map: full per-port interface inventory (admin/oper state, speed, duplex, ifAlias) from `interface_inventory`; the VLAN list from `vlan_definitions` with per-port access/trunk membership; MAC/ARP tables learned on each port from `mac_address_table` / ARP cache; the latest running-config snapshot + drift status from `config_snapshots` / `config_drift_events`; recent interface errors from the `interface_errors` endpoints; and audit findings scoped to the device from `audit_findings`. All consumed via existing APIs (`/api/interface-inventory/{host_id}`, `/api/mac-tracking/host/{host_id}`, `/api/config-backups`, `/api/interfaces/{host_id}/errors`, `/api/audit/runs/{id}/findings?host_id=…`) - this is wiring, not new collectors. *Why: the topology view is where operators triage incidents. Today they click a node, see "IP, status, connections," then have to navigate away to four other pages to actually diagnose anything. Putting interface state, VLANs, MAC learning, config, errors, and findings one click deep on the map turns the topology page into a real investigation surface and cuts MTTR.*
@@ -273,13 +116,7 @@ auditors review every tool with credentials, and medical devices have unique net
 ### Later - Advanced Analytics
 
 - [ ] **Network path failure simulation (what-if analysis)** - model the impact of link, device, or circuit failures using discovered topology and routing data; answer "what happens if this link goes down?" by computing alternate paths and identifying single points of failure; display affected services and expected failover paths; support batch simulation for resilience audits. *Why: resilience testing today means pulling cables in maintenance windows. Simulation using live topology data lets operators validate redundancy designs without risking production traffic.*
-- [x] **Bandwidth billing and 95th percentile reports** - calculate burstable 95th-percentile bandwidth per interface, per customer, or per circuit over configurable billing periods; generate exportable invoices with usage graphs; support commit-rate tracking and overage alerting. *Why: ISPs and shared-services IT departments bill by 95th percentile. This is a direct revenue/chargeback feature that currently requires a separate tool (MRTG, Cacti, or manual calculation).*
 - [ ] **User-defined alert correlation rules** - allow operators to define correlation rules (e.g., "if interface X goes down AND BGP peer Y drops within 5 minutes, create single incident instead of two alerts"); support suppression (child alerts suppressed when parent device is down) and deduplication windows. *Why: alert fatigue kills operational effectiveness. A single link failure can generate 50+ alerts across dependent devices. Correlation reduces noise so operators focus on root cause, not symptoms.*
-- [x] **Automated network documentation generation** - auto-generate network diagrams, IP address plans, VLAN maps, and device inventories as exportable PDF, SVG, or draw.io from discovered topology, inventory, and SNMP data; refresh on schedule or on-demand; include cable/circuit info when available. *Why: network documentation is always out of date. Auto-generating it from live discovery data means the documentation is as current as the last poll cycle. Saves hours of manual Visio work per quarter.*
-  - [x] Initial on-demand foundation: added `network_documentation` report generation plus CSV export and SVG topology diagram export from live inventory/topology/VLAN data.
-  - [x] Next slice (phase A): scheduled generation loop + persisted run artifacts (CSV/SVG) with downloadable artifact history.
-  - [x] Next slice (phase B): PDF packaging and cable/circuit enrichment from billing circuit metadata (`circuit_map` + topology link enrichment).
-  - [x] Next slice (phase C): draw.io topology export endpoint plus persisted `.drawio` artifacts and report UI export actions.
 
 ---
 
@@ -293,7 +130,6 @@ auditors review every tool with credentials, and medical devices have unique net
 - [ ] **Configuration template compliance diffing with remediation** - beyond golden config match/mismatch, show exactly which lines differ with context; generate remediation commands to bring non-compliant devices into alignment; support one-click "push fix" for non-compliant lines with approval gate and dry-run. *Why: knowing a device is non-compliant is step one. Knowing what to do about it - and being able to do it safely from the same tool - closes the loop and reduces remediation time from hours to minutes.*
 - [ ] **Scheduled config diff reports** - daily or weekly email showing all configuration changes across the network in a unified diff view; group by device, group, or change author; include before/after snippets and link to full diff in Plexus UI. *Why: compliance teams and network managers need a periodic "what changed" summary without logging into the tool. This is the most-requested report in every NMS deployment.*
 - [ ] Enable the ability edit devices in the cli within the topo view to make it similar to something like CML or cisco packet tracer.
-- [x] Add feature visibility toggle for hiding un used UI features
 
 ### Next - Workflow Maturity
 
@@ -338,9 +174,7 @@ auditors review every tool with credentials, and medical devices have unique net
 
 ### Now - Ecosystem Connectors
 
-- [x] **Ansible dynamic inventory provider** - expose Plexus device inventory as an Ansible dynamic inventory source via CLI script or HTTP endpoint; support group mapping (Plexus inventory groups → Ansible groups), host variables (IP, credentials, device type, model), and filtering by group, tag, or device type. *Why: teams already using Ansible for network automation need their inventory source to be authoritative and current. Plexus as the single source of truth for device inventory eliminates stale static inventory files and manual synchronization.*
 - [ ] **Inbound webhook API for external triggers** - add authenticated webhook receiver endpoints that allow external systems to trigger Plexus actions (run playbook, start discovery scan, create alert, initiate backup); support ServiceNow, Jira, and generic JSON payloads with configurable field mapping; log all inbound triggers to audit trail. *Why: automation is bidirectional. Plexus needs to react to external events (approved change ticket → auto-deploy, security scanner finding → quarantine playbook, cloud autoscale event → update inventory) not just push notifications outward.*
-
 
 ### Next - Developer Platform
 
@@ -367,21 +201,6 @@ auditors review every tool with credentials, and medical devices have unique net
 
 Findings from the full-codebase review (security items, MAC-tracking logic fixes, and credential-ownership enforcement already landed). Ordered by recommended sequence — batch 1 unblocks everything after it.
 
-### Batch 1 - Quick Wins (low risk, do first)
-
-- [x] **Fix the 13 pre-existing failing tests** - `test_week4_security` (3), `test_audit_overrides` (3), `test_geolocation` (4), `test_upgrades_images` (2), `test_cloud_visibility` (1). *Why: they fail on clean main and mask real regressions - every review session has needed stash-and-diff baselining just to tell new failures from the noise.* Root causes: 12 of 13 were stale tests asserting pre-change contracts (admin bootstrap promote-existing path + random-password first boot, `auth_status` new `Response` param, new HTTPS-redirect warning, FK enforcement on `audit_rule_overrides.host_id`, 201-on-create + Pydantic-422 convention, standardized `{ok, error:{code,message}}` error envelope, hardcoded April-2026 fixture timestamps aging out of the 24h window). 1 real production bug fixed: cloud-metric window cutoff compared Python-isoformat `interval_end` (T separator) lexically against SQLite `datetime('now')` (space separator), over-including the boundary day by up to ~24h — replaced with a Python-computed cutoff in `routes/database.py` (`_cloud_metric_window_cutoff`), engine-agnostic.
-- [x] **Repo hygiene** - gitignore and untrack `coverage.json`, `_pytest_one.txt`, `.pytest_after.txt`, `netcontrol.db.migrate.lock`; CI should regenerate coverage artifacts, not version them.
-- [x] **Add `pytest-xdist` to `requirements-dev.txt`** and document `-n auto` (already proven locally: full suite drops from ~18 min serial to ~4 min with 6 workers). Consider markers/timeout config in `pytest.ini` while in there.
-- [x] **Fix blocking `time.sleep(1)` in `netcontrol/routes/cloud_flow_pullers.py:216`** - stale finding: the sleep is inside `_run()`, which executes via `await asyncio.to_thread(_run)` (line 256) — it sleeps a worker thread, not the event loop. No change needed.
-- [x] **Fix `_audit(request, ...)` misuse in `geolocation.py` (9 calls) and `billing.py` (5 calls)** - already fixed: both files now route through `_geo_audit`/`_billing_audit` wrappers that call `_audit` with the correct `(category, action, user=, detail=, correlation_id=)` signature; repo-wide grep finds no remaining `_audit(request, ...)` calls.
-- [x] **Migrate remaining `resp.json()["detail"]` asserts** - verified stale 2026-06-12: no test asserts the legacy FastAPI error shape anymore (`test_session_idle_timeout.py:88` reads `HTTPException.detail` in-process, which is correct; `test_siem_forwarder.py` has no response-shape asserts).
-
-### Batch 2 - Background Long-Running Endpoints
-
-- [x] **Inventory discovery scan** (`netcontrol/routes/inventory.py:1002`) - full CIDR probe (up to 4096 hosts) runs inline in the HTTP handler; move to a job record + WebSocket/polling pattern like config-drift capture jobs. Done via new shared in-memory registry `netcontrol/routes/background_jobs.py` (create/progress/finish + TTL cleanup, polling instead of WebSockets): POST `.../discovery/scan` now returns 202 `{job_id}`, poll `GET /api/inventory/discovery/jobs/{job_id}` for progress (`scanned/total/found`) and the same result payload the inline response had. The SSE `/scan/stream` endpoint (what the React DiscoveryModal actually uses) is unchanged. Tests: `tests/test_discovery_scan_job.py`.
-- [x] **MAC fleet collection** (`/api/mac-tracking/collect` all-hosts mode) - now has a 409 overlap guard and per-host diagnostics, but still runs inline; reuse the same job pattern once it exists. Frontend needs a job-polling hook to keep the results display. Done: all-hosts mode returns `{job_id}`, runner aggregates per-host results with live `hosts_done/macs_found/arps_found` progress, poll `GET /api/mac-tracking/collect/jobs/{job_id}` (result carries the old inline payload). 409 guard kept. Frontend: `useStartFleetMacCollection` + `useMacCollectionJob` (2s `refetchInterval`) in `networkTools.ts`; MacTracking page shows live progress and the same results card; single-host collect unchanged.
-- [x] **Batch MAC upserts** - each MAC costs two awaited DB round-trips (upsert + history), each opening/closing a connection; tens of thousands of connection cycles per collection. Done: `record_mac_sightings_batch` + `upsert_arp_entries_batch` in `routes/database.py` — one connection/transaction per host (executemany upserts, one latest-location query per batch, per-event inserts only for actual moves). Move semantics match `record_mac_history` exactly, including sequential in-batch comparison for repeated MACs; ARP enrichment keeps `enrich_mac_ip`'s only-fill-empty, cross-host behavior. Note: write-failure granularity is now per host-batch, not per MAC (a batch failure surfaces in the host's `errors` diagnostics instead of silently dropping one row).
-
 ### Batch 3 - Frontend Shared Hooks (one hook per PR, mechanical migrations)
 
 - [ ] **`useFormDraft<T>()`** - replaces the duplicated draft-seeding pattern in 11 files (Settings tabs, Jobs/Reports/Upgrades form modals, MacTracking).
@@ -395,27 +214,7 @@ Findings from the full-codebase review (security items, MAC-tracking logic fixes
 
 - [ ] **Expand `tools/coverage_gate.py`** beyond the single `netcontrol/app.py` rule - add the top untested route modules. Update 2026-07-07: `monitoring.py` (tests/test_monitoring*.py, test_sla_summary.py) and `jobs.py` (tests/test_jobs.py) now have coverage. `metrics_engine.py` now has `test_metrics_rate_calc.py` (rate calc + counter delta) and `test_batch_b_authz.py` (capacity-planning bound, vendor-OID admin gate); `admin.py` now has `test_admin_user_mgmt.py` (last-admin guard, role validation). Both still want broader coverage but are no longer at zero.
 - [ ] **Shrink the `mypy.ini` `ignore_errors = True` list** (18 modules including app, database, auth, jobs, monitoring) - one module per PR.
-- [x] **Run Postgres smoke tests on all PRs** - verified 2026-06-12: ci.yml already has a `postgres-smoke` job (postgres:16 service container) on every PR; what was thin is the coverage. Expanded `tests/test_postgres_backend.py` from 2 to 4 tests: concurrent audit-chain writers (exercises the pg_advisory_lock path that SQLite runs never touch) and category-filtered audit listing (0055 index). Full API-test matrix on Postgres remains future work - most app tests are DB_PATH/SQLite-bound by design. Superseded 2026-10-09: the SQLite engine was removed and the whole suite now runs on Postgres (`PLEXUS_TEST_PG_URL`).
 - [ ] **Frontend coverage threshold in CI** - 5 test files for 180 components; any threshold forces improvement.
-
-### Batch 5 - Security Follow-Ups
-
-- [x] **Credential-isolation regression tests** - done 2026-07-07:
-  `tests/test_credential_isolation_http.py` drives one representative endpoint
-  per IDOR-swept module over real HTTP (risk-analysis, inventory fetch-serial,
-  config-drift capture, config-backups restore, compliance scan, deployments
-  create, upgrades campaign create, jobs launch) and asserts a non-owner gets
-  403 "You can only use your own credentials" and a bogus id gets 404 - both
-  fire before any device I/O. Both accounts are admins so the request clears the
-  feature gate and reaches the credential check, which proves the stronger
-  property that even an admin can't use another user's personal credential.
-  lab_runtime is excluded by design (its credential is device-bound and gated by
-  `_get_device_or_403`; covered by `test_lab_runtime.py` + the helper policy in
-  `test_credential_isolation.py`).
-- [x] **FDM collector credential model** (`netcontrol/integrations/cisco_fdm/collector.py:87`) - done 2026-06-12: `collect_host` rejects non-service credentials (same policy as monitoring/MAC pollers) with a regression test. Bind-time gate still needed when the endpoint that sets `hosts.fdm_credential_id` ships.
-- [x] **Air-gap README** (`deploy/airgap/README.md`) - done 2026-07-07: "Step 4 - First login" already documents retrieving the random one-time bootstrap password from the container logs and the `PLEXUS_INITIAL_ADMIN_PASSWORD` override; the stale `admin/netcontrol` copy is gone.
-- [x] **Pre-existing backend cleanups** - done 2026-06-12: audit-hook drops now logged (routes/db/audit.py); migration 0055 adds `monitoring_polls(host_id, polled_at)` + `audit_events(category)` (column is `polled_at`, not `sampled_at`); 14 hardcoded semaphores route through `state.device_op_semaphore()` / `APP_DEVICE_OP_CONCURRENCY`. `SELECT *` audit found most uses are narrow tables or fetch-one-by-id where the blob is the payload; the one real waste (deployments annotation query pulling proposed_commands blobs) is trimmed.
-- [x] **Late-binding `init_*()` boilerplate** - resolved 2026-06-12 by deletion, not a helper: 11 modules bound auth callables that were never used (route auth comes from app.py's include_router dependencies) - dead init functions/globals removed; config_drift/deployments/upgrades trimmed to the WebSocket session-check callables they actually use; app.py wiring updated. Remaining init_* functions all bind callables that are genuinely consumed.
 
 ### Frontend Post-Migration Follow-Ups
 
@@ -430,14 +229,6 @@ migration completed and the legacy files were deleted).
 - [ ] **Consolidate AI drift across React pages** - audit for inconsistent
   patterns; the concrete known offenders are already tracked in "Batch 3 -
   Frontend Shared Hooks" above.
-- [x] **Remove `script-src 'unsafe-inline'` from the CSP** in
-  `netcontrol/app.py` - done 2026-07-07: global `script-src` is now `'self'`
-  only (no `'unsafe-inline'`, no CDN); the React bundle ships as external hashed
-  modules. The security-headers middleware uses `setdefault` so the one page
-  that needs a looser policy - the graph-export embed page (inline bootstrap
-  `<script>` + CDN ECharts, data-only) - sets its own scoped CSP without being
-  clobbered. `style-src 'unsafe-inline'` is retained for dynamic `style=` attrs.
-  Regression test: `tests/test_csp_headers.py`.
 - [ ] **Track bundle size and page-load in CI** - migration targets were main
   bundle <1MB gzipped (currently ~465KB with ECharts) and TTI <2s on local
   network; neither is measured automatically yet.
@@ -465,13 +256,6 @@ Everything else from that sweep was fixed the same day (see
   to the SHA the tag currently points at (leave the tag in a trailing comment)
   to close the mutable-tag supply-chain window. Deferred: needs each action's
   current SHA looked up and verified.
-- [x] **Consistent-snapshot backup for SQLite installs** - `deploy/backup.sh`
-  tars the live `/app/state` volume; with WAL mode a sqlite install can capture
-  a torn DB. Use `sqlite3 netcontrol.db ".backup"` or `VACUUM INTO` for the
-  sqlite path (Postgres already uses `pg_dump`). Low priority: the documented
-  compose deployment is Postgres. Dropped: SQLite is no longer a supported
-  runtime (Postgres only); legacy installs migrate with
-  `tools/migrate_sqlite_to_postgres.py`.
 
 ### Deferred hardening (from the 2026-07-07 five-agent audit)
 
@@ -498,67 +282,6 @@ Remaining low-value tail:
   migrated. A one-time startup backfill (encrypt any `_looks_encrypted`-false
   `auth_config_json`) would close the residual at-rest exposure for accounts
   never re-saved.
-- [x] **admin secret-sink / notification-channel create TOCTOU** - done
-  2026-07-07: the read-modify-write of the shared `state.SIEM_SINKS` /
-  `state.NOTIFICATION_CHANNELS` (+ default-channel) globals now runs under a
-  per-resource `asyncio.Lock` (`_sink_mutation_lock` / `_channel_mutation_lock`)
-  spanning the id-uniqueness check through the `set_auth_setting` persist, so
-  concurrent create/update/delete calls can no longer duplicate an id or lose an
-  update via a stale payload winning the last write.
-
-### Performance audit (2026-07-08 four-agent sweep)
-
-Most findings were implemented the same day (see `RELEASE_NOTES.md` Performance:
-SNMP GETBULK; topology graph + utilization-map caches; dashboard bandwidth N+1;
-suppression + vendor-OID caches; discovery-fan-out semaphore; chart `setOption`
-reuse; device-scoped query-key decouple; federation concurrent fetch; geolocation
-off-loop write; compliance regex cache; `get_baselined_host_ids`; monitoring
-`include_details` cap; `compliance_scan_results` index (migration 0058)). Tests:
-`tests/test_interface_ts_multi.py`, `tests/test_perf_batch.py`, plus the topology
-suite's new cache-clearing fixture. The six deferred behavioral / architectural
-items were implemented 2026-07-08 in a follow-up pass:
-
-- [x] **SQLite global-access-lock read pool** — `get_db(read_only=True)` borrows
-  a `PRAGMA query_only=ON` connection from a bounded pool (`APP_SQLITE_READ_POOL`,
-  default 4; 0 disables) so read helpers overlap each other and the writer under
-  WAL. Writes keep the single connection + exclusive lock. Nested acquisition
-  reuses the held connection (a read helper inside a write transaction sees its
-  uncommitted rows); requesting write access while holding a read-only
-  connection raises immediately. Hot read helpers converted (monitoring polls/
-  alerts/summary/rules/suppressions, inventory groups/hosts, topology links/
-  interface stats, `query_interface_ts_multi`); the rest can migrate
-  incrementally. Tests: `tests/test_sqlite_read_pool.py`. Removed 2026-10-09
-  with the SQLite engine (`APP_SQLITE_READ_POOL` and its test are gone).
-- [x] **Route-table poll cadence** — `_ssh_poll` now parses `show ip route
-  summary` (IOS + NX-OS formats) every tick and only pulls the full
-  `show ip route` when the summary count changes or
-  `route_full_interval_seconds` (default 900; 0 = legacy every-tick) elapses.
-  `route_count` prefers the summary total; churn hashing/snapshots happen on
-  full ticks only. Equal-count table changes are caught at most one full
-  interval late — accepted tradeoff.
-- [x] **Adaptive backoff/jitter for dead hosts** — polls that raise/time out
-  (which never produced a poll row or availability transition anyway) back off
-  exponentially: retry next cycle after the 1st failure, then skip 1/2/4/8
-  (capped) cycles; any success or a manual `force` poll resets. The poll-loop
-  sleep gained 0–5% positive jitter to de-phase the background loops.
-- [x] **Batch the bulk drift-accept reads** — `bulk_accept_drift_events` now
-  loads all events (`get_config_drift_events_by_ids`) and snapshots
-  (`get_config_snapshots_by_ids`) in two `IN (...)` queries and drops the
-  per-event `get_host` (the event join already carries hostname); per-event
-  baseline/status/history writes unchanged.
-- [x] **Regex config-backup search pre-filter** — `_regex_required_literal()`
-  derives a literal every match must contain; the SQLite regex branch
-  pre-filters with `instr()` (Postgres additionally with `POSITION`) instead of
-  loading every blob. Patterns with no ≥3-char required literal are rejected
-  with a 400 (`regex_needs_literal`) pointing at substring/fulltext mode.
-- [x] **`get_monitoring_poll_history` blob gate** — lean column list by default
-  with an opt-in `include_details` flag (capped at 500 rows), plumbed through
-  `/api/monitoring/polls/{host_id}/history`; the device-detail page opts in for
-  the latest poll's `if_details`, history tables stay lean.
-
-### Batch 6 - The Big One
-
-- [x] **Split `routes/database.py` (16,795 lines) into domain modules** (hosts, credentials, monitoring, audit, mac-tracking, lab, etc.) while preserving the `routes.database` API surface. *Prerequisite: batches 1 and 4 - the suite must be green and fast before a refactor this wide.* Done 2026-06: core (connection singleton, pragmas, schema, init_db) stays in `routes/database.py` (~2,800 lines); 20 domain modules live in `routes/db/*` and are star re-exported through the facade, so all `import routes.database as db` callsites and test monkeypatches (`DB_PATH`, `DB_ENGINE`, `get_db`) work unchanged — moved code reads those names late-bound via the facade. Public API surface verified byte-identical (606 names) against a pre-split snapshot.
 
 ## UI Spacing & UX Audit (2026-11-09)
 
@@ -573,144 +296,45 @@ Suggested order: Batch 1, then Batch 2 plus the `.main-content` min-width
 item, then the modal and error-state items in Batches 4 and 5, then the
 per-page **H** items.
 
-### Batch 1 - Missing or broken CSS (fix once, affects every page)
-
-- [x] **H: Define the classes the TSX uses but `style.css` never declares** — `text-muted` (~580 uses), `input`, `table` / `table-sm`, `glass-card` (44), `card-body` (17), `skeleton-loader` (8), `badge-sm`, `btn-xs`, `badge-muted`, `text-danger`, `spinner`, `form-help`, `btn-link`, `drift-summary-card*`, `status-completed`, `.btn.active`, and a global `form-select-sm`. Today muted text renders at full colour, some inputs and tables are raw browser controls, loading skeletons are blank gaps, and the "Completed" job badge has no colour. Either define each class or switch the callers to the existing one (`form-input`, `data-table`, `btn-sm`, `badge-secondary`, `skeleton`).
-- [x] **H: Add a disabled style for controls** — no `:disabled` rule exists for `.btn`, `.form-input`, `.form-select` or `.page-tab-btn`; 249 `disabled=` props look enabled and disabled primary buttons still lift and glow on hover. Remove the 17 inline opacity patches afterwards.
-- [x] **H: Stop freezing progress indicators** — `lib/appearance.ts:93` always adds `reduced-motion` to `body`, and `style.css:3854` then freezes every spinner, skeleton shimmer and running-status pulse, so loading looks hung. Exempt progress indicators or apply the class only on user/OS request.
-- [x] **M: Opaque cards under `reduced-motion`** — the same class strips card blur (`style.css:3884`) while cards keep 25-55% alpha, so the Astral image and Matrix rain show sharply through cards and tables.
-- [x] **M: Add `button, input, select, textarea { font: inherit }`** — `.btn` renders in the system font while the rest of the UI uses JetBrains Mono (visible in TimeRangeBar, ExportMenu, Login "Register").
-- [x] **H: Template cards render browser-default button text** — `pages/GraphTemplates/GraphTemplatesTab.tsx:62` uses `<button className="card">` with no colour/font reset and `border: none`; dark text on dark cards.
-- [x] **M: Declare `color-scheme` per theme** — native date/time pickers and select popups stay light on dark themes.
-- [x] **M: Fix themed rules that never apply** — sidebar active-link glows (`style.css:345,432,592,751,1009` lose to `:1572`), Voyager nav pills (`:741`), Voyager/Sandstone sidebar and login backgrounds (wiped by `:3870`), Voyager/Matrix title colours (`:793`, `:1016`).
-- [x] **L: Remove dead and duplicate CSS** — about 150 of 425 classes are unreferenced by React (command palette, toast, stepper, `sla-*`, `credential-card`, `confirm-modal`, `#job-output-modal`); `@keyframes pulse-dot` is defined twice (`style.css:2653`, `:3416`); 68 `!important`. *Done 2026-11: 255 dead rules (177 class and id names, ~1,450 lines) and the duplicate keyframes removed; `!important` only dropped 68 to 64, the rest sit in the performance-mode and print blocks. `glass-card` and `card-body` stay as unstyled hooks.*
-
-### Batch 2 - Spacing system
-
-- [x] **M: Introduce spacing, radius and font-size tokens** — only colour tokens exist. `style.css` has 55 distinct paddings, 27 radii and 34 font sizes; the TSX has 2,925 inline styles with 69 distinct paddings. Card padding varies 0.75 / 1 / 1.25 / 1.5 / 2rem for the same surface. Move the primitives onto the tokens first. *Done 2026-11: `--space-*`, `--radius-*`, `--text-*`, `--control-h*` and `--card-pad*` on `:root`; every on-scale literal in `style.css` and the primitives (card, button, form, tabs, page header, time range) use them, and near-scale font sizes were snapped. Card padding is 1rem (`card-sm` 0.75rem). Off-scale literals in `style.css` and the inline styles on lines this batch did not touch remain.*
-- [x] **M: One page-title and page-header pattern** — `.page h2` (`style.css:1872`, 2rem gradient) only applies on Monitoring, Jobs, NetworkTools, Software and CloudVisibility, where the title margin plus `.page-header` margin leave about 4rem. Other pages use a plain h2 with an inline 0.75rem gap; DeviceDetail and DashboardViewer use 1.25rem. *Done 2026-11: shared `<PageHeader>` renders `.page-header` + `h2.page-title` (1.5rem gradient, 1rem gap below) on every page; headings inside tabs are `h3`. Change Management gained a title.*
-- [x] **M: Remove `margin-bottom` from `.card`** — `style.css:1960` stacks on grid/flex `gap`, so rows sit 1.5-2rem apart while columns sit 0.5-1rem. Drop the 29 inline `marginBottom: 0` patches afterwards. *Done 2026-11: parents set the rhythm with `.stack` / `.stack-sm` or a grid gap; the inline patches are gone.*
-- [x] **M: Remove cards nested in cards** — double border, padding and hover glow on Settings, Configuration, Compliance, Upgrades, Reports, DeviceDetail, Traffic Analysis and Monitoring Configure. *Done 2026-11: outer wrappers became plain stacks or inner blocks became `.card-inset`.*
-- [x] **M: Hover glow only on clickable cards** — `.card:hover` / `.stat-card:hover` (`style.css:1967`, `:1915`) make static panels look clickable; `.card-clickable` exists and is unused. *Done 2026-11: the glow lives on `.card-clickable`, set on cards that are links, buttons or have a click handler.*
-- [x] **M: Standard control heights with small variants** — inputs/selects ~36px, tabs ~34px, `btn-sm` ~31px, time-range ~28px. Add `.form-input-sm` / `.form-select-sm` and use them in the Topology, Configuration, Inventory, Compliance and Software toolbars. *Done 2026-11: 36px for buttons, inputs, selects and page tabs; 30px for `btn-sm`, `form-input-sm`, `form-select-sm`, small tabs and time-range buttons.*
-- [x] **H: Selects take a full row in wrapping toolbars** *(verify in browser)* — `.form-select { width: 100% }` (`style.css:2233`) inside flex-wrap toolbars: `pages/Jobs/JobsTab.tsx:76`, `pages/Monitoring/AlertsTab.tsx:73`, `AvailabilityTab.tsx:44`, `CapacityTab.tsx:28`, `SlaTab.tsx:32`, `TopologyAvailabilityPanel.tsx:80`. Add a toolbar select variant or use `.list-controls`. *Done 2026-11: `.toolbar` rows size inputs and selects to their content (also in `.page-header` and the TabBar trailing slot). Not yet checked in a browser.*
-
 ### Batch 3 - Shared primitives built several ways
 
-- [ ] **M: One stat tile component** — five or more designs across Monitoring (four of them), Dashboard, Software, Billing, the summary strip copied in Compliance / Deployments / RiskAnalysis, and the unstyled CloudVisibility cards. *Partly done 2026-11: `StatTile` / `StatGrid` (`components/StatTile.tsx`) now render the Monitoring, CloudVisibility, Billing, IPAM drilldown and MAC tracking tiles and the summary strip. Still on their own markup: Dashboard (`HealthSection`, `ResponseTimePanel`, `StatRings`) and the Software, Federation and IPAM overview tiles.*
-- [x] **M: One table style** — `.data-table`, `.chart-table`, `.device-health-table`, about 20 unclassed tables with inline `4px 8px` cells, and a div-grid table in `pages/Monitoring/SlaTab.tsx:176`. Row height ranges 29-37px. Standardise on `.data-table` plus a compact modifier. *Done 2026-11: every table is `.data-table` (`.table-sm` dense, `.table-sticky`), inline cell padding and row borders removed, the SLA grid is a real table, `.chart-table` / `.device-health-table` deleted.*
-- [ ] **M: One badge style** — `.badge`, `.status-badge`, `.alert-severity-badge`, `.tab-bar-badge`, `.topology-change-badge`, plus solid inline badges in Deployments, Monitoring Alerts/Rules and the NetFlow tab. *Partly done 2026-11: `Badge` / `SeverityBadge` / `StatusBadge` (`components/Badge.tsx`) replace `.status-badge`, `.alert-severity-badge`, `.badge-error` and the solid inline badges. `.tab-bar-badge` and `.topology-change-badge` (count bubbles) are untouched.*
-- [x] **H: One severity colour map** — Compliance profiles show medium and low as green (`pages/Compliance/Compliance.tsx:349`); RiskAnalysis maps medium and high both to amber (`pages/RiskAnalysis/helpers.ts:3`); Monitoring maps info to primary while Dashboard uses info (`pages/Monitoring/helpers.ts:26`). *Done 2026-11: `lib/severity.ts` is the only map (critical solid red, high red, medium amber, low info, info neutral); page-local maps removed.*
-- [x] **M: Compliance status colours reversed between scanners** — host scans show non-compliant amber and error red (`pages/Compliance/Compliance.tsx:651`); Meraki scans show the opposite (`merakiHelpers.ts:12`). *Done 2026-11: both use `complianceStatusTone` (compliant green, non-compliant red, error amber).*
-- [x] **M: One delete button style and label** — plain button with red text, ghost, `btn-danger` and `btn-xs` are all in use; label is "Del" in Inventory, Federation and Topology Sources. *Done 2026-11: `DeleteButton` everywhere a button deletes; label is always "Delete".*
-- [ ] **M: One callout, loading and empty-state component** — five banner styles; loading is a spinner, `.loading`, skeletons or one of 86 bare "Loading…" strings; empty is `.empty-state` (42) or one of 21 bare lines. *Partly done 2026-11: `Callout`, `LoadingState` and `EmptyState` replace the `.error` banners, red paragraphs, bare "Loading…" lines and bare "No …" lines. Still to do: skeleton placeholders, and field-level red `div`/`span` messages.*
-- [ ] **M: One date/time formatter** — at least five formats and several local helpers. Some parse zone-less timestamps as local and others as UTC, so the same event can show different times (Jobs, Federation, Maintenance, Monitoring Events; Reports History needs the backend format checked). Use `lib/datetime.ts` everywhere; also consolidate the uptime formatters. *Partly done 2026-11: all page-local date formatters removed in favour of `lib/datetime.ts`; backend format checked (UTC everywhere). Still to do: the uptime/duration formatters.*
 - [ ] **M: Reuse `CredentialSelect`** — the credential picker is hand-built five times with different labels (`pages/Inventory/SerialModal.tsx:93`, Configuration `RestoreBackupModal.tsx:48`, `RevertDriftModal.tsx:33`, `CaptureSnapshotModal.tsx:97`, `BackupPolicyModal.tsx:182`).
-- [ ] **L: One progress bar component** — four hand-written styles (`pages/Upgrades/CampaignsTab.tsx:260`, `NewImageModal.tsx:72`, `CampaignViewerModal.tsx:96`, `pages/RiskAnalysis/RiskAnalysis.tsx:317`).
-
-### Batch 4 - Modals and dialogs
-
-- [x] **M: Sticky modal header and footer** — `.modal` is the scroll container (`style.css:2425`), so the title and × scroll away; footers are 98 hand-built inline rows at the end of the body. Make `.modal-body` scroll and add a `footer` slot to `components/Modal.tsx`. *Done 2026-11: `.modal` is a flex column, `.modal-body` scrolls, and `Modal` has a `footer` prop (`.modal-footer`); every modal's closing action row moved into it (submit buttons use `form={id}`). Audit's two hand-rolled overlays now use `Modal`.*
-- [x] **M: One button order** — Cancel then primary, right-aligned; today the order and the Cancel style (`btn-secondary`, `btn-ghost`, plain) vary per modal. *Done 2026-11: every modal footer is Cancel/Close (`btn-secondary`), secondary actions, primary last; the three local `ModalActions` copies became `components/ModalActions.tsx`. Rule recorded in `FRONTEND_STYLE.md`.*
-- [x] **M: Add medium and small modal sizes** — `size="large"` is 1600px and used for simple forms; the 700px default is used for wide tables and one-line confirms. *Done 2026-11: `small` 480px and `medium` 1000px added; every `size` re-evaluated (`large` uses 39 → 14, all wide tables, diffs or log viewers).*
-- [x] **M: Backdrop close and focus handling** — `components/Modal.tsx:67` closes when a text-selection drag ends on the backdrop; no focus trap, initial focus or focus restore. *Done 2026-11: backdrop closes only when press and release both land on it; focus moves in on open, Tab is trapped in the topmost modal, focus returns on close (`components/modalFocus.ts`, unit tested).*
-- [x] **M: Specific confirmations** — callers rely on the "Please confirm" / "Confirm" defaults (`components/DialogProvider.tsx:71`) and never name the object; cancel dialogs pair "Cancel" with "Cancel reload" (`pages/Upgrades/CampaignViewerModal.tsx:1185`). *Done 2026-11: `confirm()` no longer takes a bare string and `title` / `confirmLabel` are required, so the "Please confirm" / "Confirm" defaults are gone; all 63 calls name the action and object. Cancel confirmations use "Keep running" / "Keep reload" style labels.*
-- [x] **M: Inline validation instead of `alert()`** — Inventory, Jobs, Deployments, RiskAnalysis, GraphTemplates, Backup policy. Multi-line messages lose their line breaks in `AlertDialog` / `ConfirmDialog`. *Done 2026-11: `FieldError` + `aria-invalid` for field problems and `Callout` for failed saves across the form modals (all the listed pages plus Ipam, Monitoring, Reports, Software, Upgrades, Topology, Audit); `alert()` remains for row and background action results. Alert/confirm messages keep line breaks (`.dialog-message`).*
-- [x] **M: Hide the × on the forced password-change modal** — `components/ChangePasswordModal.tsx:59` makes close a no-op but the × still renders. *Done 2026-11: `Modal` has `dismissible`; the forced modal passes `dismissible={false}` (no ×, Escape or backdrop close).*
-
-### Batch 5 - States
-
-- [x] **H: Failed requests shown as empty or endless loading** — Settings forms check `isLoading || !draft` before `isError` (seven places, e.g. `pages/Settings/AuthTab.tsx:73`); also Monitoring Availability/SLA, Compliance tabs, Configuration Backups, IPAM overview and drilldown, FloorPlan sites, Software overview, Billing summary. *Done 2026-11: `QueryError` (`components/QueryError.tsx`, with Retry) is checked before loading and empty states on every listed page and the rest of Settings, Monitoring, Network Tools, Jobs, Topology, Compliance, Configuration, Audit, Risk Analysis, Deployments, IPAM, Inventory, Floor Plans, Software, Reports and Cloud Visibility; it replaces content only when nothing is cached. Edit forms and sync-settings forms whose load failed are no longer rendered with blanks or defaults. Not swept: Dashboard, DeviceDetail, Upgrades, GraphTemplates, Federation, MaintenanceWindows, Lab; the Topology side panels (`NodeDetails` and siblings) keep their compact red line.*
-- [x] **M: Busy state on async buttons** — double-click fires twice on Jobs Retry/Cancel, IPAM Push/Accept, Compliance Assign, Alerts Acknowledge, Notification/SIEM Test. A shared pending flag disables every row at once on Compliance Scan, IPAM Sync, Cloud Discover and Audit Run now. *Done 2026-11: `BusyButton` (`components/BusyButton.tsx`) and per-row state from `usePendingKeys` (`lib/usePendingKeys.ts`) on all of the above and the other row actions on the swept pages; `ModalActions` takes `primaryBusy`.*
-- [x] **M: Confirm destructive and bulk actions** — Drift Accept All / Resolve All, Monitoring Acknowledge All, MAC Acknowledge all, Discovery "remove hosts not found", IPAM Push to IPAM, Jobs live Launch, Topology Reset Positions, RiskAnalysis and Deployment Approve. *Done 2026-11: all listed, each with a count where one exists; also Drift Accept Group, Topology changes / STP Acknowledge All, Topology Collect All and advisory import.*
 
 ### Batch 6 - Accessibility
 
-- [x] **M: Link labels to inputs** — about 300 `form-label` elements have no `htmlFor`; toolbar search and filter inputs have no label. *Done 2026-11: every `form-label` is linked with `useId` ids or titles a `role="group"`; toolbar searches, filters and row checkboxes carry an `aria-label`.*
-- [x] **M: Keyboard access for clickable rows** — Inventory group headers, Audit rows and categories, SLA host rows, FloorPlan site/floor rows, Campaign viewer rows. *Done 2026-11: all listed plus Lab rows, through `clickableProps` in `lib/clickable.ts`.*
-- [x] **M: `aria-label` on icon-only buttons and 28px minimum targets** — help toggle 18×22, kebab 23, `segmented-xs` 24, DeviceDetail Ack/Resolve ~20, IPAM ✕ ~20. *Done 2026-11: `--target-min` on `btn-xs`, `segmented-xs`, kebab and help toggle. Still under 28px: clickable `.badge` chips (Audit filters, Topology warnings) and FloorPlan floor rows (~25px).*
-- [x] **M: Visible focus** — menu keyboard focus contrast is about 1.1 (`style.css:5573`); add a shared `:focus-visible` ring.
-- [x] **M: Remove `aria-live` from `<main>`** — `App.tsx:192` re-announces every poll.
-- [x] **M: User-menu role chip contrast** — 1.2-3.4 in every theme (`components/UserMenu.tsx:62`).
 - [ ] **L: TabBar arrow-key navigation**; tabs and segmented controls jump on hover from the inherited button lift.
 
 ### Shell
 
-- [ ] **H: Collapsed sidebar hides all grouped pages** — only Dashboard and Settings stay reachable (`style.css:1648`); icons have no tooltip and the state is not persisted (`components/Sidebar.tsx:279`, `:347`).
-- [ ] **H: Add `min-width: 0` to `.main-content`** — any wide table makes the whole page scroll sideways (`style.css:1722`). 99 tables, about 26 overflow wrappers; add a shared `.table-scroll`.
-- [ ] **H: Login form width** *(verify in browser)* — `.login-card` uses `align-items: center` (`style.css:1295`), so the form in `pages/Login/Login.tsx:83` shrinks to its content.
-- [ ] **H: Mobile drawer closes when a nav group is tapped** — `components/Sidebar.tsx:379`.
-- [ ] **M: Breadcrumb bar repeats the page title** — single unlinked label (`App.tsx:85`); with the time-range bar the Dashboard opens with three header bands.
 - [ ] **M: Change Management header** — no page title, two help banners, sub-page h2 below the tabs (`pages/ChangeManagement/ChangeManagement.tsx:32`).
 - [ ] **M: Page overlays sit under the sidebar** — `.main-content { z-index: 1 }` vs sidebar 100; hand-built dialogs must portal (use `Modal`).
-- [ ] **L: Breakpoints at 1024/1280** — auto-collapse the sidebar and reduce page padding at ≤1100px.
-- [ ] **L: Sidebar labels clip without ellipsis or tooltip** (`style.css:1590`).
-- [ ] **L: Theme flash on load and missing favicon** — theme is set after first paint (`main.tsx:12`).
-- [ ] **L: Login shows "Register" regardless of the server setting** (`pages/Login/Login.tsx:22`).
 - [ ] **L: Mobile shell** — hamburger covers the drawer brand, no Escape, `100vh` hides the user link.
 
 ### Dashboard
 
-- [ ] **H: "Overall Health" sits alone in a two-column grid** — `pages/Dashboard/OverviewPanels.tsx:19`, `style.css:5043`.
-- [ ] **H: Custom panel "Height (rows)" has almost no effect** — charts are fixed at 240px (`pages/Dashboard/Panel.tsx:70`, `lib/echart.tsx:35`).
-- [ ] **M: Panels jump height** between skeleton (80px), empty and loaded states (`Dashboard.tsx:40`, `BandwidthTrendPanel.tsx:47`, `TopTalkersPanel.tsx:50`, `BackupStatusPanel.tsx:63`).
-- [ ] **M: One health label map** — Good/Bad, Healthy/Critical, warn/down and "?" are all in use (`OverviewPanels.tsx:9`, `DevicesGridPanel.tsx:9`, `HealthSection.tsx:91`, `GroupHealthPanel.tsx:169`).
-- [ ] **M: Same device-health counts shown four times**; rings sit far down the page (`Dashboard.tsx:110`).
-- [ ] **M: Two section-heading styles on one page** (`HealthSection.tsx:32`, `AlertsSection.tsx:23`).
-- [ ] **M: Busiest Interfaces tooltip shows raw bps; legend wraps over the plot** (`lib/echart.tsx:111`).
-- [ ] **M: Empty custom panels draw blank axes; error is muted text** (`Panel.tsx:126`).
-- [ ] **M: Viewer toolbar mixes button sizes and duplicates Refresh** (`DashboardViewer.tsx:135`).
-- [ ] **L: Charts resize only on window resize** — use a `ResizeObserver` (`lib/echart.tsx:73`).
-- [ ] **L: Hosts/Playbooks/Jobs rings are scaled against each other** (`StatRings.tsx:100`).
 - [ ] **L: Dashboards list** — delete button nested inside a link (`CustomDashboards.tsx:78`); switcher duplicates Manage; time-range bar shown where nothing is time-based.
 - [ ] **L: Device Health hostnames do not link to the device; Active Alerts stops at 20 with no "view all"**.
 - [ ] **L: Panel modal** — metric is free text; width/height snap back when cleared (`PanelModal.tsx:143`).
 
 ### Monitoring
 
-- [ ] **M: Availability tab is two stacked dashboards** with different table styles; host Transitions ignore the filters; "Currently Down" is red at 0 (`pages/Monitoring/AvailabilityTab.tsx:31`).
-- [ ] **M: Capacity chart** — threshold always "80%" even for count metrics; no tooltip or units (`CapacityTab.tsx:21`).
-- [ ] **M: Move the Capacity and SLA SVG charts onto the shared chart component** (`CapacityTab.tsx:113`, `SlaTab.tsx:254`).
 - [ ] **M: SLA tab** — Trends shows only the first host; MTTR/MTTD shown twice (`SlaTab.tsx:233`).
-- [ ] **M: Alert Rules cannot be edited**; disabled rules fade the Enable button too (`RulesTab.tsx:66`).
 - [ ] **M: Suppressions accept an end before the start; Scheduled and Expired look the same** (`SuppressionsTab.tsx:105`).
-- [ ] **M: OID Profiles vendor dropdown collapses to the selected vendor** (`OidProfilesTab.tsx:22`).
-- [ ] **M: Events tab** — empty state says "syslog" when SNMP Trap is selected; truncated messages have no tooltip; no overflow wrapper (`EventsTab.tsx:83`).
 
 ### DeviceDetail
 
-- [ ] **H: Interfaces tab fixed two-column tables overflow at 1280 and 1024** (`pages/DeviceDetail/InterfaceTab.tsx:162`).
 - [ ] **M: Doubled padding from the undefined `card-body`**; use the existing `.device-info-bar` (`DeviceDetail.tsx:171`).
-- [ ] **M: Overview charts have no loading or empty state** (`DeviceDetail.tsx:403`).
-- [ ] **M: Flow charts show raw bytes; rotated labels squash the Top Interfaces chart** (`FlowTab.tsx:195`, `InterfaceTab.tsx:151`).
 - [ ] **M: Ack/Resolve buttons are ~20px, unguarded, and "Acked" stays clickable** (`ErrorTrendingTab.tsx:158`).
-- [ ] **M: Help text promises an interface drill-down that does not exist; two help banners stacked** (`DeviceDetail.tsx:46`).
 - [ ] **L: Interface up/down/admin counts rely on colour alone** (`DeviceDetail.tsx:240`).
-
-### GraphTemplates
-
-- [x] **M: Templates, tree nodes and host-template assignments can be created but not edited or completed** (`pages/GraphTemplates/GraphTemplateDetailModal.tsx:69`, `GraphTreeDetailModal.tsx:62`, `HostTemplateModal.tsx:81`). *Done 2026-11: graph templates have an edit form and add/edit/delete for data series (built-ins stay read-only); host templates assign graph templates from a checklist; tree nodes can be edited, deleted, nested and pointed at a host or host graph. The item and node routes now check the parent template/tree, refuse built-in templates and reject parent cycles.*
 
 ### Topology
 
-- [ ] **H: MAC/IP/VLAN result tables are unstyled** — five columns in a 380px panel (`pages/Topology/TopologySearchPanel.tsx:245`, `:281`).
-- [ ] **H: Floating panels overlap and cover the map at 1024** *(verify in browser)* — search 380px, node details 380-460px, edge details fixed 480px (`TopologySearchPanel.tsx:131`, `NodeDetails.tsx:204`, `EdgeDetails.tsx:36`).
-- [ ] **M: Map height ignores what is stacked above it** — `calc(100vh - 280px)` (`Topology.tsx:2332`); the Path card is unbounded and pushes the map off screen; flash messages shift the toolbar.
-- [ ] **M: Toolbar overloaded** — 12 controls in one wrapping row, primary button mid-row, two search entry points, toggle labels change width (`Topology.tsx:1924`).
-- [ ] **M: Search dropdown likely painted under the map panels** *(verify in browser)* (`Topology.tsx:1973`).
 - [ ] **M: Use the shared loading, error and empty-state primitives; add a page header** (`Topology.tsx:2322`, `TopologyPage.tsx:24`).
-- [ ] **M: Add on-canvas zoom/fit controls** (`Topology.tsx:929`).
-- [ ] **M: Legend reuses colours for different meanings and draws link types as dots** (`Topology.tsx:2391`).
 - [ ] **M: Validation shown only as a red border** (`Topology.tsx:2250`, `SweepFilterFields.tsx:103`).
 - [ ] **M: Detail panels** — long hostnames do not wrap; MerakiDetails filter has no label or "no matches" message (`NodeDetails.tsx:296`, `MerakiDetails.tsx:66`).
-- [ ] **M: NodeDetails uses its own ~22px tab bar instead of the shared `TabBar`** (`NodeDetails.tsx:358`).
-- [ ] **M: STP chip is always green, even when blocking** (`NodeDetails.tsx:593`).
 - [ ] **M: Changes and STP Events modals lose row tint** (invalid `var(--x)14`) and show error and empty together (`ChangesModal.tsx:71`, `:94`, `StpEventsModal.tsx:54`, `:78`).
 - [ ] **M: Discovery progress modal** — no Stop button, stale title on error, log does not auto-scroll (`DiscoveryProgressModal.tsx:105`).
 - [ ] **M: Map Sources** — all eight sample buttons show "Building…" at once; progress renders below the table; history has no limit (`SourcesModal.tsx:528`, `:609`).
-- [ ] **M: Reachability verdict filter shows no active state** (`Reachability.tsx:466`).
-- [ ] **M: Reachability renders up to 20,000 rows unpaginated** (`Reachability.tsx:659`).
-- [ ] **M: Reachability form has ~25 always-visible controls and 170-word help**; Sources multi-select needs Ctrl+click (`Reachability.tsx:176`, `SweepFilterFields.tsx:43`).
 - [ ] **L: `DETAIL_CELL_STYLE` overrides `.data-table` padding; "Download shown rows" is disabled only through `pointerEvents`** (`helpers.ts:212`, `Reachability.tsx:497`).
 
 ### FloorPlan
@@ -721,24 +345,8 @@ per-page **H** items.
 - [ ] **M: Failed site load shows "No sites yet"; floor rows are ~22px** (`FloorPlan.tsx:188`, `:275`).
 - [ ] **L: Status dots have no label or legend; "add one above" points the wrong way; modal buttons show no busy label** (`FloorPlan.tsx:229`, `:269`, `modals.tsx:317`).
 
-### CloudVisibility
-
-- [x] **H: Summary stat cards are unstyled on the Topology, Flow and Traffic tabs** (`pages/CloudVisibility/TopologyTab.tsx:484`, `FlowTab.tsx:222`, `TrafficTab.tsx:214`). *Done 2026-11: all three use `StatGrid` / `StatTile`.*
-- [x] **M: Half a screen of header before content**; the account filter shows on tabs that ignore it (`CloudVisibility.tsx:89`). *Done 2026-11: header is title, banner, tab bar and one help line; the provider/account filters sit in the TabBar trailing slot and the account filter is hidden on Accounts; provider capability cards became a badge row on the Accounts tab.*
-- [x] **M: Form labels touch their inputs; Title Case labels with units in the name** (`SyncControls.tsx:56`, `FlowTab.tsx:72`, `AccountsTab.tsx:488`). *Done 2026-11: `form-group` / `form-label` with `useId` ids and sentence case on the Flow, Traffic, Policy and Topology filters, the sync settings and the account form; units are a suffix ("Interval (seconds)").*
-- [x] **M: Flow/Traffic sync panel sits between the filters and the data; timelines render up to 10,080 table rows** (`FlowTab.tsx:102`, `:198`). *Done 2026-11: order is filters, summary, timeline, top list, sync section; timelines are a `TimeSeriesChart` (flow bytes, traffic total); the two tabs share `analytics.ts` / `AnalyticsParts.tsx` and `lib/useFlashMessage.ts`.*
-- [x] **M: Policy tab shows Loading and empty together** (`PolicyTab.tsx:111`). *Done 2026-11: error, loading and empty are separate states with accurate messages; filters and drilldown no longer reload the views table.*
-- [x] **M: Policy tables squeezed side by side; rules silently capped at 200; route-path tables overflow 320px cards** (`PolicyTab.tsx:38`, `:108`, `TopologyTab.tsx:344`). *Done 2026-11: tables stacked full width; rules load up to the API maximum of 2,000, render 200 at a time and show a callout when truncated (the API returns no total); route-path cards are full width with a scroll wrapper.*
-- [x] **L: Accounts tab** — three primary "Add" buttons; nine-column table scrolls at 1280 (`AccountsTab.tsx:154`, `:199`). *Done 2026-11: one "Add cloud account" button; six columns. Not yet checked in a browser.*
-
 ### Settings
 
-- [ ] **M: Unsaved changes are lost silently on tab switch; the save model is mixed without signalling** (`pages/Settings/Settings.tsx:212`).
-- [ ] **M: 12-tab bar wraps to two rows at 1280** (`Settings.tsx:86`).
-- [ ] **M: Tab help describes features that do not exist** — density, SAML, password policy, log level (`Settings.tsx:35`).
-- [ ] **M: Same introduction shown up to four times per tab** (`Settings.tsx:201`, `NotificationsTab.tsx:295`, `SiemTab.tsx:150`).
-- [ ] **M: Auth and Discovery field alignment** — checkbox rows touch the next label or sit ~1rem above inputs; Notifications/SIEM patch with `marginTop: 1.4rem` (`AuthTab.tsx:731`, `DiscoveryTab.tsx:79`, `NotificationsTab.tsx:490`).
-- [ ] **M: Notifications, SIEM and Service Credentials tables** — unstyled tables, full-size row buttons, editors open below the table out of view, Test gives no feedback (`AuthTab.tsx:909`, `NotificationsTab.tsx:309`, `:409`, `SiemTab.tsx:160`, `:236`).
 - [ ] **M: Success and error messages look different on every tab**; the boxed `.error` breaks layout inline (`UserModals.tsx:161`, `SystemTab.tsx:272`).
 - [ ] **M: Users** — wall of feature badges per card; Create is disabled with no reason given; Access Groups show raw feature keys (`UsersTab.tsx:141`, `UserModals.tsx:115`, `AccessGroupsTab.tsx:107`).
 - [ ] **L: "Job Retention" sits under Authentication; rate-limit and escalation fields lack help; NetFlow status badges hand-coloured; PEM boxes use a proportional font** (`AuthTab.tsx:117`, `:251`, `MonitoringTab.tsx:130`, `NetFlowTab.tsx:72`, `SiemTab.tsx:417`).
@@ -758,13 +366,8 @@ per-page **H** items.
 - [ ] **M: Federation table overflows at 1024** — seven columns with an unbounded URL (`pages/Federation/Federation.tsx:219`).
 - [ ] **M: Federation row actions** — busy state shows "…", test result uses a blocking alert, Sync gives no confirmation (`Federation.tsx:293`).
 - [ ] **L: Federation stacks three banners before content** (`Federation.tsx:39`).
-- [x] **H: Maintenance modal fields are unstyled** (`pages/MaintenanceWindows/MaintenanceWindowModal.tsx:164`). *Done 2026-11: fields use `.form-group` / `.form-label` / `.form-row` / `.form-check` / `.form-help` with linked labels, in a real `<form>` submitted from the footer.*
-- [x] **M: Maintenance edit modal shows stale or blank data while loading, with Save enabled** (`MaintenanceWindowModal.tsx:70`). *Done 2026-11: the form mounts only after its window has loaded (spinner or `QueryError` until then, Save disabled), is seeded once per open, and the single-window query is not cached between opens.*
-- [x] **M: Maintenance table is hand-built; state shown as lowercase text; own h2 under the tab bar** (`MaintenanceWindows.tsx:75`, `:117`). *Done 2026-11: heading removed (`.toolbar` with the New Window button), state and policy are `Badge`s, list load failure uses `QueryError`.*
 - [ ] **M: MAC Tracking toolbars reuse `page-header`**, spreading controls full width (`pages/NetworkTools/MacTracking.tsx:212`, `:362`, `:548`).
 - [ ] **M: MAC Tracking badges and stat tiles are unstyled** (`MacTracking.tsx:641`, `:772`, `:828`).
-- [x] **L: Nested scrollbars in the MAC history modals** (`MacTracking.tsx:906`, `:1046`). *Done 2026-11: the move-event log and MAC history bodies dropped their own height caps; the modal body is the only vertical scroller.*
-- [x] **L: Traffic Analysis** — own range select instead of the shared time bar; sub-tab not in the URL (`TrafficAnalysis.tsx:68`, `:103`). *Done 2026-11: the view is in the path (`/network-tools/traffic/<view>`) through a nested `usePathTab`; the range select is gone, the shell's time bar shows on the tab and the window is clamped to 7d with `ClampedRangeHint` (`FLOW_RANGES` now shared from `api/networkTools.ts`).*
 
 ### Inventory
 
@@ -778,11 +381,6 @@ per-page **H** items.
 ### Configuration
 
 - [ ] **H: Restore result dumps a unified diff into an alert as one paragraph**; the confirm button is primary, not danger (`pages/Configuration/RestoreBackupModal.tsx:29`, `:75`).
-- [ ] **M: Drift bulk actions fire n separate mutations with no error handling; two primary buttons in the toolbar** (`DriftTab.tsx:118`).
-- [ ] **M: "View Diff" expands inline in one view and opens a modal in the other**; ghost buttons with zero padding (`DriftTab.tsx:330`, `:502`).
-- [ ] **M: Config viewers sized 480 / 400 / 220px**; a 400px diff inside a 1600px modal; search snippet margin bug (`BackupModal.tsx:70`, `UnifiedDiff.tsx:14`, `SearchTab.tsx:265`).
-- [ ] **M: Silent no-op submits** (`BackupPolicyModal.tsx:113`, `SetBaselineModal.tsx:62`, `CaptureSnapshotModal.tsx:39`).
-- [ ] **L: Backups and drift events render as unbounded card lists** (`BackupsTab.tsx:350`, `DriftTab.tsx:159`).
 
 ### IPAM
 
@@ -803,10 +401,7 @@ per-page **H** items.
 
 ### Upgrades and Software
 
-- [ ] **H: Software two-column grid has no breakpoint** *(verify in browser)* — the devices table gets ~350px at 1024 (`pages/Software/Software.tsx:330`).
-- [ ] **M: Software toolbar is crowded**; labels sit on the select bottom edge; full-size buttons (`Software.tsx:204`).
 - [ ] **L: Software side column lists are uncapped; empty actions header; version spread marks "behind" by colour only** (`Software.tsx:420`, `:501`, `:547`).
-- [ ] **M: Campaign viewer ordering** — history before actions, selection controls after the buttons they affect (`pages/Upgrades/CampaignViewerModal.tsx:833`, `:963`).
 - [ ] **M: Campaign viewer** — nested scrollbars, "Sel" header with no select-all, raw WebSocket state text (`CampaignViewerModal.tsx:1027`, `:1138`).
 - [ ] **M: Images table has no overflow wrapper; truncated campaign names have no tooltip** (`ImagesTab.tsx:73`, `CampaignsTab.tsx:158`).
 - [ ] **L: Campaign form error sits at the bottom of a tall 1600px modal; host checkboxes are tightly packed** (`CampaignFormModal.tsx:443`, `:562`).
