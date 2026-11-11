@@ -18,6 +18,8 @@ const TABS: { key: Tab; label: string; feature: string }[] = [
   { key: 'traffic', label: 'Traffic Analysis', feature: 'traffic-analysis' },
 ];
 const TAB_KEYS = TABS.map((t) => t.key);
+// Traffic Analysis resolves /network-tools/traffic/<view> with its own usePathTab.
+const NESTED: Tab[] = ['traffic'];
 
 export function NetworkTools() {
   const { data: auth } = useAuthStatus();
@@ -27,6 +29,7 @@ export function NetworkTools() {
     TAB_KEYS,
     'mac',
     auth ? shownTabs.map((t) => t.key) : undefined,
+    NESTED,
   );
 
   return (
