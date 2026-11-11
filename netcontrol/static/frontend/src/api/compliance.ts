@@ -85,10 +85,52 @@ export interface RunScanResult {
   total_rules?: number;
 }
 
+/** What starting a background scan returns (202): poll the job by its id. */
+export interface ScanJobStart {
+  job_id: string;
+  status: string;
+}
+
+/** Status of a background scan job; `running` until it settles. */
+export type ScanJobStatus = 'running' | 'completed' | 'partial' | 'failed';
+
+export interface RunScanBulkHostResult {
+  host_id: number;
+  hostname: string;
+  status: string;
+  passed_rules: number;
+  failed_rules: number;
+  total_rules: number;
+  result_id: number | null;
+}
+
 export interface RunScanBulkResult {
   hosts_scanned: number;
   violations: number;
   errors: number;
+  results: RunScanBulkHostResult[];
+}
+
+export interface ComplianceScanJobProgress {
+  hosts_total: number;
+  hosts_done: number;
+  violations: number;
+  errors: number;
+  profile_id: number;
+  profile_name: string;
+  assignment_id: number | null;
+}
+
+/** A host compliance scan (bulk or assignment Scan Now) running server-side. */
+export interface ComplianceScanJob {
+  job_id: string;
+  kind: string;
+  status: ScanJobStatus;
+  started_at: string | null;
+  finished_at: string | null;
+  progress: ComplianceScanJobProgress;
+  result: RunScanBulkResult | null;
+  error: string | null;
 }
 
 export interface RemediationResult {
@@ -256,24 +298,54 @@ export function useRunScan() {
   });
 }
 
+// Bulk and assignment scans run as background jobs: these start one and
+// return its id; useComplianceScanJob follows it and refreshes the lists
+// when it settles.
 export function useRunScanBulk() {
-  const qc = useQueryClient();
   return useMutation({
     mutationFn: (data: { profile_id: number; credential_id: number; host_ids: number[] }) =>
-      apiRequest<RunScanBulkResult>('/compliance/scan-bulk', { method: 'POST', body: data }),
-    onSuccess: () => invalidateCompliance(qc),
+      apiRequest<ScanJobStart>('/compliance/scan-bulk', { method: 'POST', body: data }),
   });
 }
 
 export function useScanAssignmentNow() {
-  const qc = useQueryClient();
   return useMutation({
     mutationFn: (assignmentId: number) =>
-      apiRequest<RunScanBulkResult>(`/compliance/assignments/${assignmentId}/scan-now`, {
+      apiRequest<ScanJobStart>(`/compliance/assignments/${assignmentId}/scan-now`, {
         method: 'POST',
       }),
-    onSuccess: () => invalidateCompliance(qc),
   });
+}
+
+/**
+ * Polls one background scan job until it settles. Scans have no push
+ * channel, so this refetches every 1.5 s while the job runs and stops on a
+ * terminal status or an error (a 404 once the job record expired). When the
+ * job settles it has written results, so every compliance list is refreshed.
+ */
+function useScanJobPoll<J extends { status: string }>(queryKey: readonly unknown[], path: string | null) {
+  const qc = useQueryClient();
+  return useQuery<J>({
+    queryKey,
+    queryFn: async () => {
+      const job = await apiRequest<J>(path as string);
+      if (job.status !== 'running') invalidateCompliance(qc);
+      return job;
+    },
+    enabled: path != null,
+    refetchInterval: (query) => {
+      if (query.state.status === 'error') return false;
+      return !query.state.data || query.state.data.status === 'running' ? 1500 : false;
+    },
+    retry: false,
+  });
+}
+
+export function useComplianceScanJob(jobId: string | null) {
+  return useScanJobPoll<ComplianceScanJob>(
+    ['compliance-scan-job', jobId],
+    jobId ? `/compliance/scans/${jobId}` : null,
+  );
 }
 
 export function useLoadBuiltinProfiles() {
@@ -483,24 +555,10 @@ export function useMerakiSummary() {
 }
 
 export function useMerakiScanJob(jobId: string | null) {
-  const qc = useQueryClient();
-  return useQuery<MerakiScanJob>({
-    queryKey: ['compliance-meraki', 'scan-job', jobId],
-    queryFn: async () => {
-      const job = await apiRequest<MerakiScanJob>(`/compliance/meraki/scans/${jobId}`);
-      // The job wrote results when it settled; refresh every list that shows them.
-      if (job.status !== 'running') invalidateCompliance(qc);
-      return job;
-    },
-    enabled: jobId != null,
-    // A scan is a background job with no push channel; poll until it settles
-    // (or the job record is gone, which surfaces as an error).
-    refetchInterval: (query) => {
-      if (query.state.status === 'error') return false;
-      return !query.state.data || query.state.data.status === 'running' ? 1500 : false;
-    },
-    retry: false,
-  });
+  return useScanJobPoll<MerakiScanJob>(
+    ['compliance-meraki', 'scan-job', jobId],
+    jobId ? `/compliance/meraki/scans/${jobId}` : null,
+  );
 }
 
 export interface MerakiAssignmentPayload {
@@ -540,7 +598,7 @@ export function useRunMerakiScan() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (data: { profile_id: number; org_ref: number }) =>
-      apiRequest<{ job_id: string; status: string }>('/compliance/meraki/scan', {
+      apiRequest<ScanJobStart>('/compliance/meraki/scan', {
         method: 'POST',
         body: data,
       }),
@@ -552,7 +610,7 @@ export function useScanMerakiAssignmentNow() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (assignmentId: number) =>
-      apiRequest<{ job_id: string; status: string }>(
+      apiRequest<ScanJobStart>(
         `/compliance/meraki/assignments/${assignmentId}/scan-now`,
         { method: 'POST' },
       ),

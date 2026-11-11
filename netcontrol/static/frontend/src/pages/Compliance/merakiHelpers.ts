@@ -8,6 +8,9 @@ export const MERAKI_KIND_LABEL: Record<string, string> = {
   ssid: 'SSID',
 };
 
+/** The same labels, abbreviated where they appear as a badge in a table row. */
+export const MERAKI_KIND_SHORT_LABEL: Record<string, string> = { ...MERAKI_KIND_LABEL, org: 'Org' };
+
 /** True when a profile carries at least one rule of type "meraki". */
 export function profileHasMerakiRules(profile: ComplianceProfile): boolean {
   try {

@@ -134,3 +134,15 @@ export function localInputToIso(value: string | null | undefined): string {
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? '' : d.toISOString();
 }
+
+/**
+ * A schedule interval in seconds as its largest whole unit: 86400 -> "1d",
+ * 21600 -> "6h", 900 -> "15m", 45 -> "45s". Missing or zero is "-".
+ */
+export function formatInterval(seconds: number | null | undefined): string {
+  if (!seconds) return '-';
+  if (seconds % 86400 === 0) return `${seconds / 86400}d`;
+  if (seconds % 3600 === 0) return `${seconds / 3600}h`;
+  if (seconds % 60 === 0) return `${seconds / 60}m`;
+  return `${seconds}s`;
+}

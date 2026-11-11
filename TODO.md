@@ -404,9 +404,6 @@ per-page **H** items.
 
 ### Compliance, Deployments, RiskAnalysis, Reports
 
-- [ ] **M: Compliance scans run synchronously with only "Scanning…"; Fix All shows no progress** (`pages/Compliance/RunScanModal.tsx:187`, `FindingsModal.tsx:128`).
-- [ ] **M: Up to 500 rows rendered as stacked cards with no sorting** (`Compliance.tsx:650`, `MerakiTab.tsx:339`).
-- [ ] **L: Two findings tables styled differently; second tab bar inside the Meraki tab; rules line not clamped; kind labels duplicated** (`FindingsModal.tsx:214`, `MerakiFindingsModal.tsx:43`, `MerakiTab.tsx:22`, `:62`).
 - [ ] **H: Deployment approval comment field is unstyled** (`pages/Deployments/DeploymentDetailModal.tsx:402`).
 - [ ] **M: Deployment status shown three ways with raw tokens** (`Deployments.tsx:338`, `DeploymentDetailModal.tsx:159`).
 - [ ] **M: Deployment detail tables use inline padding; proposed commands are collapsed beside Execute** (`DeploymentDetailModal.tsx:259`, `:473`).

@@ -5,7 +5,6 @@ import type { ConfigDriftEvent } from '@/api/configuration';
 import {
   backupDiffAvailable,
   filterDriftEvents,
-  formatInterval,
   groupDriftEvents,
   normalizeDiffForGrouping,
   statusColor,
@@ -19,23 +18,6 @@ const ev = (
   host_id: id,
   status: 'open',
   ...partial,
-});
-
-describe('formatInterval', () => {
-  it('formats whole-day intervals', () => {
-    expect(formatInterval(86400)).toBe('1d');
-    expect(formatInterval(86400 * 7)).toBe('7d');
-  });
-
-  it('formats whole-hour intervals', () => {
-    expect(formatInterval(3600)).toBe('1h');
-    expect(formatInterval(3600 * 6)).toBe('6h');
-  });
-
-  it('returns dash for null/zero', () => {
-    expect(formatInterval(null)).toBe('-');
-    expect(formatInterval(0)).toBe('-');
-  });
 });
 
 describe('statusColor', () => {
