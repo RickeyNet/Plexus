@@ -550,7 +550,7 @@ Each collection also records the state of what it reports, shown under **Monitor
 |---|---|---|
 | `POST` | `/api/cloud/accounts` | `{"provider": "aws", "name", "region_scope", "auth_config"}` (admin) |
 | `POST` | `/api/cloud/accounts/{id}/discover` | Run discovery; the map updates when it succeeds (admin) |
-| `GET` | `/api/cloud/accounts/{id}/discover/progress` | How far a running discovery is: `running` and `progress` (`phase`; for each region `region`, `section`, `regions_done`, `regions_total`, `steps_done`, `steps_total`) (admin) |
+| `GET` | `/api/cloud/accounts/{id}/discover/progress` | How far a running discovery is: `running` and `progress` (`phase`; for each region `region`, `section`, `regions_done`, `regions_total`, `steps_done`, `steps_total`; Azure and GCP report `section`, `steps_done`, `steps_total` per section). A scheduled discovery reports here too, and `GET /api/topology/sources` carries the same fields as the source's `progress` (admin) |
 | `POST` | `/api/sources/sample?provider=aws` | Add / refresh the demo AWS account |
 | `GET` | `/api/topology` | AWS nodes carry `source: "meraki"` and a `meraki` reference whose `provider` is `aws` and whose `org_ref` is `-1` (all AWS accounts share one reference) |
 | `GET` | `/api/sources/nodes?org_ref=-1&node_id=…` | Detail sections of one AWS node |

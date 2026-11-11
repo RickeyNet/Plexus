@@ -1142,3 +1142,15 @@ def test_no_configuration_read_leaves_the_name_and_aliases(api, monkeypatch):
     assert _run(api)["status"] == "completed"
     assert _hostnames()[host_id] == "CCM-Core-9500"
     assert _aliases(api, host_id)[host_id] == ["10.175.14.2"]
+
+
+def test_inventory_source_carries_the_progress_of_its_running_job(api, monkeypatch):
+    from netcontrol.routes import background_jobs
+
+    assert _source(api)["progress"] is None
+    monkeypatch.setattr(background_jobs, "_jobs", {})
+    job = background_jobs.create_job("inventory_collection", {"phase": "collecting", "hosts_done": 2, "hosts_total": 5})
+    monkeypatch.setitem(collection._running, "job", job["job_id"])
+    source = _source(api)
+    assert source["collecting"] is True
+    assert source["progress"] == {"phase": "collecting", "hosts_done": 2, "hosts_total": 5}
