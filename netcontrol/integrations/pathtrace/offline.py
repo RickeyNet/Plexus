@@ -34,6 +34,7 @@ MODULES = (
     "netcontrol/__init__.py",
     "netcontrol/integrations/__init__.py",
     "netcontrol/integrations/aws/__init__.py",
+    "netcontrol/integrations/aws/failures.py",
     "netcontrol/integrations/aws/normalize.py",
     "netcontrol/integrations/aws/reachability.py",
     "netcontrol/integrations/azure/__init__.py",
