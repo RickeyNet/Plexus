@@ -4,7 +4,7 @@ import { echarts } from '@/lib/echart-core';
 import { observeChartResize } from '@/lib/useEChart';
 import { resolveThemeVars, useThemeName } from '@/lib/themeColors';
 
-import { useFlowStatus, useFlowTopTalkers } from '@/api/networkTools';
+import { FLOW_RANGES, useFlowStatus, useFlowTopTalkers } from '@/api/networkTools';
 import { SegmentedControl } from '@/components/SegmentedControl';
 import { ClampedRangeHint } from '@/components/TimeRangeBar';
 import { useTimeRange } from '@/lib/timeRange-context';
@@ -14,9 +14,6 @@ import { formatBytes } from '@/pages/NetworkTools/formatting';
 import { PANEL_BODY_HEIGHT, PANEL_BODY_STYLE } from './helpers';
 
 type Direction = 'src' | 'dst';
-
-// /api/flows/top-talkers caps `hours` at 168.
-const FLOW_RANGES = ['1h', '6h', '24h', '7d'] as const;
 
 const DIRECTIONS: { key: Direction; label: string }[] = [
   { key: 'src', label: 'Source' },

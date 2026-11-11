@@ -764,7 +764,7 @@ per-page **H** items.
 - [ ] **M: MAC Tracking toolbars reuse `page-header`**, spreading controls full width (`pages/NetworkTools/MacTracking.tsx:212`, `:362`, `:548`).
 - [ ] **M: MAC Tracking badges and stat tiles are unstyled** (`MacTracking.tsx:641`, `:772`, `:828`).
 - [x] **L: Nested scrollbars in the MAC history modals** (`MacTracking.tsx:906`, `:1046`). *Done 2026-11: the move-event log and MAC history bodies dropped their own height caps; the modal body is the only vertical scroller.*
-- [ ] **L: Traffic Analysis** — own range select instead of the shared time bar (`TrafficAnalysis.tsx:68`, `:103`). *Sub-tab done 2026-11: the view is in the path (`/network-tools/traffic/<view>`) through a nested `usePathTab`. The range select is still open.*
+- [x] **L: Traffic Analysis** — own range select instead of the shared time bar; sub-tab not in the URL (`TrafficAnalysis.tsx:68`, `:103`). *Done 2026-11: the view is in the path (`/network-tools/traffic/<view>`) through a nested `usePathTab`; the range select is gone, the shell's time bar shows on the tab and the window is clamped to 7d with `ClampedRangeHint` (`FLOW_RANGES` now shared from `api/networkTools.ts`).*
 
 ### Inventory
 
