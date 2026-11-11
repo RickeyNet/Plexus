@@ -284,6 +284,18 @@ export function useBulkAcceptDriftEvents() {
   });
 }
 
+export function useBulkResolveDriftEvents() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (eventIds: number[]) =>
+      apiRequest<{ resolved: number }>('/config-drift/events/bulk-resolve', {
+        method: 'POST',
+        body: { event_ids: eventIds },
+      }),
+    onSuccess: () => invalidateDrift(qc),
+  });
+}
+
 export function useRevertDriftEvent() {
   const qc = useQueryClient();
   return useMutation({

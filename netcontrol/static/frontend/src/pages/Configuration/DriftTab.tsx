@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import {
   type ConfigDriftEvent,
   useBulkAcceptDriftEvents,
+  useBulkResolveDriftEvents,
   useConfigDriftEvents,
   useConfigDriftSummary,
   useUpdateDriftEventStatus,
@@ -13,12 +14,13 @@ import { LoadingState } from '@/components/LoadingState';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
 import { QueryError } from '@/components/QueryError';
 import { SegmentedControl } from '@/components/SegmentedControl';
+import { ShowMoreButton } from '@/components/ShowMoreButton';
 import { SummaryStrip } from '@/components/SummaryStrip';
 import { formatBackendDateTime } from '@/lib/datetime';
 import { usePendingKeys } from '@/lib/usePendingKeys';
+import { useShowMore } from '@/lib/useShowMore';
 
 import { CaptureSnapshotModal } from './CaptureSnapshotModal';
-import { DriftDiffModal } from './DriftDiffModal';
 import { DriftEventLogModal } from './DriftEventLogModal';
 import { RevertDriftModal } from './RevertDriftModal';
 import { SetBaselineModal } from './SetBaselineModal';
@@ -32,6 +34,8 @@ import {
 
 type DriftStatusFilter = 'open' | 'accepted' | 'resolved';
 type ViewMode = 'grouped' | 'flat';
+// Cards rendered before "Show more"; each can expand a full config diff.
+const CARD_STEP = 50;
 const VIEW_MODES: { key: ViewMode; label: string; title: string }[] = [
   { key: 'grouped', label: 'Grouped', title: 'Group similar changes' },
   { key: 'flat', label: 'Flat', title: 'Show individual events' },
@@ -51,11 +55,11 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
   const events = useConfigDriftEvents(statusFilter);
   const updateStatus = useUpdateDriftEventStatus();
   const bulkAccept = useBulkAcceptDriftEvents();
+  const bulkResolve = useBulkResolveDriftEvents();
   const { confirm, alert } = useDialogs();
   const pending = usePendingKeys<string>();
   const isEventBusy = (id: number) => pending.isPending(`event:${id}`);
 
-  const [diffEventId, setDiffEventId] = useState<number | null>(null);
   const [logEventId, setLogEventId] = useState<number | null>(null);
   const [revertEventId, setRevertEventId] = useState<number | null>(null);
   const [showBaseline, setShowBaseline] = useState(false);
@@ -72,6 +76,9 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
   );
 
   const groups = useMemo(() => groupDriftEvents(filtered), [filtered]);
+  const shownGroups = useShowMore(groups, CARD_STEP);
+  const shownEvents = useShowMore(filtered, CARD_STEP);
+  const shown = viewMode === 'grouped' ? shownGroups : shownEvents;
 
   const showError = (e: unknown) => void alert({ message: (e as Error).message, variant: 'error' });
 
@@ -84,52 +91,30 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
       }
     });
 
-  const acceptMany = async (key: string, ids: number[], scope: string) => {
+  // One request per bulk action; the server skips events that are no longer open.
+  const closeMany = async (
+    key: string,
+    ids: number[],
+    status: 'accepted' | 'resolved',
+    scope: string,
+  ) => {
+    const accept = status === 'accepted';
     if (
       !(await confirm({
-        title: 'Accept drift events',
-        message: `Accept ${ids.length} open drift event(s) ${scope}? The current running config of each device becomes its new baseline, so these changes stop being reported as drift.`,
-        confirmLabel: `Accept ${ids.length}`,
+        title: accept ? 'Accept drift events' : 'Resolve drift events',
+        message: accept
+          ? `Accept ${ids.length} open drift event(s) ${scope}? The current running config of each device becomes its new baseline, so these changes stop being reported as drift.`
+          : `Mark ${ids.length} open drift event(s) ${scope} as resolved? The baselines stay as they are; use this when the devices are already back in line with them.`,
+        confirmLabel: `${accept ? 'Accept' : 'Resolve'} ${ids.length}`,
         confirmVariant: 'primary',
       }))
     )
       return;
     await pending.run(key, async () => {
       try {
-        await bulkAccept.mutateAsync(ids);
+        await (accept ? bulkAccept : bulkResolve).mutateAsync(ids);
       } catch (e) {
         showError(e);
-      }
-    });
-  };
-
-  const resolveAll = async () => {
-    const ids = openIds;
-    if (
-      !(await confirm({
-        title: 'Resolve drift events',
-        message: `Mark ${ids.length} open drift event(s) in this list as resolved? The baselines stay as they are; use this when the devices are already back in line with them.`,
-        confirmLabel: `Resolve ${ids.length}`,
-        confirmVariant: 'primary',
-      }))
-    )
-      return;
-    await pending.run('resolve-all', async () => {
-      let failed = 0;
-      let lastError = '';
-      for (const id of ids) {
-        try {
-          await updateStatus.mutateAsync({ id, status: 'resolved' });
-        } catch (e) {
-          failed++;
-          lastError = (e as Error).message;
-        }
-      }
-      if (failed > 0) {
-        void alert({
-          message: `${failed} of ${ids.length} drift event(s) could not be resolved: ${lastError}`,
-          variant: 'error',
-        });
       }
     });
   };
@@ -182,10 +167,10 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
           {openIds.length > 1 && (
             <>
               <BusyButton
-                className="btn btn-sm btn-primary"
+                className="btn btn-sm btn-secondary"
                 busy={pending.isPending('accept-all')}
                 disabled={pending.isPending('resolve-all')}
-                onClick={() => void acceptMany('accept-all', openIds, 'in this list')}
+                onClick={() => void closeMany('accept-all', openIds, 'accepted', 'in this list')}
               >
                 Accept All Open ({openIds.length})
               </BusyButton>
@@ -193,7 +178,7 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
                 className="btn btn-sm btn-secondary"
                 busy={pending.isPending('resolve-all')}
                 disabled={pending.isPending('accept-all')}
-                onClick={() => void resolveAll()}
+                onClick={() => void closeMany('resolve-all', openIds, 'resolved', 'in this list')}
               >
                 Resolve All Open ({openIds.length})
               </BusyButton>
@@ -217,43 +202,40 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
       {filtered.length > 0 && (
         <div className="stack stack-sm">
           {viewMode === 'grouped'
-            ? groups.map((group) => (
+            ? shownGroups.visible.map((group) => (
                 <DriftGroupCard
                   key={group.representative_id}
                   group={group}
                   isEventBusy={isEventBusy}
                   isGroupBusy={pending.isPending(`group:${group.representative_id}`)}
-                  onShowDiff={(id) => setDiffEventId(id)}
                   onShowLog={(id) => setLogEventId(id)}
                   onShowRevert={(id) => setRevertEventId(id)}
                   onAccept={(id) => void setEventStatus(id, 'accepted')}
                   onResolve={(id) => void setEventStatus(id, 'resolved')}
                   onAcceptGroup={(ids) =>
-                    void acceptMany(`group:${group.representative_id}`, ids, 'with identical changes')
+                    void closeMany(`group:${group.representative_id}`, ids, 'accepted', 'with identical changes')
                   }
                 />
               ))
-            : filtered.map((ev) => (
+            : shownEvents.visible.map((ev) => (
                 <DriftEventCard
                   key={ev.id}
                   ev={ev}
                   isBusy={isEventBusy(ev.id)}
-                  onShowDiff={(id) => setDiffEventId(id)}
                   onShowLog={(id) => setLogEventId(id)}
                   onShowRevert={(id) => setRevertEventId(id)}
                   onAccept={(id) => void setEventStatus(id, 'accepted')}
                   onResolve={(id) => void setEventStatus(id, 'resolved')}
                 />
               ))}
+          <ShowMoreButton
+            hiddenCount={shown.hiddenCount}
+            onClick={shown.showMore}
+            style={{ alignSelf: 'flex-start' }}
+          />
         </div>
       )}
 
-      <DriftDiffModal
-        eventId={diffEventId}
-        onClose={() => setDiffEventId(null)}
-        onShowHistory={(id) => setLogEventId(id)}
-        onShowRevert={(id) => setRevertEventId(id)}
-      />
       <DriftEventLogModal
         eventId={logEventId}
         onClose={() => setLogEventId(null)}
@@ -293,13 +275,26 @@ function DriftSummaryStrip({
   return <SummaryStrip items={items} />;
 }
 
+/** "View Diff" on every drift card: expands the diff in place. */
+function DiffToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      className="btn btn-sm btn-secondary"
+      aria-expanded={open}
+      onClick={onToggle}
+    >
+      {open ? 'Hide Diff' : 'View Diff'}
+    </button>
+  );
+}
+
 interface CardProps {
   ev: ConfigDriftEvent;
   /** Rendered inside a group card, so it is an inset panel, not a second card. */
   inset?: boolean;
   /** An accept or resolve of this event is in flight. */
   isBusy: boolean;
-  onShowDiff: (id: number) => void;
   onShowLog: (id: number) => void;
   onShowRevert: (id: number) => void;
   onAccept: (id: number) => void;
@@ -310,12 +305,12 @@ function DriftEventCard({
   ev,
   inset = false,
   isBusy,
-  onShowDiff,
   onShowLog,
   onShowRevert,
   onAccept,
   onResolve,
 }: CardProps) {
+  const [showDiff, setShowDiff] = useState(false);
   return (
     <div className={inset ? 'card-inset' : 'card'}>
       <div
@@ -368,13 +363,7 @@ function DriftEventCard({
           flexWrap: 'wrap',
         }}
       >
-        <button
-          type="button"
-          className="btn btn-sm btn-secondary"
-          onClick={() => onShowDiff(ev.id)}
-        >
-          View Diff
-        </button>
+        <DiffToggle open={showDiff} onToggle={() => setShowDiff((v) => !v)} />
         <KebabMenu label={`Actions for ${ev.hostname || ev.ip_address || 'drift event'}`}>
           <MenuItem onSelect={() => onShowLog(ev.id)}>Event Log</MenuItem>
           {ev.status === 'open' && (
@@ -394,6 +383,7 @@ function DriftEventCard({
         </KebabMenu>
         {isBusy && <LoadingState variant="inline" text="Updating…" />}
       </div>
+      {showDiff && <UnifiedDiff diffText={ev.diff_text} style={{ marginTop: '0.5rem' }} />}
     </div>
   );
 }
@@ -403,7 +393,6 @@ interface GroupCardProps {
   isEventBusy: (id: number) => boolean;
   /** Accept Group is in flight for this group. */
   isGroupBusy: boolean;
-  onShowDiff: (id: number) => void;
   onShowLog: (id: number) => void;
   onShowRevert: (id: number) => void;
   onAccept: (id: number) => void;
@@ -415,7 +404,6 @@ function DriftGroupCard({
   group,
   isEventBusy,
   isGroupBusy,
-  onShowDiff,
   onShowLog,
   onShowRevert,
   onAccept,
@@ -552,20 +540,10 @@ function DriftGroupCard({
         </div>
       )}
 
-      <button
-        type="button"
-        className="btn btn-sm btn-ghost"
-        style={{ marginTop: '0.5rem' }}
-        onClick={() => setShowDiff((v) => !v)}
-      >
-        {showDiff ? 'Hide Diff' : 'View Diff'}
-      </button>
-      {showDiff && (
-        <UnifiedDiff
-          diffText={group.diff_text}
-          style={{ marginTop: '0.5rem' }}
-        />
-      )}
+      <div style={{ marginTop: '0.5rem' }}>
+        <DiffToggle open={showDiff} onToggle={() => setShowDiff((v) => !v)} />
+      </div>
+      {showDiff && <UnifiedDiff diffText={group.diff_text} style={{ marginTop: '0.5rem' }} />}
 
       {evs.length > 1 && (
         <>
@@ -597,7 +575,6 @@ function DriftGroupCard({
                   ev={ev}
                   inset
                   isBusy={isEventBusy(ev.id)}
-                  onShowDiff={onShowDiff}
                   onShowLog={onShowLog}
                   onShowRevert={onShowRevert}
                   onAccept={onAccept}

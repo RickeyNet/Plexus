@@ -43,6 +43,7 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
   );
   const [retentionDays, setRetentionDays] = useState(policy?.retention_days ?? 30);
   const [nameError, setNameError] = useState<string | null>(null);
+  const [groupError, setGroupError] = useState<string | null>(null);
   const [credError, setCredError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const formId = useId();
@@ -86,19 +87,17 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setNameError(null);
-    setCredError(null);
     setSaveError(null);
-    if (!name.trim()) {
-      setNameError('Name is required');
-      return;
-    }
+    // Report every missing field at once; none of them may end the submit silently.
+    const missingName = !name.trim();
+    const missingGroup = !isEdit && !groupId;
+    const missingCred = !credId || staleCred;
+    setNameError(missingName ? 'Name is required' : null);
+    setGroupError(missingGroup ? 'Choose an inventory group to back up' : null);
+    setCredError(missingCred ? 'Choose a credential for this policy' : null);
+    if (missingName || missingGroup || !credId || staleCred) return;
     const interval_seconds = Math.max(1, hours) * 3600;
     if (isEdit) {
-      if (!credId || staleCred) {
-        setCredError('Choose a credential for this policy');
-        return;
-      }
       update.mutate(
         {
           id: policy.id,
@@ -115,8 +114,7 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
           onError: (err) => setSaveError((err as Error).message),
         },
       );
-    } else {
-      if (!groupId || !credId) return;
+    } else if (groupId) {
       create.mutate(
         {
           name: name.trim(),
@@ -195,17 +193,25 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
               id={`${formId}-group`}
               className="form-select"
               value={groupId ?? ''}
-              onChange={(e) =>
-                setGroupId(e.target.value ? Number(e.target.value) : null)
-              }
+              onChange={(e) => {
+                setGroupId(e.target.value ? Number(e.target.value) : null);
+                setGroupError(null);
+              }}
+              aria-invalid={!!groupError}
               required
             >
+              {groupId == null && (
+                <option value="" disabled>
+                  Select a group…
+                </option>
+              )}
               {(groups.data || []).map((g) => (
                 <option key={g.id} value={g.id}>
                   {groupLabel(g)}
                 </option>
               ))}
             </select>
+            <FieldError>{groupError}</FieldError>
           </>
         )}
         <label className="form-label" htmlFor={`${formId}-credential`} style={{ marginTop: '0.75rem' }}>

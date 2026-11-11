@@ -12,8 +12,10 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import netcontrol.app as app_module
+import netcontrol.routes.config_drift as drift_routes
 import pytest
 import routes.database as db_module
+from fastapi import HTTPException
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -363,3 +365,61 @@ async def test_api_update_drift_status_invalid(monkeypatch):
     with pytest.raises(Exception) as exc_info:
         await app_module.update_config_drift_event_status(1, body, req)
     assert "400" in str(exc_info.value) or "must be" in str(exc_info.value).lower()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 5. Bulk accept / resolve
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+async def _two_open_events_and_one_resolved() -> tuple[int, int, int]:
+    """Open events on hosts 100 and 200, plus an already resolved one on 100."""
+    ids = []
+    for host_id, text in ((100, "hostname sw-a\n"), (200, "hostname sw-b\n"), (100, "hostname sw-c\n")):
+        sid = await db_module.create_config_snapshot(host_id=host_id, config_text=text)
+        ids.append(
+            await db_module.create_config_drift_event(host_id=host_id, snapshot_id=sid, baseline_id=None, diff_text="d")
+        )
+    await db_module.update_config_drift_event_status(ids[2], "resolved", "admin")
+    return ids[0], ids[1], ids[2]
+
+
+@pytest.mark.asyncio
+async def test_bulk_resolve_closes_open_events_without_touching_baselines(drift_db):
+    """One request resolves every open id, skips closed ones, writes no baseline."""
+    e1, e2, closed = await _two_open_events_and_one_resolved()
+    body = drift_routes.ConfigDriftBulkEventsRequest(event_ids=[e1, e2, e2, closed])
+
+    result = await drift_routes.bulk_resolve_drift_events(body, DummyRequest())
+
+    assert result == {"ok": True, "resolved": 2}
+    assert await db_module.get_config_drift_events(status="open") == []
+    assert await db_module.get_config_baseline_for_host(100) is None
+    assert await db_module.get_config_baseline_for_host(200) is None
+    history = await db_module.get_config_drift_event_history(e1)
+    assert [(h["to_status"], h["details"]) for h in history] == [("resolved", "bulk resolve")]
+    assert await db_module.get_config_drift_event_history(closed) == []
+
+
+@pytest.mark.asyncio
+async def test_bulk_accept_promotes_snapshots_to_baselines(drift_db):
+    """Accept still rebaselines each host from the event's snapshot."""
+    e1, e2, _closed = await _two_open_events_and_one_resolved()
+    body = drift_routes.ConfigDriftBulkEventsRequest(event_ids=[e1, e2])
+
+    result = await drift_routes.bulk_accept_drift_events(body, DummyRequest())
+
+    assert result == {"ok": True, "accepted": 2}
+    assert (await db_module.get_config_baseline_for_host(100))["config_text"] == "hostname sw-a\n"
+    assert (await db_module.get_config_baseline_for_host(200))["config_text"] == "hostname sw-b\n"
+    history = await db_module.get_config_drift_event_history(e2)
+    assert [(h["to_status"], h["details"]) for h in history] == [("accepted", "bulk accept")]
+
+
+@pytest.mark.asyncio
+async def test_bulk_resolve_requires_event_ids():
+    """An empty id list is a 400, not a silent no-op."""
+    body = drift_routes.ConfigDriftBulkEventsRequest(event_ids=[])
+    with pytest.raises(HTTPException) as exc_info:
+        await drift_routes.bulk_resolve_drift_events(body, DummyRequest())
+    assert exc_info.value.status_code == 400
