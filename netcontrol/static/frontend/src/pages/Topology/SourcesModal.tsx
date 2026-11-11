@@ -47,6 +47,7 @@ import {
   PROVIDER_INVENTORY,
 } from "./helpers";
 import { InventoryCollectModal } from "./InventoryCollectModal";
+import { MerakiAlertsSettings } from "./MerakiAlertsSettings";
 import {
   describeInventoryResult,
   describeNextCollection,
@@ -389,6 +390,7 @@ export function SourcesModal({
 
       <div className="stack stack-sm">
         {isAdmin && <SourceScheduleBar />}
+        {isAdmin && <MerakiAlertsSettings />}
 
         <div className="toolbar" style={{ justifyContent: "flex-end" }}>
           {canWrite && (

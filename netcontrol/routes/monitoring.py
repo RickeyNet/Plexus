@@ -960,6 +960,7 @@ async def _run_retention_cleanup_throttled() -> None:
         )
         await metrics_retention_cleanup()
         await db.purge_topology_availability(retention_days)
+        await db.purge_meraki_alerts(retention_days)
     except Exception as exc:
         LOGGER.warning("monitoring: retention cleanup failed: %s", redact_value(_exc_text(exc)))
 
