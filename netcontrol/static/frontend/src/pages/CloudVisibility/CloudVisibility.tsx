@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 
 import { useCloudAccounts, useCloudProviders } from '@/api/cloud';
 import { PageHeader } from '@/components/PageHeader';
@@ -6,7 +6,7 @@ import { PageHelp } from '@/components/PageHelp';
 import { QueryError } from '@/components/QueryError';
 import { TabBar } from '@/components/TabBar';
 import { UntestedBanner } from '@/components/UntestedBanner';
-import { capitalize, cloudProviderTerms, cloudTerms } from '@/lib/cloudProviderTerms';
+import { capitalize, cloudTerms } from '@/lib/cloudProviderTerms';
 import { usePathTab } from '@/lib/usePathTab';
 import { providerLabel } from './helpers';
 import { AccountsTab } from './AccountsTab';
@@ -26,7 +26,7 @@ const TABS: { key: Tab; label: string }[] = [
 ];
 const TAB_KEYS = TABS.map((t) => t.key);
 
-/** Help for a tab, in the words of the provider selected above (all three for All Providers). */
+/** Help for a tab, in the words of the selected provider (all three for All providers). */
 function tabHelp(tab: Tab, provider: string): { title: string; text: string } {
   const terms = cloudTerms(provider);
   const all = !terms.id;
@@ -34,7 +34,7 @@ function tabHelp(tab: Tab, provider: string): { title: string; text: string } {
     case 'accounts':
       return {
         title: `Connected ${terms.scopeTitlePlural}`,
-        text: `Register ${terms.scopeTitlePlural} so Plexus can read their network topology, ${terms.flowLogs} and ${terms.policy}. Live reads need the provider's SDK on the server (see the cards above).`,
+        text: `Register ${terms.scopeTitlePlural} so Plexus can read their network topology, ${terms.flowLogs} and ${terms.policy} and show them next to the on-prem devices. Live reads need the provider's SDK on the Plexus server; the Live reads row below shows which providers have it.`,
       };
     case 'topology':
       return {
@@ -45,8 +45,8 @@ function tabHelp(tab: Tab, provider: string): { title: string; text: string } {
       return {
         title: capitalize(terms.flowLogs),
         text: all
-          ? 'VPC Flow Logs from CloudWatch Logs (AWS) and Cloud Logging (GCP), NSG flow logs from a storage account (Azure): top talkers, top conversations, denied flows. Filter by provider and account above.'
-          : `${terms.flowLogs} read from ${terms.flowSource}: top talkers, top conversations, denied flows. Filter by provider and ${terms.scope} above.`,
+          ? 'VPC Flow Logs from CloudWatch Logs (AWS) and Cloud Logging (GCP), NSG flow logs from a storage account (Azure): top talkers, top conversations, denied flows. Narrow them with the provider and account filters beside the tabs.'
+          : `${terms.flowLogs} read from ${terms.flowSource}: top talkers, top conversations, denied flows. Narrow them with the provider and ${terms.scope} filters beside the tabs.`,
       };
     case 'traffic':
       return {
@@ -74,12 +74,12 @@ export function CloudVisibility() {
   const providers = useCloudProviders();
   const accounts = useCloudAccounts(filter.provider || undefined);
 
-  const accountList = accounts.data?.accounts ?? [];
-  const providerOptions = (() => {
+  const accountList = useMemo(() => accounts.data?.accounts ?? [], [accounts.data?.accounts]);
+  const providerOptions = useMemo(() => {
     const fromApi = (providers.data?.providers ?? []).map((p) => p.id.toLowerCase());
     const fromAccts = accountList.map((a) => String(a.provider ?? '').toLowerCase());
     return [...new Set([...fromApi, ...fromAccts].filter(Boolean))].sort();
-  })();
+  }, [providers.data?.providers, accountList]);
   const filteredAccounts = filter.provider
     ? accountList.filter((a) => String(a.provider ?? '').toLowerCase() === filter.provider)
     : accountList;
@@ -87,67 +87,31 @@ export function CloudVisibility() {
   const help = tabHelp(tab, filter.provider);
   const filterTerms = cloudTerms(filter.provider);
 
-  return (
-    <div className="page">
-      <PageHeader title="Cloud Visibility" />
-
-      <UntestedBanner feature="Cloud Visibility" />
-
-      <PageHelp
-        pageKey="cloud-visibility"
-        title="Hybrid Cloud Network Visibility"
-        text="Track AWS, Azure and GCP network constructs alongside on-prem devices. Manage accounts, subscriptions and projects, refresh their topology, and view cloud and hybrid connectivity paths."
-      />
-
-      <div className="stack stack-sm" style={{ marginBottom: 'var(--space-3)' }}>
-        {providers.isError && !providers.data && (
-          <QueryError what="cloud providers" query={providers} />
-        )}
-        {/* Provider capability hints */}
-        {(providers.data?.providers ?? []).length > 0 && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--space-2)' }}>
-            {(providers.data?.providers ?? []).map((p) => (
-              <div key={p.id} className="card card-sm">
-                <strong>{providerLabel(p.id)}</strong>
-                <span className="text-muted" style={{ marginLeft: '0.45rem' }}>
-                  {p.name || cloudProviderTerms(p.id).fullName}
-                </span>
-                <span
-                  className={`badge badge-${p.live_supported ? 'success' : 'warning'}`}
-                  style={{ marginLeft: '0.45rem' }}
-                >
-                  {p.live_supported ? 'Live ready' : 'Live unavailable'}
-                </span>
-                {p.missing_dependencies?.length ? (
-                  <div className="text-muted" style={{ marginTop: '0.35rem', fontSize: '0.85em' }}>
-                    Missing: {p.missing_dependencies.join(', ')}
-                  </div>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Provider + Account filters (apply to most tabs) */}
-        <div className="card card-sm toolbar">
-          <label className="text-muted" htmlFor={`${fid}-provider`}>Provider:</label>
-          <select
-            id={`${fid}-provider`}
-            className="form-select"
-            value={filter.provider}
-            onChange={(e) => setFilter({ provider: e.target.value, accountId: null })}
-          >
-            <option value="">All Providers</option>
-            {providerOptions.map((p) => (
-              <option key={p} value={p}>{providerLabel(p)}</option>
-            ))}
-          </select>
+  // Every tab reads the provider filter. The Accounts tab lists every
+  // account of that provider, so the account filter shows only on the tabs
+  // that narrow to one; it keeps its value while hidden.
+  const filters = (
+    <>
+      <label className="text-muted" htmlFor={`${fid}-provider`}>Provider</label>
+      <select
+        id={`${fid}-provider`}
+        className="form-select form-select-sm"
+        value={filter.provider}
+        onChange={(e) => setFilter({ provider: e.target.value, accountId: null })}
+      >
+        <option value="">All providers</option>
+        {providerOptions.map((p) => (
+          <option key={p} value={p}>{providerLabel(p)}</option>
+        ))}
+      </select>
+      {tab !== 'accounts' && (
+        <>
           <label className="text-muted" htmlFor={`${fid}-account`}>
-            {filterTerms.id ? `${capitalize(filterTerms.scopeTitle)}:` : 'Account:'}
+            {filterTerms.id ? capitalize(filterTerms.scopeTitle) : 'Account'}
           </label>
           <select
             id={`${fid}-account`}
-            className="form-select"
+            className="form-select form-select-sm"
             value={filter.accountId ?? ''}
             onChange={(e) =>
               setFilter({ ...filter, accountId: e.target.value ? parseInt(e.target.value, 10) : null })
@@ -160,10 +124,24 @@ export function CloudVisibility() {
               </option>
             ))}
           </select>
-        </div>
-      </div>
+        </>
+      )}
+    </>
+  );
 
-      <TabBar tabs={TABS} active={tab} onChange={selectTab} aria-label="Cloud visibility sections" />
+  return (
+    <div className="page">
+      <PageHeader title="Cloud Visibility" />
+
+      <UntestedBanner feature="Cloud Visibility" />
+
+      <TabBar
+        tabs={TABS}
+        active={tab}
+        onChange={selectTab}
+        aria-label="Cloud visibility sections"
+        trailing={filters}
+      />
 
       <PageHelp pageKey={`cloud-visibility.${tab}`} title={help.title} text={help.text} />
 
@@ -178,6 +156,11 @@ export function CloudVisibility() {
             )
           }
           providers={providers.data?.providers ?? []}
+          providersError={
+            providers.isError && !providers.data && (
+              <QueryError what="cloud providers" query={providers} />
+            )
+          }
         />
       )}
       {tab === 'topology' && <TopologyTab filter={filter} />}

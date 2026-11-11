@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 
 import { type CloudConnection, type CloudResource, useCloudTopology } from '@/api/cloud';
+import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
 import { StatGrid, StatTile } from '@/components/StatTile';
@@ -214,6 +215,7 @@ export function TopologyTab({ filter }: Props) {
     account_id: filter.accountId,
   });
   const { data } = topology;
+  const fid = useId();
   const [routeFilter, setRouteFilter] = useState<RouteFilter>('all');
 
   const resources = useMemo(() => data?.resources ?? [], [data?.resources]);
@@ -330,74 +332,73 @@ export function TopologyTab({ filter }: Props) {
       )}
 
       {routeGroups.length > 0 && (
-        <div className="card card-sm">
-          <div style={{ display: 'flex', alignItems: 'end', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
-            <label style={{ minWidth: 220, margin: 0 }}>
-              Route Focus
-              <select className="form-select" value={routeFilter} onChange={(e) => setRouteFilter(e.target.value as RouteFilter)}>
-                <option value="all">All routes</option>
-                <option value="flagged">Flagged routes</option>
-                <option value="public-egress">Public egress</option>
-                <option value="hybrid-path">Hybrid path</option>
-              </select>
-            </label>
-            <div className="text-muted" style={{ fontSize: '0.85rem' }}>
-              Showing {formatCount(filteredRouteRows)} of {formatCount(totalRouteRows)} route objects
-            </div>
+        <div className="toolbar" style={{ alignItems: 'flex-end' }}>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label" htmlFor={`${fid}-route-focus`}>Route focus</label>
+            <select id={`${fid}-route-focus`} className="form-select" value={routeFilter} onChange={(e) => setRouteFilter(e.target.value as RouteFilter)}>
+              <option value="all">All routes</option>
+              <option value="flagged">Flagged routes</option>
+              <option value="public-egress">Public egress</option>
+              <option value="hybrid-path">Hybrid path</option>
+            </select>
           </div>
+          <span className="toolbar-spacer" />
+          <span className="text-muted" style={{ fontSize: 'var(--text-sm)' }}>
+            Showing {formatCount(filteredRouteRows)} of {formatCount(totalRouteRows)} route objects
+          </span>
         </div>
       )}
 
       {filteredRouteGroups.length > 0 ? (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 'var(--space-3)' }}>
+        <div className="stack stack-sm">
           {filteredRouteGroups.map((g) => (
             <div key={g.provider} className="card card-sm">
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-2)', flexWrap: 'wrap', marginBottom: 'var(--space-2)' }}>
                 <strong>{providerLabel(g.provider)} Route Paths</strong>
-                <span className="text-muted" style={{ fontSize: '0.8rem' }}>{formatCount(g.routeRows?.length ?? 0)} route objects</span>
+                <span className="text-muted" style={{ fontSize: 'var(--text-sm)' }}>{formatCount(g.routeRows?.length ?? 0)} route objects</span>
               </div>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Route Object</th>
-                    <th>Attached To</th>
-                    <th>Path</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(g.routeRows ?? []).map((row) => (
-                    <tr key={row.uid}>
-                      <td>
-                        {row.name}
-                        <div className="text-muted" style={{ fontSize: '0.75rem' }}>
-                          {topologyResourceTypeLabel(row.type, row.provider)} | {row.destination}
-                        </div>
-                        <div className="text-muted" style={{ fontSize: '0.75rem', marginTop: '0.2rem' }}>{row.details}</div>
-                      </td>
-                      <td>
-                        <LinkGroups groups={row.attachmentGroups} emptyLabel="No route associations" />
-                      </td>
-                      <td>
-                        {row.highlights.length > 0 && (
-                          <div style={{ marginBottom: '0.35rem' }}>
-                            {row.highlights.map((h, i) => (
-                              <span key={i} className={`badge badge-${h.tone}`} style={{ marginRight: '0.35rem' }}>{h.text}</span>
-                            ))}
-                          </div>
-                        )}
-                        <LinkGroups groups={row.pathGroups} emptyLabel="No route path details available" />
-                      </td>
+              <div style={{ overflowX: 'auto' }}>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Route object</th>
+                      <th>Attached to</th>
+                      <th>Path</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {(g.routeRows ?? []).map((row) => (
+                      <tr key={row.uid}>
+                        <td>
+                          {row.name}
+                          <div className="text-muted" style={{ fontSize: 'var(--text-xs)' }}>
+                            {topologyResourceTypeLabel(row.type, row.provider)} | {row.destination}
+                          </div>
+                          <div className="text-muted" style={{ fontSize: 'var(--text-xs)', marginTop: 'var(--space-1)' }}>{row.details}</div>
+                        </td>
+                        <td>
+                          <LinkGroups groups={row.attachmentGroups} emptyLabel="No route associations" />
+                        </td>
+                        <td>
+                          {row.highlights.length > 0 && (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-1)', marginBottom: 'var(--space-1)' }}>
+                              {row.highlights.map((h) => (
+                                <span key={h.text} className={`badge badge-${h.tone}`}>{h.text}</span>
+                              ))}
+                            </div>
+                          )}
+                          <LinkGroups groups={row.pathGroups} emptyLabel="No route path details available" />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           ))}
         </div>
       ) : routeGroups.length > 0 ? (
-        <div className="card">
-          <p className="text-muted" style={{ margin: 0 }}>No route objects match the current topology filter.</p>
-        </div>
+        <EmptyState message="No route objects match the current route focus." description="Set Route focus to All routes to see every route object." />
       ) : null}
 
       <div>

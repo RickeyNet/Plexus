@@ -1,8 +1,14 @@
-import type { CloudDiscoverResult, CloudProvider, CloudPullResult } from '@/api/cloud';
+import type { CloudDiscoverResult, CloudPolicyRule, CloudProvider, CloudPullResult } from '@/api/cloud';
 import { capitalize, cloudProviderTerms } from '@/lib/cloudProviderTerms';
 
 export function providerLabel(provider?: string | null): string {
   return cloudProviderTerms(provider).label;
+}
+
+/** "Microsoft Azure (Azure)", or just the label when the full name adds nothing. */
+export function providerFullLabel(provider?: string | null): string {
+  const t = cloudProviderTerms(provider);
+  return t.fullName === t.label ? t.label : `${t.fullName} (${t.label})`;
 }
 
 /**
@@ -319,4 +325,37 @@ export function connectionMetadataSummary(connection?: { metadata?: unknown }): 
   if (md.peering_name) parts.push(`Peering ${md.peering_name}`);
   if (md.connection_status) parts.push(`Status ${md.connection_status}`);
   return parts.length ? parts.join(' | ') : '-';
+}
+
+function opensToAnywhere(selector: string | undefined): boolean {
+  const s = String(selector ?? '').toLowerCase();
+  return s.includes('0.0.0.0/0') || s.includes('::/0') || s === 'any';
+}
+
+/** True for an inbound rule from anywhere or an outbound rule to anywhere (0.0.0.0/0, ::/0 or "any"). */
+export function isPublicRule(
+  rule: Pick<CloudPolicyRule, 'direction' | 'source_selector' | 'destination_selector'>,
+): boolean {
+  const direction = String(rule.direction ?? '').toLowerCase();
+  if (direction === 'inbound') return opensToAnywhere(rule.source_selector);
+  if (direction === 'outbound') return opensToAnywhere(rule.destination_selector);
+  return false;
+}
+
+/**
+ * Stable, unique React keys for a rule list: resource uid plus rule uid
+ * (or name, direction and priority when a rule has no uid). A repeated key
+ * gets a `#n` suffix so two identical rows never collide.
+ */
+export function policyRuleKeys(
+  rules: Pick<CloudPolicyRule, 'resource_uid' | 'rule_uid' | 'rule_name' | 'direction' | 'priority'>[],
+): string[] {
+  const seen = new Map<string, number>();
+  return rules.map((rule) => {
+    const ruleId = rule.rule_uid || `${rule.rule_name ?? ''}|${rule.direction ?? ''}|${rule.priority ?? ''}`;
+    const base = `${rule.resource_uid ?? ''}:${ruleId}`;
+    const n = seen.get(base) ?? 0;
+    seen.set(base, n + 1);
+    return n ? `${base}#${n}` : base;
+  });
 }
