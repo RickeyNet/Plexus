@@ -66,6 +66,9 @@ export function useMaintenanceWindow(id: number | null) {
     queryKey: ['maintenance-window', id],
     queryFn: () => apiRequest(`/maintenance-windows/${id}`),
     enabled: id != null,
+    // Only the edit form reads this, and it must seed from the server's
+    // current values: drop the cached copy as soon as the form closes.
+    gcTime: 0,
   });
 }
 

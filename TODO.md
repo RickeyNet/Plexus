@@ -758,9 +758,9 @@ per-page **H** items.
 - [ ] **M: Federation table overflows at 1024** — seven columns with an unbounded URL (`pages/Federation/Federation.tsx:219`).
 - [ ] **M: Federation row actions** — busy state shows "…", test result uses a blocking alert, Sync gives no confirmation (`Federation.tsx:293`).
 - [ ] **L: Federation stacks three banners before content** (`Federation.tsx:39`).
-- [ ] **H: Maintenance modal fields are unstyled** (`pages/MaintenanceWindows/MaintenanceWindowModal.tsx:164`).
-- [ ] **M: Maintenance edit modal shows stale or blank data while loading, with Save enabled** (`MaintenanceWindowModal.tsx:70`).
-- [ ] **M: Maintenance table is hand-built; state shown as lowercase text; own h2 under the tab bar** (`MaintenanceWindows.tsx:75`, `:117`).
+- [x] **H: Maintenance modal fields are unstyled** (`pages/MaintenanceWindows/MaintenanceWindowModal.tsx:164`). *Done 2026-11: fields use `.form-group` / `.form-label` / `.form-row` / `.form-check` / `.form-help` with linked labels, in a real `<form>` submitted from the footer.*
+- [x] **M: Maintenance edit modal shows stale or blank data while loading, with Save enabled** (`MaintenanceWindowModal.tsx:70`). *Done 2026-11: the form mounts only after its window has loaded (spinner or `QueryError` until then, Save disabled), is seeded once per open, and the single-window query is not cached between opens.*
+- [x] **M: Maintenance table is hand-built; state shown as lowercase text; own h2 under the tab bar** (`MaintenanceWindows.tsx:75`, `:117`). *Done 2026-11: heading removed (`.toolbar` with the New Window button), state and policy are `Badge`s, list load failure uses `QueryError`.*
 - [ ] **M: MAC Tracking toolbars reuse `page-header`**, spreading controls full width (`pages/NetworkTools/MacTracking.tsx:212`, `:362`, `:548`).
 - [ ] **M: MAC Tracking badges and stat tiles are unstyled** (`MacTracking.tsx:641`, `:772`, `:828`).
 - [ ] **L: Nested scrollbars in the MAC history modals** (`MacTracking.tsx:906`, `:1046`).

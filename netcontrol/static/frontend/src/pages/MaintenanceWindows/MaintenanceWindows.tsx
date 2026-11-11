@@ -9,13 +9,15 @@ import {
   useDeleteMaintenanceWindow,
   useMaintenanceWindows,
 } from '@/api/maintenanceWindows';
-import { Callout } from '@/components/Callout';
+import { Badge } from '@/components/Badge';
 import { DeleteButton } from '@/components/DeleteButton';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { PageHelp } from '@/components/PageHelp';
+import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { formatBackendDateTime } from '@/lib/datetime';
+import type { Tone } from '@/lib/severity';
 
 import { MaintenanceWindowModal } from './MaintenanceWindowModal';
 
@@ -31,7 +33,7 @@ const RECURRENCE_LABEL: Record<WindowRecurrence, string> = {
   weekly: 'Weekly',
 };
 
-function policyColor(policy: WindowPolicy): string {
+function policyTone(policy: WindowPolicy): Tone {
   if (policy === 'block_outside_window') return 'danger';
   if (policy === 'warn_outside_window') return 'warning';
   return 'success';
@@ -78,34 +80,21 @@ export function MaintenanceWindows() {
         text="Define when production changes are allowed. Windows scoped to inventory groups gate deployments targeting those groups; global windows apply everywhere. Policy controls whether changes outside the window are blocked or just warned."
       />
 
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: 'var(--space-2)',
-          marginBottom: 'var(--space-3)',
-        }}
-      >
-        <h3 style={{ margin: 0 }}>Maintenance Windows</h3>
-        <button
-          type="button"
-          className="btn btn-primary btn-sm"
-          onClick={() => setShowCreate(true)}
-        >
-          New Window
+      {/* No heading here: the active tab and the help banner already name the section. */}
+      <div className="toolbar">
+        <span className="toolbar-spacer" />
+        <button type="button" className="btn btn-primary" onClick={() => setShowCreate(true)}>
+          + New Window
         </button>
       </div>
 
-      {windows.isPending && <LoadingState />}
-      {windows.error && (
-        <Callout tone="danger">
-          Failed to load: {(windows.error as Error).message}
-        </Callout>
+      {windows.error && !windows.data ? (
+        <QueryError what="maintenance windows" query={windows} />
+      ) : (
+        windows.isPending && <LoadingState />
       )}
 
-      {sorted.length === 0 && !windows.isPending && (
+      {windows.data && sorted.length === 0 && (
         <EmptyState compact message="No maintenance windows defined. Changes will proceed without time
           restrictions; the approval gate still applies for production
           groups and high-risk changes." />
@@ -151,22 +140,17 @@ export function MaintenanceWindows() {
                 </td>
                 <td style={{ fontSize: '0.85em' }}>{describeScope(w)}</td>
                 <td>
-                  <span
-                    style={{
-                      color: `var(--${policyColor(w.policy)})`,
-                      fontWeight: 600,
-                    }}
-                  >
+                  <Badge tone={policyTone(w.policy)} size="sm">
                     {POLICY_LABEL[w.policy] || w.policy}
-                  </span>
+                  </Badge>
                 </td>
                 <td>
                   {!w.enabled ? (
-                    <span style={{ color: 'var(--text-muted)' }}>disabled</span>
+                    <Badge size="sm">Disabled</Badge>
                   ) : w.is_active ? (
-                    <span style={{ color: 'var(--success)', fontWeight: 600 }}>active</span>
+                    <Badge tone="success" size="sm">Active</Badge>
                   ) : (
-                    <span style={{ color: 'var(--text-muted)' }}>idle</span>
+                    <Badge size="sm">Idle</Badge>
                   )}
                 </td>
                 <td style={{ textAlign: 'right' }}>
@@ -186,13 +170,11 @@ export function MaintenanceWindows() {
       )}
 
       <MaintenanceWindowModal
-        isOpen={showCreate}
-        onClose={() => setShowCreate(false)}
-        groups={groups.data || []}
-      />
-      <MaintenanceWindowModal
-        isOpen={editingId != null}
-        onClose={() => setEditingId(null)}
+        isOpen={showCreate || editingId != null}
+        onClose={() => {
+          setShowCreate(false);
+          setEditingId(null);
+        }}
         editingId={editingId}
         groups={groups.data || []}
       />
