@@ -25,6 +25,63 @@ export function formatBps(bps: number | null | undefined): string {
   return bps.toFixed(0) + ' bps';
 }
 
+export type ReportType = 'availability' | 'compliance' | 'interface' | 'network_documentation';
+
+export const REPORT_TYPES: { value: ReportType; label: string }[] = [
+  { value: 'availability', label: 'Availability' },
+  { value: 'compliance', label: 'Compliance' },
+  { value: 'interface', label: 'Interface Utilization' },
+  { value: 'network_documentation', label: 'Network Documentation' },
+];
+
+/** Words in a report column key that keep a fixed spelling. */
+const COLUMN_WORDS: Record<string, string> = {
+  id: 'ID',
+  ip: 'IP',
+  ips: 'IPs',
+  mac: 'MAC',
+  cpu: 'CPU',
+  os: 'OS',
+  vlan: 'VLAN',
+  vrf: 'VRF',
+  bgp: 'BGP',
+  ospf: 'OSPF',
+  snmp: 'SNMP',
+  sla: 'SLA',
+  url: 'URL',
+  bps: 'bps',
+  ms: 'ms',
+  pct: '%',
+};
+
+/** Column header for a report row key: `avg_cpu_pct` -> "Avg CPU %". */
+export function columnLabel(key: string): string {
+  const words = key.split(/[_\s]+/).filter(Boolean);
+  if (!words.length) return key;
+  const text = words.map((w) => COLUMN_WORDS[w.toLowerCase()] ?? w.toLowerCase()).join(' ');
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** Display name of a report type; an unknown type is shown as words, missing as "-". */
+export function reportTypeLabel(reportType: string | null | undefined): string {
+  if (!reportType) return '-';
+  return REPORT_TYPES.find((t) => t.value === reportType)?.label ?? columnLabel(reportType);
+}
+
+const ARTIFACT_TYPE_LABELS: Record<string, string> = {
+  svg: 'SVG',
+  pdf: 'PDF',
+  csv: 'CSV',
+  json: 'JSON',
+  drawio: 'draw.io',
+};
+
+/** Display name of a stored artifact type (`drawio` -> "draw.io"). */
+export function artifactTypeLabel(artifactType: string | null | undefined): string {
+  if (!artifactType) return 'File';
+  return ARTIFACT_TYPE_LABELS[artifactType.toLowerCase()] ?? artifactType.toUpperCase();
+}
+
 function extractFilename(disposition: string, fallback: string): string {
   const utf8 = disposition.match(/filename\*=UTF-8''([^;]+)/i);
   if (utf8 && utf8[1]) {

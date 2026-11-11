@@ -14,6 +14,7 @@ import { type DialogApi, useDialogs } from '@/components/DialogProvider-context'
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
 import { SummaryStrip, type SummaryStripItem } from '@/components/SummaryStrip';
+import { changeTypeLabel } from '@/lib/changeTypes';
 import { formatBackendDateTime } from '@/lib/datetime';
 import { severityTone, toneColor } from '@/lib/severity';
 
@@ -146,13 +147,20 @@ async function showRunResult(
 ) {
   const percent = scorePercent(result.risk_score);
   const areas = result.affected_areas?.length ? result.affected_areas.join(', ') : 'None';
-  const msg = `Risk: ${String(result.risk_level).toUpperCase()} (${percent}%)\n` +
-    `Hosts analyzed: ${result.hosts_analyzed}\n` +
-    `Compliance violations: ${result.total_compliance_violations}\n` +
-    `Affected areas: ${areas}\n\nOpen full details?`;
   const open = await confirm({
     title: 'Risk analysis complete',
-    message: msg,
+    message: (
+      <div className="stack stack-sm" style={{ whiteSpace: 'normal' }}>
+        <div>
+          <SeverityBadge severity={result.risk_level} />
+          <span style={{ marginLeft: '0.5rem', color: 'var(--text-muted)' }}>Score: {percent}%</span>
+        </div>
+        <div>Hosts analyzed: {result.hosts_analyzed}</div>
+        <div>Compliance violations: {result.total_compliance_violations}</div>
+        <div>Affected areas: {areas}</div>
+        <div>Open the full details?</div>
+      </div>
+    ),
     confirmLabel: 'Open details',
     cancelLabel: 'Close',
     confirmVariant: 'primary',
@@ -253,7 +261,7 @@ function AnalysisRow({ analysis, onView }: { analysis: RiskAnalysisRow; onView: 
               color: 'var(--text-muted)',
             }}
           >
-            Type: {analysis.change_type || '?'}
+            Type: {changeTypeLabel(analysis.change_type)}
           </span>
         </div>
         <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>

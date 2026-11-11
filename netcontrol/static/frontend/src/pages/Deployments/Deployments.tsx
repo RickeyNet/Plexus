@@ -17,8 +17,9 @@ import { LoadingState } from '@/components/LoadingState';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
 import { QueryError } from '@/components/QueryError';
 import { SummaryStrip, type SummaryStripItem } from '@/components/SummaryStrip';
+import { changeTypeLabel } from '@/lib/changeTypes';
 import { formatBackendDateTime } from '@/lib/datetime';
-import { statusTone, toneColor } from '@/lib/severity';
+import { statusLabel } from '@/lib/severity';
 
 import { DeploymentCorrelationModal } from './DeploymentCorrelationModal';
 import { DeploymentDetailModal } from './DeploymentDetailModal';
@@ -310,15 +311,13 @@ function DeploymentRow({
         <div>
           <StatusBadge status={deployment.status} />
           {deployment.rollback_status && (
-            <span
-              style={{
-                marginLeft: '0.5rem',
-                fontSize: '0.75em',
-                color: toneColor(statusTone(deployment.rollback_status)),
-              }}
+            <StatusBadge
+              status={deployment.rollback_status}
+              size="sm"
+              style={{ marginLeft: '0.5rem' }}
             >
-              (rollback: {deployment.rollback_status})
-            </span>
+              Rollback: {statusLabel(deployment.rollback_status)}
+            </StatusBadge>
           )}
           <strong style={{ marginLeft: '0.75rem' }}>{deployment.name}</strong>
           <span
@@ -370,7 +369,7 @@ function DeploymentRow({
       </div>
       <div style={{ marginTop: '0.5rem', fontSize: '0.85em', color: 'var(--text-muted)' }}>
         {deployment.description ? `${deployment.description} · ` : ''}
-        Type: {deployment.change_type || '?'} · {created || '-'}
+        Type: {changeTypeLabel(deployment.change_type)} · {created || '-'}
         {deployment.created_by ? ` by ${deployment.created_by}` : ''}
         {finished ? ` · Finished: ${finished}` : ''}
       </div>
