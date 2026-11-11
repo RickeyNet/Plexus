@@ -29,7 +29,7 @@ uptime % and alerts on down/degraded.
 | Cisco IOS / IOS XE / IOS XR / NX-OS / ASA (inventory) | host, interfaces | SNMP + ICMP poll | Yes (ICMP) | Yes | Full pipeline. |
 | Cisco FTD via FDM REST | host, interfaces | FDM API poll into the same pipeline | Partial (ICMP if reachable) | Yes | `netcontrol/integrations/cisco_fdm`. |
 | Cisco FTD / ASA via FMC | FTDs; uplinks, site-to-site tunnels, HA and cluster links | FMC snapshot status, recorded per collection (scheduled, hourly by default, per-source interval or opt-out) | No | Topology tracker only | Full pipeline when the FTD is an inventory host. |
-| Cisco Meraki | devices (MX/MS/MR/MG/MV/MT); uplinks, AutoVPN and IPsec tunnels | `devices/statuses`, `uplinks/statuses`, `appliance/vpn/statuses` in the org snapshot, recorded per collection (scheduled, hourly by default, per-source interval or opt-out) | No (uplink loss/latency API not collected) | Topology tracker only | Candidate: `devices/uplinksLossAndLatency`. |
+| Cisco Meraki | devices (MX/MS/MR/MG/MV/MT); uplinks, AutoVPN and IPsec tunnels | `devices/statuses`, `uplinks/statuses`, `appliance/vpn/statuses` in the org snapshot, recorded per collection (scheduled, hourly by default, per-source interval or opt-out) | No (uplink loss/latency API not collected) | Topology tracker only | Candidate: `devices/uplinksLossAndLatency`. Near-real-time alerts as well: assurance alerts polled every 60 s and an optional webhook receiver, persisted in `meraki_alerts` and raised server-side into `monitoring_alerts` / notification channels (`docs/meraki-alerts.md`). They alert; they do not feed the availability history or uptime %. |
 | Cato Networks | sites, Sockets and IPsec sites; Socket uplinks, tunnels | `accountSnapshot` connectivityStatus / operationalStatus / tunnel state, recorded per collection (scheduled, hourly by default, per-source interval or opt-out) | No (`accountMetrics` not collected) | Topology tracker only | Candidate: `accountMetrics` per link for loss/latency/jitter. |
 | AWS | instances, Transit Gateways, NAT and Direct Connect gateways; site-to-site VPN connections, Direct Connect circuits, VPC peerings, TGW/VGW attachments | resource state fields in the account discovery, recorded by the hourly discovery loop | No | Topology tracker only | No AWS Health integration. Amazon FSx file systems and ONTAP SVMs, and the services with DNS endpoints (RDS / Aurora instances, clusters and proxies, load balancers, VPC endpoints, EFS, ElastiCache, OpenSearch, MSK, Redshift and Redshift Serverless): state collected (each optional, per region) and shown in the VPC details, not tracked (gap: they are listed, not drawn, and the availability tracker follows nodes and edges only; tracking them needs a non-node entity kind in the tracker). |
 | Azure | VMs, VPN gateways, firewalls, NAT gateways; VPN connections, ExpressRoute circuits, VNet peerings, gateway attachments | provisioning / connection state fields in the account discovery, recorded by the hourly discovery loop | No | Topology tracker only | No Resource Health / Service Health integration. |
@@ -91,6 +91,22 @@ matched inventory host, else the notification channels); see
 | Azure | Subnet and NIC NSG inbound rules (CIDR sources, destination covering the VM) | VMs with a public IP | Yes | Azure Firewall DNAT, load balancers, application gateways: not collected (gap). Service tags are skipped. |
 | GCP | VPC firewall ingress rules that target the instance (source ranges) | Instances with an external IP | Yes | Hierarchical / network firewall policies: not collected (an evaluation through them is unknown). Load balancers: gap. |
 
+## Vendor alert feeds
+
+Near-real-time ingestion of the vendor's own alerts, separate from the
+collections that feed availability: the vendor tells Plexus about a problem
+within about a minute instead of the next collection seeing it. Alerts are
+persisted, deduplicated and raised server-side into `monitoring_alerts` (on a
+matched inventory host) or the notification channels.
+
+| Vendor / source | Alert feed | Status | Notes |
+|---|---|---|---|
+| Cisco Meraki | Assurance alerts polled every 60 s (`organizations/{id}/assurance/alerts`); optional webhook receiver (`POST /api/webhooks/meraki`) | Yes | `docs/meraki-alerts.md`. One alert per device and condition across both paths; device-down is not notified twice with the topology availability tracker. |
+| Cato Networks | None | No | Gap. Candidates: the Cato events feed (`eventsFeed` GraphQL query, polled) and Cato's webhook / SIEM integrations. |
+| AWS | None | No | Gap. Candidates: EventBridge rules (EC2 state change, VPN tunnel state, Direct Connect, AWS Health) delivered through SNS to an HTTPS receiver, or AWS Health API polling. |
+| Azure | None | No | Gap. Candidates: Azure Monitor action groups (webhook action, common alert schema) for metric, activity log and Resource Health alerts; Resource Health API polling. |
+| GCP, Cisco FMC, Palo Alto Panorama, Appgate SDP | None | No | Gap. Their state reaches Plexus only through the scheduled collection (topology availability tracker). |
+
 ## Known gaps, priority order
 
 1. Cato `accountMetrics` (per-link loss, latency, jitter) into the topology
@@ -109,3 +125,7 @@ matched inventory host, else the notification channels); see
    application gateways, GCP load balancers) as path trace destinations
    and egress check targets, so a Cato egress address is checked against
    their security groups too.
+8. Vendor alert feeds for the other priority vendors: Cato (events feed),
+   AWS (EventBridge / SNS / Health) and Azure (Monitor action groups /
+   Resource Health). Near-real-time alert ingestion exists for Meraki
+   only; everything else is seen at its next collection.

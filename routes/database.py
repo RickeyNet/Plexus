@@ -39,6 +39,7 @@ Tables:
     alert_rules            - user-defined threshold/anomaly alert rules
     alert_suppressions     - time-windowed alert suppression entries
     report_artifacts       - persisted report outputs (CSV/SVG/etc) by run
+    meraki_alerts          - Meraki alerts from the assurance poll and the webhook receiver
 """
 
 from __future__ import annotations
@@ -2960,6 +2961,7 @@ from routes.db.lab import *  # noqa: E402,F403
 from routes.db.mac_tracking import *  # noqa: E402,F403
 from routes.db.maintenance import *  # noqa: E402,F403
 from routes.db.meraki import *  # noqa: E402,F403
+from routes.db.meraki_alerts import *  # noqa: E402,F403
 from routes.db.meraki_compliance import *  # noqa: E402,F403
 from routes.db.metrics import *  # noqa: E402,F403
 from routes.db.monitoring import *  # noqa: E402,F403

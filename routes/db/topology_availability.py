@@ -104,15 +104,16 @@ async def list_topology_entity_states(
     org_ref: int | None = None,
     entity_type: str | None = None,
     *,
+    entity_id: str | None = None,
     states: Sequence[str] | None = None,
     worst_first: bool = False,
     limit: int | None = None,
 ) -> list[dict]:
-    """The stored state of the tracked entities. ``states`` keeps only the
-    entities currently in one of those states; ``worst_first`` orders down,
-    then degraded, then the rest, the most recent change first within each;
-    ``limit`` caps the rows returned."""
-    clauses, params = _filters("s", provider, org_ref, entity_type)
+    """The stored state of the tracked entities. ``entity_id`` keeps one
+    entity; ``states`` keeps only the entities currently in one of those
+    states; ``worst_first`` orders down, then degraded, then the rest, the
+    most recent change first within each; ``limit`` caps the rows returned."""
+    clauses, params = _filters("s", provider, org_ref, entity_type, entity_id)
     if states is not None:
         wanted = list(dict.fromkeys(str(state) for state in states))
         if not wanted:

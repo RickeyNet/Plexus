@@ -72,9 +72,27 @@ def _message(t: dict) -> str:
     )
 
 
+async def _meraki_alert_already_raised(t: dict) -> bool:
+    """A Meraki device going down whose device-down alert the near-real-time
+    Meraki alerts (``netcontrol.routes.meraki_alerts``) already raised: the
+    same condition is not notified twice. Any failure means "not raised"."""
+    entity_id = str(t.get("entity_id") or "")
+    if t.get("provider") != "meraki" or t.get("entity_type") != "device" or t.get("new_state") != "down":
+        return False
+    if not entity_id.startswith("d:"):
+        return False
+    try:
+        return await db.meraki_device_down_alerted(int(t["org_ref"]), entity_id[2:])
+    except Exception as exc:  # noqa: BLE001 - fall back to alerting
+        LOGGER.debug("topology availability: meraki alert lookup failed: %s", type(exc).__name__)
+        return False
+
+
 async def _raise_alert(t: dict) -> str:
-    """Raise the alert of one transition. Returns how: ``monitoring`` or
-    ``notification``."""
+    """Raise the alert of one transition. Returns how: ``monitoring``,
+    ``notification`` or ``meraki`` (already raised by the Meraki alerts)."""
+    if await _meraki_alert_already_raised(t):
+        return "meraki"
     severity = "critical" if t["new_state"] == "down" else "warning"
     message = _message(t)
     metric = f"topology {t['entity_type']}"
