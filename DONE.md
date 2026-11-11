@@ -483,6 +483,13 @@ items were implemented 2026-07-08 in a follow-up pass:
 - [x] **M: Silent no-op submits** (`BackupPolicyModal.tsx:113`, `SetBaselineModal.tsx:62`, `CaptureSnapshotModal.tsx:39`). *Done 2026-11: each early return now sets a `FieldError` (group, credential, host, configuration); an empty latest snapshot is reported too.*
 - [x] **L: Backups and drift events render as unbounded card lists** (`BackupsTab.tsx:350`, `DriftTab.tsx:159`). *Done 2026-11: both lists render 50 cards and grow through `useShowMore`; the five copies of the "Show more" button became `components/ShowMoreButton.tsx`.*
 
+### IPAM
+
+- [x] **M: Drilldown stat values overflow on large subnets; no thousands separators** (`SubnetDrilldown.tsx:53`). *Done 2026-11: every address count on the page goes through `lib/formatCount.ts` (thousands separators; scientific notation from 1e15, so an IPv6 /64 fits a tile). CloudVisibility uses the same helper.*
+- [x] **M: Selected subnet is nearly invisible; the drilldown panel is not scrolled into view** (`Ipam.tsx:299`, `:416`). *Done 2026-11: the selected row uses the new `.data-table tr.row-selected` (primary tint and a left bar) with `aria-current`; its button reads "Selected"; the drilldown card scrolls into view when its top is off screen.*
+- [x] **M: Inline button sizes instead of `btn-sm`; four primary buttons on the page** (`Ipam.tsx:917`, `:1101`). *Done 2026-11: every card and row button is `btn-sm` (drift row buttons sit in `.table-actions`); "+ Define Subnet" is the only primary button outside a form.*
+- [x] **L: Inline drilldown forms reverse the button order** (`SubnetDrilldown.tsx:306`). *Done 2026-11: Cancel, then the primary action, right-aligned like a modal footer.*
+
 ### Upgrades and Software
 
 - [x] **H: Software two-column grid has no breakpoint** *(verify in browser)* — the devices table gets ~350px at 1024 (`pages/Software/Software.tsx:330`).

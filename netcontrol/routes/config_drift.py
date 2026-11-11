@@ -89,7 +89,7 @@ class ConfigDriftCheckRequest(BaseModel):
     credential_id: int
 
 
-class ConfigDriftBulkAcceptRequest(BaseModel):
+class ConfigDriftBulkEventsRequest(BaseModel):
     event_ids: list[int]
 
 
@@ -1018,21 +1018,28 @@ async def list_config_drift_events(
     return await db.get_config_drift_events(status=status, host_id=host_id, limit=limit)
 
 
-@router.post("/api/config-drift/events/bulk-accept")
-async def bulk_accept_drift_events(body: ConfigDriftBulkAcceptRequest, request: Request):
-    """Accept multiple drift events at once, updating baselines for each."""
-    if not body.event_ids:
+async def _bulk_close_drift_events(event_ids: list[int], to_status: str, request: Request) -> int:
+    """Move the open events among ``event_ids`` to ``to_status``.
+
+    ``accepted`` also makes each event's snapshot the host's new baseline;
+    ``resolved`` leaves the baselines alone. Events that are not open are
+    skipped. Returns the number of events changed.
+    """
+    if not event_ids:
         raise HTTPException(status_code=400, detail="event_ids required")
     session = _get_session(request)
     user = session["user"] if session else ""
-    events = await db.get_config_drift_events_by_ids(list(dict.fromkeys(body.event_ids)))
+    events = await db.get_config_drift_events_by_ids(list(dict.fromkeys(event_ids)))
     open_events = [e for e in events if e.get("status") == "open"]
-    snapshot_ids = [e["snapshot_id"] for e in open_events if e.get("snapshot_id")]
-    snapshots_by_id = {s["id"]: s for s in await db.get_config_snapshots_by_ids(snapshot_ids)}
-    accepted = 0
+    snapshots_by_id: dict = {}
+    if to_status == "accepted":
+        snapshot_ids = [e["snapshot_id"] for e in open_events if e.get("snapshot_id")]
+        snapshots_by_id = {s["id"]: s for s in await db.get_config_snapshots_by_ids(snapshot_ids)}
+    verb = "accept" if to_status == "accepted" else "resolve"
+    changed = 0
     for event in open_events:
         from_status = event.get("status", "")
-        await db.update_config_drift_event_status(event["id"], "accepted", resolved_by=user)
+        await db.update_config_drift_event_status(event["id"], to_status, resolved_by=user)
         snapshot = snapshots_by_id.get(event.get("snapshot_id"))
         if snapshot and snapshot.get("config_text"):
             hostname = event.get("hostname") or f"host-{event['host_id']}"
@@ -1048,19 +1055,33 @@ async def bulk_accept_drift_events(body: ConfigDriftBulkAcceptRequest, request: 
             host_id=event["host_id"],
             action="status_change",
             from_status=from_status,
-            to_status="accepted",
+            to_status=to_status,
             actor=user,
-            details="bulk accept",
+            details=f"bulk {verb}",
         )
-        accepted += 1
+        changed += 1
     await _audit(
         "config-drift",
-        "drift.bulk_accepted",
+        f"drift.bulk_{to_status}",
         user=user,
-        detail=f"count={accepted} ids={body.event_ids[:20]}",
+        detail=f"count={changed} ids={event_ids[:20]}",
         correlation_id=_corr_id(request),
     )
+    return changed
+
+
+@router.post("/api/config-drift/events/bulk-accept")
+async def bulk_accept_drift_events(body: ConfigDriftBulkEventsRequest, request: Request):
+    """Accept multiple drift events at once, updating baselines for each."""
+    accepted = await _bulk_close_drift_events(body.event_ids, "accepted", request)
     return {"ok": True, "accepted": accepted}
+
+
+@router.post("/api/config-drift/events/bulk-resolve")
+async def bulk_resolve_drift_events(body: ConfigDriftBulkEventsRequest, request: Request):
+    """Mark multiple drift events resolved at once; baselines are unchanged."""
+    resolved = await _bulk_close_drift_events(body.event_ids, "resolved", request)
+    return {"ok": True, "resolved": resolved}
 
 
 @router.get("/api/config-drift/events/{event_id}")

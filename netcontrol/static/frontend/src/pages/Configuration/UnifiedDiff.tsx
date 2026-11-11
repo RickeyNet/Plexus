@@ -1,33 +1,18 @@
 interface Props {
   diffText: string | null | undefined;
-  className?: string;
   style?: React.CSSProperties;
 }
 
-export function UnifiedDiff({ diffText, className, style }: Props) {
+// Size, font and colours come from `.drift-diff-viewer` in style.css, which
+// the backup config view and the search snippets share.
+export function UnifiedDiff({ diffText, style }: Props) {
   if (!diffText) {
     return (
       <span style={{ color: 'var(--text-muted)' }}>No differences.</span>
     );
   }
   return (
-    <pre
-      className={className ?? 'drift-diff-viewer'}
-      style={{
-        maxHeight: 400,
-        overflow: 'auto',
-        padding: '0.75rem',
-        background: 'var(--bg)',
-        border: '1px solid var(--border)',
-        borderRadius: '0.375rem',
-        fontSize: '0.8rem',
-        lineHeight: 1.5,
-        whiteSpace: 'pre-wrap',
-        wordBreak: 'break-word',
-        margin: 0,
-        ...style,
-      }}
-    >
+    <pre className="drift-diff-viewer" style={style}>
       {diffText.split('\n').map((line, i) => {
         let cls = 'diff-context';
         if (line.startsWith('+++') || line.startsWith('---')) cls = 'diff-meta';

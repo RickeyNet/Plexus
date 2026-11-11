@@ -27,6 +27,7 @@ import {
   useTriggerMacCollection,
 } from '@/api/networkTools';
 
+import { ShowMoreButton } from '@/components/ShowMoreButton';
 import { useShowMore } from '@/lib/useShowMore';
 import { formatBackendDateTime } from '@/lib/datetime';
 import { usePendingKeys } from '@/lib/usePendingKeys';
@@ -842,16 +843,7 @@ function MoveEventsTable({
         ))}
       </tbody>
     </table>
-    {hiddenCount > 0 && (
-      <button
-        type="button"
-        className="btn btn-sm"
-        style={{ marginTop: '0.5rem' }}
-        onClick={showMore}
-      >
-        Show more ({hiddenCount.toLocaleString()} hidden)
-      </button>
-    )}
+    <ShowMoreButton hiddenCount={hiddenCount} onClick={showMore} style={{ marginTop: '0.5rem' }} />
     </>
   );
 }
@@ -980,16 +972,7 @@ function ResultsTable({
         ))}
       </tbody>
     </table>
-    {hiddenCount > 0 && (
-      <button
-        type="button"
-        className="btn btn-sm"
-        style={{ marginTop: '0.5rem' }}
-        onClick={showMore}
-      >
-        Show more ({hiddenCount.toLocaleString()} hidden)
-      </button>
-    )}
+    <ShowMoreButton hiddenCount={hiddenCount} onClick={showMore} style={{ marginTop: '0.5rem' }} />
     </>
   );
 }
