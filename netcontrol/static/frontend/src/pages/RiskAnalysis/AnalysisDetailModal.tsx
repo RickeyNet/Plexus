@@ -8,8 +8,10 @@ import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { changeTypeLabel } from '@/lib/changeTypes';
 import { formatBackendDateTime } from '@/lib/datetime';
 import { severityTone, toneColor } from '@/lib/severity';
+import { UnifiedDiff } from '@/pages/Configuration/UnifiedDiff';
 
 import {
   parseJsonArray,
@@ -157,7 +159,7 @@ function DetailBody({ analysis }: { analysis: RiskAnalysis }) {
             <strong>Target:</strong> {targetLabel(analysis)}
           </div>
           <div>
-            <strong>Change type:</strong> {analysis.change_type || '?'}
+            <strong>Change type:</strong> {changeTypeLabel(analysis.change_type)}
           </div>
           <div>
             <strong>Status:</strong>{' '}
@@ -266,7 +268,7 @@ function DetailBody({ analysis }: { analysis: RiskAnalysis }) {
       )}
 
       {analysis.proposed_commands && (
-        <details style={{ marginBottom: '1rem' }}>
+        <details open style={{ marginBottom: '1rem' }}>
           <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Proposed Commands</summary>
           <pre
             style={{
@@ -286,24 +288,14 @@ function DetailBody({ analysis }: { analysis: RiskAnalysis }) {
       )}
 
       {analysis.proposed_diff && (
-        <details style={{ marginBottom: '1rem' }}>
+        <details open style={{ marginBottom: '1rem' }}>
           <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
             Predicted Config Diff
           </summary>
-          <pre
-            style={{
-              marginTop: '0.5rem',
-              background: 'var(--bg-secondary)',
-              padding: '0.75rem',
-              borderRadius: 6,
-              fontSize: '0.8em',
-              maxHeight: 300,
-              overflow: 'auto',
-              whiteSpace: 'pre-wrap',
-            }}
-          >
-            {analysis.proposed_diff}
-          </pre>
+          <UnifiedDiff
+            diffText={analysis.proposed_diff}
+            style={{ marginTop: '0.5rem', maxHeight: 300 }}
+          />
         </details>
       )}
     </>

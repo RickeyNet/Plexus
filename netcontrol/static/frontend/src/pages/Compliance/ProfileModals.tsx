@@ -465,7 +465,8 @@ function FormBody({
         <label className="form-label" htmlFor={`${fid}-rules`}>Rules (JSON array)</label>
         <textarea
           id={`${fid}-rules`}
-          className="form-input"
+          className="form-input form-code"
+          spellCheck={false}
           rows={8}
           placeholder={RULES_PLACEHOLDER}
           value={rulesText}

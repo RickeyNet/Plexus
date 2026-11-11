@@ -7,6 +7,7 @@ import {
 import { Callout } from '@/components/Callout';
 import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
+import { changeTypeOptions } from '@/lib/changeTypes';
 
 interface Props {
   isOpen: boolean;
@@ -14,12 +15,7 @@ interface Props {
   onAnalyzed: (result: OfflineRiskAnalysisResult) => void;
 }
 
-const CHANGE_TYPES = [
-  { value: 'policy', label: 'Policy / ACL' },
-  { value: 'route', label: 'Route' },
-  { value: 'nat', label: 'NAT' },
-  { value: 'manual', label: 'Manual' },
-];
+const CHANGE_TYPES = changeTypeOptions(['policy', 'route', 'nat', 'manual']);
 
 export function OfflineAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
   const formId = useId();
@@ -101,7 +97,8 @@ export function OfflineAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
           <label className="form-label" htmlFor={`${formId}-current-running-config`}>Current Running Config</label>
           <textarea
             id={`${formId}-current-running-config`}
-            className="form-input"
+            className="form-input form-code"
+            spellCheck={false}
             rows={8}
             value={config}
             onChange={(e) => {
@@ -117,7 +114,8 @@ export function OfflineAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
           <label className="form-label" htmlFor={`${formId}-proposed-commands`}>Proposed Commands (one per line)</label>
           <textarea
             id={`${formId}-proposed-commands`}
-            className="form-input"
+            className="form-input form-code"
+            spellCheck={false}
             rows={6}
             value={commands}
             onChange={(e) => {

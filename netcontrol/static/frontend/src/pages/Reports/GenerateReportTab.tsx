@@ -10,16 +10,7 @@ import {
   type ReportGenerateResult,
 } from '@/api/reports';
 
-import { downloadReportExport } from './helpers';
-
-type ReportType = 'availability' | 'compliance' | 'interface' | 'network_documentation';
-
-const REPORT_TYPES: { value: ReportType; label: string }[] = [
-  { value: 'availability', label: 'Availability' },
-  { value: 'compliance', label: 'Compliance' },
-  { value: 'interface', label: 'Interface Utilization' },
-  { value: 'network_documentation', label: 'Network Documentation' },
-];
+import { columnLabel, downloadReportExport, REPORT_TYPES, type ReportType } from './helpers';
 
 const NO_DAYS = new Set<ReportType>(['compliance', 'network_documentation']);
 
@@ -163,7 +154,7 @@ function ResultBlock({ reportType, groupId, result }: ResultBlockProps) {
       <div style={{ overflowX: 'auto' }}>
         <table className="data-table">
           <thead>
-            <tr>{cols.map((c) => <th key={c}>{c}</th>)}</tr>
+            <tr>{cols.map((c) => <th key={c} title={c}>{columnLabel(c)}</th>)}</tr>
           </thead>
           <tbody>
             {rows.slice(0, 200).map((r, i) => (

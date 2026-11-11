@@ -405,12 +405,12 @@ per-page **H** items.
 ### Compliance, Deployments, RiskAnalysis, Reports
 
 - [ ] **H: Deployment approval comment field is unstyled** (`pages/Deployments/DeploymentDetailModal.tsx:402`).
-- [ ] **M: Deployment status shown three ways with raw tokens** (`Deployments.tsx:338`, `DeploymentDetailModal.tsx:159`).
-- [ ] **M: Deployment detail tables use inline padding; proposed commands are collapsed beside Execute** (`DeploymentDetailModal.tsx:259`, `:473`).
-- [ ] **M: RiskAnalysis run result shown in a red Confirm dialog with line breaks lost** (`pages/RiskAnalysis/RiskAnalysis.tsx:146`).
-- [ ] **L: RiskAnalysis predicted diff is collapsed and uncoloured** (`AnalysisDetailModal.tsx:272`).
+- [x] **M: Deployment status shown three ways with raw tokens** (`Deployments.tsx:338`, `DeploymentDetailModal.tsx:159`).
+- [x] **M: Deployment detail tables use inline padding; proposed commands are collapsed beside Execute** (`DeploymentDetailModal.tsx:259`, `:473`).
+- [x] **M: RiskAnalysis run result shown in a red Confirm dialog with line breaks lost** (`pages/RiskAnalysis/RiskAnalysis.tsx:146`).
+- [x] **L: RiskAnalysis predicted diff is collapsed and uncoloured** (`AnalysisDetailModal.tsx:272`).
 - [ ] **M: Reports action cells use `display: flex` on `<td>`** (`pages/Reports/HistoryTab.tsx:63`, `BillingTab.tsx:194`).
-- [ ] **M: Reports show raw JSON keys as headers, raw type names and sizes in bytes** (`GenerateReportTab.tsx:164`, `HistoryTab.tsx:59`, `ArtifactsModal.tsx:43`).
-- [ ] **L: Circuit create and edit forms differ** (`CircuitFormModal.tsx:95`, `:186`).
-- [ ] **L: Code and JSON boxes use a proportional font while prose fields get monospace** (`Compliance/ProfileModals.tsx:410`, `RiskAnalysis/NewAnalysisModal.tsx:149`).
+- [x] **M: Reports show raw JSON keys as headers, raw type names and sizes in bytes** (`GenerateReportTab.tsx:164`, `HistoryTab.tsx:59`, `ArtifactsModal.tsx:43`).
+- [x] **L: Circuit create and edit forms differ** (`CircuitFormModal.tsx:95`, `:186`).
+- [x] **L: Code and JSON boxes use a proportional font while prose fields get monospace** (`Compliance/ProfileModals.tsx:410`, `RiskAnalysis/NewAnalysisModal.tsx:149`).
 - [ ] **L: Number fields snap back to a default when cleared** (`Compliance/ProfileModals.tsx:305`, `Software/SettingsModal.tsx:81`, `Reports/GenerateReportTab.tsx:86`).

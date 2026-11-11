@@ -98,9 +98,13 @@ export interface BillingCircuitCreate {
 export interface BillingCircuitUpdate {
   name?: string;
   customer?: string;
+  if_name?: string;
   commit_rate_bps?: number;
+  burst_limit_bps?: number;
   cost_per_mbps?: number;
+  currency?: string;
   billing_day?: number;
+  billing_cycle?: string;
   enabled?: number | boolean;
   description?: string;
 }

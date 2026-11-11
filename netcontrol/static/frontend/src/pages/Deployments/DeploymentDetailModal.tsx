@@ -12,14 +12,15 @@ import {
   useRequestDeploymentApproval,
   useRollbackDeployment,
 } from '@/api/deployments';
-import { StatusBadge } from '@/components/Badge';
+import { Badge, StatusBadge } from '@/components/Badge';
 import { BusyButton } from '@/components/BusyButton';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { changeTypeLabel } from '@/lib/changeTypes';
 import { formatBackendDateTime, formatBackendTime } from '@/lib/datetime';
-import { statusTone, toneColor } from '@/lib/severity';
+import { statusLabel, statusTone, toneColor } from '@/lib/severity';
 
 import {
   canExecute,
@@ -212,7 +213,7 @@ function DetailBody({ deployment }: { deployment: DeploymentDetail }) {
             <strong>Group:</strong> {deployment.group_name || 'N/A'}
           </div>
           <div>
-            <strong>Type:</strong> {deployment.change_type || '?'}
+            <strong>Type:</strong> {changeTypeLabel(deployment.change_type)}
           </div>
           {deployment.rollback_status && (
             <div>
@@ -308,24 +309,31 @@ function DetailBody({ deployment }: { deployment: DeploymentDetail }) {
           </div>
         )}
 
-        <details>
+        {/* Open by default: these are what Execute pushes to every host. */}
+        <details open>
           <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
             Proposed Commands ({commandCount(deployment.proposed_commands)})
           </summary>
-          <pre
-            style={{
-              marginTop: '0.5rem',
-              background: 'var(--bg-secondary)',
-              padding: '0.75rem',
-              borderRadius: 6,
-              fontSize: '0.82rem',
-              maxHeight: 200,
-              overflowY: 'auto',
-              whiteSpace: 'pre-wrap',
-            }}
-          >
-            {deployment.proposed_commands || ''}
-          </pre>
+          {deployment.proposed_commands ? (
+            <pre
+              style={{
+                marginTop: '0.5rem',
+                background: 'var(--bg-secondary)',
+                padding: '0.75rem',
+                borderRadius: 6,
+                fontSize: '0.82rem',
+                maxHeight: 280,
+                overflowY: 'auto',
+                whiteSpace: 'pre-wrap',
+              }}
+            >
+              {deployment.proposed_commands}
+            </pre>
+          ) : (
+            <div style={{ marginTop: '0.5rem', color: 'var(--text-muted)', fontSize: '0.85em' }}>
+              No commands recorded.
+            </div>
+          )}
         </details>
 
         <CheckpointSection title="Pre-Deployment Checkpoints" checks={preChecks} label="pre-deployment" />
@@ -497,7 +505,7 @@ function CheckpointTable({
           return (
             <tr key={c.id}>
               <td>{c.hostname || c.ip_address || '-'}</td>
-              <td>{c.check_type}</td>
+              <td>{statusLabel(c.check_type)}</td>
               <td>
                 <StatusBadge status={c.status} size="sm" />
               </td>
@@ -577,11 +585,9 @@ function VerificationMetricsTable({ checks }: { checks: DeploymentCheckpoint[] }
               {r.delta}
             </td>
             <td>
-              {r.concern ? (
-                <span style={{ color: 'var(--danger)' }}>CONCERN</span>
-              ) : (
-                <span style={{ color: 'var(--success)' }}>OK</span>
-              )}
+              <Badge tone={r.concern ? 'danger' : 'success'} size="sm">
+                {r.concern ? 'Concern' : 'OK'}
+              </Badge>
             </td>
           </tr>
         ))}

@@ -5,6 +5,7 @@ import {
   isActiveStatus,
   isCriticalSeverity,
   severityTone,
+  statusLabel,
   statusTone,
   type Tone,
 } from '@/lib/severity';
@@ -110,7 +111,7 @@ interface StatusBadgeProps {
   title?: string;
   className?: string;
   style?: CSSProperties;
-  /** Text to show; defaults to the status with underscores as spaces (or "-" when missing). */
+  /** Text to show; defaults to the status with separators as spaces (or "-" when missing). */
   children?: ReactNode;
 }
 
@@ -126,7 +127,7 @@ export function StatusBadge({ status, kind = 'run', size, title, className, styl
       className={className}
       style={style}
     >
-      {children ?? (status ? status.replace(/_/g, ' ') : '-')}
+      {children ?? statusLabel(status)}
     </Badge>
   );
 }

@@ -184,6 +184,14 @@ export function statusTone(status: string | null | undefined): Tone {
   return STATUS_TONE[normalize(status)] ?? 'neutral';
 }
 
+/**
+ * Display text for a status token: separators become spaces, so `rolled-back`
+ * and `verification_failed` read as words. "-" when missing.
+ */
+export function statusLabel(status: string | null | undefined): string {
+  return status ? status.replace(/[_-]+/g, ' ') : '-';
+}
+
 /** True for statuses that mean work is happening now (the badge shows a live dot). */
 export function isActiveStatus(status: string | null | undefined): boolean {
   return statusTone(status) === 'info';

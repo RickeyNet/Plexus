@@ -11,7 +11,7 @@ import { formatBackendDateTime } from '@/lib/datetime';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import { ArtifactsModal } from './ArtifactsModal';
-import { downloadReportExport } from './helpers';
+import { downloadReportExport, reportTypeLabel } from './helpers';
 
 export function HistoryTab() {
   const { alert } = useDialogs();
@@ -62,7 +62,7 @@ export function HistoryTab() {
           {runs.map((r) => (
             <tr key={r.id}>
               <td>#{r.id}</td>
-              <td>{r.report_type ?? ''}</td>
+              <td>{reportTypeLabel(r.report_type)}</td>
               <td><StatusBadge status={r.status} /></td>
               <td>{r.row_count ?? '-'}</td>
               <td>{formatBackendDateTime(r.started_at)}</td>
