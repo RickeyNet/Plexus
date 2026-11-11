@@ -312,7 +312,7 @@ def test_suppression_rejects_end_not_after_start(monkeypatch, request):
             json={"name": "backwards", "starts_at": "2099-01-02 00:00:00", "ends_at": ends_at},
         )
         assert resp.status_code == 400
-        assert "after starts_at" in resp.json()["detail"]
+        assert "after starts_at" in resp.json()["error"]["message"]
 
     resp = client.post(
         "/api/monitoring/suppressions",
