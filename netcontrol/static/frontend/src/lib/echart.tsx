@@ -43,6 +43,12 @@ interface TimeSeriesChartProps {
   height?: number | string;
   annotations?: ChartAnnotation[];
   threshold?: ChartThreshold;
+  /**
+   * Formats the value axis ticks and the tooltip values ("1.2 GB"), in place
+   * of the bps/number formatting and `unit`. Pass a stable (module-level)
+   * function: a new one each render re-applies the chart option.
+   */
+  valueFormatter?: (value: number) => string;
 }
 
 // Pixel height when the caller passes none. A string such as '100%' lets the
@@ -67,6 +73,7 @@ export function TimeSeriesChart({
   height = DEFAULT_HEIGHT,
   annotations,
   threshold,
+  valueFormatter: formatAxisValue,
 }: TimeSeriesChartProps) {
   const ref = useRef<HTMLDivElement>(null);
   // One instance per mount, resized with its container, disposed on unmount.
@@ -110,8 +117,8 @@ export function TimeSeriesChart({
       });
     }
 
-    const formatValue = chartTooltipFormatter(isBpsAxis ? 'bps' : 'number');
-    const valueFormatter = unit
+    const formatValue = chartTooltipFormatter(formatAxisValue ?? (isBpsAxis ? 'bps' : 'number'));
+    const valueFormatter = unit && !formatAxisValue
       ? (value: unknown) => {
           const text = formatValue(value);
           return text === '-' ? text : text + unit;
@@ -163,7 +170,7 @@ export function TimeSeriesChart({
           max: yMax,
           axisLabel: {
             color: AXIS_COLOR,
-            formatter: isBpsAxis ? formatBpsTick : undefined,
+            formatter: formatAxisValue ?? (isBpsAxis ? formatBpsTick : undefined),
           },
           splitLine: { lineStyle: { color: SPLIT_COLOR } },
         },
@@ -187,7 +194,7 @@ export function TimeSeriesChart({
       // would leave stale series/legend entries behind.
       { notMerge: true },
     );
-  }, [chartRef, series, area, yAxisName, unit, yMin, yMax, annotations, threshold, theme]);
+  }, [chartRef, series, area, yAxisName, unit, yMin, yMax, annotations, threshold, formatAxisValue, theme]);
 
   return <div ref={ref} style={{ width: '100%', height }} />;
 }

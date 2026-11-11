@@ -723,13 +723,13 @@ per-page **H** items.
 
 ### CloudVisibility
 
-- [ ] **H: Summary stat cards are unstyled on the Topology, Flow and Traffic tabs** (`pages/CloudVisibility/TopologyTab.tsx:484`, `FlowTab.tsx:222`, `TrafficTab.tsx:214`).
-- [ ] **M: Half a screen of header before content**; the account filter shows on tabs that ignore it (`CloudVisibility.tsx:89`).
-- [ ] **M: Form labels touch their inputs; Title Case labels with units in the name** (`SyncControls.tsx:56`, `FlowTab.tsx:72`, `AccountsTab.tsx:488`).
-- [ ] **M: Flow/Traffic sync panel sits between the filters and the data; timelines render up to 10,080 table rows** (`FlowTab.tsx:102`, `:198`).
-- [ ] **M: Policy tab shows Loading and empty together** (`PolicyTab.tsx:111`).
-- [ ] **M: Policy tables squeezed side by side; rules silently capped at 200; route-path tables overflow 320px cards** (`PolicyTab.tsx:38`, `:108`, `TopologyTab.tsx:344`).
-- [ ] **L: Accounts tab** — three primary "Add" buttons; nine-column table scrolls at 1280 (`AccountsTab.tsx:154`, `:199`).
+- [x] **H: Summary stat cards are unstyled on the Topology, Flow and Traffic tabs** (`pages/CloudVisibility/TopologyTab.tsx:484`, `FlowTab.tsx:222`, `TrafficTab.tsx:214`). *Done 2026-11: all three use `StatGrid` / `StatTile`.*
+- [x] **M: Half a screen of header before content**; the account filter shows on tabs that ignore it (`CloudVisibility.tsx:89`). *Done 2026-11: header is title, banner, tab bar and one help line; the provider/account filters sit in the TabBar trailing slot and the account filter is hidden on Accounts; provider capability cards became a badge row on the Accounts tab.*
+- [x] **M: Form labels touch their inputs; Title Case labels with units in the name** (`SyncControls.tsx:56`, `FlowTab.tsx:72`, `AccountsTab.tsx:488`). *Done 2026-11: `form-group` / `form-label` with `useId` ids and sentence case on the Flow, Traffic, Policy and Topology filters, the sync settings and the account form; units are a suffix ("Interval (seconds)").*
+- [x] **M: Flow/Traffic sync panel sits between the filters and the data; timelines render up to 10,080 table rows** (`FlowTab.tsx:102`, `:198`). *Done 2026-11: order is filters, summary, timeline, top list, sync section; timelines are a `TimeSeriesChart` (flow bytes, traffic total); the two tabs share `analytics.ts` / `AnalyticsParts.tsx` and `lib/useFlashMessage.ts`.*
+- [x] **M: Policy tab shows Loading and empty together** (`PolicyTab.tsx:111`). *Done 2026-11: error, loading and empty are separate states with accurate messages; filters and drilldown no longer reload the views table.*
+- [x] **M: Policy tables squeezed side by side; rules silently capped at 200; route-path tables overflow 320px cards** (`PolicyTab.tsx:38`, `:108`, `TopologyTab.tsx:344`). *Done 2026-11: tables stacked full width; rules load up to the API maximum of 2,000, render 200 at a time and show a callout when truncated (the API returns no total); route-path cards are full width with a scroll wrapper.*
+- [x] **L: Accounts tab** — three primary "Add" buttons; nine-column table scrolls at 1280 (`AccountsTab.tsx:154`, `:199`). *Done 2026-11: one "Add cloud account" button; six columns. Not yet checked in a browser.*
 
 ### Settings
 

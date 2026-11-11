@@ -9,12 +9,14 @@ import {
   useDiscoverCloudAccount,
   useUpdateCloudAccount,
 } from '@/api/cloud';
+import { Badge, StatusBadge } from '@/components/Badge';
 import { BusyButton } from '@/components/BusyButton';
 import { Callout } from '@/components/Callout';
 import { DeleteButton } from '@/components/DeleteButton';
+import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
-import { capitalize, cloudProviderTerms } from '@/lib/cloudProviderTerms';
+import { ANY_CLOUD_TERMS, capitalize, cloudProviderTerms } from '@/lib/cloudProviderTerms';
 import { formatBackendDateTime } from '@/lib/datetime';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 import {
@@ -31,6 +33,7 @@ import {
   discoverOutcome,
   liveMissingDependencies,
   liveUnavailableReason,
+  providerFullLabel,
   providerLabel,
   skippedNote,
 } from './helpers';
@@ -43,6 +46,8 @@ interface Props {
   loadError: ReactNode;
   /** Provider capabilities; empty until loaded, which blocks nothing. */
   providers: CloudProvider[];
+  /** Shown above the table when the provider capabilities request failed with nothing cached. */
+  providersError?: ReactNode;
 }
 
 const PROVIDER_ORDER = ['aws', 'azure', 'gcp'];
@@ -72,7 +77,43 @@ function discoverRegionsLabel(a: CloudAccount): string | null {
   return String(a.provider ?? '').toLowerCase() === 'aws' ? 'us-east-1' : 'the default region';
 }
 
-export function AccountsTab({ accounts, providerOptions, isLoading, loadError, providers: capabilities }: Props) {
+/**
+ * One wrapping row of "AWS: ready" badges, with the packages a provider
+ * lacks on the server spelled out beside its badge.
+ */
+function LiveReadSupport({ providers }: { providers: CloudProvider[] }) {
+  const labelId = useId();
+  if (!providers.length) return null;
+  return (
+    <div
+      role="group"
+      aria-labelledby={labelId}
+      style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-2)' }}
+    >
+      <span id={labelId} className="text-muted">Live reads</span>
+      {providers.map((p) => {
+        const missing = p.missing_dependencies ?? [];
+        return (
+          <span key={p.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-1)' }}>
+            <Badge tone={p.live_supported ? 'success' : 'warning'} title={p.name || providerFullLabel(p.id)}>
+              {providerLabel(p.id)}: {p.live_supported ? 'ready' : 'unavailable'}
+            </Badge>
+            {missing.length > 0 && <small className="text-muted">missing {missing.join(', ')}</small>}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+export function AccountsTab({
+  accounts,
+  providerOptions,
+  isLoading,
+  loadError,
+  providers: capabilities,
+  providersError,
+}: Props) {
   const [modal, setModal] = useState<{ account: CloudAccount | null; provider: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<CloudAccount | null>(null);
   const [confirmDiscover, setConfirmDiscover] = useState<CloudAccount | null>(null);
@@ -139,6 +180,8 @@ export function AccountsTab({ accounts, providerOptions, isLoading, loadError, p
   const providers = orderedProviders(providerOptions);
   const deleteTerms = cloudProviderTerms(confirmDelete?.provider);
   const discoverTerms = cloudProviderTerms(confirmDiscover?.provider);
+  // "an AWS account, an Azure subscription or a GCP project"
+  const addChoices = joinOr(providers.map((p) => withArticle(cloudProviderTerms(p).scopeTitle)));
 
   // The Topology page's Add Source buttons link here as `?add=<provider>`:
   // the dialog is open on that provider while the parameter is in the URL,
@@ -162,18 +205,20 @@ export function AccountsTab({ accounts, providerOptions, isLoading, loadError, p
   return (
     <div className="stack">
       <div className="toolbar">
-        {providers.map((p) => (
-          <button
-            key={p}
-            type="button"
-            className="btn btn-primary"
-            title={`Add ${withArticle(cloudProviderTerms(p).scopeTitle)} to read its ${cloudProviderTerms(p).networks}, ${cloudProviderTerms(p).flowLogs} and ${cloudProviderTerms(p).policy}`}
-            onClick={() => setModal({ account: null, provider: p })}
-          >
-            Add {cloudProviderTerms(p).scopeTitle}
-          </button>
-        ))}
+        {/* One add action: the dialog asks for the provider, starting on the first offered. */}
+        <button
+          type="button"
+          className="btn btn-primary"
+          title={`Add ${addChoices} to read its network topology, flow logs and network policy`}
+          onClick={() => setModal({ account: null, provider: providers[0] ?? 'aws' })}
+        >
+          Add {ANY_CLOUD_TERMS.scopeTitle}
+        </button>
+        <div className="toolbar-spacer" />
+        <LiveReadSupport providers={capabilities} />
       </div>
+
+      {providersError}
 
       {actionMsg && (
         <Callout
@@ -193,11 +238,10 @@ export function AccountsTab({ accounts, providerOptions, isLoading, loadError, p
       {isLoading && <LoadingState />}
 
       {!isLoading && !loadError && accounts.length === 0 && (
-        <div className="card">
-          <p className="text-muted" style={{ margin: 0 }}>
-            No cloud accounts yet. Add {joinOr(providers.map((p) => withArticle(cloudProviderTerms(p).scopeTitle)))} to start.
-          </p>
-        </div>
+        <EmptyState
+          message={`No ${ANY_CLOUD_TERMS.scopeTitlePlural} yet`}
+          description={`Use Add ${ANY_CLOUD_TERMS.scopeTitle} to register ${addChoices}.`}
+        />
       )}
 
       {accounts.length > 0 && (
@@ -206,13 +250,10 @@ export function AccountsTab({ accounts, providerOptions, isLoading, loadError, p
             <thead>
               <tr>
                 <th>Name</th>
-                <th>Provider</th>
                 <th>Identifier</th>
                 <th>Regions</th>
-                <th>Enabled</th>
-                <th>Last Sync</th>
-                <th>Sync Readiness</th>
-                <th>Resources</th>
+                <th>Last sync</th>
+                <th>Sync readiness</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -232,28 +273,33 @@ export function AccountsTab({ accounts, providerOptions, isLoading, loadError, p
                 return (
                   <tr key={a.id}>
                     <td>
-                      {a.name}
-                      {terms.onTopologyMap && Boolean(a.enabled) && hasResources && (
-                        <small style={{ display: 'block' }}>
-                          <Link
-                            to="/topology"
-                            title={`This ${terms.scope}'s ${terms.networks}, gateways and VPNs are on the Topology map`}
+                      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--space-2)' }}>
+                        <span>{a.name}</span>
+                        {!a.enabled && <Badge size="sm">disabled</Badge>}
+                      </div>
+                      <small style={{ display: 'block' }}>
+                        <span className="text-muted">{providerLabel(a.provider)}</span>
+                        {terms.onTopologyMap && Boolean(a.enabled) && hasResources && (
+                          <>
+                            {' · '}
+                            <Link
+                              to="/topology"
+                              title={`This ${terms.scope}'s ${terms.networks}, gateways and VPNs are on the Topology map`}
+                            >
+                              Shown on Topology map
+                            </Link>
+                          </>
+                        )}
+                        {!terms.onTopologyMap && hasResources && (
+                          <span
+                            className="text-muted"
+                            title={`${capitalize(terms.scopeTitlePlural)} are not drawn on the Topology map yet`}
                           >
-                            Shown on Topology map
-                          </Link>
-                        </small>
-                      )}
-                      {!terms.onTopologyMap && hasResources && (
-                        <small
-                          className="text-muted"
-                          style={{ display: 'block' }}
-                          title={`${capitalize(terms.scopeTitlePlural)} are not drawn on the Topology map yet`}
-                        >
-                          Not on the Topology map
-                        </small>
-                      )}
+                            {' · '}Not on the Topology map
+                          </span>
+                        )}
+                      </small>
                     </td>
-                    <td>{providerLabel(a.provider)}</td>
                     <td>
                       {a.account_identifier || '-'}
                       <small className="text-muted" style={{ display: 'block' }}>{terms.identifierLabel}</small>
@@ -264,17 +310,11 @@ export function AccountsTab({ accounts, providerOptions, isLoading, loadError, p
                         : isAllRegions(a.region_scope) ? 'All regions' : (a.region_scope ?? '-')}
                     </td>
                     <td>
-                      <span className={`badge badge-${a.enabled ? 'success' : 'secondary'}`}>
-                        {a.enabled ? 'enabled' : 'disabled'}
-                      </span>
-                    </td>
-                    <td>
-                      <div
+                      <StatusBadge
+                        size="sm"
+                        status={a.last_sync_status || 'never'}
                         title={a.last_sync_message || undefined}
-                        style={a.last_sync_status === 'error' ? { color: 'var(--danger)' } : undefined}
-                      >
-                        {a.last_sync_status ?? 'never'}
-                      </div>
+                      />
                       {a.last_sync_status === 'error' && a.last_sync_message && (
                         <small style={{ color: 'var(--danger)', display: 'block', maxWidth: '16rem' }}>
                           {a.last_sync_message}
@@ -285,28 +325,29 @@ export function AccountsTab({ accounts, providerOptions, isLoading, loadError, p
                           {skippedNote(a.last_sync_message)}
                         </small>
                       )}
-                      <small className="text-muted">{a.last_sync_at ? formatBackendDateTime(a.last_sync_at) : 'Never'}</small>
+                      <small className="text-muted" style={{ display: 'block' }}>
+                        {a.last_sync_at ? formatBackendDateTime(a.last_sync_at) : 'Never'}
+                      </small>
+                      <small className="text-muted" style={{ display: 'block' }}>
+                        {a.resource_count ?? 0} nodes, {a.connection_count ?? 0} edges
+                      </small>
                     </td>
                     <td>
-                      <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
-                        <span className={`badge badge-${readiness.flowReady ? 'success' : 'warning'}`}>
+                      <div style={{ display: 'flex', gap: 'var(--space-1)', flexWrap: 'wrap' }}>
+                        <Badge tone={readiness.flowReady ? 'success' : 'warning'}>
                           {readiness.flowReady ? 'Flow logs ready' : 'Flow logs need setup'}
-                        </span>
-                        <span className={`badge badge-${readiness.trafficReady ? 'success' : 'warning'}`}>
+                        </Badge>
+                        <Badge tone={readiness.trafficReady ? 'success' : 'warning'}>
                           {readiness.trafficReady ? 'Metrics ready' : 'Metrics need setup'}
-                        </span>
+                        </Badge>
                       </div>
                       {(!readiness.flowReady || !readiness.trafficReady) && (
-                        <small className="text-muted" style={{ display: 'block', marginTop: '0.25rem' }}>
+                        <small className="text-muted" style={{ display: 'block', marginTop: 'var(--space-1)' }}>
                           {!readiness.flowReady && `Flow logs need ${readiness.flowMissing.join(', ')}`}
                           {!readiness.flowReady && !readiness.trafficReady && ' | '}
                           {!readiness.trafficReady && `Traffic metrics need ${readiness.trafficMissing.join(', ')}`}
                         </small>
                       )}
-                    </td>
-                    <td>
-                      <span className="badge badge-info">{a.resource_count ?? 0} nodes</span>{' '}
-                      <span className="badge badge-info">{a.connection_count ?? 0} edges</span>
                     </td>
                     <td style={{ whiteSpace: 'nowrap' }}>
                       <BusyButton
@@ -326,7 +367,7 @@ export function AccountsTab({ accounts, providerOptions, isLoading, loadError, p
                       {liveBlocked && (
                         <small
                           className="text-muted"
-                          style={{ display: 'block', marginTop: '0.3rem', whiteSpace: 'normal', maxWidth: '24rem' }}
+                          style={{ display: 'block', marginTop: 'var(--space-1)', whiteSpace: 'normal', maxWidth: '24rem' }}
                           title={liveBlocked}
                         >
                           Live {terms.label} reads unavailable
@@ -495,6 +536,8 @@ function AccountFormModal({ account, provider: providerProp, providerOptions, on
   }
 
   const formId = useId();
+  const signInId = `${formId}-sign-in`;
+  const allRegionsOn = allRegions && Boolean(form.allRegionsHelp);
 
   return (
     <Modal
@@ -510,15 +553,17 @@ function AccountFormModal({ account, provider: providerProp, providerOptions, on
         </>
       }
     >
-      <form id={formId} onSubmit={submit} style={{ display: 'grid', gap: '0.75rem' }}>
+      <form id={formId} onSubmit={submit}>
         {account?.id ? (
-          <div>
-            Provider: {terms.fullName === terms.label ? terms.label : `${terms.fullName} (${terms.label})`}
+          <div className="form-group">
+            <div className="form-label">Provider</div>
+            <div>{providerFullLabel(provider)}</div>
           </div>
         ) : (
-          <label>
-            Provider
+          <div className="form-group">
+            <label className="form-label" htmlFor={`${formId}-provider`}>Provider</label>
             <select
+              id={`${formId}-provider`}
               className="form-select"
               value={providerChoice}
               onChange={(e) => {
@@ -528,53 +573,71 @@ function AccountFormModal({ account, provider: providerProp, providerOptions, on
                 setValues({});
               }}
             >
-              {providerOptions.map((p) => {
-                const t = cloudProviderTerms(p);
-                return (
-                  <option key={p} value={p}>
-                    {t.fullName === t.label ? t.label : `${t.fullName} (${t.label})`}
-                  </option>
-                );
-              })}
+              {providerOptions.map((p) => (
+                <option key={p} value={p}>{providerFullLabel(p)}</option>
+              ))}
             </select>
-          </label>
+          </div>
         )}
-        <label>
-          Name
-          <input className="form-input" type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder={`Prod ${terms.label}`} required />
-        </label>
-        <label>
-          {form.identifierLabel}
-          <input className="form-input" type="text" value={accountIdentifier} onChange={(e) => setAccountIdentifier(e.target.value)} placeholder={form.identifierPlaceholder} />
-          {form.identifierHelp && <small className="text-muted" style={{ display: 'block' }}>{form.identifierHelp}</small>}
-        </label>
+
+        <div className="form-group">
+          <label className="form-label" htmlFor={`${formId}-name`}>Name</label>
+          <input
+            id={`${formId}-name`}
+            className="form-input"
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={`Prod ${terms.label}`}
+            required
+          />
+        </div>
+
+        <div className="form-group">
+          <label className="form-label" htmlFor={`${formId}-identifier`}>{form.identifierLabel}</label>
+          <input
+            id={`${formId}-identifier`}
+            className="form-input"
+            type="text"
+            value={accountIdentifier}
+            onChange={(e) => setAccountIdentifier(e.target.value)}
+            placeholder={form.identifierPlaceholder}
+            aria-describedby={form.identifierHelp ? `${formId}-identifier-help` : undefined}
+          />
+          {form.identifierHelp && (
+            <div className="form-help" id={`${formId}-identifier-help`}>{form.identifierHelp}</div>
+          )}
+        </div>
+
         {form.regionHelp && (
-          <label>
-            Regions
+          <div className="form-group">
+            <label className="form-label" htmlFor={`${formId}-regions`}>Regions</label>
             <input
+              id={`${formId}-regions`}
               className="form-input"
               type="text"
-              value={allRegions && form.allRegionsHelp ? '' : regionScope}
+              value={allRegionsOn ? '' : regionScope}
               onChange={(e) => setRegionScope(e.target.value)}
-              placeholder={allRegions && form.allRegionsHelp ? 'All regions' : 'us-east-1, us-west-2'}
-              disabled={allRegions && Boolean(form.allRegionsHelp)}
+              placeholder={allRegionsOn ? 'All regions' : 'us-east-1, us-west-2'}
+              disabled={allRegionsOn}
+              aria-describedby={`${formId}-regions-help`}
             />
-            <small className="text-muted" style={{ display: 'block' }}>
-              {allRegions && form.allRegionsHelp ? form.allRegionsHelp : form.regionHelp}
-            </small>
-          </label>
-        )}
-        {form.regionHelp && form.allRegionsHelp && (
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <input type="checkbox" checked={allRegions} onChange={(e) => setAllRegions(e.target.checked)} />
-            All regions
-          </label>
+            <div className="form-help" id={`${formId}-regions-help`}>
+              {allRegionsOn ? form.allRegionsHelp : form.regionHelp}
+            </div>
+            {form.allRegionsHelp && (
+              <label className="form-check">
+                <input type="checkbox" checked={allRegions} onChange={(e) => setAllRegions(e.target.checked)} />
+                <span>All regions</span>
+              </label>
+            )}
+          </div>
         )}
 
         {!replaceAuth && (
-          <div className="card-inset">
-            <div style={{ fontWeight: 600, marginBottom: '0.35rem' }}>Sign-in and sync settings</div>
-            <div className="text-muted" style={{ fontSize: '0.9em', marginBottom: '0.5rem' }}>
+          <div className="card-inset form-group">
+            <div style={{ fontWeight: 600, marginBottom: 'var(--space-1)' }}>Sign-in and sync settings</div>
+            <div className="text-muted" style={{ fontSize: 'var(--text-sm)', marginBottom: 'var(--space-2)' }}>
               {account?.has_auth_config
                 ? 'Stored encrypted and never shown. They stay as they are unless you change them.'
                 : 'Nothing is stored: Plexus signs in with the credentials of its own server.'}
@@ -587,10 +650,19 @@ function AccountFormModal({ account, provider: providerProp, providerOptions, on
 
         {replaceAuth && (
           <>
-            <fieldset style={{ border: '1px solid var(--border)', borderRadius: 6, padding: '0.75rem', margin: 0, display: 'grid', gap: '0.6rem' }}>
-              <legend style={{ padding: '0 0.35rem', fontWeight: 600 }}>How Plexus signs in</legend>
+            <fieldset
+              style={{
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-md)',
+                padding: 'var(--space-3)',
+                margin: '0 0 var(--space-4)',
+              }}
+            >
+              <legend id={signInId} style={{ padding: '0 var(--space-1)', fontWeight: 600 }}>
+                How Plexus signs in
+              </legend>
               {account?.id && (
-                <div className="text-muted" style={{ fontSize: '0.9em' }}>
+                <div className="text-muted" style={{ fontSize: 'var(--text-sm)', marginBottom: 'var(--space-3)' }}>
                   Saving replaces everything stored for this {terms.scope}, flow log and traffic settings included: fill in
                   all that apply.{' '}
                   <button type="button" className="btn btn-sm btn-secondary" onClick={() => setReplaceAuth(false)}>
@@ -598,41 +670,43 @@ function AccountFormModal({ account, provider: providerProp, providerOptions, on
                   </button>
                 </div>
               )}
-              {form.methods.map((m) => (
-                <label key={m.key} style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
-                  <input
-                    type="radio"
-                    name="cloud-account-sign-in"
-                    checked={method.key === m.key}
-                    onChange={() => setMethodKey(m.key)}
-                    style={{ marginTop: '0.2rem' }}
-                  />
-                  <span>
-                    <span style={{ fontWeight: 600 }}>{m.label}</span>
-                    <small className="text-muted" style={{ display: 'block' }}>{m.help}</small>
-                  </span>
-                </label>
-              ))}
+              <div role="radiogroup" aria-labelledby={signInId} className="form-group">
+                {form.methods.map((m) => (
+                  <div key={m.key}>
+                    <label className="form-check">
+                      <input
+                        type="radio"
+                        name={signInId}
+                        checked={method.key === m.key}
+                        onChange={() => setMethodKey(m.key)}
+                        aria-describedby={`${signInId}-${m.key}-help`}
+                      />
+                      <span>{m.label}</span>
+                    </label>
+                    <div className="form-help" id={`${signInId}-${m.key}-help`}>{m.help}</div>
+                  </div>
+                ))}
+              </div>
               {method.fields.map((f) => (
                 <AuthFieldInput key={f.key} field={f} value={values[f.key] ?? ''} onChange={(v) => setValue(f.key, v)} />
               ))}
-              {method.fields.length > 0 && (
-                <small className="text-muted">Stored encrypted and never shown again.</small>
-              )}
+              {method.fields.length > 0 && <div className="form-help">Stored encrypted and never shown again.</div>}
             </fieldset>
 
             {form.sections.length > 0 && (
-              <details>
+              <details className="form-group">
                 <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
                   {sectionsSummary(form.sections.map((s) => s.title))} (optional)
                 </summary>
-                <div style={{ display: 'grid', gap: '0.6rem', marginTop: '0.6rem' }}>
-                  <small className="text-muted">Discovery and the Topology map need none of these.</small>
+                <div style={{ marginTop: 'var(--space-3)' }}>
+                  <div className="form-help" style={{ marginBottom: 'var(--space-3)' }}>
+                    Discovery and the Topology map need none of these.
+                  </div>
                   {form.sections.map((section) => (
-                    <div key={section.title} style={{ display: 'grid', gap: '0.5rem' }}>
-                      <div>
+                    <div key={section.title}>
+                      <div style={{ marginBottom: 'var(--space-3)' }}>
                         <div style={{ fontWeight: 600 }}>{section.title}</div>
-                        <small className="text-muted">{section.help}</small>
+                        <div className="form-help">{section.help}</div>
                       </div>
                       {section.fields.map((f) => (
                         <AuthFieldInput key={f.key} field={f} value={values[f.key] ?? ''} onChange={(v) => setValue(f.key, v)} />
@@ -643,26 +717,46 @@ function AccountFormModal({ account, provider: providerProp, providerOptions, on
               </details>
             )}
 
-            <details>
+            <details className="form-group">
               <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Additional settings (JSON, rarely needed)</summary>
-              <label style={{ display: 'block', marginTop: '0.6rem' }}>
-                <small className="text-muted" style={{ display: 'block' }}>
+              <div style={{ marginTop: 'var(--space-3)' }}>
+                <label className="form-label" htmlFor={`${formId}-extra`}>Additional settings</label>
+                <textarea
+                  id={`${formId}-extra`}
+                  className="form-input"
+                  rows={3}
+                  value={extraText}
+                  onChange={(e) => setExtraText(e.target.value)}
+                  placeholder={form.extraPlaceholder}
+                  aria-describedby={`${formId}-extra-help`}
+                />
+                <div className="form-help" id={`${formId}-extra-help`}>
                   A JSON object of settings without a field above; it is saved on top of them.
-                </small>
-                <textarea className="form-input" rows={3} value={extraText} onChange={(e) => setExtraText(e.target.value)} placeholder={form.extraPlaceholder} />
-              </label>
+                </div>
+              </div>
             </details>
           </>
         )}
 
-        <label>
-          Notes
-          <textarea className="form-input" rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional notes" />
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-          Enabled
-        </label>
+        <div className="form-group">
+          <label className="form-label" htmlFor={`${formId}-notes`}>Notes</label>
+          <textarea
+            id={`${formId}-notes`}
+            className="form-input"
+            rows={2}
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="Optional notes"
+          />
+        </div>
+
+        <div className="form-group">
+          <label className="form-check">
+            <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+            <span>Enabled</span>
+          </label>
+        </div>
+
         {error && <Callout tone="danger">{error}</Callout>}
       </form>
     </Modal>
@@ -670,24 +764,39 @@ function AccountFormModal({ account, provider: providerProp, providerOptions, on
 }
 
 function AuthFieldInput({ field, value, onChange }: { field: AuthField; value: string; onChange: (value: string) => void }) {
+  const fid = useId();
+  const id = `${fid}-${field.key}`;
+  const describedBy = [field.list && `${id}-list`, field.help && `${id}-help`].filter(Boolean).join(' ') || undefined;
   return (
-    <label>
-      {field.label}
-      {field.optional && <span className="text-muted"> (optional)</span>}
+    <div className="form-group">
+      <label className="form-label" htmlFor={id}>
+        {field.label}
+        {field.optional && <span className="text-muted"> (optional)</span>}
+      </label>
       {field.json ? (
-        <textarea className="form-input" rows={4} value={value} onChange={(e) => onChange(e.target.value)} placeholder={field.placeholder} />
+        <textarea
+          id={id}
+          className="form-input"
+          rows={4}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={field.placeholder}
+          aria-describedby={describedBy}
+        />
       ) : (
         <input
+          id={id}
           className="form-input"
           type={field.secret ? 'password' : 'text'}
           autoComplete={field.secret ? 'new-password' : 'off'}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={field.placeholder}
+          aria-describedby={describedBy}
         />
       )}
-      {field.list && <small className="text-muted" style={{ display: 'block' }}>Separate several with commas.</small>}
-      {field.help && <small className="text-muted" style={{ display: 'block' }}>{field.help}</small>}
-    </label>
+      {field.list && <div className="form-help" id={`${id}-list`}>Separate several with commas.</div>}
+      {field.help && <div className="form-help" id={`${id}-help`}>{field.help}</div>}
+    </div>
   );
 }

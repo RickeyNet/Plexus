@@ -35,4 +35,11 @@ describe('chartTooltipFormatter', () => {
     expect(chartTooltipFormatter('bps')(undefined)).toBe('-');
     expect(chartTooltipFormatter('number')('')).toBe('-');
   });
+
+  it('uses a caller formatter for the y value and still dashes a gap', () => {
+    const fmt = chartTooltipFormatter((v) => `${v} B`);
+    expect(fmt(['2026-01-01T00:00:00Z', 512])).toBe('512 B');
+    expect(fmt('2048')).toBe('2048 B');
+    expect(fmt(null)).toBe('-');
+  });
 });

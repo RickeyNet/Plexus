@@ -35,10 +35,13 @@ export function formatBpsValue(v: number): string {
 
 /**
  * Tooltip valueFormatter for a line chart. ECharts passes the y value, an
- * array for multi-dimensional points, or nothing for a gap.
+ * array for multi-dimensional points, or nothing for a gap. `unit` is a
+ * built-in kind or the caller's own number formatter ("1.2 GB").
  */
-export function chartTooltipFormatter(unit: 'bps' | 'number'): (value: unknown) => string {
-  const fmt = unit === 'bps' ? formatBpsValue : formatChartNumber;
+export function chartTooltipFormatter(
+  unit: 'bps' | 'number' | ((value: number) => string),
+): (value: unknown) => string {
+  const fmt = typeof unit === 'function' ? unit : unit === 'bps' ? formatBpsValue : formatChartNumber;
   return (value) => {
     const v = Array.isArray(value) ? value[value.length - 1] : value;
     const n = typeof v === 'number' ? v : Number(v);

@@ -3,8 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   addProviderFromSearch,
   discoverOutcome,
+  isPublicRule,
   liveMissingDependencies,
   liveUnavailableReason,
+  policyRuleKeys,
+  providerFullLabel,
   pullOutcome,
   skippedNote,
   topologyConnectionLabel,
@@ -24,6 +27,17 @@ describe('addProviderFromSearch', () => {
     expect(addProviderFromSearch('?add=', offered)).toBeNull();
     expect(addProviderFromSearch('?add=oracle', offered)).toBeNull();
     expect(addProviderFromSearch('?add=azure', ['aws'])).toBeNull();
+  });
+});
+
+describe('providerFullLabel', () => {
+  it('adds the short label after the full name', () => {
+    expect(providerFullLabel('azure')).toBe('Microsoft Azure (Azure)');
+    expect(providerFullLabel('AWS')).toBe('Amazon Web Services (AWS)');
+  });
+
+  it('is just the label when the full name is the same', () => {
+    expect(providerFullLabel('oracle')).toBe('oracle');
   });
 });
 
@@ -183,5 +197,36 @@ describe('topologyResourceTypeLabel of AWS services', () => {
     expect(topologyResourceTypeLabel('rds_db_cluster', 'aws')).toBe('RDS DB cluster');
     expect(topologyResourceTypeLabel('redshift_serverless_workgroup', 'aws')).toBe('Redshift Serverless workgroup');
     expect(topologyResourceTypeLabel('vpc_endpoint', 'aws')).toBe('VPC endpoint');
+  });
+});
+
+describe('isPublicRule', () => {
+  it('flags inbound from anywhere and outbound to anywhere', () => {
+    expect(isPublicRule({ direction: 'inbound', source_selector: '0.0.0.0/0' })).toBe(true);
+    expect(isPublicRule({ direction: 'Inbound', source_selector: '::/0' })).toBe(true);
+    expect(isPublicRule({ direction: 'inbound', source_selector: 'Any' })).toBe(true);
+    expect(isPublicRule({ direction: 'outbound', destination_selector: '192.0.2.0/24, 0.0.0.0/0' })).toBe(true);
+  });
+
+  it('ignores the selector on the other side and scoped ranges', () => {
+    expect(isPublicRule({ direction: 'inbound', source_selector: '198.51.100.0/24', destination_selector: '0.0.0.0/0' })).toBe(false);
+    expect(isPublicRule({ direction: 'outbound', source_selector: '0.0.0.0/0', destination_selector: '2001:db8::/32' })).toBe(false);
+    expect(isPublicRule({ source_selector: '0.0.0.0/0' })).toBe(false);
+  });
+});
+
+describe('policyRuleKeys', () => {
+  it('keys by resource and rule uid, falling back to name, direction and priority', () => {
+    expect(
+      policyRuleKeys([
+        { resource_uid: 'res-a', rule_uid: 'r1' },
+        { resource_uid: 'res-b', rule_uid: 'r1' },
+        { resource_uid: 'res-c', rule_name: 'allow-web', direction: 'inbound', priority: 100 },
+      ]),
+    ).toEqual(['res-a:r1', 'res-b:r1', 'res-c:allow-web|inbound|100']);
+  });
+
+  it('keeps keys unique when two rows share one', () => {
+    expect(policyRuleKeys([{ rule_uid: 'r1' }, { rule_uid: 'r1' }, { rule_uid: 'r1' }])).toEqual([':r1', ':r1#1', ':r1#2']);
   });
 });
