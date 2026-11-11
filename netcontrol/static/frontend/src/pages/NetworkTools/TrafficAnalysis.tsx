@@ -21,6 +21,7 @@ import {
   useFlowTimeline,
 } from '@/api/networkTools';
 import { formatBackendDateTime } from '@/lib/datetime';
+import { usePathTab } from '@/lib/usePathTab';
 
 import { formatBytes } from './formatting';
 
@@ -40,6 +41,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'timeline', label: 'Timeline' },
   { key: 'exporters', label: 'Exporters' },
 ];
+const TAB_KEYS = TABS.map((t) => t.key);
 
 const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   talkers: {
@@ -67,7 +69,9 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
 export function TrafficAnalysis() {
   const [hours, setHours] = useState<number>(6);
   const [hostId, setHostId] = useState<number | null>(null);
-  const [tab, setTab] = useState<Tab>('talkers');
+  // Sub-tab lives in the path (/network-tools/traffic/<view>); Network Tools
+  // names `traffic` as nested so the segment survives its own resolver.
+  const [tab, setTab] = usePathTab('/network-tools/traffic', TAB_KEYS, 'talkers');
 
   const status = useFlowStatus();
 

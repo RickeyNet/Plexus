@@ -763,8 +763,8 @@ per-page **H** items.
 - [x] **M: Maintenance table is hand-built; state shown as lowercase text; own h2 under the tab bar** (`MaintenanceWindows.tsx:75`, `:117`). *Done 2026-11: heading removed (`.toolbar` with the New Window button), state and policy are `Badge`s, list load failure uses `QueryError`.*
 - [ ] **M: MAC Tracking toolbars reuse `page-header`**, spreading controls full width (`pages/NetworkTools/MacTracking.tsx:212`, `:362`, `:548`).
 - [ ] **M: MAC Tracking badges and stat tiles are unstyled** (`MacTracking.tsx:641`, `:772`, `:828`).
-- [ ] **L: Nested scrollbars in the MAC history modals** (`MacTracking.tsx:906`, `:1046`).
-- [ ] **L: Traffic Analysis** — own range select instead of the shared time bar; sub-tab not in the URL (`TrafficAnalysis.tsx:68`, `:103`).
+- [x] **L: Nested scrollbars in the MAC history modals** (`MacTracking.tsx:906`, `:1046`). *Done 2026-11: the move-event log and MAC history bodies dropped their own height caps; the modal body is the only vertical scroller.*
+- [ ] **L: Traffic Analysis** — own range select instead of the shared time bar (`TrafficAnalysis.tsx:68`, `:103`). *Sub-tab done 2026-11: the view is in the path (`/network-tools/traffic/<view>`) through a nested `usePathTab`. The range select is still open.*
 
 ### Inventory
 

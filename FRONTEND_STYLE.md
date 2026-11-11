@@ -511,7 +511,8 @@ Compliance, ChangeManagement, Reports, Configuration, Settings. (Delegator's
 tabs are top-level paths - /assignments, /tasks, ... - so Jobs.tsx maps them
 itself.) Monitoring nests a second level: `/monitoring/:tab?/:sub?`, where
 the top level passes `nested: ['configure']` and ConfigureTab resolves its
-sub-tab with `usePathTab('/monitoring/configure', ...)`.
+sub-tab with `usePathTab('/monitoring/configure', ...)`. Network Tools does
+the same for Traffic Analysis (`/network-tools/traffic/<view>`).
 
 ---
 
