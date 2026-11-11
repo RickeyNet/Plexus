@@ -4,6 +4,7 @@ import { Badge, StatusBadge } from '@/components/Badge';
 import { BusyButton } from '@/components/BusyButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
+  JOB_LIST_MAX,
   useCancelJob,
   useJobQueue,
   useJobs,
@@ -30,9 +31,13 @@ type StatusFilter = 'all' | 'queued' | 'running' | 'completed' | 'failed' | 'can
 type DryRunFilter = 'all' | 'yes' | 'no';
 type DateRange = 'all' | 'today' | '7d' | '30d';
 
+/** Jobs fetched at first, and added by each "Load older jobs" click. */
+const JOB_PAGE = 100;
+
 export function JobsTab() {
   const { confirm, alert } = useDialogs();
-  const jobsQuery = useJobs(100);
+  const [limit, setLimit] = useState(JOB_PAGE);
+  const jobsQuery = useJobs(limit);
   const queueQuery = useJobQueue();
   const cancelMut = useCancelJob();
   const retryMut = useRetryJob();
@@ -143,6 +148,25 @@ export function JobsTab() {
           ))}
         </div>
       ))}
+
+      {/* A full page means older jobs may exist beyond what was fetched. */}
+      {jobsQuery.data && jobsQuery.data.length >= limit && (
+        <div className="text-muted" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.85rem' }}>
+          <span>
+            Showing the {jobsQuery.data.length} most recent jobs. Search and filters only cover these.
+            {limit >= JOB_LIST_MAX && ' Older jobs are not listed.'}
+          </span>
+          {limit < JOB_LIST_MAX && (
+            <BusyButton
+              className="btn btn-sm btn-secondary"
+              busy={jobsQuery.isPlaceholderData}
+              onClick={() => setLimit((l) => Math.min(l + JOB_PAGE, JOB_LIST_MAX))}
+            >
+              Load older jobs
+            </BusyButton>
+          )}
+        </div>
+      )}
 
       <LaunchJobModal
         isOpen={showLaunch}

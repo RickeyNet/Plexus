@@ -4,7 +4,7 @@
  * Mirrors legacy api.js. Job output streaming is handled inline by the
  * Jobs page via a WebSocket on /ws/jobs/<id>; only REST is exposed here.
  */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import type { Tone } from '@/lib/severity';
 
@@ -198,11 +198,16 @@ export function useDeletePlaybook() {
 
 // ── Jobs ───────────────────────────────────────────────────────────────────
 
+/** The most jobs GET /api/jobs returns in one call (the route's `limit` ceiling). */
+export const JOB_LIST_MAX = 200;
+
 export function useJobs(limit = 100) {
   return useQuery<Job[]>({
     queryKey: ['jobs', limit],
     queryFn: () => apiRequest<Job[]>(`/jobs?limit=${limit}`),
     refetchInterval: 30_000,
+    // Keep the list on screen while a larger page loads.
+    placeholderData: keepPreviousData,
   });
 }
 

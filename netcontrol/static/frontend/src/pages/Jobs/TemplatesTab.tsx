@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 
+import { CopyButton } from '@/components/CopyButton';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import {
@@ -37,8 +38,8 @@ export function TemplatesTab() {
 
   async function handleDelete(t: ConfigTemplate) {
     const ok = await confirm({
-      title: 'Delete template',
-      message: `Delete template "${t.name}"?`,
+      title: 'Delete instruction set',
+      message: `Delete instruction set "${t.name}"?`,
       confirmLabel: 'Delete',
     });
     if (!ok) return;
@@ -49,10 +50,6 @@ export function TemplatesTab() {
         void alert({ message: (e as Error).message, variant: 'error' });
       }
     });
-  }
-
-  function copyContent(content: string) {
-    navigator.clipboard.writeText(content).catch(() => { void alert('Copy failed'); });
   }
 
   function toggleExpand(id: number) {
@@ -68,23 +65,23 @@ export function TemplatesTab() {
       <div className="toolbar">
         <input
           className="form-input"
-          placeholder="Search templates…"
-          aria-label="Search templates"
+          placeholder="Search instructions…"
+          aria-label="Search instructions"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           style={{ width: 240 }}
         />
         <span className="toolbar-spacer" />
-        <button className="btn btn-primary" onClick={() => setEditing({ mode: 'create' })}>+ New Template</button>
+        <button className="btn btn-primary" onClick={() => setEditing({ mode: 'create' })}>+ New Instruction Set</button>
       </div>
 
       {query.error && !query.data ? (
-        <QueryError what="templates" query={query} />
+        <QueryError what="instructions" query={query} />
       ) : (
         query.isPending && <LoadingState />
       )}
       {query.data && (filtered.length === 0 ? (
-        <EmptyState message="No templates" />
+        <EmptyState message={search.trim() ? 'No matching instructions' : 'No instructions'} />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {filtered.map((t) => (
@@ -93,7 +90,6 @@ export function TemplatesTab() {
               template={t}
               expanded={expanded.has(t.id)}
               onToggle={() => toggleExpand(t.id)}
-              onCopy={() => copyContent(t.content)}
               onEdit={() => setEditing({ mode: 'edit', id: t.id })}
               isDeleting={deleting.isPending(t.id)}
               onDelete={() => void handleDelete(t)}
@@ -112,12 +108,11 @@ export function TemplatesTab() {
 }
 
 function TemplateRow({
-  template, expanded, isDeleting, onToggle, onCopy, onEdit, onDelete,
+  template, expanded, isDeleting, onToggle, onEdit, onDelete,
 }: {
   template: ConfigTemplate;
   expanded: boolean;
   onToggle: () => void;
-  onCopy: () => void;
   onEdit: () => void;
   isDeleting: boolean;
   onDelete: () => void;
@@ -143,7 +138,7 @@ function TemplateRow({
           {template.description && <div className="text-muted" style={{ fontSize: '0.85rem' }}>{template.description}</div>}
         </div>
         <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-          <button className="btn btn-sm btn-secondary" onClick={onCopy}>Copy</button>
+          <CopyButton text={template.content} />
           {isLong && <button className="btn btn-sm btn-secondary" onClick={onToggle}>{expanded ? 'Collapse' : 'Expand'}</button>}
           <button className="btn btn-sm btn-secondary" onClick={onEdit}>Edit</button>
           <DeleteButton busy={isDeleting} onClick={onDelete} />

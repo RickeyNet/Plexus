@@ -2945,6 +2945,18 @@ input[type="number"].form-input {
    Job Output
    ═══════════════════════════════════════════════════════════════════════════════ */
 
+.job-output {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem;
+    max-height: 480px;
+    overflow-y: auto;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    white-space: pre-wrap;
+}
+
 .job-output-line {
     margin-bottom: var(--space-1);
 }

@@ -32,7 +32,7 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   },
   tasks: {
     title: 'Reusable Automation Tasks',
-    text: 'Python and Ansible scripts that connect to devices and do work - audits, config pushes, remediations. Tasks marked "requires template" need a matching set of Instructions before they can run.',
+    text: 'Python and Ansible scripts that connect to devices and do work - audits, config pushes, remediations. Some tasks push a set of Instructions, which you pick when you launch them.',
   },
   instructions: {
     title: 'Configuration Command Sets',
@@ -40,7 +40,7 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   },
   credentials: {
     title: 'Credential Management',
-    text: 'SSH, SNMP, and API credentials used to connect to devices. Tasks pick a credential at launch time; assign defaults per device on the Inventory page.',
+    text: 'Device logins (username, password, enable secret) that tasks connect with, plus the secret variables instructions reference. Pick a credential when you launch a task.',
   },
 };
 

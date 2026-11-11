@@ -1,3 +1,4 @@
+import type { InventoryGroupFull } from '@/api/inventory';
 import { JOB_PRIORITY_LABELS, JOB_PRIORITY_TONES, type Job } from '@/api/jobs';
 import { toDate } from '@/lib/datetime';
 import { type Tone } from '@/lib/severity';
@@ -49,6 +50,37 @@ export function parseTags(tags: unknown): string[] {
     }
   }
   return [];
+}
+
+/**
+ * The launch picker's groups narrowed to a search. A group whose name or path
+ * matches keeps all its hosts; otherwise it keeps the hosts matching on
+ * hostname, address or device type, and drops out when none do.
+ */
+export function filterTargetGroups(groups: InventoryGroupFull[], query: string): InventoryGroupFull[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return groups;
+  const out: InventoryGroupFull[] = [];
+  for (const g of groups) {
+    if (g.name.toLowerCase().includes(q) || (g.path ?? '').toLowerCase().includes(q)) {
+      out.push(g);
+      continue;
+    }
+    const hosts = (g.hosts ?? []).filter((h) =>
+      h.hostname.toLowerCase().includes(q) ||
+      h.ip_address.toLowerCase().includes(q) ||
+      (h.device_type ?? '').toLowerCase().includes(q),
+    );
+    if (hosts.length > 0) out.push({ ...g, hosts });
+  }
+  return out;
+}
+
+/** Distinct hosts across the launch picker's groups. */
+export function countTargetHosts(groups: InventoryGroupFull[]): number {
+  const ids = new Set<number>();
+  for (const g of groups) for (const h of g.hosts ?? []) ids.add(h.id);
+  return ids.size;
 }
 
 export function withinDateRange(dateStr: string, range: 'all' | 'today' | '7d' | '30d'): boolean {

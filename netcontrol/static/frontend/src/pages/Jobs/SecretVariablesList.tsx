@@ -28,7 +28,7 @@ export function SecretVariablesList() {
   async function handleDelete(v: SecretVariable) {
     const ok = await confirm({
       title: 'Delete secret variable',
-      message: `Delete secret '${v.name}'? Templates referencing {{secret.${v.name}}} will fail.`,
+      message: `Delete secret '${v.name}'? Instructions referencing {{secret.${v.name}}} will fail.`,
       confirmLabel: 'Delete',
     });
     if (!ok) return;
@@ -45,7 +45,7 @@ export function SecretVariablesList() {
     <div>
       <div className="toolbar">
         <p className="text-muted" style={{ margin: 0 }}>
-          Use <code>{'{{secret.NAME}}'}</code> in config templates to reference encrypted values.
+          Use <code>{'{{secret.NAME}}'}</code> in instructions to reference encrypted values.
         </p>
         <span className="toolbar-spacer" />
         <button className="btn btn-primary" onClick={() => setShowCreate(true)}>+ New Secret</button>
@@ -162,7 +162,7 @@ function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =
             required
           />
           <small className="text-muted" style={{ display: 'block', marginTop: '0.25rem' }}>
-            Enter only the name, not the template reference. For a template line containing{' '}
+            Enter only the name, not the full reference. For an instruction line containing{' '}
             <code>{'{{secret.snmp_v3_auth_key}}'}</code>, the name is <code>snmp_v3_auth_key</code>.
             Pasting the full reference is fine; the braces and <code>secret.</code> prefix are removed automatically.
             Allowed: letters, digits, <code>_</code> and <code>-</code>, starting with a letter or <code>_</code>, up to 64 characters.
@@ -170,14 +170,14 @@ function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =
           {normalized && (
             <small style={{ display: 'block', marginTop: '0.25rem', color: nameValid ? undefined : 'var(--danger)' }}>
               {nameValid ? (
-                <>Templates will reference this as <code>{`{{secret.${normalized}}}`}</code></>
+                <>Instructions will reference this as<code>{`{{secret.${normalized}}}`}</code></>
               ) : (
                 <>"{normalized}" is not a valid name: remove spaces, dots and other symbols.</>
               )}
             </small>
           )}
           <small className="text-muted" style={{ display: 'block', marginTop: '0.25rem' }}>
-            The built-in SNMPv3 templates expect <code>snmp_v3_auth_key</code> and <code>snmp_v3_priv_key</code>.
+            The built-in SNMPv3 instructions expect<code>snmp_v3_auth_key</code> and <code>snmp_v3_priv_key</code>.
           </small>
           <FieldError>{errors.name}</FieldError>
         </div>

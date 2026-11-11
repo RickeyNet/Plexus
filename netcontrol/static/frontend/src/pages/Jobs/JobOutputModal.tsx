@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import { Badge, StatusBadge } from '@/components/Badge';
 import { BusyButton } from '@/components/BusyButton';
+import { CopyButton } from '@/components/CopyButton';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
@@ -171,15 +172,11 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
     });
   }
 
-  function handleCopyOutput() {
-    // Mirror the single-source render so the clipboard doesn't get the
-    // duplicated history+live concatenation either.
-    const src = showLive ? liveEvents : historicalEvents;
-    const lines = src
-      .map((e) => `[${formatBackendTime(e.timestamp, '')}] ${e.host ? e.host + ': ' : ''}${e.message}`)
-      .join('\n');
-    navigator.clipboard.writeText(lines).catch(() => { void alert('Copy failed'); });
-  }
+  // The one list both the output area and the clipboard read, so neither
+  // gets the duplicated history+live concatenation.
+  const shownEvents: (LiveEvent | JobEvent)[] = showLive ? liveEvents : historicalEvents;
+  const eventLine = (e: LiveEvent | JobEvent) =>
+    `[${formatBackendTime(e.timestamp, '')}] ${e.host ? `${e.host}: ` : ''}${e.message}`;
 
   return (
     <Modal
@@ -192,7 +189,12 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
           <button type="button" className="btn btn-secondary" onClick={onClose}>Close</button>
           {job && (
             <>
-              <button type="button" className="btn btn-secondary" onClick={handleCopyOutput}>Copy Output</button>
+              <CopyButton
+                className="btn btn-secondary"
+                label="Copy Output"
+                text={() => shownEvents.map(eventLine).join('\n')}
+                disabled={shownEvents.length === 0}
+              />
               {!isFinished && (
                 <button type="button" className="btn btn-danger" onClick={handleCancel}>Cancel Job</button>
               )}
@@ -229,31 +231,12 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
             {wsState === 'error' && <span style={{ color: 'var(--danger)' }}>WebSocket error</span>}
           </div>
 
-          <div
-            ref={outputRef}
-            style={{
-              background: 'var(--bg-secondary)',
-              padding: '0.75rem',
-              borderRadius: 8,
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.82rem',
-              maxHeight: 480,
-              overflowY: 'auto',
-              whiteSpace: 'pre-wrap',
-              border: '1px solid var(--border)',
-            }}
-          >
-            {showLive
-              ? liveEvents.map((e, i) => (
-                  <div key={`l-${i}`} className={`job-output-line ${e.level || 'info'}`}>
-                    [{formatBackendTime(e.timestamp, '')}] {e.host ? `${e.host}: ` : ''}{e.message}
-                  </div>
-                ))
-              : historicalEvents.map((e, i) => (
-                  <div key={`h-${i}`} className={`job-output-line ${e.level || 'info'}`}>
-                    [{formatBackendTime(e.timestamp, '')}] {e.host ? `${e.host}: ` : ''}{e.message}
-                  </div>
-                ))}
+          <div ref={outputRef} className="job-output">
+            {shownEvents.map((e, i) => (
+              <div key={`${showLive ? 'l' : 'h'}-${i}`} className={`job-output-line ${e.level || 'info'}`}>
+                {eventLine(e)}
+              </div>
+            ))}
             {liveStatus && (
               <div className="job-output-line success" style={{ marginTop: '0.5rem', fontWeight: 600 }}>
                 [Job Complete] Status: {liveStatus}
@@ -262,7 +245,7 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
             {!showLive && eventsQuery.error && !eventsQuery.data ? (
               <QueryError what="job output" query={eventsQuery} />
             ) : (
-              (showLive ? liveEvents.length === 0 : historicalEvents.length === 0) && (
+              shownEvents.length === 0 && (
                 <EmptyState compact message="No output yet…" />
               )
             )}

@@ -174,7 +174,7 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={mode === 'edit' ? 'Edit Playbook' : 'New Playbook'}
+      title={mode === 'edit' ? 'Edit Task' : 'New Task'}
       size="medium"
       footer={
         <>
@@ -188,7 +188,7 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
       }
     >
       {loadFailed ? (
-        <QueryError what="playbook" query={detailQuery} />
+        <QueryError what="task" query={detailQuery} />
       ) : loading ? (
         <LoadingState />
       ) : (
