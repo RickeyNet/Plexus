@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { CopyButton } from '@/components/CopyButton';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
@@ -61,13 +62,7 @@ export function RouteSnapshotsModal({ hostId, hostname, onClose }: { hostId: num
           title={`Route Table - ${selected.ts}`}
           size="large"
           footer={
-            <button
-              type="button"
-              className="btn btn-sm btn-secondary"
-              onClick={() => navigator.clipboard.writeText(selected.text)}
-            >
-              Copy
-            </button>
+            <CopyButton text={selected.text} />
           }
         >
           <pre style={{ background: 'var(--bg-secondary)', padding: '0.75rem', borderRadius: 4, maxHeight: 400, overflow: 'auto', fontSize: '0.8em' }}>

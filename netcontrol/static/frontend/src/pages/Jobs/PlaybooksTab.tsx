@@ -42,8 +42,8 @@ export function PlaybooksTab() {
 
   async function handleDelete(pb: Playbook) {
     const ok = await confirm({
-      title: 'Delete playbook',
-      message: `Delete playbook "${pb.name}"? This cannot be undone.`,
+      title: 'Delete task',
+      message: `Delete task "${pb.name}"? This cannot be undone.`,
       confirmLabel: 'Delete',
     });
     if (!ok) return;
@@ -61,23 +61,23 @@ export function PlaybooksTab() {
       <div className="toolbar">
         <input
           className="form-input"
-          placeholder="Search playbooks…"
-          aria-label="Search playbooks"
+          placeholder="Search tasks…"
+          aria-label="Search tasks"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           style={{ width: 240 }}
         />
         <span className="toolbar-spacer" />
-        <button className="btn btn-primary" onClick={() => setEditing({ mode: 'create' })}>+ New Playbook</button>
+        <button className="btn btn-primary" onClick={() => setEditing({ mode: 'create' })}>+ New Task</button>
       </div>
 
       {query.error && !query.data ? (
-        <QueryError what="playbooks" query={query} />
+        <QueryError what="tasks" query={query} />
       ) : (
         query.isPending && <LoadingState />
       )}
       {query.data && (filtered.length === 0 ? (
-        <EmptyState message="No playbooks" />
+        <EmptyState message={search.trim() ? 'No matching tasks' : 'No tasks'} />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {filtered.map((pb) => (

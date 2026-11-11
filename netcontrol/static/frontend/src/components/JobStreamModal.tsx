@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
+import { CopyButton } from '@/components/CopyButton';
 import { Modal } from '@/components/Modal';
 
 export interface JobStreamMessage {
@@ -120,14 +121,6 @@ export function JobStreamModal({
     if (el) el.scrollTop = el.scrollHeight;
   }, [output]);
 
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(output);
-    } catch {
-      /* ignore - clipboard not available */
-    }
-  };
-
   return (
     <Modal
       isOpen={isOpen}
@@ -143,15 +136,7 @@ export function JobStreamModal({
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>{subtitle}</span>
-          <button
-            type="button"
-            className="btn btn-sm btn-secondary"
-            onClick={handleCopy}
-            disabled={!output}
-            title="Copy output to clipboard"
-          >
-            Copy
-          </button>
+          <CopyButton text={output} disabled={!output} title="Copy output to clipboard" />
         </div>
         <pre
           ref={outputRef}

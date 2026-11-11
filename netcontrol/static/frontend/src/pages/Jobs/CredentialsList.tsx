@@ -22,7 +22,8 @@ export function CredentialsList() {
   const query = useJobCredentials();
   const deleteMut = useDeleteCredential();
   const deleting = usePendingKeys<number>();
-  const [showCreate, setShowCreate] = useState(false);
+  // null: closed; 'new': create; a credential: edit that one.
+  const [form, setForm] = useState<Credential | 'new' | null>(null);
 
   async function handleDelete(c: Credential) {
     const ok = await confirm({
@@ -44,7 +45,7 @@ export function CredentialsList() {
     <div>
       <div className="toolbar">
         <span className="toolbar-spacer" />
-        <button className="btn btn-primary" onClick={() => setShowCreate(true)}>+ New Credential</button>
+        <button className="btn btn-primary" onClick={() => setForm('new')}>+ New Credential</button>
       </div>
 
       {query.error && !query.data ? (
@@ -57,12 +58,24 @@ export function CredentialsList() {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {query.data.map((c) => (
-            <CredentialRow key={c.id} credential={c} isDeleting={deleting.isPending(c.id)} onDelete={() => void handleDelete(c)} />
+            <CredentialRow
+              key={c.id}
+              credential={c}
+              isDeleting={deleting.isPending(c.id)}
+              onEdit={() => setForm(c)}
+              onDelete={() => void handleDelete(c)}
+            />
           ))}
         </div>
       ))}
 
-      <CreateCredentialModal isOpen={showCreate} onClose={() => setShowCreate(false)} />
+      {form && (
+        <CredentialFormModal
+          key={form === 'new' ? 'new' : form.id}
+          credential={form === 'new' ? null : form}
+          onClose={() => setForm(null)}
+        />
+      )}
     </div>
   );
 }
@@ -70,75 +83,43 @@ export function CredentialsList() {
 function CredentialRow({
   credential,
   isDeleting,
+  onEdit,
   onDelete,
 }: {
   credential: Credential;
   isDeleting: boolean;
+  onEdit: () => void;
   onDelete: () => void;
 }) {
-  const { alert } = useDialogs();
-  const fid = useId();
-  const updateMut = useUpdateCredential();
-  const [name, setName] = useState(credential.name);
-  const [username, setUsername] = useState(credential.username);
-  const [password, setPassword] = useState('');
-  const [secret, setSecret] = useState('');
-
-  const dirty = name !== credential.name || username !== credential.username || password.length > 0 || secret.length > 0;
-
-  function save() {
-    const data: Partial<{ name: string; username: string; password: string; secret: string }> = {};
-    if (name !== credential.name) data.name = name;
-    if (username !== credential.username) data.username = username;
-    if (password) data.password = password;
-    if (secret) data.secret = secret;
-    updateMut.mutate({ id: credential.id, data }, {
-      onSuccess: () => { setPassword(''); setSecret(''); },
-      onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
-    });
-  }
-
   return (
-    <div className="card card-sm">
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.5rem' }}>
-        <div>
-          <label className="form-label" htmlFor={`${fid}-name`} style={{ fontSize: '0.75rem' }}>Name</label>
-          <input id={`${fid}-name`} className="form-input" value={name} onChange={(e) => setName(e.target.value)} />
-        </div>
-        <div>
-          <label className="form-label" htmlFor={`${fid}-username`} style={{ fontSize: '0.75rem' }}>Username</label>
-          <input id={`${fid}-username`} className="form-input" value={username} onChange={(e) => setUsername(e.target.value)} />
-        </div>
-        <div>
-          <label className="form-label" htmlFor={`${fid}-password`} style={{ fontSize: '0.75rem' }}>Password</label>
-          <input id={`${fid}-password`} className="form-input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="unchanged" />
-        </div>
-        <div>
-          <label className="form-label" htmlFor={`${fid}-secret`} style={{ fontSize: '0.75rem' }}>Secret</label>
-          <input id={`${fid}-secret`} className="form-input" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="unchanged" />
+    <div className="card card-sm" style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-4)', alignItems: 'center' }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 600 }}>{credential.name}</div>
+        <div className="text-muted" style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>
+          Username: {credential.username}
         </div>
       </div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.4rem', marginTop: '0.5rem' }}>
-        {dirty && (
-          <button className="btn btn-sm btn-primary" onClick={save} disabled={updateMut.isPending}>
-            {updateMut.isPending ? 'Saving…' : 'Save'}
-          </button>
-        )}
+      <div style={{ display: 'flex', gap: '0.4rem' }}>
+        <button className="btn btn-sm btn-secondary" onClick={onEdit}>Edit</button>
         <DeleteButton busy={isDeleting} onClick={onDelete} />
       </div>
     </div>
   );
 }
 
-function CreateCredentialModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+/** Creates a credential, or edits `credential` when one is given. */
+function CredentialFormModal({ credential, onClose }: { credential: Credential | null; onClose: () => void }) {
   const createMut = useCreateCredential();
+  const updateMut = useUpdateCredential();
   const formId = useId();
-  const [name, setName] = useState('');
-  const [username, setUsername] = useState('');
+  const [name, setName] = useState(credential?.name ?? '');
+  const [username, setUsername] = useState(credential?.username ?? '');
   const [password, setPassword] = useState('');
   const [secret, setSecret] = useState('');
   const [errors, setErrors] = useState<{ name?: string; username?: string; password?: string }>({});
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  const pending = createMut.isPending || updateMut.isPending;
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -146,32 +127,41 @@ function CreateCredentialModal({ isOpen, onClose }: { isOpen: boolean; onClose: 
     const next = {
       name: name.trim() ? undefined : 'Name is required',
       username: username.trim() ? undefined : 'Username is required',
-      password: password ? undefined : 'Password is required',
+      // An edit keeps the stored password when the field is left blank.
+      password: password || credential ? undefined : 'Password is required',
     };
     setErrors(next);
     if (next.name || next.username || next.password) return;
-    createMut.mutate(
-      { name: name.trim(), username: username.trim(), password, secret: secret || undefined },
-      {
-        onSuccess: () => {
-          setName(''); setUsername(''); setPassword(''); setSecret('');
-          onClose();
-        },
-        onError: (e) => { setSaveError((e as Error).message); },
-      },
-    );
+    const onError = (err: unknown) => { setSaveError((err as Error).message); };
+    if (!credential) {
+      createMut.mutate(
+        { name: name.trim(), username: username.trim(), password, secret: secret || undefined },
+        { onSuccess: onClose, onError },
+      );
+      return;
+    }
+    const data: Partial<{ name: string; username: string; password: string; secret: string }> = {};
+    if (name.trim() !== credential.name) data.name = name.trim();
+    if (username.trim() !== credential.username) data.username = username.trim();
+    if (password) data.password = password;
+    if (secret) data.secret = secret;
+    if (Object.keys(data).length === 0) {
+      onClose();
+      return;
+    }
+    updateMut.mutate({ id: credential.id, data }, { onSuccess: onClose, onError });
   }
 
   return (
     <Modal
-      isOpen={isOpen}
+      isOpen
       onClose={onClose}
-      title="Create Credential"
+      title={credential ? 'Edit Credential' : 'Create Credential'}
       footer={
         <>
           <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" form={formId} className="btn btn-primary" disabled={createMut.isPending}>
-            {createMut.isPending ? 'Creating…' : 'Create'}
+          <button type="submit" form={formId} className="btn btn-primary" disabled={pending}>
+            {credential ? (pending ? 'Saving…' : 'Save') : (pending ? 'Creating…' : 'Create')}
           </button>
         </>
       }
@@ -208,16 +198,26 @@ function CreateCredentialModal({ isOpen, onClose }: { isOpen: boolean; onClose: 
             id={`${formId}-password`}
             className="form-input"
             type="password"
+            autoComplete="new-password"
             value={password}
             onChange={(e) => { setPassword(e.target.value); setErrors((p) => ({ ...p, password: undefined })); }}
             aria-invalid={!!errors.password}
-            required
+            required={!credential}
           />
+          {credential && <small className="text-muted">Leave blank to keep the current password.</small>}
           <FieldError>{errors.password}</FieldError>
         </div>
         <div className="form-group">
           <label className="form-label" htmlFor={`${formId}-secret`}>Secret (Enable Password)</label>
-          <input id={`${formId}-secret`} className="form-input" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} />
+          <input
+            id={`${formId}-secret`}
+            className="form-input"
+            type="password"
+            autoComplete="new-password"
+            value={secret}
+            onChange={(e) => setSecret(e.target.value)}
+          />
+          {credential && <small className="text-muted">Leave blank to keep the current secret.</small>}
         </div>
       </form>
     </Modal>

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 
 import { useMerakiSubnets, useSummarize, useTopologySources, type SummarizeReport } from '@/api/meraki';
+import { CopyButton } from '@/components/CopyButton';
 import { PageHelp } from '@/components/PageHelp';
 
 import { DETAIL_CELL_STYLE, FIELD_STYLE, HEAD_STYLE, NOTE_STYLE, SCROLL_X_STYLE, TEXT_CELL_STYLE } from './helpers';
@@ -141,15 +142,7 @@ export function Summarize() {
 }
 
 function Results({ report }: { report: SummarizeReport }) {
-  const [copied, setCopied] = useState(false);
   const overlapping = report.routes.filter((r) => r.overlaps.length).length;
-
-  function copy() {
-    void navigator.clipboard.writeText(report.text).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    });
-  }
 
   return (
     <div className="card card-sm">
@@ -170,9 +163,7 @@ function Results({ report }: { report: SummarizeReport }) {
           style={{ fontFamily: 'monospace', flex: '1 1 auto', maxWidth: 420, resize: 'vertical' }}
           onFocus={(e) => e.target.select()}
         />
-        <button type="button" className="btn btn-sm btn-secondary" onClick={copy}>
-          {copied ? 'Copied' : 'Copy'}
-        </button>
+        <CopyButton text={report.text} />
       </div>
 
       <div style={SCROLL_X_STYLE}>

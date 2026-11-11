@@ -389,11 +389,11 @@ per-page **H** items.
 
 ### Jobs
 
-- [ ] **M: Tabs say Tasks/Instructions, content says Playbook/Template** (`pages/Jobs/LaunchJobModal.tsx:138`, `PlaybooksTab.tsx:46`, `TemplatesTab.tsx:54`).
-- [ ] **M: Launch target picker has no search, count or clear** (`LaunchJobModal.tsx:152`).
-- [ ] **M: Credentials are always-open inline forms; Save appears on change and shifts the layout** (`CredentialsList.tsx:69`).
-- [ ] **L: Job list silently capped at 100; Copy gives no feedback; output modal ignores the `.job-output` class** (`JobsTab.tsx:29`, `JobOutputModal.tsx:175`, `:199`).
-- [ ] **L: Credentials help mentions an Inventory control that does not exist** (`Jobs.tsx:42`).
+- [x] **M: Tabs say Tasks/Instructions, content says Playbook/Template** (`pages/Jobs/LaunchJobModal.tsx:138`, `PlaybooksTab.tsx:46`, `TemplatesTab.tsx:54`).
+- [x] **M: Launch target picker has no search, count or clear** (`LaunchJobModal.tsx:152`).
+- [x] **M: Credentials are always-open inline forms; Save appears on change and shifts the layout** (`CredentialsList.tsx:69`).
+- [x] **L: Job list silently capped at 100; Copy gives no feedback; output modal ignores the `.job-output` class** (`JobsTab.tsx:29`, `JobOutputModal.tsx:175`, `:199`).
+- [x] **L: Credentials help mentions an Inventory control that does not exist** (`Jobs.tsx:42`).
 
 ### Upgrades and Software
 
