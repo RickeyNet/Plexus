@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any, overload
 
@@ -49,6 +51,27 @@ _require_admin = None
 # map's progress bar. The collector writes it from a worker thread; each write
 # replaces the whole entry, so a reader never sees a half-updated one.
 _DISCOVERY_PROGRESS: dict[int, dict[str, Any]] = {}
+
+
+def discovery_progress(account_id: int) -> dict[str, Any] | None:
+    """A copy of the progress of this account's running discovery; ``None`` when none runs."""
+    progress = _DISCOVERY_PROGRESS.get(account_id)
+    return None if progress is None else dict(progress)
+
+
+@contextmanager
+def _tracked_discovery(account_id: int) -> Iterator[ProgressCallback]:
+    """Publish the progress of one discovery in ``_DISCOVERY_PROGRESS`` while it runs."""
+    _DISCOVERY_PROGRESS[account_id] = {"phase": "starting"}
+
+    def _progress(fields: dict[str, Any]) -> None:
+        _DISCOVERY_PROGRESS[account_id] = dict(fields)
+
+    try:
+        yield _progress
+    finally:
+        _DISCOVERY_PROGRESS.pop(account_id, None)
+
 
 _VALID_PROVIDERS = {"aws", "azure", "gcp"}
 _VALID_FLOW_INGEST_FORMATS = {"normalized", "aws", "azure", "gcp"}
@@ -1161,11 +1184,14 @@ async def run_scheduled_discovery() -> dict:
         try:
             existing_links = await db.get_cloud_hybrid_links(account_id=account_id)
             host_ids = sorted({int(link["host_id"]) for link in existing_links if link.get("host_id")})
-            resources, connections, hybrid_links = await _build_live_discovery_snapshot(
-                account,
-                host_ids,
-                bool(host_ids),
-            )
+            # Tracked like a manual discovery, so the map's sources show its progress.
+            with _tracked_discovery(account_id) as progress:
+                resources, connections, hybrid_links = await _build_live_discovery_snapshot(
+                    account,
+                    host_ids,
+                    bool(host_ids),
+                    progress,
+                )
             await db.replace_cloud_discovery_snapshot(
                 account_id,
                 resources=resources,
@@ -1551,21 +1577,14 @@ async def ingest_cloud_traffic_metrics_api(account_id: int, request: Request, bo
 @router.get("/api/cloud/accounts/{account_id}/discover/progress", dependencies=[Depends(_require_admin_dep)])
 async def cloud_discovery_progress_api(account_id: int):
     """How far the running discovery of this account is, polled while the discover request is in flight."""
-    progress = _DISCOVERY_PROGRESS.get(account_id)
-    return {"running": progress is not None, "progress": dict(progress or {})}
+    progress = discovery_progress(account_id)
+    return {"running": progress is not None, "progress": progress or {}}
 
 
 @router.post("/api/cloud/accounts/{account_id}/discover", dependencies=[Depends(_require_admin_dep)])
 async def discover_cloud_account_api(account_id: int, request: Request, body: CloudDiscoveryRequest | None = None):
-    _DISCOVERY_PROGRESS[account_id] = {"phase": "starting"}
-
-    def _progress(fields: dict[str, Any]) -> None:
-        _DISCOVERY_PROGRESS[account_id] = dict(fields)
-
-    try:
-        return await _discover_cloud_account(account_id, request, body, _progress)
-    finally:
-        _DISCOVERY_PROGRESS.pop(account_id, None)
+    with _tracked_discovery(account_id) as progress:
+        return await _discover_cloud_account(account_id, request, body, progress)
 
 
 async def _discover_cloud_account(

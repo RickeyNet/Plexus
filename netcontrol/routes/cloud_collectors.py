@@ -40,6 +40,26 @@ def _report(progress: ProgressCallback | None, **fields: Any) -> None:
         LOGGER.debug("cloud discovery progress callback failed", exc_info=True)
 
 
+class _Steps:
+    """The counted steps of one discovery, for the progress bar. Each call
+    reports the section about to be read, with the sections already finished
+    as ``steps_done`` and the fixed ``steps_total`` of the discovery."""
+
+    def __init__(self, progress: ProgressCallback | None, phase: str, steps_total: int) -> None:
+        self.progress, self.phase, self.steps_total, self.steps_done = progress, phase, steps_total, 0
+
+    def __call__(self, section: str, **fields: Any) -> None:
+        _report(
+            self.progress,
+            phase=self.phase,
+            **fields,
+            section=section,
+            steps_done=self.steps_done,
+            steps_total=self.steps_total,
+        )
+        self.steps_done += 1
+
+
 class CloudCollectorError(RuntimeError):
     """Base class for collector failures.
 
@@ -1076,22 +1096,10 @@ def _collect_aws(account: dict, progress: ProgressCallback | None = None) -> tup
     connections: list[dict] = []
     section_errors: list[tuple[str, str]] = []
 
-    steps_total = len(regions) * _AWS_SECTIONS_PER_REGION
-    steps_done = 0
+    steps = _Steps(progress, "aws region", len(regions) * _AWS_SECTIONS_PER_REGION)
 
     def _step(region: str, section: str) -> None:
-        nonlocal steps_done
-        _report(
-            progress,
-            phase="aws region",
-            region=region,
-            section=section,
-            regions_done=region_index,
-            regions_total=len(regions),
-            steps_done=steps_done,
-            steps_total=steps_total,
-        )
-        steps_done += 1
+        steps(section, region=region, regions_done=region_index, regions_total=len(regions))
 
     region_index = 0
     for region_index, region in enumerate(regions):
@@ -1516,7 +1524,25 @@ def _collect_aws(account: dict, progress: ProgressCallback | None = None) -> tup
     return _dedupe_resources(resources), _dedupe_connections(connections)
 
 
-def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
+# The sections _collect_azure_network reads, in order; each is one step of the
+# progress bar, so their count is the progress total.
+_AZURE_SECTIONS = (
+    "public IP addresses",
+    "virtual networks",
+    "ExpressRoute circuits",
+    "route tables",
+    "network security groups",
+    "resource groups",
+    "virtual network gateways",
+    "local network gateways",
+    "gateway connections",
+    "NAT gateways",
+    "network interfaces",
+    "Azure Firewalls",
+)
+
+
+def _collect_azure(account: dict, progress: ProgressCallback | None = None) -> tuple[list[dict], list[dict]]:
     """Discover one Azure subscription with the Network API.
 
     The base sections (virtual networks and their subnets and peerings,
@@ -1544,6 +1570,7 @@ def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
     client_id = str(auth.get("client_id") or "").strip()
     client_secret = str(auth.get("client_secret") or "").strip()
 
+    _report(progress, phase="azure login")
     try:
         if tenant_id and client_id and client_secret:
             credential = ClientSecretCredential(tenant_id=tenant_id, client_id=client_id, client_secret=client_secret)
@@ -1570,7 +1597,7 @@ def _collect_azure(account: dict) -> tuple[list[dict], list[dict]]:
             resource_client = ResourceManagementClient(credential, subscription_id)
             return [str(group.name) for group in resource_client.resource_groups.list() if getattr(group, "name", "")]
 
-    return _collect_azure_network(network_client, subscription_id, list_resource_groups)
+    return _collect_azure_network(network_client, subscription_id, list_resource_groups, progress)
 
 
 def _azure_resource_groups(list_resource_groups, resources: list[dict], public_ips: dict[str, str]) -> list[str]:
@@ -1607,7 +1634,7 @@ def _azure_resource_groups(list_resource_groups, resources: list[dict], public_i
 
 
 def _collect_azure_network(
-    network_client, subscription_id: str, list_resource_groups=None
+    network_client, subscription_id: str, list_resource_groups=None, progress: ProgressCallback | None = None
 ) -> tuple[list[dict], list[dict]]:
     """The discovery itself, on an initialised ``NetworkManagementClient``.
 
@@ -1620,6 +1647,7 @@ def _collect_azure_network(
     connections: list[dict] = []
     section_errors: list[tuple[str, str]] = []
     public_ips: dict[str, str] = {}
+    step = _Steps(progress, "azure section", len(_AZURE_SECTIONS))
 
     def optional(section: str, read) -> None:
         try:
@@ -1632,8 +1660,10 @@ def _collect_azure_network(
         public_ips.update(azure_detail.public_ip_table(network_client.public_ip_addresses.list_all()))
 
     # Gateways, NAT gateways, firewalls and NICs name their public IPs by ID.
+    step("public IP addresses")
     optional("public_ip_addresses", public_ip_addresses)
 
+    step("virtual networks")
     try:
         for vnet in network_client.virtual_networks.list_all():
             resource = azure_detail.vnet_resource(vnet, subscription_id)
@@ -1659,6 +1689,7 @@ def _collect_azure_network(
             user_message=f"Azure refused the network read: {provider_error_detail(exc)}",
         ) from exc
 
+    step("ExpressRoute circuits")
     try:
         for circuit in network_client.express_route_circuits.list_all():
             resource = azure_detail.express_route_resource(circuit, subscription_id)
@@ -1668,6 +1699,7 @@ def _collect_azure_network(
         LOGGER.warning("azure collector: failed to list expressroute circuits", exc_info=True)
         section_errors.append(("expressroute_circuits", provider_error_detail(exc)))
 
+    step("route tables")
     try:
         for route_table in network_client.route_tables.list_all():
             resource = azure_detail.route_table_resource(route_table, subscription_id)
@@ -1679,6 +1711,7 @@ def _collect_azure_network(
         LOGGER.warning("azure collector: failed to list route tables", exc_info=True)
         section_errors.append(("route_tables", provider_error_detail(exc)))
 
+    step("network security groups")
     try:
         for nsg in network_client.network_security_groups.list_all():
             resource = azure_detail.nsg_resource(nsg, subscription_id)
@@ -1690,8 +1723,10 @@ def _collect_azure_network(
 
     # Gateways and connections are listed per resource group; the Network API
     # has no list_all for them.
+    step("resource groups")
     groups = _azure_resource_groups(list_resource_groups, resources, public_ips)
 
+    step("virtual network gateways")
     try:
         for group in groups:
             for gateway in network_client.virtual_network_gateways.list(group):
@@ -1706,6 +1741,7 @@ def _collect_azure_network(
         LOGGER.warning("azure collector: failed to list virtual network gateways", exc_info=True)
         section_errors.append(("virtual_network_gateways", provider_error_detail(exc)))
 
+    step("local network gateways")
     try:
         for group in groups:
             for gateway in network_client.local_network_gateways.list(group):
@@ -1716,6 +1752,7 @@ def _collect_azure_network(
         LOGGER.warning("azure collector: failed to list local network gateways", exc_info=True)
         section_errors.append(("local_network_gateways", provider_error_detail(exc)))
 
+    step("gateway connections")
     try:
         for group in groups:
             for conn in network_client.virtual_network_gateway_connections.list(group):
@@ -1743,8 +1780,11 @@ def _collect_azure_network(
             if resource:
                 resources.append(resource)
 
+    step("NAT gateways")
     optional("nat_gateways", nat_gateways)
+    step("network interfaces")
     optional("network_interfaces", virtual_machines)
+    step("Azure Firewalls")
     optional("azure_firewalls", firewalls)
 
     # A partial snapshot must not silently replace the last known-good one; the
@@ -1755,7 +1795,26 @@ def _collect_azure_network(
     return _dedupe_resources(resources), _dedupe_connections(connections)
 
 
-def _collect_gcp(account: dict) -> tuple[list[dict], list[dict]]:
+# The sections _collect_gcp_compute reads, by section key, with the label the
+# progress bar shows; each is one step, so their count is the progress total.
+_GCP_SECTIONS = {
+    "networks": "networks",
+    "subnetworks": "subnetworks",
+    "routes": "routes",
+    "firewalls": "firewall rules",
+    "routers": "Cloud Routers",
+    "vpn_gateways": "HA VPN gateways",
+    "target_vpn_gateways": "Classic VPN gateways",
+    "vpn_tunnels": "VPN tunnels",
+    "external_vpn_gateways": "external VPN gateways",
+    "interconnect_attachments": "Interconnect attachments",
+    "interconnects": "Interconnects",
+    "instances": "VM instances",
+    "network_firewall_policies": "network firewall policies",
+}
+
+
+def _collect_gcp(account: dict, progress: ProgressCallback | None = None) -> tuple[list[dict], list[dict]]:
     """Discover one GCP project with the Compute Engine API.
 
     Signs in with the service account key (JSON or a file on the server) of
@@ -1774,6 +1833,7 @@ def _collect_gcp(account: dict) -> tuple[list[dict], list[dict]]:
     if not project_id:
         raise CloudCollectorAuthError("GCP project_id is required", user_message="GCP project_id is required")
 
+    _report(progress, phase="gcp login")
     credentials = None
     try:
         svc_json = auth.get("service_account_json")
@@ -1817,7 +1877,7 @@ def _collect_gcp(account: dict) -> tuple[list[dict], list[dict]]:
             user_message=f"Could not set up the GCP compute client: {provider_error_detail(exc)}",
         ) from exc
 
-    return _collect_gcp_compute(compute, project_id)
+    return _collect_gcp_compute(compute, project_id, progress)
 
 
 def _gcp_pages(collection, method: str, **kwargs):
@@ -1846,7 +1906,9 @@ def _gcp_aggregated(compute, resource: str, project_id: str) -> list[dict]:
     return found
 
 
-def _collect_gcp_compute(compute, project_id: str) -> tuple[list[dict], list[dict]]:
+def _collect_gcp_compute(
+    compute, project_id: str, progress: ProgressCallback | None = None
+) -> tuple[list[dict], list[dict]]:
     """The discovery itself, on a built Compute Engine ``compute`` client.
 
     The base sections (networks with their peerings, subnetworks, routes and
@@ -1860,14 +1922,17 @@ def _collect_gcp_compute(compute, project_id: str) -> tuple[list[dict], list[dic
     sections: dict[str, Any] = {}
     warnings: list[dict] = []
     section_errors: list[tuple[str, str]] = []
+    step = _Steps(progress, "gcp section", len(_GCP_SECTIONS))
 
     def optional(section: str, read) -> None:
+        step(_GCP_SECTIONS[section])
         try:
             sections[section] = read()
         except Exception as exc:  # noqa: BLE001 - best-effort detail; discovery goes on
             LOGGER.warning("gcp collector: skipped %s: %s", section, gcp_detail.error_code(exc), exc_info=True)
             warnings.append(gcp_detail.warning_resource(section, exc))
 
+    step(_GCP_SECTIONS["networks"])
     try:
         sections["networks"] = _gcp_list(compute, "networks", project_id)
     except Exception as exc:
@@ -1881,6 +1946,7 @@ def _collect_gcp_compute(compute, project_id: str) -> tuple[list[dict], list[dic
         ("routes", lambda: _gcp_list(compute, "routes", project_id)),
         ("firewalls", lambda: _gcp_list(compute, "firewalls", project_id)),
     ):
+        step(_GCP_SECTIONS[section])
         try:
             sections[section] = read()
         except Exception as exc:
@@ -1933,15 +1999,16 @@ def _collect_gcp_compute(compute, project_id: str) -> tuple[list[dict], list[dic
 
 
 def collect_provider_snapshot(account: dict, progress: ProgressCallback | None = None) -> tuple[list[dict], list[dict]]:
-    """Discover one cloud account. ``progress`` receives AWS progress fields as the regions are read."""
+    """Discover one cloud account. ``progress`` receives the login phase, then
+    one counted step per section read (per region for AWS)."""
     provider = str(account.get("provider") or "").strip().lower()
     if provider not in VALID_PROVIDERS:
         raise CloudCollectorExecutionError("Unsupported cloud provider")
     if provider == "aws":
         return _collect_aws(account, progress)
     if provider == "azure":
-        return _collect_azure(account)
-    return _collect_gcp(account)
+        return _collect_azure(account, progress)
+    return _collect_gcp(account, progress)
 
 
 def _importable(module_name: str) -> bool:

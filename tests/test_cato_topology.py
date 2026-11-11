@@ -1144,6 +1144,33 @@ def test_api_collection_warnings_are_listed_for_the_sources_dialog(api, monkeypa
     assert api.get("/api/sources/snapshots/999999/warnings").status_code == 404
 
 
+def test_api_sources_carry_the_progress_of_a_running_collection(api, monkeypatch):
+    """However a collection started (Collect All, the scheduler, another tab),
+    its source shows the job's progress; an idle source shows none."""
+    import netcontrol.routes.meraki_topology as routes_module
+    from netcontrol.routes import background_jobs
+
+    body = {"name": "Busy Cato", "provider": "cato", "org_id": "4243", "api_key": "k"}
+    busy = api.post("/api/sources", json=body).json()["org"]
+    idle = api.post("/api/sources", json={**body, "name": "Idle Cato"}).json()["org"]
+    # A registry of this test's own, restored afterwards.
+    monkeypatch.setattr(background_jobs, "_jobs", {})
+    job = background_jobs.create_job("meraki_topology_build", {"phase": "sites", "calls_done": 3, "calls_total": 8})
+    monkeypatch.setitem(routes_module._running_builds, busy["id"], job["job_id"])
+    sources = {s["key"]: s for s in api.get("/api/topology/sources").json()["sources"]}
+    running = sources[f"org:{busy['id']}"]
+    assert running["collecting"] is True
+    assert running["progress"] == {"phase": "sites", "calls_done": 3, "calls_total": 8}
+    assert sources[f"org:{idle['id']}"]["collecting"] is False
+    assert sources[f"org:{idle['id']}"]["progress"] is None
+    assert sources["neighbors"]["progress"] is None
+
+    # A job record already dropped still reads as a collection under way.
+    monkeypatch.setitem(routes_module._running_builds, busy["id"], "gone")
+    sources = {s["key"]: s for s in api.get("/api/topology/sources").json()["sources"]}
+    assert sources[f"org:{busy['id']}"]["progress"] == {}
+
+
 def test_api_cato_build_needs_an_account_id(api):
     org = api.post("/api/sources", json={"name": "NoAccount", "provider": "cato", "api_key": "k"}).json()["org"]
     started = api.post(f"/api/sources/{org['id']}/build")

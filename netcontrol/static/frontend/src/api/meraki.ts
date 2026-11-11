@@ -263,12 +263,13 @@ export interface CollectionProgress {
   hosts_total?: number;
   /** Inventory collection: the hostname just finished. */
   host?: string;
-  /** AWS discovery: the region and section being read. */
+  /** AWS discovery: the region being read. */
   region?: string;
+  /** AWS / Azure / GCP discovery: the section being read, a human label. */
   section?: string;
   regions_done?: number;
   regions_total?: number;
-  /** AWS discovery: sections read, over every section of every region. */
+  /** AWS / Azure / GCP discovery: sections read, over every section (of every region, for AWS). */
   steps_done?: number;
   steps_total?: number;
 }
@@ -847,6 +848,13 @@ export interface TopologySource {
   /** The snapshot on the map (Meraki, Cato, Cisco FMC, Palo Alto Panorama, Appgate SDP), whose warnings can be listed. */
   snapshot_id?: number | null;
   collecting: boolean;
+  /**
+   * How far the running collection is; null when `collecting` is false (and
+   * always for the neighbors source, which has its own progress dialog). An
+   * organization source reports its build job's progress, the inventory source
+   * its hosts, an AWS / Azure / GCP account its discovery. Older servers omit it.
+   */
+  progress?: CollectionProgress | null;
   can_collect: boolean;
   /** False for an AWS, Azure or GCP account switched off in Cloud Visibility. */
   enabled: boolean;
@@ -869,9 +877,10 @@ export function useTopologySources(enabled = true) {
     queryFn: () =>
       apiRequest<{ sources: TopologySource[] }>("/topology/sources"),
     enabled,
-    // Collections are background jobs with no push channel.
+    // Collections are background jobs with no push channel; poll at the build
+    // job's cadence while one runs so the progress bars move.
     refetchInterval: (query) =>
-      query.state.data?.sources.some((s) => s.collecting) ? 4000 : false,
+      query.state.data?.sources.some((s) => s.collecting) ? 1500 : false,
   });
 }
 

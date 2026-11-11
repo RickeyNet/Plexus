@@ -7,6 +7,7 @@ import {
   type MerakiBuildJob,
   type MerakiBuildResult,
   type MerakiNodeDetails,
+  type TopologySource,
 } from "@/api/meraki";
 import { formatBackendDateTime } from "@/lib/datetime";
 
@@ -17,6 +18,7 @@ import {
   FMC_OPTION_TOGGLES,
   FALLBACK_PANORAMA_OPTIONS,
   PANORAMA_OPTION_TOGGLES,
+  collectionProgressCards,
   defaultCollectCredential,
   describeInventoryResult,
   describeNextCollection,
@@ -936,5 +938,156 @@ describe("aws discovery progress", () => {
     expect(
       describeProgress({ progress: { phase: "hybrid links" } }).label,
     ).toBe("Linking cloud gateways to inventory devices");
+  });
+});
+
+describe("azure and gcp discovery progress", () => {
+  it("names the section and the cloud and counts the sections", () => {
+    expect(
+      describeProgress({
+        progress: {
+          phase: "azure section",
+          section: "virtual networks",
+          steps_done: 3,
+          steps_total: 8,
+        },
+      }),
+    ).toEqual({ label: "Reading virtual networks in Azure", percent: 38 });
+    expect(
+      describeProgress({
+        progress: {
+          phase: "gcp section",
+          section: "firewall rules",
+          steps_done: 12,
+          steps_total: 10,
+        },
+      }),
+    ).toEqual({ label: "Reading firewall rules in GCP", percent: 100 });
+  });
+
+  it("labels the sign-in phases without a percent", () => {
+    expect(describeProgress({ progress: { phase: "azure login" } })).toEqual({
+      label: "Signing in to Azure",
+      percent: null,
+    });
+    expect(describeProgress({ progress: { phase: "gcp login" } })).toEqual({
+      label: "Signing in to GCP",
+      percent: null,
+    });
+  });
+});
+
+describe("cato progress", () => {
+  it("names every phase of a Cato collection", () => {
+    const labels = [
+      "cato sites",
+      "cato site config",
+      "cato users",
+      "cato client reports",
+      "cato ranges",
+      "cato routing",
+      "cato firewall",
+      "cato split tunnel",
+      "cato policies",
+      "cato objects",
+    ].map((phase) => describeProgress({ progress: { phase } }).label);
+    expect(labels.every((label) => !label.startsWith("cato "))).toBe(true);
+    expect(labels).toContain("Reading the Split Tunnel policy");
+    expect(labels).toContain("Reading groups and other policy objects");
+  });
+
+  it("counts the API calls of a Cato collection", () => {
+    expect(
+      describeProgress({
+        progress: { phase: "cato site config", calls_done: 3, calls_total: 21 },
+      }),
+    ).toEqual({
+      label:
+        "Reading site configuration and account DHCP / DNS (3 of 21 API calls)",
+      percent: 14,
+    });
+  });
+});
+
+describe("collection progress cards", () => {
+  const source = (part: Partial<TopologySource>): TopologySource => ({
+    key: "cato:1",
+    type: "cato",
+    id: 1,
+    name: "Example Cato",
+    status: "success",
+    last_collected_at: null,
+    message: "",
+    detail: "",
+    warning_count: 0,
+    collecting: false,
+    can_collect: true,
+    enabled: true,
+    demo: false,
+    ...part,
+  });
+
+  it("shows a collecting source from the sources list without a tracked job", () => {
+    const cato = source({
+      collecting: true,
+      progress: { phase: "cato sites", calls_done: 3, calls_total: 21 },
+    });
+    const idle = source({ key: "cato:2", id: 2 });
+    expect(collectionProgressCards([cato, idle], null, [])).toEqual([
+      { source: cato, from: "source" },
+    ]);
+  });
+
+  it("shows one card for the tracked job, from the list once it has progress", () => {
+    const idle = source({});
+    expect(collectionProgressCards([idle], idle, [])).toEqual([
+      { source: idle, from: "job" },
+    ]);
+    // An older server: collecting but no progress.
+    const bare = source({ collecting: true });
+    expect(collectionProgressCards([bare], idle, [])).toEqual([
+      { source: bare, from: "job" },
+    ]);
+    const reported = source({
+      collecting: true,
+      progress: { phase: "cato users" },
+    });
+    expect(collectionProgressCards([reported], idle, [])).toEqual([
+      { source: reported, from: "source" },
+    ]);
+    // Not in the list at all: still shown.
+    expect(collectionProgressCards([], idle, [])).toEqual([
+      { source: idle, from: "job" },
+    ]);
+  });
+
+  it("shows a cloud discovery started here until the list reports it", () => {
+    const azure = source({
+      key: "azure:7",
+      type: "azure",
+      id: 7,
+      name: "Example subscription",
+    });
+    expect(collectionProgressCards([azure], null, [7])).toEqual([
+      { source: azure, from: "cloud" },
+    ]);
+    const running = {
+      ...azure,
+      collecting: true,
+      progress: { phase: "azure login" },
+    };
+    expect(collectionProgressCards([running], null, [7])).toEqual([
+      { source: running, from: "source" },
+    ]);
+  });
+
+  it("leaves neighbor discovery to its own dialog", () => {
+    const neighbors = source({
+      key: "neighbors",
+      type: "neighbors",
+      id: null,
+      collecting: true,
+    });
+    expect(collectionProgressCards([neighbors], null, [])).toEqual([]);
   });
 });

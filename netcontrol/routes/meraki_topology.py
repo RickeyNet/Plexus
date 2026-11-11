@@ -169,6 +169,7 @@ from netcontrol.integrations.pathtrace.offline import (
 )
 from netcontrol.routes import background_jobs, state
 from netcontrol.routes.cloud_collectors import skipped_note
+from netcontrol.routes.cloud_visibility import discovery_progress
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, supervise_task
 from netcontrol.telemetry import configure_logging, redact_value
 
@@ -1608,6 +1609,8 @@ def _source(key: str, kind: str, name: str, **fields: Any) -> dict[str, Any]:
         "warning_count": 0,
         "snapshot_id": None,
         "collecting": False,
+        # The running collection's progress fields; None while idle.
+        "progress": None,
         "can_collect": True,
         "enabled": True,
         "demo": False,
@@ -1652,6 +1655,7 @@ def _org_source(org: dict, newest: dict | None) -> dict[str, Any]:
         # The snapshot on the map, whose warnings the dialog can list.
         snapshot_id=(newest or {}).get("id"),
         collecting=org["id"] in _running_builds,
+        progress=background_jobs.job_progress(_running_builds.get(org["id"])),
         can_collect=bool(org.get("has_api_key")),
         demo=_is_demo(org),
         **_schedule_fields(org),
@@ -1664,6 +1668,7 @@ def _cloud_source(account: dict) -> dict[str, Any]:
     status = str(account.get("last_sync_status") or "never")
     demo = account.get("auth_type") == SAMPLE_AWS_AUTH_TYPE
     resources = int(account.get("resource_count") or 0)
+    progress = discovery_progress(int(account["id"]))
     return _source(
         f"{provider}:{account['id']}",
         provider,
@@ -1676,6 +1681,8 @@ def _cloud_source(account: dict) -> dict[str, Any]:
         if status == "error"
         else skipped_note(str(account.get("last_sync_message") or "")),
         detail=_count_text(resources, "resource") if resources else "",
+        collecting=progress is not None,
+        progress=progress,
         # The demo account has nothing to discover; its data is reloaded as a sample.
         can_collect=not demo,
         enabled=bool(account.get("enabled")),

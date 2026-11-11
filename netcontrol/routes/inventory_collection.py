@@ -571,6 +571,7 @@ async def inventory_source() -> dict[str, Any]:
         detail=_detail_text(last) if ran else f"{_count_text(hosts, 'device')} in inventory",
         warning_count=int(last.get("errors") or 0) if ran else 0,
         collecting="job" in _running,
+        progress=background_jobs.job_progress(_running.get("job")),
         can_collect=hosts > 0,
         # The service credential Settings names is the default; the dialog
         # lists the others for an administrator to pick.

@@ -363,6 +363,45 @@ def test_live_collector_fails_when_a_base_section_cannot_be_read():
         collectors_module._collect_gcp_compute(_compute(networks=_Collection(deny=True)), PROJECT)
 
 
+def _install_fake_gcp_sdk(monkeypatch, compute) -> None:
+    """Stand-ins for google-auth and google-api-python-client."""
+    import sys
+    import types
+
+    service_account = types.ModuleType("google.oauth2.service_account")
+    service_account.Credentials = NS(from_service_account_info=lambda _info, scopes: object())
+    oauth2 = types.ModuleType("google.oauth2")
+    oauth2.service_account = service_account
+    discovery = types.ModuleType("googleapiclient.discovery")
+    discovery.build = lambda *_args, **_kwargs: compute
+    for name, module in (
+        ("google", types.ModuleType("google")),
+        ("google.auth", types.ModuleType("google.auth")),
+        ("google.oauth2", oauth2),
+        ("google.oauth2.service_account", service_account),
+        ("googleapiclient", types.ModuleType("googleapiclient")),
+        ("googleapiclient.discovery", discovery),
+    ):
+        monkeypatch.setitem(sys.modules, name, module)
+
+
+def test_live_collector_reports_progress_per_section(monkeypatch):
+    """The map's progress bar: login, then every section is one step, ending below the total."""
+    _install_fake_gcp_sdk(monkeypatch, _compute())
+    auth = {"project_id": PROJECT, "service_account_json": {"type": "service_account"}}
+    events: list[dict] = []
+    collectors_module.collect_provider_snapshot(
+        {"provider": "gcp", "auth_config_json": json.dumps(auth)}, events.append
+    )
+    assert events[0] == {"phase": "gcp login"}
+    steps = [e for e in events if e["phase"] == "gcp section"]
+    total = len(collectors_module._GCP_SECTIONS)
+    assert [e["steps_done"] for e in steps] == list(range(total))
+    assert {e["steps_total"] for e in steps} == {total}
+    assert [e["section"] for e in steps] == list(collectors_module._GCP_SECTIONS.values())
+    assert len(events) == 1 + total
+
+
 # ── Snapshot ─────────────────────────────────────────────────────────────────
 
 

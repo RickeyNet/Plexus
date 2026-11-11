@@ -390,6 +390,42 @@ def test_live_collector_fails_when_a_base_section_cannot_be_read():
     assert "gateway_connections (_Denied)" in info.value.user_message
 
 
+def _install_fake_azure_sdk(monkeypatch, client) -> None:
+    """Stand-ins for azure-identity and azure-mgmt-network; azure-mgmt-resource is absent."""
+    import sys
+    import types
+
+    identity = types.ModuleType("azure.identity")
+    identity.ClientSecretCredential = lambda **_kwargs: object()
+    identity.DefaultAzureCredential = lambda **_kwargs: object()
+    network = types.ModuleType("azure.mgmt.network")
+    network.NetworkManagementClient = lambda _credential, _subscription: client
+    for name, module in (
+        ("azure", types.ModuleType("azure")),
+        ("azure.identity", identity),
+        ("azure.mgmt", types.ModuleType("azure.mgmt")),
+        ("azure.mgmt.network", network),
+        ("azure.mgmt.resource", None),
+    ):
+        monkeypatch.setitem(sys.modules, name, module)
+
+
+def test_live_collector_reports_progress_per_section(monkeypatch):
+    """The map's progress bar: login, then every section is one step, ending below the total."""
+    _install_fake_azure_sdk(monkeypatch, _client())
+    events: list[dict] = []
+    collectors_module.collect_provider_snapshot(
+        {"provider": "azure", "auth_config_json": json.dumps({"subscription_id": SUB})}, events.append
+    )
+    assert events[0] == {"phase": "azure login"}
+    steps = [e for e in events if e["phase"] == "azure section"]
+    total = len(collectors_module._AZURE_SECTIONS)
+    assert [e["steps_done"] for e in steps] == list(range(total))
+    assert {e["steps_total"] for e in steps} == {total}
+    assert [e["section"] for e in steps] == list(collectors_module._AZURE_SECTIONS)
+    assert len(events) == 1 + total
+
+
 # ── Snapshot ─────────────────────────────────────────────────────────────────
 
 

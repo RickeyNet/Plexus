@@ -1,13 +1,15 @@
-import type {
-  AppgateBuildOptions,
-  CatoBuildOptions,
-  DetailSection,
-  FmcBuildOptions,
-  InventoryCollectionResult,
-  MerakiBuildJob,
-  MerakiBuildOptions,
-  MerakiNodeDetails,
-  PanoramaBuildOptions,
+import {
+  isCloudAccountProvider,
+  type AppgateBuildOptions,
+  type CatoBuildOptions,
+  type DetailSection,
+  type FmcBuildOptions,
+  type InventoryCollectionResult,
+  type MerakiBuildJob,
+  type MerakiBuildOptions,
+  type MerakiNodeDetails,
+  type PanoramaBuildOptions,
+  type TopologySource,
 } from "@/api/meraki";
 import { formatBackendDateTime, parseBackendDate } from "@/lib/datetime";
 
@@ -391,7 +393,12 @@ const PHASE_LABELS: Record<string, string> = {
   "cato users": "Reading connected remote users",
   "cato ranges": "Reading site network ranges",
   "cato routing": "Reading BGP peers",
+  "cato site config": "Reading site configuration and account DHCP / DNS",
+  "cato client reports": "Reading Client connectivity reports",
   "cato firewall": "Reading the WAN and internet firewall rules",
+  "cato split tunnel": "Reading the Split Tunnel policy",
+  "cato policies": "Reading the other policies",
+  "cato objects": "Reading groups and other policy objects",
   "fmc login": "Signing in to the FMC",
   "fmc devices": "Reading managed devices",
   "fmc ha": "Reading HA pairs and clusters",
@@ -427,11 +434,25 @@ const PHASE_LABELS: Record<string, string> = {
   saving: "Saving snapshot",
   "aws login": "Signing in to AWS",
   "aws regions": "Listing the enabled AWS regions",
+  "azure login": "Signing in to Azure",
+  "gcp login": "Signing in to GCP",
   "hybrid links": "Linking cloud gateways to inventory devices",
 };
 
+/** Cloud discovery phases that count sections in `steps_done` / `steps_total`, by the cloud they read. */
+const CLOUD_SECTION_PHASES: Record<string, string> = {
+  "aws region": "AWS",
+  "azure section": "Azure",
+  "gcp section": "GCP",
+};
+
+/** `done` of `total` as a whole percent, at most 100. */
+function percentOf(done: number | undefined, total: number): number {
+  return Math.min(100, Math.round(((done ?? 0) / total) * 100));
+}
+
 /**
- * The progress line and percent (null when unknown) of a tracked collection.
+ * The progress line and percent (null when unknown) of a collection.
  * `source` 'inventory' names the phases of an inventory collection (route
  * tables and configurations over SSH) rather than an organization build.
  */
@@ -441,14 +462,20 @@ export function describeProgress(
 ): { label: string; percent: number | null } {
   const progress = job?.progress ?? {};
   const phase = progress.phase ?? "starting";
-  if (phase === "aws region" && progress.steps_total) {
-    const done = progress.steps_done ?? 0;
-    const where = progress.regions_total
-      ? ` (region ${(progress.regions_done ?? 0) + 1} of ${progress.regions_total})`
-      : "";
+  const cloud = CLOUD_SECTION_PHASES[phase];
+  if (cloud && progress.steps_total) {
+    // AWS names the region (and how many regions); Azure and GCP name only the section.
+    const where =
+      phase === "aws region"
+        ? `${progress.region ?? "AWS"}${
+            progress.regions_total
+              ? ` (region ${(progress.regions_done ?? 0) + 1} of ${progress.regions_total})`
+              : ""
+          }`
+        : cloud;
     return {
-      label: `Reading ${progress.section ?? "resources"} in ${progress.region ?? "AWS"}${where}`,
-      percent: Math.min(100, Math.round((done / progress.steps_total) * 100)),
+      label: `Reading ${progress.section ?? "resources"} in ${where}`,
+      percent: percentOf(progress.steps_done, progress.steps_total),
     };
   }
   if (phase === "collecting" && progress.hosts_total) {
@@ -456,7 +483,7 @@ export function describeProgress(
     const host = progress.host ? `: ${progress.host}` : "";
     return {
       label: `Reading route tables and configurations (${done} of ${progress.hosts_total} devices${host})`,
-      percent: Math.min(100, Math.round((done / progress.hosts_total) * 100)),
+      percent: percentOf(done, progress.hosts_total),
     };
   }
   if (source === "inventory" && phase === "collecting") {
@@ -468,9 +495,7 @@ export function describeProgress(
   if (phase === "inventory" && progress.hosts_total) {
     return {
       label: `Enriching from Plexus inventory (${progress.hosts_done ?? 0} of ${progress.hosts_total} hosts)`,
-      percent: Math.round(
-        ((progress.hosts_done ?? 0) / progress.hosts_total) * 100,
-      ),
+      percent: percentOf(progress.hosts_done, progress.hosts_total),
     };
   }
   const label = PHASE_LABELS[phase] ?? phase;
@@ -478,10 +503,53 @@ export function describeProgress(
     const done = progress.calls_done ?? 0;
     return {
       label: `${label} (${done} of ${progress.calls_total} API calls)`,
-      percent: Math.min(100, Math.round((done / progress.calls_total) * 100)),
+      percent: percentOf(done, progress.calls_total),
     };
   }
   return { label, percent: null };
+}
+
+/**
+ * Where the progress card of a running collection reads its progress: the
+ * sources list ("source"), the build job this dialog tracks ("job"), or the
+ * discovery progress of a cloud account this dialog is discovering ("cloud").
+ */
+export type ProgressFrom = "source" | "job" | "cloud";
+
+/**
+ * One progress card per running collection. The sources list is the record of
+ * what is collecting (started here, by Collect All, by the scheduler or in
+ * another tab) and its progress wins. The tracked job's source and the cloud
+ * accounts being discovered here are added, with their own progress, until the
+ * list marks them collecting with progress (first poll not back yet, or an
+ * older server). The neighbors source has its own progress dialog.
+ */
+export function collectionProgressCards(
+  sources: readonly TopologySource[],
+  tracked: TopologySource | null,
+  cloudBusy: readonly number[],
+): { source: TopologySource; from: ProgressFrom }[] {
+  const isCloudBusy = (s: TopologySource) =>
+    isCloudAccountProvider(s.type) && cloudBusy.includes(s.id as number);
+  const cards = sources
+    .filter(
+      (s) =>
+        s.type !== "neighbors" &&
+        (s.collecting || s.key === tracked?.key || isCloudBusy(s)),
+    )
+    .map((source) => ({
+      source,
+      from: (source.progress
+        ? "source"
+        : source.key === tracked?.key
+          ? "job"
+          : isCloudBusy(source)
+            ? "cloud"
+            : "source") as ProgressFrom,
+    }));
+  if (tracked && !sources.some((s) => s.key === tracked.key))
+    cards.push({ source: tracked, from: "job" });
+  return cards;
 }
 
 // The credential choice is shared with Inventory discovery; it lives in
