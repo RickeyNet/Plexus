@@ -331,6 +331,12 @@ export interface FlowExportersResponse {
 
 export type FlowDirection = 'src' | 'dst';
 
+/**
+ * Time-range presets the flow endpoints accept: /api/flows/* caps `hours` at
+ * 168. Clamp the shared range to these with `clampPreset`.
+ */
+export const FLOW_RANGES = ['1h', '6h', '24h', '7d'] as const;
+
 function withHost(base: string, hostId?: number | null): string {
   return hostId ? `${base}&host_id=${hostId}` : base;
 }
