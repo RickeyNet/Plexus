@@ -70,6 +70,15 @@ def running_job(kind: str) -> dict | None:
     return None
 
 
+def job_progress(job_id: str | None) -> dict | None:
+    """A copy of a job's progress fields: ``None`` when no job id is given, an
+    empty dict when the job record is gone."""
+    if job_id is None:
+        return None
+    job = _jobs.get(job_id)
+    return dict(job["progress"]) if job is not None else {}
+
+
 def update_progress(job_id: str, **fields) -> None:
     """Merge progress fields into a running job (no-op if the job is gone)."""
     job = _jobs.get(job_id)

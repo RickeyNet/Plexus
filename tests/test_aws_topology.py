@@ -1529,6 +1529,26 @@ def test_api_sources_lists_everything_that_feeds_the_map(api):
     assert sources()[f"aws:{account['id']}"]["enabled"] is False
 
 
+def test_api_cloud_source_carries_the_progress_of_its_running_discovery(api, monkeypatch):
+    """A discovery started anywhere (the scheduler, another tab) shows on the source."""
+    import netcontrol.routes.cloud_visibility as cloud_module
+
+    account = api.post("/api/cloud/accounts", json={"provider": "aws", "name": "Lab AWS"}).json()["account"]
+
+    def source() -> dict:
+        listed = api.get("/api/topology/sources").json()["sources"]
+        return next(s for s in listed if s["key"] == f"aws:{account['id']}")
+
+    assert (source()["collecting"], source()["progress"]) == (False, None)
+    step = {"phase": "aws region", "section": "VPCs", "steps_done": 4, "steps_total": 20}
+    monkeypatch.setitem(cloud_module._DISCOVERY_PROGRESS, account["id"], step)
+    assert (source()["collecting"], source()["progress"]) == (True, step)
+    assert api.get(f"/api/cloud/accounts/{account['id']}/discover/progress").json() == {
+        "running": True,
+        "progress": step,
+    }
+
+
 # ── The live collector, against a stand-in for boto3 ─────────────────────────
 
 

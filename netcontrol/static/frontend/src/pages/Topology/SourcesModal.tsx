@@ -10,6 +10,7 @@ import {
 import {
   CloudAccountProvider,
   CloudProvider,
+  CollectionProgress,
   InventoryCollectRequest,
   InventoryCollectionResult,
   MerakiBuildJob,
@@ -37,6 +38,7 @@ import { useDialogs } from "@/components/DialogProvider-context";
 import { EmptyState } from "@/components/EmptyState";
 import { LoadingState } from "@/components/LoadingState";
 import { Modal } from "@/components/Modal";
+import { ProgressBar } from "@/components/ProgressBar";
 import { QueryError } from "@/components/QueryError";
 import { formatBackendDateTime } from "@/lib/datetime";
 import { usePendingKeys } from "@/lib/usePendingKeys";
@@ -49,6 +51,7 @@ import {
 import { InventoryCollectModal } from "./InventoryCollectModal";
 import { MerakiAlertsSettings } from "./MerakiAlertsSettings";
 import {
+  collectionProgressCards,
   describeInventoryResult,
   describeNextCollection,
   describeProgress,
@@ -158,8 +161,8 @@ export function SourcesModal({
   const [editing, setEditing] = useState<MerakiOrg | null>(null);
   const [adding, setAdding] = useState<CloudProvider | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
-  // Which integration the tracked collection talks to, for the progress text.
-  const [jobProvider, setJobProvider] = useState<TopologySourceType>("meraki");
+  // The source the tracked collection reads, to show its progress before the sources list marks it collecting.
+  const [jobSource, setJobSource] = useState<TopologySource | null>(null);
   // The inventory source whose collection dialog (devices, credential) is open.
   const [inventoryFor, setInventoryFor] = useState<TopologySource | null>(null);
   const [inventoryError, setInventoryError] = useState<string | null>(null);
@@ -221,7 +224,10 @@ export function SourcesModal({
     const id = source.id as number;
     setCloudBusy((busy) => [...busy, id]);
     try {
-      const result = await discoverCloud.mutateAsync(id);
+      const pending = discoverCloud.mutateAsync(id);
+      // The server marks the account collecting: pick it up (and its progress) from the sources list.
+      qc.invalidateQueries({ queryKey: ["meraki", "sources"] });
+      const result = await pending;
       return result?.ok === false
         ? (result.message ?? "Discovery failed")
         : null;
@@ -245,8 +251,8 @@ export function SourcesModal({
     setInventoryError(null);
     try {
       const started = await startInventoryCollection(body);
+      setJobSource(inventoryFor);
       setInventoryFor(null);
-      setJobProvider(PROVIDER_INVENTORY);
       setJobId(started);
     } catch (err) {
       setInventoryError(`Could not start the collection: ${errorText(err)}`);
@@ -272,7 +278,7 @@ export function SourcesModal({
     }
     try {
       const started = await startOrgBuild(source);
-      setJobProvider(source.type);
+      setJobSource(source);
       setJobId(started);
     } catch (err) {
       void alert({
@@ -374,6 +380,11 @@ export function SourcesModal({
   const formProvider = adding ?? editing?.provider ?? null;
   const orgById = new Map((orgs.data?.orgs ?? []).map((org) => [org.id, org]));
   const anyCollectable = rows.some(inCollectAll);
+  const progressCards = collectionProgressCards(
+    rows,
+    isJobRunning ? jobSource : null,
+    cloudBusy,
+  );
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Map Sources" size="large">
@@ -566,12 +577,19 @@ export function SourcesModal({
               {allNote.text}
             </div>
           )}
-          {isJobRunning && <BuildProgress job={job.data} provider={jobProvider} />}
-          {rows
-            .filter((s) => isCloudSource(s) && cloudBusy.includes(s.id as number))
-            .map((s) => (
-              <CloudDiscoveryProgress key={s.key} source={s} />
-            ))}
+          {progressCards.map(({ source, from }) =>
+            from === "cloud" ? (
+              <CloudDiscoveryProgress key={source.key} source={source} />
+            ) : (
+              <CollectionProgressCard
+                key={source.key}
+                source={source}
+                progress={
+                  from === "job" ? job.data?.progress : source.progress
+                }
+              />
+            ),
+          )}
           {isJobSettled && (
             <BuildOutcome
               job={job.data}
@@ -955,106 +973,73 @@ function SourceRow({
   );
 }
 
+/** What a collection from a source of this type costs, and when the map updates. */
+function progressNote(type: TopologySourceType): string {
+  if (type === "aws")
+    return "An AWS account takes about a dozen requests per region; All regions reads every region the account has enabled. The map updates when discovery finishes.";
+  if (isCloudAccountProvider(type))
+    return "The map updates when discovery finishes.";
+  const cost =
+    type === PROVIDER_INVENTORY
+      ? "One SSH session per device, a few at a time. The path trace uses the new route tables and configurations at the next trace."
+      : type === "cato"
+        ? "A Cato account takes a few queries, sent slowly to stay inside the Cato API rate limits."
+        : type === "fmc"
+          ? "An FMC takes several requests per device (interfaces, routing, NAT, policies), sent slowly to stay inside the FMC limit of 120 requests per minute."
+          : type === "panorama"
+            ? "A Panorama takes a few requests per device group and template, plus a few per firewall when device state is collected."
+            : type === "appgate"
+              ? "An Appgate collective takes one query per connected user for the access details; large user counts take a while."
+              : "Large organizations take several minutes: Meraki limits the API to 10 requests per second.";
+  return `${cost} You can close this dialog; the map updates when collection finishes.`;
+}
+
+function progressTitle(source: TopologySource): string {
+  if (isInventorySource(source)) return "Collecting from inventory devices…";
+  const label = providerLabel(source.type);
+  return isCloudSource(source)
+    ? `Discovering ${source.name} (${label})…`
+    : `Collecting from ${source.name} (${label})…`;
+}
+
 /** A running collection: what it is doing, a bar (full and dimmed when the total is unknown) and a note. */
-function ProgressCard({
-  title,
-  label,
-  percent,
-  note,
+function CollectionProgressCard({
+  source,
+  progress,
 }: {
-  title: string;
-  label: string;
-  percent: number | null;
-  note: string;
+  source: TopologySource;
+  /** Missing while the collection has reported nothing yet. */
+  progress: CollectionProgress | null | undefined;
 }) {
+  const title = progressTitle(source);
+  const { label, percent } = describeProgress(
+    { progress: progress ?? {} },
+    source.type,
+  );
   return (
     <div className="card" style={{ marginTop: "var(--space-4)" }}>
       <strong>{title}</strong>
       <div className="text-muted" style={{ margin: "0.35rem 0" }}>
         {label}
       </div>
-      <div
-        role="progressbar"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={percent ?? undefined}
-        style={{
-          height: 8,
-          borderRadius: 4,
-          background: "var(--bg-secondary)",
-          overflow: "hidden",
-        }}
-      >
-        <div
-          style={{
-            height: "100%",
-            width: `${percent ?? 100}%`,
-            opacity: percent === null ? 0.35 : 1,
-            background: "var(--primary)",
-            transition: "width 0.4s ease",
-          }}
-        />
-      </div>
+      <ProgressBar value={percent} label={title} />
       <div
         className="text-muted"
         style={{ fontSize: "0.85em", marginTop: "0.35rem" }}
       >
-        {note}
+        {progressNote(source.type)}
       </div>
     </div>
   );
 }
 
-function BuildProgress({
-  job,
-  provider,
-}: {
-  job: MerakiBuildJob | undefined;
-  provider: TopologySourceType;
-}) {
-  const { label, percent } = describeProgress(job, provider);
-  const isInventory = provider === PROVIDER_INVENTORY;
-  const note = `${
-    isInventory
-      ? "One SSH session per device, a few at a time. The path trace uses the new route tables and configurations at the next trace."
-      : provider === "cato"
-        ? "A Cato account takes a few queries, sent slowly to stay inside the Cato API rate limits."
-        : provider === "fmc"
-          ? "An FMC takes several requests per device (interfaces, routing, NAT, policies), sent slowly to stay inside the FMC limit of 120 requests per minute."
-          : provider === "panorama"
-            ? "A Panorama takes a few requests per device group and template, plus a few per firewall when device state is collected."
-            : provider === "appgate"
-              ? "An Appgate collective takes one query per connected user for the access details; large user counts take a while."
-              : "Large organizations take several minutes: Meraki limits the API to 10 requests per second."
-  } You can close this dialog; the map updates when collection finishes.`;
-  return (
-    <ProgressCard
-      title={
-        isInventory
-          ? "Collecting from inventory devices…"
-          : `Collecting from ${providerLabel(provider)}…`
-      }
-      label={label}
-      percent={percent}
-      note={note}
-    />
-  );
-}
-
-/** A cloud account discovery in flight: polls its progress until the discover request returns. */
+/** A cloud account discovery this dialog started, before the sources list reports it: polls its own progress. */
 function CloudDiscoveryProgress({ source }: { source: TopologySource }) {
   const progress = useCloudDiscoveryProgress(source.id as number);
-  const { label, percent } = describeProgress(progress.data);
   return (
-    <ProgressCard
-      title={`Discovering ${source.name} (${providerLabel(source.type)})…`}
-      label={label}
-      percent={percent}
-      note={
-        source.type === "aws"
-          ? "An AWS account takes about a dozen requests per region; All regions reads every region the account has enabled. The map updates when discovery finishes."
-          : "The map updates when discovery finishes."
-      }
+    <CollectionProgressCard
+      source={source}
+      progress={progress.data?.progress}
     />
   );
 }
