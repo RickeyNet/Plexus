@@ -74,15 +74,17 @@ function Breadcrumb() {
 }
 
 // Pages whose queries read useTimeRange(): the overview dashboard, custom
-// dashboards and device detail. Monitoring tabs poll on their own schedule
-// (Capacity has its own 30-365d history selector), so the bar is not shown
-// there.
+// dashboards, device detail and Network Tools' Traffic Analysis tab.
+// Monitoring tabs poll on their own schedule (Capacity has its own 30-365d
+// history selector), so the bar is not shown there.
 function MetricTimeRangeBar() {
   const { pathname } = useLocation();
   const show =
     pathname === '/' ||
     pathname.startsWith('/dashboards') ||
-    pathname.startsWith('/devices/');
+    pathname.startsWith('/devices/') ||
+    pathname === '/network-tools/traffic' ||
+    pathname.startsWith('/network-tools/traffic/');
   if (!show) return null;
   return <TimeRangeBar />;
 }

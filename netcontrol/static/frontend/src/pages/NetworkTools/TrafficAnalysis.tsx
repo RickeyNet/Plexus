@@ -4,9 +4,11 @@ import { Link } from 'react-router';
 import { PageHelp } from '@/components/PageHelp';
 import { QueryError } from '@/components/QueryError';
 import { TabBar } from '@/components/TabBar';
+import { ClampedRangeHint } from '@/components/TimeRangeBar';
 import { BarChart, TimeSeriesChart } from '@/lib/echart';
 import { useInventoryGroupsFull } from '@/api/inventory';
 import {
+  FLOW_RANGES,
   FlowApplication,
   FlowConversation,
   FlowExporter,
@@ -21,16 +23,11 @@ import {
   useFlowTimeline,
 } from '@/api/networkTools';
 import { formatBackendDateTime } from '@/lib/datetime';
+import { useTimeRange } from '@/lib/timeRange-context';
+import { clampPreset, toHours } from '@/lib/timeRangeMap';
 import { usePathTab } from '@/lib/usePathTab';
 
 import { formatBytes } from './formatting';
-
-const TIME_RANGES = [
-  { value: 1, label: 'Last 1 Hour' },
-  { value: 6, label: 'Last 6 Hours' },
-  { value: 24, label: 'Last 24 Hours' },
-  { value: 168, label: 'Last 7 Days' },
-];
 
 type Tab = 'talkers' | 'applications' | 'conversations' | 'timeline' | 'exporters';
 
@@ -58,7 +55,7 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   },
   timeline: {
     title: 'Traffic Timeline',
-    text: 'Total bytes per time bucket across the selected window. Bucket size auto-scales: 1m for 1h, 5m for 6h, 15m for 24h+.',
+    text: 'Total bytes per time bucket across the window chosen in the time bar. Bucket size auto-scales: 1m for 1h, 5m for 6h, 15m for 24h+.',
   },
   exporters: {
     title: 'Flow Exporters',
@@ -67,7 +64,11 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
 };
 
 export function TrafficAnalysis() {
-  const [hours, setHours] = useState<number>(6);
+  // The window comes from the shell's shared time bar (App.tsx shows it on
+  // this tab); flow endpoints stop at 7d, so a longer range is clamped.
+  const { range } = useTimeRange();
+  const flowRange = clampPreset(range, FLOW_RANGES);
+  const hours = toHours(flowRange);
   const [hostId, setHostId] = useState<number | null>(null);
   // Sub-tab lives in the path (/network-tools/traffic/<view>); Network Tools
   // names `traffic` as nested so the segment survives its own resolver.
@@ -105,18 +106,7 @@ export function TrafficAnalysis() {
             </option>
           ))}
         </select>
-        <select
-          className="form-select list-control-select"
-          value={hours}
-          onChange={(e) => setHours(Number(e.target.value))}
-          aria-label="Time range"
-        >
-          {TIME_RANGES.map((r) => (
-            <option key={r.value} value={r.value}>
-              {r.label}
-            </option>
-          ))}
-        </select>
+        <ClampedRangeHint requested={range} shown={flowRange} />
         <CollectorBadges status={status.data} />
       </div>
 

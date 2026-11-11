@@ -11,6 +11,7 @@ import type { TimeRangePreset } from '@/lib/timeRange-context';
 import { clampPreset, toHours } from '@/lib/timeRangeMap';
 import { formatBytes } from '@/pages/NetworkTools/formatting';
 import {
+  FLOW_RANGES,
   FlowApplication,
   FlowConversation,
   FlowDirection,
@@ -28,9 +29,6 @@ interface Props {
   hostId: number;
   range: TimeRangePreset;
 }
-
-// /api/flows/* caps `hours` at 168.
-const FLOW_RANGES = ['1h', '6h', '24h', '7d'] as const;
 
 type SubTab = 'talkers' | 'applications' | 'conversations' | 'timeline';
 
