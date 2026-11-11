@@ -1,9 +1,11 @@
+import { DataTable } from '@/components/DataTable';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { QueryError } from '@/components/QueryError';
 import { MerakiFinding, useMerakiResult } from '@/api/compliance';
 import { complianceStatusTone, toneColor } from '@/lib/severity';
 
+import { FindingResultCell } from './FindingResultCell';
 import { MERAKI_KIND_LABEL as KIND_LABEL } from './merakiHelpers';
 
 /**
@@ -54,55 +56,47 @@ export function MerakiFindingsModal({ resultId, onClose }: { resultId: number; o
             Plexus reads the Meraki Dashboard API only; failed checks are corrected in the Meraki
             Dashboard. Re-run the scan afterwards to confirm.
           </p>
-          <div style={{ overflowX: 'auto' }}>
-            <table className="data-table table-sm">
-              <thead>
-                <tr>
-                  <th>Result</th>
-                  <th>Check</th>
-                  <th>Detail</th>
-                  <th>IOS equivalent</th>
+          <DataTable compact aria-label="Findings">
+            <thead>
+              <tr>
+                <th>Result</th>
+                <th>Check</th>
+                <th>Detail</th>
+                <th>IOS equivalent</th>
+              </tr>
+            </thead>
+            <tbody>
+              {findings.map((f, idx) => (
+                <tr key={idx}>
+                  <FindingResultCell passed={f.passed} unreadable={f.unreadable} />
+                  <td>
+                    {f.name || '-'}
+                    <div style={{ fontSize: '0.8em', color: 'var(--text-muted)' }}>
+                      <code>{f.check}</code>
+                    </div>
+                  </td>
+                  <td style={{ fontSize: '0.9em' }}>
+                    {f.detail || '-'}
+                    {f.evidence && f.evidence.length > 0 && (
+                      <details style={{ marginTop: '0.3rem' }}>
+                        <summary style={{ cursor: 'pointer', color: 'var(--text-muted)', fontSize: '0.9em' }}>
+                          {f.evidence.length} item(s)
+                        </summary>
+                        <ul style={{ margin: '0.3rem 0 0 1rem', padding: 0, fontSize: '0.9em' }}>
+                          {f.evidence.map((e, i) => (
+                            <li key={i}>{e}</li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+                  </td>
+                  <td style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>
+                    {f.ios_equivalent ? <code>{f.ios_equivalent}</code> : '-'}
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {findings.map((f, idx) => {
-                  const label = f.unreadable ? 'UNREADABLE' : f.passed ? 'PASS' : 'FAIL';
-                  const color = f.unreadable ? 'warning' : f.passed ? 'success' : 'danger';
-                  return (
-                    <tr key={idx}>
-                      <td style={{ color: `var(--${color})`, whiteSpace: 'nowrap', fontWeight: 600 }}>
-                        {label}
-                      </td>
-                      <td>
-                        {f.name || '-'}
-                        <div style={{ fontSize: '0.8em', color: 'var(--text-muted)' }}>
-                          <code>{f.check}</code>
-                        </div>
-                      </td>
-                      <td style={{ fontSize: '0.9em' }}>
-                        {f.detail || '-'}
-                        {f.evidence && f.evidence.length > 0 && (
-                          <details style={{ marginTop: '0.3rem' }}>
-                            <summary style={{ cursor: 'pointer', color: 'var(--text-muted)', fontSize: '0.9em' }}>
-                              {f.evidence.length} item(s)
-                            </summary>
-                            <ul style={{ margin: '0.3rem 0 0 1rem', padding: 0, fontSize: '0.9em' }}>
-                              {f.evidence.map((e, i) => (
-                                <li key={i}>{e}</li>
-                              ))}
-                            </ul>
-                          </details>
-                        )}
-                      </td>
-                      <td style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>
-                        {f.ios_equivalent ? <code>{f.ios_equivalent}</code> : '-'}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+              ))}
+            </tbody>
+          </DataTable>
         </>
       )}
     </Modal>

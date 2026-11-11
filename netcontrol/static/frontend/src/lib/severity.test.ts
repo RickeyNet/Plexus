@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  complianceStatusRank,
   complianceStatusTone,
   isActiveStatus,
   isCriticalSeverity,
@@ -122,5 +123,15 @@ describe('toneColor', () => {
     expect(toneColor('danger')).toBe('var(--danger)');
     expect(toneColor('primary')).toBe('var(--primary)');
     expect(toneColor('neutral')).toBe('var(--text-muted)');
+  });
+});
+
+describe('complianceStatusRank', () => {
+  it('orders non-compliant, error, unknown, compliant', () => {
+    expect(complianceStatusRank('non-compliant')).toBe(0);
+    expect(complianceStatusRank('error')).toBe(1);
+    expect(complianceStatusRank('pending')).toBe(2);
+    expect(complianceStatusRank(null)).toBe(2);
+    expect(complianceStatusRank('compliant')).toBe(3);
   });
 });

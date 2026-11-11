@@ -15,6 +15,7 @@ import {
   useRunScanBulk,
 } from '@/api/compliance';
 
+import { HostScanProgress } from './HostScanProgress';
 import { MerakiScanProgress } from './MerakiScanProgress';
 import { profileHasMerakiRules } from './merakiHelpers';
 
@@ -22,6 +23,7 @@ type Scope = 'all' | 'group' | 'single' | 'meraki';
 
 const MERAKI_HINT =
   "Reads the organization's configuration with its stored API key (read-only) and evaluates the profile's Meraki rules per organization, network and switch. Runs in the background.";
+const BACKGROUND_HINT = 'The scan runs in the background: closing this dialog does not stop it.';
 
 export function RunScanModal({ onClose }: { onClose: () => void }) {
   const { alert } = useDialogs();
@@ -39,6 +41,10 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
   const [hostId, setHostId] = useState<number | null>(null);
   const [orgRef, setOrgRef] = useState<number | null>(null);
   const [merakiJobId, setMerakiJobId] = useState<string | null>(null);
+  const [hostJobId, setHostJobId] = useState<string | null>(null);
+  // Once a background scan started, the dialog's secondary button reads Close:
+  // leaving does not cancel anything.
+  const [jobStarted, setJobStarted] = useState(false);
   const [profileId, setProfileId] = useState<number | null>(null);
   const [credentialId, setCredentialId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -97,9 +103,9 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
 
   const hint =
     scope === 'all'
-      ? `Scans all ${allHosts.length} host(s) in the inventory.`
+      ? `Scans all ${allHosts.length} host(s) in the inventory. ${BACKGROUND_HINT}`
       : scope === 'group'
-        ? `Scans all ${selectedGroupHostCount} host(s) in the selected group.`
+        ? `Scans all ${selectedGroupHostCount} host(s) in the selected group. ${BACKGROUND_HINT}`
         : scope === 'meraki'
           ? MERAKI_HINT
           : '';
@@ -113,6 +119,7 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
           : 'Run Scan';
 
   const isPending = runScan.isPending || runBulk.isPending || runMeraki.isPending;
+  const jobShown = merakiJobId != null || hostJobId != null;
 
   const onSubmit = async () => {
     setError(null);
@@ -128,6 +135,7 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
       try {
         const res = await runMeraki.mutateAsync({ profile_id: profileId, org_ref: orgRef });
         setMerakiJobId(res.job_id);
+        setJobStarted(true);
       } catch (e) {
         setError(`Scan failed to start: ${(e as Error).message}`);
       }
@@ -193,25 +201,10 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
         credential_id: credentialId,
         host_ids: hostIds,
       });
-      if (res.violations > 0) {
-        await alert({
-          title: 'Scan complete',
-          message: `${res.hosts_scanned} host(s) scanned, ${res.violations} non-compliant, ${res.errors} error(s)`,
-        });
-      } else if (res.errors > 0) {
-        await alert({
-          title: 'Scan complete',
-          message: `${res.hosts_scanned} host(s) scanned, ${res.errors} error(s)`,
-        });
-      } else {
-        await alert({
-          title: 'Scan complete',
-          message: `${res.hosts_scanned} host(s) scanned - all compliant!`,
-        });
-      }
-      onClose();
+      setHostJobId(res.job_id);
+      setJobStarted(true);
     } catch (e) {
-      setError(`Scan failed: ${(e as Error).message}`);
+      setError(`Scan failed to start: ${(e as Error).message}`);
     }
   };
 
@@ -223,15 +216,15 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
       footer={
         <>
           <button type="button" className="btn btn-secondary" onClick={onClose}>
-            {merakiJobId ? 'Close' : 'Cancel'}
+            {jobStarted ? 'Close' : 'Cancel'}
           </button>
           <button
             type="button"
             className="btn btn-primary"
             onClick={onSubmit}
-            disabled={isPending || (scope === 'meraki' && merakiJobId != null)}
+            disabled={isPending || jobShown}
           >
-            {isPending ? 'Scanning…' : submitLabel}
+            {runScan.isPending ? 'Scanning…' : isPending ? 'Starting…' : submitLabel}
           </button>
         </>
       }
@@ -383,6 +376,7 @@ export function RunScanModal({ onClose }: { onClose: () => void }) {
       )}
 
       {merakiJobId && <MerakiScanProgress jobId={merakiJobId} onDismiss={() => setMerakiJobId(null)} />}
+      {hostJobId && <HostScanProgress jobId={hostJobId} onDismiss={() => setHostJobId(null)} />}
 
       {hint && (
         <div style={{ fontSize: '0.85em', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
