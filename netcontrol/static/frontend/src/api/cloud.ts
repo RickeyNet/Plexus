@@ -2,7 +2,7 @@
  * Cloud Visibility (AWS / Azure / GCP) API hooks.
  * Backend endpoints under /api/cloud.
  */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { apiRequest } from './client';
 import type { CollectionProgress } from './meraki';
@@ -350,6 +350,8 @@ export function useCloudPolicyRules(params: PolicyParams) {
     queryKey: ['cloud-policy-rules', params],
     queryFn: () =>
       apiRequest<{ rules: CloudPolicyRule[] }>(`/cloud/policies/rules${qs(params)}`),
+    // Keep the table on screen while a new filter or drilldown loads.
+    placeholderData: keepPreviousData,
   });
 }
 
