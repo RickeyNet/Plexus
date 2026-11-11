@@ -1,4 +1,4 @@
-import { FormEvent, type ReactNode, useState } from 'react';
+import { FormEvent, type ReactNode, useRef, useState } from 'react';
 import { type UseQueryResult, useQueryClient } from '@tanstack/react-query';
 
 import { groupLabel } from '@/api/inventory';
@@ -11,6 +11,7 @@ import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
 import { cloudProviderTerms } from '@/lib/cloudProviderTerms';
+import { formatCount } from '@/lib/formatCount';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import {
@@ -79,6 +80,19 @@ export function Ipam() {
   const [includeTopology, setIncludeTopology] = useState(true);
   const [selectedSubnet, setSelectedSubnet] = useState<string>('');
   const [modal, setModal] = useState<ModalState>({ kind: 'none' });
+  const drilldownRef = useRef<HTMLDivElement>(null);
+
+  const openDrilldown = (subnet: string) => {
+    setSelectedSubnet(subnet);
+    // The panel heads the right column; from far down a long subnet list it
+    // is off screen, so bring it back unless its top is already in view.
+    const card = drilldownRef.current;
+    if (!card) return;
+    const top = card.getBoundingClientRect().top;
+    if (top < 0 || top > window.innerHeight / 2) {
+      card.scrollIntoView?.({ block: 'start' });
+    }
+  };
 
   const groups = useInventoryGroups();
   const overview = useIpamOverview(groupId, includeCloud, includeTopology);
@@ -288,17 +302,14 @@ export function Ipam() {
                   return (
                     <tr
                       key={item.subnet}
-                      style={
-                        isSelected
-                          ? { background: 'rgba(from var(--text) r g b / 0.04)' }
-                          : undefined
-                      }
+                      className={isSelected ? 'row-selected' : undefined}
+                      aria-current={isSelected ? 'true' : undefined}
                     >
                       <td>
                         <div style={{ fontWeight: 600 }}>{item.subnet}</div>
                         <div className="text-muted" style={{ fontSize: '0.85em' }}>
                           IPv{item.version ?? ''} /{item.prefix_length ?? ''} ·{' '}
-                          {item.total_addresses ?? 0} addresses
+                          {formatCount(item.total_addresses)} addresses
                         </div>
                         {(item.vrf_name || vlans.length > 0 || (item.overlap_count ?? 0) > 0) && (
                           <div style={{ marginTop: '0.25rem' }}>
@@ -342,10 +353,10 @@ export function Ipam() {
                         )}
                       </td>
                       <td>
-                        <div>{item.available_address_count ?? 0} available</div>
+                        <div>{formatCount(item.available_address_count)} available</div>
                         <div className="text-muted" style={{ fontSize: '0.85em' }}>
-                          {item.allocated_address_count ?? 0} allocated ·{' '}
-                          {item.reserved_address_count ?? 0} reserved
+                          {formatCount(item.allocated_address_count)} allocated ·{' '}
+                          {formatCount(item.reserved_address_count)} reserved
                         </div>
                         <div className="text-muted" style={{ fontSize: '0.85em' }}>
                           {item.utilization_pct ?? 0}% utilized
@@ -390,10 +401,11 @@ export function Ipam() {
                       <td>
                         <button
                           type="button"
-                          className="btn btn-secondary"
-                          onClick={() => setSelectedSubnet(item.subnet)}
+                          className="btn btn-secondary btn-sm"
+                          aria-pressed={isSelected}
+                          onClick={() => openDrilldown(item.subnet)}
                         >
-                          Drilldown
+                          {isSelected ? 'Selected' : 'Drilldown'}
                         </button>
                       </td>
                     </tr>
@@ -405,7 +417,11 @@ export function Ipam() {
         </div>
 
         <div style={{ display: 'grid', gap: '1rem' }}>
-          <div className="card">
+          <div
+            className="card"
+            ref={drilldownRef}
+            style={{ scrollMarginTop: 'var(--space-4)' }}
+          >
             <h3 style={{ margin: '0 0 0.75rem' }}>Subnet Drilldown</h3>
             {selectedSubnet ? (
               <SubnetDrilldown
@@ -845,7 +861,7 @@ function SourcesCard({
         }}
       >
         <h3 style={{ margin: 0 }}>External IPAM Sources</h3>
-        <button type="button" className="btn btn-primary" onClick={onAddSource}>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={onAddSource}>
           + Add Source
         </button>
       </div>
@@ -925,8 +941,7 @@ function SourcesCard({
               }}
             >
               <BusyButton
-                className="btn btn-primary"
-                style={{ fontSize: '0.82em', padding: '0.25rem 0.6rem' }}
+                className="btn btn-secondary btn-sm"
                 onClick={() => void handleSync(src.id)}
                 busy={syncing.isPending(src.id)}
                 busyLabel="Syncing…"
@@ -1128,47 +1143,35 @@ function ReconcileCard({ runs, diffs, sources, runsError, diffsError }: Reconcil
                         <span className="text-muted"> ({ipamStatus})</span>
                       )}
                     </td>
-                    <td style={{ whiteSpace: 'nowrap' }}>
-                      {pushAvailable && src && (
+                    <td>
+                      <div className="table-actions">
+                        {pushAvailable && src && (
+                          <BusyButton
+                            className="btn btn-secondary btn-sm"
+                            busy={isResolving('accept_plexus')}
+                            disabled={rowBusy}
+                            onClick={() => void handlePush(diff, src.name)}
+                          >
+                            Push to IPAM
+                          </BusyButton>
+                        )}
                         <BusyButton
-                          className="btn btn-primary"
-                          style={{
-                            fontSize: '0.78em',
-                            padding: '0.18rem 0.45rem',
-                          }}
-                          busy={isResolving('accept_plexus')}
+                          className="btn btn-secondary btn-sm"
+                          busy={isResolving('accept_ipam')}
                           disabled={rowBusy}
-                          onClick={() => void handlePush(diff, src.name)}
+                          onClick={() => void handleResolve(diff.id, 'accept_ipam')}
                         >
-                          Push to IPAM
+                          Accept IPAM
                         </BusyButton>
-                      )}
-                      <BusyButton
-                        className="btn btn-secondary"
-                        style={{
-                          fontSize: '0.78em',
-                          padding: '0.18rem 0.45rem',
-                          marginLeft: pushAvailable ? '0.3rem' : 0,
-                        }}
-                        busy={isResolving('accept_ipam')}
-                        disabled={rowBusy}
-                        onClick={() => void handleResolve(diff.id, 'accept_ipam')}
-                      >
-                        Accept IPAM
-                      </BusyButton>
-                      <BusyButton
-                        className="btn btn-secondary"
-                        style={{
-                          fontSize: '0.78em',
-                          padding: '0.18rem 0.45rem',
-                          marginLeft: '0.3rem',
-                        }}
-                        busy={isResolving('ignored')}
-                        disabled={rowBusy}
-                        onClick={() => void handleResolve(diff.id, 'ignored')}
-                      >
-                        Ignore
-                      </BusyButton>
+                        <BusyButton
+                          className="btn btn-secondary btn-sm"
+                          busy={isResolving('ignored')}
+                          disabled={rowBusy}
+                          onClick={() => void handleResolve(diff.id, 'ignored')}
+                        >
+                          Ignore
+                        </BusyButton>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -1260,7 +1263,7 @@ function DhcpCard({
             Infoblox.
           </div>
         </div>
-        <button type="button" className="btn btn-primary" onClick={onAdd}>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={onAdd}>
           + Add DHCP Server
         </button>
       </div>

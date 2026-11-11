@@ -19,9 +19,11 @@ import { LoadingState } from '@/components/LoadingState';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
 import { QueryError } from '@/components/QueryError';
 import { SegmentedControl } from '@/components/SegmentedControl';
+import { ShowMoreButton } from '@/components/ShowMoreButton';
 import { SummaryStrip } from '@/components/SummaryStrip';
 import { formatBackendDateTime, formatRelativeTime } from '@/lib/datetime';
 import { usePendingKeys } from '@/lib/usePendingKeys';
+import { useShowMore } from '@/lib/useShowMore';
 
 import { BackupModal } from './BackupModal';
 import { BackupPolicyModal } from './BackupPolicyModal';
@@ -320,6 +322,7 @@ function HistoryList({
         (b.ip_address || '').toLowerCase().includes(q),
     );
   }, [backups, query]);
+  const { visible, hiddenCount, showMore } = useShowMore(filtered, 50);
 
   if (loading) return <LoadingState text="Loading backups…" />;
   if (!filtered.length) {
@@ -328,7 +331,7 @@ function HistoryList({
 
   return (
     <div className="stack stack-sm">
-      {filtered.map((b) => {
+      {visible.map((b) => {
         const sizeKb =
           b.config_length != null
             ? `${(b.config_length / 1024).toFixed(1)} KB`
@@ -442,6 +445,7 @@ function HistoryList({
           </div>
         );
       })}
+      <ShowMoreButton hiddenCount={hiddenCount} onClick={showMore} style={{ alignSelf: 'flex-start' }} />
     </div>
   );
 }

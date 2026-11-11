@@ -12,7 +12,15 @@ import {
   useDeleteIpamReservation,
 } from '@/api/ipam';
 import { LoadingState } from '@/components/LoadingState';
+import { formatCount } from '@/lib/formatCount';
 import { StatGrid, StatTile } from '@/components/StatTile';
+
+/** Inline form buttons: Cancel then the primary action, right-aligned like a modal footer. */
+const FORM_ACTIONS_STYLE = {
+  display: 'flex',
+  justifyContent: 'flex-end',
+  gap: 'var(--space-2)',
+} as const;
 
 interface Props {
   subnet: string;
@@ -52,14 +60,14 @@ export function SubnetDrilldown({ subnet, detail, isLoading, loadError, onRefres
           {detail.subnet || subnet}
         </div>
         <div className="text-muted" style={{ fontSize: '0.9em' }}>
-          {summary.total_addresses ?? 0} total addresses ·{' '}
-          {summary.usable_address_count ?? 0} usable
+          {formatCount(summary.total_addresses)} total addresses ·{' '}
+          {formatCount(summary.usable_address_count)} usable
         </div>
       </div>
       <StatGrid compact minTileWidth={120}>
-        <StatTile label="Available" value={summary.available_address_count ?? 0} />
-        <StatTile label="Allocated" value={summary.allocated_address_count ?? 0} />
-        <StatTile label="Reserved" value={summary.reserved_address_count ?? 0} />
+        <StatTile label="Available" value={formatCount(summary.available_address_count)} />
+        <StatTile label="Allocated" value={formatCount(summary.allocated_address_count)} />
+        <StatTile label="Reserved" value={formatCount(summary.reserved_address_count)} />
         <StatTile label="Utilized" value={`${summary.utilization_pct ?? 0}%`} />
       </StatGrid>
 
@@ -248,7 +256,7 @@ function ReservationsSection({
               className="text-muted"
               style={{ fontSize: '0.9em', lineHeight: 1.45 }}
             >
-              {item.address_count ?? 0} addresses · {item.reason || 'Reserved range'}
+              {formatCount(item.address_count)} addresses · {item.reason || 'Reserved range'}
             </div>
           </div>
         ))
@@ -311,20 +319,20 @@ function ReservationsSection({
               placeholder="Reserved range"
             />
           </div>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={create.isPending}
-            >
-              {create.isPending ? 'Saving…' : 'Reserve'}
-            </button>
+          <div style={FORM_ACTIONS_STYLE}>
             <button
               type="button"
-              className="btn btn-secondary"
+              className="btn btn-secondary btn-sm"
               onClick={() => setShowForm(false)}
             >
               Cancel
+            </button>
+            <button
+              type="submit"
+              className="btn btn-primary btn-sm"
+              disabled={create.isPending}
+            >
+              {create.isPending ? 'Saving…' : 'Reserve'}
             </button>
           </div>
         </form>
@@ -539,20 +547,20 @@ function AllocationsSection({
               placeholder="e.g. Managed by IT"
             />
           </div>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={create.isPending}
-            >
-              {create.isPending ? 'Saving…' : 'Add Allocation'}
-            </button>
+          <div style={FORM_ACTIONS_STYLE}>
             <button
               type="button"
-              className="btn btn-secondary"
+              className="btn btn-secondary btn-sm"
               onClick={() => setShowForm(false)}
             >
               Cancel
+            </button>
+            <button
+              type="submit"
+              className="btn btn-primary btn-sm"
+              disabled={create.isPending}
+            >
+              {create.isPending ? 'Saving…' : 'Add Allocation'}
             </button>
           </div>
         </form>

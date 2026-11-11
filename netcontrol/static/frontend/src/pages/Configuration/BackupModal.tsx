@@ -72,21 +72,7 @@ function ConfigView({ query }: { query: ReturnType<typeof useConfigBackupDetail>
         Captured: {formatBackendDateTime(data.captured_at, '')} • Method: {data.capture_method || '-'} • Status:{' '}
         {data.status}
       </div>
-      <pre
-        style={{
-          background: 'var(--bg-secondary)',
-          padding: '1rem',
-          borderRadius: 8,
-          maxHeight: 480,
-          overflow: 'auto',
-          fontFamily: 'var(--font-mono)',
-          fontSize: '0.8rem',
-          whiteSpace: 'pre-wrap',
-          margin: 0,
-        }}
-      >
-        {data.config_text || '(empty)'}
-      </pre>
+      <pre className="drift-diff-viewer">{data.config_text || '(empty)'}</pre>
     </>
   );
 }

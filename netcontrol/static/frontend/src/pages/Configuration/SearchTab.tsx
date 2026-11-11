@@ -250,21 +250,7 @@ function Results({
               ? `${(r.config_length / 1024).toFixed(1)} KB`
               : '-'}
           </div>
-          <pre
-            className="drift-diff-viewer"
-            style={{
-              maxHeight: 220,
-              overflow: 'auto',
-              marginTop: '0.75rem',
-              padding: '0.5rem',
-              background: 'var(--bg)',
-              border: '1px solid var(--border)',
-              borderRadius: '0.375rem',
-              fontSize: '0.8rem',
-              whiteSpace: 'pre-wrap',
-              margin: 0,
-            }}
-          >
+          <pre className="drift-diff-viewer" style={{ marginTop: '0.75rem' }}>
             {(r.context_before_lines || []).map((line, i) => {
               const lineNum = (r.match_line_number || 0) - (r.context_before_lines?.length || 0) + i;
               return (

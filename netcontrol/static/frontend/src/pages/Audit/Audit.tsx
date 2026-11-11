@@ -32,6 +32,7 @@ import { clickableProps } from '@/lib/clickable';
 import { formatBackendDateTime } from '@/lib/datetime';
 import { isCriticalSeverity, SEVERITY_LEVELS, severityRank, severityTone } from '@/lib/severity';
 import { usePendingKeys } from '@/lib/usePendingKeys';
+import { ShowMoreButton } from '@/components/ShowMoreButton';
 import { useShowMore } from '@/lib/useShowMore';
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -785,16 +786,7 @@ function FindingsTable({ findings }: { findings: AuditFinding[] }) {
         ))}
       </tbody>
     </table>
-    {hiddenCount > 0 && (
-      <button
-        type="button"
-        className="btn btn-sm"
-        style={{ marginTop: '0.5rem' }}
-        onClick={showMore}
-      >
-        Show more ({hiddenCount.toLocaleString()} hidden)
-      </button>
-    )}
+    <ShowMoreButton hiddenCount={hiddenCount} onClick={showMore} style={{ marginTop: '0.5rem' }} />
     {muting && (
       <MuteFindingDialog
         finding={muting}

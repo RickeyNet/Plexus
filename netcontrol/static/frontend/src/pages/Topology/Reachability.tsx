@@ -16,6 +16,7 @@ import {
 import { EmptyState } from '@/components/EmptyState';
 import { PageHelp } from '@/components/PageHelp';
 import { formatBackendDateTime } from '@/lib/datetime';
+import { ShowMoreButton } from '@/components/ShowMoreButton';
 import { useShowMore } from '@/lib/useShowMore';
 
 import {
@@ -753,9 +754,7 @@ function RowTable({
           <span className="text-muted">
             Showing {visible.length.toLocaleString()} of {rows.length.toLocaleString()} rows; the downloads have all of them.
           </span>
-          <button type="button" className="btn btn-sm btn-secondary" onClick={showMore}>
-            Show more ({hiddenCount.toLocaleString()} hidden)
-          </button>
+          <ShowMoreButton hiddenCount={hiddenCount} onClick={showMore} />
         </div>
       )}
     </div>

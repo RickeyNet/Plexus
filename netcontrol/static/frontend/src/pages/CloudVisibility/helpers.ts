@@ -1,5 +1,8 @@
 import type { CloudDiscoverResult, CloudPolicyRule, CloudProvider, CloudPullResult } from '@/api/cloud';
 import { capitalize, cloudProviderTerms } from '@/lib/cloudProviderTerms';
+import { formatCount } from '@/lib/formatCount';
+
+export { formatCount };
 
 export function providerLabel(provider?: string | null): string {
   return cloudProviderTerms(provider).label;
@@ -113,10 +116,6 @@ export function liveUnavailableReason(provider: string, providers: CloudProvider
   const missing = liveMissingDependencies(provider, providers);
   const need = missing.length ? `need ${missing.join(', ')}` : 'are not available';
   return `Live reads ${need} on the Plexus server. Install with: pip install -r requirements-cloud.txt`;
-}
-
-export function formatCount(value: unknown): string {
-  return Number(value ?? 0).toLocaleString();
 }
 
 export function formatBytes(value: unknown): string {

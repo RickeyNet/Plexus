@@ -22,6 +22,7 @@ export function SetBaselineModal({ onClose }: Props) {
   const [name, setName] = useState('');
   const [configText, setConfigText] = useState('');
   const [hostError, setHostError] = useState<string | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const formId = useId();
 
@@ -55,7 +56,12 @@ export function SetBaselineModal({ onClose }: Props) {
       const snap = await apiRequest<ConfigSnapshot>(
         `/config-drift/snapshots/${snapshots[0].id}`,
       );
-      if (snap.config_text) setConfigText(snap.config_text);
+      if (!snap.config_text) {
+        setHostError('The latest snapshot for this host is empty. Capture a config first.');
+        return;
+      }
+      setConfigText(snap.config_text);
+      setConfigError(null);
     } catch (e) {
       setFormError('Failed to load snapshot: ' + (e as Error).message);
     } finally {
@@ -65,8 +71,11 @@ export function SetBaselineModal({ onClose }: Props) {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!hostId || !configText.trim()) return;
     setFormError(null);
+    const missingConfig = !configText.trim();
+    setHostError(hostId ? null : 'Select the host this baseline is for');
+    setConfigError(missingConfig ? 'Paste the intended configuration, or use the latest snapshot' : null);
+    if (!hostId || missingConfig) return;
     create.mutate(
       { host_id: hostId, name, config_text: configText },
       {
@@ -151,11 +160,16 @@ export function SetBaselineModal({ onClose }: Props) {
             className="form-textarea drift-baseline-textarea"
             placeholder="Paste the intended/golden running-config here…"
             value={configText}
-            onChange={(e) => setConfigText(e.target.value)}
+            onChange={(e) => {
+              setConfigText(e.target.value);
+              setConfigError(null);
+            }}
+            aria-invalid={!!configError}
             required
             rows={12}
             style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem' }}
           />
+          <FieldError>{configError}</FieldError>
         </div>
       </form>
     </Modal>

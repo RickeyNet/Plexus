@@ -385,10 +385,6 @@ per-page **H** items.
 ### IPAM
 
 - [ ] **H: Right column clamps to 320px but holds 5-7 column tables with no scroll wrapper** *(verify in browser)* (`pages/Ipam/Ipam.tsx:235`, `:1060`, `:1228`, `:1367`).
-- [ ] **M: Drilldown stat values overflow on large subnets; no thousands separators** (`SubnetDrilldown.tsx:53`).
-- [ ] **M: Selected subnet is nearly invisible; the drilldown panel is not scrolled into view** (`Ipam.tsx:299`, `:416`).
-- [ ] **M: Inline button sizes instead of `btn-sm`; four primary buttons on the page** (`Ipam.tsx:917`, `:1101`).
-- [ ] **L: Inline drilldown forms reverse the button order** (`SubnetDrilldown.tsx:306`).
 - [ ] **L: 11 stat cards before content; permanent five-paragraph notes card** (`Ipam.tsx:99`, `:553`).
 
 ### Jobs

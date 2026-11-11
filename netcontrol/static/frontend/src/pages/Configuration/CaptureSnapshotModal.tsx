@@ -25,6 +25,7 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
   const [groupId, setGroupId] = useState<number | null>(null);
   const [credId, setCredId] = useState<number | null>(null);
   const [targetError, setTargetError] = useState<string | null>(null);
+  const [credError, setCredError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const formId = useId();
 
@@ -40,13 +41,11 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setTargetError(null);
     setSaveError(null);
-    if (!credId) return;
-    if (!hostId && !groupId) {
-      setTargetError('Please select a host or group');
-      return;
-    }
+    const missingTarget = !hostId && !groupId;
+    setTargetError(missingTarget ? 'Please select a host or group' : null);
+    setCredError(credId ? null : 'Select the credentials to log in with');
+    if (missingTarget || !credId) return;
     const onSuccess = (res: { job_id: string }) => {
       onClose();
       onJobStarted(res.job_id);
@@ -137,9 +136,11 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
             id={`${formId}-credential`}
             className="form-select"
             value={credId ?? ''}
-            onChange={(e) =>
-              setCredId(e.target.value ? Number(e.target.value) : null)
-            }
+            onChange={(e) => {
+              setCredId(e.target.value ? Number(e.target.value) : null);
+              setCredError(null);
+            }}
+            aria-invalid={!!credError}
             required
           >
             <option value="">Select credentials…</option>
@@ -149,6 +150,7 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
               </option>
             ))}
           </select>
+          <FieldError>{credError}</FieldError>
         </div>
       </form>
     </Modal>

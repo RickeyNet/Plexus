@@ -3922,7 +3922,8 @@ code {
 .drift-diff-added { color: var(--success); }
 .drift-diff-removed { color: var(--danger); }
 
-/* Unified diff viewer */
+/* Config text, unified diff and search snippet viewer. The one place that
+   sets their size: 60vh on a page, the space left in the dialog in a modal. */
 .drift-diff-viewer {
     font-family: 'JetBrains Mono', 'Fira Code', monospace;
     font-size: var(--text-sm);
@@ -3930,12 +3931,17 @@ code {
     background: var(--bg-secondary, rgba(0,0,0,0.2));
     border: 1px solid var(--border, rgba(255,255,255,0.08));
     border-radius: var(--radius-lg);
-    padding: var(--space-4);
-    overflow-x: auto;
+    padding: var(--space-3);
+    margin: 0;
     max-height: 60vh;
-    overflow-y: auto;
-    white-space: pre;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
     tab-size: 4;
+}
+
+.modal-body .drift-diff-viewer {
+    max-height: max(12rem, calc(90vh - 20rem));
 }
 
 .drift-diff-viewer .diff-added {
@@ -4104,6 +4110,15 @@ code {
 /* A row that opens something (detail, drill-down). */
 .data-table tr.row-clickable {
     cursor: pointer;
+}
+
+/* The row whose detail is open in a side panel. */
+.data-table tbody tr.row-selected > td {
+    background: var(--primary-soft);
+}
+
+.data-table tbody tr.row-selected > td:first-child {
+    box-shadow: inset 3px 0 0 var(--primary);
 }
 
 .data-table.table-sticky th {

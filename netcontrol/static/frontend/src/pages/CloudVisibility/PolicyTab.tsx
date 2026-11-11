@@ -6,6 +6,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
 import { StatGrid, StatTile } from '@/components/StatTile';
+import { ShowMoreButton } from '@/components/ShowMoreButton';
 import { useShowMore } from '@/lib/useShowMore';
 import type { CloudFilterState } from './CloudVisibility';
 import { formatCount, isPublicRule, policyRuleKeys, providerLabel, topologyResourceTypeLabel } from './helpers';
@@ -276,11 +277,7 @@ function RuleInventory({ query, exposure, serverFiltered }: RuleInventoryProps) 
         <span className="text-muted">
           Showing {formatCount(visible.length)} of {formatCount(rules.length)} rules
         </span>
-        {hiddenCount > 0 && (
-          <button type="button" className="btn btn-sm btn-secondary" onClick={showMore}>
-            Show more ({hiddenCount.toLocaleString()} hidden)
-          </button>
-        )}
+        <ShowMoreButton hiddenCount={hiddenCount} onClick={showMore} />
       </div>
     </>
   );
