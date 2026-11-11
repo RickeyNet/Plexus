@@ -13,6 +13,8 @@ import {
 } from '@/api/jobs';
 import { useInventoryGroupsFull } from '@/api/inventory';
 
+import { countTargetHosts, filterTargetGroups } from './helpers';
+
 interface Props {
   isOpen: boolean;
   onClose: () => void;
@@ -36,6 +38,7 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
   const [dryRun, setDryRun] = useState(true);
   const [adHocIps, setAdHocIps] = useState('');
   const [hostIds, setHostIds] = useState<Set<number>>(new Set());
+  const [targetQuery, setTargetQuery] = useState('');
   const [paramValues, setParamValues] = useState<Record<string, string | boolean>>({});
   const [playbookError, setPlaybookError] = useState<string | null>(null);
   const [targetsError, setTargetsError] = useState<string | null>(null);
@@ -47,6 +50,10 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
   );
   const isAnsible = selectedPb?.type === 'ansible';
   const paramSchema: PlaybookParameter[] = selectedPb?.parameters_schema ?? [];
+
+  const groups = groupsQuery.data;
+  const shownGroups = useMemo(() => filterTargetGroups(groups ?? [], targetQuery), [groups, targetQuery]);
+  const totalHosts = useMemo(() => countTargetHosts(groups ?? []), [groups]);
 
   // Seed defaults whenever the user picks a different playbook so the form
   // shows the schema's defaults instead of stale state from a prior selection.
@@ -71,7 +78,7 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
   function reset() {
     setPlaybookId(''); setCredentialId(''); setTemplateId('');
     setPriority('2'); setDependsOn(''); setDryRun(true);
-    setAdHocIps(''); setHostIds(new Set()); setParamValues({});
+    setAdHocIps(''); setHostIds(new Set()); setTargetQuery(''); setParamValues({});
     setPlaybookError(null); setTargetsError(null); setLaunchError(null);
   }
 
@@ -99,7 +106,7 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
     const adHocList = adHocIps.trim()
       ? adHocIps.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean)
       : [];
-    const pbErr = playbookId ? null : 'Select a playbook';
+    const pbErr = playbookId ? null : 'Select a task';
     const tgtErr = hostIds.size === 0 && adHocList.length === 0
       ? 'Select at least one host or enter an IP address'
       : null;
@@ -118,7 +125,7 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
     }
 
     if (!dryRun) {
-      const groupNames = (groupsQuery.data ?? [])
+      const groupNames = (groups ?? [])
         .filter((g) => (g.hosts ?? []).some((h) => hostIds.has(h.id)))
         .map((g) => g.name);
       const targets = [
@@ -127,7 +134,7 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
       ].filter(Boolean).join(' and ');
       const ok = await confirm({
         title: 'Launch live job',
-        message: `Run '${selectedPb?.name ?? 'the selected playbook'}' live against ${targets}? This is not a dry run: it makes changes on the devices.`,
+        message: `Run '${selectedPb?.name ?? 'the selected task'}' live against ${targets}? This is not a dry run: it makes changes on the devices.`,
         confirmLabel: 'Launch live',
       });
       if (!ok) return;
@@ -173,7 +180,7 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
       <form id={formId} onSubmit={(e) => void handleSubmit(e)}>
         {launchError && <Callout tone="danger">{launchError}</Callout>}
         <div className="form-group">
-          <label className="form-label" htmlFor={`${formId}-playbook`}>Playbook</label>
+          <label className="form-label" htmlFor={`${formId}-playbook`}>Task</label>
           <select
             id={`${formId}-playbook`}
             className="form-select"
@@ -183,7 +190,7 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
             required
             disabled={playbooksQuery.isError}
           >
-            <option value="">Select a playbook…</option>
+            <option value="">Select a task…</option>
             {(playbooksQuery.data ?? []).map((pb) => (
               <option key={pb.id} value={pb.id}>
                 {pb.name}{pb.type === 'ansible' ? ' [Ansible]' : ''}
@@ -198,12 +205,40 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
 
         <div className="form-group">
           <span className="form-label" id={`${formId}-targets`}>Select Targets</span>
+          {(groups ?? []).length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+              <input
+                type="search"
+                className="form-input"
+                placeholder="Search hosts or groups…"
+                aria-label="Search targets"
+                value={targetQuery}
+                onChange={(e) => setTargetQuery(e.target.value)}
+                // Enter in this box would otherwise submit the launch form.
+                onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}
+                style={{ flex: '1 1 200px', width: 'auto' }}
+              />
+              <span className="text-muted" aria-live="polite" style={{ fontSize: '0.85rem', whiteSpace: 'nowrap' }}>
+                {hostIds.size} of {totalHosts} selected
+              </span>
+              <button
+                type="button"
+                className="btn btn-sm btn-secondary"
+                disabled={hostIds.size === 0}
+                onClick={() => setHostIds(new Set())}
+              >
+                Clear
+              </button>
+            </div>
+          )}
           <div role="group" aria-labelledby={`${formId}-targets`} style={{ background: 'var(--bg-secondary)', padding: '1rem', borderRadius: 6, maxHeight: 320, overflowY: 'auto', border: '1px solid var(--border)' }}>
-            {(groupsQuery.data ?? []).length === 0 ? (
+            {(groups ?? []).length === 0 ? (
               <div className="empty-state">
                 {groupsQuery.isError ? 'Inventory could not be loaded. Enter ad-hoc IPs below.' : 'No inventory groups available'}
               </div>
-            ) : (groupsQuery.data ?? []).map((group) => {
+            ) : shownGroups.length === 0 ? (
+              <div className="empty-state">No hosts or groups match the search</div>
+            ) : shownGroups.map((group) => {
               const hosts = group.hosts ?? [];
               const groupHostIds = hosts.map((h) => h.id);
               const allChecked = hosts.length > 0 && groupHostIds.every((id) => hostIds.has(id));
@@ -271,7 +306,7 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
 
         {!isAnsible && (
           <div className="form-group">
-            <label className="form-label" htmlFor={`${formId}-template`}>Template (optional)</label>
+            <label className="form-label" htmlFor={`${formId}-template`}>Instructions (optional)</label>
             <select id={`${formId}-template`} className="form-select" value={templateId} onChange={(e) => setTemplateId(e.target.value)} disabled={tplQuery.isError}>
               <option value="">None</option>
               {(tplQuery.data ?? []).map((t) => (
@@ -281,14 +316,14 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
             <small className="text-muted">
               {tplQuery.isError
                 ? 'Instructions could not be loaded. You may not have access to Instructions.'
-                : 'Required if the selected playbook expects a template.'}
+                : 'Required if the selected task expects instructions.'}
             </small>
           </div>
         )}
 
         {paramSchema.length > 0 && (
           <div style={{ padding: '0.75rem', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 6, marginBottom: '1rem' }}>
-            <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>Playbook Parameters</div>
+            <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>Task Parameters</div>
             {paramSchema.map((f) => {
               const val = paramValues[f.name];
               const id = `pb-param-${f.name}`;

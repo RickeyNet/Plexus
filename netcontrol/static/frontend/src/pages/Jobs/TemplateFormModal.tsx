@@ -98,7 +98,7 @@ export function TemplateFormModal({ mode, templateId, onClose }: Props) {
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={mode === 'edit' ? 'Edit Template' : 'New Template'}
+      title={mode === 'edit' ? 'Edit Instruction Set' : 'New Instruction Set'}
       size="medium"
       footer={
         <>
@@ -112,7 +112,7 @@ export function TemplateFormModal({ mode, templateId, onClose }: Props) {
       }
     >
       {loadFailed ? (
-        <QueryError what="template" query={detailQuery} />
+        <QueryError what="instruction set" query={detailQuery} />
       ) : loading ? (
         <LoadingState />
       ) : (
@@ -148,7 +148,7 @@ export function TemplateFormModal({ mode, templateId, onClose }: Props) {
             </select>
             <small className="text-muted">
               Generic applies to any device. Pick a vendor to create a
-              variant of this template name; jobs send each host the body
+              variant of this instruction set; jobs send each host the body
               matching its platform (falling back to the generic body).
             </small>
           </div>
