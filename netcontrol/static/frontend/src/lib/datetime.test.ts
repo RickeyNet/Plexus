@@ -5,6 +5,7 @@ import {
   formatBackendDateTime,
   formatBackendTime,
   formatBackendTimestamp,
+  formatInterval,
   formatRelativeTime,
   localInputToIso,
   parseBackendDate,
@@ -170,5 +171,28 @@ describe('datetime-local input helpers', () => {
     expect(toLocalInputValue('not-a-date')).toBe('');
     expect(localInputToIso('')).toBe('');
     expect(localInputToIso('not-a-date')).toBe('');
+  });
+});
+
+describe('formatInterval', () => {
+  it('formats whole-day intervals', () => {
+    expect(formatInterval(86400)).toBe('1d');
+    expect(formatInterval(86400 * 7)).toBe('7d');
+  });
+
+  it('formats whole-hour intervals', () => {
+    expect(formatInterval(3600)).toBe('1h');
+    expect(formatInterval(3600 * 6)).toBe('6h');
+  });
+
+  it('formats minutes and seconds', () => {
+    expect(formatInterval(900)).toBe('15m');
+    expect(formatInterval(45)).toBe('45s');
+  });
+
+  it('returns dash for null/zero', () => {
+    expect(formatInterval(null)).toBe('-');
+    expect(formatInterval(undefined)).toBe('-');
+    expect(formatInterval(0)).toBe('-');
   });
 });

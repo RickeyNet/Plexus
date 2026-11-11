@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 
 import {
   MerakiAssignment,
@@ -10,29 +10,55 @@ import {
   useScanMerakiAssignmentNow,
   useUpdateMerakiAssignment,
 } from '@/api/compliance';
+import { Badge, StatusBadge } from '@/components/Badge';
 import { BusyButton } from '@/components/BusyButton';
+import { DataTable } from '@/components/DataTable';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
-import { TabBar } from '@/components/TabBar';
-import { formatBackendDateTime } from '@/lib/datetime';
-import { complianceStatusTone, toneColor } from '@/lib/severity';
+import { SegmentedControl } from '@/components/SegmentedControl';
+import { ShowMoreButton } from '@/components/ShowMoreButton';
+import { SortableTh } from '@/components/SortableTh';
+import { formatBackendDateTime, formatInterval } from '@/lib/datetime';
+import { complianceStatusRank } from '@/lib/severity';
 import { usePendingKeys } from '@/lib/usePendingKeys';
+import { useShowMore } from '@/lib/useShowMore';
+import {
+  compareDate,
+  compareNumber,
+  compareText,
+  passRatio,
+  useTableSort,
+  type Comparator,
+  type SortDir,
+  type SortState,
+} from '@/lib/useTableSort';
 
 import { MerakiAssignModal } from './MerakiAssignModal';
 import { MerakiFindingsModal } from './MerakiFindingsModal';
 import { MerakiScanProgress } from './MerakiScanProgress';
+import { MERAKI_KIND_SHORT_LABEL } from './merakiHelpers';
+import { RESULTS_TABLE_MAX_HEIGHT } from './scanHelpers';
 
-const KIND_LABEL: Record<string, string> = { org: 'Org', network: 'Network', device: 'Switch', ssid: 'SSID' };
+// Sortable columns of the Target Status and Scan Results tables. Status sorts
+// worst first (non-compliant, error, compliant), score by pass ratio.
+type TargetSortKey = 'status' | 'target' | 'org' | 'profile' | 'score' | 'scanned';
 
-const formatInterval = (seconds: number): string => {
-  if (seconds % 86400 === 0) return `${seconds / 86400}d`;
-  if (seconds % 3600 === 0) return `${seconds / 3600}h`;
-  if (seconds % 60 === 0) return `${seconds / 60}m`;
-  return `${seconds}s`;
+const TARGET_COMPARATORS: Record<TargetSortKey, Comparator<MerakiResult>> = {
+  status: (a, b) => complianceStatusRank(a.status) - complianceStatusRank(b.status),
+  target: (a, b) => compareText(a.target_name, b.target_name),
+  org: (a, b) => compareText(a.org_name, b.org_name),
+  profile: (a, b) => compareText(a.profile_name, b.profile_name),
+  score: (a, b) => compareNumber(passRatio(a.passed_rules, a.total_rules), passRatio(b.passed_rules, b.total_rules)),
+  scanned: (a, b) => compareDate(a.scanned_at, b.scanned_at),
 };
+const TARGET_FIRST_DIR: Partial<Record<TargetSortKey, SortDir>> = { scanned: 'desc' };
+const byTargetName: Comparator<MerakiResult> = (a, b) =>
+  compareText(a.org_name, b.org_name) ||
+  compareText(a.target_name, b.target_name) ||
+  compareText(a.profile_name, b.profile_name);
 
 type View = 'assignments' | 'status' | 'results';
 
@@ -60,18 +86,13 @@ export function MerakiTab({ query }: { query: string }) {
 
   return (
     <div className="stack stack-sm">
-      <TabBar
-        size="sm"
-        tabs={VIEWS}
-        active={view}
-        onChange={setView}
-        aria-label="Meraki views"
-        trailing={
-          <button type="button" className="btn btn-sm btn-secondary" onClick={() => setShowAssign(true)}>
-            Assign to Organization
-          </button>
-        }
-      />
+      <div className="toolbar">
+        <SegmentedControl options={VIEWS} value={view} onChange={setView} aria-label="Meraki view" />
+        <span className="toolbar-spacer" />
+        <button type="button" className="btn btn-sm btn-secondary" onClick={() => setShowAssign(true)}>
+          Assign to Organization
+        </button>
+      </div>
 
       {jobId && (
         <MerakiScanProgress
@@ -286,24 +307,23 @@ function AssignmentsView({
   );
 }
 
-function TargetLine({ r }: { r: MerakiResult }) {
+/** Target cell: kind badge, name, and model / network where they apply. */
+function TargetCell({ r }: { r: MerakiResult }) {
+  const detail = [
+    r.model,
+    (r.target_kind === 'device' || r.target_kind === 'ssid') && r.network_name ? `in ${r.network_name}` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
   return (
     <>
-      <span className="badge badge-secondary" style={{ marginRight: '0.5rem' }}>
-        {KIND_LABEL[r.target_kind] || r.target_kind}
-      </span>
+      <Badge size="sm" style={{ marginRight: '0.5rem' }}>
+        {MERAKI_KIND_SHORT_LABEL[r.target_kind] || r.target_kind}
+      </Badge>
       <strong>{r.target_name || '?'}</strong>
-      {r.model && (
-        <span style={{ marginLeft: '0.5rem', fontSize: '0.85em', color: 'var(--text-muted)' }}>{r.model}</span>
+      {detail && (
+        <span style={{ marginLeft: '0.5rem', fontSize: '0.85em', color: 'var(--text-muted)' }}>{detail}</span>
       )}
-      {(r.target_kind === 'device' || r.target_kind === 'ssid') && r.network_name && (
-        <span style={{ marginLeft: '0.5rem', fontSize: '0.85em', color: 'var(--text-muted)' }}>
-          in {r.network_name}
-        </span>
-      )}
-      <span style={{ marginLeft: '0.5rem', fontSize: '0.85em', color: 'var(--text-muted)' }}>
-        · {r.org_name || '?'} · {r.profile_name || '?'}
-      </span>
     </>
   );
 }
@@ -349,46 +369,22 @@ function StatusView({
         <input type="checkbox" checked={onlyFailing} onChange={(e) => setOnlyFailing(e.target.checked)} />
         Only non-compliant or unreadable
       </label>
-      {filtered.length === 0 && <EmptyState compact message="Nothing matches." />}
-      {filtered.map((r) => {
-        const color = toneColor(complianceStatusTone(r.status));
-        return (
-          <div key={r.id} className="card card-sm">
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                flexWrap: 'wrap',
-                gap: '0.5rem',
-              }}
-            >
-              <div>
-                <span
-                  style={{
-                    display: 'inline-block',
-                    width: 10,
-                    height: 10,
-                    borderRadius: '50%',
-                    background: color,
-                    marginRight: '0.5rem',
-                  }}
-                />
-                <TargetLine r={r} />
-              </div>
-              <div style={{ fontSize: '0.85em', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <span style={{ color: color, fontWeight: 600 }}>{r.status}</span> · {r.passed_rules}/
-                {r.total_rules} passed · {formatBackendDateTime(r.scanned_at)}
-                {r.status !== 'compliant' && (
-                  <button className="btn btn-sm btn-secondary" onClick={() => onShowFindings(r.id)}>
-                    View findings
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        );
-      })}
+      {filtered.length === 0 ? (
+        <EmptyState compact message="Nothing matches." />
+      ) : (
+        <MerakiResultsTable
+          rows={filtered}
+          initialSort={{ key: 'status', dir: 'asc' }}
+          label="Meraki target status"
+          action={(r) =>
+            r.status !== 'compliant' && (
+              <button className="btn btn-sm btn-secondary" onClick={() => onShowFindings(r.id)}>
+                View findings
+              </button>
+            )
+          }
+        />
+      )}
     </>
   );
 }
@@ -426,35 +422,88 @@ function ResultsView({
           </button>
         </div>
       )}
-      {filtered.length === 0 && <EmptyState compact message="Nothing matches." />}
-      {filtered.map((r) => {
-        const color = toneColor(complianceStatusTone(r.status));
-        return (
-          <div key={r.id} className="card card-sm">
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                flexWrap: 'wrap',
-                gap: '0.5rem',
-              }}
-            >
-              <div>
-                <span style={{ color: color, fontWeight: 600, marginRight: '0.5rem' }}>{r.status}</span>
-                <TargetLine r={r} />
-              </div>
-              <div style={{ fontSize: '0.85em', color: 'var(--text-muted)', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+      {filtered.length === 0 ? (
+        <EmptyState compact message="Nothing matches." />
+      ) : (
+        <MerakiResultsTable
+          rows={filtered}
+          initialSort={{ key: 'scanned', dir: 'desc' }}
+          label="Meraki scan results"
+          action={(r) => (
+            <button className="btn btn-sm btn-secondary" onClick={() => onShowFindings(r.id)}>
+              {r.failed_rules > 0 ? `View ${r.failed_rules} violation(s)` : 'View findings'}
+            </button>
+          )}
+        />
+      )}
+    </>
+  );
+}
+
+/**
+ * Meraki target rows (latest status or scan results) as a sortable table,
+ * rendered in pages of 200 after filtering and sorting.
+ */
+function MerakiResultsTable({
+  rows,
+  initialSort,
+  label,
+  action,
+}: {
+  rows: MerakiResult[];
+  initialSort: SortState<TargetSortKey>;
+  label: string;
+  action: (row: MerakiResult) => ReactNode;
+}) {
+  const { rows: sorted, sort, toggle } = useTableSort(rows, TARGET_COMPARATORS, initialSort, {
+    firstDir: TARGET_FIRST_DIR,
+    tieBreak: byTargetName,
+  });
+  const { visible, hiddenCount, showMore } = useShowMore(sorted);
+  const th = (key: TargetSortKey, text: string) => (
+    <SortableTh sortKey={key} sort={sort} onSort={toggle}>
+      {text}
+    </SortableTh>
+  );
+
+  return (
+    <>
+      <DataTable compact stickyHeader maxHeight={RESULTS_TABLE_MAX_HEIGHT} aria-label={label}>
+        <thead>
+          <tr>
+            {th('status', 'Status')}
+            {th('target', 'Target')}
+            {th('org', 'Organization')}
+            {th('profile', 'Profile')}
+            {th('score', 'Score')}
+            {th('scanned', 'Scanned')}
+            <th aria-label="Actions" />
+          </tr>
+        </thead>
+        <tbody>
+          {visible.map((r) => (
+            <tr key={r.id}>
+              <td>
+                <StatusBadge status={r.status} kind="compliance" size="sm" />
+              </td>
+              <td>
+                <TargetCell r={r} />
+              </td>
+              <td>{r.org_name || '?'}</td>
+              <td>{r.profile_name || '?'}</td>
+              <td style={{ whiteSpace: 'nowrap' }}>
                 {r.passed_rules}/{r.total_rules} passed
-                {r.unreadable_rules > 0 ? ` (${r.unreadable_rules} unreadable)` : ''} · {formatBackendDateTime(r.scanned_at)}
-                <button className="btn btn-sm btn-secondary" onClick={() => onShowFindings(r.id)}>
-                  {r.failed_rules > 0 ? `View ${r.failed_rules} violation(s)` : 'View findings'}
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      })}
+                {r.unreadable_rules > 0 && (
+                  <span className="text-muted"> ({r.unreadable_rules} unreadable)</span>
+                )}
+              </td>
+              <td style={{ whiteSpace: 'nowrap' }}>{formatBackendDateTime(r.scanned_at)}</td>
+              <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>{action(r)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </DataTable>
+      <ShowMoreButton hiddenCount={hiddenCount} onClick={showMore} style={{ alignSelf: 'flex-start' }} />
     </>
   );
 }

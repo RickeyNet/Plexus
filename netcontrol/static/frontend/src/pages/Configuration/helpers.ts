@@ -8,14 +8,6 @@ export function backupDiffAvailable(status: string | null | undefined): boolean 
   return status == null || status === 'success';
 }
 
-export function formatInterval(seconds: number | null | undefined): string {
-  if (!seconds) return '-';
-  if (seconds % 86400 === 0) return `${seconds / 86400}d`;
-  if (seconds % 3600 === 0) return `${seconds / 3600}h`;
-  if (seconds % 60 === 0) return `${seconds / 60}m`;
-  return `${seconds}s`;
-}
-
 export function statusColor(status: string | null | undefined): string {
   if (status === 'open') return 'var(--danger)';
   if (status === 'accepted') return 'var(--warning)';

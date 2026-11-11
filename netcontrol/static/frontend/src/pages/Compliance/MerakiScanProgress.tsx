@@ -1,7 +1,6 @@
-import type { ReactNode } from 'react';
-
 import { MerakiScanJob, useMerakiScanJob } from '@/api/compliance';
-import { Callout } from '@/components/Callout';
+
+import { ScanBanner } from './ScanBanner';
 
 /**
  * Live view of one Meraki compliance scan job: the collection phase while it
@@ -21,33 +20,33 @@ export function MerakiScanProgress({
 
   if (job.isError) {
     return (
-      <Banner tone="danger" onDismiss={onDismiss}>
+      <ScanBanner tone="danger" onDismiss={onDismiss}>
         The scan job is no longer available (it may have expired). Check Scan Results for its
         outcome.
-      </Banner>
+      </ScanBanner>
     );
   }
   const data = job.data;
   if (!data || data.status === 'running') {
     return (
-      <Banner tone="info">
+      <ScanBanner tone="info">
         <span className="backup-spinner" style={{ marginRight: '0.5rem' }} />
         Scanning {String(data?.progress?.org_name ?? 'organization')}…{' '}
         <span style={{ color: 'var(--text-muted)' }}>{describeProgress(data)}</span>
-      </Banner>
+      </ScanBanner>
     );
   }
   if (data.status === 'failed') {
     return (
-      <Banner tone="danger" onDismiss={onDismiss}>
+      <ScanBanner tone="danger" onDismiss={onDismiss}>
         Scan failed: {data.error || 'unknown error'}
-      </Banner>
+      </ScanBanner>
     );
   }
   const r = data.result;
   const tone = r && r.non_compliant > 0 ? 'warning' : r && r.errors > 0 ? 'danger' : 'success';
   return (
-    <Banner tone={tone} onDismiss={onDismiss}>
+    <ScanBanner tone={tone} onDismiss={onDismiss}>
       <strong>{r?.org_name}</strong> · {r?.profile_name}: {r?.targets} target(s) checked,{' '}
       {r?.non_compliant} non-compliant, {r?.errors} unreadable
       {r && r.collection_warnings > 0 ? `, ${r.collection_warnings} collection warning(s)` : ''}.
@@ -61,7 +60,7 @@ export function MerakiScanProgress({
           Show results
         </button>
       )}
-    </Banner>
+    </ScanBanner>
   );
 }
 
@@ -72,29 +71,4 @@ function describeProgress(job: MerakiScanJob | undefined): string {
   const total = typeof p.calls_total === 'number' ? p.calls_total : null;
   if (done != null && total != null && total > 0) return `${phase} (${done}/${total} API calls)`;
   return phase;
-}
-
-function Banner({
-  tone,
-  children,
-  onDismiss,
-}: {
-  tone: 'info' | 'success' | 'warning' | 'danger';
-  children: ReactNode;
-  onDismiss?: () => void;
-}) {
-  return (
-    <Callout
-      tone={tone}
-      action={
-        onDismiss && (
-          <button type="button" className="btn btn-sm btn-ghost" onClick={onDismiss}>
-            Dismiss
-          </button>
-        )
-      }
-    >
-      {children}
-    </Callout>
-  );
 }

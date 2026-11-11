@@ -108,6 +108,16 @@ export function complianceStatusTone(status: string | null | undefined): Tone {
   return COMPLIANCE_TONE[normalize(status)] ?? 'neutral';
 }
 
+const COMPLIANCE_RANK: Partial<Record<Tone, number>> = { danger: 0, warning: 1, success: 3 };
+
+/**
+ * Sort key of a compliance status, worst first: non-compliant 0, error 1,
+ * unknown/pending 2, compliant 3.
+ */
+export function complianceStatusRank(status: string | null | undefined): number {
+  return COMPLIANCE_RANK[complianceStatusTone(status)] ?? 2;
+}
+
 // ── Job / run / sync status ────────────────────────────────────────────────
 
 const STATUS_TONE: Record<string, Tone> = {

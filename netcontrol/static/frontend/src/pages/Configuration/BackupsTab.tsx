@@ -21,17 +21,14 @@ import { QueryError } from '@/components/QueryError';
 import { SegmentedControl } from '@/components/SegmentedControl';
 import { ShowMoreButton } from '@/components/ShowMoreButton';
 import { SummaryStrip } from '@/components/SummaryStrip';
-import { formatBackendDateTime, formatRelativeTime } from '@/lib/datetime';
+import { formatBackendDateTime, formatInterval, formatRelativeTime } from '@/lib/datetime';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 import { useShowMore } from '@/lib/useShowMore';
 
 import { BackupModal } from './BackupModal';
 import { BackupPolicyModal } from './BackupPolicyModal';
 import { RestoreBackupModal } from './RestoreBackupModal';
-import {
-  type BackupView,
-  formatInterval,
-} from './helpers';
+import { type BackupView } from './helpers';
 
 type SubTab = 'policies' | 'history';
 

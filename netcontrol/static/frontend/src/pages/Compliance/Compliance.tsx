@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 
 import { useAuthStatus } from '@/api/auth';
 import {
@@ -18,8 +18,9 @@ import {
   useScanAssignmentNow,
   useUpdateAssignment,
 } from '@/api/compliance';
-import { SeverityBadge } from '@/components/Badge';
+import { SeverityBadge, StatusBadge } from '@/components/Badge';
 import { BusyButton } from '@/components/BusyButton';
+import { DataTable } from '@/components/DataTable';
 import { DeleteButton } from '@/components/DeleteButton';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
@@ -27,20 +28,35 @@ import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { ShowMoreButton } from '@/components/ShowMoreButton';
+import { SortableTh } from '@/components/SortableTh';
 import { SummaryStrip } from '@/components/SummaryStrip';
 import { TabBar } from '@/components/TabBar';
-import { complianceStatusTone, toneColor } from '@/lib/severity';
+import { complianceStatusRank } from '@/lib/severity';
 import { visibleTabs } from '@/lib/tabGating';
 import { usePathTab } from '@/lib/usePathTab';
 import { usePendingKeys } from '@/lib/usePendingKeys';
+import { useShowMore } from '@/lib/useShowMore';
+import {
+  compareDate,
+  compareNumber,
+  compareText,
+  passRatio,
+  useTableSort,
+  type Comparator,
+  type SortDir,
+  type SortState,
+} from '@/lib/useTableSort';
 
 import { AuditContent } from '@/pages/Audit/Audit';
-import { formatBackendDateTime, parseBackendDate } from '@/lib/datetime';
+import { formatBackendDateTime, formatInterval, parseBackendDate } from '@/lib/datetime';
 
 import { AssignProfileModal, EditProfileModal, NewProfileModal } from './ProfileModals';
 import { FindingsModal } from './FindingsModal';
+import { HostScanProgress } from './HostScanProgress';
 import { MerakiTab } from './MerakiTab';
 import { RunScanModal } from './RunScanModal';
+import { RESULTS_TABLE_MAX_HEIGHT } from './scanHelpers';
 
 type Tab = 'profiles' | 'assignments' | 'results' | 'status' | 'meraki' | 'audit';
 
@@ -84,12 +100,21 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   },
 };
 
-const formatInterval = (seconds: number): string => {
-  if (seconds % 86400 === 0) return `${seconds / 86400}d`;
-  if (seconds % 3600 === 0) return `${seconds / 3600}h`;
-  if (seconds % 60 === 0) return `${seconds / 60}m`;
-  return `${seconds}s`;
+// Sortable columns of the host Scan Results and Host Status tables. Status
+// sorts worst first (non-compliant, error, compliant), score by pass ratio.
+type HostSortKey = 'status' | 'host' | 'ip' | 'profile' | 'score' | 'scanned';
+
+const HOST_COMPARATORS: Record<HostSortKey, Comparator<ComplianceHostStatus>> = {
+  status: (a, b) => complianceStatusRank(a.status) - complianceStatusRank(b.status),
+  host: (a, b) => compareText(a.hostname, b.hostname),
+  ip: (a, b) => compareText(a.ip_address, b.ip_address),
+  profile: (a, b) => compareText(a.profile_name, b.profile_name),
+  score: (a, b) => compareNumber(passRatio(a.passed_rules, a.total_rules), passRatio(b.passed_rules, b.total_rules)),
+  scanned: (a, b) => compareDate(a.scanned_at, b.scanned_at),
 };
+const HOST_FIRST_DIR: Partial<Record<HostSortKey, SortDir>> = { scanned: 'desc' };
+const byHostname: Comparator<ComplianceHostStatus> = (a, b) =>
+  compareText(a.hostname, b.hostname) || compareText(a.profile_name, b.profile_name);
 
 export function Compliance() {
   const { alert } = useDialogs();
@@ -218,6 +243,7 @@ export function Compliance() {
               assignments={assignments.data || []}
               loading={assignments.isLoading}
               query={query}
+              onShowResults={() => selectTab('results')}
             />
           ))}
         {shownTab === 'results' &&
@@ -337,6 +363,7 @@ function ProfilesTab({
         } catch {
           rules = [];
         }
+        const ruleNames = rules.map((r) => r.name || r.pattern || '?').join(', ');
         return (
           <div key={p.id} className="card">
             <div
@@ -407,13 +434,15 @@ function ProfilesTab({
             )}
             {rules.length > 0 && (
               <div
+                className="line-clamp-2"
+                title={ruleNames}
                 style={{
                   marginTop: '0.5rem',
                   fontSize: '0.85em',
                   color: 'var(--text-muted)',
                 }}
               >
-                Rules: {rules.map((r) => r.name || r.pattern || '?').join(', ')}
+                Rules: {ruleNames}
               </div>
             )}
           </div>
@@ -427,16 +456,20 @@ function AssignmentsTab({
   assignments,
   loading,
   query,
+  onShowResults,
 }: {
   assignments: ComplianceAssignment[];
   loading: boolean;
   query: string;
+  onShowResults: () => void;
 }) {
   const { confirm, alert } = useDialogs();
   const toggle = useUpdateAssignment();
   const remove = useDeleteAssignment();
   const scanNow = useScanAssignmentNow();
   const pending = usePendingKeys<string>();
+  // The scan started last; it runs server-side and reports in a banner.
+  const [jobId, setJobId] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     if (!query.trim()) return assignments;
@@ -448,15 +481,24 @@ function AssignmentsTab({
     );
   }, [assignments, query]);
 
+  // Shown above the list (and above an empty search result: the scan keeps going).
+  const progress = jobId && (
+    <HostScanProgress jobId={jobId} onDismiss={() => setJobId(null)} onShowResults={onShowResults} />
+  );
+
   if (loading) return <LoadingState text="Loading assignments…" />;
   if (!filtered.length) {
     return (
-      <EmptyState compact message="No compliance assignments. Assign a profile to an inventory group to start scanning." />
+      <>
+        {progress}
+        <EmptyState compact message="No compliance assignments. Assign a profile to an inventory group to start scanning." />
+      </>
     );
   }
 
   return (
     <>
+      {progress}
       {filtered.map((a) => {
         const lastScan = formatBackendDateTime(a.last_scan_at, 'Never');
         return (
@@ -487,12 +529,12 @@ function AssignmentsTab({
                   className="btn btn-sm btn-primary"
                   title="Scan all hosts in this assignment now"
                   busy={pending.isPending(`scan:${a.id}`)}
-                  busyLabel="Scanning…"
+                  busyLabel="Starting…"
                   onClick={async () => {
                     if (
                       await confirm({
                         title: 'Run compliance scan',
-                        message: `Scan all hosts in group "${a.group_name || '?'}" against profile "${a.profile_name || '?'}" immediately? This may take a moment.`,
+                        message: `Scan all hosts in group "${a.group_name || '?'}" against profile "${a.profile_name || '?'}" now? The scan runs in the background; progress shows above the list.`,
                         confirmLabel: 'Scan now',
                         confirmVariant: 'primary',
                       })
@@ -500,26 +542,11 @@ function AssignmentsTab({
                       await pending.run(`scan:${a.id}`, async () => {
                         try {
                           const res = await scanNow.mutateAsync(a.id);
-                          if (res.violations > 0) {
-                            void alert({
-                              title: 'Scan complete',
-                              message: `${res.hosts_scanned} hosts scanned, ${res.violations} non-compliant, ${res.errors} errors`,
-                            });
-                          } else if (res.errors > 0) {
-                            void alert({
-                              title: 'Scan complete',
-                              message: `${res.hosts_scanned} hosts scanned, ${res.errors} error(s)`,
-                            });
-                          } else {
-                            void alert({
-                              title: 'Scan complete',
-                              message: `${res.hosts_scanned} hosts scanned - all compliant!`,
-                            });
-                          }
+                          setJobId(res.job_id);
                         } catch (e) {
                           void alert({
-                            title: 'Scan failed',
-                            message: `Assignment scan failed: ${(e as Error).message}`,
+                            title: 'Scan failed to start',
+                            message: `Assignment scan failed to start: ${(e as Error).message}`,
                             variant: 'error',
                           });
                         }
@@ -622,61 +649,19 @@ function ResultsTab({
   }
 
   return (
-    <>
-      {filtered.map((r) => {
-        const color = toneColor(complianceStatusTone(r.status));
-        const scanned = formatBackendDateTime(r.scanned_at);
-        return (
-          <div key={r.id} className="card">
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                flexWrap: 'wrap',
-                gap: '0.5rem',
-              }}
-            >
-              <div>
-                <span style={{ color: color, fontWeight: 600 }}>{r.status}</span>
-                <strong style={{ marginLeft: '0.5rem' }}>{r.hostname || '?'}</strong>
-                <span
-                  style={{
-                    marginLeft: '0.5rem',
-                    fontSize: '0.85em',
-                    color: 'var(--text-muted)',
-                  }}
-                >
-                  {r.ip_address || ''}
-                </span>
-                <span
-                  style={{
-                    marginLeft: '0.5rem',
-                    fontSize: '0.85em',
-                    color: 'var(--text-muted)',
-                  }}
-                >
-                  Profile: {r.profile_name || '?'}
-                </span>
-              </div>
-              <div style={{ fontSize: '0.85em', color: 'var(--text-muted)' }}>
-                {r.passed_rules}/{r.total_rules} passed · {scanned}
-              </div>
-            </div>
-            {r.failed_rules > 0 && (
-              <div style={{ marginTop: '0.5rem' }}>
-                <button
-                  className="btn btn-sm btn-secondary"
-                  onClick={() => onShowFindings(r.id)}
-                >
-                  View {r.failed_rules} violation(s)
-                </button>
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </>
+    <HostResultsTable
+      rows={filtered}
+      rowKey={(r) => r.id}
+      initialSort={{ key: 'scanned', dir: 'desc' }}
+      label="Compliance scan results"
+      action={(r) =>
+        r.failed_rules > 0 && (
+          <button className="btn btn-sm btn-secondary" onClick={() => onShowFindings(r.id)}>
+            View {r.failed_rules} violation(s)
+          </button>
+        )
+      }
+    />
   );
 }
 
@@ -705,60 +690,79 @@ function StatusTab({
   }
 
   return (
+    <HostResultsTable
+      rows={filtered}
+      rowKey={(s) => `${s.hostname ?? ''}|${s.ip_address ?? ''}|${s.profile_name ?? ''}`}
+      initialSort={{ key: 'status', dir: 'asc' }}
+      label="Per-host compliance status"
+    />
+  );
+}
+
+/**
+ * Host compliance rows (scan results or latest status per host) as a
+ * sortable table, rendered in pages of 200 after filtering and sorting.
+ */
+function HostResultsTable<T extends ComplianceHostStatus>({
+  rows,
+  rowKey,
+  initialSort,
+  label,
+  action,
+}: {
+  rows: T[];
+  rowKey: (row: T) => string | number;
+  initialSort: SortState<HostSortKey>;
+  label: string;
+  /** Trailing action cell; omit for a table without one. */
+  action?: (row: T) => ReactNode;
+}) {
+  const { rows: sorted, sort, toggle } = useTableSort<T, HostSortKey>(rows, HOST_COMPARATORS, initialSort, {
+    firstDir: HOST_FIRST_DIR,
+    tieBreak: byHostname,
+  });
+  const { visible, hiddenCount, showMore } = useShowMore(sorted);
+  const th = (key: HostSortKey, text: string) => (
+    <SortableTh sortKey={key} sort={sort} onSort={toggle}>
+      {text}
+    </SortableTh>
+  );
+
+  return (
     <>
-      {filtered.map((s, i) => {
-        const color = toneColor(complianceStatusTone(s.status));
-        const scanned = formatBackendDateTime(s.scanned_at);
-        return (
-          <div key={i} className="card">
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                flexWrap: 'wrap',
-                gap: '0.5rem',
-              }}
-            >
-              <div>
-                <span
-                  style={{
-                    display: 'inline-block',
-                    width: 10,
-                    height: 10,
-                    borderRadius: '50%',
-                    background: color,
-                    marginRight: '0.5rem',
-                  }}
-                />
-                <strong>{s.hostname || '?'}</strong>
-                <span
-                  style={{
-                    marginLeft: '0.5rem',
-                    fontSize: '0.85em',
-                    color: 'var(--text-muted)',
-                  }}
-                >
-                  {s.ip_address || ''}
-                </span>
-                <span
-                  style={{
-                    marginLeft: '0.5rem',
-                    fontSize: '0.85em',
-                    color: 'var(--text-muted)',
-                  }}
-                >
-                  · {s.profile_name || '?'}
-                </span>
-              </div>
-              <div style={{ fontSize: '0.85em' }}>
-                <span style={{ color: color, fontWeight: 600 }}>{s.status}</span>{' '}
-                · {s.passed_rules}/{s.total_rules} passed · {scanned}
-              </div>
-            </div>
-          </div>
-        );
-      })}
+      <DataTable compact stickyHeader maxHeight={RESULTS_TABLE_MAX_HEIGHT} aria-label={label}>
+        <thead>
+          <tr>
+            {th('status', 'Status')}
+            {th('host', 'Host')}
+            {th('ip', 'IP')}
+            {th('profile', 'Profile')}
+            {th('score', 'Score')}
+            {th('scanned', 'Scanned')}
+            {action && <th aria-label="Actions" />}
+          </tr>
+        </thead>
+        <tbody>
+          {visible.map((r) => (
+            <tr key={rowKey(r)}>
+              <td>
+                <StatusBadge status={r.status} kind="compliance" size="sm" />
+              </td>
+              <td>
+                <strong>{r.hostname || '?'}</strong>
+              </td>
+              <td className="text-muted">{r.ip_address || '-'}</td>
+              <td>{r.profile_name || '?'}</td>
+              <td style={{ whiteSpace: 'nowrap' }}>
+                {r.passed_rules}/{r.total_rules} passed
+              </td>
+              <td style={{ whiteSpace: 'nowrap' }}>{formatBackendDateTime(r.scanned_at)}</td>
+              {action && <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>{action(r)}</td>}
+            </tr>
+          ))}
+        </tbody>
+      </DataTable>
+      <ShowMoreButton hiddenCount={hiddenCount} onClick={showMore} style={{ alignSelf: 'flex-start' }} />
     </>
   );
 }

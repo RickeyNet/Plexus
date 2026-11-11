@@ -5,6 +5,7 @@ admin scheduling, and background compliance check loop.
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import json
 
@@ -15,6 +16,7 @@ from routes.user_regex import UserRegex, compile_user_regex
 
 import netcontrol.routes.state as state
 from netcontrol.integrations.meraki.compliance import is_meraki_rule
+from netcontrol.routes import background_jobs
 from netcontrol.routes.device_config import ON_DEMAND_MAX_AGE_SECONDS, get_device_config
 from netcontrol.routes.meraki_compliance import (
     run_due_assignments as _run_due_meraki_assignments,
@@ -26,12 +28,18 @@ from netcontrol.routes.shared import (
     _get_session,
     _push_config_to_device,
     require_credential_access,
+    supervise_task,
 )
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
 router = APIRouter()
 admin_router = APIRouter()
 LOGGER = configure_logging("plexus.compliance")
+
+# background_jobs kind of the multi-host scans (distinct from the Meraki one).
+_SCAN_JOB_KIND = "compliance-scan"
+# assignment_id -> job_id of its running scan-now (overlap guard).
+_running_assignment_scans: dict[int, str] = {}
 
 # ── Late-binding auth dependencies (injected by app.py) ──────────────────────
 
@@ -737,11 +745,157 @@ async def get_compliance_summary():
 # ── On-demand Compliance Scan ────────────────────────────────────────────────
 
 
-@router.post("/api/compliance/assignments/{assignment_id}/scan-now")
-async def scan_assignment_now(assignment_id: int, request: Request):
-    """Run an on-demand compliance scan for all hosts in a specific assignment."""
-    import asyncio
+def _host_scan_row(host: dict, result: dict | None = None, result_id: int | None = None) -> dict:
+    """One host's entry in a multi-host scan result (``result`` None: it failed)."""
+    return {
+        "host_id": host["id"],
+        "hostname": host.get("hostname", "?"),
+        "status": result["status"] if result else "error",
+        "passed_rules": result["passed_rules"] if result else 0,
+        "failed_rules": result["failed_rules"] if result else 0,
+        "total_rules": result["total_rules"] if result else 0,
+        "result_id": result_id,
+    }
 
+
+async def _run_host_scan_job(
+    job_id: str,
+    *,
+    hosts: list[dict],
+    profile: dict,
+    cred: dict,
+    assignment_id: int | None,
+    audit_action: str,
+    audit_scope: str,
+    user: str,
+    correlation_id: str,
+) -> None:
+    """Scan ``hosts`` against ``profile`` as background job ``job_id``.
+
+    Shared by the bulk scan and an assignment's scan-now. Everything the
+    request must validate (profile, credential ownership, hosts) is done
+    before this runs. A host that fails is counted in ``errors``; the job
+    only fails if the runner itself crashes.
+    """
+    sem = state.device_op_semaphore()
+    counts = {"hosts_done": 0, "violations": 0, "errors": 0}
+
+    async def _scan_host(h: dict) -> dict:
+        async with sem:
+            try:
+                result = await _evaluate_host_compliance(h, profile, cred)
+                result_id = await db.create_compliance_scan_result(
+                    assignment_id=assignment_id,
+                    profile_id=profile["id"],
+                    host_id=h["id"],
+                    **result,
+                )
+                row = _host_scan_row(h, result, result_id)
+            except Exception as exc:
+                LOGGER.warning("compliance: %s failed host_id=%s: %s", audit_action, h["id"], exc)
+                row = _host_scan_row(h)
+        counts["hosts_done"] += 1
+        if row["status"] == "non-compliant":
+            counts["violations"] += 1
+        elif row["status"] == "error":
+            counts["errors"] += 1
+        background_jobs.update_progress(job_id, **counts)
+        return row
+
+    try:
+        host_results = await asyncio.gather(*[_scan_host(h) for h in hosts])
+        if assignment_id is not None:
+            await db.update_compliance_assignment_last_scan(assignment_id)
+        summary = {
+            "hosts_scanned": len(host_results),
+            "violations": counts["violations"],
+            "errors": counts["errors"],
+        }
+        await _audit(
+            "compliance",
+            audit_action,
+            user=user,
+            detail=(
+                f"{audit_scope} hosts_scanned={summary['hosts_scanned']} "
+                f"violations={summary['violations']} errors={summary['errors']}"
+            ),
+            correlation_id=correlation_id,
+        )
+        result: dict = {**summary, "results": list(host_results)}
+        if assignment_id is not None:
+            result["assignment_id"] = assignment_id
+        background_jobs.finish_job(job_id, "completed", result=result)
+    except Exception as exc:  # noqa: BLE001 - job must always reach a terminal state
+        LOGGER.exception("compliance: %s job %s crashed: %s", audit_action, job_id, type(exc).__name__)
+        background_jobs.finish_job(job_id, "failed", error="Compliance scan failed; see the server log for details")
+    finally:
+        if assignment_id is not None:
+            _running_assignment_scans.pop(assignment_id, None)
+
+
+def _start_host_scan(
+    request: Request,
+    *,
+    hosts: list[dict],
+    profile: dict,
+    cred: dict,
+    assignment_id: int | None,
+    audit_action: str,
+    audit_scope: str,
+) -> dict:
+    """Register a host scan job and launch it; the caller has validated everything."""
+    # Check-then-set with no await in between: atomic under asyncio.
+    if assignment_id is not None and assignment_id in _running_assignment_scans:
+        raise HTTPException(status_code=409, detail="A compliance scan is already running for this assignment")
+    job = background_jobs.create_job(
+        _SCAN_JOB_KIND,
+        {
+            "hosts_total": len(hosts),
+            "hosts_done": 0,
+            "violations": 0,
+            "errors": 0,
+            "profile_id": profile["id"],
+            "profile_name": profile.get("name", ""),
+            "assignment_id": assignment_id,
+        },
+    )
+    if assignment_id is not None:
+        _running_assignment_scans[assignment_id] = job["job_id"]
+    session = _get_session(request)
+    supervise_task(
+        asyncio.create_task(
+            _run_host_scan_job(
+                job["job_id"],
+                hosts=hosts,
+                profile=profile,
+                cred=cred,
+                assignment_id=assignment_id,
+                audit_action=audit_action,
+                audit_scope=audit_scope,
+                user=session["user"] if session else "",
+                correlation_id=_corr_id(request),
+            )
+        ),
+        "compliance-scan",
+    )
+    return {"job_id": job["job_id"], "status": "running"}
+
+
+@router.get("/api/compliance/scans/{job_id}")
+async def get_compliance_scan_job(job_id: str):
+    """Poll a bulk or scan-now host compliance scan job."""
+    job = background_jobs.get_job(job_id, kind=_SCAN_JOB_KIND)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Scan job not found (it may have expired)")
+    return job
+
+
+@router.post("/api/compliance/assignments/{assignment_id}/scan-now", status_code=202)
+async def scan_assignment_now(assignment_id: int, request: Request):
+    """Start a compliance scan of every host in an assignment's group.
+
+    Returns ``{job_id, status}``; poll ``/api/compliance/scans/{job_id}``.
+    """
     assignment = await db.get_compliance_assignment(assignment_id)
     if not assignment:
         raise HTTPException(status_code=404, detail="Assignment not found")
@@ -760,56 +914,15 @@ async def scan_assignment_now(assignment_id: int, request: Request):
     if not hosts:
         raise HTTPException(status_code=400, detail="No hosts in the assigned group")
 
-    sem = state.device_op_semaphore()
-    hosts_scanned = 0
-    violations = 0
-    errors = 0
-
-    async def _scan_host(h):
-        async with sem:
-            try:
-                result = await _evaluate_host_compliance(h, profile, cred)
-                await db.create_compliance_scan_result(
-                    assignment_id=assignment_id,
-                    profile_id=assignment["profile_id"],
-                    host_id=h["id"],
-                    **result,
-                )
-                return result["status"]
-            except Exception as exc:
-                LOGGER.warning("compliance: scan-now failed host_id=%s: %s", h["id"], exc)
-                return "error"
-
-    tasks = [_scan_host(h) for h in hosts]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    for r in results:
-        if isinstance(r, str):
-            hosts_scanned += 1
-            if r == "non-compliant":
-                violations += 1
-            elif r == "error":
-                errors += 1
-        else:
-            errors += 1
-
-    await db.update_compliance_assignment_last_scan(assignment_id)
-
-    session = _get_session(request)
-    await _audit(
-        "compliance",
-        "assignment.scan_now",
-        user=session["user"] if session else "",
-        detail=f"assignment_id={assignment_id} hosts_scanned={hosts_scanned} violations={violations} errors={errors}",
-        correlation_id=_corr_id(request),
+    return _start_host_scan(
+        request,
+        hosts=hosts,
+        profile=profile,
+        cred=cred,
+        assignment_id=assignment_id,
+        audit_action="assignment.scan_now",
+        audit_scope=f"assignment_id={assignment_id}",
     )
-    return {
-        "ok": True,
-        "assignment_id": assignment_id,
-        "hosts_scanned": hosts_scanned,
-        "violations": violations,
-        "errors": errors,
-    }
 
 
 @router.post("/api/compliance/scan")
@@ -844,15 +957,14 @@ async def run_compliance_scan(body: ComplianceScanRequest, request: Request):
 # ── Bulk / All-Hosts Scan ─────────────────────────────────────────────────
 
 
-@router.post("/api/compliance/scan-bulk")
+@router.post("/api/compliance/scan-bulk", status_code=202)
 async def run_compliance_scan_bulk(body: ComplianceBulkScanRequest, request: Request):
-    """Run an on-demand compliance scan against multiple (or all) hosts.
+    """Start a compliance scan of multiple (or all) hosts.
 
-    If host_ids is empty, every host in the inventory is scanned.
-    Returns aggregate stats plus a per-host result list.
+    If host_ids is empty, every host in the inventory is scanned. Returns
+    ``{job_id, status}``; poll ``/api/compliance/scans/{job_id}`` for the
+    aggregate stats and per-host result list.
     """
-    import asyncio
-
     profile = await db.get_compliance_profile(body.profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Compliance profile not found")
@@ -866,64 +978,15 @@ async def run_compliance_scan_bulk(body: ComplianceBulkScanRequest, request: Req
     if not hosts:
         raise HTTPException(status_code=400, detail="No hosts found to scan")
 
-    sem = state.device_op_semaphore()
-    host_results = []
-
-    async def _scan_host(h):
-        async with sem:
-            try:
-                result = await _evaluate_host_compliance(h, profile, cred)
-                result_id = await db.create_compliance_scan_result(
-                    assignment_id=None,
-                    profile_id=body.profile_id,
-                    host_id=h["id"],
-                    **result,
-                )
-                return {
-                    "host_id": h["id"],
-                    "hostname": h["hostname"],
-                    "status": result["status"],
-                    "passed_rules": result["passed_rules"],
-                    "failed_rules": result["failed_rules"],
-                    "total_rules": result["total_rules"],
-                    "result_id": result_id,
-                }
-            except Exception as exc:
-                LOGGER.warning("compliance: bulk scan failed host_id=%s: %s", h["id"], exc)
-                return {
-                    "host_id": h["id"],
-                    "hostname": h.get("hostname", "?"),
-                    "status": "error",
-                    "passed_rules": 0,
-                    "failed_rules": 0,
-                    "total_rules": 0,
-                    "result_id": None,
-                }
-
-    host_results = await asyncio.gather(*[_scan_host(h) for h in hosts])
-
-    hosts_scanned = len(host_results)
-    violations = sum(1 for r in host_results if r["status"] == "non-compliant")
-    errors = sum(1 for r in host_results if r["status"] == "error")
-
-    session = _get_session(request)
-    await _audit(
-        "compliance",
-        "scan.bulk",
-        user=session["user"] if session else "",
-        detail=(
-            f"profile_id={body.profile_id} hosts_scanned={hosts_scanned} "
-            f"violations={violations} errors={errors} "
-            f"scope={'selected' if body.host_ids else 'all'}"
-        ),
-        correlation_id=_corr_id(request),
+    return _start_host_scan(
+        request,
+        hosts=hosts,
+        profile=profile,
+        cred=cred,
+        assignment_id=None,
+        audit_action="scan.bulk",
+        audit_scope=f"profile_id={body.profile_id} scope={'selected' if body.host_ids else 'all'}",
     )
-    return {
-        "hosts_scanned": hosts_scanned,
-        "violations": violations,
-        "errors": errors,
-        "results": list(host_results),
-    }
 
 
 # ── Compliance Remediation ─────────────────────────────────────────────────

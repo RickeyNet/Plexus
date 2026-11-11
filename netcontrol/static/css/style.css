@@ -3010,6 +3010,15 @@ code {
 .text-muted { color: var(--text-muted); }
 .text-danger { color: var(--danger); }
 
+/* At most two lines, then an ellipsis; put the full text in a title. */
+.line-clamp-2 {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+}
+
 /* LoadingState (src/components/LoadingState.tsx): block and inline. */
 .loading {
     display: flex;
@@ -4138,6 +4147,37 @@ code {
     top: 0;
     z-index: 1;
     background: var(--bg-secondary);
+}
+
+/* Sortable column header (SortableTh): a button that looks like the header
+   text, with the sort arrow after it on the active column. */
+.data-table th > .th-sort {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+
+.data-table th > .th-sort:hover {
+    color: var(--primary);
+}
+
+.data-table th > .th-sort:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+}
+
+.th-sort-icon {
+    display: inline-block;
+    min-width: 0.8em;
+    font-size: 0.7em;
+    color: var(--text-muted);
 }
 
 /* Horizontal scroll for wide tables (DataTable wraps its table in this). */
