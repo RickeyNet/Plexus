@@ -22,6 +22,7 @@ or the corresponding API endpoint without a restart.
 | Interface time-series counters   | 30 days           | `Settings > Monitoring`                                       |
 | SLA / latency probe metrics      | 90 days           | `Settings > Monitoring`                                       |
 | Route snapshots                  | 30 days           | `Settings > Monitoring`                                       |
+| Meraki alerts (resolved)         | 30 days           | `Settings > Monitoring` (`retention_days`); open alerts are kept |
 | SNMP trap / syslog events        | 30 days           | `Settings > Monitoring`                                       |
 | IP history (IPAM)                | 365 days          | API-only - `routes.database.prune_ip_history(retention_days)` |
 | **Cloud flow records**           | **48 hours**      | Shares `flow_records` + NetFlow `retention_hours`; pruned by the cloud flow sync loop even when the NetFlow collector is disabled |

@@ -224,6 +224,13 @@ from netcontrol.routes.mac_tracking import _mac_move_retention_loop, router as m
 from netcontrol.routes.maintenance_windows import (
     router as maintenance_windows_router,
 )
+from netcontrol.routes.meraki_alerts import (
+    WEBHOOK_PATH as MERAKI_WEBHOOK_PATH,
+    admin_router as meraki_alerts_admin_router,
+    load_status as load_meraki_alert_status,
+    router as meraki_alerts_router,
+    webhook_router as meraki_webhook_router,
+)
 from netcontrol.routes.meraki_compliance import router as meraki_compliance_router
 from netcontrol.routes.meraki_topology import init_meraki_topology, router as meraki_topology_router
 from netcontrol.routes.metrics_engine import (
@@ -747,6 +754,14 @@ PUBLIC_PATHS = {
     "/favicon.ico",
 }
 
+# Inbound webhook receivers: no session and no CSRF (the sender can do
+# neither; each authenticates its body itself). Unlike PUBLIC_PATHS they stay
+# rate limited, under their own per-IP budget (``api_rate_limit_middleware``).
+WEBHOOK_PATHS = frozenset({MERAKI_WEBHOOK_PATH})
+# Webhook deliveries per rate-limit window per source IP. Meraki bursts when
+# many devices alert at once, so this is above the anonymous write limit.
+WEBHOOK_RATE_LIMIT_MAX = 600
+
 # Paths that remain accessible even when must_change_password is true
 PASSWORD_CHANGE_ALLOWED_PATHS = {
     "/api/auth/change-password",
@@ -805,7 +820,7 @@ async def require_auth(request: Request, response: Response = None):
     path = request.url.path
     if path.startswith("/static/"):
         return None
-    if path in PUBLIC_PATHS:
+    if path in PUBLIC_PATHS or path in WEBHOOK_PATHS:
         return None
 
     api_token = _extract_api_token(request)
@@ -1088,6 +1103,9 @@ async def _load_persisted_security_settings():
     state.CLOUD_DISCOVERY_SYNC_CONFIG = state._sanitize_cloud_discovery_sync_config(cloud_discovery_sync)
     source_collection_sync = await db.get_auth_setting("source_collection_sync")
     state.SOURCE_COLLECTION_SYNC_CONFIG = state._sanitize_source_collection_sync_config(source_collection_sync)
+    meraki_alerts_config = await db.get_auth_setting("meraki_alerts")
+    state.MERAKI_ALERTS_CONFIG = state._sanitize_meraki_alerts_config(meraki_alerts_config)
+    await load_meraki_alert_status()
     feature_visibility = await db.get_auth_setting("feature_visibility")
     if isinstance(feature_visibility, dict):
         state.FEATURE_VISIBILITY_HIDDEN = state._sanitize_feature_visibility(feature_visibility.get("hidden") or [])
@@ -1410,6 +1428,23 @@ async def _source_collection_sync_loop() -> None:
             LOGGER.warning("Source collection sync loop failed: %s", type(exc).__name__)
 
 
+async def _meraki_alert_poll_loop() -> None:
+    """Poll the Meraki organizations' assurance alerts on a short interval
+    (``state.MERAKI_ALERTS_CONFIG``), separate from the heavy scheduled
+    collection; also closes webhook alerts that never got a recovery."""
+    from netcontrol.routes.meraki_alerts import run_alert_poll_cycle
+
+    while True:
+        interval = int(state.MERAKI_ALERTS_CONFIG.get("interval_seconds", 60))
+        await asyncio.sleep(max(state.MERAKI_ALERTS_MIN_INTERVAL, interval))
+        try:
+            await run_alert_poll_cycle("scheduled")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LOGGER.warning("Meraki alert poll loop failed: %s", type(exc).__name__)
+
+
 async def _cloud_traffic_metric_sync_loop() -> None:
     """Periodically pull cloud traffic metrics for all enabled accounts."""
     while True:
@@ -1561,6 +1596,7 @@ async def lifespan(app: FastAPI):
             _cloud_traffic_metric_sync_loop,
             _cloud_discovery_sync_loop,
             _source_collection_sync_loop,
+            _meraki_alert_poll_loop,
             federation_sync_loop,
             _ipam_sync_loop,
             _dhcp_sync_loop,
@@ -1801,7 +1837,7 @@ async def csrf_protection_middleware(request: Request, call_next):
     """
     if request.method in _CSRF_PROTECTED_METHODS and request.url.path.startswith("/api/"):
         # Skip CSRF check for public paths (login, register, etc.)
-        if request.url.path not in PUBLIC_PATHS:
+        if request.url.path not in PUBLIC_PATHS and request.url.path not in WEBHOOK_PATHS:
             # Only enforce when using cookie-based auth (no API-token header)
             api_token = _extract_api_token(request)
             using_api_token = bool(APP_API_TOKEN and api_token and secrets.compare_digest(api_token, APP_API_TOKEN))
@@ -1836,6 +1872,13 @@ async def api_rate_limit_middleware(request: Request, call_next):
     refresh storm shouldn't be able to self-DoS into a 429 loop.
     """
     cfg = state.API_RATE_LIMIT
+    if cfg.get("enabled") and request.url.path in WEBHOOK_PATHS:
+        # Never authenticated by a session: counted on their own budget.
+        client_ip = request.client.host if request.client else "unknown"
+        retry_after = await _rate_limit_hit(f"webhook:{client_ip}", WEBHOOK_RATE_LIMIT_MAX, cfg)
+        if retry_after is not None:
+            return _api_error_response(429, "rate_limit_exceeded", f"Too many requests. Try again in {retry_after}s.")
+        return await call_next(request)
     if cfg.get("enabled") and request.url.path.startswith("/api/") and request.url.path not in PUBLIC_PATHS:
         # Skip counting for authenticated requests - see docstring.
         api_token = _extract_api_token(request)
@@ -1851,29 +1894,37 @@ async def api_rate_limit_middleware(request: Request, call_next):
             return await call_next(request)
 
         client_ip = request.client.host if request.client else "unknown"
-        now = time.time()
-        window = max(1, int(cfg.get("window", 60)))
         is_write = request.method in _CSRF_PROTECTED_METHODS
         limit = int(cfg.get("max_write", 40) if is_write else cfg.get("max_read", 120))
-
-        lock = state.API_RATE_LIMIT_LOCK
-        if lock:
-            async with lock:
-                tracker = state.API_RATE_LIMIT_TRACKER
-                timestamps = tracker.get(client_ip, [])
-                # Prune entries outside the sliding window
-                timestamps = [t for t in timestamps if now - t < window]
-                if len(timestamps) >= limit:
-                    retry_after = int(window - (now - timestamps[0])) + 1
-                    return _api_error_response(
-                        429,
-                        "rate_limit_exceeded",
-                        f"Too many requests. Try again in {retry_after}s.",
-                    )
-                timestamps.append(now)
-                tracker[client_ip] = timestamps
+        retry_after = await _rate_limit_hit(client_ip, limit, cfg)
+        if retry_after is not None:
+            return _api_error_response(
+                429,
+                "rate_limit_exceeded",
+                f"Too many requests. Try again in {retry_after}s.",
+            )
 
     return await call_next(request)
+
+
+async def _rate_limit_hit(key: str, limit: int, cfg: dict) -> int | None:
+    """Count one request against ``key``'s sliding window. Returns the
+    seconds to wait when the window is full, else ``None``."""
+    now = time.time()
+    window = max(1, int(cfg.get("window", 60)))
+    lock = state.API_RATE_LIMIT_LOCK
+    if not lock:
+        return None
+    async with lock:
+        tracker = state.API_RATE_LIMIT_TRACKER
+        timestamps = tracker.get(key, [])
+        # Prune entries outside the sliding window
+        timestamps = [t for t in timestamps if now - t < window]
+        if len(timestamps) >= limit:
+            return int(window - (now - timestamps[0])) + 1
+        timestamps.append(now)
+        tracker[key] = timestamps
+    return None
 
 
 @app.middleware("http")
@@ -2261,6 +2312,18 @@ app.include_router(
     cato_egress_check_router,
     dependencies=[Depends(require_auth), Depends(require_feature_method("monitoring"))],
 )
+# Near-real-time Meraki alerts: the list follows monitoring access; settings
+# and Poll Now are admin-only; the webhook receiver authenticates by its
+# shared secret and is answered 404 until one is configured.
+app.include_router(
+    meraki_alerts_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("monitoring"))],
+)
+app.include_router(
+    meraki_alerts_admin_router,
+    dependencies=[Depends(require_admin)],
+)
+app.include_router(meraki_webhook_router)
 # Admin self-update routes (check, channel config, apply/rollback via the
 # host updater handoff directory, progress).
 app.include_router(

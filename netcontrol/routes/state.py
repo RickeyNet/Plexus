@@ -586,6 +586,27 @@ SOURCE_COLLECTION_SYNC_MAX_INTERVAL = 86400
 
 SOURCE_COLLECTION_SYNC_CONFIG: dict = dict(SOURCE_COLLECTION_SYNC_DEFAULTS)
 
+# Near-real-time Meraki alerts (``netcontrol.routes.meraki_alerts``): a short
+# poll of every Meraki organization's assurance alerts, and an optional
+# webhook receiver. ``webhook_secret_enc`` is the shared secret encrypted
+# with ``routes.crypto``; the receiver answers 404 until one is set and
+# ``webhook_enabled`` is on. ``excluded_sources`` are ``meraki_orgs`` ids
+# that are not polled (their webhooks are still accepted).
+MERAKI_ALERTS_DEFAULTS: dict = {
+    "poll_enabled": True,
+    "interval_seconds": 60,
+    "webhook_enabled": False,
+    "webhook_secret_enc": "",
+    "excluded_sources": [],
+    # A webhook-only alert with no recovery event is closed after this long.
+    "webhook_open_ttl_hours": 24,
+}
+
+MERAKI_ALERTS_MIN_INTERVAL = 30
+MERAKI_ALERTS_MAX_INTERVAL = 3600
+
+MERAKI_ALERTS_CONFIG: dict = dict(MERAKI_ALERTS_DEFAULTS)
+
 IPAM_SYNC_DEFAULTS = {
     "enabled": True,
     "interval_seconds": 1800,  # 30 minutes
@@ -1099,6 +1120,37 @@ def _sanitize_source_collection_sync_config(data: dict | None) -> dict:
         SOURCE_COLLECTION_SYNC_MIN_INTERVAL,
         SOURCE_COLLECTION_SYNC_MAX_INTERVAL,
     )
+
+
+def _sanitize_meraki_alerts_config(data: dict | None) -> dict:
+    """The Meraki alert settings with the interval clamped and the source
+    list reduced to positive integer ids."""
+    cfg = dict(MERAKI_ALERTS_DEFAULTS)
+    cfg["excluded_sources"] = []
+    if isinstance(data, dict):
+        cfg["poll_enabled"] = bool(data.get("poll_enabled", cfg["poll_enabled"]))
+        cfg["interval_seconds"] = clamp_interval(
+            data.get("interval_seconds", cfg["interval_seconds"]),
+            MERAKI_ALERTS_MIN_INTERVAL,
+            MERAKI_ALERTS_MAX_INTERVAL,
+            MERAKI_ALERTS_DEFAULTS["interval_seconds"],
+        )
+        cfg["webhook_enabled"] = bool(data.get("webhook_enabled", cfg["webhook_enabled"]))
+        secret = data.get("webhook_secret_enc")
+        cfg["webhook_secret_enc"] = secret if isinstance(secret, str) else ""
+        refs: list[int] = []
+        for value in data.get("excluded_sources") or []:
+            try:
+                ref = int(value)
+            except TypeError, ValueError:
+                continue
+            if ref > 0 and ref not in refs:
+                refs.append(ref)
+        cfg["excluded_sources"] = sorted(refs)
+        cfg["webhook_open_ttl_hours"] = clamp_interval(
+            data.get("webhook_open_ttl_hours"), 1, 24 * 30, MERAKI_ALERTS_DEFAULTS["webhook_open_ttl_hours"]
+        )
+    return cfg
 
 
 def _sanitize_cloud_sync_status(data: dict | None) -> dict:

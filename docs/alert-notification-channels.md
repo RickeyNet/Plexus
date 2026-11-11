@@ -32,6 +32,11 @@ or via the admin API:
 Secrets (SMTP password, PagerDuty routing key, webhook auth value) are masked
 as `••••••••` in API responses; submit the mask to keep the stored value.
 
+Meraki alerts (alert type `meraki_alert`, from the assurance-alert poll and
+the Meraki webhook receiver) go through the same channels: on the matching
+inventory host as a monitoring alert, otherwise straight to the default
+channel set. See [meraki-alerts.md](meraki-alerts.md).
+
 ### Routing
 
 - Each alert rule (**Monitoring → Rules**) can be assigned one or more channels.

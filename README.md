@@ -116,6 +116,7 @@ groups, playbooks, templates and a default credential.
 - [docs/panorama-topology.md](docs/panorama-topology.md) - Palo Alto Panorama in the topology map
 - [docs/appgate-topology.md](docs/appgate-topology.md) - Appgate SDP in the topology map
 - [docs/meraki-topology.md](docs/meraki-topology.md) - Meraki in the topology map
+- [docs/meraki-alerts.md](docs/meraki-alerts.md) - near-real-time Meraki alerts (polling and webhook receiver, per deployment scenario)
 - [docs/meraki-compliance.md](docs/meraki-compliance.md) - Meraki security compliance audits
 - [docs/path-trace.md](docs/path-trace.md) - Path Mode on the topology map
 - [docs/software-versions.md](docs/software-versions.md) - software versions and vulnerability alerts

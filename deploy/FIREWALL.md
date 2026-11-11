@@ -143,6 +143,31 @@ are for environments that switch outgoing to `deny` for hardening.
 # sudo ufw allow out to <DB_HOST_IP>/32 port 5432 proto tcp comment 'Postgres'
 ```
 
+## 7a. Meraki alerts (optional)
+
+Near-real-time Meraki alerts ([docs/meraki-alerts.md](../docs/meraki-alerts.md)):
+
+- **Polling** needs only outbound HTTPS (TCP 443) to the Meraki Dashboard API
+  host of each organization's region (`api.meraki.com` by default; other
+  regions use a host under `meraki.cn`, `meraki.in`, `meraki.ca` or
+  `gov-meraki.com`). Allow it by name on a proxy, since Meraki may redirect to
+  shard hosts in the same domain.
+- **The webhook receiver** needs Meraki to reach `POST /api/webhooks/meraki`
+  over HTTPS with a publicly trusted certificate. Do not open the web UI's 443
+  to the internet for it: publish a separate public listener that serves only
+  that path (the nginx block in the doc), or forward the path from a DMZ
+  proxy, tunnel or cloud relay. Restrict the public listener to Meraki's
+  webhook source ranges if you can confirm them (see the doc's "Source IP
+  allowlisting").
+
+```bash
+# Polling: outbound to the Meraki API (only if outgoing is set to deny)
+# sudo ufw allow out to any port 443 proto tcp comment 'Meraki Dashboard API (HTTPS)'
+
+# Webhook receiver on a dedicated public address (example address)
+# sudo ufw allow in on eth0 to 203.0.113.10 port 443 proto tcp comment 'Meraki webhooks only'
+```
+
 ## 8. Enable and verify
 
 ```bash

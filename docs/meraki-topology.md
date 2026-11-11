@@ -521,6 +521,15 @@ API (needs `monitoring`): `GET /api/availability/topology/summary`,
 `org_ref`, `entity_type` and `days` (1-365); outages and transitions also take
 `entity_id` and `limit`. AWS, Azure and GCP are `org_ref` -1, -2 and -3.
 
+### Near-real-time alerts
+
+Availability tracking follows the collections, so a device that goes down is
+seen at the next collection (hourly by default). For alerts within about a
+minute, Plexus also polls each organization's assurance alerts every 60
+seconds and can receive Meraki webhooks; see
+[meraki-alerts.md](meraki-alerts.md), which also explains how a device-down
+alert from both features is notified once.
+
 ## Collection history
 
 Every collection is saved as a snapshot (the 10 most recent per organization

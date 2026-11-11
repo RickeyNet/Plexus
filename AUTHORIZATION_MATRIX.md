@@ -25,6 +25,7 @@ All API endpoints and their required authentication/authorization levels.
 | GET | `/api/health` | Health check (uptime, metrics) |
 | GET | `/favicon.ico` | Static |
 | GET | `/static/*` | Static files |
+| POST | `/api/webhooks/meraki` | Meraki webhook receiver. No session or CSRF; authenticated by the shared secret in the body (constant-time compare). Answers 404 until an admin sets a secret and turns it on; 401 on a wrong secret. Rate limited per source IP on its own budget (600 per window). See `docs/meraki-alerts.md` |
 
 ### Auth-only (any authenticated user)
 
@@ -62,6 +63,7 @@ All API endpoints and their required authentication/authorization levels.
 | `deployments` | `/api/deployments/*` | deployments |
 | `monitoring` | `/api/monitoring/*`, `/api/sla/*` | monitoring |
 | `monitoring` | `/api/metrics/*` | metrics_engine |
+| `monitoring` | `GET /api/monitoring/meraki-alerts` (the Meraki alert list) | meraki_alerts |
 | `upgrades` | `/api/upgrades/*` | upgrades |
 
 ### Admin-only
@@ -75,6 +77,7 @@ All API endpoints and their required authentication/authorization levels.
 | `/api/compliance/admin/*` | compliance_admin |
 | `/api/monitoring/admin/*` | monitoring_admin |
 | `/api/metrics/admin/*` | metrics_engine_admin |
+| `/api/monitoring/meraki-alerts/settings` (GET/PUT; the webhook secret is write-only), `POST /api/monitoring/meraki-alerts/poll` | meraki_alerts_admin |
 
 ### WebSocket (self-authenticated)
 
@@ -90,7 +93,10 @@ All API endpoints and their required authentication/authorization levels.
 
 All `POST/PUT/PATCH/DELETE` requests to `/api/*` require a valid `X-CSRF-Token`
 header when authenticated via session cookie. API-token authenticated requests
-are exempt (not susceptible to CSRF).
+are exempt (not susceptible to CSRF). The webhook receivers in
+`WEBHOOK_PATHS` (`netcontrol/app.py`, only `/api/webhooks/meraki` today)
+are exempt by exact path: the sender cannot carry a session or a CSRF
+token, and the shared secret in the body authenticates each delivery.
 
 ### Credential Access (IDOR protection)
 
