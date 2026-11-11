@@ -8,6 +8,7 @@ import {
   normalizeSeverity,
   severityRank,
   severityTone,
+  statusLabel,
   statusTone,
   toneColor,
 } from './severity';
@@ -133,5 +134,18 @@ describe('complianceStatusRank', () => {
     expect(complianceStatusRank('pending')).toBe(2);
     expect(complianceStatusRank(null)).toBe(2);
     expect(complianceStatusRank('compliant')).toBe(3);
+  });
+});
+
+describe('statusLabel', () => {
+  it('reads separators as spaces', () => {
+    expect(statusLabel('rolled-back')).toBe('rolled back');
+    expect(statusLabel('verification_failed')).toBe('verification failed');
+    expect(statusLabel('completed')).toBe('completed');
+  });
+
+  it('shows a dash when missing', () => {
+    expect(statusLabel(null)).toBe('-');
+    expect(statusLabel('')).toBe('-');
   });
 });

@@ -11,6 +11,7 @@ import { Callout } from '@/components/Callout';
 import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
 import { QueryError } from '@/components/QueryError';
+import { changeTypeOptions } from '@/lib/changeTypes';
 
 interface Props {
   isOpen: boolean;
@@ -18,13 +19,7 @@ interface Props {
   onAnalyzed: (result: RiskAnalysisRunResult) => void;
 }
 
-const CHANGE_TYPES = [
-  { value: 'template', label: 'Template' },
-  { value: 'policy', label: 'Policy / ACL' },
-  { value: 'route', label: 'Route' },
-  { value: 'nat', label: 'NAT' },
-  { value: 'manual', label: 'Manual' },
-];
+const CHANGE_TYPES = changeTypeOptions(['template', 'policy', 'route', 'nat', 'manual']);
 
 export function NewAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
   const formId = useId();
@@ -180,7 +175,8 @@ export function NewAnalysisModal({ isOpen, onClose, onAnalyzed }: Props) {
             <label className="form-label" htmlFor={`${formId}-proposed-commands`}>Proposed Commands (one per line)</label>
             <textarea
               id={`${formId}-proposed-commands`}
-              className="form-input"
+              className="form-input form-code"
+              spellCheck={false}
               rows={8}
               value={commands}
               onChange={(e) => {

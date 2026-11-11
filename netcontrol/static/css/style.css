@@ -2556,6 +2556,13 @@ input[type="search"].form-input::-webkit-search-results-decoration {
     color: var(--text-light);
 }
 
+/* Modifier for a field that holds code, CLI commands or JSON. */
+.form-code {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    tab-size: 4;
+}
+
 /* React playbook editor (CodeMirror 6): grow with content so the modal
    body / window handles scrolling instead of a nested scrollbar - matches
    the classic SPA's viewportMargin: Infinity behavior. */

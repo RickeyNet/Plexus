@@ -11,6 +11,7 @@ import { Callout } from '@/components/Callout';
 import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
 import { QueryError } from '@/components/QueryError';
+import { changeTypeOptions } from '@/lib/changeTypes';
 
 interface Props {
   isOpen: boolean;
@@ -18,13 +19,7 @@ interface Props {
   onCreated: (id: number) => void;
 }
 
-const CHANGE_TYPES = [
-  { value: 'template', label: 'Template' },
-  { value: 'manual', label: 'Manual' },
-  { value: 'policy', label: 'Policy' },
-  { value: 'route', label: 'Route' },
-  { value: 'nat', label: 'NAT' },
-];
+const CHANGE_TYPES = changeTypeOptions(['template', 'manual', 'policy', 'route', 'nat']);
 
 export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
   const formId = useId();
@@ -263,7 +258,8 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
           </label>
           <textarea
             id={`${formId}-commands`}
-            className="form-input"
+            className="form-input form-code"
+            spellCheck={false}
             rows={5}
             value={commands}
             onChange={(e) => {
@@ -271,7 +267,6 @@ export function NewDeploymentModal({ isOpen, onClose, onCreated }: Props) {
               clearError('commands');
             }}
             aria-invalid={!!errors.commands}
-            style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem' }}
             placeholder={'interface GigabitEthernet0/1\n no shutdown'}
           />
           <FieldError>{errors.commands}</FieldError>

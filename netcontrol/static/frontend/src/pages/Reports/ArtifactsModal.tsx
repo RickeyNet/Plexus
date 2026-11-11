@@ -6,8 +6,9 @@ import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { reportArtifactUrl, useReportRunArtifacts } from '@/api/reports';
 import { usePendingKeys } from '@/lib/usePendingKeys';
+import { formatBytes } from '@/pages/NetworkTools/formatting';
 
-import { downloadReportExport } from './helpers';
+import { artifactTypeLabel, downloadReportExport } from './helpers';
 
 interface Props {
   runId: number | null;
@@ -53,7 +54,7 @@ export function ArtifactsModal({ runId, isOpen, onClose }: Props) {
                 <div>
                   <div style={{ fontWeight: 600 }}>{a.file_name || `artifact_${a.id}`}</div>
                   <div className="text-muted" style={{ fontSize: '0.82rem' }}>
-                    {a.artifact_type ?? ''} · {a.media_type ?? ''} · {Number(a.size_bytes ?? 0).toLocaleString()} bytes
+                    {artifactTypeLabel(a.artifact_type)} · {formatBytes(a.size_bytes)}
                   </div>
                 </div>
                 <BusyButton
