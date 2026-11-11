@@ -867,7 +867,8 @@ function MoveEventLogBody({ eventId }: { eventId: number | null }) {
     return <p style={{ opacity: 0.7 }}>No log entries recorded yet.</p>;
 
   return (
-    <div className="stack stack-sm" style={{ maxHeight: '60vh', overflow: 'auto' }}>
+    // No height cap here: the modal body is the one scroll container.
+    <div className="stack stack-sm">
       {data.map((item) => (
         <div key={item.id} className="card card-sm">
           <div
@@ -1005,7 +1006,8 @@ function MacHistoryBody({ macAddress }: { macAddress: string | null }) {
   }
 
   return (
-    <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+    // Only horizontal overflow is handled here; the modal body scrolls vertically.
+    <div style={{ overflowX: 'auto' }}>
       <table className="data-table">
         <thead>
           <tr>

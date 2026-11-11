@@ -176,7 +176,9 @@ export function App() {
           <Route path="/lab" element={<Lab />} />
           {/* Network Tools: MAC Tracking (default) and Traffic Analysis tabs.
               Their old standalone paths redirect to the matching tab. */}
-          <Route path="/network-tools/:tab?" element={<NetworkTools />} />
+          {/* Network Tools: /network-tools/<tab>, and /network-tools/traffic/<view>
+              for Traffic Analysis's sub-tabs. */}
+          <Route path="/network-tools/:tab?/:sub?" element={<NetworkTools />} />
           <Route path="/mac-tracking" element={<Navigate to="/network-tools" replace />} />
           <Route path="/traffic-analysis" element={<Navigate to="/network-tools/traffic" replace />} />
           <Route path="/federation" element={<Federation />} />

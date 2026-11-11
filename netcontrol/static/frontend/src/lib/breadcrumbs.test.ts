@@ -34,6 +34,10 @@ describe('breadcrumbTrail', () => {
       { label: 'Monitoring', to: '/monitoring' },
       { label: 'Configure' },
     ]);
+    expect(breadcrumbTrail('/network-tools/traffic/timeline')).toEqual([
+      { label: 'Network Tools', to: '/network-tools' },
+      { label: 'Traffic Analysis' },
+    ]);
   });
 
   it('parents detail routes under their list page', () => {
