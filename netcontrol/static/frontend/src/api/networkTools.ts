@@ -341,11 +341,12 @@ function withHost(base: string, hostId?: number | null): string {
   return hostId ? `${base}&host_id=${hostId}` : base;
 }
 
-export function useFlowStatus() {
+export function useFlowStatus(enabled = true) {
   return useQuery({
     queryKey: ['flows', 'status'],
     queryFn: () => apiRequest<FlowStatus>('/flows/status'),
     staleTime: 10_000,
+    enabled,
   });
 }
 

@@ -566,12 +566,17 @@ export interface NotificationChannelsResponse {
   stats: NotificationChannelStats[];
 }
 
-export function useNotificationChannels() {
+/**
+ * Admin-only. `live` (the default) refetches every 15 s for the delivery
+ * stats; a caller that only needs the channel list passes false.
+ */
+export function useNotificationChannels(enabled = true, live = true) {
   return useQuery<NotificationChannelsResponse>({
     queryKey: ['admin', 'notification-channels'],
     queryFn: () => apiRequest('/admin/notification-channels'),
     // Keep delivery stats reasonably live while the tab is mounted.
-    refetchInterval: 15_000,
+    refetchInterval: live ? 15_000 : false,
+    enabled,
   });
 }
 

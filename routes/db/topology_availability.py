@@ -140,16 +140,25 @@ async def list_topology_entity_states(
 
 
 async def count_topology_entity_states() -> list[dict]:
-    """How many tracked entities each provider has in each state, as
-    ``[{"provider", "state", "count"}]`` rows."""
+    """How many tracked entities of each type each source (provider and
+    org_ref) has in each state, as ``[{"provider", "org_ref", "entity_type",
+    "state", "count"}]`` rows."""
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
-            """SELECT provider, state, COUNT(*) AS count FROM topology_entity_state
-               GROUP BY provider, state ORDER BY provider, state"""
+            """SELECT provider, org_ref, entity_type, state, COUNT(*) AS count
+               FROM topology_entity_state
+               GROUP BY provider, org_ref, entity_type, state
+               ORDER BY provider, org_ref, entity_type, state"""
         )
         return [
-            {"provider": str(r["provider"]), "state": str(r["state"]), "count": int(r["count"])}
+            {
+                "provider": str(r["provider"]),
+                "org_ref": int(r["org_ref"]),
+                "entity_type": str(r["entity_type"]),
+                "state": str(r["state"]),
+                "count": int(r["count"]),
+            }
             for r in rows_to_list(await cursor.fetchall())
         ]
     finally:

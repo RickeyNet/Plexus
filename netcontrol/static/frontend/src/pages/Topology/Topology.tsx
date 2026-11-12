@@ -33,6 +33,7 @@ import { Menu, MenuCheckboxItem, MenuItem, MenuSeparator } from '@/components/Me
 import { PageHelp } from '@/components/PageHelp';
 import { QueryError } from '@/components/QueryError';
 import { mixColors, withAlpha } from '@/lib/themeColors';
+import { useLinkedParam } from '@/lib/useLinkedParam';
 import { AddToInventoryModal } from './AddToInventoryModal';
 import { BulkAddToInventoryModal } from './BulkAddToInventoryModal';
 import { buildInventoryAddRows } from './inventoryAdd';
@@ -191,7 +192,13 @@ export function Topology() {
   const [stpBadge, setStpBadge] = useState(0);
   const [searchPanelOpen, setSearchPanelOpen] = useState(false);
   const [statusOverlay, setStatusOverlay] = useState(false);
-  const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
+  // `?provider=<provider>` (the Dashboard's integration cards) opens the map
+  // filtered to that integration; the parameter is dropped once read.
+  const [linkedProvider, clearLinkedProvider] = useLinkedParam('provider');
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>(() =>
+    linkedProvider ? `provider:${linkedProvider}` : 'all',
+  );
+  useEffect(() => clearLinkedProvider(), [clearLinkedProvider]);
   // `?sources` (the Dashboard's source health chips) opens the Sources dialog.
   const [searchParams, setSearchParams] = useSearchParams();
   const [sourcesOpen, setSourcesOpen] = useState(() => searchParams.has('sources'));

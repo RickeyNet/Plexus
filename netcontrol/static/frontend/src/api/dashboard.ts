@@ -73,9 +73,22 @@ export interface TopologyProblem {
  * Current state of what the integrations collect. Present only for users with
  * the monitoring feature (it is the data of /api/availability/topology/*).
  */
+/**
+ * State counts of one entity type of one source. A Meraki, Cato, FMC, Panorama
+ * or Appgate source's org_ref is its organization id; the AWS, Azure and GCP
+ * accounts of one cloud share one org_ref (one discovery snapshot per cloud).
+ */
+export interface TopologySourceTypeCounts extends TopologyStateCounts {
+  provider: string;
+  org_ref: number;
+  entity_type: string;
+}
+
 export interface DashboardTopology {
   entity_counts: TopologyStateCounts & { total: number };
   by_provider: Record<string, TopologyStateCounts>;
+  /** One row per entity type each source has; absent from older servers. */
+  by_source?: TopologySourceTypeCounts[];
   /** Every down / degraded entity; `problems` holds at most 50 of them. */
   problem_count: number;
   /** Down first, then degraded; the most recent change first within each. */

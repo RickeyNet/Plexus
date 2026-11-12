@@ -4978,6 +4978,265 @@ code {
     justify-content: center;
 }
 
+/* A failed request in a panel: the callout keeps its own width and margin. */
+.dashboard-response-empty .callout {
+    margin: 0;
+    max-width: 32rem;
+}
+
+/* Needs attention and All clear (CriticalIssuesBanner.tsx). */
+.dashboard-issues {
+    border-color: var(--danger);
+}
+
+.dashboard-issues-clear {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    border-color: var(--success);
+    font-size: var(--text-sm);
+}
+
+.dashboard-issues-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
+}
+
+.dashboard-issues-header .text-muted {
+    font-size: var(--text-sm);
+}
+
+.dashboard-issues-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.dashboard-issue {
+    --issue-color: var(--warning);
+    width: 100%;
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    background: rgba(from var(--issue-color) r g b / 0.08);
+    color: var(--text);
+    font: inherit;
+    font-size: var(--text-sm);
+    text-align: left;
+    cursor: pointer;
+}
+
+.dashboard-issue-critical {
+    --issue-color: var(--danger);
+}
+
+.dashboard-issue:hover,
+.dashboard-issue:focus-visible {
+    border-color: var(--issue-color);
+}
+
+.dashboard-issue-dot {
+    flex: 0 0 auto;
+    align-self: center;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--issue-color);
+}
+
+.dashboard-issue-label {
+    flex: 0 0 auto;
+}
+
+.dashboard-issue-detail {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dashboard-issue-action {
+    flex: 0 0 auto;
+    color: var(--primary);
+    white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+    .dashboard-issue {
+        flex-wrap: wrap;
+    }
+
+    .dashboard-issue-detail {
+        flex-basis: 100%;
+        order: 3;
+    }
+}
+
+/* Get started checklist and the Not set up yet card (SetupGuideCard.tsx). */
+.dashboard-setup-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    font-size: var(--text-sm);
+}
+
+.dashboard-setup-steps {
+    list-style: none;
+    margin: var(--space-3) 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.dashboard-setup-step {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) 0;
+    border-top: 1px solid var(--border);
+}
+
+.dashboard-setup-step:first-child {
+    border-top: none;
+}
+
+.dashboard-setup-mark {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.6rem;
+    height: 1.6rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+    font-weight: 600;
+}
+
+.dashboard-setup-step-done .dashboard-setup-mark {
+    border-color: var(--success);
+    background: rgba(from var(--success) r g b / 0.15);
+    color: var(--success);
+}
+
+.dashboard-setup-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: var(--text-sm);
+}
+
+.dashboard-setup-text strong {
+    color: var(--text);
+}
+
+.dashboard-setup-step-done .dashboard-setup-text strong {
+    color: var(--text-muted);
+}
+
+@media (max-width: 600px) {
+    .dashboard-setup-step {
+        flex-wrap: wrap;
+    }
+}
+
+/* Integrations section: one card per connected source (IntegrationsSection.tsx). */
+.dashboard-integrations-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+    gap: var(--space-3);
+}
+
+.dashboard-integrations-grid > .skeleton-card {
+    min-height: 140px;
+}
+
+.dashboard-integration {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-width: 0;
+    padding: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+}
+
+.dashboard-integration-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+.dashboard-integration-name {
+    margin: 0;
+    min-width: 0;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text);
+    overflow-wrap: anywhere;
+}
+
+.dashboard-integration-meta,
+.dashboard-integration-message,
+.dashboard-integration-note,
+.dashboard-integration-empty {
+    margin: 0;
+    font-size: var(--text-xs);
+}
+
+.dashboard-integration-message {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dashboard-integration-types {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.dashboard-integration-type {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-2);
+    font-size: var(--text-sm);
+}
+
+.dashboard-integration-states {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+}
+
+.dashboard-integration-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    margin-top: auto;
+}
+
 .dashboard-devices-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
@@ -5363,107 +5622,3 @@ code {
 /* Topology toolbar menus (pages/Topology/Topology.tsx) */
 .topo-toolbar-badge { margin-left: 0.3rem; }
 .topo-menu-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
-/* A failed request in a panel: the callout keeps its own width and margin. */
-.dashboard-response-empty .callout {
-    margin: 0;
-    max-width: 32rem;
-}
-
-/* Needs attention and All clear (CriticalIssuesBanner.tsx). */
-.dashboard-issues {
-    border-color: var(--danger);
-}
-
-.dashboard-issues-clear {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-    border-color: var(--success);
-    font-size: var(--text-sm);
-}
-
-.dashboard-issues-header {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    margin-bottom: var(--space-2);
-}
-
-.dashboard-issues-header .text-muted {
-    font-size: var(--text-sm);
-}
-
-.dashboard-issues-list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-}
-
-.dashboard-issue {
-    --issue-color: var(--warning);
-    width: 100%;
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-2);
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid transparent;
-    border-radius: var(--radius-md);
-    background: rgba(from var(--issue-color) r g b / 0.08);
-    color: var(--text);
-    font: inherit;
-    font-size: var(--text-sm);
-    text-align: left;
-    cursor: pointer;
-}
-
-.dashboard-issue-critical {
-    --issue-color: var(--danger);
-}
-
-.dashboard-issue:hover,
-.dashboard-issue:focus-visible {
-    border-color: var(--issue-color);
-}
-
-.dashboard-issue-dot {
-    flex: 0 0 auto;
-    align-self: center;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--issue-color);
-}
-
-.dashboard-issue-label {
-    flex: 0 0 auto;
-}
-
-.dashboard-issue-detail {
-    flex: 1 1 0;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.dashboard-issue-action {
-    flex: 0 0 auto;
-    color: var(--primary);
-    white-space: nowrap;
-}
-
-@media (max-width: 640px) {
-    .dashboard-issue {
-        flex-wrap: wrap;
-    }
-
-    .dashboard-issue-detail {
-        flex-basis: 100%;
-        order: 3;
-    }
-}
-

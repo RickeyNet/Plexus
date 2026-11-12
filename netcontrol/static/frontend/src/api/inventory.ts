@@ -199,10 +199,11 @@ export function useInventoryGroupsFull(includeHosts = true) {
   });
 }
 
-export function useSnmpProfiles() {
+export function useSnmpProfiles(enabled = true) {
   return useQuery<SnmpProfile[]>({
     queryKey: ['snmp-profiles'],
     queryFn: () => apiRequest('/admin/snmp-profiles'),
+    enabled,
   });
 }
 

@@ -12,6 +12,8 @@ import { clampPreset, toHours } from '@/lib/timeRangeMap';
 import { formatBytes } from '@/pages/NetworkTools/formatting';
 
 import { PANEL_BODY_HEIGHT, PANEL_BODY_STYLE } from './helpers';
+import { PanelEmpty, PanelError, PanelRangeEmpty } from './PanelStates';
+import { SETUP_LINKS } from './setupGuide';
 
 type Direction = 'src' | 'dst';
 
@@ -49,28 +51,26 @@ export function TopTalkersPanel() {
       {status.isPending ? (
         <div className="skeleton skeleton-card" style={PANEL_BODY_STYLE} />
       ) : collectorOff ? (
-        <div className="dashboard-response-empty" style={{ flexDirection: 'column', gap: '0.5rem' }}>
-          <p style={{ margin: 0, color: 'var(--text-muted)' }}>
-            NetFlow / sFlow collector is disabled.
-          </p>
-          <Link to="/settings" className="dashboard-overview-link">
-            Enable in Settings →
-          </Link>
-        </div>
+        <PanelEmpty
+          message="The NetFlow / sFlow collector is off"
+          description="Top talkers are read from the flow records it receives."
+          action={
+            <Link to={SETUP_LINKS.netflow} className="btn btn-sm btn-secondary">
+              Turn it on in Settings
+            </Link>
+          }
+        />
       ) : talkers.isPending ? (
         <div className="skeleton skeleton-card" style={PANEL_BODY_STYLE} />
       ) : talkers.error ? (
-        <div className="dashboard-response-empty">
-          <p style={{ color: 'var(--danger)', margin: 0 }}>
-            Failed to load: {(talkers.error as Error).message}
-          </p>
-        </div>
+        <PanelError what="top talkers" query={talkers} />
       ) : !talkers.data || talkers.data.length === 0 ? (
-        <div className="dashboard-response-empty">
-          <p style={{ margin: 0, color: 'var(--text-muted)' }}>
-            No traffic recorded in this window.
-          </p>
-        </div>
+        <PanelRangeEmpty
+          what="traffic recorded"
+          shown={flowRange}
+          allowed={FLOW_RANGES}
+          hint="The collector is on but has received no flow records. Check that devices export NetFlow or sFlow to this server."
+        />
       ) : (
         <TalkersBars rows={talkers.data} />
       )}

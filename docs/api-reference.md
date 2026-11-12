@@ -3,7 +3,7 @@
 ### Dashboard
 | Method | Endpoint         | Description                                          |
 |--------|------------------|------------------------------------------------------|
-| GET    | `/api/dashboard` | Stats, recent jobs, inventory overview, device health, open alerts; with the `monitoring` feature also `topology`: entity counts by state (total and per provider) and the down / degraded integration entities, down first, newest first, at most 50 |
+| GET    | `/api/dashboard` | Stats, recent jobs, inventory overview, device health, open alerts; with the `monitoring` feature also `topology`: entity counts by state (total, per provider, and `by_source`: one `{provider, org_ref, entity_type, up, degraded, down, unknown}` row per entity type of each source; the AWS, Azure and GCP accounts of one cloud share one `org_ref`) and the down / degraded integration entities, down first, newest first, at most 50 |
 | GET    | `/api/health`    | Service health + lightweight counters/timing metrics |
 
 ### Inventory
