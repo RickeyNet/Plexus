@@ -4825,3 +4825,107 @@ code {
 /* Topology toolbar menus (pages/Topology/Topology.tsx) */
 .topo-toolbar-badge { margin-left: 0.3rem; }
 .topo-menu-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+/* A failed request in a panel: the callout keeps its own width and margin. */
+.dashboard-response-empty .callout {
+    margin: 0;
+    max-width: 32rem;
+}
+
+/* Needs attention and All clear (CriticalIssuesBanner.tsx). */
+.dashboard-issues {
+    border-color: var(--danger);
+}
+
+.dashboard-issues-clear {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    border-color: var(--success);
+    font-size: var(--text-sm);
+}
+
+.dashboard-issues-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
+}
+
+.dashboard-issues-header .text-muted {
+    font-size: var(--text-sm);
+}
+
+.dashboard-issues-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.dashboard-issue {
+    --issue-color: var(--warning);
+    width: 100%;
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    background: rgba(from var(--issue-color) r g b / 0.08);
+    color: var(--text);
+    font: inherit;
+    font-size: var(--text-sm);
+    text-align: left;
+    cursor: pointer;
+}
+
+.dashboard-issue-critical {
+    --issue-color: var(--danger);
+}
+
+.dashboard-issue:hover,
+.dashboard-issue:focus-visible {
+    border-color: var(--issue-color);
+}
+
+.dashboard-issue-dot {
+    flex: 0 0 auto;
+    align-self: center;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--issue-color);
+}
+
+.dashboard-issue-label {
+    flex: 0 0 auto;
+}
+
+.dashboard-issue-detail {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dashboard-issue-action {
+    flex: 0 0 auto;
+    color: var(--primary);
+    white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+    .dashboard-issue {
+        flex-wrap: wrap;
+    }
+
+    .dashboard-issue-detail {
+        flex-basis: 100%;
+        order: 3;
+    }
+}
+
