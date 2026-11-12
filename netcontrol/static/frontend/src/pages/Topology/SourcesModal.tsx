@@ -38,6 +38,7 @@ import { LoadingState } from "@/components/LoadingState";
 import { Modal } from "@/components/Modal";
 import { QueryError } from "@/components/QueryError";
 import { formatBackendDateTime } from "@/lib/datetime";
+import { canUseFeature } from "@/lib/tabGating";
 import { usePendingKeys } from "@/lib/usePendingKeys";
 
 import {
@@ -49,6 +50,7 @@ import {
 import { CollectionProgressCard } from "./CollectionProgressCard";
 import { InventoryCollectModal } from "./InventoryCollectModal";
 import { MerakiAlertsSettings } from "./MerakiAlertsSettings";
+import { addSourceOptions, CLOUD_ACCOUNTS_PATH } from "./addSourceOptions";
 import {
   collectionProgressCards,
   describeInventoryResult,
@@ -58,8 +60,6 @@ import {
 import { SourceFormModal } from "./SourceFormModal";
 import { SourceScheduleBar } from "./SourceScheduleBar";
 import { defaultOptionsFor } from "./sourceForm";
-
-const CLOUD_ACCOUNTS_PATH = "/cloud-visibility";
 
 /** Sources that are entries of the organization dialog (collected as a tracked build). */
 const ORG_SOURCE_TYPES = new Set<string>([
@@ -370,6 +370,13 @@ export function SourcesModal({
     setAdding(provider);
   };
 
+  // The same list as the app-wide Add source dialog. This is the Topology
+  // page, so organization sources are always offered here.
+  const addOptions = addSourceOptions({
+    org: true,
+    cloud: canUseFeature("cloud-visibility", auth),
+  });
+
   const rows = sources.data?.sources ?? [];
   const formProvider = adding ?? editing?.provider ?? null;
   const orgById = new Map((orgs.data?.orgs ?? []).map((org) => [org.id, org]));
@@ -441,65 +448,29 @@ export function SourcesModal({
               }}
             >
               <strong>Add:</strong>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => handleAdd("meraki")}
-              >
-                Meraki Organization
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => handleAdd("cato")}
-              >
-                Cato Account
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                title="A Cisco Secure Firewall Management Center and the FTDs it manages"
-                onClick={() => handleAdd("fmc")}
-              >
-                Cisco FMC
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                title="A Palo Alto Networks Panorama and the firewalls it manages"
-                onClick={() => handleAdd("panorama")}
-              >
-                Palo Alto Panorama
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                title="An Appgate SDP collective: its Controllers, Gateways, sites, entitlements and connected users"
-                onClick={() => handleAdd("appgate")}
-              >
-                Appgate SDP
-              </button>
-              <Link
-                className="btn btn-secondary btn-sm"
-                to={`${CLOUD_ACCOUNTS_PATH}?add=aws`}
-                onClick={onClose}
-              >
-                AWS Account
-              </Link>
-              <Link
-                className="btn btn-secondary btn-sm"
-                to={`${CLOUD_ACCOUNTS_PATH}?add=azure`}
-                onClick={onClose}
-              >
-                Azure Subscription
-              </Link>
-              <Link
-                className="btn btn-secondary btn-sm"
-                to={`${CLOUD_ACCOUNTS_PATH}?add=gcp`}
-                onClick={onClose}
-              >
-                GCP Project
-              </Link>
+              {addOptions.map((option) =>
+                option.kind === "org" ? (
+                  <button
+                    key={option.provider}
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    title={option.description}
+                    onClick={() => handleAdd(option.provider)}
+                  >
+                    {option.label}
+                  </button>
+                ) : (
+                  <Link
+                    key={option.provider}
+                    className="btn btn-secondary btn-sm"
+                    title={option.description}
+                    to={option.to}
+                    onClick={onClose}
+                  >
+                    {option.label}
+                  </Link>
+                ),
+              )}
             </div>
             <div
               className="text-muted"
