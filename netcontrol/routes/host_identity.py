@@ -15,7 +15,24 @@ from __future__ import annotations
 
 import ipaddress
 
-__all__ = ["interface_ip", "is_placeholder_hostname", "placeholder_hostname"]
+__all__ = [
+    "RESERVED_HOST_NETWORKS",
+    "host_ip_problem",
+    "interface_ip",
+    "is_placeholder_hostname",
+    "placeholder_hostname",
+]
+
+# Address ranges no inventory host or ad-hoc job target may have.
+RESERVED_HOST_NETWORKS = (
+    ipaddress.ip_network("127.0.0.0/8"),  # loopback
+    ipaddress.ip_network("::1/128"),  # IPv6 loopback
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local
+    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
+    ipaddress.ip_network("0.0.0.0/8"),  # "this" network
+    ipaddress.ip_network("224.0.0.0/4"),  # multicast
+    ipaddress.ip_network("255.255.255.255/32"),  # broadcast
+)
 
 
 def placeholder_hostname(prefix: str, ip_address: str) -> str:
@@ -49,3 +66,16 @@ def interface_ip(value: str) -> str:
     if parsed.is_loopback or parsed.is_link_local or parsed.is_multicast or parsed.is_unspecified:
         return ""
     return str(parsed)
+
+
+def host_ip_problem(value: str) -> str:
+    """Why ``value`` cannot be the address of a host: ``"invalid"`` (not an
+    IP address), ``"reserved"`` (in ``RESERVED_HOST_NETWORKS``), or ``""``
+    when it can."""
+    try:
+        parsed = ipaddress.ip_address(str(value or ""))
+    except ValueError:
+        return "invalid"
+    if any(parsed in network for network in RESERVED_HOST_NETWORKS):
+        return "reserved"
+    return ""

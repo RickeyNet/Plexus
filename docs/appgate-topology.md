@@ -26,6 +26,9 @@ different.
 3. **Add your collective.** Click **Add Source**, then **Appgate SDP**, and
    enter a name, the Controller address, the identity provider, the admin
    user name and its password.
+   Adding goes on by itself to checking the credentials, the first collection
+   and an offer to import the devices into the inventory; see
+   [After adding a source](meraki-topology.md#after-adding-a-source).
 4. **Check the login.** Click **Test Login**. It signs in, reads the number
    of sites and appliances, signs out and reports what the Controller
    answered (`Login OK: Appgate SDP peer v22, 3 sites, 8 appliances`).

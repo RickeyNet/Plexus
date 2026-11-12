@@ -824,6 +824,19 @@ def get_driver(device_type: str | None) -> Driver:
     return cls()
 
 
+def supports_config_capture(device_type: str | None) -> bool:
+    """Whether Config Backups can read the running configuration of a
+    ``device_type``: its driver names the command
+    (``capture_running_config_command``). Firewalls whose configuration
+    lives in their manager (FTD under an FMC, PAN-OS under Panorama,
+    FortiOS) and types with no driver say no."""
+    try:
+        get_driver(device_type).capture_running_config_command()
+    except DriverCapabilityError:
+        return False
+    return True
+
+
 def registered_device_types() -> tuple[str, ...]:
     """Sorted tuple of every device_type that currently has a driver.
 

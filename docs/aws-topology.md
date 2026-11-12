@@ -47,6 +47,9 @@ see [azure-topology.md](azure-topology.md) and [gcp-topology.md](gcp-topology.md
    Metrics** tabs.
 4. **Discover** (it checks the sign-in first). When discovery finishes the
    account is on the Topology map (group filter **All groups**).
+   A new account is discovered as soon as it is created (when it is
+   enabled), and the page says whether scheduled discovery is on, with a
+   button to turn it on (it is off by default).
 
 To refresh the map, run **Discover** again. Scheduled discovery
 (`PUT /api/cloud/discovery-sync/config` with `enabled` and

@@ -4,10 +4,12 @@ import { Link, useSearchParams } from 'react-router';
 import {
   type CloudAccount,
   type CloudProvider,
+  useCloudDiscoverySyncConfig,
   useCreateCloudAccount,
   useDeleteCloudAccount,
   useDiscoverCloudAccount,
   useUpdateCloudAccount,
+  useUpdateCloudDiscoverySyncConfig,
 } from '@/api/cloud';
 import { Badge, StatusBadge } from '@/components/Badge';
 import { BusyButton } from '@/components/BusyButton';
@@ -106,6 +108,57 @@ function LiveReadSupport({ providers }: { providers: CloudProvider[] }) {
   );
 }
 
+/**
+ * After an account is added: whether discovery runs on a schedule (it is off
+ * by default), with a one-click switch when it is off.
+ */
+function DiscoveryScheduleNote({ onDismiss }: { onDismiss: () => void }) {
+  const schedule = useCloudDiscoverySyncConfig();
+  const save = useUpdateCloudDiscoverySyncConfig();
+  const [error, setError] = useState<string | null>(null);
+  const config = schedule.data?.config;
+  if (!config) return null;
+  const minutes = Math.round((config.interval_seconds ?? 3600) / 60);
+  const dismiss = (
+    <button type="button" className="btn btn-sm btn-ghost" onClick={onDismiss}>
+      Dismiss
+    </button>
+  );
+  if (config.enabled) {
+    return (
+      <Callout tone="info" action={dismiss}>
+        Scheduled discovery is on: every enabled account is discovered again every {minutes} minutes.
+      </Callout>
+    );
+  }
+  return (
+    <Callout
+      tone="warning"
+      title="Scheduled discovery is off"
+      action={
+        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+          <button
+            type="button"
+            className="btn btn-sm btn-primary"
+            disabled={save.isPending}
+            onClick={() => {
+              setError(null);
+              save.mutateAsync({ enabled: true }).catch((err: Error) => setError(err.message));
+            }}
+          >
+            {save.isPending ? 'Turning on…' : 'Turn on'}
+          </button>
+          {dismiss}
+        </div>
+      }
+    >
+      Accounts are only discovered when someone clicks Discover, so the map and policy views go stale. Turn on
+      scheduled discovery to rediscover every enabled account every {minutes} minutes.
+      {error && <div>Could not turn it on: {error}</div>}
+    </Callout>
+  );
+}
+
 export function AccountsTab({
   accounts,
   providerOptions,
@@ -118,6 +171,8 @@ export function AccountsTab({
   const [confirmDelete, setConfirmDelete] = useState<CloudAccount | null>(null);
   const [confirmDiscover, setConfirmDiscover] = useState<CloudAccount | null>(null);
   const [actionMsg, setActionMsg] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
+  // An account was just added: show whether discovery is scheduled.
+  const [justAdded, setJustAdded] = useState(false);
 
   const discover = useDiscoverCloudAccount();
   const deleteAcct = useDeleteCloudAccount();
@@ -232,6 +287,8 @@ export function AccountsTab({
           {actionMsg.text}
         </Callout>
       )}
+
+      {justAdded && <DiscoveryScheduleNote onDismiss={() => setJustAdded(false)} />}
 
       {loadError}
 
@@ -389,9 +446,15 @@ export function AccountsTab({
           provider={openModal.provider}
           providerOptions={providers}
           onClose={closeModal}
-          onSaved={(msg) => {
+          onSaved={(msg, created) => {
             showMsg('success', msg);
             closeModal();
+            // A new account is discovered at once: its first topology, and
+            // the check that its sign-in works (a failure is reported).
+            if (created?.enabled) {
+              setJustAdded(true);
+              runDiscover(created);
+            }
           }}
         />
       )}
@@ -459,7 +522,8 @@ interface FormProps {
   /** Providers offered when adding an account. */
   providerOptions: string[];
   onClose: () => void;
-  onSaved: (msg: string) => void;
+  /** `created`: the account a create stored (not passed for an update). */
+  onSaved: (msg: string, created?: CloudAccount) => void;
 }
 
 /** "Flow logs and traffic metrics" from the section titles. */
@@ -527,8 +591,12 @@ function AccountFormModal({ account, provider: providerProp, providerOptions, on
         await update.mutateAsync({ id: account.id, data });
         onSaved(`${terms.scopeTitle} "${payload.name}" updated`);
       } else {
-        await create.mutateAsync({ ...payload, auth_type: auth?.auth_type, auth_config: auth?.auth_config ?? {} });
-        onSaved(`${terms.scopeTitle} "${payload.name}" created`);
+        const result = await create.mutateAsync({
+          ...payload,
+          auth_type: auth?.auth_type,
+          auth_config: auth?.auth_config ?? {},
+        });
+        onSaved(`${terms.scopeTitle} "${payload.name}" created`, result.account);
       }
     } catch (err) {
       setError((err as Error).message);

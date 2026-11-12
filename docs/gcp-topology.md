@@ -37,6 +37,9 @@ describes the shared behavior. This guide covers what is different.
    **Additional settings (JSON, rarely needed)**.
 4. **Discover** (it checks the sign-in first). When discovery finishes the
    project is on the map.
+   A new entry is discovered as soon as it is created (when it is enabled),
+   and the page says whether scheduled discovery is on, with a button to turn
+   it on (it is off by default).
 
 One account entry reads one project. Add one entry per project; they are
 joined on the map automatically, because every resource is named by its

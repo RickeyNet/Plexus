@@ -387,6 +387,20 @@ async def _latest_entries() -> list[tuple[int, dict[str, Any]]]:
 
 async def latest_snapshots() -> list[tuple[int, dict]]:
     """``(org_ref, snapshot)`` for the newest snapshot of every organization."""
+async def latest_snapshot_of(org_ref: int) -> tuple[dict, dict] | None:
+    """``(metadata, snapshot)`` of the newest collection of one source, or
+    ``None`` when it has none. Reuses the parsed snapshot when cached."""
+    rows = await db.list_meraki_snapshots(org_ref, 1)
+    if not rows:
+        return None
+    meta = rows[0]
+    entry = _SNAPSHOT_CACHE.get(meta["id"])
+    if entry is not None:
+        return meta, entry["snapshot"]
+    row = await db.get_meraki_snapshot(meta["id"])
+    return (meta, row["snapshot"] or {}) if row else None
+
+
     return [(org_ref, entry["snapshot"]) for org_ref, entry in await _latest_entries()]
 
 
