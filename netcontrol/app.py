@@ -2540,12 +2540,20 @@ async def favicon():
     return {"detail": "No favicon"}
 
 
+_REVALIDATE_HEADERS = {"Cache-Control": "no-cache"}
+
+
 async def serve_react_frontend(path: str = ""):
     """Serve the React SPA. Returns the requested file when it exists on
     disk (e.g. manifest, viewer-layout.js); otherwise falls back to
     index.html so deep links handled by react-router resolve correctly.
     The root falls back to /docs only when no bundle is deployed.
     Backend-owned prefixes never reach here (see _SpaFallbackRoute).
+
+    These files keep their names across builds (only dist/assets is
+    content-hashed), so they are sent ``no-cache``: the browser revalidates
+    them on every load. Without it a browser may reuse an old index.html for
+    hours after an upgrade, and with it the old bundle it names.
     """
     if path:
         candidate = os.path.realpath(os.path.join(FRONTEND_DIST, path))
@@ -2554,9 +2562,9 @@ async def serve_react_frontend(path: str = ""):
         # the same prefix (e.g. dist-evil/) can't satisfy a bare startswith.
         dist_root = os.path.realpath(FRONTEND_DIST)
         if (candidate == dist_root or candidate.startswith(dist_root + os.sep)) and os.path.isfile(candidate):
-            return FileResponse(candidate)
+            return FileResponse(candidate, headers=_REVALIDATE_HEADERS)
     if os.path.isfile(FRONTEND_INDEX):
-        return FileResponse(FRONTEND_INDEX)
+        return FileResponse(FRONTEND_INDEX, headers=_REVALIDATE_HEADERS)
     if not path:
         return RedirectResponse(url="/docs")
     raise HTTPException(status_code=404, detail="React frontend not built")
