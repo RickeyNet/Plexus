@@ -1,4 +1,5 @@
 import type { TopologyData, TopologyEdge, TopologyNode } from '@/api/topology';
+import { LIGHT_THEMES } from '@/lib/appearance';
 import { cloudProviderTerms } from '@/lib/cloudProviderTerms';
 import { mixColors, themeColorReader, withAlpha } from '@/lib/themeColors';
 
@@ -59,7 +60,7 @@ export interface EdgeColor {
 
 export function getTopoThemeColors(): TopoThemeColors {
   const theme = document.documentElement.getAttribute('data-theme') || 'forest';
-  const isDark = !['light', 'sandstone'].includes(theme);
+  const isDark = !(LIGHT_THEMES as readonly string[]).includes(theme);
   const v = themeColorReader();
   // The vis canvas cannot read var(); every color here is concrete. The
   // fallbacks only apply while a token is missing.
