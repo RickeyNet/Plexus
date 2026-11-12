@@ -7,6 +7,7 @@ import { useTimeRange } from '@/lib/timeRange-context';
 import { formatRelativeTime } from '@/lib/datetime';
 
 import { PANEL_BODY_STYLE } from './helpers';
+import { PanelEmpty, PanelError, PanelRangeEmpty } from './PanelStates';
 
 type Category = 'deployment' | 'config' | 'alert';
 type Filter = 'all' | Category;
@@ -22,7 +23,8 @@ const CATEGORY_LABELS: Record<Category, string> = {
 export function EventsFeedPanel() {
   const { range } = useTimeRange();
   const [filter, setFilter] = useState<Filter>('all');
-  const { data, isPending, error } = useAnnotations({ range });
+  const query = useAnnotations({ range });
+  const { data, isPending, error } = query;
 
   const filtered = useMemo(() => {
     const events = data ?? [];
@@ -59,17 +61,22 @@ export function EventsFeedPanel() {
       {isPending ? (
         <div className="skeleton skeleton-card" style={PANEL_BODY_STYLE} />
       ) : error ? (
-        <div className="dashboard-response-empty">
-          <p style={{ color: 'var(--danger)', margin: 0 }}>
-            Failed to load: {(error as Error).message}
-          </p>
-        </div>
+        <PanelError what="recent events" query={query} />
+      ) : filtered.length === 0 && filter !== 'all' && (data ?? []).length > 0 ? (
+        // The range has events, just none of the chosen kind.
+        <PanelEmpty
+          message={`No ${CATEGORY_LABELS[filter].toLowerCase()} events in this time range`}
+          action={
+            <button type="button" className="btn btn-sm btn-secondary" onClick={() => setFilter('all')}>
+              Show all events
+            </button>
+          }
+        />
       ) : filtered.length === 0 ? (
-        <div className="dashboard-response-empty">
-          <p style={{ margin: 0, color: 'var(--text-muted)' }}>
-            No events in this window.
-          </p>
-        </div>
+        <PanelRangeEmpty
+          what="events"
+          hint="Deployments, configuration changes and alerts are listed here as they happen."
+        />
       ) : (
         <div className="dashboard-events-feed" style={PANEL_BODY_STYLE}>
           {filtered.map((e, i) => (
