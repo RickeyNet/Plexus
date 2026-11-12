@@ -15,8 +15,12 @@ export const VALID_THEMES = [
   'sandstone',
   'voyager',
   'matrix',
+  '1998',
 ] as const;
 export type ThemeName = (typeof VALID_THEMES)[number];
+
+/** Themes with light surfaces; canvas renderers pick dark-on-light fallbacks for them. */
+export const LIGHT_THEMES: readonly ThemeName[] = ['light', 'sandstone', '1998'];
 
 export const THEME_LABELS: Record<ThemeName, string> = {
   forest: 'Forest',
@@ -28,6 +32,7 @@ export const THEME_LABELS: Record<ThemeName, string> = {
   sandstone: 'Sandstone',
   voyager: 'Voyager',
   matrix: 'Matrix',
+  '1998': '1998',
 };
 
 export const DEFAULT_THEME: ThemeName = 'sandstone';
