@@ -417,7 +417,9 @@ collection is marked *partial*; the rest of the data is still used.
 ## After adding a source
 
 Adding a Meraki organization, Cato account, Cisco FMC, Palo Alto Panorama or
-Appgate SDP collective (admins, **Sources → Add Source**) does not just close
+Appgate SDP collective (admins: **Add source** at the top of the sidebar or
+in the Dashboard header, from any page, or **Sources → Add Source** on the
+Topology page) does not just close
 the form: the dialog goes on through three steps. **Close** leaves at any
 step; the source stays saved and a running collection carries on.
 

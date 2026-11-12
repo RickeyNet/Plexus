@@ -14,6 +14,7 @@ import {
 } from '@/lib/sidebarState';
 import { useMediaQuery } from '@/lib/useMediaQuery';
 
+import { useAddSource } from './AddSourceProvider-context';
 import { isNavItemVisible, type NavGate } from './navVisibility';
 
 // Navigation mirrors the legacy SPA sidebar (netcontrol/static/index.html). Each
@@ -219,6 +220,13 @@ const ic = {
       <circle cx="12" cy="7" r="4" />
     </svg>
   ),
+  addSource: (
+    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="9" />
+      <line x1="12" y1="8" x2="12" y2="16" />
+      <line x1="8" y1="12" x2="16" y2="12" />
+    </svg>
+  ),
   chevron: (
     <svg className="nav-group-chevron nav-label" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="6 9 12 15 18 9" />
@@ -379,6 +387,7 @@ export function Sidebar({ username, mobileOpen, onMobileClose, onOpenUserMenu }:
   };
   const { pathname } = useLocation();
   const { data: auth } = useAuthStatus();
+  const addSource = useAddSource();
 
   const visibleNav = useMemo(() => {
     const ctx = {
@@ -436,6 +445,18 @@ export function Sidebar({ username, mobileOpen, onMobileClose, onOpenUserMenu }:
         </button>
       </div>
       <div className="nav-links">
+        {/* An action, not a page: opens the Add source dialog over the current page. */}
+        {addSource.available && (
+          <button
+            type="button"
+            className="nav-link nav-action"
+            title={collapsed ? 'Add source' : 'Connect Meraki, Cato, a firewall manager or a cloud account'}
+            onClick={addSource.open}
+          >
+            {ic.addSource}
+            <span className="nav-label">Add source</span>
+          </button>
+        )}
         {visibleNav.map((item) =>
           isGroup(item) ? (
             <NavGroupItem key={item.id} group={item} currentPath={pathname} collapsed={collapsed} />
