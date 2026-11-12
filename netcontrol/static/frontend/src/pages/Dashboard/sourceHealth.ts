@@ -12,6 +12,94 @@ export const SOURCES_LINK = '/topology?sources=1';
 /** Id of the integrations panel on Monitoring -> Availability. */
 export const TOPOLOGY_AVAILABILITY_ANCHOR = 'topology-availability';
 export const TOPOLOGY_AVAILABILITY_LINK = `/monitoring/availability#${TOPOLOGY_AVAILABILITY_ANCHOR}`;
+/** Query parameter of that panel naming the source it opens filtered to. */
+export const AVAILABILITY_SOURCE_PARAM = 'source';
+/** Query parameter of that panel naming the entity type it opens filtered to. */
+export const AVAILABILITY_TYPE_PARAM = 'type';
+/** Query parameter of that panel naming the current state its entities are filtered to. */
+export const AVAILABILITY_STATE_PARAM = 'state';
+
+/** A current state the panel's entities can be filtered to; `problem` is down or degraded. */
+export type AvailabilityStateFilter = 'problem' | 'down' | 'degraded' | 'up' | 'unknown';
+
+/** The state filters, in the panel's order, with their labels. */
+export const AVAILABILITY_STATE_FILTERS: readonly { key: AvailabilityStateFilter; label: string }[] = [
+  { key: 'problem', label: 'Down or degraded' },
+  { key: 'down', label: 'Down' },
+  { key: 'degraded', label: 'Degraded' },
+  { key: 'up', label: 'Up' },
+  { key: 'unknown', label: 'Unknown' },
+];
+
+/** Reads the `?state=` value; null when absent or not one of AVAILABILITY_STATE_FILTERS. */
+export function parseAvailabilityState(value: string | null | undefined): AvailabilityStateFilter | null {
+  return AVAILABILITY_STATE_FILTERS.find((f) => f.key === value)?.key ?? null;
+}
+
+/** Whether an entity in `state` is in the set `filter` names. */
+export function matchesAvailabilityState(state: string, filter: AvailabilityStateFilter): boolean {
+  return filter === 'problem' ? state === 'down' || state === 'degraded' : state === filter;
+}
+
+/** What else the panel opens filtered to, besides the source. */
+export interface AvailabilityFilter {
+  entityType?: string | null;
+  state?: AvailabilityStateFilter | null;
+}
+
+/**
+ * The availability rows of one source: its provider and org_ref, or every
+ * org_ref of the provider when `orgRef` is null (the AWS, Azure and GCP
+ * accounts of one cloud are recorded together).
+ */
+export interface AvailabilitySourceRef {
+  provider: string;
+  orgRef: number | null;
+}
+
+/**
+ * The integrations panel on Monitoring -> Availability, filtered to `ref`
+ * (every source when absent) and to `filter`'s entity type and state.
+ */
+export function topologyAvailabilityLink(ref?: AvailabilitySourceRef | null, filter: AvailabilityFilter = {}): string {
+  const params = new URLSearchParams();
+  if (ref) params.set(AVAILABILITY_SOURCE_PARAM, ref.orgRef == null ? ref.provider : `${ref.provider}:${ref.orgRef}`);
+  if (filter.entityType) params.set(AVAILABILITY_TYPE_PARAM, filter.entityType);
+  if (filter.state) params.set(AVAILABILITY_STATE_PARAM, filter.state);
+  const query = params.toString();
+  return query ? `/monitoring/availability?${query}#${TOPOLOGY_AVAILABILITY_ANCHOR}` : TOPOLOGY_AVAILABILITY_LINK;
+}
+
+/** Reads the `?source=` value topologyAvailabilityLink writes; null when absent or malformed. */
+export function parseAvailabilitySource(value: string | null | undefined): AvailabilitySourceRef | null {
+  const m = /^([a-z0-9_-]+)(?::(-?\d+))?$/i.exec((value ?? '').trim());
+  if (!m) return null;
+  return { provider: m[1].toLowerCase(), orgRef: m[2] != null ? parseInt(m[2], 10) : null };
+}
+
+/** Entity types the availability tracking records, in display order. */
+export const TOPOLOGY_ENTITY_TYPES: readonly { key: string; label: string; plural: string }[] = [
+  { key: 'device', label: 'Device', plural: 'Devices' },
+  { key: 'site', label: 'Site', plural: 'Sites' },
+  { key: 'uplink', label: 'Uplink', plural: 'Uplinks' },
+  { key: 'tunnel', label: 'Tunnel', plural: 'Tunnels' },
+  { key: 'vpn_connection', label: 'VPN connection', plural: 'VPN connections' },
+  { key: 'circuit', label: 'Circuit', plural: 'Circuits' },
+  { key: 'peering', label: 'Peering', plural: 'Peerings' },
+  { key: 'link', label: 'Link', plural: 'Links' },
+];
+
+/** Reads the `?type=` value; null when absent or not one of TOPOLOGY_ENTITY_TYPES. */
+export function parseAvailabilityEntityType(value: string | null | undefined): string | null {
+  return TOPOLOGY_ENTITY_TYPES.find((t) => t.key === value)?.key ?? null;
+}
+
+/** "VPN connection"; an unknown type as it is. */
+export function entityTypeLabel(type: string, plural = false): string {
+  const t = TOPOLOGY_ENTITY_TYPES.find((e) => e.key === type);
+  if (!t) return type;
+  return plural ? t.plural : t.label;
+}
 
 /**
  * How old the last collection of a source may get before it counts as stale

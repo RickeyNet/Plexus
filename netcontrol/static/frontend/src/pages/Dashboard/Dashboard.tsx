@@ -4,11 +4,13 @@ import { useAuthStatus } from '@/api/auth';
 import { useDashboard } from '@/api/dashboard';
 import { useTopologySources } from '@/api/meraki';
 import { canUseFeature } from '@/lib/tabGating';
+import { useScrollToHash } from '@/lib/useScrollToHash';
 
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { AlertsSection } from './AlertsSection';
 import { CriticalIssuesBanner } from './CriticalIssuesBanner';
+import { dashboardLinkAccess } from './dashboardLinks';
 import { ISSUE_ANCHORS, PANEL_BODY_HEIGHT, PANEL_CHROME_HEIGHT, RESPONSE_SUMMARY_HEIGHT } from './helpers';
 import { DevicesGridPanel } from './DevicesGridPanel';
 import { GroupHealthPanel } from './GroupHealthPanel';
@@ -54,6 +56,8 @@ export function Dashboard() {
   const canTopology = canUseFeature('topology', auth);
   const sourcesQuery = useTopologySources(canTopology);
   const sources = canTopology ? (sourcesQuery.data?.sources ?? []) : [];
+  // Count links (dashboardLinks.ts) open a panel of this page by its anchor.
+  useScrollToHash(!isPending, 'smooth');
 
   if (isPending) {
     return (
@@ -134,6 +138,7 @@ export function Dashboard() {
           jobs={stats.total_jobs ?? 0}
           sources={canTopology && sourcesQuery.data ? summarizeSources(sources) : undefined}
           entities={topology?.entity_counts}
+          access={dashboardLinkAccess(auth)}
         />
         <HealthSection devices={devices} groups={groups} />
         <div id={ISSUE_ANCHORS.alerts}>

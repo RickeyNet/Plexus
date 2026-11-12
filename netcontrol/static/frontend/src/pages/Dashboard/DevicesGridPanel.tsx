@@ -1,24 +1,29 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Link } from 'react-router';
 
 import type { DeviceHealth } from '@/api/dashboard';
 import { SegmentedControl } from '@/components/SegmentedControl';
+import { useParamFilter } from '@/lib/useLinkedParam';
 
 import {
-  CRITICAL_DOWN_LABEL,
-  HEALTH_COLORS,
-  HEALTH_LABELS,
-  SEVERITY_ORDER,
-  classifyDeviceHealth,
-  countDeviceHealth,
-  type HealthStatus,
-} from './helpers';
+  DEVICES_FILTER_PARAM,
+  DEVICE_HEALTH_FILTERS,
+  type DeviceHealthFilter,
+  countDeviceHealthFilters,
+  deviceHealthFilterOf,
+  parseDeviceHealthFilter,
+} from './dashboardLinks';
+import { HEALTH_COLORS, HEALTH_LABELS, SEVERITY_ORDER, classifyDeviceHealth, type HealthStatus } from './helpers';
 
 // 'critical' is the merged critical + down bucket.
-type Filter = 'all' | 'critical' | 'warning' | 'healthy' | 'unknown';
+type Filter = 'all' | DeviceHealthFilter;
 
 export function DevicesGridPanel({ devices }: { devices: DeviceHealth[] }) {
-  const [filter, setFilter] = useState<Filter>('all');
+  // The filter lives in the URL (`?devices=`), so the donut and the Needs
+  // attention rows link here with a bucket selected.
+  const [linked, setLinked] = useParamFilter(DEVICES_FILTER_PARAM, parseDeviceHealthFilter);
+  const filter: Filter = linked ?? 'all';
+  const setFilter = (next: Filter) => setLinked(next === 'all' ? null : next);
 
   const classified = useMemo(
     () => devices.map((d) => ({ device: d, status: classifyDeviceHealth(d) })),
@@ -36,20 +41,15 @@ export function DevicesGridPanel({ devices }: { devices: DeviceHealth[] }) {
 
   const filtered = useMemo(() => {
     if (filter === 'all') return sorted;
-    if (filter === 'critical')
-      return sorted.filter((e) => e.status === 'critical' || e.status === 'down');
-    return sorted.filter((e) => e.status === filter);
+    return sorted.filter((e) => deviceHealthFilterOf(e.status) === filter);
   }, [sorted, filter]);
 
   // Each chip carries its count, so the grid needs no separate legend.
   const filters = useMemo<{ key: Filter; label: string }[]>(() => {
-    const c = countDeviceHealth(devices);
+    const counts = countDeviceHealthFilters(devices);
     return [
       { key: 'all', label: `All ${devices.length}` },
-      { key: 'critical', label: `${CRITICAL_DOWN_LABEL} ${c.critical + c.down}` },
-      { key: 'warning', label: `${HEALTH_LABELS.warning} ${c.warning}` },
-      { key: 'healthy', label: `${HEALTH_LABELS.healthy} ${c.healthy}` },
-      { key: 'unknown', label: `${HEALTH_LABELS.unknown} ${c.unknown}` },
+      ...DEVICE_HEALTH_FILTERS.map((f) => ({ key: f.key, label: `${f.label} ${counts[f.key]}` })),
     ];
   }, [devices]);
 

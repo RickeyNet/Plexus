@@ -1,13 +1,55 @@
-import type { DeviceHealth } from '@/api/dashboard';
+import type { DashboardGroup, DeviceHealth } from '@/api/dashboard';
 
-// Anchor ids the CriticalIssuesBanner chips scroll to. The Dashboard wraps
-// each target panel in a div carrying the matching id. Kept out of the
-// component file so it stays component-only for Vite fast refresh.
+// Anchor ids the CriticalIssuesBanner rows and the count links
+// (dashboardLinks.ts) scroll to. The Dashboard wraps each target panel in a
+// div carrying the matching id (the health table carries its own). Kept out
+// of the component file so it stays component-only for Vite fast refresh.
 export const ISSUE_ANCHORS = {
   devices: 'dashboard-devices',
   backups: 'dashboard-backups',
   alerts: 'dashboard-alerts',
+  health: 'network-health-section',
 } as const;
+
+/** Group key of the devices that belong to no group. */
+export const UNGROUPED_GROUP_KEY = 'ungrouped';
+
+/** The group a device is counted under: its group id, or UNGROUPED_GROUP_KEY. */
+export function deviceGroupKey(d: DeviceHealth): string {
+  return d.group_id != null ? String(d.group_id) : UNGROUPED_GROUP_KEY;
+}
+
+export interface DeviceGroupMembers {
+  /** deviceGroupKey of its devices. */
+  key: string;
+  name: string;
+  devices: DeviceHealth[];
+}
+
+/**
+ * The devices of each group: every group listed (empty ones too, in list
+ * order), then the groups only devices name, then Ungrouped. Shared by the
+ * Group Health tiles and the health table's group filter, so a tile's link
+ * always has a filter option to select.
+ */
+export function groupDevices(groups: readonly DashboardGroup[], devices: readonly DeviceHealth[]): DeviceGroupMembers[] {
+  const byKey = new Map<string, DeviceGroupMembers>();
+  for (const g of groups) byKey.set(String(g.id), { key: String(g.id), name: g.name, devices: [] });
+  for (const d of devices) {
+    const key = deviceGroupKey(d);
+    let entry = byKey.get(key);
+    if (!entry) {
+      const name = key === UNGROUPED_GROUP_KEY ? 'Ungrouped' : d.group_name || `Group ${key}`;
+      entry = { key, name, devices: [] };
+      byKey.set(key, entry);
+    }
+    entry.devices.push(d);
+  }
+  // Ungrouped last, wherever its first device put it.
+  const ungrouped = byKey.get(UNGROUPED_GROUP_KEY);
+  byKey.delete(UNGROUPED_GROUP_KEY);
+  return ungrouped ? [...byKey.values(), ungrouped] : [...byKey.values()];
+}
 
 export type HealthStatus = 'healthy' | 'warning' | 'critical' | 'down' | 'unknown';
 

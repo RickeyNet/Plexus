@@ -3,13 +3,14 @@ import type { DashboardAlert, DashboardTopology, DeviceHealth } from '@/api/dash
 import type { TopologySource } from '@/api/meraki';
 
 import { rollUpBackups } from './backupRollup';
+import { backupsPanelLink, countNoun, devicesPanelLink } from './dashboardLinks';
 import { ISSUE_ANCHORS, classifyDeviceHealth } from './helpers';
 import {
   SOURCES_LINK,
-  TOPOLOGY_AVAILABILITY_LINK,
   describeProblem,
   sourceLabel,
   summarizeSources,
+  topologyAvailabilityLink,
 } from './sourceHealth';
 
 // What the Dashboard's Needs attention card lists. Pure, so it is tested
@@ -24,7 +25,10 @@ export interface Issue {
   /** The affected things, one per entry; the card shows the first few. */
   items: string[];
   severity: IssueSeverity;
-  /** A Dashboard panel anchor (ISSUE_ANCHORS) to scroll to, or `to` another page. */
+  /**
+   * A Dashboard panel anchor (ISSUE_ANCHORS) to scroll to, or `to` a link:
+   * a Dashboard panel with its filter selected (dashboardLinks.ts) or another page.
+   */
   target: string | { to: string };
   /** What following the target does, e.g. "Open Sources". */
   action: string;
@@ -63,7 +67,7 @@ export function buildIssues({ devices, alerts, backups, sources, topology }: Iss
       label: down.length === 1 ? 'device unreachable' : 'devices unreachable',
       items: down.map(hostLabel),
       severity: 'critical',
-      target: ISSUE_ANCHORS.devices,
+      target: { to: devicesPanelLink('critical') },
       action: 'Show devices',
     });
   }
@@ -74,7 +78,7 @@ export function buildIssues({ devices, alerts, backups, sources, topology }: Iss
       label: critical.length === 1 ? 'device critical' : 'devices critical',
       items: critical.map(hostLabel),
       severity: 'critical',
-      target: ISSUE_ANCHORS.devices,
+      target: { to: devicesPanelLink('critical') },
       action: 'Show devices',
     });
   }
@@ -103,7 +107,7 @@ export function buildIssues({ devices, alerts, backups, sources, topology }: Iss
       label: failed.length === 1 ? 'backup failed' : 'backups failed',
       items: failed.map((r) => r.hostname),
       severity: 'critical',
-      target: ISSUE_ANCHORS.backups,
+      target: { to: backupsPanelLink('failed') },
       action: 'Show backups',
     });
   }
@@ -138,7 +142,7 @@ export function buildIssues({ devices, alerts, backups, sources, topology }: Iss
       label: count === 1 ? `integration entity ${state}` : `integration entities ${state}`,
       items: problems.filter((p) => p.state === state).map(describeProblem),
       severity: state === 'down' ? 'critical' : 'warning',
-      target: { to: TOPOLOGY_AVAILABILITY_LINK },
+      target: { to: topologyAvailabilityLink(null, { state }) },
       action: 'Open availability',
     });
   }
@@ -189,12 +193,11 @@ export function issueSummary(issue: Issue, shown: number = ISSUE_ITEMS_SHOWN): s
  */
 export function watchedSummary({ devices, sources, topology }: Omit<IssueInputs, 'alerts' | 'backups'>): string {
   const parts: string[] = [];
-  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-  if (devices.length > 0) parts.push(plural(devices.length, 'device', 'devices'));
+  if (devices.length > 0) parts.push(countNoun(devices.length, 'device', 'devices'));
   // Sources that have collected at least once; one never collected is not watched yet.
   const tracked = summarizeSources(sources).total;
-  if (tracked > 0) parts.push(plural(tracked, 'source', 'sources'));
+  if (tracked > 0) parts.push(countNoun(tracked, 'source', 'sources'));
   const entities = topology?.entity_counts.total ?? 0;
-  if (entities > 0) parts.push(plural(entities, 'integration entity', 'integration entities'));
+  if (entities > 0) parts.push(countNoun(entities, 'integration entity', 'integration entities'));
   return parts.join(', ');
 }

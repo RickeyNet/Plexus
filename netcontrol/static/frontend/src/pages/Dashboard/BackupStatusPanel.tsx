@@ -6,9 +6,14 @@ import {
   useLatestConfigBackupsPerHost,
 } from '@/api/configuration';
 import type { DeviceHealth } from '@/api/dashboard';
+import { ShowMoreButton } from '@/components/ShowMoreButton';
 import { formatRelativeTime } from '@/lib/datetime';
+import { useParamFilter } from '@/lib/useLinkedParam';
+import { useShowMore } from '@/lib/useShowMore';
 
 import { type BackupState, type HostRollup, rollUpBackups } from './backupRollup';
+import { CountLink } from './CountLink';
+import { BACKUP_STATES, BACKUP_STATE_PARAM, backupsPanelLink, countNoun, parseBackupState } from './dashboardLinks';
 
 const STATE_COLORS: Record<BackupState, string> = {
   success: 'var(--success)',
@@ -23,6 +28,17 @@ const STATE_LABELS: Record<BackupState, string> = {
   failed: 'failed',
   never: 'never',
 };
+
+// The hosts in each state, for link names and the empty list.
+const STATE_PHRASES: Record<BackupState, string> = {
+  success: 'with a recent successful backup',
+  stale: 'whose last successful backup is stale',
+  failed: 'whose last backup failed',
+  never: 'never backed up',
+};
+
+// Hosts listed before "more".
+const PROBLEM_ROWS = 20;
 
 // The list grows with the problem hosts; loading, empty and short lists share this floor.
 const BODY_STYLE = { minHeight: 120, height: 'auto' } as const;
@@ -45,10 +61,16 @@ export function BackupStatusPanel({ devices }: Props) {
     return c;
   }, [rollups]);
 
-  const problems = useMemo(
-    () => rollups.filter((r) => r.state !== 'success').slice(0, 20),
-    [rollups],
+  // `?backups=<state>` (a count here, or the Needs attention row) lists the
+  // hosts in that state instead of the problem hosts; the counts show which.
+  const [stateFilter] = useParamFilter(BACKUP_STATE_PARAM, parseBackupState);
+  const listed = useMemo(
+    () => rollups.filter((r) => (stateFilter ? r.state === stateFilter : r.state !== 'success')),
+    [rollups, stateFilter],
   );
+  // Filtered, the panel is the only place listing these hosts: show them all on demand.
+  const showMore = useShowMore(listed, PROBLEM_ROWS);
+  const problems = stateFilter ? showMore.visible : listed.slice(0, PROBLEM_ROWS);
 
   const isLoading = backups.isPending;
   const hasPolicies = (summary.data?.total_policies ?? 0) > 0;
@@ -81,22 +103,35 @@ export function BackupStatusPanel({ devices }: Props) {
               marginBottom: 12,
             }}
           >
-            <Stat state="success" count={counts.success} />
-            <Stat state="stale" count={counts.stale} />
-            <Stat state="failed" count={counts.failed} />
-            <Stat state="never" count={counts.never} />
+            {BACKUP_STATES.map((state) => (
+              <Stat key={state} state={state} count={counts[state]} active={stateFilter === state} />
+            ))}
+            {stateFilter && (
+              <CountLink
+                to={backupsPanelLink(null)}
+                label="Clear the filter: list the problem hosts"
+                className="dashboard-overview-link"
+              >
+                Showing {STATE_LABELS[stateFilter]} · Clear
+              </CountLink>
+            )}
           </div>
 
           {problems.length === 0 ? (
             <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: 13 }}>
-              All tracked devices have a recent successful backup.
+              {stateFilter
+                ? `No hosts ${STATE_PHRASES[stateFilter]}.`
+                : 'All tracked devices have a recent successful backup.'}
             </p>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               {problems.map((r) => (
                 <ProblemRow key={r.hostId} rollup={r} />
               ))}
-              {rollups.length - counts.success > problems.length && (
+              {stateFilter && (
+                <ShowMoreButton hiddenCount={showMore.hiddenCount} onClick={showMore.showMore} style={{ alignSelf: 'flex-start' }} />
+              )}
+              {!stateFilter && listed.length > problems.length && (
                 <p
                   style={{
                     margin: '6px 0 0 0',
@@ -104,8 +139,8 @@ export function BackupStatusPanel({ devices }: Props) {
                     color: 'var(--text-muted)',
                   }}
                 >
-                  +{rollups.length - counts.success - problems.length} more
-                  problem hosts - open the Backups page for the full list.
+                  +{listed.length - problems.length} more problem hosts - pick a
+                  state above to list all of them.
                 </p>
               )}
             </div>
@@ -116,17 +151,14 @@ export function BackupStatusPanel({ devices }: Props) {
   );
 }
 
-function Stat({ state, count }: { state: BackupState; count: number }) {
+// A count opens this panel listing the hosts in its state; the selected one
+// links back to the problem hosts.
+function Stat({ state, count, active }: { state: BackupState; count: number; active: boolean }) {
+  const to = active ? backupsPanelLink(null) : count > 0 ? backupsPanelLink(state) : null;
+  const hosts = `${countNoun(count, 'host', 'hosts')} ${STATE_PHRASES[state]}`;
+  const label = active ? `Showing ${hosts}; select to list the problem hosts` : `Show ${hosts}`;
   return (
-    <span
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 6,
-        fontSize: 13,
-        color: 'var(--text)',
-      }}
-    >
+    <CountLink to={to} label={label} active={active} className="dashboard-backup-stat">
       <span
         style={{
           display: 'inline-block',
@@ -138,7 +170,7 @@ function Stat({ state, count }: { state: BackupState; count: number }) {
       />
       <strong>{count}</strong>
       <span style={{ color: 'var(--text-muted)' }}>{STATE_LABELS[state]}</span>
-    </span>
+    </CountLink>
   );
 }
 
