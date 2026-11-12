@@ -2,8 +2,26 @@ import { useMemo, useState } from 'react';
 
 import type { DashboardGroup, DeviceHealth } from '@/api/dashboard';
 import { formatRelativeTime } from '@/lib/datetime';
+import { useParamFilter } from '@/lib/useLinkedParam';
 
-import { HEALTH_LABELS, classifyDeviceHealth, formatUptime, sortDevices, type SortBy } from './helpers';
+import {
+  DEVICE_HEALTH_FILTERS,
+  HEALTH_GROUP_PARAM,
+  HEALTH_STATUS_PARAM,
+  deviceHealthFilterOf,
+  parseDeviceHealthFilter,
+  parseGroupKey,
+} from './dashboardLinks';
+import {
+  HEALTH_LABELS,
+  ISSUE_ANCHORS,
+  classifyDeviceHealth,
+  deviceGroupKey,
+  formatUptime,
+  groupDevices,
+  sortDevices,
+  type SortBy,
+} from './helpers';
 
 interface HealthSectionProps {
   devices: DeviceHealth[];
@@ -11,16 +29,28 @@ interface HealthSectionProps {
 }
 
 export function HealthSection({ devices, groups }: HealthSectionProps) {
-  const [groupFilter, setGroupFilter] = useState('');
+  // Both filters live in the URL (`?group=`, `?health=`), so the Group
+  // Health tiles link here with them selected.
+  const [linkedGroup, setGroupFilter] = useParamFilter(HEALTH_GROUP_PARAM, parseGroupKey);
+  const [healthFilter, setHealthFilter] = useParamFilter(HEALTH_STATUS_PARAM, parseDeviceHealthFilter);
   const [sortBy, setSortBy] = useState<SortBy>('severity');
 
+  // Every group a device can be in (Ungrouped too), so a linked group always has its option.
+  const groupOptions = useMemo(() => groupDevices(groups, devices), [groups, devices]);
+  // A group this list does not have (deleted, or a bad link) is ignored.
+  const groupFilter = linkedGroup && groupOptions.some((g) => g.key === linkedGroup) ? linkedGroup : '';
+
   const filtered = useMemo(() => {
-    const base = groupFilter ? devices.filter((d) => String(d.group_id) === groupFilter) : devices;
+    const base = devices.filter(
+      (d) =>
+        (!groupFilter || deviceGroupKey(d) === groupFilter) &&
+        (!healthFilter || deviceHealthFilterOf(classifyDeviceHealth(d)) === healthFilter),
+    );
     return sortDevices(base, sortBy);
-  }, [devices, groupFilter, sortBy]);
+  }, [devices, groupFilter, healthFilter, sortBy]);
 
   return (
-    <div className="glass-card card dashboard-overview-card stack" id="network-health-section">
+    <div className="glass-card card dashboard-overview-card stack" id={ISSUE_ANCHORS.health}>
       <div className="toolbar">
         <h3 className="dashboard-overview-title" style={{ margin: 0 }}>Network Health Overview</h3>
         <span className="text-muted" style={{ fontSize: '0.8rem' }}>
@@ -32,12 +62,26 @@ export function HealthSection({ devices, groups }: HealthSectionProps) {
           style={{ minWidth: '160px' }}
           aria-label="Filter by group"
           value={groupFilter}
-          onChange={(e) => setGroupFilter(e.target.value)}
+          onChange={(e) => setGroupFilter(e.target.value || null)}
         >
           <option value="">All Groups</option>
-          {groups.map((g) => (
-            <option key={g.id} value={String(g.id)}>
+          {groupOptions.map((g) => (
+            <option key={g.key} value={g.key}>
               {g.name}
+            </option>
+          ))}
+        </select>
+        <select
+          className="form-select form-select-sm"
+          style={{ minWidth: '140px' }}
+          aria-label="Filter by status"
+          value={healthFilter ?? ''}
+          onChange={(e) => setHealthFilter(e.target.value || null)}
+        >
+          <option value="">All Statuses</option>
+          {DEVICE_HEALTH_FILTERS.map((f) => (
+            <option key={f.key} value={f.key}>
+              {f.label}
             </option>
           ))}
         </select>
@@ -56,7 +100,10 @@ export function HealthSection({ devices, groups }: HealthSectionProps) {
       </div>
 
       <div className="device-health-table-wrap">
-        <DeviceHealthTable devices={filtered} />
+        <DeviceHealthTable
+          devices={filtered}
+          emptyMessage={devices.length > 0 ? 'No devices match these filters' : 'No monitored devices yet'}
+        />
       </div>
     </div>
   );
@@ -76,11 +123,11 @@ function UsageBar({ pct }: { pct: number | null | undefined }) {
   );
 }
 
-function DeviceHealthTable({ devices }: { devices: DeviceHealth[] }) {
+function DeviceHealthTable({ devices, emptyMessage }: { devices: DeviceHealth[]; emptyMessage: string }) {
   if (!devices.length) {
     return (
       <div className="empty-state">
-        <p>No monitored devices yet</p>
+        <p>{emptyMessage}</p>
       </div>
     );
   }

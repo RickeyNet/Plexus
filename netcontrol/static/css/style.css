@@ -4836,6 +4836,114 @@ code {
     color: var(--text);
 }
 
+/* A Dashboard count that opens what it counted (CountLink): it keeps the look
+   of the number it replaces and shows it is a link on hover and focus. */
+.dashboard-count-link {
+    color: inherit;
+    text-decoration: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+
+.dashboard-count-link:hover,
+.dashboard-count-link:focus-visible {
+    color: var(--primary-light);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+/* The filter the panel shows now. */
+.dashboard-count-link.is-active {
+    background: var(--primary-glow);
+    box-shadow: 0 0 0 var(--space-1) var(--primary-glow);
+}
+
+/* A badge keeps its own colours; the link shows on it as a ring. */
+.dashboard-count-link:has(> .badge):hover,
+.dashboard-count-link:has(> .badge):focus-visible {
+    text-decoration: none;
+}
+
+.dashboard-count-link:has(> .badge):hover > .badge {
+    box-shadow: 0 0 0 1px currentColor;
+}
+
+/* A ring card: the ring and its label are one link. */
+.stat-ring-link {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-3);
+}
+
+.stat-ring-link.dashboard-count-link:hover,
+.stat-ring-link.dashboard-count-link:focus-visible {
+    text-decoration: none;
+}
+
+.stat-ring-link.dashboard-count-link:hover .stat-label {
+    color: var(--primary-light);
+}
+
+/* Overall Health: the donut and its legend, one link per bucket. */
+.dashboard-donut {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+}
+
+.dashboard-donut-chart {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 100%;
+}
+
+.dashboard-donut-legend {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+}
+
+.dashboard-donut-legend li {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.dashboard-donut-dot {
+    flex: 0 0 auto;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+}
+
+.dashboard-donut-entry {
+    display: inline-flex;
+    gap: var(--space-2);
+}
+
+/* Group Health tile: the group name links to its devices. */
+.dashboard-group-name {
+    min-width: 0;
+    font-weight: 600;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dashboard-backup-stat {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text);
+}
+
 .dashboard-response-summary {
     display: flex;
     gap: var(--space-5);

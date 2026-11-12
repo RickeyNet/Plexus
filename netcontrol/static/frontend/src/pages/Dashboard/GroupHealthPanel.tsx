@@ -2,18 +2,15 @@ import { useMemo } from 'react';
 
 import type { DashboardGroup, DeviceHealth } from '@/api/dashboard';
 
-import {
-  CRITICAL_DOWN_LABEL,
-  HEALTH_COLORS,
-  HEALTH_LABELS,
-  PANEL_BODY_STYLE,
-  countDeviceHealth,
-} from './helpers';
+import { CountLink } from './CountLink';
+import { type DeviceHealthFilter, countDeviceHealthFilters, countNoun, healthTableLink } from './dashboardLinks';
+import { CRITICAL_DOWN_LABEL, HEALTH_COLORS, HEALTH_LABELS, PANEL_BODY_STYLE, groupDevices } from './helpers';
 
 const TILE_COLORS = HEALTH_COLORS;
 
 interface GroupRollup {
-  id: number | string;
+  /** deviceGroupKey of its devices, the health table's group filter value. */
+  key: string;
   name: string;
   total: number;
   healthy: number;
@@ -29,33 +26,15 @@ interface GroupHealthPanelProps {
 
 export function GroupHealthPanel({ groups, devices }: GroupHealthPanelProps) {
   const rollups = useMemo<GroupRollup[]>(() => {
-    const byGroup = new Map<number | string, { name: string; devices: DeviceHealth[] }>();
-    for (const g of groups) byGroup.set(g.id, { name: g.name, devices: [] });
-
-    const UNGROUPED_KEY = '__ungrouped__';
-
-    for (const d of devices) {
-      const key = d.group_id ?? UNGROUPED_KEY;
-      let bucket = byGroup.get(key);
-      if (!bucket) {
-        bucket = {
-          name: d.group_name || (key === UNGROUPED_KEY ? 'Ungrouped' : `Group ${key}`),
-          devices: [],
-        };
-        byGroup.set(key, bucket);
-      }
-      bucket.devices.push(d);
-    }
-
-    return Array.from(byGroup, ([id, { name, devices: members }]) => {
-      const c = countDeviceHealth(members);
+    return groupDevices(groups, devices).map(({ key, name, devices: members }) => {
+      const c = countDeviceHealthFilters(members);
       return {
-        id,
+        key,
         name,
         total: members.length,
         healthy: c.healthy,
         warning: c.warning,
-        bad: c.critical + c.down,
+        bad: c.critical,
         unknown: c.unknown,
       };
     })
@@ -98,7 +77,7 @@ export function GroupHealthPanel({ groups, devices }: GroupHealthPanelProps) {
         }}
       >
         {rollups.map((r) => (
-          <GroupTile key={r.id} rollup={r} />
+          <GroupTile key={r.key} rollup={r} />
         ))}
       </div>
     </div>
@@ -107,6 +86,9 @@ export function GroupHealthPanel({ groups, devices }: GroupHealthPanelProps) {
 
 function GroupTile({ rollup }: { rollup: GroupRollup }) {
   const okPct = rollup.total > 0 ? (rollup.healthy / rollup.total) * 100 : 0;
+  // Each count opens the health table filtered to this group (and its bucket).
+  const link = (health: DeviceHealthFilter | null, n: number) => (n > 0 ? healthTableLink({ group: rollup.key, health }) : null);
+  const linkLabel = (n: number, what: string) => `Show ${countNoun(n, `${what}device`, `${what}devices`)} in ${rollup.name}`;
   const accent =
     rollup.bad > 0 ? TILE_COLORS.critical : rollup.warning > 0 ? TILE_COLORS.warning : TILE_COLORS.healthy;
 
@@ -129,20 +111,21 @@ function GroupTile({ rollup }: { rollup: GroupRollup }) {
           marginBottom: 6,
         }}
       >
-        <span
-          style={{
-            fontWeight: 600,
-            color: 'var(--text)',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-          title={rollup.name}
+        <CountLink
+          to={link(null, rollup.total)}
+          label={linkLabel(rollup.total, '')}
+          className="dashboard-group-name"
         >
           {rollup.name}
-        </span>
+        </CountLink>
         <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-          {rollup.healthy} / {rollup.total}
+          <CountLink to={link('healthy', rollup.healthy)} label={linkLabel(rollup.healthy, 'healthy ')}>
+            {rollup.healthy}
+          </CountLink>
+          {' / '}
+          <CountLink to={link(null, rollup.total)} label={linkLabel(rollup.total, '')}>
+            {rollup.total}
+          </CountLink>
         </span>
       </div>
 
@@ -165,19 +148,19 @@ function GroupTile({ rollup }: { rollup: GroupRollup }) {
 
       <div style={{ display: 'flex', gap: 10, fontSize: 12, color: 'var(--text-muted)' }}>
         {rollup.warning > 0 && (
-          <span>
+          <CountLink to={link('warning', rollup.warning)} label={linkLabel(rollup.warning, 'warning ')}>
             <Dot color={TILE_COLORS.warning} /> {rollup.warning} {HEALTH_LABELS.warning}
-          </span>
+          </CountLink>
         )}
         {rollup.bad > 0 && (
-          <span>
+          <CountLink to={link('critical', rollup.bad)} label={linkLabel(rollup.bad, 'critical or down ')}>
             <Dot color={TILE_COLORS.critical} /> {rollup.bad} {CRITICAL_DOWN_LABEL}
-          </span>
+          </CountLink>
         )}
         {rollup.unknown > 0 && (
-          <span>
+          <CountLink to={link('unknown', rollup.unknown)} label={linkLabel(rollup.unknown, 'unknown ')}>
             <Dot color={TILE_COLORS.unknown} /> {rollup.unknown} {HEALTH_LABELS.unknown}
-          </span>
+          </CountLink>
         )}
         {rollup.warning === 0 && rollup.bad === 0 && rollup.unknown === 0 && (
           <span>
