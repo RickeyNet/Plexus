@@ -23,7 +23,7 @@ from netcontrol.integrations.aws.normalize import TRANSIT_SITE_ID, build_snapsho
 from netcontrol.integrations.aws.reachability import Reachability
 from netcontrol.integrations.aws.sample import build_sample
 from netcontrol.integrations.meraki.normalize import InventoryIndex
-from netcontrol.integrations.meraki.subnets import subnet_index, subnets_containing
+from netcontrol.integrations.meraki.subnets import hosts_named, subnet_index, subnets_containing
 from netcontrol.integrations.meraki.unified import (
     build_search_index,
     graph_to_snapshot,
@@ -724,6 +724,20 @@ def test_subnet_index_has_every_fsx_address(snapshot):
     ]
 
 
+def test_subnet_index_names_hosts_by_dns_name(snapshot):
+    index = subnet_index(snapshot)
+    by_cidr = {s["cidr"]: s for s in index}
+    assert "coresvm1.corp.example.com" in by_cidr["10.200.10.60/32"]["dns_names"]
+    # A subnet, and a host listed without a name, have none.
+    assert "dns_names" not in by_cidr["10.200.10.0/24"] and "dns_names" not in by_cidr["10.220.1.81/32"]
+    # A whole name finds every address behind it, whatever its case; part of one too.
+    found = hosts_named(index, "CoreSVM1.corp.example.com.")
+    assert found and all(s["kind"] == "host" and s["name"] == "FSx core-svm1" for s in found)
+    assert "10.200.10.60/32" in [s["cidr"] for s in found]
+    assert [s["cidr"] for s in hosts_named(index, "coresvm1")] == [s["cidr"] for s in found]
+    assert hosts_named(index, "no-such-name.example.com") == [] and hosts_named(index, " ") == []
+
+
 @pytest.mark.parametrize(
     "query",
     [
@@ -1382,12 +1396,19 @@ def test_api_discovered_aws_account_is_on_the_topology(api):
         assert [(h["org_ref"], h["node_id"]) for h in hits] == [core], q
     hits = api.get("/api/topology/search/deep?q=10.200.10.61").json()["results"]
     assert (hits[0]["org_ref"], hits[0]["node_id"]) == core and "10.200.10.61/32 FSx core-svm1" in hits[0]["snippet"]
+    # A DNS name names the resource and its addresses, not just the VPC's row.
+    hits = api.get("/api/topology/search/deep", params={"q": "coresvm1.corp.example.com"}).json()["results"]
+    assert [(h["org_ref"], h["node_id"]) for h in hits] == [core]
+    assert hits[0]["label"] and hits[0]["snippet"].startswith("FSx core-svm1 · coresvm1.corp.example.com: ")
+    assert "10.200.10.60" in hits[0]["snippet"]
     # A long DNS name is no validation error.
     long_name = "a" * 60 + "." + "b" * 60 + ".fsx.us-east-1.amazonaws.com"
     assert api.get("/api/topology/search/deep", params={"q": long_name}).status_code == 200
 
     export = api.get("/api/topology/export.html")
     assert export.status_code == 200 and "prod-core-vpc" in export.text
+    # The viewer's subnet box resolves a DNS name from the index it carries.
+    assert '"dns_names"' in export.text and "function findNamedHosts" in export.text
 
     # Disabling the account takes it off the map; the discovery is kept.
     assert api.put(f"/api/cloud/accounts/{account['id']}", json={"enabled": False}).status_code == 200

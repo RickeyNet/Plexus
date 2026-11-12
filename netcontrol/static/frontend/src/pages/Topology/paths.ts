@@ -3,6 +3,7 @@ import type { TopologyEdge, TopologyNode } from '@/api/topology';
 
 import { isEdgeDown, isRemoteUserNode, PROVIDER_INVENTORY } from './helpers';
 import { layoutGroupKey } from './layout';
+import { searchHost } from './merakiHelpers';
 
 // Path mode: how a set of picked devices / sites reach one another over the
 // links on the map. The path drawn follows topology (cables, uplinks, VPN
@@ -47,6 +48,11 @@ export interface PathPick {
   address?: string;
 }
 
+/** The address of a host entry of the index (`192.0.2.10/32` -> `192.0.2.10`); a wider network as it is. */
+export function hostAddress(subnet: Pick<MerakiSubnet, 'cidr'>): string {
+  return subnet.cidr.replace(/\/32$/, '');
+}
+
 /**
  * The pick a click on a remote user (a Cato or Appgate client) makes: the
  * user's own address, so the leg is traced hop by hop like a typed address,
@@ -59,7 +65,7 @@ export function userPick(node: TopologyNode, subnets: MerakiSubnet[]): PathPick 
   if (!ref || !isRemoteUserNode(node)) return null;
   const subnet = subnets.find((s) => s.kind === 'user' && s.org_ref === ref.org_ref && s.node_id === ref.node_id);
   if (!subnet) return null;
-  const address = subnet.cidr.replace(/\/32$/, '');
+  const address = hostAddress(subnet);
   const site = subnet.site_name || ref.site_name || '';
   return {
     key: `s:${subnet.org_ref}:${address}:${subnet.node_id}`,
@@ -335,4 +341,50 @@ export function findSubnets(text: string, subnets: MerakiSubnet[]): MerakiSubnet
     }
   }
   return found;
+}
+
+/** A host offered for the name being typed, with the DNS name of its that matched (empty: its own name did). */
+export interface HostSuggestion {
+  host: MerakiSubnet;
+  dnsName: string;
+}
+
+/** Most hosts offered under a subnet box. */
+export const MAX_HOST_SUGGESTIONS = 12;
+
+/**
+ * The hosts to offer while a name is typed in a subnet box: those with a DNS
+ * name or a resource name that holds the text (the host of a pasted URL, UNC
+ * path, NFS mount or `host:port`), one per address. A name that starts with
+ * the text comes before one that only holds it. None for fewer than two
+ * characters, for an address being typed, or for a picker entry spelled out.
+ */
+export function suggestHosts(text: string, subnets: MerakiSubnet[], limit = MAX_HOST_SUGGESTIONS): HostSuggestion[] {
+  const typed = text.trim();
+  const wanted = searchHost(typed.toLowerCase()).replace(/\.$/, '');
+  if (wanted.length < 2 || /^[\d./]+$/.test(wanted)) return [];
+  const first: HostSuggestion[] = [];
+  const rest: HostSuggestion[] = [];
+  for (const host of subnets) {
+    if (host.kind !== 'host') continue;
+    if (subnetOptionLabel(host) === typed) return [];
+    const names = host.dns_names ?? [];
+    const dnsName = names.find((n) => n.startsWith(wanted)) ?? names.find((n) => n.includes(wanted));
+    const own = host.name.toLowerCase();
+    if (dnsName === undefined && !own.includes(wanted)) continue;
+    const starts = dnsName?.startsWith(wanted) || own.startsWith(wanted);
+    (starts ? first : rest).push({ host, dnsName: dnsName ?? names[0] ?? '' });
+  }
+  return [...first, ...rest].slice(0, limit);
+}
+
+/**
+ * The hosts that answer to the DNS name `text` spells out, one per address
+ * (an FSx file system or a service endpoint has several). A pasted URL, UNC
+ * path, NFS mount or `host:port` stands for its host, as in the map search.
+ */
+export function findNamedHosts(text: string, subnets: MerakiSubnet[]): MerakiSubnet[] {
+  const wanted = searchHost(text.trim().toLowerCase()).replace(/\.$/, '');
+  if (!wanted || isAddressText(wanted)) return [];
+  return subnets.filter((s) => s.dns_names?.includes(wanted));
 }
