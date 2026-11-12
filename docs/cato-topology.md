@@ -24,6 +24,9 @@ different.
    account is added to the map. Delete it from the same dialog when you are done.
 3. **Add your account.** Click **Add Source**, then **Cato Account**, and enter a name, the
    account ID and an API key.
+   Adding goes on by itself to checking the credentials, the first collection
+   and an offer to import the devices into the inventory; see
+   [After adding a source](meraki-topology.md#after-adding-a-source).
 4. **Check the key.** Click **Test Key**. It runs one small query against the
    account and reports what Cato answered.
 5. **Collect.** Click **Collect Now**. When it finishes the map updates.

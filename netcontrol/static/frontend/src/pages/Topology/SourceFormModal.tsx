@@ -10,6 +10,7 @@ import {
 import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
 
+import { SourceSetupModal } from './SourceSetupModal';
 import { isSourceFormReady, type SourceFormValues } from './sourceForm';
 import { SOURCE_FORM_CONFIGS, sourceFormFields, type SourceField } from './sourceFormConfigs';
 
@@ -22,10 +23,20 @@ export interface SourceFormModalProps {
 
 const HELP_STYLE = { fontSize: '0.85em', marginTop: '0.25rem' } as const;
 
-/** Add or edit a topology source (Meraki, Cato, FMC, Panorama, Appgate), laid out from its provider config. */
+/**
+ * Add or edit a topology source (Meraki, Cato, FMC, Panorama, Appgate), laid
+ * out from its provider config. Adding goes on to the setup steps (check the
+ * credentials, first collection, import devices); a failed check comes back
+ * here to edit the source just added. Editing an existing source just saves.
+ */
 export function SourceFormModal({ provider, existing, defaultOptions, onClose }: SourceFormModalProps) {
   const config = SOURCE_FORM_CONFIGS[provider];
-  const isEdit = existing !== null;
+  // The source this dialog added; from then on the form edits it.
+  const [created, setCreated] = useState<MerakiOrg | null>(null);
+  const [setupRun, setSetupRun] = useState(0);
+  const [inSetup, setInSetup] = useState(false);
+  const saved = existing ?? created;
+  const isEdit = saved !== null;
   const [values, setValues] = useState<SourceFormValues>(() => config.fromRecord(existing, defaultOptions));
   const [errMsg, setErrMsg] = useState<string | null>(null);
 
@@ -40,9 +51,17 @@ export function SourceFormModal({ provider, existing, defaultOptions, onClose }:
     setErrMsg(null);
     const body = config.toPayload(values);
     try {
-      if (existing) await update.mutateAsync({ id: existing.id, body });
-      else await create.mutateAsync(body);
-      onClose();
+      if (existing) {
+        await update.mutateAsync({ id: existing.id, body });
+        onClose();
+        return;
+      }
+      const result = created
+        ? await update.mutateAsync({ id: created.id, body })
+        : await create.mutateAsync(body);
+      setCreated(result.org);
+      setSetupRun((run) => run + 1);
+      setInSetup(true);
     } catch (err) {
       setErrMsg(err instanceof Error ? err.message : String(err));
     }
@@ -78,7 +97,7 @@ export function SourceFormModal({ provider, existing, defaultOptions, onClose }:
     const isRequired = field.required === true || (field.required === 'create' && !isEdit);
     const isSecret = field.type === 'password';
     const placeholder = isSecret
-      ? isEdit && existing?.has_api_key
+      ? isEdit && saved?.has_api_key
         ? '(unchanged if empty)'
         : ''
       : field.placeholder;
@@ -113,6 +132,10 @@ export function SourceFormModal({ provider, existing, defaultOptions, onClose }:
     );
   };
 
+  if (inSetup && created) {
+    return <SourceSetupModal key={setupRun} org={created} onEdit={() => setInSetup(false)} onClose={onClose} />;
+  }
+
   return (
     <Modal
       isOpen
@@ -125,7 +148,7 @@ export function SourceFormModal({ provider, existing, defaultOptions, onClose }:
             Cancel
           </button>
           <button type="button" className="btn btn-primary" disabled={!ready || pending} onClick={submit}>
-            {isEdit ? 'Save' : config.addLabel}
+            {existing ? 'Save' : created ? 'Save and check again' : config.addLabel}
           </button>
         </>
       }

@@ -23,7 +23,7 @@ from netcontrol.drivers import DriverCapabilityError, GenericDriver, get_driver
 from netcontrol.drivers.show_version import ShowVersionFacts, parse_show_version
 from netcontrol.integrations.software.versions import classify_host
 from netcontrol.routes import background_jobs
-from netcontrol.routes.host_identity import is_placeholder_hostname, placeholder_hostname
+from netcontrol.routes.host_identity import host_ip_problem, is_placeholder_hostname, placeholder_hostname
 from netcontrol.routes.icmp import _probe_discovery_target_icmp
 from netcontrol.routes.ipam_push import push_inventory_host_allocation
 from netcontrol.routes.shared import (
@@ -72,27 +72,13 @@ async def _notify_flow_collector_host_changed(
         LOGGER.debug("flow_collector cache refresh skipped: %s", type(exc).__name__)
 
 
-# Reserved IP ranges that should not be added to inventory (mirrors jobs.py)
-_BLOCKED_NETWORKS = [
-    ipaddress.ip_network("127.0.0.0/8"),  # loopback
-    ipaddress.ip_network("::1/128"),  # IPv6 loopback
-    ipaddress.ip_network("169.254.0.0/16"),  # link-local
-    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
-    ipaddress.ip_network("0.0.0.0/8"),  # "this" network
-    ipaddress.ip_network("224.0.0.0/4"),  # multicast
-    ipaddress.ip_network("255.255.255.255/32"),  # broadcast
-]
-
-
 def _validate_host_ip(ip_str: str) -> str:
     """Validate that a host IP is a valid unicast address not in reserved ranges."""
-    try:
-        addr = ipaddress.ip_address(ip_str)
-    except ValueError:
+    problem = host_ip_problem(ip_str)
+    if problem == "invalid":
         raise HTTPException(400, f"Invalid IP address: {ip_str}")
-    for net in _BLOCKED_NETWORKS:
-        if addr in net:
-            raise HTTPException(400, f"IP address {ip_str} is in a reserved range and cannot be added to inventory")
+    if problem:
+        raise HTTPException(400, f"IP address {ip_str} is in a reserved range and cannot be added to inventory")
     return ip_str
 
 
@@ -1162,12 +1148,11 @@ async def get_group_snmp_profile_assignment(group_id: int):
     return {"group_id": group_id, "snmp_profile_id": profile_id, "profile_name": profile["name"] if profile else ""}
 
 
-@router.put("/api/inventory/{group_id}/snmp-profile-assignment")
-async def update_group_snmp_profile_assignment(group_id: int, body: dict):
-    group = await db.get_group(group_id)
-    if not group:
-        raise HTTPException(404, "Group not found")
-    profile_id = str(body.get("snmp_profile_id", "")).strip()
+async def assign_group_snmp_profile(group_id: int, profile_id: str) -> dict:
+    """Assign the named SNMP profile to an inventory group (``""`` removes
+    the assignment) and persist it. The caller checks that the group
+    exists; an unknown profile raises 400."""
+    profile_id = str(profile_id or "").strip()
     if profile_id and profile_id not in state.SNMP_PROFILES:
         raise HTTPException(400, "SNMP profile not found")
     if profile_id:
@@ -1177,6 +1162,14 @@ async def update_group_snmp_profile_assignment(group_id: int, body: dict):
     await db.set_auth_setting("group_snmp_assignments", state.GROUP_SNMP_ASSIGNMENTS)
     profile = state.SNMP_PROFILES.get(profile_id) if profile_id else None
     return {"group_id": group_id, "snmp_profile_id": profile_id, "profile_name": profile["name"] if profile else ""}
+
+
+@router.put("/api/inventory/{group_id}/snmp-profile-assignment")
+async def update_group_snmp_profile_assignment(group_id: int, body: dict):
+    group = await db.get_group(group_id)
+    if not group:
+        raise HTTPException(404, "Group not found")
+    return await assign_group_snmp_profile(group_id, str(body.get("snmp_profile_id", "")))
 
 
 # ── Inventory Group CRUD ─────────────────────────────────────────────────────

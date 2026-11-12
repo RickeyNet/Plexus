@@ -25,6 +25,7 @@ from routes.secret_resolver import (
 )
 
 import netcontrol.routes.state as state
+from netcontrol.routes.host_identity import host_ip_problem
 from netcontrol.routes.shared import (
     _audit,
     _corr_id,
@@ -131,27 +132,13 @@ _PRIORITY_LABELS = {0: "low", 1: "below-normal", 2: "normal", 3: "high", 4: "cri
 _JOB_EVENT_BATCH_SIZE = max(1, int(os.getenv("APP_JOB_EVENT_BATCH_SIZE", "50")))
 _JOB_EVENT_FLUSH_SECONDS = max(0.01, float(os.getenv("APP_JOB_EVENT_FLUSH_SECONDS", "0.1")))
 
-# Reserved IP ranges that should not be targeted by ad-hoc jobs
-_BLOCKED_NETWORKS = [
-    ipaddress.ip_network("127.0.0.0/8"),  # loopback
-    ipaddress.ip_network("::1/128"),  # IPv6 loopback
-    ipaddress.ip_network("169.254.0.0/16"),  # link-local
-    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
-    ipaddress.ip_network("0.0.0.0/8"),  # "this" network
-    ipaddress.ip_network("224.0.0.0/4"),  # multicast
-    ipaddress.ip_network("255.255.255.255/32"),  # broadcast
-]
-
-
 def _validate_ad_hoc_ip(ip_str: str) -> str:
     """Validate that an ad-hoc IP is a valid unicast address not in reserved ranges."""
-    try:
-        addr = ipaddress.ip_address(ip_str)
-    except ValueError:
+    problem = host_ip_problem(ip_str)
+    if problem == "invalid":
         raise HTTPException(400, f"Invalid IP address: {ip_str}")
-    for net in _BLOCKED_NETWORKS:
-        if addr in net:
-            raise HTTPException(400, f"IP address {ip_str} is in a reserved range and cannot be targeted")
+    if problem:
+        raise HTTPException(400, f"IP address {ip_str} is in a reserved range and cannot be targeted")
     return ip_str
 
 

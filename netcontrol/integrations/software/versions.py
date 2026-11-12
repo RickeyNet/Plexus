@@ -55,7 +55,8 @@ SEVERITIES = ("critical", "high", "medium", "low", "info")
 _SEVERITY_RANK = {name: index for index, name in enumerate(SEVERITIES)}
 _SEVERITY_ALIASES = {"informational": "info", "information": "info", "moderate": "medium", "important": "high"}
 
-_DEVICE_TYPE_PLATFORMS = {
+# Inventory device type (driver key) -> platform.
+DEVICE_TYPE_PLATFORMS = {
     "cisco_xe": "ios-xe",
     "cisco_ios": "ios",
     "cisco_nxos": "nx-os",
@@ -248,7 +249,7 @@ def classify_host(device_type: Any, model: Any, raw_version: Any) -> tuple[str, 
     and the version string SNMP or SSH stored for it."""
     version = canonical_version(raw_version)
     text = f"{model or ''} {raw_version or ''}".lower()
-    platform = _DEVICE_TYPE_PLATFORMS.get(str(device_type or "").strip().lower(), "")
+    platform = DEVICE_TYPE_PLATFORMS.get(str(device_type or "").strip().lower(), "")
     if platform == "ios" and ("xe" in text or _IOS_XE_RELEASE.match(version)):
         platform = "ios-xe"
     if platform == "ftd" and "adaptive security" in text:
@@ -276,7 +277,8 @@ _FMC_PROVIDERS = ("fmc", "anyconnect")
 _MANAGER_PLATFORMS = ("fmc", "panorama")
 
 
-def _snapshot_platform(provider: str, node: dict) -> str:
+def snapshot_platform(provider: str, node: dict) -> str:
+    """The platform of a device of a ``provider`` snapshot ('' when unknown)."""
     kind = str(node.get("kind") or "")
     model = str(node.get("model") or "").lower()
     if provider == "meraki":
@@ -320,7 +322,7 @@ def snapshot_devices(snapshot: dict, provider: str) -> list[dict[str, Any]]:
         if kind in ("wan", "external", "vpn_peer", "users", "user", "vpc"):
             continue
         raw_version = _version_row(node)
-        platform = _snapshot_platform(provider, node)
+        platform = snapshot_platform(provider, node)
         if not raw_version or not platform or (kind == "cloud" and platform not in _MANAGER_PLATFORMS):
             continue
         version = canonical_version(raw_version)

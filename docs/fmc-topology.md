@@ -42,6 +42,9 @@ on-box by Firepower Device Manager, is not read.
    name, the FMC address, the API username and its password. Under **Data to
    collect**, untick what you do not need (see
    [What is collected](#what-is-collected)).
+   Adding goes on by itself to checking the credentials, the first collection
+   and an offer to import the devices into the inventory; see
+   [After adding a source](meraki-topology.md#after-adding-a-source).
 4. **Check the login.** Click **Test Login**. It signs in to the FMC and
    lists the domains the user can see.
 5. **Collect.** Click **Collect Now**. When it finishes the map updates.

@@ -10,14 +10,12 @@ import {
 import {
   CloudAccountProvider,
   CloudProvider,
-  CollectionProgress,
   InventoryCollectRequest,
   InventoryCollectionResult,
   MerakiBuildJob,
   MerakiOrg,
   MerakiSnapshot,
   TopologySource,
-  TopologySourceType,
   useBuildMerakiSample,
   useDeleteMerakiOrg,
   useDeleteMerakiSnapshot,
@@ -38,23 +36,23 @@ import { useDialogs } from "@/components/DialogProvider-context";
 import { EmptyState } from "@/components/EmptyState";
 import { LoadingState } from "@/components/LoadingState";
 import { Modal } from "@/components/Modal";
-import { ProgressBar } from "@/components/ProgressBar";
 import { QueryError } from "@/components/QueryError";
 import { formatBackendDateTime } from "@/lib/datetime";
 import { usePendingKeys } from "@/lib/usePendingKeys";
 
 import {
+  errorText,
   providerLabel,
   providerScopeName,
   PROVIDER_INVENTORY,
 } from "./helpers";
+import { CollectionProgressCard } from "./CollectionProgressCard";
 import { InventoryCollectModal } from "./InventoryCollectModal";
 import { MerakiAlertsSettings } from "./MerakiAlertsSettings";
 import {
   collectionProgressCards,
   describeInventoryResult,
   describeNextCollection,
-  describeProgress,
   sourceTypeLabel,
 } from "./merakiHelpers";
 import { SourceFormModal } from "./SourceFormModal";
@@ -87,10 +85,6 @@ function isInventorySource(source: TopologySource): boolean {
 /** AWS accounts, Azure subscriptions and GCP projects: Cloud Visibility accounts. */
 function isCloudSource(source: TopologySource): boolean {
   return isCloudAccountProvider(source.type);
-}
-
-function errorText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 /** The collection whose warnings are listed in the warnings dialog. */
@@ -970,66 +964,6 @@ function SourceRow({
         </div>
       </td>
     </tr>
-  );
-}
-
-/** What a collection from a source of this type costs, and when the map updates. */
-function progressNote(type: TopologySourceType): string {
-  if (type === "aws")
-    return "An AWS account takes about a dozen requests per region; All regions reads every region the account has enabled. The map updates when discovery finishes.";
-  if (isCloudAccountProvider(type))
-    return "The map updates when discovery finishes.";
-  const cost =
-    type === PROVIDER_INVENTORY
-      ? "One SSH session per device, a few at a time. The path trace uses the new route tables and configurations at the next trace."
-      : type === "cato"
-        ? "A Cato account takes a few queries, sent slowly to stay inside the Cato API rate limits."
-        : type === "fmc"
-          ? "An FMC takes several requests per device (interfaces, routing, NAT, policies), sent slowly to stay inside the FMC limit of 120 requests per minute."
-          : type === "panorama"
-            ? "A Panorama takes a few requests per device group and template, plus a few per firewall when device state is collected."
-            : type === "appgate"
-              ? "An Appgate collective takes one query per connected user for the access details; large user counts take a while."
-              : "Large organizations take several minutes: Meraki limits the API to 10 requests per second.";
-  return `${cost} You can close this dialog; the map updates when collection finishes.`;
-}
-
-function progressTitle(source: TopologySource): string {
-  if (isInventorySource(source)) return "Collecting from inventory devices…";
-  const label = providerLabel(source.type);
-  return isCloudSource(source)
-    ? `Discovering ${source.name} (${label})…`
-    : `Collecting from ${source.name} (${label})…`;
-}
-
-/** A running collection: what it is doing, a bar (full and dimmed when the total is unknown) and a note. */
-function CollectionProgressCard({
-  source,
-  progress,
-}: {
-  source: TopologySource;
-  /** Missing while the collection has reported nothing yet. */
-  progress: CollectionProgress | null | undefined;
-}) {
-  const title = progressTitle(source);
-  const { label, percent } = describeProgress(
-    { progress: progress ?? {} },
-    source.type,
-  );
-  return (
-    <div className="card" style={{ marginTop: "var(--space-4)" }}>
-      <strong>{title}</strong>
-      <div className="text-muted" style={{ margin: "0.35rem 0" }}>
-        {label}
-      </div>
-      <ProgressBar value={percent} label={title} />
-      <div
-        className="text-muted"
-        style={{ fontSize: "0.85em", marginTop: "0.35rem" }}
-      >
-        {progressNote(source.type)}
-      </div>
-    </div>
   );
 }
 

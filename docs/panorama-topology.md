@@ -44,6 +44,9 @@ Panorama.
    and enter a name, the Panorama address and either an API key or a
    username and its password. Under **Data to collect**, untick what you do
    not need (see [What is collected](#what-is-collected)).
+   Adding goes on by itself to checking the credentials, the first collection
+   and an offer to import the devices into the inventory; see
+   [After adding a source](meraki-topology.md#after-adding-a-source).
 4. **Check the login.** Click **Test Login**. It signs in to Panorama and
    lists the device groups it has.
 5. **Collect.** Click **Collect Now**. When it finishes the map updates.

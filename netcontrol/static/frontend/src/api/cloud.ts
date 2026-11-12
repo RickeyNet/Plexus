@@ -487,6 +487,30 @@ export function useCloudDiscoveryProgress(id: number) {
   });
 }
 
+/** The schedule that rediscovers every enabled AWS, Azure and GCP account (off by default). */
+export function useCloudDiscoverySyncConfig(enabled = true) {
+  return useQuery({
+    queryKey: ['cloud-discovery-sync-config'],
+    queryFn: () => apiRequest<{ config: CloudSyncConfig }>('/cloud/discovery-sync/config'),
+    enabled,
+  });
+}
+
+/** Administrators only. */
+export function useUpdateCloudDiscoverySyncConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Pick<CloudSyncConfig, 'enabled' | 'interval_seconds'>) =>
+      apiRequest<{ config: CloudSyncConfig }>('/cloud/discovery-sync/config', {
+        method: 'PUT',
+        body: data,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['cloud-discovery-sync-config'] });
+    },
+  });
+}
+
 export function useUpdateCloudFlowSyncConfig() {
   const qc = useQueryClient();
   return useMutation({

@@ -45,6 +45,7 @@ from netcontrol.drivers.base import (
     parse_vlan_ranges,
     register_driver,
     registered_device_types,
+    supports_config_capture,
 )
 
 __all__ = [
@@ -58,4 +59,5 @@ __all__ = [
     "parse_vlan_ranges",
     "register_driver",
     "registered_device_types",
+    "supports_config_capture",
 ]

@@ -66,8 +66,11 @@ async def list_config_backup_policies(group_id: int | None = Query(default=None)
     return await db.get_config_backup_policies(group_id)
 
 
-@router.post("/api/config-backups/policies", status_code=201)
-async def create_config_backup_policy(body: ConfigBackupPolicyCreate, request: Request):
+async def create_backup_policy(body: ConfigBackupPolicyCreate, request: Request) -> dict:
+    """Create a backup policy for an inventory group, as the requesting
+    user: the group must exist and the user may use the credential (or it
+    is the service credential); the interval and retention are clamped to
+    their bounds. Audited. Returns the stored policy."""
     group = await db.get_group(body.group_id)
     if not group:
         raise HTTPException(status_code=404, detail="Inventory group not found")
@@ -95,6 +98,11 @@ async def create_config_backup_policy(body: ConfigBackupPolicyCreate, request: R
         correlation_id=_corr_id(request),
     )
     return await db.get_config_backup_policy(policy_id)
+
+
+@router.post("/api/config-backups/policies", status_code=201)
+async def create_config_backup_policy(body: ConfigBackupPolicyCreate, request: Request):
+    return await create_backup_policy(body, request)
 
 
 @router.get("/api/config-backups/policies/{policy_id}")

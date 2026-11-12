@@ -34,6 +34,9 @@ projects join the map the same way; see [gcp-topology.md](gcp-topology.md).
    the managed identity / environment credentials of the Plexus server.
 4. **Discover** (it checks the sign-in first). When discovery finishes the
    subscription is on the map.
+   A new entry is discovered as soon as it is created (when it is enabled),
+   and the page says whether scheduled discovery is on, with a button to turn
+   it on (it is off by default).
 
 One account entry reads one subscription. Add one entry per subscription;
 they are joined on the map automatically, because every resource is named

@@ -287,6 +287,7 @@ from netcontrol.routes.snmp import (
     _snmp_walk,
 )
 from netcontrol.routes.software import _software_refresh_loop, init_software, router as software_router
+from netcontrol.routes.source_import import router as source_import_router
 from netcontrol.routes.templates import TemplateCreate, TemplateUpdate, router as templates_router
 from netcontrol.routes.topology import (
     _calc_interface_utilization,
@@ -2244,6 +2245,17 @@ app.include_router(
 app.include_router(
     meraki_topology_router,
     dependencies=[Depends(require_auth), Depends(require_feature_method("topology"))],
+)
+# Importing a source's devices into the inventory: an administrator action
+# that writes to both features, so it is gated by both.
+app.include_router(
+    source_import_router,
+    dependencies=[
+        Depends(require_auth),
+        Depends(require_feature_method("topology")),
+        Depends(require_feature("inventory")),
+        Depends(require_admin),
+    ],
 )
 # Inventory route/configuration collection, a source of the topology map:
 # collecting is a write, so it needs topology.write like a source build.
