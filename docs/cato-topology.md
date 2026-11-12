@@ -242,6 +242,17 @@ users group whose members were not read in full, an FQDN or IP range
 container, a host, an application, a category, a country) makes a rule that
 may match *not decided*, never allowed.
 
+A trace to an internet application or a domain (for example a remote user
+to `YouTube`) decides the Internet firewall rules that name applications,
+app categories, custom applications, domains and FQDNs, the WAN firewall's
+application field and the Network Rules' application field against it:
+the application's categories come from Cato's application catalog
+(`catalogs.catalogApplicationList`) and its domains from the custom
+applications and the catalog's website. Custom categories, sanctioned app
+categories and containers, whose contents the API does not list, stay
+*not decided*. See
+[path-trace.md](path-trace.md#internet-applications-and-domains).
+
 A connected remote user's VPN address is in the subnet list as a network of
 its own (`10.88.0.11/32 - PoP New York - Cato Client Dana Reyes`), so typing
 the address, or picking the entry, starts the trace at that user: user → PoP
@@ -373,6 +384,7 @@ both hold, or that sits inside a VPC, is listed under **Overlapping Ranges**
 | Users groups and their members | `user.usersGroupList`, `user.usersGroup.members` | All other policies |
 | IP range and FQDN containers (name, type, size; their contents are only a file download and are not read) | `container.list` | All other policies |
 | Custom applications | `customAppData.customApplicationList` | All other policies |
+| Application catalog (each application's categories and website), for path traces to an application; a beta field that needs the Apps Catalog permission, read in pages of 1,000 (100 when a page that size is refused) | `catalogs.catalogApplicationList` | All other policies |
 | Network range settings (type, VLAN, local IP, gateway, DHCP, Internet only, mDNS, NAT) | `site.networkRangeList`, per site | Site and network configuration |
 | Static and known hosts (known hosts are DHCP leases and discovered hosts, up to 1000 a site) | `site.staticHostList`, `site.knownHostList`, per site | Site and network configuration |
 | Socket configuration (model, version, serial, management IP, registration, Wi-Fi support) | `site.siteSocketConfiguration`, per site | Site and network configuration |

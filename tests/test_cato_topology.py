@@ -1291,7 +1291,7 @@ def test_sample_firewall_rules_map_onto_forwarding_rules(snapshot):
     assert [(r["index"], r["name"], r["action"]) for r in wan] == [
         (1, "Isolate Denver from servers", "deny"),
         # Direction BOTH: a second rule with the ends swapped.
-        (1, "Isolate Denver from servers (return)", "deny"),
+        (1, "Isolate Denver from servers (two-way rule, reverse direction)", "deny"),
         (2, "Sites to HQ servers", "allow"),
         (3, "Remote users to HQ", "allow"),
         (4, "Any to any", "allow"),
@@ -1386,6 +1386,62 @@ def test_firewall_rule_addresses_services_and_conditions_are_resolved_or_kept_un
     isolated = rules[3]
     assert (isolated["action"], isolated["comment"]) == ("allow", "Remote browser isolation")
     assert (isolated["protocol"], isolated["dst_ports"]) == ("tcp", "22")
+
+
+def test_a_firewall_rule_outside_its_active_period_is_skipped_as_cato_skips_it():
+    def period(**fields) -> dict:
+        return {"effectiveFrom": None, "expiresAt": None, "useEffectiveFrom": False, "useExpiresAt": False, **fields}
+
+    rules = _one_policy(
+        [
+            _rule_raw(
+                index=1, name="Expired", activePeriod=period(useExpiresAt=True, expiresAt="2001-01-01T00:00:00Z")
+            ),
+            _rule_raw(
+                index=2, name="Not yet", activePeriod=period(useEffectiveFrom=True, effectiveFrom="2999-01-01T00:00:00")
+            ),
+            _rule_raw(
+                index=3,
+                name="Current",
+                activePeriod=period(
+                    useEffectiveFrom=True,
+                    effectiveFrom="2001-01-01T00:00:00.000Z",
+                    useExpiresAt=True,
+                    expiresAt="2999-01-01T00:00:00+02:00",
+                ),
+            ),
+            # A bound whose flag is off does not count.
+            _rule_raw(index=4, name="Unused bound", activePeriod=period(expiresAt="2001-01-01T00:00:00Z")),
+            _rule_raw(index=5, name="Unreadable", activePeriod=period(useExpiresAt=True, expiresAt="next week")),
+            _rule_raw(index=6, name="Always"),
+        ]
+    )
+    assert [(r["index"], r["enabled"], r["unresolved"]) for r in rules] == [
+        (1, False, []),
+        (2, False, []),
+        (3, True, []),
+        (4, True, []),
+        (5, True, ["active period until next week"]),
+        (6, True, []),
+    ]
+
+
+def test_a_firewall_rule_matching_on_device_attributes_is_kept_unresolved():
+    (rule,) = _one_policy(
+        [
+            _rule_raw(
+                deviceAttributes={
+                    "category": ["IoT"],
+                    "manufacturer": [],
+                    "model": [],
+                    "os": [],
+                    "osVersion": ["12"],
+                    "type": ["Printer"],
+                }
+            )
+        ]
+    )
+    assert rule["unresolved"] == ["device category IoT", "device OS version 12", "device type Printer"]
 
 
 def test_global_ip_range_objects_named_by_rules_are_resolved_when_collected():
@@ -2197,8 +2253,14 @@ async def test_collect_account_reads_the_policies_sub_policies_and_objects(monke
         payload = {"allocatedIpList": {"allocatedIp": sample["allocated_ips"], "paging": {"total": 2}}}
         return httpx.Response(200, json={"data": {"popLocations": payload}})
 
+    def app_catalog(body: dict) -> httpx.Response:
+        listed = page(sample["app_catalog"], body)
+        payload = {"catalogApplicationList": {"application": listed["items"], "pageInfo": listed["paging"]}}
+        return httpx.Response(200, json={"data": {"catalogs": payload}})
+
     answers |= {
         "plexusAllocatedIps": allocated_ips,
+        "plexusAppCatalog": app_catalog,
         "plexusSocketLanPolicies": policy_list,
         "plexusGroups": lambda _b: httpx.Response(200, json={"errors": [{"message": "Permission denied"}]}),
         "plexusUsersGroups": users_groups,
@@ -2228,7 +2290,9 @@ async def test_collect_account_reads_the_policies_sub_policies_and_objects(monke
     assert raw["custom_applications"] == sample["custom_applications"]
     # The allocated IPs network rules NAT to.
     assert raw["allocated_ips"] == sample["allocated_ips"]
-    assert progress[-1]["calls_done"] == progress[-1]["calls_total"] == 1 + 15 + 1 + 1 + 5
+    # Cato's application catalog, for traces asked about an application.
+    assert raw["app_catalog"] == sample["app_catalog"]
+    assert progress[-1]["calls_done"] == progress[-1]["calls_total"] == 1 + 15 + 1 + 1 + 6
 
 
 @pytest.mark.asyncio

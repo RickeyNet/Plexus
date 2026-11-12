@@ -48,6 +48,7 @@ from netcontrol.integrations.meraki.forwarding import (
     rule,
     share,
 )
+from netcontrol.integrations.pathtrace import apps as trace_apps
 
 _PROTOCOL_NUMBERS = {"1": "icmp", "6": "tcp", "17": "udp", "58": "icmpv6"}
 _PROTOCOL_NAMES = {"tcp": "tcp", "udp": "udp", "icmp": "icmp", "icmpv4": "icmp", "icmpv6": "icmpv6", "any": ANY}
@@ -212,22 +213,47 @@ def _zones(block: Any) -> list[str]:
     return [n for n in dict.fromkeys(_name(r) for r in refs) if n]
 
 
-def _extras(item: dict) -> list[str]:
-    """What an access or prefilter rule also matches on that Plexus cannot
-    evaluate: applications, URLs, users, VLAN tags, security group tags."""
-    found: list[str] = []
+# The taxonomy FMC's URL categories are in (``pathtrace.apps``).
+CATEGORY_SCHEME = "FMC"
+
+
+def _app_names(item: dict) -> list[dict]:
+    """A rule's application and URL conditions as name criteria
+    (``pathtrace.apps``): each condition must match, any entry of one does.
+    An application filter and a URL object or literal (matched on the URL,
+    not only the host) cannot be decided, nor can a URL category while the
+    FMC's categories of applications are not collected."""
+    found: list[dict] = []
     apps = _dict(item.get("applications"))
     for key in ("applications", "applicationFilters", "inlineApplicationFilters"):
-        found += [f"application {_name(a)}" for a in _dicts(apps.get(key)) if _name(a)]
+        for ref in _dicts(apps.get(key)):
+            if not _name(ref):
+                continue
+            text = f"application {_name(ref)}"
+            if key == "applications":
+                found.append(trace_apps.criterion(trace_apps.APPLICATION, _name(ref), text, group="application"))
+            else:
+                why = "an application filter, whose members are not collected"
+                found.append(trace_apps.criterion(trace_apps.OTHER, _name(ref), text, why=why, group="application"))
     urls = _dict(item.get("urls"))
-    found += [
-        f"URL {_name(u) or _text(u.get('url'))}" for u in _dicts(urls.get("objects")) + _dicts(urls.get("literals"))
-    ]
-    found += [
-        f"URL category {_name(_dict(c).get('category'))}"
-        for c in _dicts(urls.get("urlCategoriesWithReputation"))
-        if _name(_dict(c).get("category"))
-    ]
+    for ref in _dicts(urls.get("objects")) + _dicts(urls.get("literals")):
+        value = _name(ref) or _text(ref.get("url"))
+        why = "a URL, which Plexus does not match"
+        found.append(trace_apps.criterion(trace_apps.OTHER, value, f"URL {value}", why=why, group="url"))
+    for entry in _dicts(urls.get("urlCategoriesWithReputation")):
+        category = _name(_dict(entry.get("category")))
+        if not category:
+            continue
+        text = f"URL category {category}"
+        found.append(trace_apps.criterion(trace_apps.CATEGORY, category, text, scheme=CATEGORY_SCHEME, group="url"))
+    return found
+
+
+def _extras(item: dict) -> list[str]:
+    """What an access or prefilter rule also matches on that Plexus cannot
+    evaluate: applications, URLs (``_app_names``, decided only for a trace
+    asked about an application), users, VLAN tags, security group tags."""
+    found: list[str] = [c["text"] for c in _app_names(item)]
     users = _dict(item.get("users"))
     found += [f"user {_name(u)}" for u in _dicts(users.get("objects")) if _name(u)]
     tags = _dict(item.get("vlanTags"))
@@ -278,6 +304,7 @@ def _rules(
                     src_zones=src_zones,
                     dst_zones=dst_zones,
                     unresolved=unresolved,
+                    app_names=_app_names(item),
                 )
             )
     return found

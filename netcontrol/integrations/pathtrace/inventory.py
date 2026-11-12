@@ -117,6 +117,7 @@ def _rules(entries: list, *, src_zones: list[str] | None = None, dst_zones: list
             comment=entry.comment,
             unresolved=entry.unresolved,
             established=entry.established,
+            app_names=entry.app_names,
             src_zones=src_zones if src_zones is not None else (entry.src_zones or None),
             dst_zones=dst_zones if dst_zones is not None else (entry.dst_zones or None),
         )

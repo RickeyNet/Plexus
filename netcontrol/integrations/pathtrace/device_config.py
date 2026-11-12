@@ -108,6 +108,9 @@ class AclEntry:
     src_zones: list[str] = field(default_factory=list)
     dst_zones: list[str] = field(default_factory=list)
     enabled: bool = True
+    # Name criteria the entry narrows by (``pathtrace.apps``, a rule's
+    # ``app_names``): applications, URL categories, each also unresolved.
+    app_names: list[dict] = field(default_factory=list)
 
 
 @dataclass

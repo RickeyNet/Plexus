@@ -54,7 +54,9 @@ __all__ = [
     "Network",
     "contains",
     "cover",
+    "dst_cover",
     "hop",
+    "is_public",
     "is_default",
     "item",
     "longest_route",
@@ -131,6 +133,63 @@ def cover(cidrs: list[str] | None, network: Network) -> int:
         best = max(best, cidr_cover(text, network))
         if best == FULL:
             break
+    return best
+
+
+# Address space that is never routed on the internet. The documentation
+# ranges are left out on purpose: samples and examples use them as public
+# addresses.
+_NOT_PUBLIC = tuple(
+    ipaddress.ip_network(cidr)
+    for cidr in (
+        "0.0.0.0/8",
+        "10.0.0.0/8",
+        "100.64.0.0/10",
+        "127.0.0.0/8",
+        "169.254.0.0/16",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "224.0.0.0/3",
+        "::/128",
+        "::1/128",
+        "fc00::/7",
+        "fe80::/10",
+        "ff00::/8",
+    )
+)
+
+
+def is_public(network: Network) -> bool:
+    """Whether an address or network is reached over the internet: none of
+    it is address space the internet never routes."""
+    return not any(n.version == network.version and n.overlaps(network) for n in _NOT_PUBLIC)
+
+
+def _may_be_public(network: Network) -> bool:
+    """Whether a network holds any address the internet routes."""
+    return not any(n.version == network.version and network.subnet_of(n) for n in _NOT_PUBLIC)  # type: ignore[arg-type]
+
+
+def dst_cover(cidrs: list[str] | None, network: Network, unknown: bool = False) -> int:
+    """``cover`` of a destination, where ``unknown`` says the destination is
+    an internet address nobody resolved (``network`` is then every address):
+    a list that holds every address covers it, one that holds some internet
+    addresses covers part of it (it may hold the address or not), one of
+    private networks only covers none of it."""
+    if not unknown:
+        return cover(cidrs, network)
+    best = NONE
+    for cidr in cidrs or []:
+        text = str(cidr or "").strip().lower()
+        if text == "any":
+            return FULL
+        found = net(text)
+        if found is None or found.version != network.version:
+            continue
+        if found.prefixlen == 0:
+            return FULL
+        if _may_be_public(found):
+            best = PART
     return best
 
 

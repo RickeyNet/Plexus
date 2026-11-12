@@ -130,6 +130,7 @@ from netcontrol.integrations.meraki.normalize import (
     table_section,
 )
 from netcontrol.integrations.meraki.subnets import _cidr
+from netcontrol.integrations.pathtrace import apps as trace_apps
 
 CLOUD_SITE_ID = "__cato_cloud__"
 CLOUD_NODE_ID = "cato:cloud"
@@ -316,6 +317,8 @@ _OBJECT_WORDS = {
     "customCategory": "custom category",
     "sanctionedAppsCategory": "sanctioned apps category",
 }
+# The fields of a rule's ``deviceAttributes``, as the trace words them.
+_DEVICE_ATTRIBUTE_WORDS = {"osVersion": "OS version"}
 # Plain-text values that are not addresses.
 _TEXT_WORDS = {"fqdn": "FQDN", "domain": "domain", "remoteAsn": "ASN"}
 _ACTIONS = {"ALLOW": "allow", "BLOCK": "deny", "PROMPT": "prompt", "RBI": "allow"}
@@ -377,25 +380,24 @@ def _global_range_cidrs(item: dict) -> list[str]:
     return [single] if single else []
 
 
-def _rule_addresses(endpoint: Any, book: AddressBook) -> tuple[list[str], list[str]]:
-    """``(cidrs, unresolved)`` of a rule's source or destination.
+# An unresolved entry of a rule's field: (field, value, text).
+_Unresolved = tuple[str, Any, str]
 
-    Cato matches a flow when any object listed matches, and an empty one is
-    any address. As in ``forwarding._field``, a field Plexus cannot resolve
-    in full is treated as any address with the names kept as unresolved, so
-    a flow it might cover is reported as unknown, never as allowed. A field
-    that names only objects with no address (a group none of whose members
-    has one now) is ``([], [])``: no address at all."""
+
+def _endpoint_parts(endpoint: Any, book: AddressBook) -> tuple[list[str], list[_Unresolved], bool]:
+    """``(cidrs, unresolved, named)`` of a rule's source or destination: the
+    addresses it resolves to, what it names that cannot be resolved, and
+    whether it names any object."""
     endpoint = endpoint if isinstance(endpoint, dict) else {}
     cidrs: list[str] = []
-    unresolved: list[str] = []
+    unresolved: list[_Unresolved] = []
     named = False
     for value in _items_of(endpoint.get("ip")) + _items_of(endpoint.get("subnet")):
         cidr = canonical(value)
         if cidr:
             cidrs.append(cidr)
         else:
-            unresolved.append(f"address {value}")
+            unresolved.append(("ip", value, f"address {value}"))
     for span in _items_of(endpoint.get("ipRange")):
         span = span if isinstance(span, dict) else {}
         try:
@@ -403,7 +405,7 @@ def _rule_addresses(endpoint: Any, book: AddressBook) -> tuple[list[str], list[s
             last = ipaddress.ip_address(_text(span.get("to")))
             cidrs += [str(n) for n in ipaddress.summarize_address_range(first, last)]
         except TypeError, ValueError:
-            unresolved.append(f"range {_text(span.get('from'))}-{_text(span.get('to'))}")
+            unresolved.append(("ipRange", span, f"range {_text(span.get('from'))}-{_text(span.get('to'))}"))
     containers = _obj(endpoint.get("containers"))
     named_objects = [(field, word, endpoint.get(field)) for field, word in _OBJECT_WORDS.items()]
     named_objects += [(field, word, containers.get(field)) for field, word in _CONTAINER_WORDS.items()]
@@ -414,14 +416,104 @@ def _rule_addresses(endpoint: Any, book: AddressBook) -> tuple[list[str], list[s
             if found is not None:
                 cidrs += found
             else:
-                unresolved.append(f"{word} {_ref_name(ref)}")
+                unresolved.append((field, ref, f"{word} {_ref_name(ref)}"))
     for field, word in _TEXT_WORDS.items():
-        unresolved += [f"{word} {_text(v)}" for v in _items_of(endpoint.get(field))]
+        unresolved += [(field, v, f"{word} {_text(v)}") for v in _items_of(endpoint.get(field))]
+    return cidrs, unresolved, named
+
+
+def _rule_addresses(endpoint: Any, book: AddressBook) -> tuple[list[str], list[str]]:
+    """``(cidrs, unresolved)`` of a rule's source or destination.
+
+    Cato matches a flow when any object listed matches, and an empty one is
+    any address. As in ``forwarding._field``, a field Plexus cannot resolve
+    in full is treated as any address with the names kept as unresolved, so
+    a flow it might cover is reported as unknown, never as allowed. A field
+    that names only objects with no address (a group none of whose members
+    has one now) is ``([], [])``: no address at all."""
+    cidrs, unresolved, named = _endpoint_parts(endpoint, book)
     if unresolved:
-        return [ANY], unresolved
+        return [ANY], [text for _field, _value, text in unresolved]
     if named and not cidrs:
         return [], []
     return list(dict.fromkeys(cidrs)) or [ANY], []
+
+
+# Why a name criterion cannot be decided, by the field that names it.
+_UNDECIDED = {
+    "customCategory": "whose contents are not collected",
+    "sanctionedAppsCategory": "whose list is not collected",
+    "fqdnContainer": "whose members are not collected",
+    "ipAddressRangeContainer": "whose members are not collected",
+}
+# The taxonomy Cato's application categories are in (``pathtrace.apps``).
+CATEGORY_SCHEME = "Cato"
+# Fields that name what a flow is for, by the criterion kind they are.
+_NAME_KINDS = {
+    "application": trace_apps.APPLICATION,
+    "appCategory": trace_apps.CATEGORY,
+    "customApp": trace_apps.CUSTOM_APPLICATION,
+    "domain": trace_apps.DOMAIN,
+    "fqdn": trace_apps.FQDN,
+}
+
+
+def _custom_app(ref: Any, custom_apps: Any) -> dict | None:
+    """The collected definition of the custom application ``ref`` names."""
+    listed = {key: a for a in _items_of(custom_apps) if isinstance(a, dict) for key in _keys(a) if key}
+    return next((listed[k] for k in (_text(_obj(ref).get("id")), _ref_name(ref).lower()) if k and k in listed), None)
+
+
+def _custom_app_names(definition: dict | None) -> tuple[list[str], list[str]] | None:
+    """``(domains, fqdns)`` a custom application is defined by, ``None``
+    when its definition is not known or is not only domains and FQDNs."""
+    if definition is None:
+        return None
+    domains: list[str] = []
+    fqdns: list[str] = []
+    for criterion in map(_obj, _items_of(definition.get("criteria"))):
+        destination = _obj(criterion.get("destination"))
+        if destination.get("destinationIp"):
+            return None
+        found = [_text(d) for d in _items_of(destination.get("domain")) if _text(d)]
+        exact = [_text(f) for f in _items_of(destination.get("fqdn")) if _text(f)]
+        if not found and not exact:
+            return None
+        domains += found
+        fqdns += exact
+    return (domains, fqdns) if domains or fqdns else None
+
+
+def _name_criteria(unresolved: list[_Unresolved], custom_apps: Any) -> list[dict]:
+    """The unresolved entries of a rule's field as name criteria
+    (``pathtrace.apps``), each with the text its ``unresolved`` entry has."""
+    found = []
+    for field, value, text in unresolved:
+        kind = _NAME_KINDS.get(field)
+        if kind == trace_apps.CUSTOM_APPLICATION:
+            names = _custom_app_names(_custom_app(value, custom_apps))
+            domains, fqdns = names if names is not None else (None, None)
+            found.append(trace_apps.criterion(kind, _ref_name(value), text, domains=domains, fqdns=fqdns))
+        elif kind is not None:
+            found.append(trace_apps.criterion(kind, _ref_name(value), text, scheme=CATEGORY_SCHEME))
+        else:
+            found.append(
+                trace_apps.criterion(
+                    trace_apps.OTHER, _ref_name(value), text, why=_UNDECIDED.get(field, "which Plexus cannot evaluate")
+                )
+            )
+    return found
+
+
+def _destination_names(endpoint: Any, book: AddressBook, custom_apps: Any) -> tuple[list[dict], list[str]]:
+    """The name criteria of a firewall rule's destination and the addresses
+    listed beside them, any of which matches (an Internet firewall rule
+    names applications, categories, domains and addresses in one field);
+    ``([], [])`` when it names none."""
+    cidrs, unresolved, _named = _endpoint_parts(endpoint, book)
+    if not any(field in _NAME_KINDS for field, _value, _text_ in unresolved):
+        return [], []
+    return _name_criteria(unresolved, custom_apps), list(dict.fromkeys(cidrs))
 
 
 def _rule_service(service: Any) -> tuple[list[tuple[str, str]], list[str]]:
@@ -458,32 +550,82 @@ def _rule_service(service: Any) -> tuple[list[tuple[str, str]], list[str]]:
     return found, []
 
 
-def _rule_context(item: dict) -> list[str]:
-    """What a rule matches on besides addresses and services."""
-    unresolved: list[str] = []
-    # The WAN firewall's application field narrows a rule further (to
-    # applications, categories or destinations of their own): any of it
-    # is something Plexus does not evaluate.
+def _application_criteria(item: dict, custom_apps: Any = None) -> list[dict]:
+    """The WAN firewall's application field, which narrows a rule further
+    (to applications, categories or destinations of their own), as name
+    criteria (``pathtrace.apps``) any of which matches; each one's text is
+    the rule's ``unresolved`` entry for it."""
     application = _obj(item.get("application"))
+    unresolved: list[_Unresolved] = []
     for field, word in {**_OBJECT_WORDS, **_TEXT_WORDS}.items():
-        unresolved += [f"{word} {_ref_name(v)}" for v in _items_of(application.get(field))]
+        unresolved += [(field, v, f"{word} {_ref_name(v)}") for v in _items_of(application.get(field))]
+    found = _name_criteria(unresolved, custom_apps)
     for field in ("ip", "subnet"):
-        unresolved += [f"application address {_text(v)}" for v in _items_of(application.get(field))]
+        for value in _items_of(application.get(field)):
+            text = f"application address {_text(value)}"
+            cidr = canonical(value)
+            found.append(
+                trace_apps.criterion(trace_apps.ADDRESS, _text(value), text, cidrs=[cidr])
+                if cidr
+                else trace_apps.criterion(trace_apps.OTHER, _text(value), text)
+            )
     for span in _items_of(application.get("ipRange")):
         if isinstance(span, dict):
-            unresolved.append(f"application range {_text(span.get('from'))}-{_text(span.get('to'))}")
+            text = f"application range {_text(span.get('from'))}-{_text(span.get('to'))}"
+            try:
+                first, last = ipaddress.ip_address(_text(span.get("from"))), ipaddress.ip_address(_text(span.get("to")))
+                cidrs = [str(n) for n in ipaddress.summarize_address_range(first, last)]
+                found.append(trace_apps.criterion(trace_apps.ADDRESS, text, text, cidrs=cidrs))
+            except TypeError, ValueError:
+                found.append(trace_apps.criterion(trace_apps.OTHER, text, text))
+    return found
+
+
+def _rule_context(item: dict) -> list[str]:
+    """What a rule matches on besides addresses and services."""
+    # The WAN firewall's application field: any of it is something Plexus
+    # does not evaluate for a flow that names no application.
+    unresolved: list[str] = [c["text"] for c in _application_criteria(item)]
     origin = _text(item.get("connectionOrigin")).upper()
     if origin and origin != "ANY":
         unresolved.append(f"connection origin {origin.lower()}")
     unresolved += [f"country {_ref_name(c)}" for c in _items_of(item.get("country"))]
     unresolved += [f"device posture {_ref_name(d)}" for d in _items_of(item.get("device"))]
     unresolved += [f"device OS {_text(o)}" for o in _items_of(item.get("deviceOS"))]
+    for field, values in _obj(item.get("deviceAttributes")).items():
+        unresolved += [f"device {_DEVICE_ATTRIBUTE_WORDS.get(field, field)} {_text(v)}" for v in _items_of(values)]
     schedule = item.get("schedule")
     active = _text(schedule.get("activeOn")) if isinstance(schedule, dict) else ""
     if active and active.upper() != "ALWAYS":
         unresolved.append(f"schedule {active.lower().replace('_', ' ')}")
     unresolved += [f"exception {_ref_name(e)}" for e in _items_of(item.get("exceptions"))]
     return unresolved
+
+
+def _active_period(item: dict, now: datetime) -> tuple[bool, list[str]]:
+    """``(active, unresolved)`` of a rule's active period at ``now``: Cato
+    skips a rule before its ``effectiveFrom`` and after its ``expiresAt``
+    (each counts only with its ``use...`` flag set). A bound that cannot be
+    read leaves the rule active and is named as unresolved."""
+    period = _obj(item.get("activePeriod"))
+    active = True
+    unresolved: list[str] = []
+    for flag, field, word, ended in (
+        ("useEffectiveFrom", "effectiveFrom", "from", False),
+        ("useExpiresAt", "expiresAt", "until", True),
+    ):
+        if not period.get(flag):
+            continue
+        try:
+            bound = datetime.fromisoformat(_text(period.get(field)))
+        except ValueError:
+            unresolved.append(f"active period {word} {_text(period.get(field)) or 'an unknown time'}")
+            continue
+        if bound.tzinfo is None:
+            bound = bound.replace(tzinfo=UTC)
+        if (now >= bound) if ended else (now < bound):
+            active = False
+    return active, unresolved
 
 
 def _ordered_rules(payload: dict) -> list[tuple[int, dict]]:
@@ -502,21 +644,34 @@ def _ordered_rules(payload: dict) -> list[tuple[int, dict]]:
     ]
 
 
-def _firewall_rules(payload: dict, book: AddressBook, *, directional: bool) -> list[dict]:
+def _firewall_rules(payload: dict, book: AddressBook, *, directional: bool, custom_apps: Any = None) -> list[dict]:
     """A Cato firewall policy's rules as forwarding rules, in Cato's order.
 
     ``directional`` (the WAN firewall): a rule applies from its source to its
     destination (``TO``), the other way (``FROM``), or both ways (``BOTH``,
     a second rule with the ends swapped). A rule matching on more services
-    than one protocol is one rule per protocol, with the same index."""
+    than one protocol is one rule per protocol, with the same index. A rule
+    outside its active period when the snapshot is built is not enabled:
+    Cato skips it.
+
+    A destination that names applications, categories or domains carries
+    them as ``dst_names`` beside the addresses it lists (``dst_cidrs``), and
+    the application field of a WAN firewall rule as ``app_names``
+    (``pathtrace.apps``): a trace that asks about an application decides
+    them. ``custom_apps`` is the collected custom application list."""
     found: list[dict] = []
+    now = datetime.now(UTC)
     for index, item in _ordered_rules(payload):
         src, unresolved_src = _rule_addresses(item.get("source"), book)
         dst, unresolved_dst = _rule_addresses(item.get("destination"), book)
         services, unresolved_service = _rule_service(item.get("service"))
-        unresolved = unresolved_src + unresolved_dst + unresolved_service + _rule_context(item)
+        active, unresolved_period = _active_period(item, now)
+        unresolved = unresolved_src + unresolved_dst + unresolved_service + _rule_context(item) + unresolved_period
+        dst_names, dst_cidrs = _destination_names(item.get("destination"), book, custom_apps)
+        app_names = _application_criteria(item, custom_apps)
         if payload.get("reduced"):
             src, dst, unresolved = [ANY], [ANY], [*unresolved, _REDUCED]
+            dst_names, dst_cidrs, app_names = [], [], []
         elif not src or not dst:
             # It names only objects with no address now: it matches no flow.
             continue
@@ -524,23 +679,29 @@ def _firewall_rules(payload: dict, book: AddressBook, *, directional: bool) -> l
         action = _ACTIONS.get(raw_action, raw_action.lower() or "unknown")
         comment = "Remote browser isolation" if raw_action == "RBI" else _text(item.get("description"))
         direction = _text(item.get("direction")).upper() if directional else "TO"
-        ends = {"FROM": [(dst, src, "")], "BOTH": [(src, dst, ""), (dst, src, " (return)")]}.get(
-            direction, [(src, dst, "")]
-        )
+        ends = {
+            "FROM": [(dst, src, "")],
+            "BOTH": [(src, dst, ""), (dst, src, " (two-way rule, reverse direction)")],
+        }.get(direction, [(src, dst, "")])
         for rule_src, rule_dst, suffix in ends:
+            # Names are what a flow is for: they stay with the rule's own destination.
+            names = dst_names if rule_dst is dst else []
             for protocol, ports in services or [(ANY, ANY)]:
                 found.append(
                     rule(
                         index,
                         action,
                         name=_text(item.get("name")) + suffix,
-                        enabled=item.get("enabled", True) is not False,
+                        enabled=active and item.get("enabled", True) is not False,
                         protocol=protocol,
                         src=rule_src,
                         dst=rule_dst,
                         dst_ports=ports,
                         comment=comment,
                         unresolved=unresolved,
+                        dst_names=names,
+                        dst_cidrs=dst_cidrs,
+                        app_names=app_names,
                     )
                 )
     return found
@@ -557,8 +718,19 @@ def _app_criteria(app: Any, book: AddressBook, custom_apps: Any) -> list[dict]:
     app = _obj(app)
     found: list[dict] = []
 
-    def add(kind: str, text: str, cidrs: list[str] | None = None, services: list | None = None) -> None:
-        found.append({"kind": kind, "text": text, "cidrs": list(cidrs or []), "services": list(services or [])})
+    def add(
+        kind: str, text: str, cidrs: list[str] | None = None, services: list | None = None, match: dict | None = None
+    ) -> None:
+        """``match``: a name criterion as ``pathtrace.apps`` decides it."""
+        entry: dict[str, Any] = {
+            "kind": kind,
+            "text": text,
+            "cidrs": list(cidrs or []),
+            "services": list(services or []),
+        }
+        if match is not None:
+            entry["match"] = match
+        found.append(entry)
 
     def addresses(text: str, endpoint: dict, services: list | None = None) -> None:
         cidrs, unresolved = _rule_addresses(endpoint, book)
@@ -577,7 +749,11 @@ def _app_criteria(app: Any, book: AddressBook, custom_apps: Any) -> list[dict]:
             add("ip", f"group {_ref_name(ref)}", cidrs)
         else:
             # An advanced group of applications, categories, domains...
-            add("name", f"group {_ref_name(ref)} (its members are not all addresses)")
+            word = f"group {_ref_name(ref)}"
+            match = trace_apps.criterion(
+                trace_apps.OTHER, _ref_name(ref), word, why="whose members are not all addresses"
+            )
+            add("name", f"{word} (its members are not all addresses)", match=match)
     for entry in map(_obj, _items_of(app.get("customServiceIp"))):
         endpoint = {"ip": _items_of(entry.get("ip")), "ipRange": _items_of(entry.get("ipRange"))}
         addresses(f"service {_text(entry.get('name')) or ', '.join(_endpoint_texts(endpoint))}", endpoint)
@@ -590,13 +766,9 @@ def _app_criteria(app: Any, book: AddressBook, custom_apps: Any) -> list[dict]:
             add("unresolved", f"service {_ref_name(ref)}")
         else:
             add("service", f"service {_ref_name(ref)}", services=services)
-    listed = {key: a for a in _items_of(custom_apps) if isinstance(a, dict) for key in _keys(a) if key}
     for ref in _items_of(app.get("customApp")):
         name = _ref_name(ref)
-        definition = next(
-            (listed[k] for k in (_text(_obj(ref).get("id")), name.lower()) if k and k in listed),
-            None,
-        )
+        definition = _custom_app(ref, custom_apps)
         if definition is None:
             why = "its definition is not collected" if custom_apps is None else "not in the custom application list"
             add("unresolved", f"custom application {name} ({why})")
@@ -607,7 +779,11 @@ def _app_criteria(app: Any, book: AddressBook, custom_apps: Any) -> list[dict]:
             destination = _obj(criterion.get("destination"))
             names = [*_names(destination.get("domain"), "domain"), *_names(destination.get("fqdn"), "FQDN")]
             if names:
-                add("name", f"custom application {name} ({', '.join(names)})")
+                text = f"custom application {name} ({', '.join(names)})"
+                domains = [_text(d) for d in _items_of(destination.get("domain")) if _text(d)]
+                fqdns = [_text(f) for f in _items_of(destination.get("fqdn")) if _text(f)]
+                match = trace_apps.criterion(trace_apps.CUSTOM_APPLICATION, name, text, domains=domains, fqdns=fqdns)
+                add("name", text, match=match)
             for ip in map(_obj, _items_of(destination.get("destinationIp"))):
                 endpoint = {k: _items_of(ip.get(k)) for k in ("ip", "subnet", "ipRange")}
                 addresses(f"custom application {name} ({', '.join(_endpoint_texts(endpoint))})", endpoint, services)
@@ -615,13 +791,18 @@ def _app_criteria(app: Any, book: AddressBook, custom_apps: Any) -> list[dict]:
                 add("service", f"custom application {name}", services=services or [[ANY, ANY]])
     for field, word in (("domain", "domain"), ("fqdn", "FQDN")):
         for value in _items_of(app.get(field)):
-            add("name", f"{word} {_text(value)}")
+            text = f"{word} {_text(value)}"
+            add("name", text, match=trace_apps.criterion(_NAME_KINDS[field], _text(value), text))
     for field, word in (("application", "application"), ("appCategory", "app category")):
         for ref in _items_of(app.get(field)):
-            add("name", f"{word} {_ref_name(ref)}")
+            text = f"{word} {_ref_name(ref)}"
+            match = trace_apps.criterion(_NAME_KINDS[field], _ref_name(ref), text, scheme=CATEGORY_SCHEME)
+            add("name", text, match=match)
     for ref in _items_of(app.get("customCategory")):
         # Cato's API lists no members of a custom category.
-        add("name", f"custom category {_ref_name(ref)} (its contents are not collected)")
+        word = f"custom category {_ref_name(ref)}"
+        match = trace_apps.criterion(trace_apps.OTHER, _ref_name(ref), word, why=_UNDECIDED["customCategory"])
+        add("name", f"{word} (its contents are not collected)", match=match)
     return found
 
 
@@ -672,13 +853,15 @@ def network_rule_policy_of(payload: Any, book: AddressBook, *, custom_apps: Any,
     }
 
 
-def _firewall_policy(name: str, applies: str, payload: dict, book: AddressBook, *, default: str) -> dict:
+def _firewall_policy(
+    name: str, applies: str, payload: dict, book: AddressBook, *, default: str, custom_apps: Any = None
+) -> dict:
     """A collected Cato firewall policy as a rule set. A policy that is
     turned off holds no rules, and what Cato then does with the traffic is
     not documented: the default action is unknown, never a guess."""
     if payload.get("enabled", True) is False:
         return policy_set(name, "firewall", applies, [], default="unknown")
-    rules = _firewall_rules(payload, book, directional=applies == "wan_traffic")
+    rules = _firewall_rules(payload, book, directional=applies == "wan_traffic", custom_apps=custom_apps)
     return policy_set(name, "firewall", applies, rules, default=default)
 
 
@@ -2522,7 +2705,11 @@ class _Builder:
         ):
             payload = self.raw.get(key)
             if isinstance(payload, dict):
-                policies.append(_firewall_policy(name, applies, payload, book, default=default))
+                policies.append(
+                    _firewall_policy(
+                        name, applies, payload, book, default=default, custom_apps=self.raw.get("custom_applications")
+                    )
+                )
             else:
                 missing.append(name)
         return policies, missing
@@ -2697,6 +2884,42 @@ def network_rule_policy(raw: dict) -> dict:
     return builder.network_rules(builder._address_book())
 
 
+def applications_of(raw: dict) -> list[dict]:
+    """The applications a path trace can be asked about by name
+    (``pathtrace.apps.catalog_entry``): the account's custom applications,
+    with their categories and the domains and FQDNs they are defined by,
+    then Cato's application catalog when it was collected (``app_catalog``:
+    each application's categories and website)."""
+    found = []
+    for app in _items_of(raw.get("custom_applications")):
+        if not isinstance(app, dict) or not _text(app.get("name")):
+            continue
+        names = _custom_app_names(app)
+        found.append(
+            trace_apps.catalog_entry(
+                _text(app.get("name")),
+                categories=[_ref_name(c) for c in _items_of(app.get("category")) if _ref_name(c)],
+                domains=names[0] if names else None,
+                fqdns=names[1] if names else None,
+                source="Cato custom application",
+                scheme=CATEGORY_SCHEME,
+            )
+        )
+    for app in _items_of(raw.get("app_catalog")):
+        if not isinstance(app, dict) or not _text(app.get("name")):
+            continue
+        found.append(
+            trace_apps.catalog_entry(
+                _text(app.get("name")),
+                categories=[_ref_name(c) for c in _items_of(app.get("category")) if _ref_name(c)],
+                website=_text(app.get("website")),
+                source="Cato application catalog",
+                scheme=CATEGORY_SCHEME,
+            )
+        )
+    return found
+
+
 def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[str, Any]:
     """Build the positioned topology snapshot from raw collector output."""
     builder = _Builder(raw, inventory or InventoryIndex())
@@ -2774,4 +2997,6 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
         "sites": sites,
         "nodes": nodes,
         "edges": builder.edges,
+        # What a path trace asked about an application knows of it.
+        "applications": applications_of(raw),
     }
