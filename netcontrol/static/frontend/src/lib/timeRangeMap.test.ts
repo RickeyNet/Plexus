@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_TIME_RANGE,
   clampPreset,
+  describePreset,
   isTimeRangePreset,
   parseStoredTimeRange,
   toDays,
   toHours,
+  widerPreset,
 } from './timeRangeMap';
 
 describe('toHours', () => {
@@ -69,5 +71,26 @@ describe('stored range parsing', () => {
     expect(parseStoredTimeRange(null)).toBe(DEFAULT_TIME_RANGE);
     expect(parseStoredTimeRange('custom')).toBe(DEFAULT_TIME_RANGE);
     expect(parseStoredTimeRange('')).toBe(DEFAULT_TIME_RANGE);
+  });
+});
+
+describe('describePreset', () => {
+  it('reads as part of a sentence', () => {
+    expect(describePreset('1h')).toBe('the last hour');
+    expect(describePreset('7d')).toBe('the last 7 days');
+  });
+});
+
+describe('widerPreset', () => {
+  it('returns the next longer preset', () => {
+    expect(widerPreset('1h')).toBe('6h');
+    expect(widerPreset('7d')).toBe('30d');
+  });
+  it('returns null at the longest preset', () => {
+    expect(widerPreset('30d')).toBeNull();
+  });
+  it('stays within the allowed presets, in any order', () => {
+    expect(widerPreset('1h', ['7d', '24h'])).toBe('24h');
+    expect(widerPreset('7d', ['1h', '6h', '24h', '7d'])).toBeNull();
   });
 });

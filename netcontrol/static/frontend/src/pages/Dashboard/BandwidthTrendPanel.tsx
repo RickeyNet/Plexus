@@ -8,6 +8,7 @@ import { useTimeRange } from '@/lib/timeRange-context';
 import { clampPreset } from '@/lib/timeRangeMap';
 
 import { PANEL_BODY_HEIGHT, PANEL_BODY_STYLE } from './helpers';
+import { PanelError, PanelRangeEmpty } from './PanelStates';
 
 // /api/dashboard/top-interfaces only knows 1h..7d and falls back to 6h otherwise.
 const TOP_INTERFACE_RANGES = ['1h', '6h', '24h', '7d'] as const;
@@ -18,7 +19,8 @@ const LINE_COLORS = SERIES_COLORS.slice(0, 5);
 export function BandwidthTrendPanel() {
   const { range: globalRange } = useTimeRange();
   const range = clampPreset(globalRange, TOP_INTERFACE_RANGES);
-  const { data, isPending, error } = useTopInterfaces({ range, limit: 5 });
+  const query = useTopInterfaces({ range, limit: 5 });
+  const { data, isPending, error } = query;
 
   const series = useMemo<TimeSeries[]>(() => {
     const interfaces = data ?? [];
@@ -48,17 +50,14 @@ export function BandwidthTrendPanel() {
       {isPending ? (
         <div className="skeleton skeleton-card" style={PANEL_BODY_STYLE} />
       ) : error ? (
-        <div className="dashboard-response-empty">
-          <p style={{ color: 'var(--danger)', margin: 0 }}>
-            Failed to load: {(error as Error).message}
-          </p>
-        </div>
+        <PanelError what="interface bandwidth" query={query} />
       ) : !hasData ? (
-        <div className="dashboard-response-empty">
-          <p style={{ margin: 0, color: 'var(--text-muted)' }}>
-            No interface bandwidth samples yet for this range.
-          </p>
-        </div>
+        <PanelRangeEmpty
+          what="interface bandwidth samples"
+          shown={range}
+          allowed={TOP_INTERFACE_RANGES}
+          hint="Bandwidth is sampled from the interface counters of devices polled over SNMP."
+        />
       ) : (
         <TimeSeriesChart series={series} area yAxisName="bps" height={PANEL_BODY_HEIGHT} />
       )}

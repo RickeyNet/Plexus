@@ -5,6 +5,7 @@ import { TimeSeriesChart } from '@/lib/echart';
 import { useTimeRange } from '@/lib/timeRange-context';
 
 import { PANEL_BODY_HEIGHT, PANEL_BODY_STYLE } from './helpers';
+import { PanelError, PanelRangeEmpty } from './PanelStates';
 
 export function ResponseTimePanel() {
   const { range } = useTimeRange();
@@ -55,17 +56,12 @@ export function ResponseTimePanel() {
       {query.isPending ? (
         <div className="skeleton skeleton-card" style={PANEL_BODY_STYLE} />
       ) : query.error ? (
-        <div className="dashboard-response-empty">
-          <p style={{ color: 'var(--danger)', margin: 0 }}>
-            Failed to load: {(query.error as Error).message}
-          </p>
-        </div>
+        <PanelError what="response times" query={query} />
       ) : series.length === 0 ? (
-        <div className="dashboard-response-empty">
-          <p style={{ margin: 0, color: 'var(--text-muted)' }}>
-            No response-time samples yet for this range.
-          </p>
-        </div>
+        <PanelRangeEmpty
+          what="response-time samples"
+          hint="Samples are recorded each time a device is polled."
+        />
       ) : (
         <TimeSeriesChart series={series} area yAxisName="ms" unit=" ms" height={PANEL_BODY_HEIGHT} />
       )}

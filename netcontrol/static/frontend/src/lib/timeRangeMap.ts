@@ -42,3 +42,29 @@ export function clampPreset<T extends TimeRangePreset>(preset: TimeRangePreset, 
 export function parseStoredTimeRange(raw: string | null): TimeRangePreset {
   return isTimeRangePreset(raw) ? raw : DEFAULT_TIME_RANGE;
 }
+
+const PRESET_PHRASES: Record<TimeRangePreset, string> = {
+  '1h': 'hour',
+  '6h': '6 hours',
+  '24h': '24 hours',
+  '7d': '7 days',
+  '30d': '30 days',
+};
+
+/** "the last 6 hours", for sentences about a range. */
+export function describePreset(preset: TimeRangePreset): string {
+  return `the last ${PRESET_PHRASES[preset]}`;
+}
+
+/**
+ * The next longer preset among `allowed`, or null when `preset` is already
+ * the longest: what an empty panel offers to widen to.
+ */
+export function widerPreset<T extends TimeRangePreset>(
+  preset: TimeRangePreset,
+  allowed: readonly T[] = TIME_RANGE_PRESETS as unknown as readonly T[],
+): T | null {
+  const longer = allowed.filter((p) => PRESET_HOURS[p] > PRESET_HOURS[preset]);
+  if (longer.length === 0) return null;
+  return longer.reduce((a, b) => (PRESET_HOURS[a] <= PRESET_HOURS[b] ? a : b));
+}
