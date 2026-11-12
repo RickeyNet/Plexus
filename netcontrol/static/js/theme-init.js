@@ -10,7 +10,7 @@
   var theme = 'sandstone';
   try {
     var saved = localStorage.getItem('plexus-theme');
-    if (saved && /^[a-z-]+$/.test(saved)) theme = saved;
+    if (saved && /^[a-z0-9-]+$/.test(saved)) theme = saved;
   } catch (e) {
     /* storage unavailable: keep the default */
   }

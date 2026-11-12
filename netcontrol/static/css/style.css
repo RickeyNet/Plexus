@@ -1129,7 +1129,424 @@ button.card {
     box-shadow: 0 0 8px rgba(0, 255, 65, 0.25);
 }
 
+/* ─── 1998 (classic grey desktop) ─── */
+[data-theme="1998"] {
+    color-scheme: light;
+    --primary: #000080;
+    --primary-dark: #00005a;
+    --primary-light: #000080;
+    --secondary: #808080;
+    --success: #005a00;
+    --warning: #664400;
+    --danger: #990000;
+    --bg: #c0c0c0;
+    --bg-secondary: #dfdfdf;
+    --bg-dark: #b4b4b4;
+    --card-bg: #c0c0c0;
+    --card-bg-hover: #cacaca;
+    --text: #000000;
+    --text-light: #1a1a1a;
+    --text-muted: #404040;
+    --border: #808080;
+    --border-light: #404040;
+    --primary-soft: rgba(0, 0, 128, 0.12);
+    --primary-soft-strong: rgba(0, 0, 128, 0.24);
+    /* No glows in this theme. */
+    --primary-glow: rgba(0, 0, 128, 0);
+    --overlay: rgba(0, 0, 0, 0.4);
+    --shadow: 1px 1px 0 #0a0a0a;
+    --shadow-lg: 2px 2px 0 rgba(0, 0, 0, 0.5);
+    --topo-accent-rgb: 0, 0, 128;
+    --info: #004890;
+    --violet: #800080;
+    --on-primary: #ffffff;
+
+    --radius-sm: 0;
+    --radius-md: 0;
+    --radius-lg: 0;
+    --radius-xl: 0;
+    --radius-2xl: 0;
+    --radius-pill: 0;
+
+    /* Theme-local tokens: desktop, title bar, field and the 2px bevels. */
+    --w98-desktop: #008080;
+    --w98-field: #ffffff;
+    --w98-titlebar: linear-gradient(90deg, #000080, #1084d0);
+    --w98-raised: inset -1px -1px #0a0a0a, inset 1px 1px #ffffff, inset -2px -2px #808080, inset 2px 2px #dfdfdf;
+    --w98-window: inset -1px -1px #0a0a0a, inset 1px 1px #dfdfdf, inset -2px -2px #808080, inset 2px 2px #ffffff;
+    --w98-sunken: inset -1px -1px #ffffff, inset 1px 1px #808080, inset -2px -2px #dfdfdf, inset 2px 2px #0a0a0a;
+    --w98-pressed: inset -1px -1px #ffffff, inset 1px 1px #0a0a0a, inset -2px -2px #dfdfdf, inset 2px 2px #808080;
+    --w98-dither: repeating-conic-gradient(#c0c0c0 0% 25%, #ffffff 0% 50%) 0 0 / 2px 2px;
+
+    --topo-cisco-bg: #d8e0f8;       --topo-cisco-border: #000080;
+    --topo-cisco-hi-bg: #c0ccf0;    --topo-cisco-hi-border: #00005a;
+    --topo-juniper-bg: #d0ecd0;     --topo-juniper-border: #005a00;
+    --topo-juniper-hi-bg: #b8e0b8;  --topo-juniper-hi-border: #003c00;
+    --topo-arista-bg: #f4e8b8;      --topo-arista-border: #664400;
+    --topo-arista-hi-bg: #ecdc98;   --topo-arista-hi-border: #402b00;
+    --topo-fortinet-bg: #f4d0d0;    --topo-fortinet-border: #990000;
+    --topo-fortinet-hi-bg: #ecb8b8; --topo-fortinet-hi-border: #6a0000;
+    --topo-unknown-bg: #e8e8e8;     --topo-unknown-border: #404040;
+    --topo-unknown-hi-bg: #d8d8d8;  --topo-unknown-hi-border: #000000;
+
+    --topo-edge-cdp: #000080;       --topo-edge-cdp-hi: #00005a;
+    --topo-edge-lldp: #005a00;      --topo-edge-lldp-hi: #003c00;
+    --topo-edge-ospf: #664400;      --topo-edge-ospf-hi: #402b00;
+    --topo-edge-bgp: #800080;       --topo-edge-bgp-hi: #5a005a;
+
+    --topo-path-glow: rgba(0, 0, 128, 0.5);
+    --topo-dim-bg: rgba(192, 192, 192, 0.5);
+    --topo-dim-border: rgba(128, 128, 128, 0.5);
+    --topo-dim-edge: rgba(128, 128, 128, 0.3);
+    --topo-dim-edge-hi: rgba(128, 128, 128, 0.4);
+}
+
+/* Square corners everywhere, including hard-coded and inline radii. The
+   logo orb and the spinners are circles by shape, not rounded corners. */
+[data-theme="1998"] *,
+[data-theme="1998"] *::before,
+[data-theme="1998"] *::after,
+[data-theme="1998"] *::-webkit-scrollbar-thumb {
+    border-radius: 0 !important;
+}
+
+[data-theme="1998"] .nav-orb,
+[data-theme="1998"] .login-orb,
+[data-theme="1998"] .backup-spinner,
+[data-theme="1998"] .discovery-spinner {
+    border-radius: 50% !important;
+}
+
+[data-theme="1998"] body {
+    font-family: Tahoma, 'MS Sans Serif', 'Segoe UI', Geneva, Verdana, sans-serif;
+    accent-color: var(--primary);
+}
+
+[data-theme="1998"] ::selection {
+    background: var(--primary);
+    color: var(--on-primary);
+}
+
+[data-theme="1998"] * {
+    scrollbar-color: #808080 #dfdfdf;
+}
+
+/* Desktop: flat teal, no star field. */
+[data-theme="1998"] .animated-bg,
+[data-theme="1998"] .login-screen {
+    background: var(--w98-desktop);
+}
+
+[data-theme="1998"] .app-container {
+    background: transparent;
+}
+
+[data-theme="1998"] .space-nebula,
+[data-theme="1998"] .space-vignette,
+[data-theme="1998"] .login-particles,
+[data-theme="1998"] .app-particles {
+    display: none;
+}
+
+/* The page is one window on the desktop. The teal frame and the bevel are
+   inset shadows drawn inside the padding, so the layout does not move. */
+[data-theme="1998"] .main-content {
+    background: var(--bg);
+}
+
+@media screen {
+    [data-theme="1998"] .main-content {
+        box-shadow:
+            inset 0 0 0 4px var(--w98-desktop),
+            inset 5px 5px #dfdfdf,
+            inset -5px -5px #0a0a0a,
+            inset 6px 6px #ffffff,
+            inset -6px -6px #808080;
+    }
+}
+
+/* Sidebar: a grey panel with a title bar and menu-style highlights. */
+[data-theme="1998"] .sidebar {
+    background: var(--card-bg);
+    border-right-color: transparent;
+    box-shadow: var(--w98-window);
+}
+
+[data-theme="1998"] .sidebar-top {
+    margin: 3px 3px 0;
+    background: var(--w98-titlebar);
+    border-bottom-color: transparent;
+}
+
+[data-theme="1998"] .nav-brand-text {
+    color: var(--on-primary);
+    text-shadow: none;
+}
+
+[data-theme="1998"] .nav-orb,
+[data-theme="1998"] .login-orb {
+    box-shadow: none;
+    animation: none;
+}
+
+[data-theme="1998"] .sidebar-toggle,
+[data-theme="1998"] .sidebar-toggle:hover,
+[data-theme="1998"] .modal-close,
+[data-theme="1998"] .modal-close:hover {
+    background: var(--card-bg);
+    border-color: transparent;
+    color: var(--text);
+    box-shadow: var(--w98-raised);
+}
+
+[data-theme="1998"] .sidebar-toggle:active,
+[data-theme="1998"] .modal-close:active {
+    box-shadow: var(--w98-pressed);
+}
+
+[data-theme="1998"] .sidebar .nav-link {
+    color: var(--text);
+    transition: none;
+}
+
+[data-theme="1998"] .sidebar .nav-group-toggle.has-active-child {
+    color: var(--primary);
+}
+
+[data-theme="1998"] .sidebar .nav-link:hover,
+[data-theme="1998"] .sidebar .nav-link.active,
+[data-theme="1998"] .sidebar .nav-link.active .nav-icon {
+    color: var(--on-primary);
+}
+
+[data-theme="1998"] .sidebar .nav-link:hover,
+[data-theme="1998"] .sidebar .nav-link.active {
+    background: var(--primary);
+    box-shadow: none;
+}
+
+[data-theme="1998"] .page-title {
+    color: var(--text);
+    background: none;
+    -webkit-text-fill-color: currentColor;
+}
+
+/* Cards and stat tiles are raised panels. */
+[data-theme="1998"] .card,
+[data-theme="1998"] .stat-card,
+[data-theme="1998"] .card-clickable:hover {
+    border-color: transparent;
+    box-shadow: var(--w98-window);
+}
+
+[data-theme="1998"] .card,
+[data-theme="1998"] .stat-card {
+    background: var(--card-bg);
+}
+
+[data-theme="1998"] .card-clickable:hover {
+    background: var(--card-bg-hover);
+}
+
+/* Etched group box. */
+[data-theme="1998"] .card-inset {
+    background: transparent;
+    border-color: #808080 #ffffff #ffffff #808080;
+}
+
+/* Buttons: grey face with a 2px bevel, no hover lift, pressed when active. */
+[data-theme="1998"] .btn,
+[data-theme="1998"] .btn:hover:not(:disabled),
+[data-theme="1998"] .time-range-btn,
+[data-theme="1998"] .time-range-btn:hover {
+    background: var(--card-bg);
+    border-color: transparent;
+    color: var(--text);
+    box-shadow: var(--w98-raised);
+    transform: none;
+    transition: none;
+}
+
+/* The default button carries an extra black frame instead of a fill. */
+[data-theme="1998"] .btn-primary,
+[data-theme="1998"] .btn-primary:hover:not(:disabled) {
+    font-weight: 700;
+    box-shadow: var(--w98-raised), 0 0 0 1px #0a0a0a;
+}
+
+[data-theme="1998"] .btn-primary::after {
+    display: none;
+}
+
+[data-theme="1998"] .btn-danger,
+[data-theme="1998"] .btn-danger:hover:not(:disabled) {
+    color: var(--danger);
+}
+
+[data-theme="1998"] .btn:active:not(:disabled),
+[data-theme="1998"] .time-range-btn:active {
+    box-shadow: var(--w98-pressed);
+}
+
+[data-theme="1998"] .btn.active,
+[data-theme="1998"] .btn.active:hover:not(:disabled),
+[data-theme="1998"] .page-tab-btn.active,
+[data-theme="1998"] .time-range-btn.active {
+    background: var(--w98-dither);
+    border-color: transparent;
+    color: var(--text);
+    font-weight: 700;
+    box-shadow: var(--w98-pressed);
+}
+
+[data-theme="1998"] .btn:disabled {
+    opacity: 1;
+    color: #808080;
+    text-shadow: 1px 1px 0 #ffffff;
+}
+
+[data-theme="1998"] .btn-link,
+[data-theme="1998"] .btn-link:hover:not(:disabled) {
+    background: none;
+    box-shadow: none;
+    color: var(--primary);
+}
+
+/* Fields: white well with a sunken bevel. */
+[data-theme="1998"] .form-input,
+[data-theme="1998"] .form-textarea,
+[data-theme="1998"] .form-select,
+[data-theme="1998"] input[type="search"].form-input {
+    background: var(--w98-field);
+    border-color: transparent;
+    color: var(--text);
+    box-shadow: var(--w98-sunken);
+}
+
+[data-theme="1998"] .form-input:focus,
+[data-theme="1998"] .form-textarea:focus,
+[data-theme="1998"] .form-select:focus {
+    background: var(--w98-field);
+    border-color: var(--primary);
+    box-shadow: var(--w98-sunken);
+}
+
+[data-theme="1998"] .form-input:disabled,
+[data-theme="1998"] .form-textarea:disabled,
+[data-theme="1998"] .form-select:disabled {
+    opacity: 1;
+    background: var(--card-bg);
+    color: #808080;
+}
+
+[data-theme="1998"] .form-input[aria-invalid="true"],
+[data-theme="1998"] .form-select[aria-invalid="true"],
+[data-theme="1998"] .form-textarea[aria-invalid="true"] {
+    border-color: var(--danger);
+}
+
+/* Tables: a white list view with raised column headers. */
+[data-theme="1998"] .table-scroll {
+    padding: 2px;
+    background: var(--w98-field);
+    box-shadow: var(--w98-sunken);
+}
+
+[data-theme="1998"] .data-table tbody {
+    background: var(--w98-field);
+}
+
+[data-theme="1998"] .data-table td {
+    border-bottom-color: #dfdfdf;
+}
+
+[data-theme="1998"] table.data-table th {
+    background: var(--card-bg);
+    border-bottom: 1px solid #0a0a0a;
+    box-shadow: inset -1px -1px #808080, inset 1px 1px #ffffff;
+}
+
+/* Status inks are dark, so badges are filled chips with white text. */
+[data-theme="1998"] .badge {
+    background: var(--text-muted);
+    color: var(--on-primary);
+}
+[data-theme="1998"] .badge-success { background: var(--success); }
+[data-theme="1998"] .badge-warning { background: var(--warning); }
+[data-theme="1998"] .badge-danger { background: var(--danger); }
+[data-theme="1998"] .badge-info { background: var(--info); }
+[data-theme="1998"] .badge-primary { background: var(--primary); }
+[data-theme="1998"] .badge-secondary { background: var(--text-muted); }
+
+/* Dialogs: a window with a title bar. */
+[data-theme="1998"] .modal,
+[data-theme="1998"] .login-card,
+[data-theme="1998"] .menu {
+    background: var(--card-bg);
+    border-color: transparent;
+    box-shadow: var(--w98-window);
+}
+
+[data-theme="1998"] .modal-header {
+    margin: 3px 3px 0;
+    padding: var(--space-1) var(--space-1) var(--space-1) var(--space-2);
+    background: var(--w98-titlebar);
+    border-bottom: none;
+    color: var(--on-primary);
+}
+
+[data-theme="1998"] .modal-header h3 {
+    font-size: var(--text-base);
+    font-weight: 700;
+    color: var(--on-primary);
+}
+
+[data-theme="1998"] .modal-close {
+    width: 1.5rem;
+    height: 1.5rem;
+    font-size: var(--text-md);
+    flex-shrink: 0;
+}
+
+[data-theme="1998"] .modal-footer {
+    border-top-color: #808080;
+    box-shadow: inset 0 1px 0 #ffffff;
+}
+
+[data-theme="1998"] .login-card {
+    padding-top: 3.5rem;
+}
+
+[data-theme="1998"] .login-card::before {
+    content: 'Welcome';
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    right: 3px;
+    padding: var(--space-1) var(--space-2);
+    background: var(--w98-titlebar);
+    color: var(--on-primary);
+    font-size: var(--text-base);
+    font-weight: 700;
+    line-height: 1.4;
+}
+
+/* Menus: highlight bar instead of a tint. */
+[data-theme="1998"] .menu {
+    padding: 3px;
+}
+
+[data-theme="1998"] .menu-item:not([aria-disabled="true"]):hover,
+[data-theme="1998"] .menu-item:not([aria-disabled="true"]):focus,
+[data-theme="1998"] .menu-item:not([aria-disabled="true"]):hover .menu-item-description,
+[data-theme="1998"] .menu-item:not([aria-disabled="true"]):focus .menu-item-description {
+    background: var(--primary);
+    color: var(--on-primary);
+}
+
 /* Light surfaces: a dark drop shadow under dark text only blurs it. */
+[data-theme="1998"] .card-title,
+[data-theme="1998"] .section h3,
 [data-theme="light"] .card-title,
 [data-theme="light"] .section h3,
 [data-theme="sandstone"] .card-title,
@@ -1244,6 +1661,19 @@ button.card {
     --space-star-far-rgb: 60, 170, 90;
     --space-star-near-rgb: 170, 255, 190;
     --space-intensity-base: 0.9;
+}
+
+[data-theme="1998"] {
+    --space-bg-1: #008080;
+    --space-bg-2: #008080;
+    --space-bg-3: #008080;
+    --space-nebula-a: transparent;
+    --space-nebula-b: transparent;
+    --space-nebula-c: transparent;
+    --space-vignette: transparent;
+    --space-star-far-rgb: 0, 128, 128;
+    --space-star-near-rgb: 0, 128, 128;
+    --space-intensity-base: 0;
 }
 
 body {
