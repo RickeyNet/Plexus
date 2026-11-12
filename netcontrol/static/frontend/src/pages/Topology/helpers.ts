@@ -678,3 +678,8 @@ export function merakiNodeIndex(nodes: TopologyNode[]): Map<string, TopologyNode
   }
   return index;
 }
+
+/** The message of a thrown value: an Error's message, anything else as text. */
+export function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}

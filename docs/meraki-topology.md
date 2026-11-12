@@ -48,6 +48,9 @@ other hardening controls; see [meraki-compliance.md](meraki-compliance.md).
    a Meraki Dashboard API key. Leave *Organization ID* blank if the key can see
    only one organization; otherwise click **Test Key** afterwards to list the
    organization IDs the key can see, and enter the one you want.
+   Adding goes on by itself to checking the credentials, the first collection
+   and an offer to import the devices into the inventory; see
+   [After adding a source](#after-adding-a-source).
 4. **Collect.** Click **Collect Now**. Progress is shown while Plexus
    collects; when it finishes the map updates.
 5. **Share.** Click **Export** in the toolbar, then **HTML map (download)** to
@@ -411,6 +414,63 @@ VLANs disabled) are skipped silently. Anything else that fails - such as an
 endpoint the key lacks access to - is counted as a collection warning and the
 collection is marked *partial*; the rest of the data is still used.
 
+## After adding a source
+
+Adding a Meraki organization, Cato account, Cisco FMC, Palo Alto Panorama or
+Appgate SDP collective (admins, **Sources → Add Source**) does not just close
+the form: the dialog goes on through three steps. **Close** leaves at any
+step; the source stays saved and a running collection carries on.
+
+1. **Check credentials.** The same check as **Test Key** / **Test Login**.
+   When it fails, its message is shown with **Edit source**, which goes back
+   to the form of the source just added (the API key or password can be left
+   empty to keep the stored one), and **Check again**.
+2. **First collection.** The same collection as **Collect Now**, with its
+   progress. A failure is shown with **Retry**. When it is done the dialog
+   says whether the source is collected on the schedule, and offers to turn
+   the schedule on when it is off.
+3. **Import devices** (optional). The devices of the collection that have a
+   management address are listed with the device type each would get and
+   what Plexus does with it once it is an inventory host. Devices that are
+   in the inventory already (same address, or matched by the collection) are
+   shown and cannot be selected; the rest are selected. Choose:
+   - **Inventory group**: a new top-level group, named after the source by
+     default, or an existing one.
+   - **SNMP profile**: an existing profile, assigned to the group, which is
+     what makes the monitoring poller poll its hosts over SNMP (every
+     inventory host is pinged). It is preselected when there is only one; a
+     group that already has another profile keeps it. With no profile yet,
+     the step links to where profiles are created. No community or SNMPv3
+     user is ever created here.
+   - **Configuration backups**: offered only when a selected device is of a
+     platform Config Backups can read: a daily policy for the group, backups
+     kept 30 days, signing in with a credential you choose (the service
+     credential named in Settings by default). A group that already has a
+     policy keeps it, and the policy covers the new hosts.
+   - **Monitoring**: polling follows from being in the inventory; when
+     monitoring is turned off in Settings the step says so and offers to
+     turn it on.
+
+What each source's devices become:
+
+| Source | Devices listed | Device type | Plexus can |
+|---|---|---|---|
+| Meraki | MX, MS, MR, MG... with a LAN address, and the CDP/LLDP neighbors they report | ICMP-only (cloud-managed); a neighbor gets the driver its platform names (NX-OS, Junos...) when the reported platform says which | ping; a neighbor of a known platform is also polled over SNMP and, where its driver reads the configuration, backed up |
+| Cato | Sockets with an internal (LAN) address; IPsec sites are not devices | ICMP-only | ping |
+| Cisco FMC | managed FTDs (ASAs) with a management address | `cisco_ftd` (`cisco_asa`) | ping, SNMP polling; no backup (the configuration lives in the FMC) |
+| Palo Alto Panorama | managed firewalls with a management address | `paloalto_panos` | ping, SNMP polling; no backup (the configuration lives in Panorama) |
+| Appgate SDP | Controllers, Gateways and other appliances with an address | ICMP-only | ping |
+
+A source whose collection has no device addresses (a Cato account whose
+Sockets report no LAN address, for example) lists nothing and says why.
+Status, versions and alerts of the source's own devices keep coming from the
+source's collection either way; importing adds the inventory pipeline
+(ICMP latency and loss, SLA targets, SNMP where supported) on top.
+
+AWS accounts, Azure subscriptions and GCP projects are added under Cloud
+Visibility: a new account is discovered at once, and the page says whether
+scheduled discovery is on (it is off by default) with a button to turn it on.
+
 ## Scheduled collection
 
 Meraki organizations, Cato accounts, Cisco FMCs, Palo Alto Panoramas and
@@ -607,6 +667,8 @@ it shows. The selector appears only when the export includes an integration.
 | `POST` | `/api/sources/{id}/validate` | Test the stored key, list visible organizations (admin) |
 | `POST` | `/api/sources/{id}/build` | Start a collection; returns `job_id` |
 | `GET` | `/api/sources/builds/{job_id}` | Collection progress and result |
+| `GET` | `/api/sources/{id}/importable-devices` | The devices of the latest collection that can be imported into the inventory (admin) |
+| `POST` | `/api/sources/{id}/import-devices` | Import chosen devices into an inventory group, with an SNMP profile and a backup policy (admin); see [api-reference.md](api-reference.md#source-device-import) |
 | `POST` | `/api/sources/sample` | Add / refresh the demo organization |
 | `GET` | `/api/sources/snapshots` | List snapshots (`?org_ref=` to filter) |
 | `GET` | `/api/sources/snapshots/{id}/data` | Snapshot as JSON |
