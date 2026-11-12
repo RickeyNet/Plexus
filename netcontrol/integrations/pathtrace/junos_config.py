@@ -57,6 +57,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from netcontrol.integrations.meraki.forwarding import ANY, INTERFACE, canonical, is_address, nat
+from netcontrol.integrations.pathtrace import apps as trace_apps
 from netcontrol.integrations.pathtrace.device_config import (
     AclEntry,
     ConfigInterface,
@@ -642,6 +643,9 @@ class _Policy:
     destinations: list[str] = field(default_factory=list)
     applications: list[str] = field(default_factory=list)
     unresolved: list[str] = field(default_factory=list)
+    # The dynamic applications and URL categories it matches on, as name
+    # criteria (``pathtrace.apps``); each field must match.
+    app_names: list[dict] = field(default_factory=list)
     action: str = ""
     description: str = ""
     global_policy: bool = False
@@ -677,11 +681,36 @@ def _read_policy(policy: _Policy, rest: list[str], config: RunningConfig) -> Non
             policy.to_zones.extend(v for v in values if v != "any")
         elif key in ("dynamic-application", "url-category", "source-identity", "source-end-user-profile"):
             if any(v.lower() not in ("any", "none") for v in values):
-                policy.unresolved.append(f"{key} {' '.join(values)}")
+                text = f"{key} {' '.join(values)}"
+                policy.unresolved.append(text)
+                if key in ("dynamic-application", "url-category"):
+                    policy.app_names += _app_names(key, values, text)
         elif key in ("source-address-excluded", "destination-address-excluded"):
             policy.unresolved.append(f"{key} (negated)")
         else:
             policy.unresolved.append(" ".join(rest[1:]))
+
+
+# The taxonomy Junos URL categories are in (``pathtrace.apps``).
+CATEGORY_SCHEME = "Junos"
+
+
+def _app_names(key: str, values: list[str], text: str) -> list[dict]:
+    """A policy's ``dynamic-application`` (``junos:YOUTUBE``, matched by its
+    name without the ``junos:`` prefix) or ``url-category`` as name
+    criteria, each with the policy's unresolved ``text`` for the field. A
+    field that mixes ``any`` or ``none`` with names is one criterion Plexus
+    cannot decide."""
+    if any(v.lower() in ("any", "none") for v in values):
+        return [trace_apps.criterion(trace_apps.OTHER, text, text, group=key)]
+    if key == "dynamic-application":
+        return [
+            trace_apps.criterion(trace_apps.APPLICATION, v.split(":", 1)[-1], text, group=key)
+            if not v.lower().startswith("junos:any")
+            else trace_apps.criterion(trace_apps.OTHER, v, text, group=key)
+            for v in values
+        ]
+    return [trace_apps.criterion(trace_apps.CATEGORY, v, text, scheme=CATEGORY_SCHEME, group=key) for v in values]
 
 
 def _policy_entries(policy: _Policy, sequence: int, objects: _Objects) -> list[AclEntry]:
@@ -710,6 +739,7 @@ def _policy_entries(policy: _Policy, sequence: int, objects: _Objects) -> list[A
             name=policy.name,
             src_zones=list(policy.from_zones),
             dst_zones=list(policy.to_zones),
+            app_names=list(policy.app_names),
         )
         for protocol, src_ports, dst_ports, missing in services
     ]

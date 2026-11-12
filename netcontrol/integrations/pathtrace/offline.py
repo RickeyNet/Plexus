@@ -50,6 +50,7 @@ MODULES = (
     "netcontrol/integrations/meraki/normalize.py",
     "netcontrol/integrations/meraki/subnets.py",
     "netcontrol/integrations/pathtrace/__init__.py",
+    "netcontrol/integrations/pathtrace/apps.py",
     "netcontrol/integrations/pathtrace/cloud.py",
     "netcontrol/integrations/pathtrace/engine.py",
     "netcontrol/integrations/pathtrace/model.py",
@@ -122,11 +123,14 @@ def trace(
     destination_node: Any = None,
     protocol: str = "",
     port: int | None = None,
+    destination_app: str | None = None,
     node_ids: set[str],
     edge_ids: dict[str, str],
 ) -> dict[str, Any]:
     """One direction of a leg as the export carries it: the trace in the
-    export's ids, or why there is none."""
+    export's ids, or why there is none. ``destination_app`` names an
+    application or domain the flow is for (``Tracer.trace``); with no
+    ``destination`` its address is not known, as nothing is looked up here."""
     try:
         found = tracer.trace(
             source,
@@ -135,6 +139,7 @@ def trace(
             destination_node=graph_node_id(destination_node),
             protocol=protocol,
             port=port,
+            destination_app=destination_app,
         )
     except ValueError as exc:
         return {"applies": False, "traffic": "", "verdict": "unknown", "summary": str(exc)}
@@ -216,8 +221,8 @@ def build(data: dict[str, Any]) -> Tracer:
 def open_session(path: str) -> Callable[[str], str]:
     """Build the tracer over the inputs JSON at ``path`` and return what the
     file calls for each trace: a request as JSON (``source``, ``destination``,
-    ``source_node``, ``destination_node``, ``protocol``, ``port``) in, the
-    direction ``trace`` returns as JSON out."""
+    ``source_node``, ``destination_node``, ``protocol``, ``port``,
+    ``destination_app``) in, the direction ``trace`` returns as JSON out."""
     with open(path, encoding="utf-8") as handle:
         data = json.load(handle)
     tracer = build(data)
@@ -228,6 +233,7 @@ def open_session(path: str) -> Callable[[str], str]:
     def run(request: str) -> str:
         asked = json.loads(request)
         port = asked.get("port")
+        app = asked.get("destination_app")
         return json.dumps(
             trace(
                 tracer,
@@ -237,6 +243,7 @@ def open_session(path: str) -> Callable[[str], str]:
                 destination_node=asked.get("destination_node"),
                 protocol=str(asked.get("protocol") or ""),
                 port=port if isinstance(port, int) and not isinstance(port, bool) else None,
+                destination_app=str(app) if app not in (None, "") else None,
                 node_ids=node_ids,
                 edge_ids=edge_ids,
             ),

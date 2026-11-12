@@ -52,6 +52,7 @@ from netcontrol.integrations.meraki.forwarding import (
 )
 from netcontrol.integrations.panorama.collector import members
 from netcontrol.integrations.panorama.normalize import _bare, _Builder, _dict, _name, _text, _yes, value_cidr
+from netcontrol.integrations.pathtrace import apps as trace_apps
 
 _DEFAULT_ROUTES = ("0.0.0.0/0", "::/0")
 # The next hop of a connected route: no gateway.
@@ -67,6 +68,8 @@ _ACTIONS = {
 _DYNAMIC_FLAGS = (("B", "BGP"), ("O", "OSPF"), ("Oi", "OSPF"), ("Oo", "OSPF"), ("O1", "OSPF"), ("O2", "OSPF"))
 SECURITY_POLICY_NAME = "Security policy"
 LOCAL_RULES_NOTE = "Local firewall rules"
+# The taxonomy PAN-OS URL categories are in (``pathtrace.apps``).
+CATEGORY_SCHEME = "Panorama"
 
 
 def _vrf(name: Any) -> str:
@@ -271,15 +274,18 @@ class _FirewallForwarding:
 
     # Rule values
 
-    def _addresses(self, names: Any, group: str, negate: bool, what: str) -> tuple[list[str], list[str]]:
+    def _addresses(
+        self, names: Any, group: str, negate: bool, what: str, criteria: list[dict] | None = None
+    ) -> tuple[list[str], list[str]]:
         """``(cidrs, unresolved)`` of a rule's source or destination. A field
         Plexus cannot resolve in full matches every address, with the names
-        kept as unresolved."""
+        kept as unresolved (and as name criteria in ``criteria``, when given,
+        see ``objects.addresses``)."""
         listed = members(names) or [ANY]
         cidrs: list[str] = []
         unresolved: list[str] = []
         for name in listed:
-            found, bad = self.b.objects.addresses(name, group)
+            found, bad = self.b.objects.addresses(name, group, criteria=criteria)
             cidrs += [c for c in found if c not in cidrs]
             unresolved += bad
         if negate:
@@ -316,8 +322,26 @@ class _FirewallForwarding:
         return [(p, _join([port for q, port in services if q == p])) for p in protocols]
 
     @staticmethod
+    def _app_names(item: dict) -> list[dict]:
+        """A rule's applications and URL categories as name criteria
+        (``pathtrace.apps``): each field must match, any entry of one does."""
+        found = [
+            trace_apps.criterion(trace_apps.APPLICATION, a, f"application {a}", group="application")
+            for a in members(item.get("application"))
+            if a.lower() != ANY
+        ]
+        found += [
+            trace_apps.criterion(trace_apps.CATEGORY, v, f"URL category {v}", scheme=CATEGORY_SCHEME, group="url")
+            for v in members(item.get("category"))
+            if v.lower() != ANY
+        ]
+        return found
+
+    @staticmethod
     def _extras(item: dict) -> tuple[list[str], list[str]]:
-        """``(applications, other unresolved)`` a rule also matches on."""
+        """``(applications, other unresolved)`` a rule also matches on: its
+        applications and URL categories (``_app_names``), users and HIP
+        profiles."""
         apps = [a for a in members(item.get("application")) if a.lower() != ANY]
         extras = [f"application {a}" for a in apps]
         for key, label in (
@@ -438,12 +462,23 @@ class _FirewallForwarding:
         for _base, group, item in b.security_chain(self.serial):
             position += 1
             src, bad_src = self._addresses(item.get("source"), group, _yes(item.get("negate-source")), "source")
+            dst_names: list[dict] = []
             dst, bad_dst = self._addresses(
-                item.get("destination"), group, _yes(item.get("negate-destination")), "destination"
+                item.get("destination"), group, _yes(item.get("negate-destination")), "destination", dst_names
             )
+            # The addresses listed beside FQDN objects, any of which matches.
+            dst_cidrs: list[str] = []
+            if bad_dst and not _yes(item.get("negate-destination")):
+                for name in members(item.get("destination")):
+                    listed, _bad = self.b.objects.addresses(name, group)
+                    dst_cidrs += [c for c in listed if c not in dst_cidrs and c != ANY]
+            if not any(c["kind"] == trace_apps.FQDN for c in dst_names):
+                dst_names = []
             for original, translated in self.dnat:
                 if any(cidr in dst for cidr in original):
                     dst += [cidr for cidr in translated if cidr not in dst]
+                if any(cidr in dst_cidrs for cidr in original):
+                    dst_cidrs += [cidr for cidr in translated if cidr not in dst_cidrs]
             apps, extras = self._extras(item)
             services, bad_services = self._services(item, group, apps)
             action = _text(item.get("action")).lower()
@@ -462,6 +497,9 @@ class _FirewallForwarding:
                         dst_zones=self.rule_zones(item.get("to")),
                         comment=_text(item.get("description")),
                         unresolved=bad_src + bad_dst + bad_services + extras,
+                        dst_names=dst_names,
+                        dst_cidrs=dst_cidrs,
+                        app_names=self._app_names(item),
                     )
                 )
         defaults = b.default_actions(self.serial)

@@ -917,23 +917,34 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     });
   }
   function traceRequest(from, to, t) {
+    if (to.app) return { source: pickEnd(from), destination_app: to.app, source_node: from.n.id, protocol: t.protocol, port: t.port };
     return { source: pickEnd(from), destination: pickEnd(to), source_node: from.n.id, destination_node: to.n.id,
       protocol: t.protocol, port: t.port };
   }
-  // Traces a leg both ways (once per traffic) and redraws the path with it.
+  // The ends of a leg the tracer can trace, source first: two subnets or
+  // addresses as picked, or a subnet or address and an internet application,
+  // which is always the destination. Null for any other leg.
+  function traceEnds(from, to) {
+    if (from.subnet && to.subnet) return [from, to];
+    if (from.subnet && to.app) return [from, to];
+    if (from.app && to.subnet) return [to, from];
+    return null;
+  }
+  // Traces a leg both ways (once per traffic) and redraws the path with it;
+  // a leg to an internet application one way only (it has no reverse).
   function requestLeg(from, to) {
     var key = legCacheKey(from, to);
     if (tracedLegs[key] || tracedLegs[legCacheKey(to, from)]) return;
     var entry = tracedLegs[key] = { result: null }, t = traffic;
     tracerReady().then(function () {
-      return Promise.all([askTracer(traceRequest(from, to, t)), askTracer(traceRequest(to, from, t))]);
+      return Promise.all([askTracer(traceRequest(from, to, t)), to.app ? null : askTracer(traceRequest(to, from, t))]);
     }).then(function (both) {
       entry.result = { forward: both[0], backward: both[1] };
       refreshPath();
     }, function (err) {
       if (tracer.state === 'failed') return;
       var failed = { applies: false, traffic: '', verdict: 'unknown', summary: 'the path tracer in this file failed: ' + errorText(err) };
-      entry.result = { forward: failed, backward: failed };
+      entry.result = { forward: failed, backward: to.app ? null : failed };
       refreshPath();
     });
   }
@@ -1046,7 +1057,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
   function traceBody(section) {
     var box = el('div', 'trace');
     if (section.note) { box.appendChild(el('div', 'c-muted', 'ⓘ ' + section.note)); return box; }
-    var rev = !!pathReversed[section.key], ends = section.ends;
+    var rev = !!pathReversed[section.key] && !!section.backward, ends = section.ends;
     var shown = rev ? section.backward : section.forward, other = rev ? section.forward : section.backward;
     var otherEnds = rev ? ends[0] + ' → ' + ends[1] : ends[1] + ' → ' + ends[0];
     var applies = !!(shown && shown.applies), route = applies ? traceRoute(shown.request) : null;
@@ -1059,15 +1070,28 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
       if (shown.traffic) head.appendChild(el('span', 'c-muted', ' (' + shown.traffic + ')'));
       head.appendChild(document.createTextNode(': ' + (shown.summary || '')));
     }
-    var button = el('button', 'btn t-btn', rev ? 'Reverse: back to ' + otherEnds : 'Reverse: trace ' + otherEnds + ' as a new connection');
-    button.type = 'button'; button.setAttribute('aria-pressed', rev ? 'true' : 'false');
-    button.addEventListener('click', function () { reversePathLeg(section.key); });
-    head.appendChild(button); box.appendChild(head);
-    box.appendChild(el('div', 'c-muted', (rev ? 'Original direction (' + otherEnds + ')' : 'Reverse direction (' + otherEnds + ', new connection)') +
-      ': ' + verdictWord(other)));
+    if (section.backward) {
+      var button = el('button', 'btn t-btn', rev ? 'Reverse: back to ' + otherEnds : 'Reverse: trace ' + otherEnds + ' as a new connection');
+      button.type = 'button'; button.setAttribute('aria-pressed', rev ? 'true' : 'false');
+      button.addEventListener('click', function () { reversePathLeg(section.key); });
+      head.appendChild(button);
+    }
+    box.appendChild(head);
+    if (section.backward) {
+      box.appendChild(el('div', 'c-muted', (rev ? 'Original direction (' + otherEnds + ')' : 'Reverse direction (' + otherEnds + ', new connection)') +
+        ': ' + verdictWord(other)));
+    }
     if (!applies) return box;
+    var app = shown.destination_app;
+    if (app) {
+      var at = app.address ? 'at ' + app.address : 'address not known';
+      var appLine = el('div'); appLine.appendChild(el('strong', null, 'Internet application'));
+      appLine.appendChild(document.createTextNode(': ' + [app.name, app.domain && app.domain !== app.name ? app.domain + ' ' + at : at]
+        .concat((app.categories || []).length ? ['categories: ' + app.categories.join(', ')] : []).join(' · ') + '.'));
+      box.appendChild(appLine);
+    }
     var src = (shown.source && shown.source.address) || (rev ? ends[1] : ends[0]);
-    var dst = (shown.destination && shown.destination.address) || (rev ? ends[0] : ends[1]);
+    var dst = (shown.destination && shown.destination.address) || (app && app.address) || (rev ? ends[0] : ends[1]);
     var ports = portsText(shown.ports);
     if (ports) {
       var line = el('div'); line.appendChild(el('strong', null, 'Ports end to end'));
@@ -1131,16 +1155,18 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     allNodes.forEach(function (n) { n.onPath = false; });
     allEdges.forEach(function (e) { e.onPath = false; });
     pathLegs = []; pathSiteIds = {}; pathPicked = {};
-    pathPicks.forEach(function (p) { p.n.onPath = true; pathPicked[p.n.id] = true; if (p.n.site) pathSiteIds[p.n.site] = true; });
+    pathPicks.forEach(function (p) { if (!p.n) return; p.n.onPath = true; pathPicked[p.n.id] = true; if (p.n.site) pathSiteIds[p.n.site] = true; });
     var reachFrom = {};
     for (var i = 0; i < pathPicks.length - 1; i++) {
       for (var j = i + 1; j < pathPicks.length; j++) {
-        var from = pathPicks[i], to = pathPicks[j], key = from.key + '|' + to.key;
+        var from = pathPicks[i], to = pathPicks[j], key = from.key + '|' + to.key, ends = traceEnds(from, to);
         // A traced leg lights up the hops of the direction shown, else the
         // path over the links.
-        var traced = from.subnet && to.subnet ? legTrace(from, to) : null;
-        if (from.subnet && to.subnet && !traced && TRACER && tracer.state !== 'failed') requestLeg(from, to);
-        var lit = traced ? markTrace(pathReversed[key] ? traced.backward : traced.forward) : false;
+        var traced = ends ? legTrace(ends[0], ends[1]) : null;
+        if (ends && !traced && TRACER && tracer.state !== 'failed') requestLeg(ends[0], ends[1]);
+        var lit = traced ? markTrace(pathReversed[key] && traced.backward ? traced.backward : traced.forward) : false;
+        // An internet application is not on the map: only its trace is shown.
+        if (!from.n || !to.n) { pathLegs.push({ key: key, from: from, to: to, hops: null, same: false, internet: true, notes: [], traced: traced, lit: lit, ends: ends }); continue; }
         if (from.n === to.n) { pathLegs.push({ key: key, from: from, to: to, hops: null, same: true, notes: [], traced: traced, lit: lit }); continue; }
         var reach = reachFrom[from.n.id] || (reachFrom[from.n.id] = shortestFrom(from.n));
         var hops = [], tunnels = 0, at = reach[to.n.id];
@@ -1150,25 +1176,34 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
           if (at.edge) { if (!lit) at.edge.onPath = true; if (isCurved(at.edge)) tunnels++; }
           at = at.prev ? reach[at.prev.id] : null;
         }
-        pathLegs.push({ key: key, from: from, to: to, hops: hops.length ? hops : null, same: false, traced: traced, lit: lit,
+        pathLegs.push({ key: key, from: from, to: to, hops: hops.length ? hops : null, same: false, traced: traced, lit: lit, ends: ends,
           notes: subnetNotes(from, tunnels).concat(subnetNotes(to, tunnels)) });
       }
     }
   }
   function nodeSiteName(n) { return (siteById[n.site] || {}).name || ''; }
-  function pickName(p) { return p.subnet ? p.address || p.subnet.cidr : (nodeSiteName(p.n) || p.n.label); }
-  // The address a trace runs from or to: the typed address, else the subnet.
-  function pickEnd(p) { return p.address || (p.subnet ? p.subnet.cidr : p.label || p.n.label); }
+  function pickName(p) { return p.app || (p.subnet ? p.address || p.subnet.cidr : (nodeSiteName(p.n) || p.n.label)); }
+  // The address a trace runs from or to: the typed address, else the subnet
+  // (or the internet application).
+  function pickEnd(p) { return p.app || p.address || (p.subnet ? p.subnet.cidr : p.label || p.n.label); }
   // The section under a leg's path: its trace, or why it has none.
   function legTraceSection(leg, name) {
     if (leg.traced) {
-      var shown = pathReversed[leg.key] ? leg.traced.backward : leg.traced.forward;
+      var shown = pathReversed[leg.key] && leg.traced.backward ? leg.traced.backward : leg.traced.forward;
       return { title: name + ' · ' + (shown && shown.applies ? verdictLabel(shown.verdict)[0] : 'no trace'), kind: 'trace', key: leg.key,
-        ends: [pickEnd(leg.from), pickEnd(leg.to)], forward: leg.traced.forward, backward: leg.traced.backward };
+        ends: [pickEnd(leg.ends[0]), pickEnd(leg.ends[1])], forward: leg.traced.forward, backward: leg.traced.backward };
     }
     var note = null;
-    if (leg.from.subnet && leg.to.subnet && TRACER && tracer.state !== 'failed') {
+    if (leg.ends && TRACER && tracer.state !== 'failed') {
       return { title: name + ' · tracing', kind: 'trace', note: tracerNote() };
+    } else if (leg.from.app && leg.to.app) {
+      note = 'Two internet applications are not traced to each other: an application is traced from a subnet or IP address.';
+    } else if (leg.internet && !leg.ends) {
+      var other = leg.from.app ? leg.to : leg.from;
+      note = (leg.from.app || leg.to.app) + ' is traced from a subnet or IP address: add ' + (other.label || other.n.label) +
+        ' with the subnet box instead (one of its subnets, or an IP address).';
+    } else if (leg.internet) {
+      note = (TRACER ? 'The path tracer in this file could not start: ' + tracer.error + '. ' : '') + 'Not traced.';
     } else if (leg.from.subnet && leg.to.subnet) {
       note = (TRACER ? 'The path tracer in this file could not start: ' + tracer.error + '. ' : '') +
         'Not traced: this file carries the traces Plexus ran for the picks open when it was exported. Open Path Mode on the Topology page to trace other ends.';
@@ -1184,7 +1219,8 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     if (pathMessage) sections.push({ title: 'Note', kind: 'text', text: pathMessage });
     if (pathPicks.length < 2) {
       sections.push({ title: 'How to use', kind: 'text', text: 'Click two or more sites in the list, or sites and devices on the map, to see how they reach one another.' +
-        (subnets.length ? ' Or pick subnets in the box above: choose one from its list, or type an IP address or network and press Enter.' : '') +
+        (subnets.length ? ' Or pick subnets in the box above: choose one from its list, or type an IP address or network and press Enter.' +
+          (TRACER ? ' Type an internet application or domain (YouTube, youtube.com) and press Enter to trace to it as the destination.' : '') : '') +
         ' Click a pick again to remove it. Up to ' + MAX_PATH_PICKS + ' picks.' +
         (TRACER ? ' This file traces any two subnets or IP addresses itself, offline, from the data collected when it was exported (' + (DATA.generated_at || 'date not recorded') +
           '): pick them in the box above and set the traffic next to it to see, at every device, the policies, ACLs, security groups, NAT rules and routes the flow hits.' +
@@ -1195,6 +1231,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     if (pathPicks.length) {
       sections.push({ title: 'Picked', kind: 'table', columns: ['Pick', 'Device', 'Site'],
         rows: pathPicks.map(function (p) {
+          if (!p.n) return [p.label, 'Internet (not on the map)', ''];
           return [p.subnet ? (p.address || p.subnet.cidr) + ' (' + p.subnet.name + ')' : 'Device', p.n.label, nodeSiteName(p.n)];
         }) });
       if (hasTraces) sections.push({ title: 'Traces in this file', kind: 'kv', rows: [['Traffic traced', trafficText(EMBEDDED_PATH.traffic)],
@@ -1204,7 +1241,8 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     pathLegs.forEach(function (leg) {
       var name = pickName(leg.from) + '  →  ' + pickName(leg.to), trace = legTraceSection(leg, name);
       if (leg.traced) anyTraced = true;
-      if (leg.same) sections.push({ title: name + ' (same device)', kind: 'text', text: 'Routed locally by ' + leg.from.n.label + '.' });
+      if (leg.internet) { if (!leg.lit) sections.push({ title: name + ' (internet)', kind: 'text', text: 'Out to the internet; an application is not on the map.' }); }
+      else if (leg.same) sections.push({ title: name + ' (same device)', kind: 'text', text: 'Routed locally by ' + leg.from.n.label + '.' });
       else if (!leg.hops) sections.push({ title: name + ' (no path)', kind: 'text', text: 'No path over links that are up.' });
       // A traced leg lists the hops of its trace instead of the path over the links.
       else if (!leg.lit) {
@@ -1217,7 +1255,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
       if (leg.notes.length) sections.push({ title: 'Warning: ' + name, kind: 'text', text: leg.notes.join('\n') });
     });
     if (pathLegs.length) {
-      var inCloud = pathPicks.some(function (p) { return p.n.provider === 'aws' || p.n.provider === 'azure' || p.n.provider === 'gcp'; });
+      var inCloud = pathPicks.some(function (p) { return p.n && (p.n.provider === 'aws' || p.n.provider === 'azure' || p.n.provider === 'gcp'); });
       sections.push({ title: 'About this path', kind: 'text', text: 'The path drawn is the shortest way over the cables, uplinks and VPN tunnels on the map that are up: it shows how the ends are joined, not the route each device picks.' +
         (anyTraced ? ' A traced leg lists the hops of its trace instead.' : '') +
         ' A subnet is placed on the device that owns it (appliance, L3 switch, VPC or VPN peer).' +
@@ -1369,12 +1407,29 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     var named = found.length ? [] : findNamedHosts(text);
     if (named.length) found = named;
     if (found.length === 1) { addSubnetPick(found[0], subnetByLabel[text] ? null : text); return; }
+    var app = found.length ? null : appCandidate(text);
+    if (app && !suggestHosts(text).length) { addAppPick(app); return; }
     pathMessage = named.length ? named[0].name + ' has ' + named.length + ' addresses (' +
         named.slice(0, 6).map(function (s) { return s.cidr.replace(/\/32$/, ''); }).join(', ') + (named.length > 6 ? ', ...' : '') +
         ') - pick the one to trace below the box.' :
       found.length ? text + ' exists at ' + found.length + ' sites - pick the one you mean from the list.' : 'No collected subnet contains ' + text + ', and no collected host has that DNS name.';
     showPath();
   });
+  // The internet application or domain typed text can be traced to, as on
+  // the Topology page (appCandidate): only in a file with the path tracer, and
+  // not an address or text the subnet list or a host's DNS name answers to.
+  function appCandidate(text) {
+    var typed = text.trim(), name = /[:\/\\]/.test(typed) ? typedHost(typed) : typed, lower = typed.toLowerCase();
+    if (!TRACER || name.length < 2 || name.length > 128) return null;
+    if (/^[\d.\/]+$/.test(name) || /^[\da-f]*:[\da-f:.]*(?:\/\d{1,3})?$/i.test(name)) return null;
+    if (subnets.some(function (s) { return subnetLabel(s).toLowerCase().indexOf(lower) !== -1; })) return null;
+    return findNamedHosts(typed).length ? null : name;
+  }
+  function addAppPick(name) {
+    $('p-subnet').value = ''; $('p-hosts').textContent = ''; $('p-subnet').setAttribute('list', 'subnet-options');
+    togglePathPick({ key: 'a:' + name.toLowerCase(), n: null, subnet: null, address: null, app: name, label: 'Internet application: ' + name }, true);
+  }
+  if (TRACER) $('p-subnet').placeholder = 'Add a subnet, IP address, part of a DNS name or an internet application...';
   // The traffic the path tracer checks, next to the subnet picker.
   function showTraffic() {
     $('p-proto').value = traffic.protocol;

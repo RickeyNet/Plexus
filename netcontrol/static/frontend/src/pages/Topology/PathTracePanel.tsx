@@ -3,11 +3,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathTrace, type PathDirection, type PathTrace as PathTraceResult, type PathTraceQuery } from '@/api/meraki';
 
 import {
+  destinationAppText,
   hopTitle,
   itemWhere,
   portsText,
   stageLabel,
   statusMark,
+  traceDestination,
   traceEnds,
   traceHighlight,
   traceRoute,
@@ -112,10 +114,15 @@ function Asymmetry({ result }: { result: PathTraceResult }) {
 
 function Result({ result, query }: { result: PathTraceResult; query: PathTraceQuery }) {
   const source = result.source?.address || query.source;
-  const destination = result.destination?.address || query.destination;
+  const destination = result.destination?.address || result.destination_app?.address || traceDestination(query);
   const ports = portsText(result.ports);
   return (
     <>
+      {result.destination_app && (
+        <div>
+          <strong>Internet application</strong>: {destinationAppText(result.destination_app)}.
+        </div>
+      )}
       {ports && (
         <div>
           <strong>Ports end to end</strong>: {ports}.
@@ -146,7 +153,9 @@ function Result({ result, query }: { result: PathTraceResult; query: PathTraceQu
  * the same traffic the other way round as a new connection (Reverse), then at
  * every device the policies, ACLs, security groups, NAT rules and routes it
  * hits, for the request and the replies, and last whether routing is
- * asymmetric, which compares the two lists above it.
+ * asymmetric, which compares the two lists above it. A trace to an internet
+ * application has no reverse (`backward` null) and names the application,
+ * the address it was traced to and its categories.
  */
 export function PathTrace({
   forward,
@@ -154,16 +163,18 @@ export function PathTrace({
   onHighlight,
 }: {
   forward: PathTraceQuery;
-  backward: PathTraceQuery;
+  /** The same traffic the other way round; null when it cannot be (a trace to an internet application). */
+  backward: PathTraceQuery | null;
   /** Called with the request hops of the direction shown, null when there are none. */
   onHighlight?: (highlight: TraceHighlight | null) => void;
 }) {
-  const [reversed, setReversed] = useState(false);
+  const [reversedPicked, setReversed] = useState(false);
+  const reversed = reversedPicked && backward !== null;
   const forwardTrace = usePathTrace(forward);
   const backwardTrace = usePathTrace(backward);
   const shown = reversed ? backwardTrace : forwardTrace;
   const other = reversed ? forwardTrace : backwardTrace;
-  const shownQuery = reversed ? backward : forward;
+  const shownQuery = reversed && backward ? backward : forward;
   const otherQuery = reversed ? forward : backward;
 
   const data = shown.data;
@@ -179,7 +190,7 @@ export function PathTrace({
   }, [highlight]);
   useEffect(() => () => onHighlightRef.current?.(null), []);
 
-  const reverseButton = (
+  const reverseButton = otherQuery && (
     <button
       type="button"
       className="btn btn-sm btn-secondary"
@@ -215,10 +226,12 @@ export function PathTrace({
         {head}
         {reverseButton}
       </div>
-      <div className="text-muted">
-        {reversed ? `Original direction (${traceEnds(otherQuery)})` : `Reverse direction (${traceEnds(otherQuery)}, new connection)`}:{' '}
-        {verdictWord(other)}
-      </div>
+      {otherQuery && (
+        <div className="text-muted">
+          {reversed ? `Original direction (${traceEnds(otherQuery)})` : `Reverse direction (${traceEnds(otherQuery)}, new connection)`}:{' '}
+          {verdictWord(other)}
+        </div>
+      )}
       {data?.applies && <Result result={data} query={shownQuery} />}
     </div>
   );

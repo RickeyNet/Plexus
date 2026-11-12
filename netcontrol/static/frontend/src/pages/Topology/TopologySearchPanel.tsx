@@ -11,6 +11,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMacSearch, type MacEntry } from '@/api/networkTools';
 import { useHostsByVlan, type VlanHostRole } from '@/api/host-details';
 import { EmptyState } from '@/components/EmptyState';
+import { useDebouncedValue } from '@/lib/useDebouncedValue';
 import { MAP_PANEL_MAX_WIDTH } from './helpers';
 
 export type SearchKind = 'auto' | 'mac' | 'ip' | 'vlan';
@@ -48,13 +49,8 @@ function detectKind(q: string): Exclude<SearchKind, 'auto'> {
 export function TopologySearchPanel({ onHighlight, resolveMeraki, onClose, hidden = false }: Props) {
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState<SearchKind>('auto');
-  const [debounced, setDebounced] = useState('');
-
   // Debounce so we don't hammer the backend on every keystroke.
-  useEffect(() => {
-    const t = setTimeout(() => setDebounced(query.trim()), 250);
-    return () => clearTimeout(t);
-  }, [query]);
+  const debounced = useDebouncedValue(query.trim());
 
   const effectiveKind = kind === 'auto' ? detectKind(debounced) : kind;
   const vlanId =

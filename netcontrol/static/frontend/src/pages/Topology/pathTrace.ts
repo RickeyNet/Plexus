@@ -1,4 +1,5 @@
 import type {
+  PathDestinationApp,
   PathDirection,
   PathHop,
   PathItem,
@@ -9,34 +10,44 @@ import type {
   ReachabilityStatus,
 } from '@/api/meraki';
 
-import type { PathPick, PickLeg, TrafficFilter } from './paths';
+import { pickNodes, type PathPick, type PickLeg, type TrafficFilter } from './paths';
 
 // Path trace: what the server finds when it walks a Path Mode leg between two
-// subnets or addresses hop by hop, through each device's routes, policies,
-// ACLs, security groups and NAT, for the request and for the replies
-// (`GET /api/topology/path`). These helpers turn picks into the query and the
-// result into text, marks and map highlights; PathTrace.tsx draws them.
+// subnets or addresses (or from one to an internet application or domain) hop
+// by hop, through each device's routes, policies, ACLs, security groups and
+// NAT, for the request and for the replies (`GET /api/topology/path`). These
+// helpers turn picks into the query and the result into text, marks and map
+// highlights; PathTrace.tsx draws them.
 
 type NodeId = number | string;
 
 /**
- * The trace of a leg from `from` to `to`, or null unless both ends are
- * subnets or addresses: a device or site pick has no address to trace.
+ * The trace of a leg from `from` to `to`, or null unless the source is a
+ * subnet or address and the destination a subnet, an address or an internet
+ * application: a device or site pick has no address to trace. An internet
+ * application is always the destination, whichever end it was picked as.
  */
 export function pathTraceQuery(from: PathPick, to: PathPick, traffic: TrafficFilter): PathTraceQuery | null {
-  if (!from.subnet || !to.subnet) return null;
+  const [source, destination] = from.app ? [to, from] : [from, to];
+  if (!source.subnet) return null;
+  const ends = { source: source.address ?? source.subnet.cidr, source_node: source.node };
+  const flow = { protocol: traffic.protocol, port: traffic.port };
+  if (destination.app) return { ...ends, destination_app: destination.app, ...flow };
+  if (!destination.subnet) return null;
   return {
-    source: from.address ?? from.subnet.cidr,
-    destination: to.address ?? to.subnet.cidr,
-    source_node: from.node,
-    destination_node: to.node,
-    protocol: traffic.protocol,
-    port: traffic.port,
+    ...ends,
+    destination: destination.address ?? destination.subnet.cidr,
+    destination_node: destination.node,
+    ...flow,
   };
 }
 
-/** The same traffic as a new connection from the destination to the source. */
-export function reverseTraceQuery(query: PathTraceQuery): PathTraceQuery {
+/**
+ * The same traffic as a new connection from the destination to the source;
+ * null for a trace to an internet application, which is only ever a destination.
+ */
+export function reverseTraceQuery(query: PathTraceQuery): PathTraceQuery | null {
+  if (query.destination_app !== undefined || query.destination === undefined) return null;
   return {
     source: query.destination,
     destination: query.source,
@@ -77,7 +88,7 @@ export function mergeHighlights(
   legs: PickLeg[],
   traces: Readonly<Record<string, TraceHighlight | null | undefined>>,
 ): TraceHighlight {
-  const nodeIds = new Set<NodeId>(picks.map((p) => p.node));
+  const nodeIds = new Set<NodeId>(pickNodes(picks));
   const edgeIds = new Set<NodeId>();
   for (const leg of legs) {
     const trace = traces[legKey(leg)];
@@ -211,22 +222,44 @@ export function portsText(ports: PathPorts | null | undefined): string | null {
   return parts.map(([word, text]) => `${word} ${text || 'none'}`).join('; ');
 }
 
-/** `10.1.10.5 → 10.0.1.5` */
+/** What a trace runs to: the destination address, or the internet application. */
+export function traceDestination(query: PathTraceQuery): string {
+  return query.destination_app ?? query.destination ?? '';
+}
+
+/** `192.0.2.5 → 198.51.100.5`, or `192.0.2.5 → YouTube` */
 export function traceEnds(query: PathTraceQuery): string {
-  return `${query.source} → ${query.destination}`;
+  return `${query.source} → ${traceDestination(query)}`;
 }
 
 /**
- * Why a leg with a subnet or address at one end is not traced: the other end
- * was picked as a device or site. Null when the leg is traced or has no
- * subnet end.
+ * The internet application a trace ran to, on one line:
+ * `YouTube · youtube.com at 203.0.113.10 · categories: Video streaming`, or
+ * `... · address not known` when no address was found for it.
+ */
+export function destinationAppText(app: PathDestinationApp): string {
+  const parts = [app.name];
+  const at = app.address ? `at ${app.address}` : 'address not known';
+  parts.push(app.domain && app.domain !== app.name ? `${app.domain} ${at}` : at);
+  if (app.categories.length) parts.push(`categories: ${app.categories.join(', ')}`);
+  return parts.join(' · ');
+}
+
+/**
+ * Why a leg with a subnet, an address or an internet application at one end
+ * is not traced: the other end was picked as a device or site, or both ends
+ * are internet applications. Null when the leg is traced or has neither.
  */
 export function uncheckedTraceNote(from: PathPick, to: PathPick): string | null {
+  if (from.app && to.app) {
+    return 'Two internet applications are not traced to each other: an application is traced from a subnet or IP address.';
+  }
   // Both subnets: traced. Both devices: there is no address to trace.
-  const devices = [from, to].filter((p) => !p.subnet);
+  const devices = [from, to].filter((p) => !p.subnet && !p.app);
   if (devices.length !== 1) return null;
-  return (
-    'Routes, policies and NAT are checked only between two subnets or IP addresses: ' +
-    `add ${devices[0].label} with the subnet box instead (one of its subnets, or an IP address).`
-  );
+  const app = [from, to].find((p) => p.app)?.app;
+  return app
+    ? `${app} is traced from a subnet or IP address: add ${devices[0].label} with the subnet box instead (one of its subnets, or an IP address).`
+    : 'Routes, policies and NAT are checked only between two subnets or IP addresses: ' +
+        `add ${devices[0].label} with the subnet box instead (one of its subnets, or an IP address).`;
 }

@@ -52,6 +52,7 @@ import csv
 import io
 import json
 import re
+import socket
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -153,13 +154,14 @@ from netcontrol.integrations.panorama.collector import (
 from netcontrol.integrations.panorama.normalize import build_snapshot as build_panorama_snapshot
 from netcontrol.integrations.panorama.sample import build_sample_raw as build_panorama_sample_raw
 from netcontrol.integrations.pathtrace import (
+    apps as trace_apps,
     placement as trace_placement,
     summarize as reach_summarize,
     sweep as reach_sweep,
 )
 from netcontrol.integrations.pathtrace.engine import PROTOCOLS as PATH_PROTOCOLS, Tracer
 from netcontrol.integrations.pathtrace.inventory import forwarding_for_host, subnets_for_host
-from netcontrol.integrations.pathtrace.model import INVENTORY_ORG_REF
+from netcontrol.integrations.pathtrace.model import INVENTORY_ORG_REF, net
 from netcontrol.integrations.pathtrace.offline import (
     dumps as offline_dumps,
     export_ids,
@@ -1995,14 +1997,38 @@ async def _offline_clouds(clouds: dict[int, Any]) -> dict[int, dict[str, Any]]:
     return rows
 
 
+# How long the address of an application's domain is looked up for.
+_APP_LOOKUP_TIMEOUT = 3.0
+
+
+async def _app_address(domain: str, version: int) -> str:
+    """The address ``domain`` resolves to, of IP ``version`` when it has
+    one (else an IPv4 address first), ``""`` when it cannot be looked up in
+    ``_APP_LOOKUP_TIMEOUT`` seconds. Only a DNS query: nothing connects."""
+    loop = asyncio.get_running_loop()
+    try:
+        infos = await asyncio.wait_for(
+            loop.getaddrinfo(domain, None, type=socket.SOCK_STREAM), timeout=_APP_LOOKUP_TIMEOUT
+        )
+    except (OSError, TimeoutError, UnicodeError) as exc:
+        LOGGER.debug("path trace: %s could not be looked up: %s", domain, type(exc).__name__)
+        return ""
+    found = [str(info[4][0]) for info in infos if info and info[4]]
+    v4 = [a for a in found if ":" not in a]
+    v6 = [a for a in found if ":" in a]
+    ordered = (v6 + v4) if version == 6 else (v4 + v6)
+    return ordered[0] if ordered else ""
+
+
 @router.get("/api/topology/path")
 async def topology_path_api(
     source: str = Query(min_length=1, max_length=64),
-    destination: str = Query(min_length=1, max_length=64),
+    destination: str | None = Query(default=None, min_length=1, max_length=64),
     source_node: str | None = Query(default=None, max_length=300),
     destination_node: str | None = Query(default=None, max_length=300),
     protocol: str = Query(default="", max_length=8),
     port: int | None = Query(default=None, ge=0, le=65535),
+    destination_app: str | None = Query(default=None, min_length=1, max_length=trace_apps.MAX_LENGTH),
 ):
     """Trace a flow from ``source`` to ``destination`` (IP addresses or
     networks) hop by hop across every device on the map, and its replies:
@@ -2010,27 +2036,54 @@ async def topology_path_api(
     in the order the device applies them, and whether routing is asymmetric.
     ``source_node`` / ``destination_node`` name the graph nodes that own the
     ends when the page knows them. ``protocol`` is ``tcp``, ``udp``, ``icmp``
-    or empty (any traffic)."""
+    or empty (any traffic).
+
+    ``destination_app`` asks about an internet application or domain
+    (``pathtrace.apps``): rules that name applications, categories or
+    domains are decided against it, and the result carries what it was
+    taken for (``destination_app``). ``destination`` is then optional: the
+    domain is looked up (``_app_address``), and when no address is found
+    the flow goes to an internet address that is not known."""
     if protocol.strip().lower() not in ("", "any", "all", *PATH_PROTOCOLS):
         raise HTTPException(status_code=400, detail=f"protocol must be one of {', '.join(PATH_PROTOCOLS)}")
+    if destination is None and destination_app is None:
+        raise HTTPException(status_code=400, detail="destination or destination_app is required")
     make_tracer = await _path_tracer()
-
-    def run() -> dict:
-        tracer = make_tracer()
-        return tracer.trace(
+    try:
+        # Building the indexes and walking a large map is CPU-bound.
+        tracer = await asyncio.to_thread(make_tracer)
+        address = destination or ""
+        if destination_app is not None and not address:
+            target = tracer.app_target(destination_app)
+            source_net = net(source)
+            if target.domain and source_net is not None:
+                address = await _app_address(target.domain, source_net.version)
+        return await asyncio.to_thread(
+            tracer.trace,
             source,
-            destination,
+            address,
             source_node=_graph_node_id(source_node),
             destination_node=_graph_node_id(destination_node),
             protocol=protocol,
             port=port,
+            destination_app=destination_app,
         )
-
-    try:
-        # Building the indexes and walking a large map is CPU-bound.
-        return await asyncio.to_thread(run)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/api/topology/path/apps")
+async def topology_path_apps_api(
+    q: str = Query(default="", max_length=trace_apps.MAX_LENGTH),
+    limit: int = Query(default=20, ge=1, le=50),
+):
+    """Applications, categories and domains a path trace can be asked about
+    by name (``destination_app``) whose name holds ``q``, those it starts
+    with first: from the collected catalogs (Cato's application catalog and
+    custom applications) and every one the rules of the latest snapshots
+    name."""
+    snapshots = [snapshot for _org_ref, snapshot in await latest_snapshots()]
+    return {"items": trace_apps.suggest(trace_apps.names(snapshots), q, limit)}
 
 
 def _reachability_file(report: dict[str, Any], fmt: str, verdict: str | None, source: str = "") -> Response:
@@ -2496,7 +2549,11 @@ async def topology_deep_search_api(
                         "org_ref": org_ref,
                         "node_id": node_id,
                         "label": next(
-                            (n.get("label") or "" for n in entry["snapshot"].get("nodes") or [] if n.get("id") == node_id),
+                            (
+                                n.get("label") or ""
+                                for n in entry["snapshot"].get("nodes") or []
+                                if n.get("id") == node_id
+                            ),
                             "",
                         ),
                         "snippet": _named_hosts_snippet(hosts, wanted),

@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import type { MerakiSubnet, PathDirection, PathHop } from '@/api/meraki';
 
-import { connectPicks, type PathPick } from './paths';
+import { appPick, connectPicks, type PathPick } from './paths';
 import {
+  destinationAppText,
   hopTitle,
   itemWhere,
   legKey,
@@ -66,7 +67,7 @@ describe('path trace query', () => {
       protocol: 'udp',
       port: 53,
     });
-    expect(traceEnds(reverseTraceQuery(forward))).toBe('10.0.10.20 → 10.1.10.5');
+    expect(traceEnds(reverseTraceQuery(forward)!)).toBe('10.0.10.20 → 10.1.10.5');
   });
 
   it('says which end to add as a subnet', () => {
@@ -204,5 +205,61 @@ describe('path trace on the map', () => {
     const plain = mergeHighlights(picks, result.legs, { [legKey(traced)]: { nodeIds: new Set(), edgeIds: new Set() } });
     expect([...plain.nodeIds].sort()).toEqual(['hub', 'mx-a', 'mx-b', 'sw-b']);
     expect([...plain.edgeIds].sort()).toEqual(['lan-b', 'vpn-a', 'vpn-b']);
+  });
+});
+
+describe('a trace to an internet application', () => {
+  const lan = subnet('192.0.2.0/24', 'mx-a', 'Branch 01');
+  const dmz = subnet('198.51.100.0/24', 'hub', 'Hub 01');
+  const app = appPick('YouTube');
+
+  it('sends the application in place of the destination, whichever end it was picked as', () => {
+    const query = { source: '192.0.2.10', source_node: 'mx-a', destination_app: 'YouTube', protocol: 'tcp', port: 443 };
+    expect(pathTraceQuery(pick(lan, '192.0.2.10'), app, { protocol: 'tcp', port: 443 })).toEqual(query);
+    expect(pathTraceQuery(app, pick(lan, '192.0.2.10'), { protocol: 'tcp', port: 443 })).toEqual(query);
+    const q = pathTraceQuery(pick(lan), app, { protocol: '' })!;
+    expect(q).not.toHaveProperty('destination');
+    expect(q).not.toHaveProperty('destination_node');
+    expect(traceEnds(q)).toBe('192.0.2.0/24 → YouTube');
+    // It has no reverse: an application is only a destination.
+    expect(reverseTraceQuery(q)).toBeNull();
+  });
+
+  it('is not traced from a device or another application', () => {
+    expect(pathTraceQuery(mx, app, { protocol: '' })).toBeNull();
+    expect(pathTraceQuery(app, appPick('example.com'), { protocol: '' })).toBeNull();
+    expect(uncheckedTraceNote(mx, app)).toBe(
+      'YouTube is traced from a subnet or IP address: add Branch 01 MX with the subnet box instead (one of its subnets, or an IP address).',
+    );
+    expect(uncheckedTraceNote(app, appPick('example.com'))).toContain('Two internet applications');
+    expect(uncheckedTraceNote(pick(lan), app)).toBeNull();
+  });
+
+  it('leaves the query between two subnets as it was', () => {
+    const picks = [pick(lan, '192.0.2.10'), app, pick(dmz)];
+    const result = connectPicks(picks, [{ id: 'vpn-a', from: 'mx-a', to: 'hub', protocol: 'vpn', status: '' }]);
+    const queries = result.legs.map((leg) => pathTraceQuery(leg.from, leg.to, { protocol: 'udp', port: 53 }));
+    expect(queries[2]).toMatchObject({ source: '198.51.100.0/24', destination_app: 'YouTube' });
+    expect(queries[1]).toEqual({
+      source: '192.0.2.10',
+      destination: '198.51.100.0/24',
+      source_node: 'mx-a',
+      destination_node: 'hub',
+      protocol: 'udp',
+      port: 53,
+    });
+    expect(queries[0]).toMatchObject({ source: '192.0.2.10', destination_app: 'YouTube' });
+    // The application adds no device to the map highlight.
+    const lit = mergeHighlights(picks, result.legs, {});
+    expect([...lit.nodeIds].sort()).toEqual(['hub', 'mx-a']);
+  });
+
+  it('describes the application the server resolved', () => {
+    expect(destinationAppText({ name: 'YouTube', domain: 'youtube.com', address: '203.0.113.10', categories: ['Video streaming'] })).toBe(
+      'YouTube · youtube.com at 203.0.113.10 · categories: Video streaming',
+    );
+    expect(destinationAppText({ name: 'example.com', domain: 'example.com', address: null, categories: [] })).toBe(
+      'example.com · address not known',
+    );
   });
 });

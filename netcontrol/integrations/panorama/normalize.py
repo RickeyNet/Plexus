@@ -73,6 +73,7 @@ from netcontrol.integrations.panorama.collector import (
     stack_of_devices,
     stack_templates,
 )
+from netcontrol.integrations.pathtrace import apps as trace_apps
 
 PANORAMA_SITE_ID = "__panorama__"
 PANORAMA_NODE_ID = "panorama"
@@ -337,11 +338,21 @@ class Objects:
             return "IP wildcard", _text(item.get("ip-wildcard"))
         return "", ""
 
-    def addresses(self, name: str, device_group: str, depth: int = 0) -> tuple[list[str], list[str]]:
+    def addresses(
+        self, name: str, device_group: str, depth: int = 0, criteria: list[dict] | None = None
+    ) -> tuple[list[str], list[str]]:
         """``(cidrs, unresolved)`` an address name stands for: ``any``, a
         literal address, network or range, an address object or a static
         group (every member); an FQDN, a wildcard, a dynamic group or a name
-        that is no object (a region, an external list) is unresolved."""
+        that is no object (a region, an external list) is unresolved. Each
+        unresolved entry is also added to ``criteria``, when given, as a name
+        criterion (``pathtrace.apps``): an FQDN object as the FQDN it is."""
+
+        def bad(entry: str, kind: str = trace_apps.OTHER, value: str = "") -> tuple[list[str], list[str]]:
+            if criteria is not None:
+                criteria.append(trace_apps.criterion(kind, value or entry, entry))
+            return [], [entry]
+
         text = _text(name)
         if not text or text.lower() == "any":
             return ["any"], []
@@ -354,22 +365,23 @@ class Objects:
             cidr = value_cidr(value) if kind in ("IP netmask", "IP range") else ""
             if cidr:
                 return [cidr], []
-            return [], [f"{kind or 'address'} {text}" + (f" ({value})" if value and value != text else "")]
+            entry = f"{kind or 'address'} {text}" + (f" ({value})" if value and value != text else "")
+            return bad(entry, trace_apps.FQDN, value) if kind == "FQDN" else bad(entry)
         group, _scope = self.find("address-group", text, device_group)
         if group is not None:
             dynamic = _dict(group.get("dynamic"))
             if dynamic or "dynamic" in group:
-                return [], [f"dynamic address group {text} ({_text(dynamic.get('filter'))})".replace(" ()", "")]
+                return bad(f"dynamic address group {text} ({_text(dynamic.get('filter'))})".replace(" ()", ""))
             if depth >= _MAX_GROUP_DEPTH:
-                return [], [f"address group {text}"]
+                return bad(f"address group {text}")
             cidrs: list[str] = []
             unresolved: list[str] = []
             for member in members(group.get("static")):
-                found, bad = self.addresses(member, device_group, depth + 1)
+                found, missing = self.addresses(member, device_group, depth + 1, criteria)
                 cidrs += [c for c in found if c not in cidrs]
-                unresolved += bad
+                unresolved += missing
             return cidrs, unresolved
-        return [], [text]
+        return bad(text)
 
     def describe(self, name: str, device_group: str) -> str:
         """An address name as "name (value)" when it is an object."""

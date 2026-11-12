@@ -345,8 +345,9 @@ export interface TopologyExportPath {
 }
 
 /**
- * URL of the self-contained HTML map. With a `path` of at least one pick the
- * file also carries that path and the hop-by-hop traces Plexus runs for it.
+ * URL of the self-contained HTML map. With a `path` of at least one pick on
+ * the map (an internet application is left out) the file also carries that
+ * path and the hop-by-hop traces Plexus runs for it.
  * `engine` false leaves out the path tracer (the file is then much smaller
  * and shows only those traces).
  */
@@ -360,14 +361,12 @@ export function topologyExportUrl(
   if (groupId != null) params.set("group_id", String(groupId));
   if (download) params.set("download", "1");
   if (!engine) params.set("engine", "0");
-  if (path && path.picks.length) {
-    const picks = path.picks.map(({ key, node, label, subnet, address }) => ({
-      key,
-      node,
-      label,
-      subnet,
-      address,
-    }));
+  // An internet application is not on the exported map: the file carries the
+  // picks that are, and the traces between them.
+  const picks = (path?.picks ?? []).flatMap(({ key, node, label, subnet, address }) =>
+    node === undefined ? [] : [{ key, node, label, subnet, address }],
+  );
+  if (path && picks.length) {
     params.set("path", JSON.stringify({ traffic: path.traffic, picks }));
   }
   const query = params.toString();
@@ -399,10 +398,16 @@ export function useMerakiSubnets(enabled: boolean) {
 export type ReachabilityStatus =
   "ok" | "blocked" | "partial" | "unknown" | "info";
 
-/** What Path Mode traces: two subnets or addresses and the traffic between them. */
+/**
+ * What Path Mode traces: two subnets or addresses, or a subnet or address and
+ * an internet application or domain, and the traffic between them.
+ */
 export interface PathTraceQuery {
   source: string;
-  destination: string;
+  /** Absent when `destination_app` is set. */
+  destination?: string;
+  /** An internet application name or a domain (1-128 characters) in place of `destination` and `destination_node`. */
+  destination_app?: string;
   /** Graph node ids of the devices that own the ends, when the page knows them. */
   source_node?: number | string;
   destination_node?: number | string;
@@ -489,6 +494,15 @@ export interface PathEnd {
   site: string;
 }
 
+/** The internet application or domain a trace ran to, as the server resolved it. */
+export interface PathDestinationApp {
+  name: string;
+  domain: string | null;
+  /** The address the trace used; null when none was found (traced to an internet address not known). */
+  address: string | null;
+  categories: string[];
+}
+
 /** A flow traced hop by hop across every device on the map (`GET /api/topology/path`). */
 export interface PathTrace {
   /** False when neither end could be placed; `summary` says why. */
@@ -505,6 +519,8 @@ export interface PathTrace {
   request?: PathDirection;
   reply?: PathDirection;
   notes?: string[];
+  /** Only when the query asked for `destination_app`. */
+  destination_app?: PathDestinationApp | null;
 }
 
 /** The query string of `GET /api/topology/path`. */
@@ -512,6 +528,7 @@ export function pathTraceSearch(query: PathTraceQuery): string {
   const values: Record<string, string | number | undefined> = {
     source: query.source,
     destination: query.destination,
+    destination_app: query.destination_app,
     source_node: query.source_node,
     destination_node: query.destination_node,
     protocol: query.protocol,
@@ -531,6 +548,33 @@ export function usePathTrace(query: PathTraceQuery | null) {
     queryFn: () => apiRequest<PathTrace>(`/topology/path?${search}`),
     enabled: query != null,
     staleTime: 60_000,
+  });
+}
+
+/** An internet application, category or domain offered for a typed Path Mode destination. */
+export interface PathAppSuggestion {
+  name: string;
+  kind: "application" | "category" | "domain";
+  /** Where the name comes from (a vendor's application catalogue, a built-in list). */
+  source: string;
+}
+
+/**
+ * Internet applications, categories and domains matching `query`
+ * (`GET /api/topology/path/apps`); off for an empty query. A query superseded
+ * by the next keystroke is cancelled.
+ */
+export function usePathAppSuggestions(query: string, limit = 8) {
+  const q = query.trim();
+  return useQuery({
+    queryKey: ["topology", "path", "apps", q, limit],
+    queryFn: ({ signal }) =>
+      apiRequest<{ items: PathAppSuggestion[] }>(
+        `/topology/path/apps?q=${encodeURIComponent(q)}&limit=${limit}`,
+        { signal },
+      ),
+    enabled: q.length > 0,
+    staleTime: 300_000,
   });
 }
 

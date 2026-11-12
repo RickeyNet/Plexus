@@ -156,6 +156,8 @@ At each device the trace takes these steps in this order:
 In a rule set the first matching rule decides. When no rule matches, the
 set's default applies. A rule that also matches on something Plexus cannot
 evaluate, such as an application, an FQDN or a user group, gives *unknown*.
+A trace to an [application or domain](#internet-applications-and-domains)
+decides the application, category and domain criteria too.
 
 ### Which rule sets apply
 
@@ -329,6 +331,69 @@ source the flow arrived with: the address it left its own network with,
 never a private address from before a NAT. The replies leave from the
 public address again. The address of an instance that is a device the
 trace follows itself (a vMX, an FTDv) is left to that device's own data.
+
+### Internet applications and domains
+
+The destination can be an internet application or a domain instead of an
+address (`destination_app`): `YouTube`, `youtube.com`, a Cato custom
+application's name. Rules that name applications, application categories,
+domains, FQDNs or URL categories are then decided against it instead of
+being *unknown* whenever they match:
+
+- **What it is.** A name is that application; the catalogs a snapshot
+  carries give its categories and domains: a Cato custom application (its
+  categories and the domains and FQDNs it is defined by) and Cato's
+  application catalog when it was collected (its categories and its
+  website). A domain is the host the flow goes to; it is an application
+  only when a custom application is defined by it. The result's
+  `destination_app` says what it was taken for: `name`, `domain`,
+  `address` and `categories`.
+- **Where it is.** A destination given with it is used as it is. Else the
+  server looks up the domain (the one typed, or the custom application's
+  or catalog's) with a short timeout. When no address is found (no domain
+  is known, the lookup fails, or the trace runs in an HTML export, which
+  looks nothing up) the flow goes to an internet address that is not
+  known: it is internet traffic (a Cato flow meets the Internet firewall),
+  only the default route and routes to internet ranges can carry it (a
+  route to an internet range ahead of the default makes the lookup
+  *partial*), a rule or NAT rule that names internet addresses may match
+  it (*partial*), one that names private ranges only does not, and the
+  replies are not traced.
+- **How a criterion is decided.** An application name matches when it is
+  the same name (case, spaces and punctuation do not count) and does not
+  when it is another; a name that holds the other (PAN-OS `youtube-base`
+  for YouTube) is *unknown*. A category matches when the application is
+  in it, in the same vendor's taxonomy: a Cato category is decided by
+  Cato's catalog, an FMC, PAN-OS or Junos URL category stays *unknown*,
+  since their catalogs are not collected. A domain covers itself and every
+  name under it, an FQDN one name, a wildcard (`*.example.com`) every name
+  under it. A custom application matches by its name, or by the domains it
+  is defined by when those are all it is defined by. What cannot be
+  decided (the categories of an application no catalog lists, which
+  application a typed domain is, the contents of a custom category, an
+  FMC application filter or URL) makes the rule *unknown*, with the reason:
+  "Rule 1 Block social may match files.example.org: it names app category
+  Social, and the categories of files.example.org are not collected". A
+  rule that matches says on what: "It matches YouTube on app category
+  Video Streaming". Schedules, users, device posture and the other
+  criteria Plexus does not evaluate still make a rule *unknown*.
+
+Where each vendor's rules carry these criteria:
+
+| Source | Decided against the application |
+|---|---|
+| Cato | Internet firewall destinations (applications, app categories, custom applications, domains, FQDNs, any of which matches, with the addresses listed beside them); the WAN firewall's application field, which narrows a rule; the Network Rules' application field (domains, FQDNs, applications, app categories, custom applications), so the rule that routes the flow out is decided too. Custom categories, sanctioned app categories and containers stay *unknown* |
+| Cisco FMC | Access and prefilter rule applications (filters stay *unknown*) and URL categories, each condition of its own; URLs stay *unknown* |
+| Palo Alto Panorama | Security rule applications and URL categories, and FQDN address objects in the destination |
+| Juniper Junos | Security policy `dynamic-application` and `url-category` |
+| Meraki | FQDN and wildcard destinations of Layer 3, inbound, site-to-site VPN rules and switch ACLs |
+
+FortiOS FQDN and wildcard-FQDN addresses and ASA FQDN objects are not
+decided yet: a rule that names one stays *unknown* when it matches.
+
+**Suggestions** (`GET /api/topology/path/apps`) list the applications and
+categories of the catalogs and every application, category and domain the
+rules of the latest snapshots name.
 
 ### Cato network rules and the egress address
 
@@ -948,7 +1013,8 @@ network the filters keep overlaps it.
 
 | Method | Path | Notes |
 |---|---|---|
-| `GET` | `/api/topology/path` | Traces a flow hop by hop. `source`, `destination`: an IP address or network, 1 to 64 characters. Optional `source_node`, `destination_node`: the map node ids of the devices that own the ends. Optional `protocol`: `tcp`, `udp`, `icmp`, `any` or empty for any traffic. Optional `port`: 0 to 65535. Returns `applies`, `traffic`, `source`, `destination`, `verdict` (`allowed`, `blocked`, `partial`, `unknown`), `summary`, `ports`, `asymmetric` (`status` `no`, `yes` or `unknown`, and `text`), `request` and `reply` (each `verdict`, `summary`, `ports` and `hops`) and `notes`. Each hop has `node`, `edge`, `label`, `site`, `provider`, `in`, `out`, `status` and `items`; each item `stage`, `status`, `where`, `text`, `rule` and, on the item that states a rule set's decision, `ports`. A `ports` value is `{"allowed": {"tcp": "80, 443", "icmp": "any"}, "partial": {"tcp": "8000-8080"}, "unknown": {}, "text": "allowed tcp 80, 443 · icmp; in part tcp 8000-8080"}`, with only the protocols asked about and only those that have ports in each list, or `null` for a direction that was not traced and for a trace that does not apply. A bad parameter returns HTTP 400 |
+| `GET` | `/api/topology/path` | Traces a flow hop by hop. `source`, `destination`: an IP address or network, 1 to 64 characters. Optional `source_node`, `destination_node`: the map node ids of the devices that own the ends. Optional `protocol`: `tcp`, `udp`, `icmp`, `any` or empty for any traffic. Optional `port`: 0 to 65535. Optional `destination_app` (1 to 128 characters): an [application or domain](#internet-applications-and-domains) the flow is for; `destination` is then optional, and the result carries `destination_app` (`name`, `domain`, `address`, the address traced or `null` when none was found, and `categories`). One of `destination` and `destination_app` is required. Returns `applies`, `traffic`, `source`, `destination`, `verdict` (`allowed`, `blocked`, `partial`, `unknown`), `summary`, `ports`, `asymmetric` (`status` `no`, `yes` or `unknown`, and `text`), `request` and `reply` (each `verdict`, `summary`, `ports` and `hops`) and `notes`. Each hop has `node`, `edge`, `label`, `site`, `provider`, `in`, `out`, `status` and `items`; each item `stage`, `status`, `where`, `text`, `rule` and, on the item that states a rule set's decision, `ports`. A `ports` value is `{"allowed": {"tcp": "80, 443", "icmp": "any"}, "partial": {"tcp": "8000-8080"}, "unknown": {}, "text": "allowed tcp 80, 443 · icmp; in part tcp 8000-8080"}`, with only the protocols asked about and only those that have ports in each list, or `null` for a direction that was not traced and for a trace that does not apply. A bad parameter returns HTTP 400 |
+| `GET` | `/api/topology/path/apps` | Suggestions for `destination_app`. Optional `q` (up to 128 characters; case-insensitive substring, names that start with it first) and `limit` (1 to 50, default 20). Returns `items`, each `name`, `kind` (`application`, `category` or `domain`) and `source` (`Cato application catalog`, `Cato custom application` or `Named by <rule set>`) |
 | `POST` | `/api/topology/summarize` | [Summarize addresses](#summarize-addresses). JSON body: `addresses` (required, up to 200,000 characters: IP addresses and networks split on newlines, commas, semicolons and spaces; at most 5,000 entries), `prefix` (optional roll-up prefix length; IPv4 0 to 32, IPv6 0 to 128), `max_routes` (optional, at least 1, per IP version) and the source filters of the reachability sweep as strings (`sources`, `providers`, `kinds`, `vlans`, `name`, `exclude`, `sites`, `within`, `overlaps`, `in_vpn`), which pick the collected networks each route is checked against. Returns `generated_at`, `input_count`, `unique_count`, `prefix`, `max_routes`, `filters` (the effective filters), `route_count`, `routes` (each with `cidr`, `version`, `prefixlen`, `addresses`, `inputs` (the distinct inputs it covers, sorted), `input_count`, `input_addresses` (the addresses the inputs hold) and `overlaps`: the collected networks it overlaps, with the network fields of a [listed](#list-only) row and `relation` `equal`, `inside`, `contains` or `overlaps`), `text` (the routes, one per line) and `uncovered` (always empty: every input is covered). A bad address, prefix, `max_routes` or filter, or more than 5,000 entries, returns HTTP 400 |
 | `GET` | `/api/topology/reachability` | The [reachability sweep](#reachability-sweep): traces one flow to `destination` (an IP address or network, optional) from every source network the filters keep. Optional `destination_node` (map node id of the device that owns the destination) or `destination_org_ref` + `destination_node_id` (the source and snapshot node of a picked subnet; `-4` and the host id for an inventory device); `protocol` and `port` as for `/api/topology/path`; filters `sources`, `providers`, `kinds`, `vlans`, `name`, `exclude`, `sites`, `within`, `overlaps`, `in_vpn`; `format` `json` (default), `csv` or `xlsx`, with optional `verdict` for a download of one verdict's rows. With `destination` empty the sweep is a [matrix](#many-destinations): the destination filters `to_sources`, `to_providers`, `to_kinds`, `to_vlans`, `to_name`, `to_exclude`, `to_sites`, `to_within`, `to_overlaps`, `to_in_vpn` pick the destination networks and every source network is traced to every destination network; `to_*` with a `destination`, or `destination_node` / `destination_org_ref` / `destination_node_id` without one, returns HTTP 400. Optional `source` (an IP address or network, up to 64 characters) traces [one source](#one-source) in place of the filtered source networks, to `destination` or to every `to_*` destination network it does not overlap, with optional `source_node` or `source_org_ref` + `source_node_id` for its owner; `source` with any source filter, `source_node` / `source_org_ref` / `source_node_id` without `source`, or a `source` that is not an IP address or network returns HTTP 400. Optional `list=1` [lists](#list-only) the networks the source filters keep without tracing them: `source`, its owner, the `to_*` filters, `protocol`, `port`, `verdict` and the limit are ignored; JSON returns `mode` `list`, `destination` and `source` `null`, `traffic` `""`, `to_filters` `null`, `source_count` and `candidates` the networks listed, `destination_count` 0, `counts` all 0 and `rows` with the network fields only (`org_ref` to `in_vpn` below); CSV and xlsx have the columns Source to In VPN, the xlsx one **Networks** tab, the CSV no summary, named `networks-<count>`. JSON returns `mode` (`one`, `matrix` or `list`), `source` (`address`, `node`, `label`, `site` of a typed source; `null` otherwise), `destination` (`address`, `node`, `label`, `site`; `null` in a matrix), `traffic`, `generated_at`, `filters` (the effective filters, with the default kinds), `to_filters` (the effective destination filters, `null` with one destination), `source_count`, `destination_count` (1 with one destination), `candidates` (the traces run), `limit`, `counts` (per verdict) and `rows`, each with `org_ref`, `org_name`, `provider`, `site_id`, `site_name`, `node_id`, `source_node`, `node_label`, `kind`, `vlan`, `cidr`, `name`, `in_vpn`, `dst_cidr`, `dst_name`, `dst_site_name`, `dst_org_ref`, `dst_org_name`, `dst_provider`, `dst_node_id`, `dst_node_label`, `dst_kind`, `dst_vlan`, `dst_in_vpn`, `destination_node`, `verdict`, `summary`, `traffic`, `decided_at`, `decided_by` and `ports`, sorted by site, then VLAN, then network, then the same for the destination. With one destination, `dst_cidr` is `destination` and `dst_node_label` / `dst_site_name` come from the trace's destination end; the other `dst_*` are empty. The row of a typed source has `cidr` the source as typed, `site_name`, `source_node` and `node_label` from the trace's source end, `org_ref`, `vlan` and `in_vpn` `null` and the other source fields empty; `source_count` is 1. CSV and xlsx are attachments with the columns listed in [Downloads](#downloads). A bad parameter returns HTTP 400; more than 20,000 traces (matching networks, or source→destination pairs in a matrix) returns HTTP 400 with `count` and `limit` |
 | `POST` | `/api/topology/inventory/collect` | [Collects](#inventory-devices-and-configuration-backups) the route table, the running configuration and the VLAN, port, CDP/LLDP neighbor and MAC address tables of inventory devices over SSH; needs `topology.write`. Optional JSON body: `group_id` (one inventory group's direct hosts; default every host), `host_ids` (explicit hosts, over `group_id`), `credential_id` (a credential the caller may use; default the Plexus service credential). ICMP-only hosts are left out. Returns HTTP 202 `{"job_id", "status": "running"}`; poll `GET /api/sources/builds/{job_id}`, whose `progress` is `phase` (`starting`, `collecting`, `saving`), `hosts_done`, `hosts_total`, `host`, and whose `result` is `hosts`, `collected` (hosts anything was read from), `routes`, `configs`, `vlans`, `interfaces`, `neighbors`, `macs` (each the number of hosts that part was read from), `skipped`, `errors` (each `host_id`, `hostname`, `ip_address`, `message`), `warning_count` and `duration_seconds`, with `status` `completed`, `partial` (some hosts failed) or `failed` (every host). An unknown host id, no collectable host in scope or no credential returns HTTP 400, an unknown group 404, a collection already running 409. The last run is the `inventory` entry of `GET /api/topology/sources` (with `service_credential`, whether Settings names a service credential, and `service_credential_id`, which one) |

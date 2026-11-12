@@ -47,6 +47,10 @@ What is read:
                                 groups with their members (so a rule naming
                                 one can be resolved), IP range and FQDN
                                 containers, custom applications
+  - ``catalogs.catalogApplicationList``
+                                Cato's application catalog (each
+                                application's categories and website), for
+                                a path trace asked about an application
   - ``site.*``, ``networkConfig``, ``accountManagement``
                                 the configuration of every site and the
                                 account's DHCP and DNS configuration, read
@@ -720,6 +724,23 @@ query plexusCustomApplications($accountId: ID!, $input: CustomApplicationListInp
 }
 """
 
+# Cato's application catalog (``catalogs.catalogApplicationList``, a
+# ``@beta`` field that needs the "Apps Catalog" permission): each
+# application's categories and website, which a path trace asked about an
+# application by name decides category rules with. The fields are those of
+# the documented example query; the input pages with ``paging`` and the
+# payload counts in ``pageInfo { total }``.
+APP_CATALOG_QUERY = """
+query plexusAppCatalog($accountId: ID!, $input: CatalogApplicationListInput!) {
+  catalogs(accountId: $accountId) {
+    catalogApplicationList(input: $input) {
+      pageInfo { total }
+      application { id name category { id name } website }
+    }
+  }
+}
+"""
+
 # The account's allocated IPs (Network > IP Allocation): the public addresses
 # a network rule with route NAT leaves from, which a rule names by
 # ``AllocatedIpRef`` (id and name only). ``PopLocationAllocatedIpInput`` has
@@ -746,6 +767,11 @@ _POLICY_LIST_PAGE = 100
 _MAX_OBJECTS = 5000
 _MAX_GROUPS_WITH_MEMBERS = 500
 _MAX_GROUP_MEMBERS = 10000
+# The catalog lists some 16,000 applications. The largest page a tenant
+# accepts is not documented: a refused first page is asked again smaller.
+_CATALOG_PAGE = 1000
+_CATALOG_FALLBACK_PAGE = 100
+_MAX_CATALOG = 30000
 
 # The account's global IP ranges: objects defined once (Networking > IP
 # Ranges) and named by rules of any policy. ``ipRange`` is ``from-to`` text,
@@ -1060,6 +1086,47 @@ async def _custom_applications(client: CatoClient, account_id: str, errors: list
     return scrub_secrets(items)
 
 
+def _catalog_page(data: dict) -> dict:
+    found = (data.get("catalogs") or {}).get("catalogApplicationList") or {}
+    return {"items": found.get("application") or [], "paging": found.get("pageInfo") or {}}
+
+
+async def _app_catalog(client: CatoClient, account_id: str, errors: list[dict[str, Any]]) -> list[dict]:
+    """Cato's application catalog: ``{id name category website}`` of each
+    application."""
+    variables: dict[str, Any] = {
+        "accountId": account_id,
+        "input": {"sort": {"name": {"direction": "ASC", "priority": 1}}},
+    }
+    try:
+        items, total = await _paged(
+            client, "plexusAppCatalog", APP_CATALOG_QUERY, variables, _catalog_page, _CATALOG_PAGE, _MAX_CATALOG
+        )
+    except CatoApiError as exc:
+        if not exc.graphql:
+            raise
+        items, total = await _paged(
+            client,
+            "plexusAppCatalog",
+            APP_CATALOG_QUERY,
+            variables,
+            _catalog_page,
+            _CATALOG_FALLBACK_PAGE,
+            _MAX_CATALOG,
+        )
+    if total > len(items):
+        errors.append(_cap_error("catalogs.catalogApplicationList", f"{len(items)} of {total} applications read"))
+    return [
+        {
+            "id": a.get("id"),
+            "name": a.get("name"),
+            "category": [c for c in a.get("category") or [] if isinstance(c, dict)],
+            "website": a.get("website"),
+        }
+        for a in items
+    ]
+
+
 async def _allocated_ips(client: CatoClient, account_id: str) -> list[dict]:
     data = await client.query("plexusAllocatedIps", ALLOCATED_IPS_QUERY, {"accountId": account_id})
     found = ((data.get("popLocations") or {}).get("allocatedIpList") or {}).get("allocatedIp") or []
@@ -1073,6 +1140,7 @@ _OBJECTS: tuple[tuple[str, str], ...] = (
     ("containers", "container.list"),
     ("custom_applications", "customAppData.customApplicationList"),
     ("allocated_ips", "popLocations.allocatedIpList"),
+    ("app_catalog", "catalogs.catalogApplicationList"),
 )
 
 
@@ -1240,6 +1308,7 @@ async def collect_account(
             "containers": lambda: _containers(client, account_id),
             "custom_applications": lambda: _custom_applications(client, account_id, errors),
             "allocated_ips": lambda: _allocated_ips(client, account_id),
+            "app_catalog": lambda: _app_catalog(client, account_id, errors),
         }
         for key, path in _OBJECTS:
             report("cato objects")
