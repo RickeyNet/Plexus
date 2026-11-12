@@ -4,7 +4,11 @@ import type { DashboardAlert, TopologyProblem } from '@/api/dashboard';
 import { Badge, SeverityBadge } from '@/components/Badge';
 import { formatBackendDateTime, formatRelativeTime } from '@/lib/datetime';
 
-import { TOPOLOGY_AVAILABILITY_LINK, describeProblem, problemLocation } from './sourceHealth';
+import { CountLink } from './CountLink';
+import { describeProblem, problemLocation, topologyAvailabilityLink } from './sourceHealth';
+
+// Every down or degraded entity, the set the section counts.
+const PROBLEMS_LINK = topologyAvailabilityLink(null, { state: 'problem' });
 
 interface Props {
   alerts: DashboardAlert[];
@@ -54,7 +58,11 @@ export function AlertsSection({ alerts, topologyProblems = [], topologyProblemCo
               <h4 style={{ margin: '1rem 0 0.25rem', fontSize: '0.95em' }}>
                 Integrations and cloud{' '}
                 <span className="text-muted" style={{ fontWeight: 'normal', fontSize: '0.9em' }}>
-                  ({problemTotal} down or degraded)
+                  (
+                  <CountLink to={PROBLEMS_LINK} label={`Show the ${problemTotal} down or degraded integration entities`}>
+                    {problemTotal} down or degraded
+                  </CountLink>
+                  )
                 </span>
               </h4>
               {topologyProblems.slice(0, TOPOLOGY_ROWS).map((p) => (
@@ -84,7 +92,7 @@ export function AlertsSection({ alerts, topologyProblems = [], topologyProblemCo
               ))}
               {problemTotal > TOPOLOGY_ROWS && (
                 <div style={{ marginTop: '0.5rem', fontSize: '0.85em' }}>
-                  <Link to={TOPOLOGY_AVAILABILITY_LINK}>
+                  <Link to={PROBLEMS_LINK}>
                     View all {problemTotal} in Monitoring &rarr; Availability
                   </Link>
                 </div>

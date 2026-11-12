@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
-import { useLocation } from 'react-router';
+import { useMemo, useState } from 'react';
 
 import {
   useTopologyAvailabilityOutages,
@@ -14,7 +13,22 @@ import { QueryError } from '@/components/QueryError';
 import { StatGrid, StatTile } from '@/components/StatTile';
 import { TabBar } from '@/components/TabBar';
 import { type Tone } from '@/lib/severity';
-import { TOPOLOGY_AVAILABILITY_ANCHOR } from '@/pages/Dashboard/sourceHealth';
+import { useLinkedParam } from '@/lib/useLinkedParam';
+import { useScrollToHash } from '@/lib/useScrollToHash';
+import {
+  AVAILABILITY_SOURCE_PARAM,
+  AVAILABILITY_STATE_FILTERS,
+  AVAILABILITY_STATE_PARAM,
+  AVAILABILITY_TYPE_PARAM,
+  TOPOLOGY_AVAILABILITY_ANCHOR,
+  TOPOLOGY_ENTITY_TYPES as ENTITY_TYPES,
+  type AvailabilityStateFilter,
+  entityTypeLabel,
+  matchesAvailabilityState,
+  parseAvailabilityEntityType,
+  parseAvailabilitySource,
+  parseAvailabilityState,
+} from '@/pages/Dashboard/sourceHealth';
 import { sourceTypeLabel } from '@/pages/Topology/merakiHelpers';
 import { formatBackendDateTime } from '@/lib/datetime';
 
@@ -28,19 +42,6 @@ const SUB_TABS: { key: SubTab; label: string }[] = [
   { key: 'transitions', label: 'Transitions' },
 ];
 
-const ENTITY_TYPES: { key: string; label: string }[] = [
-  { key: 'device', label: 'Device' },
-  { key: 'site', label: 'Site' },
-  { key: 'uplink', label: 'Uplink' },
-  { key: 'tunnel', label: 'Tunnel' },
-  { key: 'vpn_connection', label: 'VPN connection' },
-  { key: 'circuit', label: 'Circuit' },
-  { key: 'peering', label: 'Peering' },
-  { key: 'link', label: 'Link' },
-];
-
-const entityTypeLabel = (type: string) => ENTITY_TYPES.find((t) => t.key === type)?.label ?? type;
-
 /**
  * Availability of what the integrations collect (Meraki, Cato, Cisco FMC,
  * Palo Alto Panorama, Appgate SDP, AWS, Azure, GCP): devices, sites, uplinks,
@@ -48,16 +49,20 @@ const entityTypeLabel = (type: string) => ENTITY_TYPES.find((t) => t.key === typ
  * over the period picked above.
  */
 export function TopologyAvailabilityPanel({ days }: { days: number }) {
-  const [provider, setProvider] = useState('');
-  const [orgRef, setOrgRef] = useState<number | null>(null);
-  const [entityType, setEntityType] = useState('');
+  // `?source=<provider>[:<org_ref>]`, `?type=<entity type>` and
+  // `?state=<state>` (the Dashboard's integration cards and entity counts)
+  // open the panel filtered to them, until another value is picked.
+  const [linkedSource, clearLinkedSource] = useLinkedParam(AVAILABILITY_SOURCE_PARAM);
+  const [provider, setProvider] = useState(() => parseAvailabilitySource(linkedSource)?.provider ?? '');
+  const [orgRef, setOrgRef] = useState<number | null>(() => parseAvailabilitySource(linkedSource)?.orgRef ?? null);
+  const [linkedType, clearLinkedType] = useLinkedParam(AVAILABILITY_TYPE_PARAM);
+  const [entityType, setEntityType] = useState(() => parseAvailabilityEntityType(linkedType) ?? '');
+  const [linkedState, clearLinkedState] = useLinkedParam(AVAILABILITY_STATE_PARAM);
+  // Current state of the entities listed; the summary API has no state filter, so it applies to the table.
+  const [stateFilter, setStateFilter] = useState<AvailabilityStateFilter | null>(() => parseAvailabilityState(linkedState));
   const [subTab, setSubTab] = useState<SubTab>('entities');
-  // The Dashboard links here (#topology-availability) from its down / degraded entity chips.
-  const rootRef = useRef<HTMLDivElement>(null);
-  const { hash } = useLocation();
-  useEffect(() => {
-    if (hash === `#${TOPOLOGY_AVAILABILITY_ANCHOR}`) rootRef.current?.scrollIntoView({ block: 'start' });
-  }, [hash]);
+  // The Dashboard links here (#topology-availability) from its entity counts.
+  useScrollToHash();
 
   const filters = { provider: provider || null, orgRef, entityType: entityType || null, days };
   const summary = useTopologyAvailabilitySummary(filters);
@@ -65,8 +70,13 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
   const transitions = useTopologyAvailabilityTransitions({ ...filters, limit: 500 });
 
   const s = summary.data;
+  const entities = useMemo(
+    () => (stateFilter ? (s?.entities ?? []).filter((e) => matchesAvailabilityState(e.current_state, stateFilter)) : (s?.entities ?? [])),
+    [s, stateFilter],
+  );
   const orgs = s?.orgs ?? [];
-  const providers = [...new Set(orgs.map((o) => o.provider))];
+  // A linked provider stays listed while the summary loads (or has none of it).
+  const providers = [...new Set([...orgs.map((o) => o.provider), ...(provider ? [provider] : [])])];
   const cards: { label: string; value: string | number; tone?: Tone }[] = [
     { label: 'Entities Tracked', value: s?.entity_count ?? '-' },
     { label: 'Up', value: s?.up ?? '-', tone: countTone(s?.up, 'success') },
@@ -77,7 +87,7 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
   ];
 
   return (
-    <div id={TOPOLOGY_AVAILABILITY_ANCHOR} ref={rootRef} style={{ marginTop: '1.5rem' }}>
+    <div id={TOPOLOGY_AVAILABILITY_ANCHOR} style={{ marginTop: '1.5rem' }}>
       <h3 style={{ marginBottom: '0.5rem' }}>Integrations and cloud</h3>
       <p className="text-muted" style={{ marginTop: 0, fontSize: '0.85em' }}>
         Devices, sites, uplinks, tunnels and cloud connections reported by each collection of a Meraki, Cato, FMC,
@@ -93,6 +103,7 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
           onChange={(e) => {
             setProvider(e.target.value);
             setOrgRef(null);
+            clearLinkedSource();
           }}
         >
           <option value="">All sources</option>
@@ -105,7 +116,10 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
           id="topo-avail-org"
           className="form-select"
           value={orgRef ?? ''}
-          onChange={(e) => setOrgRef(e.target.value ? parseInt(e.target.value, 10) : null)}
+          onChange={(e) => {
+            setOrgRef(e.target.value ? parseInt(e.target.value, 10) : null);
+            clearLinkedSource();
+          }}
         >
           <option value="">All</option>
           {orgs
@@ -121,13 +135,35 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
           id="topo-avail-type"
           className="form-select"
           value={entityType}
-          onChange={(e) => setEntityType(e.target.value)}
+          onChange={(e) => {
+            setEntityType(e.target.value);
+            clearLinkedType();
+          }}
         >
           <option value="">All types</option>
           {ENTITY_TYPES.map((t) => (
             <option key={t.key} value={t.key}>{t.label}</option>
           ))}
         </select>
+        {subTab === 'entities' && (
+          <>
+            <label className="text-muted" htmlFor="topo-avail-state">State:</label>
+            <select
+              id="topo-avail-state"
+              className="form-select"
+              value={stateFilter ?? ''}
+              onChange={(e) => {
+                setStateFilter(parseAvailabilityState(e.target.value));
+                clearLinkedState();
+              }}
+            >
+              <option value="">All states</option>
+              {AVAILABILITY_STATE_FILTERS.map((f) => (
+                <option key={f.key} value={f.key}>{f.label}</option>
+              ))}
+            </select>
+          </>
+        )}
       </div>
 
       <StatGrid compact>
@@ -145,6 +181,8 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
           <LoadingState />
         ) : !s?.entities.length ? (
           <EmptyState message="Nothing tracked yet - collect a topology source or run a cloud discovery." />
+        ) : !entities.length ? (
+          <EmptyState message="No entities in this state." />
         ) : (
           <DataTable stickyHeader maxHeight={AVAILABILITY_TABLE_MAX_HEIGHT}>
               <thead>
@@ -160,7 +198,7 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
                 </tr>
               </thead>
               <tbody>
-                {s.entities.map((e) => (
+                {entities.map((e) => (
                   <tr key={`${e.provider}:${e.org_ref}:${e.entity_type}:${e.entity_id}`}>
                     <td title={e.model || undefined}>{e.name}</td>
                     <td>

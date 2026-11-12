@@ -5,7 +5,8 @@ import type { TopologySource } from '@/api/meraki';
 
 import { buildIssues, issueSummary, watchedSummary, type Issue, type IssueInputs } from './criticalIssues';
 import { ISSUE_ANCHORS } from './helpers';
-import { SOURCES_LINK, TOPOLOGY_AVAILABILITY_LINK } from './sourceHealth';
+import { backupsPanelLink, devicesPanelLink } from './dashboardLinks';
+import { SOURCES_LINK, topologyAvailabilityLink } from './sourceHealth';
 
 function source(over: Partial<TopologySource> = {}): TopologySource {
   return {
@@ -67,7 +68,7 @@ describe('buildIssues', () => {
     expect(buildIssues(inputs({ devices: [healthy], sources: [source()] }))).toEqual([]);
   });
 
-  it('names unreachable devices and points at the devices panel', () => {
+  it('names unreachable devices and points at the devices panel filtered to them', () => {
     const [issue] = buildIssues(inputs({ devices: [healthy, unreachable] }));
     expect(issue).toMatchObject({
       key: 'devices-down',
@@ -75,7 +76,7 @@ describe('buildIssues', () => {
       label: 'device unreachable',
       items: ['edge-rtr-1'],
       severity: 'critical',
-      target: ISSUE_ANCHORS.devices,
+      target: { to: devicesPanelLink('critical') },
     });
   });
 
@@ -95,7 +96,7 @@ describe('buildIssues', () => {
       { id: 1, host_id: 1, hostname: 'core-sw-1', captured_at: new Date().toISOString(), status: 'failed' },
     ];
     const [issue] = buildIssues(inputs({ devices: [healthy], backups }));
-    expect(issue).toMatchObject({ key: 'backups-failed', count: 1, target: ISSUE_ANCHORS.backups });
+    expect(issue).toMatchObject({ key: 'backups-failed', count: 1, target: { to: backupsPanelLink('failed') } });
   });
 
   it('takes the entity count from the totals, not the capped problem list', () => {
@@ -106,7 +107,7 @@ describe('buildIssues', () => {
     const [issue] = buildIssues(inputs({ topology: topo }));
     expect(issue.count).toBe(60);
     expect(issue.items).toHaveLength(1);
-    expect(issue.target).toEqual({ to: TOPOLOGY_AVAILABILITY_LINK });
+    expect(issue.target).toEqual({ to: topologyAvailabilityLink(null, { state: 'down' }) });
   });
 
   it('sends a failed source to Sources with its message', () => {

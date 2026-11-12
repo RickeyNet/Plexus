@@ -385,8 +385,6 @@ async def _latest_entries() -> list[tuple[int, dict[str, Any]]]:
     return entries
 
 
-async def latest_snapshots() -> list[tuple[int, dict]]:
-    """``(org_ref, snapshot)`` for the newest snapshot of every organization."""
 async def latest_snapshot_of(org_ref: int) -> tuple[dict, dict] | None:
     """``(metadata, snapshot)`` of the newest collection of one source, or
     ``None`` when it has none. Reuses the parsed snapshot when cached."""
@@ -401,6 +399,8 @@ async def latest_snapshot_of(org_ref: int) -> tuple[dict, dict] | None:
     return (meta, row["snapshot"] or {}) if row else None
 
 
+async def latest_snapshots() -> list[tuple[int, dict]]:
+    """``(org_ref, snapshot)`` for the newest snapshot of every organization."""
     return [(org_ref, entry["snapshot"]) for org_ref, entry in await _latest_entries()]
 
 
