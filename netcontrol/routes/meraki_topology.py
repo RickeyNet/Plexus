@@ -129,7 +129,7 @@ from netcontrol.integrations.meraki.html_export import (
 )
 from netcontrol.integrations.meraki.normalize import build_snapshot
 from netcontrol.integrations.meraki.sample import build_sample_raw
-from netcontrol.integrations.meraki.subnets import subnet_index, subnets_containing
+from netcontrol.integrations.meraki.subnets import hosts_named, subnet_index, subnets_containing
 from netcontrol.integrations.meraki.unified import (
     build_search_index,
     graph_to_snapshot,
@@ -2400,6 +2400,19 @@ async def topology_summarize_api(body: SummarizeRequest):
     }
 
 
+def _named_hosts_snippet(hosts: list[dict], wanted: str) -> str:
+    """What a deep search hit says of the hosts of one network found by DNS
+    name (``hosts_named`` rows): each resource with the name that matched and
+    every address behind it, ``FSx files · files.example.com: 192.0.2.10,
+    192.0.2.11``."""
+    by_resource: dict[tuple[str, str], list[str]] = {}
+    for host in hosts:
+        name = next(n for n in host["dns_names"] if wanted in n)
+        by_resource.setdefault((host["name"], name), []).append(host["cidr"].rsplit("/", 1)[0])
+    parts = [f"{resource} · {name}: {', '.join(addresses)}" for (resource, name), addresses in by_resource.items()]
+    return "; ".join(parts)[:240]
+
+
 @router.get("/api/topology/search/deep")
 async def topology_deep_search_api(
     # Room for a DNS name (up to 253 characters) among the other terms.
@@ -2415,7 +2428,9 @@ async def topology_deep_search_api(
     most specific first over every source (an inventory host's VLAN, a cloud
     VM's own address or its subnet, then a site range or a VPN local network
     that covers it, then a firewall's summary route): an address inside a
-    subnet is no substring of it.
+    subnet is no substring of it. A DNS name finds the hosts that answer to
+    it first (an FSx file system, a service endpoint), each named with its
+    addresses.
     """
     tokens = q.lower().split()[:8]
     results: list[dict] = []
@@ -2450,6 +2465,29 @@ async def topology_deep_search_api(
                     "snippet": f"{place} · Subnets: {subnet['cidr']} {subnet['name']}".strip(),
                 }
             )
+    elif len(tokens) == 1:
+        # A DNS name (or part of one) finds the hosts that answer to it: the
+        # resource and its addresses are named, not just the network's row.
+        wanted = tokens[0].rstrip(".")
+        for org_ref, entry in entries:
+            named: dict[str, list[dict]] = {}
+            for host in hosts_named(await _subnets_of(entry), wanted):
+                named.setdefault(host["node_id"], []).append(host)
+            for node_id, hosts in named.items():
+                if len(results) >= limit:
+                    break
+                seen.add((org_ref, node_id))
+                results.append(
+                    {
+                        "org_ref": org_ref,
+                        "node_id": node_id,
+                        "label": next(
+                            (n.get("label") or "" for n in entry["snapshot"].get("nodes") or [] if n.get("id") == node_id),
+                            "",
+                        ),
+                        "snippet": _named_hosts_snippet(hosts, wanted),
+                    }
+                )
     for org_ref, entry in entries:
         if entry["index"] is None:
             entry["index"] = await asyncio.to_thread(build_search_index, entry["snapshot"])
