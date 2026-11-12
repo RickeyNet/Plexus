@@ -3,8 +3,9 @@
 Covers, with no network access:
   * db filter   - ``list_topology_entity_states`` state filter, worst-first
                   ordering and limit; ``count_topology_entity_states``
-  * aggregate   - ``dashboard_topology_summary`` counts per state and per
-                  provider, problem rows (labels, ordering, cap)
+  * aggregate   - ``dashboard_topology_summary`` counts per state, per
+                  provider and per source and entity type, problem rows
+                  (labels, ordering, cap)
   * HTTP API    - the ``topology`` section of /api/dashboard, and its gate
                   on the monitoring feature (the cache is shared, the gate is
                   per user)
@@ -86,15 +87,28 @@ async def test_list_states_filters_orders_worst_first_and_limits():
     assert [r["provider"] for r in every] == ["aws", "aws", "cato", "cato", "cato"]
 
 
-async def test_count_states_groups_by_provider_and_state():
+async def test_count_states_groups_by_source_type_and_state():
     await _seed()
-    counts = {(r["provider"], r["state"]): r["count"] for r in await db_module.count_topology_entity_states()}
-    assert counts == {
-        ("aws", "up"): 1,
-        ("aws", "unknown"): 1,
-        ("cato", "down"): 2,
-        ("cato", "degraded"): 1,
+    rows = await db_module.count_topology_entity_states()
+    assert [(r["provider"], r["org_ref"], r["entity_type"], r["state"], r["count"]) for r in rows] == [
+        ("aws", 21, "vpn_connection", "unknown", 1),
+        ("aws", 21, "vpn_connection", "up", 1),
+        ("cato", 11, "site", "degraded", 1),
+        ("cato", 11, "site", "down", 1),
+        ("cato", 11, "tunnel", "down", 1),
+    ]
+
+
+async def test_count_states_keeps_two_orgs_of_one_provider_apart():
+    await _seed()
+    await db_module.apply_topology_entity_states(
+        "cato", 12, [_entity("cato", 12, "site", "z", "up", name="Branch Z")], org_name="Other Cato", now=T0
+    )
+    rows = await db_module.count_topology_entity_states()
+    sites = {
+        (r["org_ref"], r["state"]): r["count"] for r in rows if r["provider"] == "cato" and r["entity_type"] == "site"
     }
+    assert sites == {(11, "degraded"): 1, (11, "down"): 1, (12, "up"): 1}
 
 
 # ── aggregate ────────────────────────────────────────────────────────────────
@@ -108,6 +122,19 @@ async def test_dashboard_summary_counts_and_problems():
         "aws": {"up": 1, "degraded": 0, "down": 0, "unknown": 1},
         "cato": {"up": 0, "degraded": 1, "down": 2, "unknown": 0},
     }
+    assert summary["by_source"] == [
+        {
+            "provider": "aws",
+            "org_ref": 21,
+            "entity_type": "vpn_connection",
+            "up": 1,
+            "degraded": 0,
+            "down": 0,
+            "unknown": 1,
+        },
+        {"provider": "cato", "org_ref": 11, "entity_type": "site", "up": 0, "degraded": 1, "down": 1, "unknown": 0},
+        {"provider": "cato", "org_ref": 11, "entity_type": "tunnel", "up": 0, "degraded": 0, "down": 1, "unknown": 0},
+    ]
     assert summary["problem_count"] == 3
     first = summary["problems"][0]
     assert first == {
@@ -140,6 +167,7 @@ async def test_dashboard_summary_empty():
     assert summary == {
         "entity_counts": {"up": 0, "degraded": 0, "down": 0, "unknown": 0, "total": 0},
         "by_provider": {},
+        "by_source": [],
         "problem_count": 0,
         "problems": [],
     }
@@ -191,6 +219,11 @@ def test_dashboard_includes_topology_for_admin(client):
     assert topology["entity_counts"]["down"] == 2
     assert topology["problem_count"] == 3
     assert [p["entity_id"] for p in topology["problems"]] == ["c", "a", "b"]
+    assert {(r["provider"], r["org_ref"], r["entity_type"]) for r in topology["by_source"]} == {
+        ("aws", 21, "vpn_connection"),
+        ("cato", 11, "site"),
+        ("cato", 11, "tunnel"),
+    }
 
 
 def test_dashboard_omits_topology_without_monitoring_feature(client):

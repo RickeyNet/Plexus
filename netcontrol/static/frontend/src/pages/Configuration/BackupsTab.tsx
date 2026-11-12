@@ -22,6 +22,7 @@ import { SegmentedControl } from '@/components/SegmentedControl';
 import { ShowMoreButton } from '@/components/ShowMoreButton';
 import { SummaryStrip } from '@/components/SummaryStrip';
 import { formatBackendDateTime, formatInterval, formatRelativeTime } from '@/lib/datetime';
+import { useLinkedParam } from '@/lib/useLinkedParam';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 import { useShowMore } from '@/lib/useShowMore';
 
@@ -47,6 +48,10 @@ export function BackupsTab() {
   const [query, setQuery] = useState('');
 
   const [createPolicy, setCreatePolicy] = useState(false);
+  // `?add=policy` (the Dashboard's setup guide) opens New Policy; closing it
+  // drops the parameter.
+  const [linkedAdd, clearLinkedAdd] = useLinkedParam('add');
+  const creatingPolicy = createPolicy || linkedAdd === 'policy';
   const [editPolicy, setEditPolicy] = useState<ConfigBackupPolicy | null>(null);
   const [viewing, setViewing] = useState<{ id: number; view: BackupView } | null>(null);
   const [restoreId, setRestoreId] = useState<number | null>(null);
@@ -110,12 +115,13 @@ export function BackupsTab() {
         />
       )}
 
-      {(createPolicy || editPolicy) && (
+      {(creatingPolicy || editPolicy) && (
         <BackupPolicyModal
           policy={editPolicy}
           onClose={() => {
             setCreatePolicy(false);
             setEditPolicy(null);
+            if (linkedAdd !== null) clearLinkedAdd();
           }}
         />
       )}
