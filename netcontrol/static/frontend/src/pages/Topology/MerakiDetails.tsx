@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { type DetailSection, useMerakiNodeDetails } from '@/api/meraki';
 import type { TopologyMerakiRef } from '@/api/topology';
@@ -25,6 +25,14 @@ export function MerakiDetails({ meraki, highlight = '', view, title }: Props) {
   const details = useMerakiNodeDetails(meraki.org_ref, meraki.node_id);
   const [filter, setFilter] = useState('');
   const [expanded, setExpanded] = useState(false);
+  // The first row matching the map search is brought into view, so a hit deep
+  // in a long tab (one endpoint of a large VPC) needs no scrolling to find.
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const loaded = details.data !== undefined;
+  useEffect(() => {
+    if (!highlight || !loaded) return;
+    bodyRef.current?.querySelector('[data-search-match]')?.scrollIntoView({ block: 'nearest' });
+  }, [highlight, view, loaded, meraki.org_ref, meraki.node_id]);
 
   if (details.isPending) return <p className="text-muted" style={{ fontSize: '0.78rem' }}>Loading…</p>;
   if (details.error) {
@@ -86,7 +94,7 @@ export function MerakiDetails({ meraki, highlight = '', view, title }: Props) {
         {providerSourceName(data.provider)} data · collected {formatBackendDateTime(data.generated_at)}
       </div>
       {controls}
-      {!expanded && body}
+      {!expanded && <div ref={bodyRef}>{body}</div>}
       <Modal isOpen={expanded} onClose={() => setExpanded(false)} title={`${data.label} — ${title}`} size="large">
         {controls}
         {body}
@@ -189,10 +197,13 @@ function Section({ section, filterTerms, highlightTerms }: SectionProps) {
             </thead>
           )}
           <tbody>
-            {visible.map((row, i) => (
+            {visible.map((row, i) => {
+              const matched = rowMatches(row, highlightTerms);
+              return (
               <tr
                 key={i}
-                style={rowMatches(row, highlightTerms) ? { background: 'rgba(from var(--warning) r g b / 0.18)' } : undefined}
+                data-search-match={matched ? '' : undefined}
+                style={matched ? { background: 'rgba(from var(--warning) r g b / 0.18)' } : undefined}
               >
                 {row.map((cell, j) => (
                   <td
@@ -204,7 +215,8 @@ function Section({ section, filterTerms, highlightTerms }: SectionProps) {
                   </td>
                 ))}
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>

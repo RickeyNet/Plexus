@@ -180,6 +180,16 @@ export function NodeDetails({
       matched: sectionsMatch(sections, highlightTerms) || sectionsMatch(siteSections, highlightTerms),
     };
   });
+  // A map search opens the first tab holding a matching row, once per node
+  // and search and once the details have loaded; not in the render that
+  // resets the tab for a new node, where `activeTab` is still the old one.
+  const autoTabKey = `${node.id}|${searchText ?? ''}`;
+  const [autoTabDone, setAutoTabDone] = useState('');
+  if (highlightTerms.length && autoTabDone !== autoTabKey && node.id === prevNodeId && (!node.meraki || merakiData)) {
+    setAutoTabDone(autoTabKey);
+    const firstMatched = tabs.find((t) => t.matched && !t.disabled);
+    if (firstMatched && !tabs.some((t) => t.key === activeTab && t.matched)) setActiveTab(firstMatched.key);
+  }
   // A tab can go away once the details load (nothing collected for it).
   const shownTab: TabKey = tabs.some((t) => t.key === activeTab && !t.disabled) ? activeTab : 'overview';
   const merakiView = merakiViews.includes(shownTab as MerakiView) ? (shownTab as MerakiView) : null;
