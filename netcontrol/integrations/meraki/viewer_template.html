@@ -68,6 +68,11 @@ canvas.dragging { cursor: grabbing; }
 .panel-head .row { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
 .panel-head input { flex: 1; min-width: 120px; padding: 5px 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
 .panel-head #p-port { flex: 0 0 76px; min-width: 0; }
+#p-hosts { max-height: 220px; overflow: auto; margin-top: 4px; border: 1px solid var(--border); border-radius: 6px; }
+#p-hosts:empty { display: none; }
+#p-hosts div { padding: 5px 8px; cursor: pointer; font-size: 12px; }
+#p-hosts div:hover { background: var(--hit); }
+#p-hosts small { display: block; opacity: .7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .panel-head #p-port:disabled { opacity: .5; }
 .panel-body { overflow: auto; flex: 1; padding: 4px 14px 20px; }
 .group-title { margin: 14px 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
@@ -145,13 +150,14 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
       <h2 id="p-title"></h2>
       <div class="meta" id="p-sub"></div>
       <div class="row" id="p-subnet-row" style="display:none">
-        <input id="p-subnet" type="search" list="subnet-options" placeholder="Add a subnet or IP address..." autocomplete="off" spellcheck="false">
+        <input id="p-subnet" type="search" list="subnet-options" placeholder="Add a subnet, IP address or part of a DNS name..." autocomplete="off" spellcheck="false">
         <datalist id="subnet-options"></datalist>
         <select class="btn" id="p-proto" title="Traffic the path tracer checks" style="display:none">
           <option value="">any traffic</option><option value="tcp">tcp</option><option value="udp">udp</option><option value="icmp">icmp</option>
         </select>
         <input id="p-port" type="number" min="0" max="65535" placeholder="port" title="Destination port (tcp or udp)" style="display:none">
       </div>
+      <div id="p-hosts"></div>
       <div class="row">
         <input id="p-filter" type="search" placeholder="Filter this panel..." autocomplete="off" spellcheck="false">
         <button class="btn" id="p-zoom">Zoom to</button>
@@ -1256,7 +1262,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     pathMode = on; pathPicks = []; pathMessage = ''; pathReversed = {};
     $('btn-path').classList.toggle('on', on);
     $('p-subnet-row').style.display = on && subnets.length ? '' : 'none';
-    $('p-subnet').value = '';
+    $('p-subnet').value = ''; $('p-hosts').textContent = '';
     if (on) fillSubnetOptions();
     computePath();
     if (on) showPath(); else select(null, false);
@@ -1297,24 +1303,76 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
     });
     return found;
   }
+  // The host of a pasted URL, UNC path, NFS mount or host:port, else the text
+  // itself, lower case (searchHost of the Topology page).
+  function typedHost(text) {
+    var rest = text.trim().toLowerCase(), m;
+    if ((m = /^[a-z][a-z0-9+.-]*(?::[a-z][a-z0-9+.-]*)*:\/\/(.*)$/.exec(rest))) {
+      rest = m[1].split(/[\/?#\\]/, 1)[0].replace(/^[^@]*@/, '');
+      if (rest.split(':').length === 2) rest = rest.split(':')[0];
+    } else if ((m = /^(?:\\\\|\/\/)([^\\\/]+)/.exec(rest))) rest = m[1];
+    else if ((m = /^([^\s:\/\\]+):\//.exec(rest))) rest = m[1];
+    else if ((m = /^((?:[a-z0-9-]+\.)+[a-z0-9-]+)\.?:\d{1,5}(?:[\/?#].*)?$/.exec(rest))) rest = m[1];
+    return rest.replace(/\.$/, '');
+  }
+  // The hosts that answer to the typed DNS name, one per address (an FSx file
+  // system or a service endpoint has several).
+  function findNamedHosts(text) {
+    var wanted = typedHost(text);
+    if (!wanted || parseV4(wanted)) return [];
+    return subnets.filter(function (s) { return (s.dns_names || []).indexOf(wanted) !== -1; });
+  }
   // A typed address inside the subnet is kept, as on the page: the trace is
   // run for it, and it is part of the pick's key.
   function addSubnetPick(s, typed) {
-    $('p-subnet').value = '';
+    $('p-subnet').value = ''; $('p-hosts').textContent = ''; $('p-subnet').setAttribute('list', 'subnet-options');
     var address = typed && parseV4(typed) && typed !== s.cidr ? typed : null;
     togglePathPick({ key: 's:' + (address || s.cidr) + ':' + s.node_id, n: nodeById[s.node_id], subnet: s, address: address,
       label: (address || s.cidr) + ' · ' + (s.site_name || s.name) }, true);
   }
+  // The hosts to offer while a name is typed: those with a DNS name or a
+  // resource name that holds it, a name that starts with it first.
+  function suggestHosts(text) {
+    var wanted = typedHost(text), first = [], rest = [];
+    if (wanted.length < 2 || /^[\d.\/]+$/.test(wanted) || subnetByLabel[text.trim()]) return [];
+    subnets.forEach(function (s) {
+      if (s.kind !== 'host') return;
+      var names = s.dns_names || [], own = s.name.toLowerCase(), dns = null;
+      names.forEach(function (n) { if (n.indexOf(wanted) === 0 && (dns === null || dns.indexOf(wanted) !== 0)) dns = n; else if (dns === null && n.indexOf(wanted) !== -1) dns = n; });
+      if (dns === null && own.indexOf(wanted) === -1) return;
+      ((dns !== null && dns.indexOf(wanted) === 0) || own.indexOf(wanted) === 0 ? first : rest).push({ host: s, dns: dns || names[0] || '' });
+    });
+    return first.concat(rest).slice(0, 12);
+  }
+  // The offered hosts under the subnet box, each picked with a click; they
+  // take the place of the subnet list while there are some.
+  function showHostSuggestions() {
+    var box = $('p-hosts'), input = $('p-subnet'), found = pathMode ? suggestHosts(input.value) : [];
+    box.textContent = '';
+    if (found.length) input.removeAttribute('list'); else input.setAttribute('list', 'subnet-options');
+    found.forEach(function (f) {
+      var row = el('div', '', f.host.name + ' · ' + f.host.cidr.replace(/\/32$/, ''));
+      row.appendChild(el('small', '', [f.dns, f.host.site_name].filter(Boolean).join(' · ')));
+      row.addEventListener('mousedown', function (ev) { ev.preventDefault(); addSubnetPick(f.host); });
+      box.appendChild(row);
+    });
+  }
   $('p-subnet').addEventListener('input', function () {
     var s = subnetByLabel[this.value.trim()];
-    if (s && pathMode) addSubnetPick(s);
+    if (s && pathMode) addSubnetPick(s); else showHostSuggestions();
   });
   $('p-subnet').addEventListener('keydown', function (ev) {
     if (ev.key !== 'Enter' || !pathMode) return;
     var text = this.value.trim(), found = subnetByLabel[text] ? [subnetByLabel[text]] : findSubnets(text);
     if (!text) return;
+    // A DNS name or URL stands for the addresses of the host that answers to it.
+    var named = found.length ? [] : findNamedHosts(text);
+    if (named.length) found = named;
     if (found.length === 1) { addSubnetPick(found[0], subnetByLabel[text] ? null : text); return; }
-    pathMessage = found.length ? text + ' exists at ' + found.length + ' sites - pick the one you mean from the list.' : 'No collected subnet contains ' + text + '.';
+    pathMessage = named.length ? named[0].name + ' has ' + named.length + ' addresses (' +
+        named.slice(0, 6).map(function (s) { return s.cidr.replace(/\/32$/, ''); }).join(', ') + (named.length > 6 ? ', ...' : '') +
+        ') - pick the one to trace below the box.' :
+      found.length ? text + ' exists at ' + found.length + ' sites - pick the one you mean from the list.' : 'No collected subnet contains ' + text + ', and no collected host has that DNS name.';
     showPath();
   });
   // The traffic the path tracer checks, next to the subnet picker.

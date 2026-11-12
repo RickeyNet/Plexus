@@ -10,7 +10,7 @@ import type {
 } from '@/api/meraki';
 
 import { INVENTORY_ORG_REF, providerLabel, PROVIDER_INVENTORY } from './helpers';
-import { findSubnets, parseTraffic } from './paths';
+import { findNamedHosts, findSubnets, hostAddress, parseTraffic } from './paths';
 
 // Reachability sweep: one destination traced from every source network the
 // filters keep, or (matrix mode, no destination) every kept source traced to
@@ -165,17 +165,49 @@ export function endOwnerPatch(side: SweepEnd, owner?: EndOwner): Partial<Reachab
 }
 
 /**
- * The form with each typed end that exactly one subnet holds placed at that
- * subnet's owner (as in Path Mode); an end with an owner already, or with
- * none or several subnets, is left as it is.
+ * The subnets a typed end stands for: those that hold its address, else the
+ * hosts that answer to its DNS name or URL (one per address).
+ */
+export function endOwners(text: string, subnets: MerakiSubnet[]): MerakiSubnet[] {
+  const held = findSubnets(text, subnets);
+  return held.length ? held : findNamedHosts(text, subnets);
+}
+
+/**
+ * The form fields of the owner picked for a typed end. An end typed as a DNS
+ * name gets the owner's address in its place: the server traces addresses.
+ */
+export function pickedOwnerPatch(side: SweepEnd, text: string, owner?: MerakiSubnet): Partial<ReachabilityForm> {
+  return owner && findNamedHosts(text, [owner]).length
+    ? endPatch(side, hostAddress(owner), owner)
+    : endOwnerPatch(side, owner);
+}
+
+/** Why a form cannot be run as typed: an end is a DNS name with several addresses and none picked. Null otherwise. */
+export function namedEndError(form: ReachabilityForm, subnets: MerakiSubnet[]): string | null {
+  for (const side of ['source', 'destination'] as const) {
+    const hosts = findNamedHosts(form[side], subnets);
+    if (hosts.length > 1) {
+      const label = side === 'source' ? 'Source' : 'Destination';
+      return `${label}: ${hosts[0].name} has ${hosts.length} addresses - pick the one to trace in "${label} is at".`;
+    }
+  }
+  return null;
+}
+
+/**
+ * The form with each typed end that exactly one subnet holds (or, for a DNS
+ * name, exactly one host answers to) placed at that subnet's owner, as in
+ * Path Mode; an end with an owner already, or with none or several subnets,
+ * is left as it is.
  */
 export function withSingleOwners(form: ReachabilityForm, subnets: MerakiSubnet[]): ReachabilityForm {
   let next = form;
   for (const side of ['source', 'destination'] as const) {
     const ownerRef = side === 'source' ? next.sourceOrgRef : next.destinationOrgRef;
     if (ownerRef !== undefined) continue;
-    const owners = findSubnets(next[side], subnets);
-    if (owners.length === 1) next = { ...next, ...endOwnerPatch(side, owners[0]) };
+    const owners = endOwners(next[side], subnets);
+    if (owners.length === 1) next = { ...next, ...pickedOwnerPatch(side, next[side], owners[0]) };
   }
   return next;
 }

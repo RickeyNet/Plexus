@@ -6,12 +6,14 @@ import type { TopologyEdge, TopologyNode } from '@/api/topology';
 import {
   connectEndpoints,
   connectPicks,
+  findNamedHosts,
   findSubnets,
   isAddressText,
   parseTraffic,
   pathModeHint,
   pathSites,
   subnetOptionLabel,
+  suggestHosts,
   subnetPick,
   userPick,
   type PathPick,
@@ -115,6 +117,39 @@ describe('path mode', () => {
     expect(findSubnets(' 10.1.10.20 ', subnets)).toEqual([subnets[1], subnets[2]]);
     expect(findSubnets('192.168.1.1', subnets)).toEqual([]);
     expect(findSubnets('not an address', subnets)).toEqual([]);
+    // A DNS name, or a URL, mount or host:port of it, finds every address of its host.
+    const hosts = [
+      subnet('192.0.2.10/32', 'vpc:1', '1', { kind: 'host', name: 'FSx files', dns_names: ['files.example.com'] }),
+      subnet('192.0.2.11/32', 'vpc:1', '1', { kind: 'host', name: 'FSx files', dns_names: ['files.example.com', 'smb.example.com'] }),
+      subnet('192.0.2.20/32', 'vpc:1', '1', { kind: 'host', name: 'RDS db', dns_names: ['db.example.com'] }),
+    ];
+    const all = [...subnets, ...hosts];
+    for (const typed of ['files.example.com', ' Files.Example.com. ', 'https://files.example.com/share', '\\\\files.example.com\\share', 'files.example.com:/fsx', 'files.example.com:445']) {
+      expect(findNamedHosts(typed, all), typed).toEqual([hosts[0], hosts[1]]);
+    }
+    expect(findNamedHosts('smb.example.com', all)).toEqual([hosts[1]]);
+    // Not part of a name, and not an address: those are findSubnets' to place.
+    expect(findNamedHosts('example.com', all)).toEqual([]);
+    expect(findNamedHosts('192.0.2.10', all)).toEqual([]);
+    expect(findNamedHosts('', all)).toEqual([]);
+    // While a name is typed, the hosts it is part of are offered, a name that starts with it first.
+    expect(suggestHosts('fil', all)).toEqual([
+      { host: hosts[0], dnsName: 'files.example.com' },
+      { host: hosts[1], dnsName: 'files.example.com' },
+    ]);
+    expect(suggestHosts('https://smb.exa', all)).toEqual([{ host: hosts[1], dnsName: 'smb.example.com' }]);
+    expect(suggestHosts('example', all).map((s) => s.host)).toEqual(hosts);
+    expect(suggestHosts('example', all, 2)).toHaveLength(2);
+    // The resource's own name finds it too, with its first DNS name shown.
+    expect(suggestHosts('rds', all)).toEqual([{ host: hosts[2], dnsName: 'db.example.com' }]);
+    expect(suggestHosts('B.EXAMPLE', all)).toEqual([
+      { host: hosts[1], dnsName: 'smb.example.com' },
+      { host: hosts[2], dnsName: 'db.example.com' },
+    ]);
+    // Nothing for one character, an address being typed, a subnet's name or an entry already spelled out.
+    for (const typed of ['f', '192.0.2', '192.0.2.10/32', 'VLAN 10', subnetOptionLabel(hosts[0])]) {
+      expect(suggestHosts(typed, all), typed).toEqual([]);
+    }
     expect([' 10.2.0.57 ', '10.1.0.0/16', 'Site 10', '10.2.0', '300.1.1.1'].map(isAddressText)).toEqual([true, true, false, false, false]);
   });
 

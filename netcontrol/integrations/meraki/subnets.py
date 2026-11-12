@@ -100,7 +100,9 @@ def subnet_index(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     site's appliance, the L3 switch holding the SVI, the non-Meraki VPN
     peer the subnet sits behind, or the remote user whose client holds the
     address. ``in_vpn`` is whether the site advertises the
-    subnet into the VPN (``None`` when the snapshot does not say).
+    subnet into the VPN (``None`` when the snapshot does not say). A host
+    listed with a DNS name (an FSx or service endpoint) also has
+    ``dns_names``, lower case.
     """
     nodes = [n for n in snapshot.get("nodes") or [] if isinstance(n, dict)]
     gateways = site_gateways(nodes)
@@ -165,7 +167,16 @@ def subnet_index(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
             for row in rows:
                 kind = label or _named(row, columns, "Service")
                 name = f"{kind} {_named(row, columns, 'Name')}".strip()
-                add(_cidr(_named(row, columns, column)), gateway, site["id"], "host", name, None)
+                cidr = _cidr(_named(row, columns, column))
+                add(cidr, gateway, site["id"], "host", name, None)
+                # The names the address answers to (an endpoint table's "DNS
+                # name" column), so a typed name finds the host like its address.
+                dns_name = _named(row, columns, "DNS name").strip().rstrip(".").lower()
+                entry = entries.get((cidr, gateway))
+                if dns_name and entry is not None and entry["kind"] == "host":
+                    names = entry.setdefault("dns_names", [])
+                    if dns_name not in names:
+                        names.append(dns_name)
         for row in _rows(sections, "Single LAN"):
             if _cell(row, 0) == "Subnet":
                 cidr = _cidr(_cell(row, 1))
@@ -298,3 +309,13 @@ def subnets_containing(subnets: list[dict[str, Any]], text: str) -> list[dict[st
         if network.version == wanted.version and network.supernet_of(wanted):  # type: ignore[arg-type]
             found.append((-network.prefixlen, entry))
     return [entry for _depth, entry in sorted(found, key=lambda pair: pair[0])]
+
+
+def hosts_named(subnets: list[dict[str, Any]], text: str) -> list[dict[str, Any]]:
+    """The host entries of ``subnets`` with a DNS name (``dns_names``) that
+    holds ``text``, one per address, in index order: a whole name finds the
+    addresses it resolves to, part of one every host it is part of."""
+    wanted = text.strip().rstrip(".").lower()
+    if not wanted:
+        return []
+    return [entry for entry in subnets if any(wanted in name for name in entry.get("dns_names") or ())]

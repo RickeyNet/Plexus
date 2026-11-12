@@ -10,6 +10,9 @@ import type {
 
 import {
   activeFilterCount,
+  endOwners,
+  namedEndError,
+  pickedOwnerPatch,
   buildListQuery,
   buildReachabilityQuery,
   cloudsToMerakiForm,
@@ -738,6 +741,31 @@ describe("typed source", () => {
       subnets,
     );
     expect(kept).toMatchObject({ sourceOrgRef: 7, sourceNodeId: "d:Z" });
+    // A DNS name (or its URL) one host answers to becomes that host's address
+    // at its owner; several addresses wait for a pick.
+    const hosts = [
+      { ...subnet("192.0.2.10/32", 3, "vpc:1"), kind: "host", name: "RDS db", dns_names: ["db.example.com"] },
+      { ...subnet("192.0.2.20/32", 3, "vpc:1"), kind: "host", name: "FSx files", dns_names: ["files.example.com"] },
+      { ...subnet("192.0.2.21/32", 3, "vpc:1"), kind: "host", name: "FSx files", dns_names: ["files.example.com"] },
+    ];
+    const all = [...subnets, ...hosts];
+    const named = withSingleOwners(
+      { ...emptyForm(), source: "https://db.example.com:5432/app", destination: "files.example.com" },
+      all,
+    );
+    expect(named).toMatchObject({ source: "192.0.2.10", sourceOrgRef: 3, sourceNodeId: "vpc:1" });
+    expect(named.destination).toBe("files.example.com");
+    expect(named.destinationOrgRef).toBeUndefined();
+    expect(endOwners("files.example.com", all)).toEqual([hosts[1], hosts[2]]);
+    expect(endOwners("10.1.0.5", all)).toEqual([subnets[0]]);
+    expect(namedEndError(named, all)).toBe(
+      'Destination: FSx files has 2 addresses - pick the one to trace in "Destination is at".',
+    );
+    const picked = { ...named, ...pickedOwnerPatch("destination", named.destination, hosts[2]) };
+    expect(picked).toMatchObject({ destination: "192.0.2.21", destinationOrgRef: 3, destinationNodeId: "vpc:1" });
+    expect(namedEndError(picked, all)).toBeNull();
+    // An owner picked for a typed address leaves the text as it is.
+    expect(pickedOwnerPatch("source", "10.2.0.9", subnets[2])).toEqual({ sourceOrgRef: 2, sourceNodeId: "d:C" });
   });
 
   it("traces a typed row again from its source node", () => {

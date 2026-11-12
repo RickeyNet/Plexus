@@ -327,6 +327,8 @@ export interface MerakiSubnet {
   node_id: string;
   /** Whether the site advertises the subnet into the VPN; null when unknown. */
   in_vpn: boolean | null;
+  /** DNS names a host answers to (an FSx or service endpoint), lower case. */
+  dns_names?: string[];
 }
 
 export interface TopologyDeepSearchHit {

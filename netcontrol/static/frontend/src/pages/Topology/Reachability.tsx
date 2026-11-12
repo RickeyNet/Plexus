@@ -29,7 +29,8 @@ import {
   TEXT_CELL_STYLE,
 } from './helpers';
 import { PathTrace } from './PathTracePanel';
-import { findSubnets, subnetOptionLabel } from './paths';
+import { HostSuggestions } from './HostSuggestions';
+import { hostAddress, subnetOptionLabel, suggestHosts, type HostSuggestion } from './paths';
 import { portsText, reverseTraceQuery, verdictLabel } from './pathTrace';
 import { FilterFields } from './SweepFilterFields';
 import {
@@ -37,7 +38,7 @@ import {
   buildReachabilityQuery,
   cloudsToMerakiForm,
   emptyForm,
-  endOwnerPatch,
+  endOwners,
   endPatch,
   isListQuery,
   isTraceRow,
@@ -50,6 +51,8 @@ import {
   sweepProviders,
   sweepSources,
   VERDICT_ORDER,
+  namedEndError,
+  pickedOwnerPatch,
   vlanTextError,
   withSingleOwners,
   type PairRollup,
@@ -105,7 +108,7 @@ export function Reachability() {
   const sources = useMemo(() => sweepSources(sourcesQuery.data?.sources ?? [], subnets), [sourcesQuery.data, subnets]);
   const providers = useMemo(() => sweepProviders(subnets), [subnets]);
   const owners = useMemo<Record<SweepEnd, MerakiSubnet[]>>(
-    () => ({ source: findSubnets(form.source, subnets), destination: findSubnets(form.destination, subnets) }),
+    () => ({ source: endOwners(form.source, subnets), destination: endOwners(form.destination, subnets) }),
     [form.source, form.destination, subnets],
   );
   const matrixForm = !form.destination.trim();
@@ -132,14 +135,22 @@ export function Reachability() {
     setPicked((p) => ({ ...p, [side]: exact ? subnetKey(exact) : '' }));
   }
 
+  // A host picked from those offered for the name being typed: its address, at its owner.
+  function pickHost(side: SweepEnd, host: MerakiSubnet) {
+    update(endPatch(side, hostAddress(host), host));
+    setPicked((p) => ({ ...p, [side]: subnetKey(host) }));
+  }
+
   function pickOwner(side: SweepEnd, key: string) {
     setPicked((p) => ({ ...p, [side]: key }));
-    update(endOwnerPatch(side, owners[side].find((s) => subnetKey(s) === key)));
+    update(pickedOwnerPatch(side, form[side], owners[side].find((s) => subnetKey(s) === key)));
   }
 
   function run() {
     // A typed address one subnet holds is placed at that subnet's owner, as in Path Mode.
-    submit(buildReachabilityQuery(withSingleOwners(form, subnets)));
+    const placed = withSingleOwners(form, subnets);
+    const error = namedEndError(placed, subnets);
+    submit(error ? { error } : buildReachabilityQuery(placed));
   }
 
   function listNetworks() {
@@ -194,8 +205,8 @@ export function Reachability() {
                 label={side === 'source' ? 'Source' : 'Destination'}
                 placeholder={
                   side === 'source'
-                    ? 'IP address, network or subnet; empty: use the filters'
-                    : 'IP address, network or subnet; empty: many'
+                    ? 'IP address, network, subnet or part of a DNS name; empty: use the filters'
+                    : 'IP address, network, subnet or part of a DNS name; empty: many'
                 }
                 title={
                   side === 'source'
@@ -208,6 +219,8 @@ export function Reachability() {
                 owners={owners[side]}
                 picked={picked[side]}
                 onPick={(key) => pickOwner(side, key)}
+                suggestions={suggestHosts(form[side], subnets)}
+                onSuggestion={(host) => pickHost(side, host)}
               />
             ))}
             <label style={FIELD_STYLE}>
@@ -326,23 +339,45 @@ interface EndFieldProps {
   /** Key of the owner picked among several. */
   picked: string;
   onPick: (key: string) => void;
+  /** The hosts offered for the name being typed. */
+  suggestions: HostSuggestion[];
+  onSuggestion: (host: MerakiSubnet) => void;
 }
 
 /** One typed end of a sweep (Source or Destination), with the subnet suggestions and its "is at" owner picker. */
-function EndField({ label, placeholder, title, value, onChange, onEnter, owners, picked, onPick }: EndFieldProps) {
+function EndField({
+  label,
+  placeholder,
+  title,
+  value,
+  onChange,
+  onEnter,
+  owners,
+  picked,
+  onPick,
+  suggestions,
+  onSuggestion,
+}: EndFieldProps) {
+  // The offered hosts show only while the field is being typed in.
+  const [focused, setFocused] = useState(false);
+  const offered = focused ? suggestions : [];
   return (
     <>
-      <label style={{ ...FIELD_STYLE, minWidth: 280 }}>
+      <label style={{ ...FIELD_STYLE, minWidth: 280, position: 'relative' }}>
         <span className="form-label">{label}</span>
         <input
           className="form-input form-input-sm"
-          list={SUBNETS_LIST_ID}
+          // The hosts found for a typed name take the place of the subnet list.
+          list={offered.length ? undefined : SUBNETS_LIST_ID}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
           placeholder={placeholder}
           title={title}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') onEnter(); }}
         />
+        <HostSuggestions suggestions={offered} onPick={onSuggestion} />
       </label>
       {owners.length > 1 && (
         <label style={FIELD_STYLE}>

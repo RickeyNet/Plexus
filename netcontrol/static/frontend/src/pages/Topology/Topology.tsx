@@ -39,6 +39,7 @@ import { buildInventoryAddRows } from './inventoryAdd';
 import { ChangesModal } from './ChangesModal';
 import { DiscoveryProgressModal } from './DiscoveryProgressModal';
 import { ExportMenu } from './ExportMenu';
+import { HostSuggestions } from './HostSuggestions';
 import { searchTerms } from './merakiHelpers';
 import { exportJSON, exportPNG, exportSVG } from './exporters';
 import {
@@ -76,7 +77,7 @@ import {
 import { crowdedGroups, fitTitles, labelWidth, straighten, tidyLabel, tidyTree, type XY } from './layout';
 import { distanceToRoute, routeSourceLinks, traceRoute } from './routes';
 import { EdgeDetails } from './EdgeDetails';
-import { MAX_PATH_ENDPOINTS, connectPicks, findSubnets, isAddressText, parseTraffic, pathModeHint, pathSites, subnetOptionLabel, subnetPick, userPick, type PathPick } from './paths';
+import { MAX_PATH_ENDPOINTS, connectPicks, findNamedHosts, findSubnets, hostAddress, isAddressText, suggestHosts, parseTraffic, pathModeHint, pathSites, subnetOptionLabel, subnetPick, userPick, type PathPick } from './paths';
 import { PathTrace } from './PathTracePanel';
 import { legKey, mergeHighlights, pathTraceQuery, reverseTraceQuery, uncheckedTraceNote, type TraceHighlight } from './pathTrace';
 import { NodeDetails } from './NodeDetails';
@@ -1600,24 +1601,38 @@ export function Topology() {
     addPathPick(nodePick(site.gateway));
   }
 
+  // The hosts whose DNS name or resource name holds what is being typed in the
+  // subnet box, offered under it while it is being typed in.
+  const [pathSubnetFocused, setPathSubnetFocused] = useState(false);
+  const pathHostSuggestions = useMemo(
+    () => (pathSubnetFocused ? suggestHosts(pathSubnetInput, pathSubnets.list) : []),
+    [pathSubnetFocused, pathSubnetInput, pathSubnets],
+  );
+
   // `typed` is a finished entry (Enter) rather than a keystroke: then an
   // address or network is resolved to the subnet that contains it. Returns
   // whether a subnet was added.
   function handlePathSubnetInput(value: string, typed = false): boolean {
     const node = pathSubnets.owners.get(value.trim());
-    const found = node !== undefined || typed ? findSubnets(value, pathSubnets.list) : [];
+    const inSubnets = node !== undefined || typed ? findSubnets(value, pathSubnets.list) : [];
+    // A DNS name or URL stands for the addresses of the host that answers to it.
+    const named = typed && !inSubnets.length ? findNamedHosts(value, pathSubnets.list) : [];
+    const found = named.length ? named : inSubnets;
     if (found.length !== 1) {
       setPathSubnetInput(value);
       // The choices stand until the text changes or one is picked.
       setPathSubnetChoices(typed && found.length > 1 ? found : []);
       if (typed && value.trim()) {
         const sites = [...new Set(found.map((s) => s.site_name || s.name))];
+        const addresses = found.map(hostAddress);
         setPathNote(
-          found.length
-            ? `${value.trim()} is in ${found[0].cidr}, which exists at ${found.length} places (${sites.slice(0, 4).join(', ')}${sites.length > 4 ? ', ...' : ''}) - pick the one you mean in "is at".`
-            : subnetsQuery.isPending
-              ? 'Subnets are still loading - try again in a moment.'
-              : `No collected subnet contains ${value.trim()}.`,
+          named.length
+            ? `${named[0].name} has ${named.length} addresses (${addresses.slice(0, 4).join(', ')}${addresses.length > 4 ? ', ...' : ''}) - pick the one to trace in "is at".`
+            : found.length
+              ? `${value.trim()} is in ${found[0].cidr}, which exists at ${found.length} places (${sites.slice(0, 4).join(', ')}${sites.length > 4 ? ', ...' : ''}) - pick the one you mean in "is at".`
+              : subnetsQuery.isPending
+                ? 'Subnets are still loading - try again in a moment.'
+                : `No collected subnet contains ${value.trim()}, and no collected host has that DNS name.`,
         );
       }
       return false;
@@ -2283,17 +2298,23 @@ export function Topology() {
               )}
               {showPathSubnets && (
                 <>
+                  <div style={{ position: 'relative' }}>
                   <input
                     className="form-input form-input-sm"
-                    list="topology-path-subnets"
-                    placeholder={pathSubnetInput ? undefined : subnetsQuery.isPending ? 'Loading subnets…' : 'Add a subnet or IP address…'}
+                    // The hosts found for a typed name take the place of the subnet list.
+                    list={pathHostSuggestions.length ? undefined : 'topology-path-subnets'}
+                    onFocus={() => setPathSubnetFocused(true)}
+                    onBlur={() => setPathSubnetFocused(false)}
+                    placeholder={pathSubnetInput ? undefined : subnetsQuery.isPending ? 'Loading subnets…' : 'Add a subnet, IP address or DNS name…'}
                     aria-label="Add a subnet to the path"
-                    title="Pick a subnet from the list, or type an IP address or network and press Enter"
+                    title="Pick a subnet from the list, type an IP address or network and press Enter, or type part of the DNS name or URL of a cloud resource and pick it below"
                     value={pathSubnetInput}
                     onChange={(e) => handlePathSubnetInput(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter') handlePathSubnetInput(e.currentTarget.value, true); }}
                     style={{ minWidth: 260 }}
                   />
+                  <HostSuggestions suggestions={pathHostSuggestions} onPick={(host) => addPathSubnet(host, '')} />
+                  </div>
                   <datalist id="topology-path-subnets">
                     {pathSubnets.list.map((s) => {
                       const text = subnetOptionLabel(s);
@@ -2304,7 +2325,7 @@ export function Topology() {
                     <select
                       className="form-select form-select-sm"
                       aria-label={`${pathSubnetInput.trim()} is at`}
-                      title="The typed address is in a subnet that several sites have: pick the one you mean"
+                      title="The typed address is in a subnet that several sites have, or the typed name has several addresses: pick the one you mean"
                       value=""
                       onChange={(e) => pickPathSubnetChoice(e.target.value)}
                       style={{ minWidth: 260 }}
