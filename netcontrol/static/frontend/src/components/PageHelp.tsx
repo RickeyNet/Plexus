@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-const STORAGE_KEY = 'plexus_help_dismissed';
+import { isHelpDismissed, setHelpDismissed } from '@/lib/helpDismissed';
 
 interface Props {
   pageKey: string;
@@ -8,39 +8,20 @@ interface Props {
   text: string;
 }
 
-function loadDismissed(): Record<string, boolean> {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}');
-  } catch {
-    return {};
-  }
-}
-
-function saveDismissed(d: Record<string, boolean>): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(d));
-  } catch {
-    /* private mode */
-  }
-}
-
 export function PageHelp({ pageKey, title, text }: Props) {
-  const [collapsed, setCollapsed] = useState<boolean>(() => !!loadDismissed()[pageKey]);
+  const [collapsed, setCollapsed] = useState<boolean>(() => isHelpDismissed(pageKey));
 
   const [prevPageKey, setPrevPageKey] = useState(pageKey);
   // Re-read the dismissed state from storage when the page key changes.
   if (pageKey !== prevPageKey) {
     setPrevPageKey(pageKey);
-    setCollapsed(!!loadDismissed()[pageKey]);
+    setCollapsed(isHelpDismissed(pageKey));
   }
 
   function toggle() {
     setCollapsed((prev) => {
       const next = !prev;
-      const d = loadDismissed();
-      if (next) d[pageKey] = true;
-      else delete d[pageKey];
-      saveDismissed(d);
+      setHelpDismissed(pageKey, next);
       return next;
     });
   }

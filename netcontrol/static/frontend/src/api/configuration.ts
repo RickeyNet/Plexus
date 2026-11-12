@@ -191,10 +191,11 @@ export function useConfigSnapshot(snapshotId: number | null) {
   });
 }
 
-export function useConfigBackupSummary() {
+export function useConfigBackupSummary(enabled = true) {
   return useQuery<ConfigBackupSummary>({
     queryKey: ['config-backup-summary'],
     queryFn: () => apiRequest('/config-backups/summary'),
+    enabled,
   });
 }
 

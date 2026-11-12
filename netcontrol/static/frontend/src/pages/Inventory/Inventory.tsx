@@ -9,6 +9,7 @@ import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
 import { clickableProps } from '@/lib/clickable';
+import { useLinkedParam } from '@/lib/useLinkedParam';
 
 import {
   groupLabel,
@@ -75,7 +76,19 @@ export function Inventory() {
   const [sort, setSort] = useState<InventorySort>('custom');
   const [compact, setCompact] = useState<boolean>(() => loadCompactMode());
   const [collapsed, setCollapsed] = useState<Set<number>>(() => loadCollapsedSet());
-  const [modal, setModal] = useState<ModalState>({ kind: 'none' });
+  const [modalState, setModal] = useState<ModalState>({ kind: 'none' });
+  // `?open=discovery` and `?open=snmp-profiles` (the Dashboard's setup guide)
+  // open that dialog once the groups have loaded; closing it drops the parameter.
+  const [linkedOpen, clearLinkedOpen] = useLinkedParam('open');
+  const linkedModal: ModalState | null =
+    modalState.kind !== 'none' || !groupsQ.data
+      ? null
+      : linkedOpen === 'discovery'
+        ? { kind: 'discovery', mode: 'global', group: null }
+        : linkedOpen === 'snmp-profiles'
+          ? { kind: 'snmp-profiles' }
+          : null;
+  const modal = linkedModal ?? modalState;
   const [selectedHosts, setSelectedHosts] = useState<Map<number, Set<number>>>(
     new Map(),
   );
@@ -236,7 +249,10 @@ export function Inventory() {
     window.open(inventoryCsvExportUrl(), '_blank');
   };
 
-  const closeModal = () => setModal({ kind: 'none' });
+  const closeModal = () => {
+    setModal({ kind: 'none' });
+    if (linkedOpen !== null) clearLinkedOpen();
+  };
 
   return (
     <div>

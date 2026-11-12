@@ -188,18 +188,30 @@ def _state_counts() -> dict[str, int]:
 
 async def dashboard_topology_summary(limit: int = DASHBOARD_PROBLEM_LIMIT) -> dict[str, Any]:
     """The current state of every tracked entity, for ``GET /api/dashboard``:
-    counts in total and per provider, and the down / degraded entities
-    (down first, the most recent change first, at most ``limit``)."""
+    counts in total, per provider and per source and entity type
+    (``by_source``: one ``{provider, org_ref, entity_type, up, degraded,
+    down, unknown}`` row per type a source has, for the Dashboard's
+    integration cards), and the down / degraded entities (down first, the
+    most recent change first, at most ``limit``). The AWS, Azure and GCP
+    accounts of one cloud share one ``org_ref``: their discoveries are
+    recorded as one snapshot per cloud."""
     totals = _state_counts()
     by_provider: dict[str, dict[str, int]] = {}
+    by_source: dict[tuple[str, int, str], dict[str, int]] = {}
     for row in await db.count_topology_entity_states():
         state = row["state"] if row["state"] in totals else "unknown"
         totals[state] += row["count"]
         by_provider.setdefault(row["provider"], _state_counts())[state] += row["count"]
+        key = (row["provider"], row["org_ref"], row["entity_type"])
+        by_source.setdefault(key, _state_counts())[state] += row["count"]
     problems = await db.list_topology_entity_states(states=_PROBLEM_STATES, worst_first=True, limit=limit)
     return {
         "entity_counts": {**totals, "total": sum(totals.values())},
         "by_provider": by_provider,
+        "by_source": [
+            {"provider": provider, "org_ref": org_ref, "entity_type": entity_type, **counts}
+            for (provider, org_ref, entity_type), counts in sorted(by_source.items())
+        ],
         "problem_count": totals["down"] + totals["degraded"],
         "problems": [
             {
