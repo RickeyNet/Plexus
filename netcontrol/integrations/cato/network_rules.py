@@ -27,6 +27,13 @@ with the route it would take. What cannot be resolved (a users group whose
 members were not read, a custom application whose definition was not
 collected) makes a rule one that may apply: unknown, never guessed.
 
+Asked about an application or a domain (``app``, a ``pathtrace.apps``
+target), the name criteria are decided against it (a criterion's ``match``,
+see ``apps.match``) instead: a rule that names it applies, one that names
+something else does not, one that needs what was not collected may apply.
+When its address is not known (``dst_unknown``), a rule that names
+internet addresses may match part of it.
+
 The address a NAT rule leaves with is read from the account's allocated IP
 list (``popLocations.allocatedIpList``) by the allocated IP's id, else from
 the reference's name ("NAT IP Ashburn - 192.0.2.101"). Every other route
@@ -46,6 +53,7 @@ import ipaddress
 import re
 from typing import Any
 
+from netcontrol.integrations.pathtrace import apps as trace_apps
 from netcontrol.integrations.pathtrace.model import (
     FULL,
     INFO,
@@ -58,6 +66,7 @@ from netcontrol.integrations.pathtrace.model import (
     UNKNOWN,
     Network,
     cover,
+    dst_cover,
     ports_match,
     protocol_match,
     show,
@@ -178,22 +187,48 @@ def _service_cover(services: list, protocol: str, ports: tuple[int, int] | None)
     return best
 
 
-def _criterion(criterion: dict, dst: Network, protocol: str, ports: tuple[int, int] | None) -> int | str:
+class _Asked:
+    """The flow a rule is matched against."""
+
+    def __init__(
+        self,
+        src: Network,
+        dst: Network,
+        protocol: str,
+        ports: tuple[int, int] | None,
+        app: trace_apps.Target | None,
+        dst_unknown: bool,
+    ) -> None:
+        self.src, self.dst, self.protocol, self.ports = src, dst, protocol, ports
+        self.app, self.dst_unknown = app, dst_unknown
+
+    def dst_cover(self, cidrs: list[str] | None) -> int:
+        return dst_cover(cidrs, self.dst, self.dst_unknown)
+
+
+def _criterion(criterion: dict, asked: _Asked) -> tuple[int | str, str]:
+    """``(state, text)`` of one criterion: a cover, ``name`` or ``unknown``,
+    and the text that says why it is not a plain cover."""
     kind = criterion.get("kind")
+    text = _text(criterion.get("text"))
     if kind == "name":
-        return _BY_NAME
+        if asked.app is None:
+            return _BY_NAME, text
+        match = criterion.get("match")
+        if not isinstance(match, dict):
+            return _MAYBE, f"it names {text}, which Plexus cannot evaluate"
+        found, reason = trace_apps.match(match, asked.app)
+        return (_MAYBE, reason) if reason else (found, text)
     if kind not in ("ip", "service"):
-        return _MAYBE
+        return _MAYBE, text
     # An address criterion with no CIDR (a group with no address now) matches nothing.
-    found = cover(criterion.get("cidrs") or [], dst) if kind == "ip" else FULL
+    found = asked.dst_cover(criterion.get("cidrs") or []) if kind == "ip" else FULL
     if criterion.get("services"):
-        found = min(found, _service_cover(criterion["services"], protocol, ports))
-    return found
+        found = min(found, _service_cover(criterion["services"], asked.protocol, asked.ports))
+    return found, text
 
 
-def _application(
-    criteria: list[dict], dst: Network, protocol: str, ports: tuple[int, int] | None
-) -> tuple[str, list[str]]:
+def _application(criteria: list[dict], asked: _Asked) -> tuple[str, list[str]]:
     """Whether a rule's application field matches: ``yes``, ``no``,
     ``part``, ``name`` (only what Cato identifies by name could) or
     ``unknown``, with the criteria that leave it so. An empty field is any
@@ -204,8 +239,7 @@ def _application(
     partly: list[str] = []
     doubtful: list[str] = []
     for criterion in criteria:
-        found = _criterion(criterion, dst, protocol, ports)
-        text = _text(criterion.get("text"))
+        found, text = _criterion(criterion, asked)
         if found == FULL:
             return _YES, []
         if found == _BY_NAME:
@@ -223,15 +257,13 @@ def _application(
     return _NO, []
 
 
-def _matches(
-    entry: dict, src: Network, dst: Network, protocol: str, ports: tuple[int, int] | None
-) -> tuple[str, list[str]]:
+def _matches(entry: dict, asked: _Asked) -> tuple[str, list[str]]:
     """Whether a rule (or an exception) matches a flow: ``yes``, ``no``,
     ``part``, ``name`` or ``unknown``, and why it is not a plain yes."""
-    src_cover, dst_cover = cover(entry.get("src"), src), cover(entry.get("dst"), dst)
+    src_cover, dst_cover = cover(entry.get("src"), asked.src), asked.dst_cover(entry.get("dst"))
     if src_cover == NONE or dst_cover == NONE:
         return _NO, []
-    state, detail = _application(entry.get("app") or [], dst, protocol, ports)
+    state, detail = _application(entry.get("app") or [], asked)
     if state == _NO:
         return _NO, []
     unresolved = [_text(u) for u in (entry.get("src_unresolved") or []) + (entry.get("dst_unresolved") or [])]
@@ -244,10 +276,19 @@ def _matches(
 
 
 def evaluate(
-    policy: Any, src: Network, dst: Network, protocol: str = "", ports: tuple[int, int] | None = None
+    policy: Any,
+    src: Network,
+    dst: Network,
+    protocol: str = "",
+    ports: tuple[int, int] | None = None,
+    *,
+    app: trace_apps.Target | None = None,
+    dst_unknown: bool = False,
 ) -> dict[str, Any]:
     """The network rule that routes a flow from ``src`` to ``dst`` to the
-    internet, for a connection made to the bare IP ``dst``.
+    internet, for a connection made to the bare IP ``dst``, or to the
+    application or domain ``app`` (whose address ``dst`` is not known when
+    ``dst_unknown``).
 
     Returns ``state``: ``not_collected``, ``reduced`` (read with the reduced
     query, the match fields missing), ``disabled``, ``matched`` (``rule``
@@ -266,11 +307,11 @@ def evaluate(
         return {**found, "state": "reduced"}
     if policy.get("enabled", True) is False:
         return {**found, "state": "disabled"}
-    protocol = _text(protocol).lower()
+    asked = _Asked(src, dst, _text(protocol).lower(), ports, app, dst_unknown)
     for rule in policy.get("rules") or []:
         if not isinstance(rule, dict) or rule.get("enabled", True) is False:
             continue
-        state, detail = _matches(rule, src, dst, protocol, ports)
+        state, detail = _matches(rule, asked)
         if state == _NO:
             continue
         if state != _YES:
@@ -280,7 +321,7 @@ def evaluate(
         excluded: dict | None = None
         doubt: dict | None = None
         for exception in rule.get("exceptions") or []:
-            ex_state, ex_detail = _matches(exception, src, dst, protocol, ports)
+            ex_state, ex_detail = _matches(exception, asked)
             name = _text(exception.get("name")) or "unnamed"
             if ex_state == _NO:
                 continue
@@ -387,14 +428,21 @@ def _route_status(egress: dict) -> str:
 
 
 def trace_egress(
-    policy: Any, src: Network, dst: Network, protocol: str = "", ports: tuple[int, int] | None = None
+    policy: Any,
+    src: Network,
+    dst: Network,
+    protocol: str = "",
+    ports: tuple[int, int] | None = None,
+    *,
+    app: trace_apps.Target | None = None,
+    dst_unknown: bool = False,
 ) -> dict[str, Any]:
     """``evaluate`` as path trace items at the hop where the flow leaves
     Cato: ``items`` (``(stage, status, where, text, rule index)``), the
     ``addresses`` the source becomes (several when the rule NATs to several
     allocated IPs; which one Cato uses is not reported) and, when none is
     known, ``unknown``: why, in a sentence."""
-    found = evaluate(policy, src, dst, protocol, ports)
+    found = evaluate(policy, src, dst, protocol, ports, app=app, dst_unknown=dst_unknown)
     items: list[tuple[str, str, str, str, int | None]] = []
     state = found["state"]
     bare = show(dst)
@@ -422,7 +470,8 @@ def trace_egress(
     fallen = f"falls to {_label(rule)}" if rule is not None else "matches no rule"
     for candidate in found["candidates"]:
         other = candidate["rule"]
-        detail = ", ".join(candidate["detail"])
+        # Asked about an application, each detail is a clause of its own.
+        detail = ("; " if app is not None else ", ").join(candidate["detail"])
         would, _why = _route_text(other["egress"])
         if candidate["why"] == _BY_NAME:
             items.append(
@@ -448,13 +497,14 @@ def trace_egress(
                 )
             )
         else:
+            # Asked about an application, the details say why in a sentence each.
+            why = detail if app is not None else f"{detail} cannot be resolved to addresses"
             items.append(
                 (
                     ROUTE,
                     UNKNOWN,
                     NAME,
-                    f"{_label(other)} may apply: {detail} cannot be resolved to addresses. Its route would be: "
-                    f"{would}.",
+                    f"{_label(other)} may apply: {why}. Its route would be: {would}.",
                     other.get("index"),
                 )
             )

@@ -750,7 +750,8 @@ def _other_policies() -> dict[str, Any]:
 
 def _objects() -> dict[str, Any]:
     """The groups, users groups, containers, custom applications and
-    allocated IPs rules name, as the collector returns them."""
+    allocated IPs rules name, and part of Cato's application catalog, as
+    the collector returns them."""
     return {
         "groups": [
             {
@@ -847,6 +848,28 @@ def _objects() -> dict[str, Any]:
             }
         ],
         "allocated_ips": copy.deepcopy(ALLOCATED_IPS),
+        # Cato's application catalog, as ``catalogs.catalogApplicationList``
+        # returns it (a few of its applications; websites invented).
+        "app_catalog": [
+            {
+                "id": "youtube",
+                "name": "YouTube",
+                "category": [_ref("video_streaming", "Video Streaming")],
+                "website": "https://video.example.com",
+            },
+            {
+                "id": "dropbox",
+                "name": "Dropbox",
+                "category": [_ref("file_sharing", "File Sharing")],
+                "website": "https://files.example.com",
+            },
+            {
+                "id": "zoom",
+                "name": "Zoom",
+                "category": [_ref("video_conferencing", "Video Conferencing")],
+                "website": None,
+            },
+        ],
     }
 
 

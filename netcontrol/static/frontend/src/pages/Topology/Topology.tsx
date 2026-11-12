@@ -26,13 +26,14 @@ import {
   type UtilizationStreamEdge,
 } from '@/api/topology';
 import { groupLabel } from '@/api/inventory';
-import { topologyExportUrl, useMerakiSubnets, useTopologyDeepSearch, type MerakiSubnet, type TopologyExportPath } from '@/api/meraki';
+import { topologyExportUrl, useMerakiSubnets, usePathAppSuggestions, useTopologyDeepSearch, type MerakiSubnet, type TopologyExportPath } from '@/api/meraki';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { LoadingState } from '@/components/LoadingState';
 import { Menu, MenuCheckboxItem, MenuItem, MenuSeparator } from '@/components/Menu';
 import { PageHelp } from '@/components/PageHelp';
 import { QueryError } from '@/components/QueryError';
 import { mixColors, withAlpha } from '@/lib/themeColors';
+import { useDebouncedValue } from '@/lib/useDebouncedValue';
 import { useLinkedParam } from '@/lib/useLinkedParam';
 import { AddToInventoryModal } from './AddToInventoryModal';
 import { BulkAddToInventoryModal } from './BulkAddToInventoryModal';
@@ -78,7 +79,7 @@ import {
 import { crowdedGroups, fitTitles, labelWidth, straighten, tidyLabel, tidyTree, type XY } from './layout';
 import { distanceToRoute, routeSourceLinks, traceRoute } from './routes';
 import { EdgeDetails } from './EdgeDetails';
-import { MAX_PATH_ENDPOINTS, connectPicks, findNamedHosts, findSubnets, hostAddress, isAddressText, suggestHosts, parseTraffic, pathModeHint, pathSites, subnetOptionLabel, subnetPick, userPick, type PathPick } from './paths';
+import { MAX_PATH_ENDPOINTS, appCandidate, appOptions, appPick, connectPicks, findNamedHosts, findSubnets, hostAddress, isAddressText, pickEnd, pickNodes, suggestHosts, parseTraffic, pathModeHint, pathSites, subnetOptionLabel, subnetPick, userPick, type PathPick } from './paths';
 import { PathTrace } from './PathTracePanel';
 import { legKey, mergeHighlights, pathTraceQuery, reverseTraceQuery, uncheckedTraceNote, type TraceHighlight } from './pathTrace';
 import { NodeDetails } from './NodeDetails';
@@ -214,7 +215,6 @@ export function Topology() {
       { replace: true },
     );
   }, [setSearchParams]);
-  const [debouncedSearch, setDebouncedSearch] = useState('');
   // Search text behind the current highlight / open details pane, so the
   // Meraki tabs can mark the rows that matched.
   const [appliedSearch, setAppliedSearch] = useState('');
@@ -315,15 +315,11 @@ export function Topology() {
   const addableBadge = badgeText(addableCount);
   showAllTunnelsRef.current = showAllTunnels;
   const positions = positionsQuery.data;
-  // A pasted URL or UNC path searches for its host, here and in the local match.
-  const deepSearch = useTopologyDeepSearch(hasDeepSearch ? searchTerms(debouncedSearch).join(' ') : '');
-
   // Debounce the deep (server-side) search so typing doesn't fire a request
   // per keystroke; the local name/IP match stays instant.
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedSearch(search), 250);
-    return () => clearTimeout(timer);
-  }, [search]);
+  const debouncedSearch = useDebouncedValue(search);
+  // A pasted URL or UNC path searches for its host, here and in the local match.
+  const deepSearch = useTopologyDeepSearch(hasDeepSearch ? searchTerms(debouncedSearch).join(' ') : '');
   const statusByHostRef = useRef<Map<number, TopologyHostStatus>>(new Map());
 
   // Hook up theme colors once on mount.
@@ -1338,9 +1334,10 @@ export function Topology() {
   const trafficFilter = useMemo(() => parseTraffic(pathTraffic), [pathTraffic]);
   // Legs between two subnets or addresses, which the server traces hop by hop.
   const pathHasTraceLeg = pathResult.legs.some((leg) => pathTraceQuery(leg.from, leg.to, { protocol: '' }) !== null);
-  // The HTML export carries the open path and the traces Plexus runs for it.
+  // The HTML export carries the open path and the traces Plexus runs for it
+  // (not an internet application, which is not on the map).
   const exportPath = useMemo<TopologyExportPath | null>(
-    () => (pathMode && pathPicks.length > 0 ? { picks: pathPicks, traffic: trafficFilter ?? { protocol: '' } } : null),
+    () => (pathMode && pickNodes(pathPicks).length > 0 ? { picks: pathPicks, traffic: trafficFilter ?? { protocol: '' } } : null),
     [pathMode, pathPicks, trafficFilter],
   );
   const setLegHighlight = useCallback((key: string, highlight: TraceHighlight | null) => {
@@ -1615,6 +1612,16 @@ export function Topology() {
     () => (pathSubnetFocused ? suggestHosts(pathSubnetInput, pathSubnets.list) : []),
     [pathSubnetFocused, pathSubnetInput, pathSubnets],
   );
+  // The internet application or domain the text in the subnet box can be
+  // traced to, when it is none of the subnets, addresses or host names the
+  // map knows, offered after the hosts with the server's matching names.
+  const pathAppCandidate = useMemo(
+    () => (pathSubnetFocused && !subnetsQuery.isPending ? appCandidate(pathSubnetInput, pathSubnets.list) : null),
+    [pathSubnetFocused, pathSubnetInput, pathSubnets, subnetsQuery.isPending],
+  );
+  const pathAppQuery = usePathAppSuggestions(useDebouncedValue(pathAppCandidate ?? ''));
+  const pathAppItems = pathAppQuery.data?.items;
+  const pathAppOptions = useMemo(() => appOptions(pathAppCandidate, pathAppItems ?? []), [pathAppCandidate, pathAppItems]);
 
   // `typed` is a finished entry (Enter) rather than a keystroke: then an
   // address or network is resolved to the subnet that contains it. Returns
@@ -1625,6 +1632,15 @@ export function Topology() {
     // A DNS name or URL stands for the addresses of the host that answers to it.
     const named = typed && !inSubnets.length ? findNamedHosts(value, pathSubnets.list) : [];
     const found = named.length ? named : inSubnets;
+    if (typed && !found.length && !subnetsQuery.isPending) {
+      // Nothing on the map: an application or domain is traced to the
+      // internet, unless hosts whose names hold the text are offered first.
+      const app = appCandidate(value, pathSubnets.list);
+      if (app && !suggestHosts(value, pathSubnets.list, 1).length) {
+        addPathApp(app);
+        return false;
+      }
+    }
     if (found.length !== 1) {
       setPathSubnetInput(value);
       // The choices stand until the text changes or one is picked.
@@ -1639,7 +1655,9 @@ export function Topology() {
               ? `${value.trim()} is in ${found[0].cidr}, which exists at ${found.length} places (${sites.slice(0, 4).join(', ')}${sites.length > 4 ? ', ...' : ''}) - pick the one you mean in "is at".`
               : subnetsQuery.isPending
                 ? 'Subnets are still loading - try again in a moment.'
-                : `No collected subnet contains ${value.trim()}, and no collected host has that DNS name.`,
+                : appCandidate(value, pathSubnets.list)
+                  ? `Hosts on the map have names holding "${value.trim()}" - pick one below, or the internet application at the end of the list.`
+                  : `No collected subnet contains ${value.trim()}, and no collected host has that DNS name.`,
         );
       }
       return false;
@@ -1659,13 +1677,21 @@ export function Topology() {
     return true;
   }
 
+  // An internet application or domain, typed or picked under the subnet box.
+  function addPathApp(name: string) {
+    setPathSubnetInput('');
+    setPathSubnetChoices([]);
+    addPathPick(appPick(name));
+  }
+
   // One of the "is at" choices picked for the typed address.
   function pickPathSubnetChoice(key: string) {
     const subnet = pathSubnetChoices.find((s) => `${s.org_ref}|${s.node_id}|${s.cidr}` === key);
     if (subnet) addPathSubnet(subnet, pathSubnetInput);
   }
 
-  function pathLabel(nodeId: number | string): string {
+  function pathLabel(nodeId: number | string | undefined): string {
+    if (nodeId === undefined) return '';
     return nodeMetaRef.current.get(nodeId)?.raw.label ?? String(nodeId);
   }
 
@@ -2309,18 +2335,23 @@ export function Topology() {
                   <input
                     className="form-input form-input-sm"
                     // The hosts found for a typed name take the place of the subnet list.
-                    list={pathHostSuggestions.length ? undefined : 'topology-path-subnets'}
+                    list={pathHostSuggestions.length || pathAppOptions.length ? undefined : 'topology-path-subnets'}
                     onFocus={() => setPathSubnetFocused(true)}
                     onBlur={() => setPathSubnetFocused(false)}
-                    placeholder={pathSubnetInput ? undefined : subnetsQuery.isPending ? 'Loading subnets…' : 'Add a subnet, IP address or DNS name…'}
-                    aria-label="Add a subnet to the path"
-                    title="Pick a subnet from the list, type an IP address or network and press Enter, or type part of the DNS name or URL of a cloud resource and pick it below"
+                    placeholder={pathSubnetInput ? undefined : subnetsQuery.isPending ? 'Loading subnets…' : 'Add a subnet, IP address, DNS name or internet application…'}
+                    aria-label="Add a subnet, address or internet application to the path"
+                    title="Pick a subnet from the list, type an IP address or network and press Enter, type part of the DNS name or URL of a cloud resource and pick it below, or type an internet application or domain (YouTube, youtube.com) to trace to it as the destination"
                     value={pathSubnetInput}
                     onChange={(e) => handlePathSubnetInput(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter') handlePathSubnetInput(e.currentTarget.value, true); }}
                     style={{ minWidth: 260 }}
                   />
-                  <HostSuggestions suggestions={pathHostSuggestions} onPick={(host) => addPathSubnet(host, '')} />
+                  <HostSuggestions
+                    suggestions={pathHostSuggestions}
+                    onPick={(host) => addPathSubnet(host, '')}
+                    apps={pathAppOptions}
+                    onPickApp={addPathApp}
+                  />
                   </div>
                   <datalist id="topology-path-subnets">
                     {pathSubnets.list.map((s) => {
@@ -2376,11 +2407,15 @@ export function Topology() {
             )}
             {pathResult.legs.map((leg) => (
               <div key={legKey(leg)} style={{ marginTop: '0.35rem' }}>
-                {(leg.from.subnet || leg.to.subnet) && (
-                  <strong>{leg.from.address ?? leg.from.subnet?.cidr ?? leg.from.label} ↔ {leg.to.address ?? leg.to.subnet?.cidr ?? leg.to.label}: </strong>
+                {(leg.from.subnet || leg.to.subnet || leg.internet) && (
+                  <strong>{pickEnd(leg.from)} ↔ {pickEnd(leg.to)}: </strong>
                 )}
                 {/* A traced leg lists the hops of its trace (PathTrace below) instead of the drawn path. */}
-                {leg.sameDevice ? (
+                {leg.internet ? (
+                  traceHighlights[legKey(leg)]?.nodeIds.size ? null : (
+                    <span className="text-muted">out to the internet; an application is not on the map.</span>
+                  )
+                ) : leg.sameDevice ? (
                   <>Same device - routed locally by {pathLabel(leg.from.node)}.</>
                 ) : leg.path && traceHighlights[legKey(leg)]?.nodeIds.size ? null : leg.path ? (
                   <>
@@ -2419,7 +2454,7 @@ export function Topology() {
                 {pathHasTraceLeg && ' A traced leg lists the hops of its trace instead.'} A subnet is placed on the device that
                 owns it (appliance, L3 switch, VPC or VPN peer).
                 {pathHasTraceLeg &&
-                  ' Between two subnets or addresses the server traces the flow hop by hop and lists, at every device, the policies, ACLs, security groups, NAT rules and routes it hits, for the request and for the replies, and says whether routing is asymmetric. Reverse swaps the ends. Anything a source does not collect is reported as unknown, never as allowed.'}
+                  ' Between two subnets or addresses the server traces the flow hop by hop and lists, at every device, the policies, ACLs, security groups, NAT rules and routes it hits, for the request and for the replies, and says whether routing is asymmetric. Reverse swaps the ends. An internet application or domain is traced as the destination from a subnet or address, out to the internet, so application, category and domain rules on the way are checked; it has no Reverse. Anything a source does not collect is reported as unknown, never as allowed.'}
               </div>
             )}
           </div>

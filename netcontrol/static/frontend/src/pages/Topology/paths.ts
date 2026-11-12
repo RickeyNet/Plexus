@@ -1,4 +1,4 @@
-import type { MerakiSubnet } from '@/api/meraki';
+import type { MerakiSubnet, PathAppSuggestion } from '@/api/meraki';
 import type { TopologyEdge, TopologyNode } from '@/api/topology';
 
 import { isEdgeDown, isRemoteUserNode, PROVIDER_INVENTORY } from './helpers';
@@ -38,14 +38,23 @@ export interface PathLeg {
   edgeIds: NodeId[];
 }
 
-/** Something picked for the path: a device, a site's gateway or a subnet's owner. */
+/**
+ * Something picked for the path: a device, a site's gateway, a subnet's owner,
+ * or an internet application or domain (`app`), which is not on the map.
+ */
 export interface PathPick {
   key: string;
-  node: NodeId;
+  /** The map device that stands for the pick; absent for an internet application. */
+  node?: NodeId;
   label: string;
   subnet?: MerakiSubnet;
   /** The address typed to pick `subnet`, when it is narrower than the subnet. */
   address?: string;
+  /**
+   * An internet application or domain (`YouTube`, `youtube.com`), traced as
+   * the destination of its legs whichever order it was picked in.
+   */
+  app?: string;
 }
 
 /** The address of a host entry of the index (`192.0.2.10/32` -> `192.0.2.10`); a wider network as it is. */
@@ -103,6 +112,8 @@ export interface PickLeg {
   notes: string[];
   /** Links the drawn path runs over. */
   edgeIds: NodeId[];
+  /** One end is an internet application: the leg leaves the map, so no path is drawn for it. */
+  internet: boolean;
 }
 
 export interface PickResult {
@@ -233,16 +244,28 @@ function subnetNotes(pick: PathPick, tunnels: number): string[] {
     : [];
 }
 
-/** Trace every pair of picks; two picks on one device need no path. */
+/** The map devices of `picks`, once each; an internet application has none. */
+export function pickNodes(picks: PathPick[]): NodeId[] {
+  return [...new Set(picks.flatMap((p) => (p.node === undefined ? [] : [p.node])))];
+}
+
+/**
+ * Trace every pair of picks; two picks on one device need no path, and a leg
+ * to an internet application has none on the map (only its trace).
+ */
 export function connectPicks(picks: PathPick[], edges: TopologyEdge[]): PickResult {
-  const traced = connectEndpoints([...new Set(picks.map((p) => p.node))], edges);
+  const traced = connectEndpoints(pickNodes(picks), edges);
   const legs: PickLeg[] = [];
   for (let i = 0; i < picks.length - 1; i++) {
     for (let j = i + 1; j < picks.length; j++) {
       const from = picks[i];
       const to = picks[j];
+      if (from.node === undefined || to.node === undefined) {
+        legs.push({ from, to, path: null, sameDevice: false, notes: [], edgeIds: [], internet: true });
+        continue;
+      }
       if (from.node === to.node) {
-        legs.push({ from, to, path: [from.node], sameDevice: true, notes: [], edgeIds: [] });
+        legs.push({ from, to, path: [from.node], sameDevice: true, notes: [], edgeIds: [], internet: false });
         continue;
       }
       const forward = traced.legs.find((l) => l.from === from.node && l.to === to.node);
@@ -257,6 +280,7 @@ export function connectPicks(picks: PathPick[], edges: TopologyEdge[]): PickResu
         sameDevice: false,
         notes: [...subnetNotes(from, tunnels), ...subnetNotes(to, tunnels)],
         edgeIds: leg?.edgeIds ?? [],
+        internet: false,
       });
     }
   }
@@ -294,7 +318,13 @@ export function subnetOptionLabel(subnet: MerakiSubnet): string {
 
 /** The Path Mode prompt, naming the site and subnet inputs that are shown. */
 export function pathModeHint(hasSites: boolean, hasSubnets: boolean): string {
-  const extra = hasSites && hasSubnets ? 'sites and subnets' : hasSites ? 'sites' : hasSubnets ? 'subnets or IP addresses' : '';
+  const extra = hasSites && hasSubnets
+    ? 'sites, subnets and internet applications'
+    : hasSites
+      ? 'sites'
+      : hasSubnets
+        ? 'subnets, IP addresses or internet applications'
+        : '';
   return `Click two or more devices on the map${extra ? `, or add ${extra},` : ''} to see how they reach one another.`;
 }
 
@@ -387,4 +417,83 @@ export function findNamedHosts(text: string, subnets: MerakiSubnet[]): MerakiSub
   const wanted = searchHost(text.trim().toLowerCase()).replace(/\.$/, '');
   if (!wanted || isAddressText(wanted)) return [];
   return subnets.filter((s) => s.dns_names?.includes(wanted));
+}
+
+/** What a pick stands for at the end of a leg: its address, subnet or internet application, else its name. */
+export function pickEnd(pick: PathPick): string {
+  return pick.address ?? pick.subnet?.cidr ?? pick.app ?? pick.label;
+}
+
+/** Longest application name or domain the trace takes. */
+export const MAX_APP_LENGTH = 128;
+
+/**
+ * The internet application or domain `text` can be traced to as a
+ * destination, or null when it is something the map knows: an IPv4 or IPv6
+ * address or network (or part of one being typed), text the subnet picker
+ * has entries for, an address inside a collected subnet, or the DNS name of
+ * a collected host. A
+ * pasted URL stands for its host (`https://www.example.com/a` ->
+ * `www.example.com`). Hosts whose names only hold the text are offered first
+ * by `suggestHosts`, but do not stop the text being taken as an application.
+ */
+export function appCandidate(text: string, subnets: MerakiSubnet[]): string | null {
+  const typed = text.trim();
+  const name = searchHost(typed).replace(/\.$/, '');
+  if (name.length < 2 || name.length > MAX_APP_LENGTH) return null;
+  // IPv4 being typed (`192.0`), or IPv6 (`2001:db8::1`, `::1`).
+  if (/^[\d./]+$/.test(name) || /^[\da-f]*:[\da-f:.]*(?:\/\d{1,3})?$/i.test(name)) return null;
+  // A picker entry, or text the subnet list offers entries for (it matches
+  // anywhere in an entry, `Branch` finds the subnets of a site).
+  const lower = typed.toLowerCase();
+  if (subnets.some((s) => subnetOptionLabel(s).toLowerCase().includes(lower))) return null;
+  if (findSubnets(typed, subnets).length || findNamedHosts(typed, subnets).length) return null;
+  return name;
+}
+
+/** The pick of the internet application or domain `name` (from `appCandidate` or the server's list). */
+export function appPick(name: string): PathPick {
+  const app = name.trim();
+  return { key: `a:${app.toLowerCase()}`, label: `Internet application: ${app}`, app };
+}
+
+/** An internet application or domain offered under the subnet box. */
+export interface AppOption {
+  /** What is traced to (`destination_app`). */
+  name: string;
+  title: string;
+  detail: string;
+}
+
+const APP_KINDS: Record<PathAppSuggestion['kind'], string> = {
+  application: 'Internet application',
+  category: 'Application category',
+  domain: 'Domain',
+};
+
+/**
+ * The internet destinations offered for the typed `candidate` (see
+ * `appCandidate`): the server's applications and domains, then always the typed text itself,
+ * so it can be traced even when the server knows no such name. None without
+ * a candidate.
+ */
+export function appOptions(candidate: string | null, suggestions: PathAppSuggestion[]): AppOption[] {
+  if (!candidate) return [];
+  const seen = new Set<string>();
+  const found: AppOption[] = [];
+  for (const item of suggestions) {
+    const name = item.name.trim();
+    // A category is not something a flow goes to: only a rule can name one.
+    if (item.kind === 'category' || !name || seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    found.push({ name, title: name, detail: [APP_KINDS[item.kind] ?? item.kind, item.source].filter(Boolean).join(' · ') });
+  }
+  return [
+    ...found,
+    {
+      name: candidate,
+      title: `Internet application or domain: ${candidate}`,
+      detail: 'Traced to the internet as the destination of its legs',
+    },
+  ];
 }

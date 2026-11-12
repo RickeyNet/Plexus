@@ -10,7 +10,12 @@ from netcontrol.integrations.cato.normalize import (
     CLOUD_NODE_ID as CATO_CLOUD_NODE_ID,
     build_snapshot as build_cato_snapshot,
 )
-from netcontrol.integrations.cato.sample import build_sample_raw as build_cato_sample_raw
+from netcontrol.integrations.cato.sample import (
+    _endpoint as _cato_endpoint,
+    _fw_rule as _cato_fw_rule,
+    _ref as _cato_ref,
+    build_sample_raw as build_cato_sample_raw,
+)
 from netcontrol.integrations.meraki.forwarding import (
     interface,
     nat,
@@ -1164,7 +1169,7 @@ def test_cato_wan_firewall_rule_blocks_at_the_ingress_pop():
     assert result["verdict"] == "blocked"
     assert _items(request["hops"][-1]) == [("policy", "blocked", "WAN firewall rules")]
     assert request["summary"].startswith(
-        "Blocked at PoP Ashburn, WAN firewall rules: Rule 1 Isolate Denver from servers (return)"
+        "Blocked at PoP Ashburn, WAN firewall rules: Rule 1 Isolate Denver from servers (two-way rule, reverse direction)"
     )
 
 
@@ -1375,6 +1380,162 @@ def test_cato_remote_user_to_the_internet_meets_the_internet_firewall_at_the_use
     assert (status, name) == ("unknown", "Internet firewall rules") and text.startswith("Rule 1 Block malware")
     assert _policies(request["hops"][2]) == [("info", "Internet firewall rules", "Already applied at PoP New York.")]
     assert _route_item(request["hops"][2])["where"] == "Cato internet egress"
+
+
+def _cato_app_tracer() -> Tracer:
+    """The sample account with Internet firewall rules on a category, on a
+    category beside an address and on a domain."""
+    raw = build_cato_sample_raw()
+    raw["internet_firewall"]["rules"] = [
+        _cato_fw_rule(1, "Block social", "BLOCK", destination=_cato_endpoint(appCategory=[_cato_ref("so", "Social")])),
+        _cato_fw_rule(
+            2,
+            "Block streaming or the bad range",
+            "BLOCK",
+            destination=_cato_endpoint(appCategory=[_cato_ref("vs", "Video Streaming")], ip=["203.0.113.50"]),
+        ),
+        _cato_fw_rule(
+            3, "Allow the video domain", "ALLOW", destination={**_cato_endpoint(), "domain": ["video.example.com"]}
+        ),
+        _cato_fw_rule(4, "Allow all", "ALLOW"),
+    ]
+    return _cato_tracer(raw)
+
+
+def test_cato_remote_user_to_an_application_meets_the_internet_firewall_rule_that_names_it():
+    tracer = _cato_app_tracer()
+    # The sample catalog puts YouTube in Video Streaming: rule 2 blocks it, whatever its address.
+    for address in ("", "203.0.113.9"):
+        result = tracer.trace("10.88.0.11", address, **_DANA, **_HTTPS, destination_app="youtube")
+        assert result["verdict"] == "blocked", result["summary"]
+        assert result["destination_app"] == {
+            "name": "YouTube",
+            "domain": "video.example.com",
+            "address": address or None,
+            "categories": ["Video Streaming"],
+        }
+        [(status, name, text)] = _policies(result["request"]["hops"][1])
+        assert (status, name) == ("blocked", "Internet firewall rules")
+        assert text.startswith("Rule 2 Block streaming or the bad range") and text.endswith(
+            ": denies it. It matches YouTube on app category Video Streaming."
+        )
+
+    # Zoom is in another category: rule 2 matches only if Zoom's unknown address is its range,
+    # and rule 3 names a domain Zoom is not known to use.
+    zoom = tracer.trace("10.88.0.11", "", **_DANA, **_HTTPS, destination_app="Zoom")
+    assert zoom["verdict"] == "unknown"
+    [(status, _name, text)] = _policies(zoom["request"]["hops"][1])
+    assert status == "unknown" and text.startswith("Rule 3 Allow the video domain")
+    assert text.endswith("may match Zoom: it names domain video.example.com, and the domains Zoom uses are not known.")
+
+    # A typed domain no catalog links to an application: its categories are not known.
+    files = tracer.trace("10.88.0.11", "", **_DANA, **_HTTPS, destination_app="files.example.org")
+    [(status, _name, text)] = _policies(files["request"]["hops"][1])
+    assert status == "unknown" and text.endswith(
+        "may match files.example.org: it names app category Social, and the categories of files.example.org are not "
+        "collected."
+    )
+
+    # Asked about no application: worded as it always was.
+    plain = tracer.trace("10.88.0.11", "203.0.113.9", **_DANA, **_HTTPS)
+    assert "destination_app" not in plain
+    [(status, _name, text)] = _policies(plain["request"]["hops"][1])
+    assert status == "unknown" and text.endswith("also matches on app category Social, which Plexus cannot evaluate.")
+
+
+def test_cato_wan_firewall_application_field_is_decided_for_an_application():
+    raw = build_cato_sample_raw()
+    raw["wan_firewall"]["rules"].insert(
+        0,
+        _cato_fw_rule(
+            1,
+            "Payroll only",
+            "BLOCK",
+            direction="TO",
+            source=_cato_endpoint(site=[_cato_ref("1002", "Branch-Madison")]),
+            application={"customApp": [_cato_ref("ca-1", "Payroll portal")]},
+        ),
+    )
+    tracer = _cato_tracer(raw)
+    # The custom application, by its FQDN, at a private address HQ holds: rule 1 blocks it.
+    payroll = tracer.trace(
+        "10.60.20.5", "10.50.10.20", **_MADISON_TO_HQ, **_HTTPS, destination_app="payroll.example.com"
+    )
+    assert payroll["verdict"] == "blocked"
+    assert _policies(payroll["request"]["hops"][1])[0][2].endswith(
+        "It matches payroll.example.com on custom application Payroll portal."
+    )
+    # Another application to the same address: rule 1 does not apply, rule 2 allows HTTPS.
+    other = tracer.trace(
+        "10.60.20.5", "10.50.10.20", **_MADISON_TO_HQ, **_HTTPS, destination_app="intranet.example.com"
+    )
+    [(status, _name, text)] = _policies(other["request"]["hops"][1])
+    assert status == "ok" and text.startswith("Rule 2 Sites to HQ servers")
+
+
+def test_an_application_whose_address_is_not_known_goes_to_the_internet_and_may_match_address_rules():
+    branch = _mx(
+        {"VLAN 10": ("10.1.10.1", "10.1.10.0/24")},
+        routes=[route("10.0.10.0/24", "autovpn", peer={"site": "HUB"}, source="AutoVPN from Hub 01")],
+        l3=[
+            rule(1, "deny", dst=["10.0.0.0/8"], comment="No private ranges"),
+            rule(2, "allow", dst=["203.0.113.0/24"], comment="Partner range"),
+            rule(
+                3,
+                "deny",
+                dst=["any"],
+                unresolved=["shop.example.com"],
+                dst_names=[{"kind": "fqdn", "value": "shop.example.com", "text": "shop.example.com"}],
+                comment="No shop",
+            ),
+        ],
+        wan_ip="198.51.100.2",
+        gateway="198.51.100.1",
+    )
+    tracer = _tracer(
+        {1: _snapshot("Acme", [_node("d:BR", "appliance", "BR", "Branch 01 MX", branch)], [], {"BR": "Branch 01"})}
+    )
+
+    other = tracer.trace("10.1.10.5", "", source_node="meraki:1:d:BR", destination_app="other.example.org")
+    assert other["destination"]["address"] == "other.example.org" and other["destination"]["node"] is None
+    assert other["destination_app"] == {
+        "name": "other.example.org",
+        "domain": "other.example.org",
+        "address": None,
+        "categories": [],
+    }
+    request = other["request"]
+    assert _labels(request) == ["Branch 01 MX", "Internet"]
+    # Rule 1 names private ranges only: never the internet. Rule 2 may hold the address, and allows
+    # it as the default rule does.
+    l3 = next(i for i in request["hops"][0]["items"] if i["where"] == "Layer 3 firewall rules")
+    assert l3["status"] == "ok" and l3["text"].startswith("Rule 4")
+    # The AutoVPN route to a private range does not split it; the default route takes it out.
+    route_item = next(i for i in request["hops"][0]["items"] if i["stage"] == "route")
+    assert route_item["status"] == "ok" and "to the internet" in route_item["text"]
+    assert request["hops"][1]["items"][0]["text"] == (
+        "other.example.org, whose address is not known, is on the internet: the trace ends where the flow leaves the "
+        "map."
+    )
+    assert other["reply"]["summary"] == (
+        "Not traced: the address of other.example.org is not known: other.example.org could not be looked up, so "
+        "where the replies come from is not known."
+    )
+
+    shop = tracer.trace("10.1.10.5", "", source_node="meraki:1:d:BR", destination_app="shop.example.com")
+    l3 = next(i for i in shop["request"]["hops"][0]["items"] if i["where"] == "Layer 3 firewall rules")
+    assert l3["status"] == "partial" and l3["text"] == (
+        "rule 2 allows part of it; the rest is denied by rule 3. The address of shop.example.com is not known: "
+        "shop.example.com could not be looked up, and it names internet addresses."
+    )
+    # Its address known: rule 2 decides.
+    known = tracer.trace("10.1.10.5", "203.0.113.9", source_node="meraki:1:d:BR", destination_app="shop.example.com")
+    assert known["verdict"] == "allowed" and known["destination_app"]["address"] == "203.0.113.9"
+    # No address and no application: nothing to trace.
+    with pytest.raises(ValueError):
+        tracer.trace("10.1.10.5", "", source_node="meraki:1:d:BR")
+    with pytest.raises(ValueError):
+        tracer.trace("10.1.10.5", "", source_node="meraki:1:d:BR", destination_app="  ")
 
 
 def test_cato_remote_user_to_a_private_address_no_site_covers_says_only_the_default_route_matches():
@@ -2004,6 +2165,81 @@ def test_api_traces_the_demo_flows_end_to_end(api):
     assert api.get("/api/topology/path?source=nope&destination=10.0.10.20").status_code == 400
 
 
+def test_api_traces_an_application_and_looks_up_its_address(api, monkeypatch):
+    import netcontrol.routes.meraki_topology as routes_module
+
+    assert api.post("/api/sources/sample?provider=cato").status_code == 201
+    dana = next(n["id"] for n in api.get("/api/topology").json()["nodes"] if n["label"] == "Dana Reyes")
+    looked_up: list[tuple[str, int]] = []
+
+    async def address(domain: str, version: int) -> str:
+        looked_up.append((domain, version))
+        return "203.0.113.9"
+
+    monkeypatch.setattr(routes_module, "_app_address", address)
+    base = f"/api/topology/path?source=10.88.0.11&source_node={dana}&protocol=tcp&port=443"
+    found = api.get(f"{base}&destination_app=YouTube")
+    assert found.status_code == 200, found.text
+    body = found.json()
+    assert looked_up == [("video.example.com", 4)]
+    assert body["destination_app"] == {
+        "name": "YouTube",
+        "domain": "video.example.com",
+        "address": "203.0.113.9",
+        "categories": ["Video Streaming"],
+    }
+    assert body["destination"]["address"] == "203.0.113.9"
+    # The sample's malware rule does not name YouTube's category: the Internet firewall allows it.
+    firewall = next(i for i in body["request"]["hops"][1]["items"] if i["where"] == "Internet firewall rules")
+    assert firewall["status"] == "ok" and firewall["text"].startswith("Rule 2 Allow all")
+
+    # A destination given with the application is used as it is.
+    given = api.get(f"{base}&destination=203.0.113.20&destination_app=YouTube").json()
+    assert given["destination_app"]["address"] == "203.0.113.20" and len(looked_up) == 1
+
+    # Nothing found: an internet address that is not known.
+    async def nothing(_domain: str, _version: int) -> str:
+        return ""
+
+    monkeypatch.setattr(routes_module, "_app_address", nothing)
+    unknown = api.get(f"{base}&destination_app=YouTube").json()
+    assert unknown["destination_app"]["address"] is None
+    assert unknown["request"]["hops"][-1]["label"] == "Internet"
+
+    assert api.get(f"{base}").status_code == 400
+    assert api.get(f"{base}&destination_app=%20%20").status_code == 400
+    assert api.get(f"{base}&destination_app={'x' * 129}").status_code == 422
+
+    suggested = api.get("/api/topology/path/apps?q=you").json()["items"]
+    assert suggested[0] == {"name": "YouTube", "kind": "application", "source": "Cato application catalog"}
+    named = api.get("/api/topology/path/apps?q=malware&limit=5").json()["items"]
+    assert named == [{"name": "Malware", "kind": "category", "source": "Named by Internet firewall rules"}]
+    assert len(api.get("/api/topology/path/apps?limit=3").json()["items"]) == 3
+    assert api.get("/api/topology/path/apps?limit=51").status_code == 422
+
+
+def test_app_address_prefers_the_sources_ip_version_and_gives_up_quietly(monkeypatch):
+    import asyncio
+    import socket
+
+    import netcontrol.routes.meraki_topology as routes_module
+
+    answers = [
+        (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2001:db8::7", 0, 0, 0)),
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.7", 0)),
+    ]
+
+    async def resolve(self, host, port, **_kwargs):
+        if host == "down.example.com":
+            raise socket.gaierror("not found")
+        return answers
+
+    monkeypatch.setattr(asyncio.BaseEventLoop, "getaddrinfo", resolve)
+    assert asyncio.run(routes_module._app_address("app.example.com", 4)) == "192.0.2.7"
+    assert asyncio.run(routes_module._app_address("app.example.com", 6)) == "2001:db8::7"
+    assert asyncio.run(routes_module._app_address("down.example.com", 4)) == ""
+
+
 def _export_data(response) -> dict:
     import json
     import re
@@ -2211,6 +2447,17 @@ def test_offline_session_answers_trace_requests_as_json(tmp_path):
     answer = json.loads(run(json.dumps({**request, "protocol": "tcp", "port": 443})))
     assert answer["applies"] is True and answer["traffic"] == "tcp/443" and answer["verdict"] == "allowed"
     assert json.loads(run(json.dumps({**request, "protocol": "gre"})))["applies"] is False
+    # An application: nothing is looked up offline, so its address is not known.
+    app = json.loads(
+        run(json.dumps({"source": "10.1.10.5", "source_node": "meraki:1:d:BR", "destination_app": "shop.example.com"}))
+    )
+    assert app["destination_app"] == {
+        "name": "shop.example.com",
+        "domain": "shop.example.com",
+        "address": None,
+        "categories": [],
+    }
+    assert app["destination"]["address"] == "shop.example.com"
 
 
 def test_offline_modules_import_with_the_standard_library_only(tmp_path):
@@ -3216,7 +3463,10 @@ def test_catalyst_vlan_acl_decides_and_the_uplink_acl_lets_established_replies_i
 
     allowed = tracer.trace("10.1.10.0/24", "10.20.0.10", source_node=source_node, protocol="tcp", port=443)
     assert allowed["verdict"] == "allowed", allowed["summary"]
-    assert _labels(allowed["request"]) == ["core-sw1", "dc-rtr1"] and _labels(allowed["reply"]) == ["dc-rtr1", "core-sw1"]
+    assert _labels(allowed["request"]) == ["core-sw1", "dc-rtr1"] and _labels(allowed["reply"]) == [
+        "dc-rtr1",
+        "core-sw1",
+    ]
     permit = next(i for i in allowed["request"]["hops"][0]["items"] if i["where"] == "ACL USERS-IN in on Vlan10")
     assert permit["status"] == "ok" and permit["rule"] == 10 and "Web to the servers" in permit["text"]
     assert allowed["request"]["hops"][1]["in"] == "GigabitEthernet0/0"

@@ -4,6 +4,9 @@ import type { MerakiSubnet } from '@/api/meraki';
 import type { TopologyEdge, TopologyNode } from '@/api/topology';
 
 import {
+  appCandidate,
+  appOptions,
+  appPick,
   connectEndpoints,
   connectPicks,
   findNamedHosts,
@@ -12,6 +15,7 @@ import {
   parseTraffic,
   pathModeHint,
   pathSites,
+  pickEnd,
   subnetOptionLabel,
   suggestHosts,
   subnetPick,
@@ -338,9 +342,79 @@ describe('path mode with inventory subnets', () => {
   });
 
   it('names only the inputs that are shown', () => {
-    expect(pathModeHint(true, true)).toBe('Click two or more devices on the map, or add sites and subnets, to see how they reach one another.');
-    expect(pathModeHint(false, true)).toBe('Click two or more devices on the map, or add subnets or IP addresses, to see how they reach one another.');
+    expect(pathModeHint(true, true)).toBe('Click two or more devices on the map, or add sites, subnets and internet applications, to see how they reach one another.');
+    expect(pathModeHint(false, true)).toBe('Click two or more devices on the map, or add subnets, IP addresses or internet applications, to see how they reach one another.');
     expect(pathModeHint(true, false)).toBe('Click two or more devices on the map, or add sites, to see how they reach one another.');
     expect(pathModeHint(false, false)).toBe('Click two or more devices on the map to see how they reach one another.');
+  });
+});
+
+describe('an internet application as the destination', () => {
+  const lan: MerakiSubnet = {
+    org_ref: 1, provider: 'meraki', cidr: '192.0.2.0/24', name: 'VLAN 10 Data',
+    kind: 'vlan', site_id: 's1', site_name: 'Branch 01', node_id: 'mx-a', in_vpn: true,
+  };
+  const files: MerakiSubnet = {
+    org_ref: 2, provider: 'aws', cidr: '198.51.100.20/32', name: 'files-01',
+    kind: 'host', site_id: 'vpc-1', site_name: 'Shared VPC', node_id: 'vpc-1', in_vpn: null,
+    dns_names: ['storage.corp.example.com'],
+  };
+  const all = [lan, files];
+
+  it('takes text the map does not know as an application or domain', () => {
+    expect(appCandidate('youtube', all)).toBe('youtube');
+    expect(appCandidate(' YouTube ', all)).toBe('YouTube');
+    expect(appCandidate('youtube.com', all)).toBe('youtube.com');
+    expect(appCandidate('Microsoft Teams', all)).toBe('Microsoft Teams');
+    // A pasted URL stands for its host.
+    expect(appCandidate('https://www.example.com/watch?v=1', all)).toBe('www.example.com');
+    // A host whose name only holds the text is offered first, but does not stop it.
+    expect(appCandidate('storage', all)).toBe('storage');
+  });
+
+  it('leaves addresses, subnets and known hosts to the map', () => {
+    for (const typed of ['', 'y', '192.0.2.10', '192.0.2.0/24', '192.0', '203.0.113.5', '2001:db8::1', '::1']) {
+      expect(appCandidate(typed, all), typed).toBeNull();
+    }
+    // A picker entry, or text the subnet list has entries for.
+    expect(appCandidate(subnetOptionLabel(lan), all)).toBeNull();
+    expect(appCandidate('branch 01', all)).toBeNull();
+    // The DNS name of a collected host, typed or in a URL.
+    expect(appCandidate('storage.corp.example.com', all)).toBeNull();
+    expect(appCandidate('https://storage.corp.example.com/share', all)).toBeNull();
+    expect(appCandidate('x'.repeat(129), all)).toBeNull();
+  });
+
+  it('offers the server matches, then always the typed text', () => {
+    expect(appOptions(null, [{ name: 'YouTube', kind: 'application', source: 'catalog' }])).toEqual([]);
+    expect(appOptions('youtube', [])).toEqual([
+      { name: 'youtube', title: 'Internet application or domain: youtube', detail: 'Traced to the internet as the destination of its legs' },
+    ]);
+    const offered = appOptions('youtube', [
+      { name: 'YouTube', kind: 'application', source: 'catalog' },
+      { name: 'youtube', kind: 'application', source: 'other' },
+      { name: 'Streaming Media', kind: 'category', source: 'catalog' },
+      { name: 'youtube.com', kind: 'domain', source: '' },
+    ]);
+    expect(offered.map((o) => [o.name, o.detail])).toEqual([
+      ['YouTube', 'Internet application · catalog'],
+      ['youtube.com', 'Domain'],
+      ['youtube', 'Traced to the internet as the destination of its legs'],
+    ]);
+  });
+
+  it('is a pick with no map device, whose legs have no drawn path', () => {
+    const app = appPick(' YouTube ');
+    expect(app).toEqual({ key: 'a:youtube', label: 'Internet application: YouTube', app: 'YouTube' });
+    expect(pickEnd(app)).toBe('YouTube');
+    const source: PathPick = { key: 's:192.0.2.0/24:mx-a', node: 'mx-a', label: '192.0.2.0/24 · Branch 01', subnet: lan };
+    const device: PathPick = { key: 'n:hub', node: 'hub', label: 'hub' };
+    const result = connectPicks([source, app, device], EDGES);
+    expect(result.legs.map((l) => [l.from.key, l.to.key, l.internet, l.path, l.sameDevice])).toEqual([
+      ['s:192.0.2.0/24:mx-a', 'a:youtube', true, null, false],
+      ['s:192.0.2.0/24:mx-a', 'n:hub', false, ['mx-a', 'hub'], false],
+      ['a:youtube', 'n:hub', true, null, false],
+    ]);
+    expect([...result.nodeIds].sort()).toEqual(['hub', 'mx-a']);
   });
 });

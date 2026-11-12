@@ -52,7 +52,7 @@ from typing import Any
 
 from netcontrol.integrations.cato import network_rules as cato_network_rules
 from netcontrol.integrations.meraki.subnets import site_gateways
-from netcontrol.integrations.pathtrace import ports as port_sets
+from netcontrol.integrations.pathtrace import apps as trace_apps, ports as port_sets
 from netcontrol.integrations.pathtrace.cloud import CloudAdapter
 from netcontrol.integrations.pathtrace.model import (
     ACL,
@@ -77,8 +77,10 @@ from netcontrol.integrations.pathtrace.model import (
     Network,
     contains,
     cover,
+    dst_cover,
     hop,
     is_default,
+    is_public,
     item,
     longest_route,
     net,
@@ -208,6 +210,13 @@ class Flow:
     # Why the source is a public address nobody reported (``src`` is then
     # every address): the shared address of a Cato PoP. ``""`` otherwise.
     src_unknown: str = ""
+    # The application or domain asked about as the destination
+    # (``pathtrace.apps``): rules that name applications, categories or
+    # domains are decided against it.
+    app: trace_apps.Target | None = None
+    # Why the destination is an internet address nobody resolved (``dst`` is
+    # then every address, and ``app`` says what it is). ``""`` otherwise.
+    dst_unknown: str = ""
 
 
 @dataclass
@@ -276,32 +285,68 @@ class _Walk:
     placed_node: Any = None
 
 
-# Address space that is never routed on the internet. The documentation
-# ranges are left out on purpose: samples and examples use them as public
-# addresses.
-_NOT_PUBLIC = tuple(
-    ipaddress.ip_network(cidr)
-    for cidr in (
-        "0.0.0.0/8",
-        "10.0.0.0/8",
-        "100.64.0.0/10",
-        "127.0.0.0/8",
-        "169.254.0.0/16",
-        "172.16.0.0/12",
-        "192.168.0.0/16",
-        "224.0.0.0/3",
-        "::/128",
-        "::1/128",
-        "fc00::/7",
-        "fe80::/10",
-        "ff00::/8",
-    )
-)
+_public = is_public
 
 
-def _public(network: Network) -> bool:
-    """Whether an address or network is reached over the internet."""
-    return not any(n.version == network.version and n.overlaps(network) for n in _NOT_PUBLIC)
+def _public_dst(flow: Flow) -> bool:
+    """Whether the flow's destination is reached over the internet: an
+    application whose address is not known always is."""
+    return bool(flow.dst_unknown) or _public(flow.dst)
+
+
+def _dst_text(flow: Flow) -> str:
+    """The destination as a sentence names it: the application when its
+    address is not known."""
+    return flow.app.name if flow.dst_unknown and flow.app is not None else show(flow.dst)
+
+
+def _dst(cidrs: list[str] | None, flow: Flow) -> int:
+    """How much of the flow's destination ``cidrs`` covers (``dst_cover``)."""
+    return dst_cover(cidrs, flow.dst, bool(flow.dst_unknown))
+
+
+def _names(rule: dict, flow: Flow, reply: bool) -> tuple[int, int, list[str], list[str], set[str]]:
+    """How a rule's destination and application criteria cover the flow:
+    ``(destination, application, reasons, matched_on, consumed)``.
+
+    With no application asked about (or in the replies), the destination is
+    the rule's ``dst`` and the names the rule matches on stay in its
+    ``unresolved`` list, as they always were. With one (``Flow.app``), a
+    rule's ``dst_names`` are alternatives to its ``dst_cidrs`` and its
+    ``app_names`` narrow it further (each ``group`` of them must match),
+    each decided by ``apps.match``:
+    ``reasons`` says why a criterion that may match cannot be decided,
+    ``matched_on`` names those that match, and ``consumed`` is the
+    ``unresolved`` entries they stand for, which no longer count."""
+    destination = _dst(rule.get("dst"), flow)
+    if flow.app is None or reply:
+        return destination, FULL, [], [], set()
+    reasons: list[str] = []
+    matched: list[str] = []
+    consumed: set[str] = set()
+    application = FULL
+    names = rule.get("dst_names")
+    if isinstance(names, list) and names:
+        results = [(_dst(rule.get("dst_cidrs") or [], flow), "", "")]
+        results += [(*trace_apps.match(c, flow.app), str(c.get("text") or "")) for c in names if isinstance(c, dict)]
+        destination, why, hit = trace_apps.any_of(results)
+        reasons += why
+        matched += hit
+        consumed.update(str(c.get("text") or "") for c in names if isinstance(c, dict))
+    narrowing = rule.get("app_names")
+    if isinstance(narrowing, list) and narrowing:
+        grouped = [
+            (str(c.get("group") or ""), _dst(c.get("cidrs") or [], flow), "", str(c.get("text") or ""))
+            if c.get("kind") == trace_apps.ADDRESS
+            else (str(c.get("group") or ""), *trace_apps.match(c, flow.app), str(c.get("text") or ""))
+            for c in narrowing
+            if isinstance(c, dict)
+        ]
+        application, why, hit = trace_apps.all_groups(grouped)
+        reasons += why
+        matched += hit
+        consumed.update(str(c.get("text") or "") for c in narrowing if isinstance(c, dict))
+    return destination, application, reasons, matched, consumed
 
 
 def _applies(applies: str, classes: set, wan: bool | None) -> bool:
@@ -423,6 +468,20 @@ def _rule_name(rule: dict) -> str:
     return f"{label} ({detail})"
 
 
+def _may_match(rule: dict, flow: Flow, reasons: list[str], unresolved: list[str]) -> str:
+    """The text of a rule that matches the flow but for what cannot be
+    decided: the application criteria (``reasons``, see ``_names``) and what
+    else it matches on that Plexus cannot evaluate (``unresolved``)."""
+    also = ", ".join(unresolved)
+    if not reasons:
+        return f"{_rule_name(rule)} also matches on {also}, which Plexus cannot evaluate."
+    name = flow.app.name if flow.app is not None else "the destination"
+    text = f"{_rule_name(rule)} may match {name}: {'; '.join(reasons)}."
+    if unresolved:
+        text += f" It also matches on {also}, which Plexus cannot evaluate."
+    return text
+
+
 def _translate(network: Network, original: list[str], translated: list[str], interface_ip: str) -> Network | None:
     """``network`` after a NAT rule mapping ``original`` to ``translated``:
     a range maps address by address onto a range of the same size; a single
@@ -469,24 +528,28 @@ def _port_set(policy: dict, flow: Flow, in_zone: str, out_zone: str, reply: bool
     """The ports a rule set lets through, as ``Tracer._evaluate`` decides
     each one. A stateless rule set matches a reply on its source ports."""
     service, other = ("src_ports", "dst_ports") if reply else ("dst_ports", "src_ports")
-    matches = [
-        port_sets.Match(
-            cover=min(
-                cover(rule.get("src"), flow.src),
-                cover(rule.get("dst"), flow.dst),
-                _zones(rule.get("src_zones") or [], in_zone),
-                _zones(rule.get("dst_zones") or [], out_zone),
-                _established(rule, flow, reply),
-            ),
-            protocol=str(rule.get("protocol") or ""),
-            ports=str(rule.get(service) or ""),
-            action=str(rule.get("action") or ""),
-            other_ports=str(rule.get(other) or ""),
-            unresolved=bool(rule.get("unresolved")),
+    matches = []
+    for rule in policy.get("rules") or []:
+        if not isinstance(rule, dict) or not rule.get("enabled", True):
+            continue
+        destination, application, reasons, _matched, consumed = _names(rule, flow, reply)
+        matches.append(
+            port_sets.Match(
+                cover=min(
+                    cover(rule.get("src"), flow.src),
+                    destination,
+                    application,
+                    _zones(rule.get("src_zones") or [], in_zone),
+                    _zones(rule.get("dst_zones") or [], out_zone),
+                    _established(rule, flow, reply),
+                ),
+                protocol=str(rule.get("protocol") or ""),
+                ports=str(rule.get(service) or ""),
+                action=str(rule.get("action") or ""),
+                other_ports=str(rule.get(other) or ""),
+                unresolved=bool(reasons or [u for u in rule.get("unresolved") or [] if str(u) not in consumed]),
+            )
         )
-        for rule in policy.get("rules") or []
-        if isinstance(rule, dict) and rule.get("enabled", True)
-    ]
     return port_sets.first_match(
         matches,
         _asked(flow, reply),
@@ -540,6 +603,8 @@ class Tracer:
         # Graph node -> where the device on its local network was placed
         # (``pathtrace.placement``), for a node whose own network is not collected.
         self.placements: dict[Any, dict] = dict(placements or {})
+        # The applications the snapshots list (``apps.catalog_of``), read when first asked for.
+        self._app_catalog: list[dict] | None = None
 
         self.graph_of, self.refs_of = graph_refs(self.nodes)
 
@@ -793,6 +858,14 @@ class Tracer:
 
     # ── The trace ──────────────────────────────────────────────────────────
 
+    def app_target(self, text: Any) -> trace_apps.Target:
+        """What the application or domain ``text`` is, from the catalogs of
+        the snapshots (``apps.target``); raises ``ValueError`` for an empty
+        or too long text."""
+        if self._app_catalog is None:
+            self._app_catalog = trace_apps.catalog_of(self.snapshots.values())
+        return trace_apps.target(text, self._app_catalog)
+
     def trace(
         self,
         source: str,
@@ -802,15 +875,31 @@ class Tracer:
         destination_node: Any = None,
         protocol: str = "",
         port: int | None = None,
+        destination_app: str | None = None,
     ) -> dict[str, Any]:
         """Trace ``protocol``/``port`` from ``source`` to ``destination``
         (addresses or networks) and the replies. ``protocol`` ``""`` asks
-        about any traffic."""
+        about any traffic.
+
+        ``destination_app`` names what the flow is for, an application or a
+        domain (``pathtrace.apps``): rules that name applications,
+        categories or domains are decided against it, and the result says
+        what it was taken for (``destination_app``). ``destination`` is then
+        the address it was found at, or ``""`` when none was: the flow goes
+        to an internet address that is not known (``Flow.dst_unknown``), so
+        a rule that names destination addresses may match it in part, and
+        the replies are not traced."""
         protocol = str(protocol or "").strip().lower()
         protocol = "" if protocol in ("any", "all") else protocol
         if protocol and protocol not in PROTOCOLS:
             raise ValueError(f"protocol must be one of {', '.join(PROTOCOLS)}")
+        app = self.app_target(destination_app) if destination_app is not None else None
+        unknown = ""
         src, dst = net(source), net(destination)
+        if app is not None and not str(destination or "").strip() and src is not None:
+            dst = ipaddress.ip_network("::/0" if src.version == 6 else "0.0.0.0/0")
+            how = f"{app.domain} could not be looked up" if app.domain else "no domain is known for it"
+            unknown = f"The address of {app.name} is not known: {how}"
         for raw, parsed in ((source, src), (destination, dst)):
             if parsed is None:
                 raise ValueError(f"{raw!r} is not an IP address or network")
@@ -819,9 +908,16 @@ class Tracer:
             raise ValueError("source and destination must both be IPv4 or both be IPv6")
         ports = (port, port) if port is not None and protocol in ("tcp", "udp") else None
         ephemeral = EPHEMERAL_PORTS if protocol in ("tcp", "udp") else None
-        flow = Flow(src, dst, protocol, ephemeral, ports)
+        flow = Flow(src, dst, protocol, ephemeral, ports, app=app, dst_unknown=unknown)
 
-        start, end = self._locate(src, source_node), self._locate(dst, destination_node)
+        start = self._locate(src, source_node)
+        if app is not None and unknown:
+            # Nowhere on the map, unless the page names the node it is for.
+            end: dict[str, Any] = {"address": app.name, "node": None, "ambiguous": []}
+            if destination_node is not None:
+                end["node"] = self._locate(dst, destination_node)["node"]
+        else:
+            end = self._locate(dst, destination_node)
         result: dict[str, Any] = {
             "applies": True,
             "traffic": "any traffic" if not protocol else protocol + (f"/{port}" if ports else ""),
@@ -835,6 +931,8 @@ class Tracer:
             "ports": None,
             "notes": [],
         }
+        if app is not None:
+            result["destination_app"] = app.summary(None if unknown else show(dst))
         for place in (start, end):
             if place["ambiguous"]:
                 where = ", ".join(sorted(self.label(g) for g in place["ambiguous"]))
@@ -854,10 +952,13 @@ class Tracer:
             _Arrival(node=start["node"], first=True), flow, reply=False, dest=end["node"], sessions={}, passed=set()
         )
         result["request"] = self._direction(request)
-        if request.delivered and request.source_unknown:
+        if request.delivered and (request.source_unknown or unknown):
             reply = None
-            why = _sentence_item(request.source_text.rstrip(".")) or "the device's local address is not collected"
-            text = f"{why}, so where the replies go is not known."
+            if request.source_unknown:
+                why = _sentence_item(request.source_text.rstrip(".")) or "the device's local address is not collected"
+                text = f"{why}, so where the replies go is not known."
+            else:
+                text = f"{_sentence_item(unknown)}, so where the replies come from is not known."
             result["reply"]["summary"] = f"Not traced: {text}"
             result["asymmetric"] = {"status": "unknown", "text": f"The replies were not traced: {text}"}
         elif request.delivered:
@@ -1135,14 +1236,20 @@ class Tracer:
                 return None
         route_notes = [n for n in ctx.missing if _route_note(n)]
         route, narrower = longest_route(block.get("routes") or [], flow.dst, vrf)
+        far = _dst_text(flow)
+        if flow.dst_unknown:
+            # Only a route to internet addresses may hold an address nobody resolved.
+            narrower = [r for r in narrower if _dst([str(r.get("prefix") or "")], flow) != NONE]
         if route is None:
-            if route_notes:
+            if flow.dst_unknown and narrower:
+                prefixes = ", ".join(str(r.get("prefix")) for r in narrower[:3])
+                text = f"No default route, and the address of {far} is not known: whether {prefixes} holds it is not known."
+                items.append(item(ROUTE, UNKNOWN, "Route table", text))
+            elif route_notes:
                 ctx.used.update(route_notes)
-                items.append(
-                    item(ROUTE, UNKNOWN, "Route table", f"No route to {show(flow.dst)}; {_not_collected(route_notes)}.")
-                )
+                items.append(item(ROUTE, UNKNOWN, "Route table", f"No route to {far}; {_not_collected(route_notes)}."))
             else:
-                items.append(item(ROUTE, BLOCKED, "Route table", f"No route to {show(flow.dst)}."))
+                items.append(item(ROUTE, BLOCKED, "Route table", f"No route to {far}."))
             return self._stop(walk, ctx)
         source = str(route.get("source") or "Route table")
         if route.get("kind") == "blackhole":
@@ -1156,9 +1263,12 @@ class Tracer:
         ]
         if split:
             other = ", ".join(f"{r['prefix']} ({r.get('source') or r.get('kind')})" for r in split[:3])
-            items.append(
-                item(ROUTE, PARTIAL, "Route table", f"Part of {show(flow.dst)} is routed differently: {other}.")
+            text = (
+                f"If the address of {far} is in {other}, it is routed differently."
+                if flow.dst_unknown
+                else f"Part of {far} is routed differently: {other}."
             )
+            items.append(item(ROUTE, PARTIAL, "Route table", text))
         egress = next((i for i in interfaces if route.get("interface") and i.get("name") == route["interface"]), None)
 
         if route.get("kind") == "connected":
@@ -1189,7 +1299,7 @@ class Tracer:
             self._leftover_notes(walk, ctx)
             return None
 
-        target = self._route_target(gid, org_ref, route, egress, interfaces, items, source, flow.dst)
+        target = self._route_target(gid, org_ref, route, egress, interfaces, items, source, _public_dst(flow))
         if is_default(route) and route_notes:
             # The route item of the lookup: unknown, since a learned route may be more specific.
             ctx.used.update(route_notes)
@@ -1197,11 +1307,11 @@ class Tracer:
             ctx.default_lookup = (lookup, lookup["text"])
             lookup["status"] = UNKNOWN
             lookup["text"] += (
-                f" Only the default route matches {show(flow.dst)}; {_not_collected(route_notes)}, "
+                f" Only the default route matches {far}; {_not_collected(route_notes)}, "
                 "so a more specific route may exist."
             )
         else:
-            if target.get("internet") and is_default(route) and not narrower and not _public(flow.dst):
+            if target.get("internet") and is_default(route) and not narrower and not _public_dst(flow):
                 # A private destination that only the default route carries:
                 # the table was collected and holds nothing closer to it.
                 lookup = next(i for i in reversed(items) if i["stage"] == ROUTE)
@@ -1223,7 +1333,7 @@ class Tracer:
         interfaces: list[dict],
         items: list[dict],
         source: str,
-        dst: Network,
+        public_dst: bool,
     ) -> dict:
         """Where a route sends the flow: ``node`` (a graph node; ``None`` when
         it is not on the map, and an item says so), or ``internet``. The
@@ -1231,7 +1341,7 @@ class Tracer:
         an interface into a network that was not collected but sits behind a
         known public address (``behind_ip``), a flow that is not for the
         internet goes to the device that answers on that address
-        (``behind``)."""
+        (``behind``). ``public_dst``: whether the flow is for the internet."""
         prefix = route["prefix"]
         peer = route.get("peer") or {}
         if peer.get("site") and org_ref is not None:
@@ -1295,7 +1405,7 @@ class Tracer:
             items.append(item(ROUTE, UNKNOWN, source, f"{text[:-1]}: next hop {hop_ip} is not a device on the map."))
             return {"node": None, "out": out, "out_kind": out_kind, "egress": egress}
         behind = str((egress or {}).get("behind_ip") or "")
-        if egress is not None and behind and (not is_default(route) or not _public(dst)):
+        if egress is not None and behind and (not is_default(route) or not public_dst):
             return self._behind(gid, prefix, egress, behind, items, source)
         if egress is not None and egress.get("kind") == "wan" and is_default(route):
             items.append(item(ROUTE, OK, source, f"{prefix} out of {egress['name']}: to the internet."))
@@ -1464,13 +1574,13 @@ class Tracer:
         ]
         chosen = None
         for vpn in selectors:
-            match = min(cover(vpn.get("local"), flow.src), cover(vpn.get("remote"), flow.dst))
+            match = min(cover(vpn.get("local"), flow.src), _dst(vpn.get("remote"), flow))
             if match != NONE:
                 chosen = (vpn, match)
                 break
         if chosen is None and before.src != flow.src:
             for vpn in selectors:
-                if min(cover(vpn.get("local"), before.src), cover(vpn.get("remote"), before.dst)) != NONE:
+                if min(cover(vpn.get("local"), before.src), _dst(vpn.get("remote"), before)) != NONE:
                     where = f"Site-to-site VPN {vpn.get('name') or ''}".strip()
                     text = (
                         f"The protected networks hold {show(before.src)}, but NAT made the source "
@@ -1693,6 +1803,10 @@ class Tracer:
         kinds += [_MISSING_SETS[n][0] for n in ctx.missing if n in _MISSING_SETS]
         if not any(_account_wide(k) for k in kinds):
             return
+        if walk.flow.dst_unknown and not walk.reply:
+            # An application whose address nobody resolved is on the internet.
+            ctx.wan = False
+            return
         far = walk.flow.src if walk.reply else walk.flow.dst
         route, _narrower = longest_route(block.get("routes") or [], far, vrf)
         if route is not None and not is_default(route):
@@ -1807,13 +1921,16 @@ class Tracer:
         partly: list[dict] = []
         icmp = flow.protocol.startswith("icmp")
         rules = [r for r in policy.get("rules") or [] if isinstance(r, dict)]
+        matched_on: list[str] = []
         for rule in rules:
             if not rule.get("enabled", True):
                 continue
+            destination, application, reasons, on, consumed = _names(rule, flow, reply)
             match = min(
                 protocol_match(rule.get("protocol"), flow.protocol),
                 cover(rule.get("src"), flow.src),
-                cover(rule.get("dst"), flow.dst),
+                destination,
+                application,
                 FULL if icmp else ports_match(rule.get("src_ports"), flow.src_ports),
                 FULL if icmp else ports_match(rule.get("dst_ports"), flow.dst_ports),
                 _zones(rule.get("src_zones") or [], in_zone),
@@ -1825,24 +1942,16 @@ class Tracer:
             if match == PART:
                 partly.append(rule)
                 continue
-            if rule.get("unresolved"):
-                also = ", ".join(str(u) for u in rule["unresolved"])
-                found.append(
-                    item(
-                        stage,
-                        UNKNOWN,
-                        name,
-                        f"{_rule_name(rule)} also matches on {also}, which Plexus cannot evaluate.",
-                        rule.get("index"),
-                    )
-                )
+            unresolved = [str(u) for u in rule.get("unresolved") or [] if str(u) not in consumed]
+            if unresolved or reasons:
+                found.append(item(stage, UNKNOWN, name, _may_match(rule, flow, reasons, unresolved), rule.get("index")))
                 return found, "unknown"
             if rule.get("action") == "monitor":
                 found.append(
                     item(stage, INFO, name, f"{_rule_name(rule)}: logs it, and evaluation goes on.", rule.get("index"))
                 )
                 continue
-            decided = rule
+            decided, matched_on = rule, on
             break
 
         default = str(policy.get("default") or "unknown")
@@ -1862,9 +1971,10 @@ class Tracer:
                 else ("allows" if action == "deny" else "denies")
             )
             rest = "denied" if action == "deny" else "allowed"
-            found.append(
-                item(stage, PARTIAL, name, f"{first} {verb} part of it; the rest is {rest} by {final}.", index)
-            )
+            text = f"{first} {verb} part of it; the rest is {rest} by {final}."
+            if flow.dst_unknown:
+                text += f" {flow.dst_unknown}, and {'they name' if len(other) > 1 else 'it names'} internet addresses."
+            found.append(item(stage, PARTIAL, name, text, index))
             return found, action
         if decided is not None:
             words = {
@@ -1876,7 +1986,10 @@ class Tracer:
                 "prompt": "prompts the user",
             }
             status = BLOCKED if action == "deny" else OK if action in _ALLOWING else UNKNOWN
-            found.append(item(stage, status, name, f"{_rule_name(decided)}: {words.get(action, action)}.", index))
+            text = f"{_rule_name(decided)}: {words.get(action, action)}."
+            if matched_on and flow.app is not None:
+                text += f" It matches {flow.app.name} on {_and(matched_on)}."
+            found.append(item(stage, status, name, text, index))
             return found, action
         if default == "allow":
             found.append(item(stage, OK, name, "No rule matches: the default action allows it."))
@@ -1927,7 +2040,7 @@ class Tracer:
                 ip = (ingress or {}).get("ip") or ""
                 dst_match = FULL if ip and show(flow.dst) == ip else NONE
             else:
-                dst_match = cover(original_dst, flow.dst)
+                dst_match = _dst(original_dst, flow)
             match = min(
                 cover(entry.get("original_src") or ["any"], flow.src),
                 dst_match,
@@ -1940,6 +2053,13 @@ class Tracer:
                 continue
             where = f"{_NAT_KINDS.get(nat_kind, 'NAT')} {entry.get('name') or ''}".strip()
             index = entry.get("index")
+            if flow.dst_unknown and dst_match == PART:
+                text = (
+                    f"The rule translates {', '.join(str(d) for d in original_dst)}; the address of {_dst_text(flow)} "
+                    "is not known, so whether it translates this flow is not known."
+                )
+                items.append(item(NAT, UNKNOWN, where, text, index))
+                continue
             translated = _translate(
                 flow.dst, list(original_dst), list(entry["translated_dst"]), (ingress or {}).get("ip") or ""
             )
@@ -2016,9 +2136,8 @@ class Tracer:
                 continue
             match = min(
                 cover(entry.get("original_src") or ["any"], flow.src),
-                cover(
-                    [d for d in entry.get("original_dst") or ["any"] if str(d).lower() != "interface"] or ["any"],
-                    flow.dst,
+                _dst(
+                    [d for d in entry.get("original_dst") or ["any"] if str(d).lower() != "interface"] or ["any"], flow
                 ),
                 protocol_match(entry.get("protocol"), flow.protocol),
             )
@@ -2076,7 +2195,15 @@ class Tracer:
                 "unknown": why,
             }
         else:
-            decision = evaluate(policy, flow.src, flow.dst, flow.protocol, flow.dst_ports)
+            decision = evaluate(
+                policy,
+                flow.src,
+                flow.dst,
+                flow.protocol,
+                flow.dst_ports,
+                app=flow.app,
+                dst_unknown=bool(flow.dst_unknown),
+            )
         for stage, status, where, text, index in decision["items"]:
             ctx.items.append(item(stage, status, where, text, index))
         found = [n for n in (net(a) for a in decision["addresses"]) if n is not None and n.version == flow.src.version]
@@ -2252,7 +2379,7 @@ class Tracer:
             ]
             target = self._first_owner(owners) if owners else None
         if target is not None and target != at.prev:
-            if not _public(flow.dst):
+            if not _public_dst(flow):
                 items.append(
                     item(
                         ROUTE,
@@ -2287,15 +2414,10 @@ class Tracer:
             )
             walk.ended = True
             return None
-        if _public(flow.dst):
-            items.append(
-                item(
-                    ROUTE,
-                    OK,
-                    "Internet",
-                    f"{show(flow.dst)} is on the internet: the trace ends where the flow leaves the map.",
-                )
-            )
+        if _public_dst(flow):
+            where = f"{_dst_text(flow)}, whose address is not known," if flow.dst_unknown else show(flow.dst)
+            text = f"{where} is on the internet: the trace ends where the flow leaves the map."
+            items.append(item(ROUTE, OK, "Internet", text))
             walk.delivered = True
             return None
         items.append(item(ROUTE, UNKNOWN, "Internet", f"The internet path to {show(flow.dst)} is not on the map."))

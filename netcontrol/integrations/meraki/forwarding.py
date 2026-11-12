@@ -25,6 +25,8 @@ import ipaddress
 import re
 from typing import Any
 
+from netcontrol.integrations.pathtrace import apps as trace_apps
+
 FORWARDING_VERSION = 1
 
 ANY = "any"
@@ -204,9 +206,26 @@ def rule(
     comment: str = "",
     unresolved: list[str] | None = None,
     established: bool = False,
+    dst_names: list[dict] | None = None,
+    dst_cidrs: list[str] | None = None,
+    app_names: list[dict] | None = None,
 ) -> dict[str, Any]:
     """A rule. ``established`` (a TCP access list entry) matches only
-    packets of a connection already open: the replies, never a request."""
+    packets of a connection already open: the replies, never a request.
+
+    Name criteria (``pathtrace.apps.criterion``), kept only when given:
+    ``dst_names`` are alternatives to the destination addresses
+    ``dst_cidrs`` (a destination that names applications, categories or
+    domains beside addresses; ``dst`` is then any address and the names are
+    in ``unresolved``, as for a trace that asks about no application);
+    ``app_names`` narrow the rule further (an application or URL category
+    field), each also in ``unresolved``."""
+    extra: dict[str, Any] = {}
+    if dst_names:
+        extra["dst_names"] = list(dst_names)
+        extra["dst_cidrs"] = list(dst_cidrs or [])
+    if app_names:
+        extra["app_names"] = list(app_names)
     return {
         "index": index,
         "name": name,
@@ -222,6 +241,7 @@ def rule(
         "comment": comment,
         "unresolved": list(dict.fromkeys(unresolved or [])),
         "established": bool(established),
+        **extra,
     }
 
 
@@ -347,6 +367,24 @@ def _field(raw: Any, vlans: dict[str, str]) -> tuple[list[str], list[str]]:
     return cidrs, []
 
 
+def _fqdn_names(raw: Any, vlans: dict[str, str]) -> tuple[list[dict], list[str]]:
+    """The FQDNs a Meraki destination field names (``www.example.com``,
+    ``*.example.com``) as name criteria (``pathtrace.apps``), with what
+    else it cannot resolve and the addresses listed beside them, any of
+    which matches; ``([], [])`` when it names no FQDN."""
+    cidrs, unresolved = meraki_addresses(raw, vlans)
+    if not any(trace_apps.host(part.replace("*.", "x.", 1)) for part in unresolved):
+        return [], []
+    found = []
+    for part in unresolved:
+        if not trace_apps.host(part.replace("*.", "x.", 1)):
+            found.append(trace_apps.criterion(trace_apps.OTHER, part, part))
+        else:
+            kind = trace_apps.WILDCARD if "*" in part else trace_apps.FQDN
+            found.append(trace_apps.criterion(kind, part, part))
+    return found, [c for c in cidrs if c != ANY]
+
+
 def meraki_rules(
     rules: Any, vlans: dict[str, str], *, dst_key: str = "destCidr", dst_port_key: str = "destPort"
 ) -> list[dict]:
@@ -357,6 +395,7 @@ def meraki_rules(
     for index, item in enumerate((r for r in rules or [] if isinstance(r, dict)), start=1):
         src, unresolved_src = _field(item.get("srcCidr"), vlans)
         dst, unresolved_dst = _field(item.get(dst_key), vlans)
+        dst_names, dst_cidrs = _fqdn_names(item.get(dst_key), vlans)
         src_ports, bad_src = meraki_ports(item.get("srcPort"))
         dst_ports, bad_dst = meraki_ports(item.get(dst_port_key))
         protocol, bad_protocol = meraki_protocol(item.get("protocol"))
@@ -377,6 +416,8 @@ def meraki_rules(
                 dst_ports=dst_ports,
                 comment=str(item.get("comment") or ""),
                 unresolved=unresolved,
+                dst_names=dst_names,
+                dst_cidrs=dst_cidrs,
             )
         )
     return found
