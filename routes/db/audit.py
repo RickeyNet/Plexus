@@ -264,20 +264,33 @@ async def add_audit_event(
 async def get_audit_events(
     limit: int = 100,
     category: str | None = None,
+    *,
+    user: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
 ) -> list[dict]:
-    """Return recent audit events, optionally filtered by category."""
+    """Return recent audit events, newest first, optionally filtered by
+    category, by user, and by time (``since`` / ``until`` inclusive, UTC
+    ``YYYY-MM-DD HH:MM:SS`` text as stored)."""
+    clauses: list[str] = []
+    params: list = []
+    for clause, value in (
+        ("category = ?", category),
+        ('"user" = ?', user),
+        ("timestamp >= ?", since),
+        ("timestamp <= ?", until),
+    ):
+        if value:
+            clauses.append(clause)
+            params.append(value)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.append(limit)
     conn = await _dbcore.get_db()
     try:
-        if category:
-            cursor = await conn.execute(
-                "SELECT * FROM audit_events WHERE category = ? ORDER BY id DESC LIMIT ?",
-                (category, limit),
-            )
-        else:
-            cursor = await conn.execute(
-                "SELECT * FROM audit_events ORDER BY id DESC LIMIT ?",
-                (limit,),
-            )
+        cursor = await conn.execute(
+            f"SELECT * FROM audit_events {where} ORDER BY id DESC LIMIT ?",  # nosec B608 - fixed clauses
+            tuple(params),
+        )
         return rows_to_list(await cursor.fetchall())
     finally:
         await conn.close()
