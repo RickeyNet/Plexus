@@ -794,6 +794,92 @@ export function useUpdateFlowCollectorConfig() {
   });
 }
 
+// ── AI access (MCP endpoint and tokens) ────────────────────────────────────
+
+export interface McpSettings {
+  enabled: boolean;
+  max_result_bytes: number;
+  max_rows: number;
+  calls_per_minute: number;
+}
+
+export interface McpTokenRecord {
+  id: number;
+  name: string;
+  /** First characters of the token, for telling tokens apart. */
+  token_prefix: string;
+  owner_user_id: number;
+  owner_username: string;
+  owner_role: string;
+  categories: string[];
+  /** '' (never) or YYYY-MM-DD. */
+  expires_at: string;
+  created_at: string;
+  created_by: string;
+  last_used_at: string;
+  call_count: number;
+  /** '' while the token is usable. */
+  revoked_at: string;
+}
+
+export interface McpTokenList {
+  tokens: McpTokenRecord[];
+  categories: string[];
+}
+
+export interface McpTokenCreatePayload {
+  name: string;
+  owner_user_id: number;
+  categories: string[];
+  expires_at: string;
+}
+
+export interface McpTokenCreated {
+  /** The token itself. Returned once, never again. */
+  token: string;
+  record: McpTokenRecord;
+}
+
+export function useMcpSettings() {
+  return useQuery<McpSettings>({
+    queryKey: ['admin', 'mcp', 'settings'],
+    queryFn: () => apiRequest('/admin/mcp/settings'),
+  });
+}
+
+export function useUpdateMcpSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Partial<McpSettings>) =>
+      apiRequest<McpSettings>('/admin/mcp/settings', { method: 'PUT', body: data }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'mcp', 'settings'] }),
+  });
+}
+
+export function useMcpTokens() {
+  return useQuery<McpTokenList>({
+    queryKey: ['admin', 'mcp', 'tokens'],
+    queryFn: () => apiRequest('/admin/mcp/tokens'),
+  });
+}
+
+export function useCreateMcpToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: McpTokenCreatePayload) =>
+      apiRequest<McpTokenCreated>('/admin/mcp/tokens', { method: 'POST', body: data }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'mcp', 'tokens'] }),
+  });
+}
+
+export function useRevokeMcpToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => apiRequest(`/admin/mcp/tokens/${id}`, { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'mcp', 'tokens'] }),
+  });
+}
+
 // ── Helpers reused across tabs ─────────────────────────────────────────────
 
 export function useInventoryGroupsList() {

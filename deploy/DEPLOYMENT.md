@@ -181,6 +181,8 @@ This starts 3 containers and mounts persistent state into Docker volumes (`/app/
 | `plexus-postgres` | PostgreSQL 16 database | 5432 (internal)             |
 | `plexus-nginx`    | HTTPS reverse proxy    | 443 (public), 80 (redirect) |
 
+The AI access endpoint (`/mcp`, off until enabled in Settings > AI Access) is served through the same nginx `location /` block as the rest of the application: it answers each request with one JSON response, so it needs no extra proxy configuration and no extra port. See [docs/ai-access.md](../docs/ai-access.md).
+
 Additional UDP ports exposed on the app container:
 
 | Port       | Purpose                       |

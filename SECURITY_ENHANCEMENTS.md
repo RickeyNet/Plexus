@@ -135,3 +135,23 @@ are recorded in the code and `TODO.md`. Remaining low-severity ops items are in
 - [x] **`must_change_password` gate not enforced on WebSocket streams** - The HTTP middleware blocks a must-change user from every route except password-change, but `verify_ws_session` never checked the flag, so such a user could open `/ws/jobs`, `/ws/deployment`, `/ws/upgrades`, and the config-capture/revert sockets before rotating. Fixed 2026-07-06: `verify_ws_session` (`shared.py`) now rejects sessions with `must_change_password` set, mirroring the HTTP gate.
 - [x] **config-capture / config-revert WS lacked the owner check** - Same class as the Upgrades IDOR but materially lower risk (job ids are uuid4, so cross-user enumeration is impractical). Fixed 2026-07-06 for defense in depth: the capture/revert job records now store `launched_by` and both WS handlers reject a non-owner non-admin (`config_drift.py`).
 - [x] **Credential-use audit logging** (carried from pass-3 Medium) - `require_credential_access` now emits a `credential`/`use` or `use_denied` audit event on every decision, flagging non-ownership grants with `override=` markers. See the pass-3 section.
+
+## AI access over MCP (2026-11-12)
+
+The read-only MCP endpoint (`/mcp`, `netcontrol/mcp/`, see `docs/ai-access.md`) sends data to whichever AI provider the connecting client uses, so its controls are listed here.
+
+- [x] **Off by default** - the endpoint answers `404` until an admin enables it in Settings > AI Access.
+- [x] **Separate credential** - MCP tokens (`plx_mcp_` + 32 random bytes) are created by admins, shown once, and stored only as a SHA-256 hash (`mcp_tokens`, migration 0082). Lookup is by hash with a constant-time compare. An MCP token is refused on `/api/*`; a session cookie and `APP_API_TOKEN` are refused on `/mcp`.
+- [x] **Least privilege, re-checked per request** - a token carries data categories and acts as one user. The token row, its owner and the owner's features are read on every request, so revoking the token, deleting the owner or removing a feature takes effect on the next call. The audit log tool needs an admin owner.
+- [x] **Read-only by construction** - the server registers tools only (no prompts, no resources). A test parses every tool module and fails if it references a database function with a mutating prefix. No tool contacts a device or a vendor API.
+- [x] **Secret masking, always on, fail closed** - every tool result and every tool error message passes through `netcontrol/mcp/redact.py` in the dispatcher before it is serialised, so a new tool cannot skip it. Config text is masked line by line (the secret is replaced, the command is kept); structured values under secret-bearing keys are replaced. If masking raises, the result is withheld. Stored credentials, secret variables, integration API keys, user rows and sessions are not reachable through any tool.
+- [x] **Bounded** - arguments are validated against a closed JSON Schema; regex search uses RE2 with the same length and shape limits as Config Backups search; results are capped in size and rows; each token has a per-minute call limit; a tool call is stopped after 30 seconds.
+- [x] **Throttled sign-in** - failed tokens are counted per client address (20 a minute, then `429`), and audited at most once per address per minute.
+- [x] **Audited** - every tool call writes an `mcp` / `tool_call` audit event (token, owner, tool, masked arguments, rows, bytes, duration, outcome). Result content is not logged. Token creation and revocation and settings changes are audited; the plaintext token never appears in an audit event or a log line.
+- [x] **No stream to proxy** - the transport runs stateless with single JSON responses and accepts `POST` only, so the existing nginx `location /` block serves it unchanged.
+
+### Remaining risks (accepted)
+
+- **Pattern-based masking is not a guarantee.** A secret in a syntax no rule covers, in free text (a `description` or `remark` command, banner prose), spread over several words, or as an all-numeric key on a bare `key <number>` line is not masked. A banner never suspends masking for the lines after it, and `search_configs` matches against masked text so it cannot be used to probe a secret. Mitigation: the `configs` category is opt-in per token, and the limit is stated in the user documentation.
+- **Hostnames, IP addresses and configuration structure are sent to the AI provider unmasked.** This is the feature; the Settings tab says so where tokens are created.
+- **SDK dependency.** `mcp` is pinned exactly and audited with `pip-audit`; it parses requests only after the token check.

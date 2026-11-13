@@ -28,6 +28,12 @@ describe('breadcrumbTrail', () => {
     expect(breadcrumbTrail('/assignments')[0]).toEqual({ label: 'Delegator', to: undefined });
   });
 
+  it('labels the legacy Delegator paths like the tabs they open', () => {
+    expect(breadcrumbTrail('/jobs')).toEqual([{ label: 'Delegator', to: '/assignments' }, { label: 'Assignments' }]);
+    expect(breadcrumbTrail('/playbooks')).toEqual([{ label: 'Delegator', to: '/assignments' }, { label: 'Tasks' }]);
+    expect(breadcrumbTrail('/templates')).toEqual([{ label: 'Delegator', to: '/assignments' }, { label: 'Instructions' }]);
+  });
+
   it('falls back to the parent label for tabs without an entry', () => {
     expect(breadcrumbTrail('/settings/users')).toEqual([{ label: 'Settings' }]);
     expect(breadcrumbTrail('/monitoring/configure/suppressions')).toEqual([

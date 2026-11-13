@@ -100,6 +100,11 @@ def _get_session(request) -> dict | None:
     return _verify_session_token_fn(token)
 
 
+def _session_user(request) -> str:
+    """The username of the session making the request, or ``""``."""
+    return (_get_session(request) or {}).get("user", "")
+
+
 async def verify_ws_session(token: str) -> dict | None:
     """Validate a WebSocket session token the same way require_auth does.
 

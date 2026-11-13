@@ -29,7 +29,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
-from starlette.routing import Match
+from starlette.routing import Match, Route
 
 # Ensure project root is on path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -41,6 +41,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel, ConfigDict, Field
 
 from netcontrol.integrations.cisco_fdm.collector import fdm_poll_loop
+from netcontrol.mcp.server import build_mcp_app
 from netcontrol.routes import notification_channels, siem_forwarder
 from netcontrol.routes.admin import (
     AdminAccessGroupCreateRequest,
@@ -224,6 +225,7 @@ from netcontrol.routes.mac_tracking import _mac_move_retention_loop, router as m
 from netcontrol.routes.maintenance_windows import (
     router as maintenance_windows_router,
 )
+from netcontrol.routes.mcp_tokens import router as mcp_tokens_router
 from netcontrol.routes.meraki_alerts import (
     WEBHOOK_PATH as MERAKI_WEBHOOK_PATH,
     admin_router as meraki_alerts_admin_router,
@@ -1489,6 +1491,9 @@ async def _cloud_traffic_metric_sync_loop() -> None:
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+_mcp_app, _run_mcp = build_mcp_app()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize DB and seed on startup."""
@@ -1644,7 +1649,10 @@ async def lifespan(app: FastAPI):
             _ensure_flow_aggregation_task()
 
     try:
-        yield
+        # The MCP transport's task group lives for the life of the app (a
+        # mounted app's own lifespan is never run by Starlette).
+        async with _run_mcp():
+            yield
     finally:
         # Give in-flight jobs a grace window to finish before tearing the loop
         # down, so a firmware push / config deploy isn't severed mid-write on
@@ -2336,6 +2344,12 @@ app.include_router(
     dependencies=[Depends(require_admin)],
 )
 app.include_router(meraki_webhook_router)
+# AI access (MCP): endpoint settings and token management, admin-only. The
+# /mcp endpoint itself is mounted separately and authenticates by MCP token.
+app.include_router(
+    mcp_tokens_router,
+    dependencies=[Depends(require_admin)],
+)
 # Admin self-update routes (check, channel config, apply/rollback via the
 # host updater handoff directory, progress).
 app.include_router(
@@ -2477,6 +2491,13 @@ app.include_router(
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 FRONTEND_DIST = os.path.join(STATIC_DIR, "frontend", "dist")
 FRONTEND_INDEX = os.path.join(FRONTEND_DIST, "index.html")
+
+# AI access (MCP), read-only. Off until an admin enables it (404 until then)
+# and authenticated by MCP tokens only: no session cookie, no APP_API_TOKEN.
+# Served with and without the trailing slash; both routes sit ahead of the
+# SPA catch-all.
+app.router.routes.append(Route("/mcp", endpoint=_mcp_app, methods=None))
+app.mount("/mcp", _mcp_app)
 
 # Mount static files directory
 if os.path.isdir(STATIC_DIR):

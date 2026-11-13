@@ -20,6 +20,15 @@ DEFAULT_RULES = {
     # Floor from tests/test_jobs.py (param coercion, queue ordering,
     # dependency gating, event writer). The runner itself is untested.
     "netcontrol/routes/jobs.py": 25.0,
+    # AI access (MCP): the token check, the dispatcher every call goes
+    # through and the secret masking. Floors sit a few points under what
+    # tests/test_mcp_*.py measure; do not lower them to land a change.
+    "netcontrol/mcp/auth.py": 95.0,
+    "netcontrol/mcp/dispatch.py": 90.0,
+    "netcontrol/mcp/redact.py": 90.0,
+    "netcontrol/mcp/registry.py": 95.0,
+    "netcontrol/mcp/server.py": 85.0,
+    "netcontrol/routes/mcp_tokens.py": 90.0,
 }
 
 

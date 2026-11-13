@@ -17,6 +17,7 @@ stream live job output - all through a REST API with WebSocket support.
 - **Software upgrades** - software version inventory, vulnerability alerts and an IOS-XE upgrade tool.
 - **Digital-twin lab mode** - rehearse changes against lab copies of devices.
 - **Alerting** - alert rules routed to email, PagerDuty, webhook and Microsoft Teams channels.
+- **AI access** - a read-only MCP endpoint so an AI client such as Claude can query Plexus data for diagnosis and reports, with scoped tokens, secret masking and an audit trail.
 
 ## Quick Start
 
@@ -126,6 +127,7 @@ groups, playbooks, templates and a default credential.
 - [docs/network-documentation-usage.md](docs/network-documentation-usage.md) - automated network documentation reports
 - [docs/flow-collector.md](docs/flow-collector.md) - NetFlow / sFlow / IPFIX collector
 - [docs/alert-notification-channels.md](docs/alert-notification-channels.md) - email, PagerDuty, webhook and Teams alerts
+- [docs/ai-access.md](docs/ai-access.md) - connecting an AI client over MCP: tokens, tools, secret masking, limits
 
 ## Repository layout
 

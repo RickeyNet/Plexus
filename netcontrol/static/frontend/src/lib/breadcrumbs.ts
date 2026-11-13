@@ -27,6 +27,10 @@ const LABELS: Record<string, string> = {
   '/tasks': 'Delegator · Tasks',
   '/instructions': 'Delegator · Instructions',
   '/credentials': 'Delegator · Credentials',
+  // Legacy paths that still open the Delegator tabs (LEGACY_PATHS in Jobs.tsx).
+  '/jobs': 'Delegator · Assignments',
+  '/playbooks': 'Delegator · Tasks',
+  '/templates': 'Delegator · Instructions',
   '/monitoring': 'Monitoring',
   '/monitoring/alerts': 'Monitoring · Alerts',
   '/monitoring/events': 'Monitoring · Events',

@@ -11,6 +11,7 @@ All API endpoints and their required authentication/authorization levels.
 | **feature(X)** | Authenticated + user has access to feature X |
 | **admin** | Authenticated + `role == "admin"` |
 | **ws-auth** | WebSocket with session cookie validated before `accept()` |
+| **mcp-token** | `Authorization: Bearer` MCP token created by an admin (hashed at rest); never a session cookie or `APP_API_TOKEN` |
 
 ## Endpoints
 
@@ -71,6 +72,7 @@ All API endpoints and their required authentication/authorization levels.
 | Paths | Router |
 |-------|--------|
 | `/api/admin/*` | admin |
+| `/api/admin/mcp/settings`, `/api/admin/mcp/tokens*` | mcp_tokens (AI access settings and MCP token create, list, revoke) |
 | `/api/secret-variables/*` | (admin enforced in handlers; reads and writes both) |
 | `/api/inventory/admin/*` | inventory_admin |
 | `/api/topology/admin/*` | topology_admin |
@@ -128,6 +130,23 @@ users' credentials). It exists for CI/CD and machine-to-machine use
   peer URLs require HTTPS unless `PLEXUS_FEDERATION_ALLOW_HTTP=true`).
 - Per-token scoping is not implemented; if finer-grained machine access is
   needed, that requires a token-scopes design first.
+
+### MCP endpoint (mcp-token)
+
+| Method | Path | Notes |
+|--------|------|-------|
+| POST | `/mcp`, `/mcp/` | Read-only AI access. `404` until an admin enables it. Not in `PUBLIC_PATHS`; it has its own token check and is exempt from CSRF because it never reads a cookie. An MCP token is refused on `/api/*`, and `APP_API_TOKEN` is refused here |
+
+What a token may call is decided per request, from the token row and its owner as they are now:
+
+| Rule | Detail |
+|------|--------|
+| Token state | Refused when revoked, expired, or when its owner no longer exists |
+| Category | A tool is listed and callable only if its category is on the token |
+| Owner feature | The owner must hold the category's feature: `inventory`, `config-backups` (configs; `config-drift` as well for `list_config_drift`), `compliance`, `monitoring`, `topology`, `software`, `mac-tracking` (`search_mac_or_ip`), `traffic-analysis` (`get_top_talkers`). An admin owner passes every feature check |
+| Audit category | `search_audit_log` needs an admin owner; a token cannot be given `audit` for a non-admin owner |
+| Hidden tools | A tool the token may not use answers "Unknown tool", the same as one that does not exist |
+| Always available | `plexus_overview`, which reports only on the categories the token can use: device counts need `inventory`, the data source list needs `inventory`, `monitoring` or `topology` |
 
 ## Notes
 
