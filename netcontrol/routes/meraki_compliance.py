@@ -48,7 +48,7 @@ from netcontrol.integrations.meraki.compliance import (
     summarise_results,
 )
 from netcontrol.routes import background_jobs
-from netcontrol.routes.shared import _audit, _corr_id, _get_session, supervise_task
+from netcontrol.routes.shared import _audit, _corr_id, _session_user, supervise_task
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
 router = APIRouter()
@@ -82,11 +82,6 @@ class MerakiScanRequest(BaseModel):
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
-
-def _session_user(request: Request) -> str:
-    session = _get_session(request)
-    return session["user"] if session else ""
 
 
 def _profile_rules(profile: dict) -> list:
