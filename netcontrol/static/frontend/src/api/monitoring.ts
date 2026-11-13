@@ -826,6 +826,10 @@ export interface TopologyAvailabilityEntity {
   degraded_seconds: number;
   down_seconds: number;
   unknown_seconds: number;
+  /** Covered by a mute: left out of the state counts, the Dashboard and notifications. */
+  muted: boolean;
+  /** The mute that covers it; `site` (when sent) names a site mute's site, which an uplink or tunnel may not share. */
+  mute: (Pick<TopologyMute, 'id' | 'scope' | 'reason' | 'created_by' | 'created_at'> & { site?: string }) | null;
 }
 
 export interface TopologyAvailabilityOrg {
@@ -844,6 +848,8 @@ export interface TopologyAvailabilitySummary {
   degraded: number;
   down: number;
   unknown: number;
+  /** Muted entities, in any state; up / degraded / down / unknown leave them out. */
+  muted: number;
   avg_uptime_pct: number | null;
   total_outages: number;
   orgs: TopologyAvailabilityOrg[];
@@ -907,6 +913,58 @@ export function useTopologyAvailabilityTransitions(f: TopologyAvailabilityFilter
   return useQuery<{ transitions: TopologyAvailabilityTransition[] }>({
     queryKey: ['topology-availability-transitions', f.provider ?? null, f.orgRef ?? null, f.entityType ?? null, f.days ?? 7, f.limit ?? 500],
     queryFn: () => apiRequest(`/availability/topology/transitions?${topologyAvailabilityQuery(f, 500)}`),
+  });
+}
+
+/**
+ * A mute of one entity (and the uplinks and tunnels of a device) or of
+ * everything at a site of one source. It lasts until it is deleted.
+ */
+export interface TopologyMute {
+  id: number;
+  provider: string;
+  org_ref: number;
+  scope: 'entity' | 'site';
+  entity_type: string;
+  entity_id: string;
+  site: string;
+  reason: string;
+  created_by: string;
+  created_at: string;
+}
+
+/** What the mute dialog is opened on: an availability entity or a Dashboard problem row. */
+export interface TopologyMuteTarget {
+  provider: string;
+  org_ref: number;
+  entity_type: string;
+  entity_id: string;
+  name: string;
+  site: string;
+}
+
+export type TopologyMuteCreate = Pick<TopologyMute, 'provider' | 'org_ref' | 'scope' | 'reason'> &
+  Partial<Pick<TopologyMute, 'entity_type' | 'entity_id' | 'site'>>;
+
+function invalidateTopologyMutes(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: ['topology-availability-summary'] });
+  qc.invalidateQueries({ queryKey: ['dashboard'] });
+  qc.invalidateQueries({ queryKey: ['meraki-alerts'] });
+}
+
+export function useMuteTopologyEntity() {
+  const qc = useQueryClient();
+  return useMutation<{ mute: TopologyMute; acknowledged: number }, Error, TopologyMuteCreate>({
+    mutationFn: (body) => apiRequest('/availability/topology/mutes', { method: 'POST', body }),
+    onSuccess: () => invalidateTopologyMutes(qc),
+  });
+}
+
+export function useUnmuteTopologyEntity() {
+  const qc = useQueryClient();
+  return useMutation<{ ok: boolean }, Error, number>({
+    mutationFn: (muteId) => apiRequest(`/availability/topology/mutes/${muteId}`, { method: 'DELETE' }),
+    onSuccess: () => invalidateTopologyMutes(qc),
   });
 }
 

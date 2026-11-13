@@ -1,18 +1,24 @@
 import { useMemo, useState } from 'react';
 
 import {
+  type TopologyAvailabilityEntity,
   useTopologyAvailabilityOutages,
   useTopologyAvailabilitySummary,
   useTopologyAvailabilityTransitions,
+  useUnmuteTopologyEntity,
 } from '@/api/monitoring';
-import { StatusBadge } from '@/components/Badge';
+import { Badge, StatusBadge } from '@/components/Badge';
+import { BusyButton } from '@/components/BusyButton';
 import { DataTable } from '@/components/DataTable';
+import { useDialogs } from '@/components/DialogProvider-context';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
+import { MuteEntityModal } from '@/components/MuteEntityModal';
 import { QueryError } from '@/components/QueryError';
 import { StatGrid, StatTile } from '@/components/StatTile';
 import { TabBar } from '@/components/TabBar';
 import { type Tone } from '@/lib/severity';
+import { usePendingKeys } from '@/lib/usePendingKeys';
 import { useLinkedParam } from '@/lib/useLinkedParam';
 import { useScrollToHash } from '@/lib/useScrollToHash';
 import {
@@ -25,9 +31,11 @@ import {
   type AvailabilityStateFilter,
   entityTypeLabel,
   matchesAvailabilityState,
+  muteBadgeTitle,
   parseAvailabilityEntityType,
   parseAvailabilitySource,
   parseAvailabilityState,
+  unmuteConfirmMessage,
 } from '@/pages/Dashboard/sourceHealth';
 import { sourceTypeLabel } from '@/pages/Topology/merakiHelpers';
 import { formatBackendDateTime } from '@/lib/datetime';
@@ -61,6 +69,10 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
   // Current state of the entities listed; the summary API has no state filter, so it applies to the table.
   const [stateFilter, setStateFilter] = useState<AvailabilityStateFilter | null>(() => parseAvailabilityState(linkedState));
   const [subTab, setSubTab] = useState<SubTab>('entities');
+  const [muting, setMuting] = useState<TopologyAvailabilityEntity | null>(null);
+  const unmute = useUnmuteTopologyEntity();
+  const unmuting = usePendingKeys<number>();
+  const { confirm, alert } = useDialogs();
   // The Dashboard links here (#topology-availability) from its entity counts.
   useScrollToHash();
 
@@ -71,7 +83,7 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
 
   const s = summary.data;
   const entities = useMemo(
-    () => (stateFilter ? (s?.entities ?? []).filter((e) => matchesAvailabilityState(e.current_state, stateFilter)) : (s?.entities ?? [])),
+    () => (stateFilter ? (s?.entities ?? []).filter((e) => matchesAvailabilityState(e, stateFilter)) : (s?.entities ?? [])),
     [s, stateFilter],
   );
   const orgs = s?.orgs ?? [];
@@ -82,9 +94,29 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
     { label: 'Up', value: s?.up ?? '-', tone: countTone(s?.up, 'success') },
     { label: 'Degraded', value: s?.degraded ?? '-', tone: countTone(s?.degraded, 'warning') },
     { label: 'Down', value: s?.down ?? '-', tone: countTone(s?.down, 'danger') },
+    ...(s?.muted ? [{ label: 'Muted', value: s.muted }] : []),
     { label: 'Avg Uptime', value: formatUptimePct(s?.avg_uptime_pct) },
     { label: `Outages (${days}d)`, value: s?.total_outages ?? '-' },
   ];
+
+  async function handleUnmute(e: TopologyAvailabilityEntity) {
+    const mute = e.mute;
+    if (!mute) return;
+    const ok = await confirm({
+      title: 'Unmute alerts',
+      message: unmuteConfirmMessage(e.name, mute, e.site),
+      confirmLabel: 'Unmute',
+      confirmVariant: 'primary',
+    });
+    if (!ok) return;
+    await unmuting.run(mute.id, async () => {
+      try {
+        await unmute.mutateAsync(mute.id);
+      } catch (err) {
+        void alert({ message: (err as Error).message, variant: 'error' });
+      }
+    });
+  }
 
   return (
     <div id={TOPOLOGY_AVAILABILITY_ANCHOR} style={{ marginTop: '1.5rem' }}>
@@ -195,6 +227,7 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
                   <th style={{ textAlign: 'right' }}>Uptime</th>
                   <th>Last change</th>
                   <th style={{ textAlign: 'right' }}>Outages</th>
+                  <th aria-label="Actions" />
                 </tr>
               </thead>
               <tbody>
@@ -209,17 +242,50 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
                     <td>{e.site || '-'}</td>
                     <td>
                       <StatusBadge status={e.current_state} />
+                      {e.muted && (
+                        <Badge
+                          size="sm"
+                          title={e.mute ? muteBadgeTitle(e.mute) : undefined}
+                          style={{ marginLeft: 'var(--space-1)' }}
+                        >
+                          Muted
+                        </Badge>
+                      )}
                       {e.missing && <span className="text-muted" style={{ fontSize: '0.8em', marginLeft: '0.3rem' }}>not in last collection</span>}
                     </td>
                     <td style={{ textAlign: 'right' }}>{formatUptimePct(e.uptime_pct)}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>{formatBackendDateTime(e.last_change)}</td>
                     <td style={{ textAlign: 'right' }}>{e.outage_count}</td>
+                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      {e.muted ? (
+                        e.mute && (
+                          <BusyButton
+                            className="btn btn-sm btn-secondary"
+                            busy={unmuting.isPending(e.mute.id)}
+                            aria-label={`Unmute ${e.name}`}
+                            onClick={() => void handleUnmute(e)}
+                          >
+                            Unmute
+                          </BusyButton>
+                        )
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          aria-label={`Mute ${e.name}`}
+                          onClick={() => setMuting(e)}
+                        >
+                          Mute
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
           </DataTable>
         )
       )}
+      {muting && <MuteEntityModal target={muting} onClose={() => setMuting(null)} />}
 
       {subTab === 'outages' && (
         outages.error && !outages.data ? (

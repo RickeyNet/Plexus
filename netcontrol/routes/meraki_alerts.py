@@ -57,6 +57,7 @@ from netcontrol.integrations.meraki.normalize import InventoryIndex
 from netcontrol.routes import notification_channels
 from netcontrol.routes.meraki_topology import PROVIDER_MERAKI, _is_demo, _require_admin_dep, _session_user
 from netcontrol.routes.shared import _audit, _corr_id
+from netcontrol.routes.topology_availability import _mute_index, finish_removal
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -74,6 +75,8 @@ _SECRET_MIN, _SECRET_MAX = 16, 256
 _POLL_CONCURRENCY = 4
 _POLL_TIMEOUT_SECONDS = 20.0
 _PER_PAGE = 300
+# Serials per confirmation call (``GET /organizations/{organizationId}/devices``).
+_CONFIRM_CHUNK = 100
 # Back-off caps: a key without access (401/403) or an org the key cannot
 # see (404) is retried at most hourly, anything else every ten minutes.
 _MAX_BACKOFF_AUTH = 3600
@@ -200,6 +203,28 @@ async def _topology_device(org_ref: int, serial: str) -> dict | None:
     return rows[0] if rows else None
 
 
+def _muted(row: dict, index: db.TopologyMuteIndex) -> dict | None:
+    """The topology mute covering an alert row: a mute of its device
+    (entity ``d:<serial>``, which a mute of the device's site covers too) or
+    of its network (a site mute named like ``network_name``)."""
+    org_ref = int(row.get("org_ref") or 0)
+    serial = str(row.get("device_serial") or "")
+    network = str(row.get("network_name") or "")
+    if serial:
+        device = {
+            "provider": PROVIDER_MERAKI,
+            "org_ref": org_ref,
+            "entity_type": "device",
+            "entity_id": f"d:{serial}",
+            "site": network,
+            "meta": {},
+        }
+        hit = index.match(device)
+        if hit:
+            return hit
+    return index.match_site(PROVIDER_MERAKI, org_ref, network)
+
+
 async def _host_for(row: dict, index: InventoryIndex, tracked: dict | None) -> dict | None:
     """The inventory host of the alert's device: by serial or name (the
     matching the topology build does), else the host the topology map
@@ -287,14 +312,23 @@ async def ingest(events: list[dict], *, poll_scope: tuple[int, set[str]] | None 
     async with _APPLY_LOCK:
         result = await db.apply_meraki_alert_events(events)
         clears = list(result["clears"])
+        vanished: list[str] = []
         if poll_scope is not None:
             missing = await db.resolve_missing_meraki_alerts(poll_scope[0], poll_scope[1])
             result["resolved"] += len(missing)
             clears.extend(r for r in missing if r.get("alert_state"))
+            vanished = sorted({str(r["device_serial"]) for r in missing if r.get("device_serial")})
         raised = 0
         index: InventoryIndex | None = None
+        mutes = await _mute_index(PROVIDER_MERAKI) if result["alerts"] else None
         for row in result["alerts"]:
             try:
+                if mutes and _muted(row, mutes):
+                    # Stored and counted as raised, so unmuting does not notify it.
+                    await db.set_meraki_alert_raised(
+                        str(row["alert_key"]), str(row.get("severity") or ""), "muted", row.get("host_id")
+                    )
+                    continue
                 if index is None:
                     index = await load_inventory_index()
                 via, host_id = await _raise_alert(row, index)
@@ -310,6 +344,7 @@ async def ingest(events: list[dict], *, poll_scope: tuple[int, set[str]] | None 
         "resolved": result["resolved"],
         "alerted": raised,
         "alerts_cleared": cleared,
+        "vanished": vanished,
     }
 
 
@@ -324,23 +359,33 @@ async def expire_webhook_alerts() -> int:
 # ── Poll ─────────────────────────────────────────────────────────────────────
 
 
-async def poll_source(org: dict) -> list[dict]:
-    """The active assurance alerts of one source, normalised. Raises
-    ``MerakiApiError`` when the organization cannot be read."""
+async def _poll_client(org: dict) -> tuple[MerakiClient, str]:
+    """A Dashboard API client for one source with the poll's settings (short
+    timeout, one request at a time, one retry, the client's own rate
+    limiting), and its organization ID. Raises ``MerakiApiError`` when the
+    source has no valid organization ID or no API key."""
     org_id = str(org.get("org_id") or "").strip()
     if not _ORG_ID_RE.match(org_id):
         raise MerakiApiError("invalid organization ID")
     api_key = await db.get_meraki_org_api_key(int(org["id"]))
     if not api_key:
         raise MerakiApiError("no API key")
-    async with MerakiClient(
+    client = MerakiClient(
         api_key,
         base_url=str(org.get("base_url") or "") or DEFAULT_BASE_URL,
         timeout=_POLL_TIMEOUT_SECONDS,
         max_concurrency=1,
         max_retries=1,
         transport=_TRANSPORT,
-    ) as client:
+    )
+    return client, org_id
+
+
+async def poll_source(org: dict) -> list[dict]:
+    """The active assurance alerts of one source, normalised. Raises
+    ``MerakiApiError`` when the organization cannot be read."""
+    client, org_id = await _poll_client(org)
+    async with client:
         rows = await client.get_all(
             f"organizations/{org_id}/assurance/alerts",
             params={"active": "true", "dismissed": "false", "resolved": "false"},
@@ -348,6 +393,46 @@ async def poll_source(org: dict) -> list[dict]:
         )
     events = [meraki_alerts.from_assurance_alert(r, org_ref=int(org["id"]), org=org) for r in rows]
     return [e for e in events if e]
+
+
+async def remove_vanished_devices(org: dict, serials: list[str]) -> int:
+    """After a poll resolved alerts Meraki no longer reports: remove from
+    availability tracking the devices among ``serials`` that are no longer
+    in the organization (with their uplinks, tunnels, links and mutes).
+
+    Only serials with a tracked device entity are checked, with one
+    ``GET /organizations/{organizationId}/devices`` (devices assigned to a
+    network) filtered to them, per chunk of serials. A serial the call does
+    not return is gone; a device that recovered is still returned and kept.
+    Any error removes nothing. Returns the number of devices removed."""
+    if not serials:
+        return 0
+    org_ref = int(org["id"])
+    try:
+        tracked = {
+            str(r["entity_id"]) for r in await db.list_topology_entity_states(PROVIDER_MERAKI, org_ref, "device")
+        }
+        wanted = sorted({s for s in serials if f"d:{s}" in tracked})
+        if not wanted:
+            return 0
+        found: set[str] = set()
+        client, org_id = await _poll_client(org)
+        async with client:
+            for start in range(0, len(wanted), _CONFIRM_CHUNK):
+                rows = await client.get_all(
+                    f"organizations/{org_id}/devices",
+                    params={"serials[]": wanted[start : start + _CONFIRM_CHUNK]},
+                )
+                found.update(str(r.get("serial") or "").upper() for r in rows if isinstance(r, dict))
+        gone = [s for s in wanted if s.upper() not in found]
+        if not gone:
+            return 0
+        rows = await db.remove_topology_entities(PROVIDER_MERAKI, org_ref, [f"d:{s}" for s in gone])
+        await finish_removal(rows)
+        return sum(1 for r in rows if r.get("entity_type") == "device")
+    except Exception as exc:  # noqa: BLE001 - the poll stays best effort
+        LOGGER.warning("meraki alerts: checking vanished devices of source %s failed: %s", org_ref, type(exc).__name__)
+        return 0
 
 
 def _error_text(exc: Exception) -> str:
@@ -387,7 +472,9 @@ async def _poll_one(org: dict) -> dict[str, Any]:
         return {"org_ref": org_ref, "ok": False, "error": _error_text(exc)}
     _BACKOFF.pop(org_ref, None)
     status.update({"last_ok_at": status["last_poll_at"], "last_error": "", "backoff_seconds": 0, "open": len(active)})
-    return {"org_ref": org_ref, "ok": True, "active": len(active), **result}
+    # Outside _APPLY_LOCK: one more API call, only when an alert vanished.
+    removed = await remove_vanished_devices(org, result["vanished"])
+    return {"org_ref": org_ref, "ok": True, "active": len(active), **result, "removed": removed}
 
 
 async def run_alert_poll_cycle(trigger: str = "scheduled", *, force: bool = False) -> dict[str, Any]:
@@ -430,15 +517,18 @@ async def run_alert_poll_cycle(trigger: str = "scheduled", *, force: bool = Fals
         new = sum(int(r.get("new") or 0) for r in results)
         alerted = sum(int(r.get("alerted") or 0) for r in results)
         resolved = sum(int(r.get("resolved") or 0) for r in results)
-        if new or resolved or failed:
+        removed = sum(int(r.get("removed") or 0) for r in results)
+        if new or resolved or failed or removed:
             LOGGER.info(
-                "meraki alerts (%s): %s source(s) polled, %s failed, %s new, %s resolved, %s alert(s)",
+                "meraki alerts (%s): %s source(s) polled, %s failed, %s new, %s resolved, %s alert(s), "
+                "%s removed device(s)",
                 trigger,
                 len(results),
                 len(failed),
                 new,
                 resolved,
                 alerted,
+                removed,
             )
         return {
             "ok": not failed,
@@ -449,6 +539,7 @@ async def run_alert_poll_cycle(trigger: str = "scheduled", *, force: bool = Fals
             "new": new,
             "resolved": resolved,
             "alerted": alerted,
+            "removed": removed,
             "expired": expired,
             "sources": results,
         }
@@ -601,8 +692,13 @@ async def list_meraki_alerts_api(
     org_ref: int | None = Query(default=None),
     limit: int = Query(default=500, ge=1, le=5000),
 ):
-    """The Meraki alerts from the poll and the webhook receiver."""
-    return {"alerts": await db.list_meraki_alerts(include_resolved=include_resolved, org_ref=org_ref, limit=limit)}
+    """The Meraki alerts from the poll and the webhook receiver; ``muted``
+    marks the alerts of a muted device or network."""
+    rows = await db.list_meraki_alerts(include_resolved=include_resolved, org_ref=org_ref, limit=limit)
+    mutes = await _mute_index(PROVIDER_MERAKI, org_ref) if rows else None
+    for row in rows:
+        row["muted"] = bool(mutes and _muted(row, mutes))
+    return {"alerts": rows}
 
 
 @admin_router.get("/api/monitoring/meraki-alerts/settings", dependencies=[Depends(_require_admin_dep)])

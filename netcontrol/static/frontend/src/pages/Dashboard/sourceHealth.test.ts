@@ -9,10 +9,15 @@ import {
   describeProblem,
   isSourceStale,
   isTrackedSource,
+  matchesAvailabilityState,
+  muteBadgeTitle,
+  muteEntityChoiceLabel,
+  parseAvailabilityState,
   problemLocation,
   sourceLabel,
   staleAfterMs,
   summarizeSources,
+  unmuteConfirmMessage,
 } from './sourceHealth';
 
 const NOW = Date.parse('2026-03-10T12:00:00Z');
@@ -155,6 +160,51 @@ describe('summarizeSources', () => {
   });
   it('is empty for no sources', () => {
     expect(summarizeSources([], NOW)).toEqual({ total: 0, healthy: 0, failed: [], partial: [], stale: [], warnings: [] });
+  });
+});
+
+describe('availability state filter', () => {
+  it("'muted' matches only muted entities", () => {
+    expect(matchesAvailabilityState({ current_state: 'down', muted: true }, 'muted')).toBe(true);
+    expect(matchesAvailabilityState({ current_state: 'up', muted: true }, 'muted')).toBe(true);
+    expect(matchesAvailabilityState({ current_state: 'down', muted: false }, 'muted')).toBe(false);
+    // An older server sends no flag: nothing is muted.
+    expect(matchesAvailabilityState({ current_state: 'down' }, 'muted')).toBe(false);
+  });
+  it("'problem' leaves a muted down entity out", () => {
+    expect(matchesAvailabilityState({ current_state: 'down', muted: true }, 'problem')).toBe(false);
+    expect(matchesAvailabilityState({ current_state: 'degraded', muted: true }, 'degraded')).toBe(false);
+    expect(matchesAvailabilityState({ current_state: 'down', muted: true }, 'down')).toBe(false);
+    expect(matchesAvailabilityState({ current_state: 'down', muted: false }, 'problem')).toBe(true);
+    // Up and unknown match by state, muted or not.
+    expect(matchesAvailabilityState({ current_state: 'up', muted: true }, 'up')).toBe(true);
+    expect(matchesAvailabilityState({ current_state: 'unknown', muted: true }, 'unknown')).toBe(true);
+  });
+  it("parses 'muted' from the query string", () => {
+    expect(parseAvailabilityState('muted')).toBe('muted');
+  });
+});
+
+describe('mute wording', () => {
+  it('names the entity type of the single-entity choice', () => {
+    expect(muteEntityChoiceLabel('device')).toBe('This device only');
+    expect(muteEntityChoiceLabel('uplink')).toBe('This uplink only');
+    expect(muteEntityChoiceLabel('vpn_connection')).toBe('This VPN connection only');
+  });
+  it('says a site unmute covers the whole site', () => {
+    expect(unmuteConfirmMessage('Branch-12 MX', { scope: 'entity' }, 'Branch-12')).toBe('Unmute Branch-12 MX?');
+    expect(unmuteConfirmMessage('Branch-12 MX', { scope: 'site' }, 'Branch-12')).toBe(
+      'Unmute Branch-12 MX?\nThis unmutes everything at site Branch-12.',
+    );
+    // A tunnel stored under the hub's site, muted through the branch site.
+    expect(unmuteConfirmMessage('Hub - Branch-12', { scope: 'site', site: 'Branch-12' }, 'Hub')).toBe(
+      'Unmute Hub - Branch-12?\nThis unmutes everything at site Branch-12.',
+    );
+  });
+  it('titles the Muted badge with reason, who and when', () => {
+    const title = muteBadgeTitle({ reason: 'Not installed yet', created_by: 'alice', created_at: '2026-11-13 10:00:00' });
+    expect(title.startsWith('Not installed yet - alice, ')).toBe(true);
+    expect(title).toContain('2026');
   });
 });
 

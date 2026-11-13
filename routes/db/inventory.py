@@ -23,6 +23,7 @@ from routes.database import (
     row_to_dict,
     rows_to_list,
 )
+from routes.db.custom_fields import purge_object_data
 from routes.db.ipam import record_ip_assignment, record_ip_release
 
 __all__ = [
@@ -460,6 +461,11 @@ async def delete_group(group_id: int):
         cursor = await db.execute("SELECT COUNT(*) FROM inventory_groups WHERE parent_id = ?", (group_id,))
         if (await cursor.fetchone())[0]:
             raise ValueError("The group has sub-groups: delete them or move them to another parent first")
+        # The group's hosts go with it (FK cascade): purge their custom data too.
+        cursor = await db.execute("SELECT id FROM hosts WHERE group_id = ?", (group_id,))
+        host_keys = [str(r["id"]) for r in rows_to_list(await cursor.fetchall())]
+        await purge_object_data(db, "host", host_keys)
+        await purge_object_data(db, "group", [str(group_id)])
         # Delete jobs referencing this group (job_events cascade automatically)
         await db.execute("DELETE FROM jobs WHERE inventory_group_id = ?", (group_id,))
         await db.execute("DELETE FROM inventory_groups WHERE id = ?", (group_id,))
@@ -718,6 +724,7 @@ async def remove_host(host_id: int):
             prior_ip = (d.get("ip_address") or "").strip()
             prior_vrf = (d.get("vrf_name") or "").strip()
         await db.execute("DELETE FROM hosts WHERE id = ?", (host_id,))
+        await purge_object_data(db, "host", [str(host_id)])
         await db.commit()
     finally:
         await db.close()
@@ -822,6 +829,7 @@ async def bulk_delete_hosts(host_ids: list[int]) -> int:
             f"DELETE FROM hosts WHERE id IN ({placeholders})",
             tuple(host_ids),
         )
+        await purge_object_data(db, "host", [str(h) for h in host_ids])
         await db.commit()
         rowcount = cursor.rowcount
     finally:
@@ -890,7 +898,7 @@ async def get_all_hosts_for_export() -> list[dict]:
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("""
-            SELECT h.hostname, h.ip_address, h.device_type, h.status,
+            SELECT h.id, h.hostname, h.ip_address, h.device_type, h.status,
                    h.model, h.software_version, g.name AS group_name
             FROM hosts h
             LEFT JOIN inventory_groups g ON g.id = h.group_id

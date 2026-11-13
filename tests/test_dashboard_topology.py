@@ -117,10 +117,10 @@ async def test_count_states_keeps_two_orgs_of_one_provider_apart():
 async def test_dashboard_summary_counts_and_problems():
     await _seed()
     summary = await tracking.dashboard_topology_summary()
-    assert summary["entity_counts"] == {"up": 1, "degraded": 1, "down": 2, "unknown": 1, "total": 5}
+    assert summary["entity_counts"] == {"up": 1, "degraded": 1, "down": 2, "unknown": 1, "muted": 0, "total": 5}
     assert summary["by_provider"] == {
-        "aws": {"up": 1, "degraded": 0, "down": 0, "unknown": 1},
-        "cato": {"up": 0, "degraded": 1, "down": 2, "unknown": 0},
+        "aws": {"up": 1, "degraded": 0, "down": 0, "unknown": 1, "muted": 0},
+        "cato": {"up": 0, "degraded": 1, "down": 2, "unknown": 0, "muted": 0},
     }
     assert summary["by_source"] == [
         {
@@ -131,9 +131,28 @@ async def test_dashboard_summary_counts_and_problems():
             "degraded": 0,
             "down": 0,
             "unknown": 1,
+            "muted": 0,
         },
-        {"provider": "cato", "org_ref": 11, "entity_type": "site", "up": 0, "degraded": 1, "down": 1, "unknown": 0},
-        {"provider": "cato", "org_ref": 11, "entity_type": "tunnel", "up": 0, "degraded": 0, "down": 1, "unknown": 0},
+        {
+            "provider": "cato",
+            "org_ref": 11,
+            "entity_type": "site",
+            "up": 0,
+            "degraded": 1,
+            "down": 1,
+            "unknown": 0,
+            "muted": 0,
+        },
+        {
+            "provider": "cato",
+            "org_ref": 11,
+            "entity_type": "tunnel",
+            "up": 0,
+            "degraded": 0,
+            "down": 1,
+            "unknown": 0,
+            "muted": 0,
+        },
     ]
     assert summary["problem_count"] == 3
     first = summary["problems"][0]
@@ -165,12 +184,69 @@ async def test_dashboard_summary_caps_problems_but_not_counts():
 async def test_dashboard_summary_empty():
     summary = await tracking.dashboard_topology_summary()
     assert summary == {
-        "entity_counts": {"up": 0, "degraded": 0, "down": 0, "unknown": 0, "total": 0},
+        "entity_counts": {"up": 0, "degraded": 0, "down": 0, "unknown": 0, "muted": 0, "total": 0},
         "by_provider": {},
         "by_source": [],
         "problem_count": 0,
         "problems": [],
     }
+
+
+# ── mutes ────────────────────────────────────────────────────────────────────
+
+
+async def _seed_branch() -> None:
+    """Meraki org 31: two down devices at Branch-12, one up at Hub."""
+    await db_module.apply_topology_entity_states(
+        "meraki",
+        31,
+        [
+            _entity("meraki", 31, "device", "d:Q2XX-AAAA-0001", "down", name="Branch-12 MX", site="Branch-12"),
+            _entity("meraki", 31, "device", "d:Q2XX-AAAA-0002", "down", name="Branch-12 AP", site="Branch-12"),
+            _entity("meraki", 31, "device", "d:Q2XX-AAAA-0003", "up", name="Hub MX", site="Hub"),
+        ],
+        org_name="Example Org",
+        now=T0,
+    )
+
+
+async def _mute(entity_id: str) -> None:
+    await db_module.create_topology_mute(
+        "meraki", 31, "entity", entity_type="device", entity_id=entity_id, reason="not installed", created_by="admin"
+    )
+
+
+async def test_muted_problem_leaves_dashboard_counts_and_list():
+    await _seed_branch()
+    await _mute("d:Q2XX-AAAA-0001")
+    summary = await tracking.dashboard_topology_summary()
+    assert summary["entity_counts"] == {"up": 1, "degraded": 0, "down": 1, "unknown": 0, "muted": 1, "total": 3}
+    assert summary["by_provider"]["meraki"] == {"up": 1, "degraded": 0, "down": 1, "unknown": 0, "muted": 1}
+    assert summary["problem_count"] == 1
+    assert [p["entity_id"] for p in summary["problems"]] == ["d:Q2XX-AAAA-0002"]
+    (row,) = summary["by_source"]
+    assert row["down"] == 1 and row["muted"] == 1 and row["up"] == 1
+
+
+async def test_muted_up_entity_is_still_counted_up():
+    await _seed_branch()
+    await _mute("d:Q2XX-AAAA-0003")
+    summary = await tracking.dashboard_topology_summary()
+    assert summary["entity_counts"] == {"up": 1, "degraded": 0, "down": 2, "unknown": 0, "muted": 0, "total": 3}
+    assert summary["problem_count"] == 2
+
+
+async def test_site_mute_hides_every_problem_of_the_site():
+    await _seed()
+    await _seed_branch()
+    await db_module.create_topology_mute("meraki", 31, "site", site="Branch-12", reason="not installed", created_by="a")
+    summary = await tracking.dashboard_topology_summary(limit=2)
+    assert summary["entity_counts"]["muted"] == 2 and summary["entity_counts"]["total"] == 8
+    assert summary["by_provider"]["meraki"]["down"] == 0 and summary["by_provider"]["meraki"]["muted"] == 2
+    assert summary["by_provider"]["cato"]["muted"] == 0
+    # Only the Cato problems are left; the cut to ``limit`` comes after the mutes.
+    assert summary["problem_count"] == 3
+    assert [p["entity_id"] for p in summary["problems"]] == ["c", "a"]
 
 
 # ── HTTP API ─────────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 # Muting integration entities and removing ones that are gone
 
-Date: 2026-11-13. Status: awaiting approval.
+Date: 2026-11-13. Status: approved.
 
 ## Intent
 

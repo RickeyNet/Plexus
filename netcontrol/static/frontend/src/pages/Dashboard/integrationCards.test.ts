@@ -38,7 +38,7 @@ function row(
   provider: string,
   org_ref: number,
   entity_type: string,
-  counts: Partial<Pick<TopologySourceTypeCounts, 'up' | 'degraded' | 'down' | 'unknown'>> = {},
+  counts: Partial<Pick<TopologySourceTypeCounts, 'up' | 'degraded' | 'down' | 'unknown' | 'muted'>> = {},
 ): TopologySourceTypeCounts {
   return { provider, org_ref, entity_type, up: 0, degraded: 0, down: 0, unknown: 0, ...counts };
 }
@@ -74,7 +74,7 @@ describe('sourceEntityCounts', () => {
   it('keeps one organization, in display order, unknown types last', () => {
     const counts = sourceEntityCounts({ provider: 'cato', orgRef: 11 }, rows);
     expect(counts.map((c) => c.type)).toEqual(['site', 'tunnel', 'mystery']);
-    expect(counts[0]).toEqual({ type: 'site', label: 'Sites', up: 2, degraded: 1, down: 1, unknown: 0, total: 4 });
+    expect(counts[0]).toEqual({ type: 'site', label: 'Sites', up: 2, degraded: 1, down: 1, unknown: 0, muted: 0, total: 4 });
     expect(counts[2].label).toBe('mystery');
   });
 
@@ -88,6 +88,15 @@ describe('sourceEntityCounts', () => {
 
   it('is empty for a source with no rows', () => {
     expect(sourceEntityCounts({ provider: 'fmc', orgRef: 5 }, rows)).toEqual([]);
+  });
+
+  it('counts muted entities in the total, apart from the problems', () => {
+    const muted = [row('meraki', 1, 'device', { up: 3, muted: 2 }), row('meraki', 1, 'uplink', { muted: 1 })];
+    const counts = sourceEntityCounts({ provider: 'meraki', orgRef: 1 }, muted);
+    expect(counts.map((c) => [c.type, c.down, c.muted, c.total])).toEqual([
+      ['device', 0, 2, 5],
+      ['uplink', 0, 1, 1],
+    ]);
   });
 });
 
@@ -151,6 +160,18 @@ describe('buildIntegrationCards', () => {
     expect(failed.map((c) => c.key)).toEqual(['org:2', 'org:1']);
   });
 
+  it('does not rank a source with only muted problems as down', () => {
+    const cards = buildIntegrationCards(
+      [source({ key: 'org:1', name: 'A' }), source({ key: 'org:2', id: 2, name: 'B' })],
+      [row('meraki', 1, 'device', { up: 1, muted: 4 }), row('meraki', 2, 'device', { up: 1, degraded: 1 })],
+      NOW,
+    );
+    expect(cards.map((c) => [c.key, c.down, c.degraded])).toEqual([
+      ['org:2', 0, 1],
+      ['org:1', 0, 0],
+    ]);
+  });
+
   it('is empty with no connected source', () => {
     expect(buildIntegrationCards(sources.slice(0, 2), rows, NOW)).toEqual([]);
   });
@@ -175,5 +196,6 @@ describe('links', () => {
   it('describes counts in words', () => {
     expect(describeCounts({ up: 3, degraded: 0, down: 2, unknown: 1 })).toBe('3 up, 2 down, 1 unknown');
     expect(describeCounts({ up: 0, degraded: 0, down: 0, unknown: 0 })).toBe('none');
+    expect(describeCounts({ up: 1, degraded: 0, down: 0, unknown: 0, muted: 2 })).toBe('1 up, 2 muted');
   });
 });

@@ -1,16 +1,20 @@
-import { FormEvent, type ReactNode, useRef, useState } from 'react';
+import { FormEvent, type ReactNode, useMemo, useRef, useState } from 'react';
 import { type UseQueryResult, useQueryClient } from '@tanstack/react-query';
 
 import { groupLabel } from '@/api/inventory';
 import { StatusBadge } from '@/components/Badge';
 import { BusyButton } from '@/components/BusyButton';
+import { CustomDataFilter } from '@/components/CustomDataFilter';
+import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
+import { TagChips } from '@/components/TagChips';
 import { cloudProviderTerms } from '@/lib/cloudProviderTerms';
+import { type CustomDataFilterValue, EMPTY_CUSTOM_DATA_FILTER, isEmptyFilter } from '@/lib/customData';
 import { formatCount } from '@/lib/formatCount';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 
@@ -48,6 +52,7 @@ import { SubnetDrilldown } from './SubnetDrilldown';
 import {
   driftBadgeClass,
   driftLabel,
+  filterSubnetsByCustomData,
   formatSubnetPreview,
   providerLabel,
 } from './helpers';
@@ -79,6 +84,7 @@ export function Ipam() {
   const [includeCloud, setIncludeCloud] = useState(true);
   const [includeTopology, setIncludeTopology] = useState(true);
   const [selectedSubnet, setSelectedSubnet] = useState<string>('');
+  const [dataFilter, setDataFilter] = useState<CustomDataFilterValue>(EMPTY_CUSTOM_DATA_FILTER);
   const [modal, setModal] = useState<ModalState>({ kind: 'none' });
   const drilldownRef = useRef<HTMLDivElement>(null);
 
@@ -111,7 +117,13 @@ export function Ipam() {
   );
 
   const summary = overview.data?.summary ?? {};
-  const subnets = overview.data?.subnets ?? [];
+  const allSubnets = overview.data?.subnets;
+  const subnets = useMemo(
+    () => filterSubnetsByCustomData(allSubnets ?? [], dataFilter),
+    [allSubnets, dataFilter],
+  );
+  const hasDataFilter = !isEmptyFilter(dataFilter);
+  const selectedRow = allSubnets?.find((s) => s.subnet === selectedSubnet);
   const duplicates = overview.data?.duplicate_ips ?? [];
   const overlaps = overview.data?.overlaps ?? [];
   const sourceList = sources.data?.sources ?? [];
@@ -194,6 +206,7 @@ export function Ipam() {
           />
           Include Topology Subnets
         </label>
+        <CustomDataFilter objectType="prefix" value={dataFilter} onChange={setDataFilter} />
         <button
           type="button"
           className="btn btn-secondary"
@@ -260,7 +273,9 @@ export function Ipam() {
                   className="text-muted"
                   style={{ fontSize: '0.88em', marginTop: '0.2rem' }}
                 >
-                  {subnets.length} visible subnet{subnets.length === 1 ? '' : 's'}
+                  {hasDataFilter
+                    ? `${subnets.length} of ${allSubnets?.length ?? 0} subnets match the filter`
+                    : `${subnets.length} visible subnet${subnets.length === 1 ? '' : 's'}`}
                 </div>
               )}
             </div>
@@ -276,6 +291,16 @@ export function Ipam() {
             overviewError
           ) : overview.isPending ? (
             <LoadingState text="Loading subnet inventory…" />
+          ) : subnets.length === 0 && hasDataFilter ? (
+            <EmptyState
+              compact
+              message="No subnets match this filter."
+              action={
+                <button type="button" className="btn btn-sm btn-secondary" onClick={() => setDataFilter(EMPTY_CUSTOM_DATA_FILTER)}>
+                  Clear filter
+                </button>
+              }
+            />
           ) : subnets.length === 0 ? (
             <div className="empty-state">
               <p>No IPAM data found for the current filter.</p>
@@ -311,6 +336,11 @@ export function Ipam() {
                           IPv{item.version ?? ''} /{item.prefix_length ?? ''} ·{' '}
                           {formatCount(item.total_addresses)} addresses
                         </div>
+                        {item.tags && item.tags.length > 0 && (
+                          <div style={{ marginTop: '0.25rem' }}>
+                            <TagChips tags={item.tags} max={3} />
+                          </div>
+                        )}
                         {(item.vrf_name || vlans.length > 0 || (item.overlap_count ?? 0) > 0) && (
                           <div style={{ marginTop: '0.25rem' }}>
                             {(item.overlap_count ?? 0) > 0 && (
@@ -426,6 +456,7 @@ export function Ipam() {
             {selectedSubnet ? (
               <SubnetDrilldown
                 subnet={selectedSubnet}
+                vrf={selectedRow?.vrf_name ?? ''}
                 detail={subnetDetail.data}
                 isLoading={subnetDetail.isPending}
                 loadError={loadError(subnetDetail, 'subnet detail')}

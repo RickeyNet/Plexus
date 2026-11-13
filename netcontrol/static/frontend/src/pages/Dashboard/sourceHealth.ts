@@ -1,6 +1,7 @@
 import type { TopologyProblem } from '@/api/dashboard';
 import type { TopologySource } from '@/api/meraki';
-import { parseBackendDate } from '@/lib/datetime';
+import type { TopologyMute, TopologyMuteCreate, TopologyMuteTarget } from '@/api/monitoring';
+import { formatBackendDateTime, parseBackendDate } from '@/lib/datetime';
 import { sourceTypeLabel } from '@/pages/Topology/merakiHelpers';
 
 // Health of the topology sources (GET /api/topology/sources) and wording of
@@ -19,8 +20,11 @@ export const AVAILABILITY_TYPE_PARAM = 'type';
 /** Query parameter of that panel naming the current state its entities are filtered to. */
 export const AVAILABILITY_STATE_PARAM = 'state';
 
-/** A current state the panel's entities can be filtered to; `problem` is down or degraded. */
-export type AvailabilityStateFilter = 'problem' | 'down' | 'degraded' | 'up' | 'unknown';
+/**
+ * A current state the panel's entities can be filtered to; `problem` is down
+ * or degraded, `muted` is every muted entity whatever its state.
+ */
+export type AvailabilityStateFilter = 'problem' | 'down' | 'degraded' | 'up' | 'unknown' | 'muted';
 
 /** The state filters, in the panel's order, with their labels. */
 export const AVAILABILITY_STATE_FILTERS: readonly { key: AvailabilityStateFilter; label: string }[] = [
@@ -29,6 +33,7 @@ export const AVAILABILITY_STATE_FILTERS: readonly { key: AvailabilityStateFilter
   { key: 'degraded', label: 'Degraded' },
   { key: 'up', label: 'Up' },
   { key: 'unknown', label: 'Unknown' },
+  { key: 'muted', label: 'Muted' },
 ];
 
 /** Reads the `?state=` value; null when absent or not one of AVAILABILITY_STATE_FILTERS. */
@@ -36,9 +41,93 @@ export function parseAvailabilityState(value: string | null | undefined): Availa
   return AVAILABILITY_STATE_FILTERS.find((f) => f.key === value)?.key ?? null;
 }
 
-/** Whether an entity in `state` is in the set `filter` names. */
-export function matchesAvailabilityState(state: string, filter: AvailabilityStateFilter): boolean {
-  return filter === 'problem' ? state === 'down' || state === 'degraded' : state === filter;
+/**
+ * Whether an entity is in the set `filter` names. A muted entity is never a
+ * problem (as on the server, which leaves it out of the down and degraded
+ * counts); up and unknown match by state alone.
+ */
+export function matchesAvailabilityState(
+  entity: { current_state: string; muted?: boolean },
+  filter: AvailabilityStateFilter,
+): boolean {
+  const state = entity.current_state;
+  const muted = entity.muted === true;
+  switch (filter) {
+    case 'muted':
+      return muted;
+    case 'problem':
+      return !muted && (state === 'down' || state === 'degraded');
+    case 'down':
+    case 'degraded':
+      return !muted && state === filter;
+    default:
+      return state === filter;
+  }
+}
+
+/** Longest mute reason the server accepts. */
+export const MUTE_REASON_MAX = 500;
+
+/** A reason the server accepts: 1 to MUTE_REASON_MAX characters once trimmed. */
+export function isMuteReasonValid(reason: string): boolean {
+  const n = reason.trim().length;
+  return n > 0 && n <= MUTE_REASON_MAX;
+}
+
+/** "This device only", "This VPN connection only". */
+export function muteEntityChoiceLabel(entityType: string): string {
+  const label = entityTypeLabel(entityType);
+  // Lower-case a plain word ("Tunnel"), not an acronym ("VPN connection").
+  const word = /^[A-Z][a-z]/.test(label) ? label[0].toLowerCase() + label.slice(1) : label;
+  return `This ${word} only`;
+}
+
+/** The POST /availability/topology/mutes body for muting `target` (or its site). */
+export function muteRequestBody(
+  target: TopologyMuteTarget,
+  scope: TopologyMute['scope'],
+  reason: string,
+): TopologyMuteCreate {
+  const base = { provider: target.provider, org_ref: target.org_ref, reason: reason.trim() };
+  return scope === 'site'
+    ? { ...base, scope, site: target.site }
+    : { ...base, scope, entity_type: target.entity_type, entity_id: target.entity_id };
+}
+
+/**
+ * Sends a mute and calls `onDone` once it is stored. Resolves to null on
+ * success, else to the error message, for the dialog to show while it stays open.
+ */
+export async function submitMute(
+  post: (body: TopologyMuteCreate) => Promise<unknown>,
+  body: TopologyMuteCreate,
+  onDone: () => void,
+): Promise<string | null> {
+  try {
+    await post(body);
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+  onDone();
+  return null;
+}
+
+/** "Not installed yet - alice, Nov 13, 2026, 10:00 AM", the title of a Muted badge. */
+export function muteBadgeTitle(mute: Pick<TopologyMute, 'reason' | 'created_by' | 'created_at'>): string {
+  return `${mute.reason} - ${mute.created_by}, ${formatBackendDateTime(mute.created_at)}`;
+}
+
+/**
+ * The message of the Unmute confirm; a site mute says it covers the whole
+ * site. `site` is the entity's, used when the mute does not name its own.
+ */
+export function unmuteConfirmMessage(
+  name: string,
+  mute: Pick<TopologyMute, 'scope'> & { site?: string },
+  site: string,
+): string {
+  const question = `Unmute ${name}?`;
+  return mute.scope === 'site' ? `${question}\nThis unmutes everything at site ${mute.site || site}.` : question;
 }
 
 /** What else the panel opens filtered to, besides the source. */

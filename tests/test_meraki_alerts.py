@@ -310,6 +310,80 @@ async def test_the_migration_created_the_table():
         await db.close()
 
 
+# ── Mutes ────────────────────────────────────────────────────────────────────
+
+
+async def _mute_ap(org_ref: int) -> dict:
+    return await db_module.create_topology_mute(
+        "meraki",
+        org_ref,
+        "entity",
+        entity_type="device",
+        entity_id=f"d:{sample.AP_SERIAL}",
+        reason="not installed",
+        created_by="admin",
+    )
+
+
+async def test_muted_device_alert_is_stored_not_raised(notifications):
+    org = await _source()
+    await _mute_ap(org["id"])
+    result = await routes.ingest([_poll_event(org["id"])])
+    assert result["new"] == 1 and result["alerted"] == 0 and notifications == []
+    (row,) = await db_module.list_meraki_alerts()
+    assert row["alert_via"] == "muted" and row["alert_state"] == "critical"
+    assert await db_module.get_monitoring_alerts() == []
+
+
+async def test_muted_network_alert_is_not_raised(notifications):
+    org = await _source()
+    await db_module.create_topology_mute(
+        "meraki", org["id"], "site", site="Branch-12", reason="not installed", created_by="admin"
+    )
+    event = _poll_event(org["id"], serial="", network_name="Branch-12", severity="warning")
+    assert event["device_serial"] == ""
+    result = await routes.ingest([event])
+    assert result["alerted"] == 0 and notifications == []
+    (row,) = await db_module.list_meraki_alerts()
+    assert row["alert_via"] == "muted" and row["alert_state"] == "warning"
+    # An alert of another network still notifies.
+    other = _poll_event(
+        org["id"],
+        alert_id="4000000009",
+        serial="",
+        network_id=sample.NETWORK_ID_2,
+        network_name="Hub",
+        severity="warning",
+    )
+    assert (await routes.ingest([other]))["alerted"] == 1 and len(notifications) == 1
+
+
+async def test_listed_alerts_carry_muted_flag(notifications):
+    org = await _source()
+    await _mute_ap(org["id"])
+    await routes.ingest(
+        [
+            _poll_event(org["id"]),
+            *(alerts.from_assurance_alert(r, org_ref=org["id"]) for r in sample.sample_assurance_alerts()[1:]),
+        ]
+    )
+    listed = (await routes.list_meraki_alerts_api(include_resolved=False, org_ref=None, limit=500))["alerts"]
+    flags = {r["device_serial"] or r["network_name"]: r["muted"] for r in listed}
+    assert flags == {sample.AP_SERIAL: True, sample.SWITCH_SERIAL: False, sample.NETWORK_NAME_2: False}
+
+
+async def test_unmuted_open_alert_does_not_notify_until_worse(notifications):
+    org = await _source()
+    mute = await _mute_ap(org["id"])
+    event = _poll_event(org["id"], severity="warning")
+    await routes.ingest([event])
+    assert await db_module.delete_topology_mute(mute["id"])
+    again = await routes.ingest([event])
+    assert again["alerted"] == 0 and notifications == []
+    worse = await routes.ingest([dict(event, severity="critical")])
+    assert worse["alerted"] == 1 and len(notifications) == 1
+
+
 # ── Poll ─────────────────────────────────────────────────────────────────────
 
 
@@ -392,6 +466,86 @@ async def test_sources_without_a_key_or_org_id_and_demo_entries_are_skipped(monk
     calls: list[str] = []
     monkeypatch.setattr(routes, "_TRANSPORT", _transport({}, calls))
     assert (await routes.run_alert_poll_cycle())["polled"] == 0 and calls == []
+
+
+# ── Devices removed from Meraki ──────────────────────────────────────────────
+
+
+def _removal_transport(alert_rows: list[dict], devices: httpx.Response, calls: list[httpx.Request]):
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if request.url.path.endswith("/assurance/alerts"):
+            return httpx.Response(200, json=alert_rows)
+        if request.url.path.endswith(f"/organizations/{sample.ORG_ID}/devices"):
+            return devices
+        return httpx.Response(404, json={"errors": ["Not found"]})
+
+    return httpx.MockTransport(handler)
+
+
+async def _track_ap(org_ref: int) -> None:
+    device_id = f"d:{sample.AP_SERIAL}"
+    await db_module.apply_topology_entity_states(
+        "meraki",
+        org_ref,
+        [
+            {"entity_type": "device", "entity_id": device_id, "name": sample.AP_NAME, "state": "down"},
+            {
+                "entity_type": "uplink",
+                "entity_id": f"uplink:w1>{device_id}:wan1",
+                "name": f"{sample.AP_NAME} wan1",
+                "state": "down",
+                "meta": {"kind": "uplink", "a": "w1", "b": device_id},
+            },
+        ],
+    )
+
+
+async def _poll_twice(monkeypatch, devices: httpx.Response) -> tuple[dict, list[httpx.Request]]:
+    """Poll 1 reports the AP unreachable; poll 2 no longer reports it."""
+    org = await _source()
+    await _track_ap(org["id"])
+    calls: list[httpx.Request] = []
+    monkeypatch.setattr(routes, "_TRANSPORT", _removal_transport([sample.assurance_alert()], devices, calls))
+    first = await routes.run_alert_poll_cycle()
+    assert first["removed"] == 0
+    monkeypatch.setattr(routes, "_TRANSPORT", _removal_transport([], devices, calls))
+    return await routes.run_alert_poll_cycle(), calls
+
+
+async def test_vanished_alert_of_removed_device_removes_it(monkeypatch, notifications):
+    result, calls = await _poll_twice(monkeypatch, httpx.Response(200, json=[]))
+    assert result["ok"] and result["resolved"] == 1 and result["removed"] == 1
+    assert result["sources"][0]["removed"] == 1
+    assert await db_module.list_topology_entity_states("meraki") == []
+    (confirm,) = [c for c in calls if c.url.path.endswith("/devices")]
+    assert confirm.url.params.get_list("serials[]") == [sample.AP_SERIAL]
+
+
+async def test_recovered_device_is_kept(monkeypatch, notifications):
+    devices = httpx.Response(200, json=[{"serial": sample.AP_SERIAL, "networkId": sample.NETWORK_ID}])
+    result, _calls = await _poll_twice(monkeypatch, devices)
+    assert result["ok"] and result["removed"] == 0
+    assert len(await db_module.list_topology_entity_states("meraki")) == 2
+
+
+async def test_confirmation_failure_removes_nothing(monkeypatch, notifications):
+    result, calls = await _poll_twice(monkeypatch, httpx.Response(500, json={"errors": ["boom"]}))
+    assert result["ok"] is True and result["failed"] == 0 and result["removed"] == 0
+    assert any(c.url.path.endswith("/devices") for c in calls)
+    assert len(await db_module.list_topology_entity_states("meraki")) == 2
+
+
+async def test_no_confirmation_call_without_tracked_serial(monkeypatch, notifications):
+    await _source()
+    calls: list[httpx.Request] = []
+    devices = httpx.Response(200, json=[])
+    monkeypatch.setattr(routes, "_TRANSPORT", _removal_transport([sample.assurance_alert()], devices, calls))
+    await routes.run_alert_poll_cycle()
+    monkeypatch.setattr(routes, "_TRANSPORT", _removal_transport([], devices, calls))
+    result = await routes.run_alert_poll_cycle()
+    assert result["resolved"] == 1 and result["removed"] == 0
+    assert not any(c.url.path.endswith("/devices") for c in calls)
 
 
 # ── Webhook receiver and API ─────────────────────────────────────────────────

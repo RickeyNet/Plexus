@@ -2,7 +2,7 @@ import { useState } from 'react';
 
 import { useAuthStatus } from '@/api/auth';
 import { useMerakiAlerts, usePollMerakiAlerts } from '@/api/merakiAlerts';
-import { SeverityBadge } from '@/components/Badge';
+import { Badge, SeverityBadge } from '@/components/Badge';
 import { BusyButton } from '@/components/BusyButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { LoadingState } from '@/components/LoadingState';
@@ -13,6 +13,7 @@ const VIA_LABELS: Record<string, string> = {
   monitoring: 'Host alert',
   notification: 'Notified',
   topology: 'Already notified (availability)',
+  muted: 'Muted',
 };
 
 /**
@@ -22,11 +23,13 @@ const VIA_LABELS: Record<string, string> = {
  */
 export function MerakiAlertsPanel() {
   const [includeResolved, setIncludeResolved] = useState(false);
+  const [showMuted, setShowMuted] = useState(false);
   const alerts = useMerakiAlerts(includeResolved);
   const poll = usePollMerakiAlerts();
   const { data: auth } = useAuthStatus();
   const { alert } = useDialogs();
-  const rows = alerts.data?.alerts ?? [];
+  const allRows = alerts.data?.alerts ?? [];
+  const rows = showMuted ? allRows : allRows.filter((a) => !a.muted);
 
   function handlePoll() {
     poll.mutate(undefined, {
@@ -54,6 +57,10 @@ export function MerakiAlertsPanel() {
           <input type="checkbox" checked={includeResolved} onChange={(e) => setIncludeResolved(e.target.checked)} />
           Show resolved
         </label>
+        <label className="text-muted" style={{ display: 'flex', gap: '0.3rem', alignItems: 'center' }}>
+          <input type="checkbox" checked={showMuted} onChange={(e) => setShowMuted(e.target.checked)} />
+          Show muted
+        </label>
         {auth?.role === 'admin' && (
           <BusyButton className="btn btn-sm btn-secondary" busy={poll.isPending} busyLabel="Polling…" onClick={handlePoll}>
             Poll Now
@@ -65,8 +72,10 @@ export function MerakiAlertsPanel() {
         <QueryError what="Meraki alerts" query={alerts} />
       ) : alerts.isPending ? (
         <LoadingState />
-      ) : !rows.length ? (
+      ) : !allRows.length ? (
         <div className="empty-state">No Meraki alerts - add a Meraki organization with an API key under Topology.</div>
+      ) : !rows.length ? (
+        <div className="empty-state">Every alert listed is muted - tick Show muted to see them.</div>
       ) : (
         <div style={{ maxHeight: 520, overflow: 'auto' }}>
           <table className="data-table">
@@ -105,7 +114,15 @@ export function MerakiAlertsPanel() {
                     {formatBackendDateTime(a.status === 'resolved' ? a.resolved_at : a.last_seen)}
                   </td>
                   <td>{a.seen_via.join(', ')}</td>
-                  <td style={{ fontSize: '0.85em' }}>{VIA_LABELS[a.alert_via] ?? (a.severity === 'info' ? 'Listed only' : '-')}</td>
+                  <td style={{ fontSize: '0.85em' }}>
+                    {VIA_LABELS[a.alert_via] ?? (a.severity === 'info' ? 'Listed only' : '-')}
+                    {/* Raised before its device or network was muted. */}
+                    {a.muted && a.alert_via !== 'muted' && (
+                      <Badge size="sm" style={{ marginLeft: 'var(--space-1)' }}>
+                        Muted
+                      </Badge>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
