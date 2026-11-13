@@ -15,7 +15,7 @@ const featureLabel = (feature: string): string =>
 // Split the flat features list into base keys + their `.write` companions.
 // Base keys ending in `.write` are paired with their parent for the two-column
 // View/Modify display; bases without a `.write` companion still render but
-// have a disabled "modify" cell.
+// show "n/a" in the Modify column.
 function buildFeatureRows(features: string[]): Array<{ base: string; hasWrite: boolean }> {
   const writeKeys = new Set(features.filter((f) => f.endsWith('.write')));
   const bases = features.filter((f) => !f.endsWith('.write'));
@@ -53,6 +53,52 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
   const submitDisabled = name.trim().length < 2;
   const featureSet = new Set(featureKeys);
   const fid = useId();
+
+  const rows = buildFeatureRows(props.features);
+  const baseKeys = rows.map((r) => r.base);
+  const writeKeys = rows.filter((r) => r.hasWrite).map((r) => `${r.base}.write`);
+  const viewCount = baseKeys.filter((k) => featureSet.has(k)).length;
+  const writeCount = writeKeys.filter((k) => featureSet.has(k)).length;
+
+  // Modify needs View, so "all Modify" also ticks every View and "no View"
+  // also clears every Modify.
+  const toggleAll = (column: 'view' | 'write', checked: boolean) => {
+    const next = new Set(featureSet);
+    if (checked) {
+      baseKeys.forEach((k) => next.add(k));
+      if (column === 'write') writeKeys.forEach((k) => next.add(k));
+    } else {
+      writeKeys.forEach((k) => next.delete(k));
+      if (column === 'view') baseKeys.forEach((k) => next.delete(k));
+    }
+    setFeatureKeys(Array.from(next));
+  };
+
+  const columnHeader = (column: 'view' | 'write', label: string, count: number, total: number) => (
+    <label
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: '0.15rem',
+        fontWeight: 600,
+        fontSize: '0.85rem',
+      }}
+    >
+      {label}
+      <input
+        type="checkbox"
+        checked={total > 0 && count === total}
+        disabled={total === 0}
+        ref={(el) => {
+          if (el) el.indeterminate = count > 0 && count < total;
+        }}
+        onChange={(e) => toggleAll(column, e.target.checked)}
+        title={`Select all ${label}`}
+        aria-label={`Select all ${label}`}
+      />
+    </label>
+  );
 
   return (
     <Modal
@@ -114,7 +160,8 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
       <div className="form-group">
         <span className="form-label" id={`${fid}-features`}>Feature Access</span>
         <div className="form-help" style={{ marginBottom: '0.4rem' }}>
-          View grants read-only access. Modify also allows creating, changing and deleting.
+          View grants read-only access. Modify also allows creating, changing and deleting,
+          and includes View. Read-only features have no Modify option.
         </div>
         <div
           role="group"
@@ -128,9 +175,9 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
           }}
         >
           <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>Feature</div>
-          <div style={{ fontWeight: 600, fontSize: '0.85rem', textAlign: 'center' }}>View</div>
-          <div style={{ fontWeight: 600, fontSize: '0.85rem', textAlign: 'center' }}>Modify</div>
-          {buildFeatureRows(props.features).flatMap(({ base, hasWrite }) => {
+          {columnHeader('view', 'View', viewCount, baseKeys.length)}
+          {columnHeader('write', 'Modify', writeCount, writeKeys.length)}
+          {rows.flatMap(({ base, hasWrite }) => {
             const writeKey = `${base}.write`;
             const baseChecked = featureSet.has(base);
             const writeChecked = featureSet.has(writeKey);
@@ -153,21 +200,34 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
                   setFeatureKeys(Array.from(next));
                 }}
               />,
-              <input
-                key={`${base}-write`}
-                type="checkbox"
-                checked={writeChecked}
-                aria-label={`Modify ${featureLabel(base)}`}
-                disabled={!hasWrite || !baseChecked}
-                title={!hasWrite ? 'No modify actions for this feature' : ''}
-                style={{ justifySelf: 'center' }}
-                onChange={(e) => {
-                  const next = new Set(featureSet);
-                  if (e.target.checked) next.add(writeKey);
-                  else next.delete(writeKey);
-                  setFeatureKeys(Array.from(next));
-                }}
-              />,
+              hasWrite ? (
+                <input
+                  key={`${base}-write`}
+                  type="checkbox"
+                  checked={writeChecked}
+                  aria-label={`Modify ${featureLabel(base)}`}
+                  style={{ justifySelf: 'center' }}
+                  onChange={(e) => {
+                    const next = new Set(featureSet);
+                    if (e.target.checked) {
+                      next.add(base);
+                      next.add(writeKey);
+                    } else {
+                      next.delete(writeKey);
+                    }
+                    setFeatureKeys(Array.from(next));
+                  }}
+                />
+              ) : (
+                <span
+                  key={`${base}-write`}
+                  className="text-muted"
+                  title="Read-only feature: nothing to modify"
+                  style={{ justifySelf: 'center', fontSize: '0.8rem' }}
+                >
+                  n/a
+                </span>
+              ),
             ];
           })}
         </div>

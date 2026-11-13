@@ -40,6 +40,7 @@ Tables:
     alert_suppressions     - time-windowed alert suppression entries
     report_artifacts       - persisted report outputs (CSV/SVG/etc) by run
     meraki_alerts          - Meraki alerts from the assurance poll and the webhook receiver
+    mcp_tokens             - bearer tokens for the read-only AI access endpoint (/mcp)
 """
 
 from __future__ import annotations
@@ -2960,6 +2961,7 @@ from routes.db.jobs import *  # noqa: E402,F403
 from routes.db.lab import *  # noqa: E402,F403
 from routes.db.mac_tracking import *  # noqa: E402,F403
 from routes.db.maintenance import *  # noqa: E402,F403
+from routes.db.mcp_tokens import *  # noqa: E402,F403
 from routes.db.meraki import *  # noqa: E402,F403
 from routes.db.meraki_alerts import *  # noqa: E402,F403
 from routes.db.meraki_compliance import *  # noqa: E402,F403

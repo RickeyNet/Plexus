@@ -58,3 +58,9 @@ asyncpg>=0.30,<1
 # RE2 (linear-time matching) for user-supplied regexes, e.g. config backup
 # search, so a crafted pattern cannot stall the event loop (ReDoS).
 google-re2>=1.1.20251105,<2
+# Model Context Protocol SDK: serves the read-only AI access endpoint at /mcp
+# (netcontrol/mcp/). Pinned exactly; it parses untrusted client requests.
+mcp==2.3.0
+# jsonschema validates MCP tool arguments in netcontrol/mcp/dispatch.py. It is
+# also a dependency of mcp; listed here because Plexus imports it directly.
+jsonschema>=4.26,<5

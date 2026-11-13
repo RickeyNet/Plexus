@@ -13,6 +13,7 @@ import { TabBar } from '@/components/TabBar';
 import { usePathTab } from '@/lib/usePathTab';
 
 import { AccessGroupsTab } from './AccessGroupsTab';
+import { AiAccessTab } from './AiAccessTab';
 import { AppearanceTab } from './AppearanceTab';
 import { AuthTab } from './AuthTab';
 import { DiscoveryTab } from './DiscoveryTab';
@@ -39,6 +40,7 @@ type Tab =
   | 'netflow'
   | 'notifications'
   | 'features'
+  | 'ai-access'
   | 'system';
 
 // One intro per tab: describe only what the tab renders.
@@ -87,6 +89,10 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
     title: 'Feature Visibility',
     text: 'Choose which features appear in the navigation for every user, admins included. Hiding a feature removes it from the menu; it does not disable it.',
   },
+  'ai-access': {
+    title: 'AI Access',
+    text: 'Let AI clients such as Claude read Plexus data through a read-only MCP endpoint: turn the endpoint on, set its limits, and create or revoke the tokens clients sign in with. Each token is limited to the data categories you choose and to what its owner can see, and every call is written to the audit log.',
+  },
   system: {
     title: 'System & Updates',
     text: 'See the running version, choose the update channel, check for updates, and install or roll back an update through the host updater. Job history sets how long finished jobs are kept.',
@@ -105,6 +111,7 @@ const ADMIN_TABS: { key: Tab; label: string }[] = [
   { key: 'netflow', label: 'NetFlow' },
   { key: 'notifications', label: 'Notifications' },
   { key: 'features', label: 'Features' },
+  { key: 'ai-access', label: 'AI Access' },
   { key: 'system', label: 'System' },
 ];
 const TAB_KEYS = ADMIN_TABS.map((t) => t.key);
@@ -228,6 +235,7 @@ export function Settings() {
           {tab === 'netflow' && <NetFlowTab />}
           {tab === 'notifications' && <NotificationsTab />}
           {tab === 'features' && <FeaturesTab capabilities={caps} />}
+          {tab === 'ai-access' && <AiAccessTab />}
           {tab === 'system' && (
             <div className="stack">
               <SystemTab />
