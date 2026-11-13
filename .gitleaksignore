@@ -18,3 +18,9 @@
 # - netcontrol/integrations/meraki/sample.py: the SSID auth-mode value
 #   (802.1X/RADIUS) in the built-in sample dataset.
 d490454e3d77ce7337967c619d81ddd9b2f607a5:netcontrol/integrations/meraki/sample.py:generic-api-key:210
+# - tests/test_mcp_redact.py, tests/test_mcp_tools_configs.py: invented PEM
+#   blocks (armor lines around made-up body text) fed to the AI access
+#   masking tests to prove a key body is never returned.
+22c913676b4da770a511697ebf9d485851107be4:tests/test_mcp_tools_configs.py:private-key:138
+22c913676b4da770a511697ebf9d485851107be4:tests/test_mcp_redact.py:private-key:500
+22c913676b4da770a511697ebf9d485851107be4:tests/test_mcp_redact.py:private-key:539

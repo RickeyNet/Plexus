@@ -242,6 +242,12 @@ def _pg_fresh_database(_pg_session_template):
         _pg_dispose_pools_sync()
         _pg_clone_test_db()
         _pg_dirty = False
+    # Row ids restart with the database, so rate-limit windows keyed by them
+    # (an MCP token id, a user id) must restart too, or a run of fast tests
+    # that each create "token 1" shares one window and gets throttled.
+    from netcontrol.routes import state as _state
+
+    _state.API_RATE_LIMIT_TRACKER.clear()
     yield
 
 
