@@ -166,10 +166,12 @@ Effects of a mute:
 API (monitoring feature, the same gate as acknowledging an alert; audited
 as `monitoring` / `topology.muted` and `topology.unmuted`):
 
-- `GET /api/monitoring/topology-availability/mutes`
-- `POST /api/monitoring/topology-availability/mutes` with `provider`,
-  `org_ref`, `scope`, (`entity_type`, `entity_id`) or `site`, `reason`
-- `DELETE /api/monitoring/topology-availability/mutes/{id}`
+- `GET /api/availability/topology/mutes`
+- `POST /api/availability/topology/mutes` with `provider`, `org_ref`,
+  `scope`, (`entity_type`, `entity_id`) or `site`, `reason`
+- `DELETE /api/availability/topology/mutes/{id}`
+
+(next to the existing `/api/availability/topology/*` routes)
 
 The availability summary rows and the Dashboard problem rows carry what
 the UI needs (`muted`, mute id, reason, by, at).
