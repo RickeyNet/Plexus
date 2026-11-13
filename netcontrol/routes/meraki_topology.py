@@ -172,7 +172,7 @@ from netcontrol.integrations.pathtrace.offline import (
 from netcontrol.routes import background_jobs, state
 from netcontrol.routes.cloud_collectors import skipped_note
 from netcontrol.routes.cloud_visibility import discovery_progress
-from netcontrol.routes.shared import _audit, _corr_id, _get_session, supervise_task
+from netcontrol.routes.shared import _audit, _corr_id, _session_user, supervise_task
 from netcontrol.telemetry import configure_logging, redact_value
 
 router = APIRouter()
@@ -518,10 +518,6 @@ async def _require_admin_dep(request: Request):
     if _require_admin is None:
         raise HTTPException(status_code=500, detail="Authorization subsystem not initialized")
     return await _require_admin(request)
-
-
-def _session_user(request: Request) -> str:
-    return (_get_session(request) or {}).get("user", "")
 
 
 class MerakiOrgCreate(BaseModel):

@@ -47,7 +47,7 @@ from netcontrol.integrations.software.versions import (
 )
 from netcontrol.routes import background_jobs, notification_channels
 from netcontrol.routes.meraki_topology import latest_snapshots
-from netcontrol.routes.shared import _audit, _corr_id, _get_session, supervise_task
+from netcontrol.routes.shared import _audit, _corr_id, _session_user, supervise_task
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -92,10 +92,6 @@ async def _require_admin_dep(request: Request):
     if _require_admin is None:
         raise HTTPException(status_code=500, detail="Software routes not initialised")
     return await _require_admin(request)
-
-
-def _session_user(request: Request) -> str:
-    return (_get_session(request) or {}).get("user", "")
 
 
 def _true(value: Any) -> bool:

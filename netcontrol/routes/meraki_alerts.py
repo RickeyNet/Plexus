@@ -55,8 +55,8 @@ from netcontrol.integrations.meraki.client import DEFAULT_BASE_URL, MerakiApiErr
 from netcontrol.integrations.meraki.enrich import load_inventory_index
 from netcontrol.integrations.meraki.normalize import InventoryIndex
 from netcontrol.routes import notification_channels
-from netcontrol.routes.meraki_topology import PROVIDER_MERAKI, _is_demo, _require_admin_dep, _session_user
-from netcontrol.routes.shared import _audit, _corr_id
+from netcontrol.routes.meraki_topology import PROVIDER_MERAKI, _is_demo, _require_admin_dep
+from netcontrol.routes.shared import _audit, _corr_id, _session_user
 from netcontrol.routes.topology_availability import _mute_index, finish_removal
 from netcontrol.telemetry import configure_logging
 

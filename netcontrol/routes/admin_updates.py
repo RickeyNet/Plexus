@@ -57,7 +57,7 @@ import httpx
 import routes.database as db
 from fastapi import APIRouter, HTTPException, Request
 
-from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol.routes.shared import _audit, _corr_id, _get_session, _session_user
 from netcontrol.telemetry import configure_logging
 from netcontrol.version import APP_GIT_SHA, APP_VERSION
 
@@ -558,11 +558,6 @@ async def _queue_request(d: Path, req: dict[str, Any], request: Request, action:
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
-
-
-def _session_user(request: Request) -> str:
-    session = _get_session(request)
-    return str(session.get("user", "")) if session else ""
 
 
 @router.post("/api/admin/updates/apply", status_code=202)
