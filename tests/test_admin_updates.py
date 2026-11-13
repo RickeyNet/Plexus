@@ -44,6 +44,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(au.db, "set_auth_setting", _set)
     monkeypatch.setattr(au, "_audit", _audit)
     monkeypatch.setattr(au, "_get_session", lambda request: {"user": "alice"})
+    monkeypatch.setattr(au, "_session_user", lambda request: "alice")
     au._last_check_cache.clear()
     yield SimpleNamespace(dir=tmp_path, store=store, audits=audits)
     au._last_check_cache.clear()
