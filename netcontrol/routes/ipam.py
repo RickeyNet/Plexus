@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
+from netcontrol.routes.custom_fields import attach_custom_data, matching_keys
 from netcontrol.routes.ipam_adapters import (
     IpamAdapterError,
     collect_ipam_snapshot,
@@ -128,8 +129,18 @@ def _serialize_source(row: dict) -> dict:
     }
 
 
+def _subnet_key(row: dict) -> str:
+    """The custom-data key of an overview or detail row (no data for a row
+    whose subnet does not parse)."""
+    try:
+        return db.prefix_key(row["subnet"], row.get("vrf_name"))
+    except ValueError:
+        return ""
+
+
 @router.get("/api/ipam/overview")
 async def ipam_overview_api(
+    request: Request,
     group_id: int | None = Query(default=None),
     include_cloud: bool = Query(default=True),
     include_external: bool = Query(default=True),
@@ -139,15 +150,25 @@ async def ipam_overview_api(
     external and local IPAM prefixes and, with ``include_topology``, the
     subnets of the latest Topology collections (Meraki VLANs and routes, Cato
     and Appgate network ranges, FMC and Panorama connected subnets, routes and VPN pools), with the
-    ranges two sites or VPCs both claim listed under ``overlaps``."""
+    ranges two sites or VPCs both claim listed under ``overlaps``.
+
+    Each subnet carries its ``tags`` and ``custom_fields``; ``tag=`` and
+    ``cf.<key>=`` keep only the matching subnets (summary counts unchanged)."""
     if group_id is not None and group_id <= 0:
         raise HTTPException(status_code=400, detail="Invalid inventory group id")
-    return await db.get_ipam_overview(
+    keys = await matching_keys("prefix", request.query_params)
+    overview = await db.get_ipam_overview(
         group_id=group_id,
         include_cloud=include_cloud,
         include_external=include_external,
         topology_subnets=await topology_subnets() if include_topology else None,
     )
+    subnets = overview.get("subnets", [])
+    if keys is not None:
+        subnets = [s for s in subnets if _subnet_key(s) in keys]
+        overview["subnets"] = subnets
+    await attach_custom_data("prefix", subnets, _subnet_key)
+    return overview
 
 
 @router.get("/api/ipam/address/{ip}")
@@ -216,11 +237,14 @@ async def ipam_subnet_detail_api(
     group_id: int | None = Query(default=None),
     include_cloud: bool = Query(default=True),
     include_external: bool = Query(default=True),
+    vrf: str = Query(default="", max_length=200),
 ):
+    """A subnet's allocations, reservations and free addresses, with the
+    ``tags`` and ``custom_fields`` of the prefix (``subnet`` in ``vrf``)."""
     if group_id is not None and group_id <= 0:
         raise HTTPException(status_code=400, detail="Invalid inventory group id")
     try:
-        return await db.get_ipam_subnet_detail(
+        detail = await db.get_ipam_subnet_detail(
             subnet,
             group_id=group_id,
             include_cloud=include_cloud,
@@ -228,6 +252,8 @@ async def ipam_subnet_detail_api(
         )
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid subnet") from None
+    await attach_custom_data("prefix", [detail], lambda row: _subnet_key({"subnet": row["subnet"], "vrf_name": vrf}))
+    return detail
 
 
 @router.get("/api/ipam/providers")

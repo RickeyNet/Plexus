@@ -183,6 +183,36 @@ def _edge_name(entity_type: str, label: str, edge: dict, a: dict, b: dict) -> st
     return f"{name} ({label})" if label else name
 
 
+def clean_entity_types(provider: str, snapshot: dict | None) -> frozenset[str]:
+    """The entity types whose absence from ``snapshot`` proves the entity is
+    gone at the vendor: every call that says what exists of that type
+    succeeded. Availability tracking deletes a stored entity of a clean type
+    that the snapshot does not report, and keeps (``unknown``, missing) one
+    of any other type.
+
+    - No snapshot, or a site that was not collected: nothing is clean.
+    - Meraki: a stored snapshot always holds the full network and device
+      lists (the collector raises otherwise), so ``device`` is always clean.
+      Uplinks come from ``uplinks/statuses`` and tunnels from
+      ``appliance/vpn/statuses`` and ``thirdPartyVPNPeers``, all organization
+      calls (error scope ``org``), so ``uplink``, ``tunnel`` and ``link`` are
+      clean only when no ``org`` call failed. A failed network or device
+      detail call does not feed any tracked entity.
+    - Every other provider: every type when the collection reported no
+      error, else none (its errors do not say which entity type they feed).
+    """
+    if not snapshot:
+        return frozenset()
+    if any(isinstance(s, dict) and s.get("not_collected") for s in snapshot.get("sites") or []):
+        return frozenset()
+    errors = [e for e in (snapshot.get("collection") or {}).get("errors") or [] if e]
+    if _text(provider).lower() == "meraki":
+        if any(isinstance(e, dict) and _text(e.get("scope")) == "org" for e in errors):
+            return frozenset({"device"})
+        return frozenset({"device", "uplink", "tunnel", "link"})
+    return frozenset() if errors else frozenset(ENTITY_TYPES)
+
+
 def extract_entity_states(provider: str, org_ref: int, snapshot: dict | None) -> list[EntityState]:
     """The tracked entities of one snapshot with their availability state."""
     snapshot = snapshot or {}

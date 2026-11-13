@@ -39,6 +39,23 @@ uptime % and alerts on down/degraded.
 | Juniper / Arista / Fortinet / PAN-OS (inventory) | host, interfaces | SNMP + ICMP poll | Yes (ICMP) | Yes | Full pipeline. |
 | ICMP-only hosts | host | ICMP | Yes | Yes | |
 
+### Muting and removal of API-collected entities
+
+Both live in the shared topology availability tracker, so they behave the
+same for every source (`docs/meraki-topology.md#muting`,
+`docs/meraki-topology.md#removed-entities`). Inventory hosts use
+acknowledge and Suppressions instead.
+
+| Vendor / source | Mute (entity or site, server-side, no alert or notification while muted) | Removed when gone at the source | Faster than the next collection |
+|---|---|---|---|
+| Cisco Meraki | Yes | Yes: devices at any stored collection; uplinks and tunnels when no organization-wide call failed | Yes, for a device that had an open Meraki alert: confirmed with one API call by the alert poll, about a minute |
+| Cato Networks | Yes | Yes, at a collection with no warnings and no site marked not collected | No |
+| Cisco FMC, Palo Alto Panorama, Appgate SDP | Yes | Yes, at a collection with no warnings | No |
+| AWS, Azure, GCP | Yes | Partly: at a discovery with no warnings and no *not collected* network (a peered VPC or VNet outside the collected accounts and regions). One failed region or account, or one such peering, keeps everything of that cloud `unknown` until the retention cleanup. Gap: removal per account and region | No |
+
+A removal that cannot be trusted (any other collection) leaves the entity
+`unknown` until the retention cleanup, as before.
+
 ## Software versions and CVE advisories
 
 The software tracker (`netcontrol/integrations/software/versions.py`,

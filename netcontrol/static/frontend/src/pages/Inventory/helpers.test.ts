@@ -9,6 +9,7 @@ import {
   discoveredHostFacts,
   discoveredHostSshError,
   filterGroups,
+  filterGroupsByCustomData,
   hiddenByCollapsedAncestor,
   hostMatchesQuery,
   isAwsInstanceId,
@@ -218,5 +219,56 @@ describe('discovery SSH show version', () => {
     expect(discoveredHostFacts(failed)).toBe('');
     expect(discoveredHostSshError(failed)).toBe('Authentication failed.');
     expect(discoveredHostSshError({ ip_address: '10.0.0.3' })).toBe('');
+  });
+});
+
+describe('filterGroupsByCustomData', () => {
+  const core = { id: 1, name: 'core', color: 'blue' };
+  const edge = { id: 2, name: 'edge', color: 'green' };
+  const tree = [
+    group(1, 'Campus', [host(1, { ip_address: '192.0.2.1' })], { parent_id: null }),
+    group(
+      2,
+      'Building A',
+      [
+        host(2, { ip_address: '192.0.2.2', tags: [core] }),
+        host(3, { ip_address: '192.0.2.3', custom_fields: { env: 'prod' } }),
+      ],
+      { parent_id: 1 },
+    ),
+    group(3, 'Lab', [host(4, { ip_address: '198.51.100.4' }), host(5, { ip_address: '198.51.100.5' })], {
+      parent_id: null,
+      tags: [core],
+      custom_fields: { env: 'lab' },
+    }),
+    group(4, 'Edge', [host(6, { ip_address: '203.0.113.6', tags: [edge] })], { parent_id: null }),
+  ];
+  const ids = (groups: InventoryGroupFull[]) =>
+    groups.map((g) => [g.id, (g.hosts ?? []).map((h) => h.id)]);
+
+  it('keeps every host of a group that matches by its own tags or fields', () => {
+    expect(ids(filterGroupsByCustomData(tree, { tagIds: [], fields: { env: 'lab' } }))).toEqual([[3, [4, 5]]]);
+  });
+
+  it('keeps only the matching hosts of a group that matches through its hosts', () => {
+    expect(ids(filterGroupsByCustomData(tree, { tagIds: [1], fields: {} }))).toEqual([
+      [1, []],
+      [2, [2]],
+      [3, [4, 5]],
+    ]);
+    expect(ids(filterGroupsByCustomData(tree, { tagIds: [], fields: { env: '*' } }))).toEqual([
+      [1, []],
+      [2, [3]],
+      [3, [4, 5]],
+    ]);
+  });
+
+  it('drops a group with no match of either kind', () => {
+    expect(ids(filterGroupsByCustomData(tree, { tagIds: [2], fields: {} }))).toEqual([[4, [6]]]);
+    expect(filterGroupsByCustomData(tree, { tagIds: [1, 2], fields: {} })).toEqual([]);
+  });
+
+  it('returns the input unchanged for an empty filter', () => {
+    expect(filterGroupsByCustomData(tree, { tagIds: [], fields: {} })).toBe(tree);
   });
 });

@@ -16,6 +16,7 @@ import { AccessGroupsTab } from './AccessGroupsTab';
 import { AiAccessTab } from './AiAccessTab';
 import { AppearanceTab } from './AppearanceTab';
 import { AuthTab } from './AuthTab';
+import { CustomDataTab } from './CustomDataTab';
 import { DiscoveryTab } from './DiscoveryTab';
 import { FeaturesTab } from './FeaturesTab';
 import { JobRetentionSection } from './JobRetentionSection';
@@ -40,6 +41,7 @@ type Tab =
   | 'netflow'
   | 'notifications'
   | 'features'
+  | 'custom-data'
   | 'ai-access'
   | 'system';
 
@@ -89,6 +91,10 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
     title: 'Feature Visibility',
     text: 'Choose which features appear in the navigation for every user, admins included. Hiding a feature removes it from the menu; it does not disable it.',
   },
+  'custom-data': {
+    title: 'Custom Fields & Tags',
+    text: 'Define extra fields and tags for hosts, groups and IPAM prefixes. Values are set on the object itself.',
+  },
   'ai-access': {
     title: 'AI Access',
     text: 'Let AI clients such as Claude read Plexus data through a read-only MCP endpoint: turn the endpoint on, set its limits, and create or revoke the tokens clients sign in with. Each token is limited to the data categories you choose and to what its owner can see, and every call is written to the audit log.',
@@ -111,6 +117,7 @@ const ADMIN_TABS: { key: Tab; label: string }[] = [
   { key: 'netflow', label: 'NetFlow' },
   { key: 'notifications', label: 'Notifications' },
   { key: 'features', label: 'Features' },
+  { key: 'custom-data', label: 'Custom Fields & Tags' },
   { key: 'ai-access', label: 'AI Access' },
   { key: 'system', label: 'System' },
 ];
@@ -235,6 +242,7 @@ export function Settings() {
           {tab === 'netflow' && <NetFlowTab />}
           {tab === 'notifications' && <NotificationsTab />}
           {tab === 'features' && <FeaturesTab capabilities={caps} />}
+          {tab === 'custom-data' && <CustomDataTab />}
           {tab === 'ai-access' && <AiAccessTab />}
           {tab === 'system' && (
             <div className="stack">

@@ -41,6 +41,10 @@ Tables:
     report_artifacts       - persisted report outputs (CSV/SVG/etc) by run
     meraki_alerts          - Meraki alerts from the assurance poll and the webhook receiver
     mcp_tokens             - bearer tokens for the read-only AI access endpoint (/mcp)
+    tags                   - admin-managed tags (name unique ignoring case, palette color)
+    tag_assignments        - tags on hosts, groups and IPAM prefixes by (object_type, object_key)
+    custom_fields          - admin-defined extra fields (key, type, choices, applicable object types)
+    custom_field_values    - canonical text value per field and object
 """
 
 from __future__ import annotations
@@ -2952,6 +2956,7 @@ from routes.db.billing import *  # noqa: E402,F403
 from routes.db.cato_egress import *  # noqa: E402,F403
 from routes.db.cloud import *  # noqa: E402,F403
 from routes.db.credentials import *  # noqa: E402,F403
+from routes.db.custom_fields import *  # noqa: E402,F403
 from routes.db.flows import *  # noqa: E402,F403
 from routes.db.geolocation import *  # noqa: E402,F403
 from routes.db.graphs import *  # noqa: E402,F403

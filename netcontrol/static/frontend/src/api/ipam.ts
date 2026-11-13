@@ -5,6 +5,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { apiRequest } from './client';
+import type { CustomValue, TagRef } from './customData';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -53,6 +54,10 @@ export interface IpamSubnet {
   overlap_count?: number;
   vrf_name?: string | null;
   vlan_ids?: Array<string | number>;
+  /** The prefix's tags (inline from the overview). */
+  tags?: TagRef[];
+  /** The prefix's custom field values by field key (stored values only). */
+  custom_fields?: Record<string, CustomValue>;
 }
 
 /** One side of an overlap: the range and who holds it. */
@@ -258,7 +263,8 @@ const KEYS = {
   dhcpCorrelation: ['dhcp-correlation'] as const,
 };
 
-function invalidateOverview(qc: ReturnType<typeof useQueryClient>) {
+/** Refetches the IPAM overview and subnet detail. */
+export function invalidateOverview(qc: ReturnType<typeof useQueryClient>) {
   qc.invalidateQueries({ queryKey: ['ipam-overview'] });
   qc.invalidateQueries({ queryKey: ['ipam-subnet-detail'] });
 }

@@ -1,6 +1,8 @@
 import { FormEvent, useId, useMemo, useState } from 'react';
 
+import { useSaveObjectData } from '@/api/customData';
 import { Callout } from '@/components/Callout';
+import { CustomDataSection } from '@/components/CustomDataSection';
 import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
 import {
@@ -9,6 +11,7 @@ import {
   useCreateInventoryGroup,
   useUpdateInventoryGroup,
 } from '@/api/inventory';
+import { saveCustomDataDraft, useCustomDataDraft } from '@/lib/useCustomDataDraft';
 
 import { descendantIds } from './helpers';
 
@@ -26,6 +29,11 @@ export function GroupModal({ group, isCreate, groups, defaultParentId = null, on
   const formId = useId();
   const create = useCreateInventoryGroup();
   const update = useUpdateInventoryGroup();
+  const saveData = useSaveObjectData();
+  const draft = useCustomDataDraft('group', !isCreate && group ? { type: 'group', id: group.id } : null);
+  // Set once the group itself is saved; a retry after a failed custom-data
+  // save then sends only the custom data.
+  const [savedId, setSavedId] = useState<number | null>(null);
   const [name, setName] = useState(group?.name ?? '');
   const [description, setDescription] = useState(group?.description ?? '');
   const [parentId, setParentId] = useState<number | null>(
@@ -42,7 +50,7 @@ export function GroupModal({ group, isCreate, groups, defaultParentId = null, on
     return groups.filter((g) => !excluded.has(g.id));
   }, [groups, group]);
 
-  const isPending = create.isPending || update.isPending;
+  const isPending = create.isPending || update.isPending || saveData.isPending;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -52,9 +60,15 @@ export function GroupModal({ group, isCreate, groups, defaultParentId = null, on
       setNameError('Group name is required.');
       return;
     }
+    const withData = draft.ready && (draft.dirty || (isCreate && draft.hasData));
+    if (withData && Object.keys(draft.checkRequired()).length > 0) return;
+    let groupId = savedId;
     try {
-      if (isCreate) {
-        await create.mutateAsync({ name: trimmedName, description, parent_id: parentId });
+      if (groupId !== null) {
+        // Saved on an earlier try; only the custom data is left.
+      } else if (isCreate) {
+        const created = await create.mutateAsync({ name: trimmedName, description, parent_id: parentId });
+        groupId = created.id;
       } else if (group) {
         await update.mutateAsync({
           id: group.id,
@@ -62,11 +76,25 @@ export function GroupModal({ group, isCreate, groups, defaultParentId = null, on
           description,
           parent_id: parentId,
         });
+        groupId = group.id;
       }
-      onClose();
     } catch (err) {
       setSaveError((err as Error).message);
+      return;
     }
+    if (groupId === null) {
+      onClose();
+      return;
+    }
+    setSavedId(groupId);
+    if (withData) {
+      const failure = await saveCustomDataDraft(saveData, draft, { type: 'group', id: groupId });
+      if (failure) {
+        setSaveError(`The group was saved, but its tags and custom fields were not: ${failure} Fix them and save again.`);
+        return;
+      }
+    }
+    onClose();
   };
 
   return (
@@ -87,47 +115,51 @@ export function GroupModal({ group, isCreate, groups, defaultParentId = null, on
     >
       <form id={formId} onSubmit={submit}>
         {saveError && <Callout tone="danger">{saveError}</Callout>}
-        <div className="form-group">
-          <label className="form-label" htmlFor={`${formId}-name`}>Group Name</label>
-          <input
-            id={`${formId}-name`}
-            className="form-input"
-            value={name}
-            onChange={(e) => {
-              setName(e.target.value);
-              setNameError(null);
-            }}
-            required
-            autoFocus
-            aria-invalid={!!nameError}
-          />
-          <FieldError>{nameError}</FieldError>
-        </div>
-        <div className="form-group">
-          <label className="form-label" htmlFor="inventory-group-parent">Parent group</label>
-          <select
-            id="inventory-group-parent"
-            className="form-select"
-            value={parentId ?? ''}
-            onChange={(e) => setParentId(e.target.value ? Number(e.target.value) : null)}
-          >
-            <option value="">None (top level)</option>
-            {parentChoices.map((g) => (
-              <option key={g.id} value={g.id}>
-                {groupLabel(g)}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="form-group">
-          <label className="form-label" htmlFor={`${formId}-description`}>Description</label>
-          <textarea
-            id={`${formId}-description`}
-            className="form-textarea"
-            value={description ?? ''}
-            onChange={(e) => setDescription(e.target.value)}
-          />
-        </div>
+        {/* Once the group is saved only its custom data can still change here. */}
+        <fieldset disabled={savedId !== null} className="fieldset-plain">
+          <div className="form-group">
+            <label className="form-label" htmlFor={`${formId}-name`}>Group Name</label>
+            <input
+              id={`${formId}-name`}
+              className="form-input"
+              value={name}
+              onChange={(e) => {
+                setName(e.target.value);
+                setNameError(null);
+              }}
+              required
+              autoFocus
+              aria-invalid={!!nameError}
+            />
+            <FieldError>{nameError}</FieldError>
+          </div>
+          <div className="form-group">
+            <label className="form-label" htmlFor="inventory-group-parent">Parent group</label>
+            <select
+              id="inventory-group-parent"
+              className="form-select"
+              value={parentId ?? ''}
+              onChange={(e) => setParentId(e.target.value ? Number(e.target.value) : null)}
+            >
+              <option value="">None (top level)</option>
+              {parentChoices.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {groupLabel(g)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label" htmlFor={`${formId}-description`}>Description</label>
+            <textarea
+              id={`${formId}-description`}
+              className="form-textarea"
+              value={description ?? ''}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+          </div>
+        </fieldset>
+        <CustomDataSection objectType="group" draft={draft} canCreateTags />
       </form>
     </Modal>
   );
