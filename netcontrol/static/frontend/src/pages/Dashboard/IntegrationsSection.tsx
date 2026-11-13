@@ -193,6 +193,13 @@ function EntityTypeRow({
             </Badge>
           </CountLink>
         )}
+        {c.muted > 0 && (
+          <CountLink to={link('muted')} label={label(c.muted, 'muted')}>
+            <Badge tone="neutral" size="sm">
+              {c.muted} muted
+            </Badge>
+          </CountLink>
+        )}
       </span>
     </li>
   );

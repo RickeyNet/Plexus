@@ -9,6 +9,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { apiRequest, getCsrfToken } from './client';
+import type { CustomValue, TagRef } from './customData';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -23,6 +24,10 @@ export interface InventoryHost {
   status?: string | null;
   /** Explicit EC2 instance ID pinning this host on the Topology map ('' when unset). */
   aws_instance_id?: string | null;
+  /** The host's tags (inline from the listing). */
+  tags?: TagRef[];
+  /** The host's custom field values by field key (stored values only). */
+  custom_fields?: Record<string, CustomValue>;
 }
 
 export interface InventoryGroupFull {
@@ -38,6 +43,10 @@ export interface InventoryGroupFull {
   /** The group's direct hosts (sub-groups' hosts are not counted). */
   host_count?: number | null;
   hosts?: InventoryHost[];
+  /** The group's tags (inline from the listing). */
+  tags?: TagRef[];
+  /** The group's custom field values by field key (stored values only). */
+  custom_fields?: Record<string, CustomValue>;
 }
 
 /** Joins the names of a group path (mirrors the backend's GROUP_PATH_SEPARATOR). */
@@ -229,7 +238,8 @@ export function useGroupSnmpAssignments(groupIds: number[]) {
 
 // ── Mutations: groups & hosts ──────────────────────────────────────────────
 
-function invalidateInventory(qc: ReturnType<typeof useQueryClient>) {
+/** Refetches both inventory group listings (full and light). */
+export function invalidateInventory(qc: ReturnType<typeof useQueryClient>) {
   qc.invalidateQueries({ queryKey: ['inventory-groups-full'] });
   qc.invalidateQueries({ queryKey: ['inventory-groups'] });
 }
@@ -307,7 +317,7 @@ export function useAddHost() {
       /** Optional EC2 instance ID ('' or omitted leaves it unset). */
       aws_instance_id?: string;
     }) =>
-      apiRequest(`/inventory/${groupId}/hosts`, {
+      apiRequest<{ id: number }>(`/inventory/${groupId}/hosts`, {
         method: 'POST',
         body: {
           hostname,

@@ -556,8 +556,12 @@ devices').
 How it behaves:
 
 - An entity seen for the first time is a baseline and raises no alert.
-- An entity in an earlier collection and missing from the latest one turns
-  `unknown` (*not in last collection*) and comes back when it reappears.
+- An entity in an earlier collection and missing from the latest one is
+  removed when the collection read everything that defines what exists, and
+  otherwise turns `unknown` (*not in last collection*) and comes back when
+  it reappears; see [Removed entities](#removed-entities).
+- A muted entity raises no alert and is left off the Dashboard; see
+  [Muting](#muting).
 - Uptime is time-weighted between collections: (time up + time degraded) /
   time in a known state. Time in `unknown` is left out, and so is the time
   before Plexus first saw the entity. Outages are the periods spent `down`.
@@ -582,6 +586,81 @@ API (needs `monitoring`): `GET /api/availability/topology/summary`,
 `GET /api/availability/topology/transitions`, each filtered by `provider`,
 `org_ref`, `entity_type` and `days` (1-365); outages and transitions also take
 `entity_id` and `limit`. AWS, Azure and GCP are `org_ref` -1, -2 and -3.
+Mutes: `GET` and `POST /api/availability/topology/mutes` and
+`DELETE /api/availability/topology/mutes/{id}`.
+
+### Muting
+
+Some entities are down on purpose: a site that is not installed yet, an
+appliance being decommissioned. Mute them so they stop showing as problems.
+**Mute** is on each row of the Dashboard's **Integrations and cloud** list and
+of **Monitoring > Availability > Integrations and cloud**. It asks what to
+mute and for a reason:
+
+- **This device only** (or this uplink, tunnel and so on) mutes that entity.
+  Muting a device also covers its uplinks and tunnels.
+- **Everything at site ...** mutes every entity at that site (for Meraki, the
+  network), including ones added later and tunnels from another site to it.
+
+A mute has no expiry: it lasts until someone clicks **Unmute**, or until what
+it covers is removed at the source. It works the same for every source type.
+Anyone with the `monitoring` feature can mute and unmute; both are audited
+(`monitoring` / `topology.muted`, `topology.unmuted`).
+
+While an entity is muted:
+
+- it is left out of the Dashboard's problem list, its **Needs attention**
+  counts and the down and degraded counts of the Integrations cards, which
+  show it as *muted* instead;
+- its state changes are still recorded, so its history stays true, but no
+  alert is raised and nothing is sent to the notification channels, by the
+  availability tracker or by the [Meraki alerts](meraki-alerts.md);
+- open alerts on a matched inventory host are acknowledged as `muted` when
+  the mute is created;
+- it is still listed under **Monitoring > Availability** with a **Muted**
+  badge that shows the reason, who muted it and when; the **Muted** state
+  filter lists every muted entity. The stat tiles and the average uptime
+  leave muted entities out.
+
+Unmuting sends nothing for what happened while muted: an entity that is
+still down shows on the Dashboard again at once, and notifies again only
+when it gets worse, or recovers and fails again.
+
+A site is matched by name, so a renamed site is no longer muted and shows
+again.
+
+### Removed entities
+
+An entity that no longer exists at the source (a device removed from a
+Meraki network, a deleted site, a tunnel that was unconfigured) is deleted
+from availability tracking, together with its mute, at the first collection
+that no longer reports it. It disappears from the Dashboard and from
+**Monitoring > Availability**; an alert open on a matched inventory host is
+acknowledged as `auto-resolved`; no notification is sent. Its past
+transitions are kept until the retention cleanup. A site mute is deleted
+when the site itself is gone, not when the site merely has no devices.
+
+Plexus only deletes when the collection can be trusted to have seen
+everything:
+
+| Source | Removed when missing from a collection that... |
+|---|---|
+| Meraki devices | was stored at all (a collection that cannot list the networks and devices fails and stores nothing) |
+| Meraki uplinks and tunnels | had no failed organization-wide call |
+| Cato, FMC, Panorama, Appgate | finished with no collection warnings and no site marked not collected |
+| AWS, Azure, GCP | finished with no warnings and drew no *not collected* network (a peered VPC or VNet outside the collected accounts and regions). A cloud that always has such a peering never removes on its own: its gone entities stay `unknown` until the retention cleanup |
+
+In any other case the entity turns `unknown` (*not in last collection*) as
+before, and is deleted by the retention cleanup if it never comes back.
+
+A Meraki source limited to some networks (by tag or name) tracks only
+the devices of those networks: narrowing the filter removes the devices of
+the networks left out at the next collection, with their mutes.
+
+A Meraki device that had an open Meraki alert is removed sooner, within
+about a minute; see
+[Devices removed from Meraki](meraki-alerts.md#devices-removed-from-meraki).
+A device that comes back later is tracked as new.
 
 ### Near-real-time alerts
 

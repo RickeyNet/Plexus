@@ -29,6 +29,10 @@ DEFAULT_RULES = {
     "netcontrol/mcp/registry.py": 95.0,
     "netcontrol/mcp/server.py": 85.0,
     "netcontrol/routes/mcp_tokens.py": 90.0,
+    # Custom fields and tags: the value rules and the API. Measured by
+    # tests/test_custom_fields_*.py; do not lower them to land a change.
+    "netcontrol/custom_fields.py": 95.0,
+    "netcontrol/routes/custom_fields.py": 85.0,
 }
 
 

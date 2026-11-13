@@ -272,20 +272,39 @@ async def test_status_flip_records_transition_alerts_once_and_recovers(notificat
     assert [(o["started_at"], o["ended_at"], o["duration_seconds"]) for o in outages] == [(T1, T3, 2 * 86400)]
 
 
+def _with_errors(snapshot: dict) -> dict:
+    """The snapshot of a collection where a call failed: not clean."""
+    snapshot = copy.deepcopy(snapshot)
+    snapshot.setdefault("collection", {})["errors"] = [{"scope": "controller", "path": "/x", "message": "timeout"}]
+    return snapshot
+
+
 async def test_entity_missing_from_a_collection_turns_unknown(notifications):
     base = SNAPSHOTS["appgate"]()
     await tracking.record_snapshot_states("appgate", 12, base, now=T0)
-    gone = copy.deepcopy(base)
+    gone = _with_errors(base)
     node = next(n for n in gone["nodes"] if n["kind"] == "appliance" and n["status"] == "online")
     gone["nodes"].remove(node)
     result = await tracking.record_snapshot_states("appgate", 12, gone, now=T1)
-    assert result["missing"] == 1 and notifications == []
+    assert result["missing"] == 1 and result["removed"] == 0 and notifications == []
     states = {s["entity_id"]: s for s in await db_module.list_topology_entity_states("appgate", 12, "device")}
     assert states[node["id"]]["state"] == "unknown" and states[node["id"]]["missing"] is True
     # Back in the next collection.
     await tracking.record_snapshot_states("appgate", 12, base, now=T2)
     states = {s["entity_id"]: s for s in await db_module.list_topology_entity_states("appgate", 12, "device")}
     assert states[node["id"]]["state"] == "up" and states[node["id"]]["missing"] is False
+
+
+async def test_entity_gone_from_a_clean_collection_is_removed(notifications):
+    base = SNAPSHOTS["appgate"]()
+    await tracking.record_snapshot_states("appgate", 12, base, now=T0)
+    gone = copy.deepcopy(base)
+    node = next(n for n in gone["nodes"] if n["kind"] == "appliance" and n["status"] == "online")
+    gone["nodes"].remove(node)
+    result = await tracking.record_snapshot_states("appgate", 12, gone, now=T1)
+    assert result["removed"] >= 1 and result["missing"] == 0 and notifications == []
+    states = {s["entity_id"] for s in await db_module.list_topology_entity_states("appgate", 12, "device")}
+    assert node["id"] not in states
 
 
 async def test_entity_of_an_inventory_host_raises_a_monitoring_alert(notifications):
@@ -320,6 +339,222 @@ async def test_tracking_never_raises(monkeypatch):
     monkeypatch.setattr(db_module, "apply_topology_entity_states", _boom)
     result = await tracking.record_snapshot_states("meraki", 1, SNAPSHOTS["meraki"]())
     assert result["tracked"] == 0 and result["alerts"] == []
+
+
+# ── Mutes ────────────────────────────────────────────────────────────────────
+
+
+def _online_cato_site(snapshot: dict) -> str:
+    return next(s["id"] for s in snapshot["sites"] if s["status"] == "online" and not s["id"].startswith("__"))
+
+
+async def _mute_site_entity(org_ref: int, site_id: str) -> dict:
+    return await db_module.create_topology_mute(
+        "cato", org_ref, "entity", entity_type="site", entity_id=site_id, reason="not installed", created_by="admin"
+    )
+
+
+async def test_muted_entity_raises_no_alert_but_records_transition(notifications):
+    base = SNAPSHOTS["cato"]()
+    site_id = _online_cato_site(base)
+    await tracking.record_snapshot_states("cato", 16, base, now=T0)
+    await _mute_site_entity(16, site_id)
+    result = await tracking.record_snapshot_states("cato", 16, _cato_with(base, {site_id: "offline"}), now=T1)
+    assert result["alerted"] == 0 and result["muted_alerts"] == 1 and notifications == []
+    transitions = await db_module.get_topology_transitions(provider="cato", org_ref=16, entity_id=site_id, days=3650)
+    assert [t["new_state"] for t in transitions] == ["down", "up"]
+    (row,) = await db_module.list_topology_entity_states("cato", 16, "site", entity_id=site_id)
+    assert row["state"] == "down" and row["alert_state"] == "down"
+
+
+async def test_unmute_does_not_alert_while_state_unchanged(notifications):
+    base = SNAPSHOTS["cato"]()
+    site_id = _online_cato_site(base)
+    down = _cato_with(base, {site_id: "offline"})
+    await tracking.record_snapshot_states("cato", 17, base, now=T0)
+    mute = await _mute_site_entity(17, site_id)
+    await tracking.record_snapshot_states("cato", 17, down, now=T1)
+    assert await db_module.delete_topology_mute(mute["id"])
+    again = await tracking.record_snapshot_states("cato", 17, down, now=T2)
+    assert again["alerted"] == 0 and again["muted_alerts"] == 0 and notifications == []
+
+
+async def test_summary_marks_muted_and_excludes_it_from_totals():
+    entity = {
+        "entity_type": "device",
+        "entity_id": "gw-1",
+        "name": "Example Gateway",
+        "state": "down",
+        "site": "Branch-12",
+    }
+    other = {**entity, "entity_id": "gw-2", "name": "Other Gateway", "state": "up", "site": "Hub"}
+    await db_module.apply_topology_entity_states("appgate", 40, [entity, other], now=T0)
+    mute = await db_module.create_topology_mute(
+        "appgate", 40, "entity", entity_type="device", entity_id="gw-1", reason="not installed", created_by="admin"
+    )
+    summary = await db_module.get_topology_availability_summary("appgate", 40, days=4, now=T1)
+    by_id = {e["entity_id"]: e for e in summary["entities"]}
+    assert by_id["gw-1"]["muted"] is True
+    assert by_id["gw-1"]["mute"] == {
+        "id": mute["id"],
+        "scope": "entity",
+        "site": "",
+        "reason": "not installed",
+        "created_by": "admin",
+        "created_at": mute["created_at"],
+    }
+    assert by_id["gw-2"]["muted"] is False and by_id["gw-2"]["mute"] is None
+    assert summary["down"] == 0 and summary["up"] == 1 and summary["muted"] == 1
+    assert summary["entity_count"] == 2
+    assert summary["avg_uptime_pct"] == 100.0 and summary["total_outages"] == 0
+    # A site mute names its site, so the UI can say what unmuting it covers.
+    await db_module.delete_topology_mute(mute["id"])
+    site_mute = await db_module.create_topology_mute(
+        "appgate", 40, "site", site="Branch-12", reason="r", created_by="a"
+    )
+    summary = await db_module.get_topology_availability_summary("appgate", 40, days=4, now=T1)
+    gw = next(e for e in summary["entities"] if e["entity_id"] == "gw-1")
+    assert gw["mute"]["id"] == site_mute["id"] and gw["mute"]["scope"] == "site" and gw["mute"]["site"] == "Branch-12"
+
+
+# ── Removal ──────────────────────────────────────────────────────────────────
+
+
+def test_clean_types_meraki_devices_always_edges_need_org_calls():
+    snapshot = SNAPSHOTS["meraki"]()
+    assert availability.clean_entity_types("meraki", snapshot) == {"device", "uplink", "tunnel", "link"}
+    snapshot["collection"]["errors"] = [{"scope": "network:Branch-12", "path": "networks/N_1/appliance/vlans"}]
+    assert availability.clean_entity_types("meraki", snapshot) == {"device", "uplink", "tunnel", "link"}
+    snapshot["collection"]["errors"].append({"scope": "org", "path": "organizations/1/uplinks/statuses"})
+    assert availability.clean_entity_types("meraki", snapshot) == {"device"}
+
+
+def test_clean_types_other_providers_all_or_nothing():
+    for provider in ("cato", "fmc", "panorama", "appgate", "aws"):
+        snapshot = SNAPSHOTS[provider]()
+        assert availability.clean_entity_types(provider, snapshot) == set(availability.ENTITY_TYPES)
+        assert availability.clean_entity_types(provider, _with_errors(snapshot)) == frozenset()
+    assert availability.clean_entity_types("cato", None) == frozenset()
+    assert availability.clean_entity_types("meraki", {}) == frozenset()
+
+
+def test_clean_types_empty_when_a_site_is_not_collected():
+    snapshot = SNAPSHOTS["cato"]()
+    snapshot["sites"][0]["not_collected"] = True
+    assert availability.clean_entity_types("cato", snapshot) == frozenset()
+    meraki = SNAPSHOTS["meraki"]()
+    meraki["sites"][0]["not_collected"] = True
+    assert availability.clean_entity_types("meraki", meraki) == frozenset()
+
+
+def _site_snapshot(*sites: tuple[str, str, str]) -> dict:
+    """Appgate-style snapshot from (site id, gateway id, gateway status) rows."""
+    return {
+        "sites": [{"id": site, "name": f"Site {site}", "status": "online"} for site in sorted({s[0] for s in sites})],
+        "nodes": [
+            {"id": gw, "kind": "appliance", "label": f"Gateway {gw}", "status": status, "site": site}
+            for site, gw, status in sites
+            if gw
+        ],
+        "edges": [],
+        "collection": {"errors": []},
+    }
+
+
+TWO_UP = (("s1", "gw-1", "online"), ("s1", "gw-2", "online"))
+ONLY_GW2 = (("s1", "gw-2", "online"),)
+
+
+async def test_clean_collection_removes_absent_entity_and_its_mute(notifications):
+    await tracking.record_snapshot_states("appgate", 41, _site_snapshot(*TWO_UP), now=T0)
+    down = _site_snapshot(("s1", "gw-1", "offline"), ("s1", "gw-2", "online"))
+    await tracking.record_snapshot_states("appgate", 41, down, now=T1)
+    await db_module.create_topology_mute(
+        "appgate", 41, "entity", entity_type="device", entity_id="gw-1", reason="decommissioned", created_by="admin"
+    )
+    result = await tracking.record_snapshot_states("appgate", 41, _site_snapshot(*ONLY_GW2), now=T2)
+    assert result["removed"] == 1 and result["missing"] == 0 and result["transitions"] == []
+    assert await db_module.list_topology_entity_states("appgate", 41, "device", entity_id="gw-1") == []
+    assert await db_module.list_topology_mutes("appgate", 41) == []
+    transitions = await db_module.get_topology_transitions(provider="appgate", org_ref=41, entity_id="gw-1", days=3650)
+    assert [t["new_state"] for t in transitions] == ["down", "up"]
+
+
+async def test_unclean_collection_keeps_missing_entities(notifications):
+    await tracking.record_snapshot_states("appgate", 42, _site_snapshot(*TWO_UP), now=T0)
+    result = await tracking.record_snapshot_states("appgate", 42, _with_errors(_site_snapshot(*ONLY_GW2)), now=T1)
+    assert result["removed"] == 0 and result["missing"] == 1
+    (row,) = await db_module.list_topology_entity_states("appgate", 42, "device", entity_id="gw-1")
+    assert row["state"] == "unknown" and row["missing"] is True
+
+
+async def test_removed_entity_with_open_alert_is_auto_resolved(notifications):
+    db = await db_module.get_db()
+    try:
+        await db.execute("INSERT INTO inventory_groups (id, name) VALUES (943, 'Gateways')")
+        await db.execute(
+            "INSERT INTO hosts (id, group_id, hostname, ip_address, device_type) "
+            "VALUES (9431, 943, 'gw-1.example.com', '192.0.2.31', 'appgate')"
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    base = _site_snapshot(*TWO_UP)
+    base["nodes"][0]["inventory"] = {"host_id": 9431}
+    await tracking.record_snapshot_states("appgate", 43, base, now=T0)
+    down = copy.deepcopy(base)
+    down["nodes"][0]["status"] = "offline"
+    await tracking.record_snapshot_states("appgate", 43, down, now=T1)
+    (alert,) = await db_module.get_monitoring_alerts(host_id=9431)
+    assert not alert["acknowledged"]
+    result = await tracking.record_snapshot_states("appgate", 43, _site_snapshot(*ONLY_GW2), now=T2)
+    assert result["removed"] == 1
+    (alert,) = await db_module.get_monitoring_alerts(host_id=9431)
+    assert alert["acknowledged"] and alert["acknowledged_by"] == "auto-resolved"
+
+
+async def test_site_mute_survives_empty_site_and_goes_with_the_site(notifications):
+    two_sites = _site_snapshot(("s1", "gw-1", "online"), ("s2", "gw-2", "online"))
+    await tracking.record_snapshot_states("appgate", 44, two_sites, now=T0)
+    await db_module.create_topology_mute("appgate", 44, "site", site="Site s1", reason="not installed", created_by="a")
+    # s1 is still listed but has no gateway left: the mute stays.
+    empty_s1 = _site_snapshot(("s1", "", ""), ("s2", "gw-2", "online"))
+    await tracking.record_snapshot_states("appgate", 44, empty_s1, now=T1)
+    assert [m["site"] for m in await db_module.list_topology_mutes("appgate", 44)] == ["Site s1"]
+    # s1 is gone from the site list: so is its mute.
+    await tracking.record_snapshot_states("appgate", 44, _site_snapshot(("s2", "gw-2", "online")), now=T2)
+    assert await db_module.list_topology_mutes("appgate", 44) == []
+
+
+async def test_reappearing_entity_is_a_new_baseline(notifications):
+    await tracking.record_snapshot_states("appgate", 45, _site_snapshot(*TWO_UP), now=T0)
+    await tracking.record_snapshot_states("appgate", 45, _site_snapshot(*ONLY_GW2), now=T1)
+    back = _site_snapshot(("s1", "gw-1", "offline"), ("s1", "gw-2", "online"))
+    result = await tracking.record_snapshot_states("appgate", 45, back, now=T2)
+    assert result["new"] == 1 and result["alerts"] == [] and notifications == []
+    (row,) = await db_module.list_topology_entity_states("appgate", 45, "device", entity_id="gw-1")
+    assert row["state"] == "down" and row["first_seen"] == T2
+
+
+async def test_remove_topology_entities_takes_edges_and_mutes():
+    device = {"entity_type": "device", "entity_id": "d:Q2XX-AAAA-0001", "name": "Branch MX", "state": "down"}
+    hub = {"entity_type": "device", "entity_id": "d:Q2XX-AAAA-0002", "name": "Hub MX", "state": "up"}
+    tunnel = {
+        "entity_type": "tunnel",
+        "entity_id": "vpn:d:Q2XX-AAAA-0002>d:Q2XX-AAAA-0001",
+        "name": "Hub MX - Branch MX",
+        "state": "down",
+        "meta": {"kind": "vpn", "a": "d:Q2XX-AAAA-0002", "b": "d:Q2XX-AAAA-0001"},
+    }
+    await db_module.apply_topology_entity_states("meraki", 46, [device, hub, tunnel], now=T0)
+    await db_module.create_topology_mute(
+        "meraki", 46, "entity", entity_type="device", entity_id=device["entity_id"], reason="r", created_by="a"
+    )
+    rows = await db_module.remove_topology_entities("meraki", 46, [device["entity_id"]])
+    assert sorted(r["entity_id"] for r in rows) == sorted([device["entity_id"], tunnel["entity_id"]])
+    assert [r["entity_id"] for r in await db_module.list_topology_entity_states("meraki", 46)] == [hub["entity_id"]]
+    assert await db_module.list_topology_mutes("meraki", 46) == []
+    assert await db_module.remove_topology_entities("meraki", 46, []) == []
 
 
 # ── Retention ────────────────────────────────────────────────────────────────

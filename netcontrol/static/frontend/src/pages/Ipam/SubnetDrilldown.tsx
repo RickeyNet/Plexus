@@ -1,6 +1,15 @@
 import { FormEvent, type ReactNode, useId, useState } from 'react';
 
+import { useAuthStatus } from '@/api/auth';
+import {
+  type CustomField,
+  type ObjectRef,
+  useCustomFields,
+  useObjectData,
+  useSaveObjectData,
+} from '@/api/customData';
 import { Callout } from '@/components/Callout';
+import { CustomDataSection } from '@/components/CustomDataSection';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { FieldError } from '@/components/FieldError';
@@ -11,8 +20,13 @@ import {
   useDeleteIpamAllocation,
   useDeleteIpamReservation,
 } from '@/api/ipam';
+import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
+import { QueryError } from '@/components/QueryError';
+import { TagChips } from '@/components/TagChips';
+import { applicableFields, formatCustomValue } from '@/lib/customData';
 import { formatCount } from '@/lib/formatCount';
+import { saveCustomDataDraft, useCustomDataDraft } from '@/lib/useCustomDataDraft';
 import { StatGrid, StatTile } from '@/components/StatTile';
 
 /** Inline form buttons: Cancel then the primary action, right-aligned like a modal footer. */
@@ -24,6 +38,8 @@ const FORM_ACTIONS_STYLE = {
 
 interface Props {
   subnet: string;
+  /** The subnet's VRF ('' for none); with the subnet it names the prefix's tags and fields. */
+  vrf?: string | null;
   detail: IpamSubnetDetail | undefined;
   isLoading: boolean;
   /** Shown in place of the drilldown when the detail request failed with nothing cached. */
@@ -31,7 +47,7 @@ interface Props {
   onRefresh: () => void;
 }
 
-export function SubnetDrilldown({ subnet, detail, isLoading, loadError, onRefresh }: Props) {
+export function SubnetDrilldown({ subnet, vrf, detail, isLoading, loadError, onRefresh }: Props) {
   if (loadError) return loadError;
   if (isLoading) {
     return (
@@ -70,6 +86,8 @@ export function SubnetDrilldown({ subnet, detail, isLoading, loadError, onRefres
         <StatTile label="Reserved" value={formatCount(summary.reserved_address_count)} />
         <StatTile label="Utilized" value={`${summary.utilization_pct ?? 0}%`} />
       </StatGrid>
+
+      <CustomDataPanel key={`${subnet}|${vrf ?? ''}`} subnet={subnet} vrf={vrf ?? ''} />
 
       <div>
         <div style={{ fontWeight: 600, marginBottom: '0.45rem' }}>
@@ -136,6 +154,126 @@ export function SubnetDrilldown({ subnet, detail, isLoading, loadError, onRefres
         </div>
       )}
     </div>
+  );
+}
+
+/** A stored value as text, URLs as links. */
+function FieldValue({ field, value }: { field: CustomField; value: string | number | boolean }) {
+  const text = formatCustomValue(field, value);
+  if (field.field_type === 'url') {
+    return (
+      <a href={text} target="_blank" rel="noopener noreferrer" style={{ overflowWrap: 'anywhere' }}>
+        {text}
+      </a>
+    );
+  }
+  return <span style={{ overflowWrap: 'anywhere' }}>{text}</span>;
+}
+
+/**
+ * The prefix's tags and custom field values: read-only for everyone, with
+ * an Edit button for admins (prefix writes are admin-only, like every other
+ * IPAM write).
+ */
+function CustomDataPanel({ subnet, vrf }: { subnet: string; vrf: string }) {
+  const isAdmin = useAuthStatus().data?.role === 'admin';
+  const ref: ObjectRef = { type: 'prefix', subnet, vrf };
+  const dataQ = useObjectData(ref);
+  const fieldsQ = useCustomFields('prefix');
+  const [editing, setEditing] = useState(false);
+
+  const fields = applicableFields(fieldsQ.data ?? [], 'prefix');
+  const stored = dataQ.data?.fields ?? {};
+  const shownFields = fields.filter((f) => stored[f.key] !== undefined && stored[f.key] !== '');
+  const tags = dataQ.data?.tags ?? [];
+  const editButton = isAdmin && !editing && (
+    <button
+      type="button"
+      className="btn btn-secondary btn-sm"
+      aria-label="Edit tags and custom fields"
+      onClick={() => setEditing(true)}
+    >
+      Edit
+    </button>
+  );
+
+  let body;
+  if (editing) {
+    body = <CustomDataEditor prefixRef={ref} onDone={() => setEditing(false)} />;
+  } else if (dataQ.isError && !dataQ.data) {
+    body = <QueryError what="tags and custom fields" query={dataQ} />;
+  } else if (dataQ.isPending) {
+    body = <LoadingState text="Loading tags and custom fields…" />;
+  } else if (tags.length === 0 && shownFields.length === 0) {
+    body = (
+      <EmptyState
+        compact
+        message="No tags or custom fields set."
+        description={isAdmin ? undefined : 'An admin can add them.'}
+        action={editButton || undefined}
+      />
+    );
+  } else {
+    body = (
+      <div style={{ display: 'grid', gap: '0.35rem', lineHeight: 1.45 }}>
+        {tags.length > 0 && <TagChips tags={tags} />}
+        {shownFields.map((field) => (
+          <div key={field.id}>
+            <span className="text-muted">{field.label}: </span>
+            <FieldValue field={field} value={stored[field.key]} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  const showHeaderButton = editButton && (tags.length > 0 || shownFields.length > 0);
+  return (
+    <div>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '0.5rem',
+          marginBottom: '0.45rem',
+        }}
+      >
+        <div style={{ fontWeight: 600 }}>Tags and Custom Fields</div>
+        {showHeaderButton && editButton}
+      </div>
+      {body}
+    </div>
+  );
+}
+
+function CustomDataEditor({ prefixRef, onDone }: { prefixRef: ObjectRef; onDone: () => void }) {
+  const draft = useCustomDataDraft('prefix', prefixRef);
+  const save = useSaveObjectData();
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setSaveError(null);
+    if (!draft.ready || Object.keys(draft.checkRequired()).length > 0) return;
+    const failure = await saveCustomDataDraft(save, draft, prefixRef);
+    if (failure) setSaveError(`The tags and custom fields were not saved: ${failure} Fix them and save again.`);
+    else onDone();
+  };
+
+  return (
+    <form onSubmit={submit} style={{ display: 'grid', gap: '0.6rem' }}>
+      {saveError && <Callout tone="danger">{saveError}</Callout>}
+      <CustomDataSection objectType="prefix" draft={draft} canCreateTags title={null} />
+      <div style={FORM_ACTIONS_STYLE}>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={onDone}>
+          Cancel
+        </button>
+        <button type="submit" className="btn btn-primary btn-sm" disabled={save.isPending || !draft.ready}>
+          {save.isPending ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+    </form>
   );
 }
 

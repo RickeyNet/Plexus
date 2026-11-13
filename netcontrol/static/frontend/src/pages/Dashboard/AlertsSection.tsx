@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import { Link } from 'react-router';
 
 import type { DashboardAlert, TopologyProblem } from '@/api/dashboard';
 import { Badge, SeverityBadge } from '@/components/Badge';
+import { MuteEntityModal } from '@/components/MuteEntityModal';
 import { formatBackendDateTime, formatRelativeTime } from '@/lib/datetime';
 
 import { CountLink } from './CountLink';
@@ -22,6 +24,7 @@ const TOPOLOGY_ROWS = 20;
 
 export function AlertsSection({ alerts, topologyProblems = [], topologyProblemCount }: Props) {
   const problemTotal = Math.max(topologyProblemCount ?? 0, topologyProblems.length);
+  const [muting, setMuting] = useState<TopologyProblem | null>(null);
   return (
     <div className="glass-card card dashboard-overview-card">
       <h3 className="dashboard-overview-title">Active Alerts</h3>
@@ -88,6 +91,14 @@ export function AlertsSection({ alerts, topologyProblems = [], topologyProblemCo
                   >
                     {p.since ? formatRelativeTime(p.since) : ''}
                   </span>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-secondary"
+                    aria-label={`Mute ${p.name}`}
+                    onClick={() => setMuting(p)}
+                  >
+                    Mute
+                  </button>
                 </div>
               ))}
               {problemTotal > TOPOLOGY_ROWS && (
@@ -101,6 +112,7 @@ export function AlertsSection({ alerts, topologyProblems = [], topologyProblemCo
           )}
         </>
       )}
+      {muting && <MuteEntityModal target={muting} onClose={() => setMuting(null)} />}
     </div>
   );
 }

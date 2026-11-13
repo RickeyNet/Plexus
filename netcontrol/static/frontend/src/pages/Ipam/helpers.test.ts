@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   driftBadgeClass,
   driftLabel,
+  filterSubnetsByCustomData,
   formatSubnetPreview,
   providerLabel,
   validateConnectionForm,
@@ -97,5 +98,33 @@ describe('validateConnectionForm', () => {
       name: 'Name is required.',
       baseUrl: 'Base URL is required.',
     });
+  });
+});
+
+describe('filterSubnetsByCustomData', () => {
+  const core = { id: 1, name: 'core', color: 'blue' };
+  const subnets = [
+    { subnet: '192.0.2.0/24', tags: [core], custom_fields: { site: 'north' } },
+    { subnet: '198.51.100.0/24', custom_fields: { site: 'south' } },
+    { subnet: '2001:db8::/32' },
+  ];
+  const names = (rows: { subnet: string }[]) => rows.map((r) => r.subnet);
+
+  it('filters by tag', () => {
+    expect(names(filterSubnetsByCustomData(subnets, { tagIds: [1], fields: {} }))).toEqual(['192.0.2.0/24']);
+  });
+
+  it('filters by field value and by has-a-value', () => {
+    expect(names(filterSubnetsByCustomData(subnets, { tagIds: [], fields: { site: 'south' } }))).toEqual([
+      '198.51.100.0/24',
+    ]);
+    expect(names(filterSubnetsByCustomData(subnets, { tagIds: [], fields: { site: '*' } }))).toEqual([
+      '192.0.2.0/24',
+      '198.51.100.0/24',
+    ]);
+  });
+
+  it('returns the input unchanged for an empty filter', () => {
+    expect(filterSubnetsByCustomData(subnets, { tagIds: [], fields: {} })).toBe(subnets);
   });
 });

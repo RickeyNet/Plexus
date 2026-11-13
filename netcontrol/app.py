@@ -140,6 +140,13 @@ from netcontrol.routes.config_drift import (
     ws_router as config_drift_ws_router,
 )
 from netcontrol.routes.credentials import CredentialCreate, CredentialUpdate, router as credentials_router
+from netcontrol.routes.custom_fields import (
+    admin_router as custom_fields_admin_router,
+    init_custom_fields,
+    inventory_router as custom_fields_inventory_router,
+    ipam_router as custom_fields_ipam_router,
+    router as custom_fields_router,
+)
 from netcontrol.routes.dashboards import router as dashboards_router
 from netcontrol.routes.deployments import (
     DeploymentCreate,
@@ -2047,17 +2054,17 @@ async def https_redirect_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-def _api_error_response(status_code: int, code: str, message: str) -> JSONResponse:
-    return JSONResponse(
-        status_code=status_code,
-        content={
-            "ok": False,
-            "error": {
-                "code": code,
-                "message": message,
-            },
+def _api_error_response(status_code: int, code: str, message: str, detail: dict | None = None) -> JSONResponse:
+    content: dict = {
+        "ok": False,
+        "error": {
+            "code": code,
+            "message": message,
         },
-    )
+    }
+    if detail is not None:
+        content["detail"] = detail
+    return JSONResponse(status_code=status_code, content=content)
 
 
 @app.exception_handler(HTTPException)
@@ -2065,10 +2072,19 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     if not request.url.path.startswith("/api/"):
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
-    detail = exc.detail if isinstance(exc.detail, str) else "Request failed"
+    # A structured detail (a dict with a ``message``, e.g. per-field
+    # validation errors) is passed through as ``detail`` beside the usual
+    # ``error.message``; any other non-string detail stays hidden.
+    structured = exc.detail if isinstance(exc.detail, dict) and isinstance(exc.detail.get("message"), str) else None
+    if structured is not None:
+        detail = structured["message"]
+    else:
+        detail = exc.detail if isinstance(exc.detail, str) else "Request failed"
     safe_detail = str(redact_value(detail))
     LOGGER.warning("HTTP %s on %s: %s", exc.status_code, request.url.path, safe_detail)
-    return _api_error_response(exc.status_code, "http_error", safe_detail)
+    if structured is not None:
+        structured = {**structured, "message": safe_detail}
+    return _api_error_response(exc.status_code, "http_error", safe_detail, structured)
 
 
 @app.exception_handler(RequestValidationError)
@@ -2214,6 +2230,7 @@ init_deployments(verify_session_token, _get_user_features)
 init_cloud_visibility(require_admin)
 init_meraki_topology(require_admin)
 init_ipam(require_admin)
+init_custom_fields(require_admin)
 init_software(require_admin)
 init_dhcp(require_admin)
 init_federation(require_admin)
@@ -2233,6 +2250,19 @@ app.include_router(
 app.include_router(
     inventory_admin_router,
     dependencies=[Depends(require_admin)],
+)
+# Custom fields and tags: definitions are readable by any signed-in user and
+# managed by admins; host and group data sit with inventory access, prefix
+# data with IPAM access (and admin to change, like every IPAM write).
+app.include_router(custom_fields_router, dependencies=[Depends(require_auth)])
+app.include_router(custom_fields_admin_router, dependencies=[Depends(require_admin)])
+app.include_router(
+    custom_fields_inventory_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("inventory"))],
+)
+app.include_router(
+    custom_fields_ipam_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("ipam"))],
 )
 # Ansible dynamic inventory provider
 app.include_router(

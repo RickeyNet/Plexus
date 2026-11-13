@@ -35,8 +35,13 @@ export interface MerakiAlert {
   seen_via: string[];
   occurrences: number;
   host_id: number | null;
-  /** How Plexus alerted: ``monitoring``, ``notification``, ``topology`` or empty (not alerted). */
+  /**
+   * How Plexus alerted: ``monitoring``, ``notification``, ``topology``,
+   * ``muted`` (stored but not raised) or empty (not alerted).
+   */
   alert_via: string;
+  /** Its device or network is muted; absent from older servers. */
+  muted?: boolean;
 }
 
 export interface MerakiAlertSettingsConfig {

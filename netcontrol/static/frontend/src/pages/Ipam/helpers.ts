@@ -1,4 +1,5 @@
 import type { IpamSubnet } from '@/api/ipam';
+import { type CustomDataFilterValue, isEmptyFilter, matchesCustomData } from '@/lib/customData';
 
 export function formatSubnetPreview(item: IpamSubnet): string {
   const parts: string[] = [];
@@ -111,4 +112,10 @@ export function validateConnectionForm(values: {
   if (!values.name.trim()) errors.name = 'Name is required.';
   if (!values.baseUrl.trim()) errors.baseUrl = 'Base URL is required.';
   return errors;
+}
+
+/** The subnets carrying every tag and field value of the filter; an empty filter returns `subnets` unchanged. */
+export function filterSubnetsByCustomData(subnets: IpamSubnet[], filter: CustomDataFilterValue): IpamSubnet[] {
+  if (isEmptyFilter(filter)) return subnets;
+  return subnets.filter((subnet) => matchesCustomData(subnet, filter));
 }

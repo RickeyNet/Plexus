@@ -47,15 +47,24 @@ def admin_client(monkeypatch, request) -> CsrfClient:
     return CsrfClient(client, resp.json().get("csrf_token", ""))
 
 
-def create_user(admin: CsrfClient, username: str = "ai-reader", role: str = "user") -> int:
-    resp = admin.post("/api/admin/users", json={"username": username, "password": "password123", "role": role})
+def create_user(
+    admin: CsrfClient, username: str = "ai-reader", role: str = "user", features: list[str] | None = None
+) -> int:
+    """Create a user; with ``features``, in a new access group granting exactly those."""
+    body: dict = {"username": username, "password": "password123", "role": role}
+    if features:
+        group = admin.post("/api/admin/access-groups", json={"name": f"{username} access", "feature_keys": features})
+        assert group.status_code == 201, group.text
+        body["group_ids"] = [int(group.json()["id"])]
+    resp = admin.post("/api/admin/users", json=body)
     assert resp.status_code == 201, resp.text
     return int(resp.json()["id"])
 
 
-def user_client(admin: CsrfClient, username: str = "plain-user") -> CsrfClient:
-    """A second session, for a new non-admin user, on the same running app."""
-    create_user(admin, username)
+def user_client(admin: CsrfClient, username: str = "plain-user", features: list[str] | None = None) -> CsrfClient:
+    """A second session, for a new non-admin user, on the same running app.
+    ``features`` grants that user exactly those features."""
+    create_user(admin, username, features=features)
     client = TestClient(app_module.app, raise_server_exceptions=False)
     resp = client.post("/api/auth/login", json={"username": username, "password": "password123"})
     assert resp.status_code == 200, resp.text

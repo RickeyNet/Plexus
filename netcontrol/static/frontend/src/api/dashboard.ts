@@ -49,6 +49,12 @@ export interface TopologyStateCounts {
   degraded: number;
   down: number;
   unknown: number;
+  /**
+   * Muted entities that are down or degraded; the server leaves them out of
+   * `down` / `degraded` (a muted up or unknown entity stays under its state).
+   * Absent from older servers.
+   */
+  muted?: number;
 }
 
 /** A down or degraded entity an integration collects (site, uplink, tunnel...). */

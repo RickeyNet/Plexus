@@ -166,11 +166,11 @@ describe('availability links', () => {
   });
 
   it('matches down or degraded for the problem filter', () => {
-    expect(matchesAvailabilityState('down', 'problem')).toBe(true);
-    expect(matchesAvailabilityState('degraded', 'problem')).toBe(true);
-    expect(matchesAvailabilityState('up', 'problem')).toBe(false);
-    expect(matchesAvailabilityState('up', 'up')).toBe(true);
-    expect(matchesAvailabilityState('unknown', 'down')).toBe(false);
+    expect(matchesAvailabilityState({ current_state: 'down' }, 'problem')).toBe(true);
+    expect(matchesAvailabilityState({ current_state: 'degraded' }, 'problem')).toBe(true);
+    expect(matchesAvailabilityState({ current_state: 'up' }, 'problem')).toBe(false);
+    expect(matchesAvailabilityState({ current_state: 'up' }, 'up')).toBe(true);
+    expect(matchesAvailabilityState({ current_state: 'unknown' }, 'down')).toBe(false);
   });
 });
 

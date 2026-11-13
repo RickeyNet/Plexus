@@ -4,6 +4,7 @@ import type {
   InventoryHost,
   SshEnrichmentSummary,
 } from '@/api/inventory';
+import { type CustomDataFilterValue, isEmptyFilter, matchesCustomData } from '@/lib/customData';
 import { descendantIdsOf, treeOrder } from '@/lib/tree';
 
 const groupIdOf = (g: InventoryGroupFull) => g.id;
@@ -65,6 +66,42 @@ export function filterGroups(
     }
   }
   return groups.filter((g) => keep.has(g.id));
+}
+
+/**
+ * Groups and hosts that match a tag / custom field filter. A group that
+ * matches by its own tags or fields keeps all its hosts; a group that matches
+ * only through some of its hosts keeps just those; a group with neither is
+ * dropped, unless it is the ancestor of a kept group, which stays (without
+ * hosts) so the tree still reads from the top. An empty filter returns
+ * `groups` unchanged.
+ */
+export function filterGroupsByCustomData(
+  groups: InventoryGroupFull[],
+  filter: CustomDataFilterValue,
+): InventoryGroupFull[] {
+  if (isEmptyFilter(filter)) return groups;
+  const kept = new Map<number, InventoryGroupFull>();
+  for (const group of groups) {
+    if (matchesCustomData(group, filter)) {
+      kept.set(group.id, group);
+      continue;
+    }
+    const hosts = (group.hosts ?? []).filter((host) => matchesCustomData(host, filter));
+    if (hosts.length > 0) kept.set(group.id, { ...group, hosts });
+  }
+  const parentOf = new Map(groups.map((g) => [g.id, g.parent_id ?? null]));
+  const ancestors = new Set<number>();
+  for (const id of kept.keys()) {
+    for (let p = parentOf.get(id) ?? null; p != null && !ancestors.has(p); p = parentOf.get(p) ?? null) {
+      ancestors.add(p);
+    }
+  }
+  return groups.flatMap((g) => {
+    const match = kept.get(g.id);
+    if (match) return [match];
+    return ancestors.has(g.id) ? [{ ...g, hosts: [] }] : [];
+  });
 }
 
 /**

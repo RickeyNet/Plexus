@@ -10,13 +10,15 @@ import json
 import random
 import time
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
+from netcontrol.routes import topology_availability as topology_tracking
 from netcontrol.routes.icmp import ICMP_AVAILABLE, ping_host
 from netcontrol.routes.maintenance_windows import _parse_iso
 from netcontrol.routes.metrics_engine import (
@@ -33,7 +35,7 @@ from netcontrol.routes.route_capture import (  # re-exported: tests and callers 
     read_full_route_tables,
     store_route_snapshot,
 )
-from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol.routes.shared import _audit, _corr_id, _get_session, _session_user
 from netcontrol.routes.snmp import PYSMNP_AVAILABLE, _snmp_walk
 from netcontrol.telemetry import configure_logging, increment_metric, redact_value
 
@@ -2134,6 +2136,90 @@ async def topology_availability_outages_api(
             limit=limit,
         )
     }
+
+
+# Mutes of topology entities: same gate as acknowledging an alert.
+_MUTE_REASON_MAX = 500
+_TOPOLOGY_ENTITY_OR_EMPTY_RE = _TOPOLOGY_ENTITY_RE.replace("^(", "^(|", 1)
+
+
+class TopologyMuteCreate(BaseModel):
+    provider: str = Field(pattern=_TOPOLOGY_PROVIDER_RE)
+    org_ref: int
+    scope: Literal["entity", "site"]
+    entity_type: str = Field(default="", pattern=_TOPOLOGY_ENTITY_OR_EMPTY_RE)
+    entity_id: str = Field(default="", max_length=500)
+    site: str = Field(default="", max_length=200)
+    reason: str = ""
+
+
+def _mute_audit_detail(mute: dict) -> str:
+    # The reason is free text: kept out of the audit detail.
+    target = mute["entity_id"] or mute["site"]
+    return f"{mute['provider']}:{mute['org_ref']} {mute['scope']} {mute['entity_type']}:{target}"
+
+
+@router.get("/api/availability/topology/mutes")
+async def list_topology_mutes_api():
+    return {"mutes": await db.list_topology_mutes()}
+
+
+@router.post("/api/availability/topology/mutes", status_code=201)
+async def create_topology_mute_api(body: TopologyMuteCreate, request: Request):
+    """Mute one tracked entity, or every entity at one site, of one source.
+    Its open alerts are acknowledged as ``muted``."""
+    reason = body.reason.strip()
+    if not 1 <= len(reason) <= _MUTE_REASON_MAX:
+        raise HTTPException(status_code=400, detail=f"A reason of 1 to {_MUTE_REASON_MAX} characters is required")
+    if body.scope == "entity":
+        found = bool(body.entity_type and body.entity_id) and bool(
+            await db.list_topology_entity_states(
+                body.provider, body.org_ref, body.entity_type, entity_id=body.entity_id
+            )
+        )
+        if not found:
+            raise HTTPException(status_code=404, detail="No such tracked entity")
+    else:
+        site = body.site.strip()
+        rows = await db.list_topology_entity_states(body.provider, body.org_ref) if site else []
+        if not any(str(r.get("site") or "") == site for r in rows):
+            raise HTTPException(status_code=404, detail="No tracked entity is at that site")
+    mute = await db.create_topology_mute(
+        body.provider,
+        body.org_ref,
+        body.scope,
+        entity_type=body.entity_type,
+        entity_id=body.entity_id,
+        site=body.site.strip(),
+        reason=reason,
+        created_by=_session_user(request),
+    )
+    acknowledged = await topology_tracking.mute_entities(mute)
+    await _audit(
+        "monitoring",
+        "topology.muted",
+        user=_session_user(request),
+        detail=_mute_audit_detail(mute),
+        correlation_id=_corr_id(request),
+    )
+    return {"mute": mute, "acknowledged": acknowledged}
+
+
+@router.delete("/api/availability/topology/mutes/{mute_id}")
+async def delete_topology_mute_api(mute_id: int, request: Request):
+    """Unmute. Nothing is raised retroactively: an alert swallowed while
+    muted counts as raised."""
+    mute = await db.get_topology_mute(mute_id)
+    if mute is None or not await db.delete_topology_mute(mute_id):
+        raise HTTPException(status_code=404, detail="Mute not found")
+    await _audit(
+        "monitoring",
+        "topology.unmuted",
+        user=_session_user(request),
+        detail=_mute_audit_detail(mute),
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True}
 
 
 # ── Per-Port Utilization Routes ──────────────────────────────────────────────

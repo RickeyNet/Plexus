@@ -294,8 +294,9 @@ async def expire_meraki_webhook_alerts(ttl_hours: int, *, now: str | None = None
 
 async def set_meraki_alert_raised(alert_key: str, severity: str, via: str, host_id: int | None = None) -> None:
     """Record that an alert was raised for a row at ``severity``: ``via`` is
-    ``monitoring`` (on an inventory host), ``notification`` (the channels)
-    or ``topology`` (already notified by the topology availability tracker)."""
+    ``monitoring`` (on an inventory host), ``notification`` (the channels),
+    ``topology`` (already notified by the topology availability tracker) or
+    ``muted`` (its device or network is muted: recorded, not raised)."""
     db = await _dbcore.get_db()
     try:
         await db.execute(

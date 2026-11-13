@@ -104,10 +104,28 @@ open alert (again only if the severity gets worse):
   [alert-notification-channels.md](alert-notification-channels.md)) with the
   same event shape;
 - when the alert resolves, its monitoring alert is acknowledged as
-  `auto-resolved`.
+  `auto-resolved`;
+- an alert whose device or network is muted
+  ([meraki-topology.md](meraki-topology.md#muting)) is stored but not
+  raised: it is listed with **Plexus: Muted**, and hidden from the list
+  unless **Show muted** is ticked.
 
 Every step is best effort: a failure is logged with the exception type only
 and never stops the poll loop or the webhook response.
+
+### Devices removed from Meraki
+
+When a poll no longer reports an alert it reported before, and the alert's
+device is one the availability tracker follows, Plexus asks Meraki whether
+the device still exists (`GET /organizations/{organizationId}/devices`
+filtered to those serials: one more request for that organization, on that
+poll only). A device Meraki no longer lists is deleted from availability
+tracking at once, with its uplinks, tunnels and mute, so it leaves the
+Dashboard within about one poll interval instead of at the next collection.
+A device that is still listed (it came back online, or the alert was
+dismissed) is kept. If the request fails, nothing is removed and the next
+collection decides (see
+[Removed entities](meraki-topology.md#removed-entities)).
 
 ### Overlap with the hourly availability alerts
 
@@ -524,6 +542,16 @@ alerts carry their alert type, so a notification rule can drop one of them.
 If the same alert keeps notifying, check whether it resolves and reopens
 (**Show resolved**): each new occurrence after a resolve is notified.
 
+**A device I muted still shows.** A muted device is left off the Dashboard
+and sends no notifications, but stays listed under **Monitoring >
+Availability** with a **Muted** badge, by design, so a mute never hides
+something without a trace. Its Meraki alerts are hidden unless **Show muted**
+is ticked.
+
+**A removed device is still listed.** A device with no open Meraki alert
+when it was removed waits for the next topology collection (hourly by
+default; **Collect Now** in the Sources dialog does it at once).
+
 **Rate limiting.** Repeated `HTTP 429` in **Last error** means the
 organization's API budget is used up by Plexus's collection and other tools
 together: raise `interval_seconds`, or the topology collection interval, or
@@ -560,6 +588,9 @@ NTP.
   recorded against the first one (lowest `order`); the count is kept in the
   record's detail.
 - **Info alerts are not notified.** They are listed only.
+- **Fast removal needs an alert.** Only a removed device that had an open
+  alert the poll reported is removed within a minute; any other removed
+  device, network or tunnel is removed at the next collection.
 - **Uplink and tunnel overlap** with the hourly availability alerts is not
   suppressed (see [Overlap with the hourly availability
   alerts](#overlap-with-the-hourly-availability-alerts)).

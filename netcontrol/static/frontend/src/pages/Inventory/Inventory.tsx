@@ -1,14 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
+import { CustomDataFilter } from '@/components/CustomDataFilter';
 import { DeleteButton } from '@/components/DeleteButton';
+import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
+import { TagChips } from '@/components/TagChips';
 import { clickableProps } from '@/lib/clickable';
+import { type CustomDataFilterValue, EMPTY_CUSTOM_DATA_FILTER, isEmptyFilter } from '@/lib/customData';
 import { useLinkedParam } from '@/lib/useLinkedParam';
 
 import {
@@ -27,6 +31,7 @@ import {
 } from '@/api/inventory';
 
 import { BulkMoveModal } from './BulkMoveModal';
+import { BulkTagModal } from './BulkTagModal';
 import { DiscoveryModal, type DiscoveryMode } from './DiscoveryModal';
 import { GroupModal } from './GroupModal';
 import { HostModal } from './HostModal';
@@ -35,6 +40,7 @@ import { SnmpProfilesModal } from './SnmpProfilesModal';
 import {
   applyGroupOrder,
   filterGroups,
+  filterGroupsByCustomData,
   hiddenByCollapsedAncestor,
   hostMatchesQuery,
   loadCollapsedSet,
@@ -56,6 +62,7 @@ type ModalState =
       host: InventoryHost & { group_id: number };
     }
   | { kind: 'bulk-move'; sourceGroupId: number; hostIds: number[] }
+  | { kind: 'bulk-tag'; hostIds: number[] }
   | { kind: 'serial'; target: SerialTarget }
   | { kind: 'snmp-profiles' }
   | {
@@ -73,6 +80,7 @@ export function Inventory() {
   const assignmentsQ = useGroupSnmpAssignments(groupIds);
 
   const [query, setQuery] = useState('');
+  const [dataFilter, setDataFilter] = useState<CustomDataFilterValue>(EMPTY_CUSTOM_DATA_FILTER);
   const [sort, setSort] = useState<InventorySort>('custom');
   const [compact, setCompact] = useState<boolean>(() => loadCompactMode());
   const [collapsed, setCollapsed] = useState<Set<number>>(() => loadCollapsedSet());
@@ -111,10 +119,18 @@ export function Inventory() {
     [groups, orderOverride],
   );
 
+  // The text search and the tag / custom field filter both apply.
   const filtered = useMemo(
-    () => sortGroups(filterGroups(orderedGroups, query), sort),
-    [orderedGroups, query, sort],
+    () => sortGroups(filterGroupsByCustomData(filterGroups(orderedGroups, query), dataFilter), sort),
+    [orderedGroups, query, dataFilter, sort],
   );
+  const hasDataFilter = !isEmptyFilter(dataFilter);
+  // The filter hides hosts, so a selection made before it could act on
+  // hosts no longer shown: start the selection over.
+  const changeDataFilter = (next: CustomDataFilterValue) => {
+    setDataFilter(next);
+    setSelectedHosts(new Map());
+  };
   // A collapsed group hides its sub-groups as well as its hosts.
   const hiddenIds = useMemo(() => hiddenByCollapsedAncestor(filtered, collapsed), [filtered, collapsed]);
   const visible = useMemo(() => filtered.filter((g) => !hiddenIds.has(g.id)), [filtered, hiddenIds]);
@@ -127,7 +143,7 @@ export function Inventory() {
     return counts;
   }, [filtered]);
 
-  const isCustomOrder = sort === 'custom' && !query.trim();
+  const isCustomOrder = sort === 'custom' && !query.trim() && !hasDataFilter;
 
   const toggleCollapsed = (id: number) => {
     setCollapsed((prev) => {
@@ -304,6 +320,7 @@ export function Inventory() {
           onChange={(e) => setQuery(e.target.value)}
           style={{ maxWidth: 280, flex: '1 1 200px' }}
         />
+        <CustomDataFilter objectType="host" value={dataFilter} onChange={changeDataFilter} />
         <select
           className="form-select form-select-sm"
           value={sort}
@@ -347,7 +364,20 @@ export function Inventory() {
         <QueryError what="SNMP profile assignments" query={assignmentsQ} />
       )}
       <div className="stack stack-sm">
-        {groupsQ.data && filtered.length === 0 && (
+        {groupsQ.data && filtered.length === 0 && hasDataFilter && (
+          <div className="card">
+            <EmptyState
+              message="No groups or hosts match this filter."
+              description={query ? 'The search box narrows the list as well.' : undefined}
+              action={
+                <button type="button" className="btn btn-sm btn-secondary" onClick={() => changeDataFilter(EMPTY_CUSTOM_DATA_FILTER)}>
+                  Clear filter
+                </button>
+              }
+            />
+          </div>
+        )}
+        {groupsQ.data && filtered.length === 0 && !hasDataFilter && (
           <div
             className="card"
             style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-muted)' }}
@@ -426,6 +456,10 @@ export function Inventory() {
               });
             }}
             onBulkDelete={() => handleBulkDelete(group.id)}
+            onBulkTag={() => {
+              const ids = Array.from(selectedHosts.get(group.id) ?? []);
+              if (ids.length) setModal({ kind: 'bulk-tag', hostIds: ids });
+            }}
           />
         ))}
       </div>
@@ -466,6 +500,9 @@ export function Inventory() {
             closeModal();
           }}
         />
+      )}
+      {modal.kind === 'bulk-tag' && (
+        <BulkTagModal hostIds={modal.hostIds} onClose={closeModal} />
       )}
       {modal.kind === 'serial' && (
         <SerialModal target={modal.target} onClose={closeModal} />
@@ -513,6 +550,7 @@ interface GroupCardProps {
   onFetchSerial: (host: InventoryHost) => void;
   onBulkMove: () => void;
   onBulkDelete: () => void;
+  onBulkTag: () => void;
 }
 
 /** How far each level of sub-groups is indented. */
@@ -545,6 +583,7 @@ function GroupCard({
   onFetchSerial,
   onBulkMove,
   onBulkDelete,
+  onBulkTag,
 }: GroupCardProps) {
   const hosts = group.hosts ?? [];
   const sortedHosts = sortHostsForQuery(hosts, query);
@@ -654,6 +693,11 @@ function GroupCard({
                 {group.description}
               </div>
             )}
+            {group.tags && group.tags.length > 0 && (
+              <div style={{ marginTop: 'var(--space-1)' }}>
+                <TagChips tags={group.tags} max={3} />
+              </div>
+            )}
           </div>
         </div>
         <div
@@ -738,6 +782,13 @@ function GroupCard({
                   >
                     Move
                   </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-secondary"
+                    onClick={onBulkTag}
+                  >
+                    Tag…
+                  </button>
                   <DeleteButton onClick={onBulkDelete} />
                 </>
               )}
@@ -821,7 +872,14 @@ function GroupCard({
                                   aria-label={`Select ${host.hostname}`}
                                 />
                               </td>
-                              <td>{host.hostname}</td>
+                              <td>
+                                {host.hostname}
+                                {host.tags && host.tags.length > 0 && (
+                                  <div style={{ marginTop: 'var(--space-1)' }}>
+                                    <TagChips tags={host.tags} max={3} />
+                                  </div>
+                                )}
+                              </td>
                               <td>{host.ip_address}</td>
                               <td>{host.device_type || 'cisco_ios'}</td>
                               <td>{host.model || '-'}</td>

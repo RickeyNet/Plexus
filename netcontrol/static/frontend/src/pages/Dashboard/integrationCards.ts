@@ -40,6 +40,8 @@ export interface EntityTypeCounts {
   degraded: number;
   down: number;
   unknown: number;
+  /** Muted down / degraded entities: counted in `total`, never a problem. */
+  muted: number;
   total: number;
 }
 
@@ -59,13 +61,15 @@ export function sourceEntityCounts(
       degraded: 0,
       down: 0,
       unknown: 0,
+      muted: 0,
       total: 0,
     };
     c.up += r.up;
     c.degraded += r.degraded;
     c.down += r.down;
     c.unknown += r.unknown;
-    c.total = c.up + c.degraded + c.down + c.unknown;
+    c.muted += r.muted ?? 0;
+    c.total = c.up + c.degraded + c.down + c.unknown + c.muted;
     byType.set(r.entity_type, c);
   }
   const order = (type: string) => {
@@ -171,11 +175,14 @@ export function buildIntegrationCards(
 }
 
 /** "3 up, 1 degraded, 2 down" (zero counts left out, "none" when empty), for screen readers and tooltips. */
-export function describeCounts(c: Pick<EntityTypeCounts, 'up' | 'degraded' | 'down' | 'unknown'>): string {
+export function describeCounts(
+  c: Pick<EntityTypeCounts, 'up' | 'degraded' | 'down' | 'unknown'> & { muted?: number },
+): string {
   const parts: string[] = [];
   if (c.up) parts.push(`${c.up} up`);
   if (c.degraded) parts.push(`${c.degraded} degraded`);
   if (c.down) parts.push(`${c.down} down`);
   if (c.unknown) parts.push(`${c.unknown} unknown`);
+  if (c.muted) parts.push(`${c.muted} muted`);
   return parts.join(', ') || 'none';
 }

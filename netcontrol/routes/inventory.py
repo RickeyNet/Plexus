@@ -23,6 +23,7 @@ from netcontrol.drivers import DriverCapabilityError, GenericDriver, get_driver
 from netcontrol.drivers.show_version import ShowVersionFacts, parse_show_version
 from netcontrol.integrations.software.versions import classify_host
 from netcontrol.routes import background_jobs
+from netcontrol.routes.custom_fields import attach_custom_data, matching_keys
 from netcontrol.routes.host_identity import host_ip_problem, is_placeholder_hostname, placeholder_hostname
 from netcontrol.routes.icmp import _probe_discovery_target_icmp
 from netcontrol.routes.ipam_push import push_inventory_host_allocation
@@ -1175,17 +1176,51 @@ async def update_group_snmp_profile_assignment(group_id: int, body: dict):
 # ── Inventory Group CRUD ─────────────────────────────────────────────────────
 
 
+def _id_key(row: dict) -> str:
+    return str(row["id"])
+
+
+def _csv_field_cell(field: dict, value: object) -> str:
+    """A custom field value as CSV text: numbers and booleans as written,
+    text-like values guarded against formulas."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if field["field_type"] == "number":
+        return str(value)
+    return _csv_text_cell(value)
+
+
 @router.get("/api/inventory")
 async def list_groups(request: Request, include_hosts: bool = Query(default=False)):
+    """Every group (with its hosts when ``include_hosts``), each carrying its
+    ``tags`` and ``custom_fields``. ``tag=`` (repeatable) and ``cf.<key>=``
+    filter: with hosts, each group keeps only its matching hosts and groups
+    left empty are dropped; without, only matching groups are listed."""
+    keys = await matching_keys("host" if include_hosts else "group", request.query_params)
     session = _get_session(request)
     user_id = session.get("user_id") if session else None
     if user_id is not None:
         if include_hosts:
-            return await db.get_all_groups_with_hosts_for_user(int(user_id))
-        return await db.get_all_groups_for_user(int(user_id))
+            groups = await db.get_all_groups_with_hosts_for_user(int(user_id))
+        else:
+            groups = await db.get_all_groups_for_user(int(user_id))
+    elif include_hosts:
+        groups = await db.get_all_groups_with_hosts()
+    else:
+        groups = await db.get_all_groups()
+    if keys is not None:
+        if include_hosts:
+            for group in groups:
+                group["hosts"] = [h for h in group["hosts"] if _id_key(h) in keys]
+            groups = [g for g in groups if g["hosts"]]
+        else:
+            groups = [g for g in groups if _id_key(g) in keys]
+    await attach_custom_data("group", groups, _id_key)
     if include_hosts:
-        return await db.get_all_groups_with_hosts()
-    return await db.get_all_groups()
+        await attach_custom_data("host", [h for g in groups for h in g["hosts"]], _id_key)
+    return groups
 
 
 class GroupReorderRequest(BaseModel):
@@ -1202,14 +1237,34 @@ async def reorder_groups(payload: GroupReorderRequest, request: Request):
     return {"ok": True}
 
 
+# A cell starting with one of these is read as a formula by spreadsheet apps.
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_text_cell(value: object) -> str:
+    """A user-entered text cell made safe to open in a spreadsheet: a leading
+    apostrophe stops a value such as ``=cmd`` or ``@SUM(A1)`` running as a
+    formula."""
+    text = "" if value is None else str(value)
+    return f"'{text}" if text.startswith(_CSV_FORMULA_PREFIXES) else text
+
+
 @router.get("/api/inventory/export/csv")
 async def export_inventory_csv():
-    """Export all inventory hosts as a CSV file."""
+    """Export all inventory hosts as a CSV file: the host columns, then
+    ``Tags`` (names joined with ``; ``) and one column per custom field that
+    applies to hosts, in display order."""
     rows = await db.get_all_hosts_for_export()
+    fields = await db.list_custom_fields("host")
+    await attach_custom_data("host", rows, _id_key)
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Hostname", "IP Address", "Model", "Software Version", "Device Type", "Status", "Group"])
+    writer.writerow(
+        ["Hostname", "IP Address", "Model", "Software Version", "Device Type", "Status", "Group", "Tags"]
+        + [f["label"] for f in fields]
+    )
     for r in rows:
+        values = r["custom_fields"]
         writer.writerow(
             [
                 r.get("hostname", ""),
@@ -1219,7 +1274,9 @@ async def export_inventory_csv():
                 r.get("device_type", ""),
                 r.get("status", ""),
                 r.get("group_name", ""),
+                _csv_text_cell("; ".join(t["name"] for t in r["tags"])),
             ]
+            + [_csv_field_cell(f, values.get(f["key"])) for f in fields]
         )
     return StreamingResponse(
         io.StringIO(output.getvalue()),
@@ -1267,7 +1324,10 @@ async def get_group(group_id: int):
     if not group:
         raise HTTPException(404, "Group not found")
     hosts = await db.get_hosts_for_group(group_id)
-    return {**group, "hosts": hosts}
+    result = {**group, "hosts": hosts}
+    await attach_custom_data("group", [result], _id_key)
+    await attach_custom_data("host", hosts, _id_key)
+    return result
 
 
 @router.delete("/api/inventory/{group_id}")
@@ -1283,8 +1343,15 @@ async def delete_group(group_id: int):
 
 
 @router.get("/api/inventory/{group_id}/hosts")
-async def list_hosts(group_id: int):
-    return await db.get_hosts_for_group(group_id)
+async def list_hosts(group_id: int, request: Request):
+    """A group's hosts with their ``tags`` and ``custom_fields``; ``tag=`` and
+    ``cf.<key>=`` keep only the matching hosts."""
+    keys = await matching_keys("host", request.query_params)
+    hosts = await db.get_hosts_for_group(group_id)
+    if keys is not None:
+        hosts = [h for h in hosts if _id_key(h) in keys]
+    await attach_custom_data("host", hosts, _id_key)
+    return hosts
 
 
 async def _insert_host(group_id: int, body: HostCreate) -> int:
