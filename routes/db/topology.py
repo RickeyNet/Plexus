@@ -2098,12 +2098,19 @@ async def get_config_backups(
     host_id: int | None = None,
     policy_id: int | None = None,
     limit: int = 100,
+    status: str | None = None,
 ) -> list[dict]:
-    """List backups with host info, optionally filtered."""
+    """List backups with host info, newest first, optionally filtered.
+    ``status='success'`` leaves out failed attempts, which hold no config and
+    can be newer than the config a host still has (an unchanged re-read
+    updates ``checked_at`` rather than writing a row)."""
     db = await _dbcore.get_db(read_only=True)
     try:
         conditions = []
         params: list = []
+        if status is not None:
+            conditions.append("b.status = ?")
+            params.append(status)
         if host_id is not None:
             conditions.append("b.host_id = ?")
             params.append(host_id)
@@ -2119,7 +2126,7 @@ async def get_config_backups(
                 FROM config_backups b
                 LEFT JOIN hosts h ON h.id = b.host_id
                 {where}
-                ORDER BY b.captured_at DESC LIMIT ?""",
+                ORDER BY b.captured_at DESC, b.id DESC LIMIT ?""",
             tuple(params),
         )
         return rows_to_list(await cursor.fetchall())
