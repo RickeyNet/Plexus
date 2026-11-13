@@ -185,6 +185,30 @@ async def test_newest_host_backup_honours_the_age_limit(backup_search_db):
 
 
 @pytest.mark.asyncio
+async def test_backup_list_status_filter_skips_a_newer_failed_attempt(backup_search_db):
+    """A failed attempt is the host's newest row but holds no config; the
+    ``status`` filter returns the config the host still has (the device
+    details Config tab reads the list this way)."""
+    failed_id = await db_module.create_config_backup(
+        policy_id=None,
+        host_id=100,
+        config_text="",
+        status="error",
+        error_message="connection timed out",
+    )
+    newest = await db_module.get_config_backups(host_id=100, limit=1)
+    assert [row["id"] for row in newest] == [failed_id]
+    assert newest[0]["config_length"] == 0
+
+    good = await db_module.get_config_backups(host_id=100, limit=1, status="success")
+    assert [row["id"] for row in good] == [backup_search_db["third_id"]]
+    assert good[0]["config_length"] > 0
+
+    failed = await db_module.get_config_backups(host_id=100, status="error")
+    assert [row["id"] for row in failed] == [failed_id]
+
+
+@pytest.mark.asyncio
 async def test_retention_keeps_each_hosts_newest_backup(backup_search_db):
     """Retention never deletes the configuration a host still has, however old."""
     db = await db_module.get_db()

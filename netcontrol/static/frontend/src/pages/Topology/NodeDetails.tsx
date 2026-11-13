@@ -693,14 +693,16 @@ function MacArpTab({ hostId }: { hostId: number }) {
 // ── Tab content: Config backups ────────────────────────────────────────────
 
 function ConfigTab({ hostId }: { hostId: number }) {
-  const list = useHostConfigBackups(hostId, 1);
+  // The newest successful capture: a failed attempt holds no config and can
+  // be newer than the config the device still has.
+  const list = useHostConfigBackups(hostId, 1, true, 'success');
   const latest = list.data?.[0];
   const detail = useConfigBackupDetail(latest?.id ?? null);
   const [expanded, setExpanded] = useState(false);
 
   if (list.isPending) return <Loading />;
   if (list.error) return <ErrorRow error={list.error} />;
-  if (!latest) return <Empty msg="No config backups for this device." />;
+  if (!latest) return <Empty msg="No successful config backup for this device." />;
 
   const configText = detail.data?.config_text ?? '';
   const capturedLabel = latest.captured_at

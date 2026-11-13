@@ -9,6 +9,7 @@ import io
 import re as _re
 import zipfile
 from datetime import UTC, datetime, timezone
+from typing import Literal
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -175,8 +176,9 @@ async def list_config_backups(
     host_id: int | None = Query(default=None),
     policy_id: int | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
+    status: Literal["success", "error"] | None = Query(default=None),
 ):
-    return await db.get_config_backups(host_id=host_id, policy_id=policy_id, limit=limit)
+    return await db.get_config_backups(host_id=host_id, policy_id=policy_id, limit=limit, status=status)
 
 
 @router.get("/api/config-backups/summary")

@@ -104,15 +104,23 @@ export interface ConfigBackupRow {
   device_type?: string;
 }
 
+/**
+ * A host's backups, newest first. `status: 'success'` leaves out failed
+ * attempts: they hold no config, and one can be newer than the config the
+ * host still has (an unchanged re-read writes no new row).
+ */
 export function useHostConfigBackups(
   hostId: number | null,
   limit = 10,
   enabled = true,
+  status?: 'success' | 'error',
 ) {
   return useQuery<ConfigBackupRow[]>({
-    queryKey: ['host-config-backups', hostId, limit],
+    queryKey: ['host-config-backups', hostId, limit, status ?? 'any'],
     queryFn: () =>
-      apiRequest(`/config-backups?host_id=${hostId}&limit=${limit}`),
+      apiRequest(
+        `/config-backups?host_id=${hostId}&limit=${limit}${status ? `&status=${status}` : ''}`,
+      ),
     enabled: enabled && hostId != null,
   });
 }
