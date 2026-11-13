@@ -85,7 +85,10 @@ def test_every_provider_lists_its_devices_or_says_why_not(api, provider):  # noq
     assert found["max_devices"] > 0
     assert found["devices"] or found["reason"]
     for device in found["devices"]:
-        assert device["existing"] is None
+        # Nothing was imported, so a device is in the inventory only when a
+        # seeded host has its address (the Meraki sample's LLDP neighbor
+        # overlaps the dev-bootstrap seed).
+        assert device["existing"] is None or device["existing"]["ip_address"] == device["ip"]
         assert set(device["capabilities"]) == {"snmp_polling", "config_backup"}
     assert "api_key" not in str(found)
 
