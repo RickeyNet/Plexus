@@ -15,7 +15,28 @@
 | DELETE | `/api/inventory/{id}`         | Delete group and its hosts                       |
 | GET    | `/api/inventory/{id}/hosts`   | List hosts in group                              |
 | POST   | `/api/inventory/{id}/hosts`   | Add host `{hostname, ip_address, device_type}`   |
+| PUT    | `/api/hosts/{id}`             | Update a host `{hostname, ip_address, device_type, vrf_name?, vlan_id?, ...}`; `vrf_name` and `vlan_id` are each left alone when absent or null and set (`""` clears) when sent |
 | DELETE | `/api/hosts/{id}`             | Remove a host                                    |
+
+### VRFs, VLANs and interface addresses
+Reads need the `ipam` feature, writes are admin only and audited (`network_objects`). See [vrfs-and-vlans.md](vrfs-and-vlans.md).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET    | `/api/ipam/vrfs` | `{"vrfs": [Vrf]}` by name. A Vrf: `id`, `name`, `rd`, `description`, `origin` (`manual`, `discovered`), `created_at`, `host_count`, `device_count`, `prefix_count`, `address_count` |
+| POST   | `/api/ipam/vrfs` | `{name, rd?, description?}`. `201` with the Vrf; `409` when a VRF has the name ignoring case |
+| GET    | `/api/ipam/vrfs/{id}` | The Vrf plus `devices` (`host_id`, `hostname`, `interface_count`), `interfaces` (at most 2000 interface addresses), `truncated`, `prefixes` (`subnet`, `source`: the IPAM source's provider or `interface`) |
+| PUT    | `/api/ipam/vrfs/{id}` | `{rd?, description?}`; a `name` key gives `422` |
+| DELETE | `/api/ipam/vrfs/{id}` | `{"ok": true}`; `409` with `detail = {message, affected}` while hosts, IPAM prefixes or allocations, interface addresses or devices use the name (`message` names them, `affected` is the total) |
+| GET    | `/api/ipam/vlans` | `{"vlans": [Vlan]}` by site name then VLAN id; `site_id=<id>` or `site_id=none`, `vid=<n>`. A Vlan: `id`, `vid`, `name`, `site_id`, `site` (`{id, name}` or null), `description`, `origin`, `created_at`, `device_count`, `interface_count`, `prefix_count`, `name_mismatch` |
+| POST   | `/api/ipam/vlans` | `{vid, name?, site_id?, description?}`. `201` with the Vlan; `409` when the site (or no site) has the VLAN id; `400` with `detail.fields.site_id` for an unknown site |
+| GET    | `/api/ipam/vlans/{id}` | The Vlan plus `devices` (`host_id`, `hostname`, `name`, `state`, `name_matches`), `interfaces` (`host_id`, `hostname`, `interface`, `mode`: `access` or `trunk`; at most 2000), `truncated`, `prefixes` (`network`, `vrf_name`, `host_id`, `hostname`, `interface`, `address`) |
+| PUT    | `/api/ipam/vlans/{id}` | `{name?, site_id?, description?}` (`site_id` null: no site); `409` when the move collides; a `vid` key gives `422` |
+| DELETE | `/api/ipam/vlans/{id}` | `{"ok": true}` |
+| POST   | `/api/ipam/interface-addresses/rebuild` | Admin. Reads the newest stored configuration of every host again: `{"ok": true, "hosts": <read>, "addresses": <stored>}` |
+| GET    | `/api/hosts/{host_id}/interface-addresses` | `reports` feature, like `/api/hosts/{host_id}/interface-inventory`. `{host_id, addresses, vrfs}`: each address `host_id`, `hostname`, `interface`, `address`, `prefix_length`, `network`, `vrf_name`, `role` (`primary`, `secondary`, `virtual`), `protocol` (`HSRP`, `VRRP`, `GLBP` or `""`), `svi_vid`, `collected_at`, `vrf_id`, `vlan_id`; each VRF `name`, `vrf_id`, `interface_count` |
+
+`GET /api/ipam/address/{ip}` adds `interfaces`: the interface addresses equal to the address (only those of `vrf` when it is given). `GET /api/ipam/subnets/{subnet}` adds `interfaces`: the interface addresses inside the subnet, at most 1024; with `vrf` empty or absent they come from every VRF (each row carries its `vrf_name`), with `vrf` only from that VRF.
 
 ### Source device import
 Admin only (and the `topology` and `inventory` features). See [After adding a source](meraki-topology.md#after-adding-a-source).

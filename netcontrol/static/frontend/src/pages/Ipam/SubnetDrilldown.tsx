@@ -1,4 +1,4 @@
-import { FormEvent, type ReactNode, useId, useState } from 'react';
+import { FormEvent, type ReactNode, useId, useMemo, useState } from 'react';
 
 import { useAuthStatus } from '@/api/auth';
 import {
@@ -20,12 +20,14 @@ import {
   useDeleteIpamAllocation,
   useDeleteIpamReservation,
 } from '@/api/ipam';
+import type { InterfaceAddress } from '@/api/networkObjects';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
 import { TagChips } from '@/components/TagChips';
 import { applicableFields, formatCustomValue } from '@/lib/customData';
 import { formatCount } from '@/lib/formatCount';
+import { addressRoleLabel, describeCarriers, formatInterfaceAddress, interfacesByAddress } from '@/lib/networkObjects';
 import { saveCustomDataDraft, useCustomDataDraft } from '@/lib/useCustomDataDraft';
 import { StatGrid, StatTile } from '@/components/StatTile';
 
@@ -68,6 +70,7 @@ export function SubnetDrilldown({ subnet, vrf, detail, isLoading, loadError, onR
   const cloudResources = detail.cloud_resources ?? [];
   const externalPrefixes = detail.external_prefixes ?? [];
   const availablePreview = detail.available_preview ?? [];
+  const interfaces = detail.interfaces ?? [];
 
   return (
     <div style={{ display: 'grid', gap: '1rem' }}>
@@ -109,6 +112,7 @@ export function SubnetDrilldown({ subnet, vrf, detail, isLoading, loadError, onR
       <AllocationsSection
         subnet={subnet}
         allocations={allocations}
+        interfaces={interfaces}
         onChanged={onRefresh}
       />
 
@@ -491,15 +495,21 @@ function ReservationsSection({
 interface AllocationsSectionProps {
   subnet: string;
   allocations: NonNullable<IpamSubnetDetail['allocations']>;
+  /** Addresses device interfaces carry in the subnet: shown on the matching rows. */
+  interfaces: InterfaceAddress[];
   onChanged: () => void;
 }
 
 function AllocationsSection({
   subnet,
   allocations,
+  interfaces,
   onChanged,
 }: AllocationsSectionProps) {
   const fid = useId();
+  const carriers = useMemo(() => interfacesByAddress(interfaces), [interfaces]);
+  const allocated = new Set(allocations.map((a) => a.ip_address ?? ''));
+  const untracked = interfaces.filter((i) => !allocated.has(i.address));
   const { confirm, alert } = useDialogs();
   const create = useCreateIpamAllocation();
   const remove = useDeleteIpamAllocation();
@@ -590,6 +600,11 @@ function AllocationsSection({
                     {item.group_name ? ` · ${item.group_name}` : ''}
                     {item.description ? ` · ${item.description}` : ''}
                   </div>
+                  {carriers.has(item.ip_address ?? '') && (
+                    <div className="text-muted" style={{ fontSize: '0.85em', lineHeight: 1.45 }}>
+                      On {describeCarriers(carriers.get(item.ip_address ?? '') ?? [])}
+                    </div>
+                  )}
                 </div>
                 <div
                   style={{
@@ -636,6 +651,20 @@ function AllocationsSection({
         <p className="text-muted" style={{ margin: 0 }}>
           No allocations tracked for this subnet.
         </p>
+      )}
+      {untracked.length > 0 && (
+        <div style={{ marginTop: '0.65rem' }}>
+          <div style={{ fontWeight: 600, marginBottom: '0.35rem' }}>Interface addresses</div>
+          <div className="text-muted" style={{ display: 'grid', gap: '0.25rem', lineHeight: 1.45, maxHeight: 240, overflow: 'auto' }}>
+            {untracked.map((i) => (
+              <div key={`${i.host_id}|${i.interface}|${i.address}`}>
+                <span style={{ color: 'var(--text)', fontWeight: 600 }}>{formatInterfaceAddress(i)}</span> on{' '}
+                {i.hostname} {i.interface}
+                {i.role !== 'primary' ? ` · ${addressRoleLabel(i)}` : ''}
+              </div>
+            ))}
+          </div>
+        </div>
       )}
       {showForm ? (
         <form

@@ -17,6 +17,9 @@ write the same records instead of each keeping its own copy:
     confirmed within that window (``ON_DEMAND_MAX_AGE_SECONDS``) instead of
     opening a session. ``0`` always reads the device: a scheduled job, or a
     step that needs the state after a change it just made.
+  - Every capture is read into the host's interface addresses
+    (``netcontrol.routes.network_objects.sync_host_bindings``), best
+    effort: a configuration the parser trips on never fails the capture.
   - One capture per host at a time. A caller that arrives while another
     capture of the same host runs waits for it and takes its result when
     that capture started after the caller asked, so the result is at least
@@ -33,6 +36,7 @@ from dataclasses import dataclass
 
 import routes.database as db
 
+from netcontrol.routes.network_objects import sync_host_bindings
 from netcontrol.routes.shared import _capture_device_configs
 
 # How old a stored configuration an on-demand action (a compliance scan, a
@@ -75,11 +79,15 @@ async def store_device_config(
     *,
     capture_method: str,
     policy_id: int | None = None,
+    device_type: str | None = None,
 ) -> DeviceConfig:
     """Store a configuration read from a device: a new backup row, or, when
     it matches the host's newest backup, a re-check of that row. For callers
     that read the configuration over a session of their own (the topology
-    collection, the upgrade prestage); others use ``get_device_config``."""
+    collection, the upgrade prestage); others use ``get_device_config``.
+
+    Either way the configuration is read into the host's interface
+    addresses with the parser of ``device_type`` (``None``: the host's)."""
     newest = await db.get_newest_host_config_backup(host_id)
     if (
         newest is not None
@@ -87,23 +95,26 @@ async def store_device_config(
         and (newest.get("config_text_full") or "") == config_text_full
     ):
         await db.mark_config_backup_checked(int(newest["id"]))
-        return _from_row(newest, created=False, reused=False)
-    backup_id = await db.create_config_backup(
-        policy_id=policy_id,
-        host_id=host_id,
-        config_text=config_text,
-        config_text_full=config_text_full,
-        capture_method=capture_method,
-        status="success",
-        error_message="",
-    )
-    return DeviceConfig(
-        backup_id=int(backup_id),
-        config_text=config_text,
-        config_text_full=config_text_full,
-        created=True,
-        reused=False,
-    )
+        stored = _from_row(newest, created=False, reused=False)
+    else:
+        backup_id = await db.create_config_backup(
+            policy_id=policy_id,
+            host_id=host_id,
+            config_text=config_text,
+            config_text_full=config_text_full,
+            capture_method=capture_method,
+            status="success",
+            error_message="",
+        )
+        stored = DeviceConfig(
+            backup_id=int(backup_id),
+            config_text=config_text,
+            config_text_full=config_text_full,
+            created=True,
+            reused=False,
+        )
+    await sync_host_bindings(host_id, device_type, config_text)
+    return stored
 
 
 async def get_device_config(
@@ -138,6 +149,7 @@ async def get_device_config(
             config_text_full,
             capture_method=capture_method,
             policy_id=policy_id,
+            device_type=str(host.get("device_type") or ""),
         )
         _last_capture[host_id] = (started, stored.backup_id)
         return stored

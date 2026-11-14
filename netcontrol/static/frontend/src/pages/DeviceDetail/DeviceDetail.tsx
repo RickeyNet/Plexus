@@ -5,6 +5,7 @@ import { useAuthStatus } from '@/api/auth';
 import { SeverityBadge } from '@/components/Badge';
 import { Callout } from '@/components/Callout';
 import { EmptyState } from '@/components/EmptyState';
+import { InterfaceAddressesTable } from '@/components/InterfaceAddressesTable';
 import { LoadingState } from '@/components/LoadingState';
 import { PageHelp } from '@/components/PageHelp';
 import { TabBar } from '@/components/TabBar';
@@ -161,7 +162,12 @@ export function DeviceDetail() {
           <OverviewTab cpu={cpu} mem={mem} rt={rt} pl={pl} />
         )}
         {tab === 'interfaces' && (
-          <InterfaceTab ifData={ifData.data} latestPoll={latestPoll} loading={ifData.isLoading} />
+          <div className="stack">
+            <InterfaceTab ifData={ifData.data} latestPoll={latestPoll} loading={ifData.isLoading} />
+            <div className="card-inset" style={{ minWidth: 0 }}>
+              <InterfaceAddressesTable hostId={hostId} />
+            </div>
+          </div>
         )}
         {tab === 'errors' && <ErrorTrendingTab hostId={hostId} range={range} />}
         {tab === 'flow' && !flowHidden && <FlowTab hostId={hostId} range={range} />}

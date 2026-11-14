@@ -28,6 +28,9 @@ from netcontrol.routes.shared import _audit, _corr_id, _get_session
 router = APIRouter()
 _require_admin = None
 
+# Most device interface addresses a subnet drill-down lists.
+SUBNET_INTERFACES_LIMIT = 1024
+
 
 class IpamSyncConfigUpdate(BaseModel):
     enabled: bool | None = None
@@ -178,6 +181,9 @@ async def ipam_address_context_api(ip: str, vrf: str | None = Query(default=None
     When `vrf` is provided, prefer subnets in that VRF and only flag a conflict
     when the duplicate exists in the same VRF - overlapping ranges across
     different VRFs are not real conflicts.
+
+    ``interfaces``: the device interfaces that carry the address (of that VRF
+    when `vrf` is provided).
     """
     try:
         addr = ipaddress.ip_address(ip)
@@ -228,6 +234,7 @@ async def ipam_address_context_api(ip: str, vrf: str | None = Query(default=None
         "is_conflict": conflict_entry is not None,
         "conflict_groups": conflict_entry.get("groups", []) if conflict_entry else [],
         "conflict_vrf": (conflict_entry.get("vrf_name") if conflict_entry else None),
+        "interfaces": await db.find_interface_addresses(ip, target_vrf or None),
     }
 
 
@@ -240,7 +247,9 @@ async def ipam_subnet_detail_api(
     vrf: str = Query(default="", max_length=200),
 ):
     """A subnet's allocations, reservations and free addresses, with the
-    ``tags`` and ``custom_fields`` of the prefix (``subnet`` in ``vrf``)."""
+    ``tags`` and ``custom_fields`` of the prefix (``subnet`` in ``vrf``) and
+    the device ``interfaces`` whose address is inside it (of ``vrf`` when it
+    is given; at most ``SUBNET_INTERFACES_LIMIT``)."""
     if group_id is not None and group_id <= 0:
         raise HTTPException(status_code=400, detail="Invalid inventory group id")
     try:
@@ -253,6 +262,9 @@ async def ipam_subnet_detail_api(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid subnet") from None
     await attach_custom_data("prefix", [detail], lambda row: _subnet_key({"subnet": row["subnet"], "vrf_name": vrf}))
+    detail["interfaces"] = await db.find_interface_addresses_in_subnet(
+        subnet, vrf.strip() or None, SUBNET_INTERFACES_LIMIT
+    )
     return detail
 
 

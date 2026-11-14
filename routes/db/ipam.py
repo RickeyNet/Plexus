@@ -22,6 +22,7 @@ from routes.database import (
     row_to_dict,
     rows_to_list,
 )
+from routes.db.network_objects import ensure_vrfs
 
 __all__ = [
     "find_subnet_overlaps",
@@ -1008,9 +1009,14 @@ async def replace_ipam_source_snapshot(
             (now_iso, sync_status, sync_message, now_iso, source_id),
         )
         await db.commit()
-        return {"prefixes": prefix_count, "allocations": alloc_count}
     finally:
         await db.close()
+    await ensure_vrfs(
+        [str(p.get("vrf") or "") for p in prefixes]
+        + [str(a.get("vrf") or a.get("vrf_name") or "") for a in allocations],
+        "discovered",
+    )
+    return {"prefixes": prefix_count, "allocations": alloc_count}
 
 
 async def set_ipam_source_sync_status(
@@ -1142,6 +1148,8 @@ async def create_ipam_prefix(
             (source_id, subnet_key, subnet_key, description, vrf, json.dumps({"notes": notes})),
         )
         await db.commit()
+        if vrf:
+            await ensure_vrfs([vrf], "manual")
         prefix_id = cursor.lastrowid
         if not prefix_id:
             # Already existed - fetch it

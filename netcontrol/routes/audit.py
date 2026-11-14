@@ -1562,32 +1562,13 @@ async def search_hosts_by_vlan(vlan_id: int = Query(..., ge=1, le=4094)):
             if row[1]:
                 entry["vlan_name"] = row[1]
 
-        cursor = await conn.execute(
-            "SELECT i.host_id, i.name, h.hostname "
-            "FROM interface_inventory i LEFT JOIN hosts h ON h.id = i.host_id "
-            "WHERE i.access_vlan = ?",
-            (vlan_id,),
-        )
-        for row in await cursor.fetchall():
-            hid = row[0]
-            entry = roles.setdefault(hid, {"host_id": hid, "hostname": row[2], "roles": [], "ports": []})
-            if "access" not in entry["roles"]:
-                entry["roles"].append("access")
-            entry["ports"].append({"name": row[1], "kind": "access"})
-
-        cursor = await conn.execute(
-            "SELECT i.host_id, i.name, i.trunk_vlans, h.hostname "
-            "FROM interface_inventory i LEFT JOIN hosts h ON h.id = i.host_id "
-            "WHERE i.trunk_vlans IS NOT NULL AND i.trunk_vlans != ''",
-        )
-        for row in await cursor.fetchall():
-            if vlan_id not in _parse_vlan_csv(row[2] or ""):
-                continue
-            hid = row[0]
-            entry = roles.setdefault(hid, {"host_id": hid, "hostname": row[3], "roles": [], "ports": []})
-            if "trunk" not in entry["roles"]:
-                entry["roles"].append("trunk")
-            entry["ports"].append({"name": row[1], "kind": "trunk"})
+        # Access ports, then trunk ports: the matching the VLAN records use too.
+        for port in await db.list_vlan_ports(vlan_id):
+            hid, mode = port["host_id"], port["mode"]
+            entry = roles.setdefault(hid, {"host_id": hid, "hostname": port["hostname"], "roles": [], "ports": []})
+            if mode not in entry["roles"]:
+                entry["roles"].append(mode)
+            entry["ports"].append({"name": port["interface"], "kind": mode})
 
         return {"vlan_id": vlan_id, "hosts": list(roles.values())}
     finally:
