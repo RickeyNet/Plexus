@@ -4,7 +4,7 @@ import { useAuthStatus } from '@/api/auth';
 import { CustomDataError } from '@/api/customData';
 import { type Vrf, useDeleteVrf, useRebuildInterfaceAddresses, useVrf, useVrfs } from '@/api/networkObjects';
 import { BusyButton } from '@/components/BusyButton';
-import { CatalogueBody, RowActions } from '@/components/CatalogueParts';
+import { CardHeader, CatalogueBody, Dash, RowActions } from '@/components/CatalogueParts';
 import { DataTable } from '@/components/DataTable';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { EmptyState } from '@/components/EmptyState';
@@ -15,7 +15,7 @@ import { addressRoleLabel, formatInterfaceAddress } from '@/lib/networkObjects';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import { VrfModal } from './NetworkObjectModals';
-import { CardHeader, Dash, DetailSection, OriginBadge, SplitLayout } from './NetworkObjectParts';
+import { DetailSection, OriginBadge, SplitLayout } from './NetworkObjectParts';
 
 const RIGHT = { textAlign: 'right' } as const;
 

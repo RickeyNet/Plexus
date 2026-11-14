@@ -20,6 +20,9 @@ write the same records instead of each keeping its own copy:
   - Every capture is read into the host's interface addresses
     (``netcontrol.routes.network_objects.sync_host_bindings``), best
     effort: a configuration the parser trips on never fails the capture.
+  - A capture that stores a new backup row compares the host's intended
+    configuration with it again
+    (``netcontrol.routes.intended_config.recompare_host``), best effort too.
   - One capture per host at a time. A caller that arrives while another
     capture of the same host runs waits for it and takes its result when
     that capture started after the caller asked, so the result is at least
@@ -36,6 +39,7 @@ from dataclasses import dataclass
 
 import routes.database as db
 
+from netcontrol.routes.intended_config import recompare_host
 from netcontrol.routes.network_objects import sync_host_bindings
 from netcontrol.routes.shared import _capture_device_configs
 
@@ -87,7 +91,8 @@ async def store_device_config(
     collection, the upgrade prestage); others use ``get_device_config``.
 
     Either way the configuration is read into the host's interface
-    addresses with the parser of ``device_type`` (``None``: the host's)."""
+    addresses with the parser of ``device_type`` (``None``: the host's); a
+    new row also re-compares the host's intended configuration."""
     newest = await db.get_newest_host_config_backup(host_id)
     if (
         newest is not None
@@ -114,6 +119,8 @@ async def store_device_config(
             reused=False,
         )
     await sync_host_bindings(host_id, device_type, config_text)
+    if stored.created:
+        await recompare_host(host_id)
     return stored
 
 

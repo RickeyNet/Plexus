@@ -64,3 +64,7 @@ mcp==2.3.0
 # jsonschema validates MCP tool arguments in netcontrol/mcp/dispatch.py. It is
 # also a dependency of mcp; listed here because Plexus imports it directly.
 jsonschema>=4.26,<5
+# Jinja2 renders the intended configuration templates
+# (netcontrol/intended_config.py) in its sandboxed environment. Pinned
+# exactly: templates are admin-written text run on the server.
+jinja2==3.1.6

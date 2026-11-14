@@ -9,16 +9,19 @@ import { usePathTab } from '@/lib/usePathTab';
 
 import { BackupsTab } from './BackupsTab';
 import { DriftTab } from './DriftTab';
+import { IntendedTab } from './IntendedTab';
 import { SearchTab } from './SearchTab';
 import { ConfigJobStreamModal } from './ConfigJobStreamModal';
 
-type Tab = 'drift' | 'backups' | 'search';
+type Tab = 'drift' | 'intended' | 'backups' | 'search';
 
-// Each tab is gated on the feature its API needs: drift on `config-drift`,
-// backups and config search (served by the config-backups router) on
-// `config-backups`. The sidebar entry shows for either feature.
+// Each tab is gated on the feature its API needs: drift and intended
+// configuration on `config-drift`, backups and config search (served by the
+// config-backups router) on `config-backups`. The sidebar entry shows for
+// either feature.
 const TABS: { key: Tab; label: string; feature: string }[] = [
   { key: 'drift', label: 'Config Drift', feature: 'config-drift' },
+  { key: 'intended', label: 'Intended', feature: 'config-drift' },
   { key: 'backups', label: 'Backups', feature: 'config-backups' },
   { key: 'search', label: 'Config Search', feature: 'config-backups' },
 ];
@@ -28,6 +31,10 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   drift: {
     title: 'Detect & Revert Configuration Drift',
     text: 'Capture a known-good baseline per device, then watch for unexpected changes against it. Diff drift events, revert to baseline, or accept the new config as the new baseline.',
+  },
+  intended: {
+    title: 'Intended Configuration',
+    text: 'Jinja2 templates and config contexts render what each device’s configuration should be. Each intended configuration is compared with the device’s newest backup: lines the device lacks make it non-compliant. Nothing here changes a device.',
   },
   backups: {
     title: 'Config Backups',
@@ -76,6 +83,7 @@ export function Configuration() {
             onRevertStarted={(jobId) => setRevertJob(jobId)}
           />
         )}
+        {shownTab === 'intended' && <IntendedTab />}
         {shownTab === 'backups' && <BackupsTab />}
         {shownTab === 'search' && <SearchTab />}
       </div>

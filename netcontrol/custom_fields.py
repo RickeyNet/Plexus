@@ -166,6 +166,16 @@ def clean_name(raw: object, label: str, limit: int) -> str:
     return name
 
 
+def clean_text(raw: object, label: str, limit: int) -> str:
+    """Optional text trimmed; at most ``limit`` characters, may be empty (a
+    value that is not text counts as empty). ``label`` starts the error
+    message (``"Description"``)."""
+    text = raw.strip() if isinstance(raw, str) else ""
+    if len(text) > limit:
+        raise CustomFieldError(f"{label} must be at most {limit} characters.")
+    return text
+
+
 def clean_tag_name(raw: object) -> str:
     """A tag name trimmed; 1 to ``TAG_NAME_MAX`` characters."""
     return clean_name(raw, "Tag name", TAG_NAME_MAX)
