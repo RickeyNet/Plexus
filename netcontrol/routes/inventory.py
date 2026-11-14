@@ -24,6 +24,15 @@ from netcontrol.drivers.show_version import ShowVersionFacts, parse_show_version
 from netcontrol.integrations.software.versions import classify_host
 from netcontrol.routes import background_jobs
 from netcontrol.routes.custom_fields import attach_custom_data, matching_keys
+from netcontrol.routes.device_model import (
+    HostDeviceValues,
+    attach_device_data,
+    audit_device_write,
+    check_device_values,
+    describe_values,
+    matching_host_ids,
+    sent_device_values,
+)
 from netcontrol.routes.host_identity import host_ip_problem, is_placeholder_hostname, placeholder_hostname
 from netcontrol.routes.icmp import _probe_discovery_target_icmp
 from netcontrol.routes.ipam_push import push_inventory_host_allocation
@@ -123,7 +132,11 @@ class GroupUpdate(BaseModel):
     parent_id: int | None = None
 
 
-class HostCreate(BaseModel):
+class HostCreate(HostDeviceValues):
+    """A new host. The device values (``device_type_id``, ``role_id``,
+    ``lifecycle_status_id``, ``site_id``, ``location_detail``) are optional;
+    a host created without ``lifecycle_status_id`` gets the default status."""
+
     hostname: str
     ip_address: str
     device_type: str = "cisco_ios"
@@ -162,7 +175,9 @@ class HostBulkCreateGrouped(BaseModel):
 BULK_ADD_GROUP_DESCRIPTION = "Added from the Topology map"
 
 
-class HostUpdate(BaseModel):
+class HostUpdate(HostDeviceValues):
+    """A host edit. A device value that is left out keeps its stored value."""
+
     hostname: str
     ip_address: str
     device_type: str = "cisco_ios"
@@ -1195,10 +1210,14 @@ def _csv_field_cell(field: dict, value: object) -> str:
 @router.get("/api/inventory")
 async def list_groups(request: Request, include_hosts: bool = Query(default=False)):
     """Every group (with its hosts when ``include_hosts``), each carrying its
-    ``tags`` and ``custom_fields``. ``tag=`` (repeatable) and ``cf.<key>=``
-    filter: with hosts, each group keeps only its matching hosts and groups
-    left empty are dropped; without, only matching groups are listed."""
+    ``tags`` and ``custom_fields``; hosts also carry their device model
+    display objects. ``tag=`` (repeatable) and ``cf.<key>=`` filter: with
+    hosts, each group keeps only its matching hosts and groups left empty are
+    dropped; without, only matching groups are listed. The device filters
+    (``manufacturer_id=`` and the rest) are host filters: without hosts, a
+    group is listed when it has a matching host."""
     keys = await matching_keys("host" if include_hosts else "group", request.query_params)
+    host_ids = await matching_host_ids(request.query_params)
     session = _get_session(request)
     user_id = session.get("user_id") if session else None
     if user_id is not None:
@@ -1210,17 +1229,28 @@ async def list_groups(request: Request, include_hosts: bool = Query(default=Fals
         groups = await db.get_all_groups_with_hosts()
     else:
         groups = await db.get_all_groups()
-    if keys is not None:
-        if include_hosts:
-            for group in groups:
-                group["hosts"] = [h for h in group["hosts"] if _id_key(h) in keys]
-            groups = [g for g in groups if g["hosts"]]
-        else:
+    if include_hosts and (keys is not None or host_ids is not None):
+        for group in groups:
+            group["hosts"] = _filter_hosts(group["hosts"], keys, host_ids)
+        groups = [g for g in groups if g["hosts"]]
+    elif not include_hosts:
+        if keys is not None:
             groups = [g for g in groups if _id_key(g) in keys]
+        if host_ids is not None:
+            with_hosts = set(host_ids.values())
+            groups = [g for g in groups if g["id"] in with_hosts]
     await attach_custom_data("group", groups, _id_key)
     if include_hosts:
-        await attach_custom_data("host", [h for g in groups for h in g["hosts"]], _id_key)
+        hosts = [h for g in groups for h in g["hosts"]]
+        await attach_custom_data("host", hosts, _id_key)
+        await attach_device_data(hosts)
     return groups
+
+
+def _filter_hosts(hosts: list[dict], keys: set[str] | None, host_ids: dict[int, int] | None) -> list[dict]:
+    """The hosts matching the tag and custom field filters (``keys``) and
+    the device filters (``host_ids``); ``None`` is no filter."""
+    return [h for h in hosts if (keys is None or _id_key(h) in keys) and (host_ids is None or int(h["id"]) in host_ids)]
 
 
 class GroupReorderRequest(BaseModel):
@@ -1251,20 +1281,24 @@ def _csv_text_cell(value: object) -> str:
 
 @router.get("/api/inventory/export/csv")
 async def export_inventory_csv():
-    """Export all inventory hosts as a CSV file: the host columns, then
-    ``Tags`` (names joined with ``; ``) and one column per custom field that
-    applies to hosts, in display order."""
+    """Export all inventory hosts as a CSV file: the host columns (the
+    driver key as ``Platform``), the device model columns, then ``Tags``
+    (names joined with ``; ``) and one column per custom field that applies
+    to hosts, in display order."""
     rows = await db.get_all_hosts_for_export()
     fields = await db.list_custom_fields("host")
     await attach_custom_data("host", rows, _id_key)
+    await attach_device_data(rows)
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(
-        ["Hostname", "IP Address", "Model", "Software Version", "Device Type", "Status", "Group", "Tags"]
+        ["Hostname", "IP Address", "Model", "Software Version", "Platform", "Status", "Group"]
+        + ["Manufacturer", "Device Type", "Role", "Lifecycle Status", "Site", "Location Detail", "Tags"]
         + [f["label"] for f in fields]
     )
     for r in rows:
         values = r["custom_fields"]
+        hardware = r["hardware"] or {}
         writer.writerow(
             [
                 r.get("hostname", ""),
@@ -1274,7 +1308,18 @@ async def export_inventory_csv():
                 r.get("device_type", ""),
                 r.get("status", ""),
                 r.get("group_name", ""),
-                _csv_text_cell("; ".join(t["name"] for t in r["tags"])),
+            ]
+            + [
+                _csv_text_cell(text)
+                for text in (
+                    hardware.get("manufacturer"),
+                    hardware.get("model"),
+                    (r["role"] or {}).get("name"),
+                    (r["lifecycle_status"] or {}).get("name"),
+                    (r["site"] or {}).get("name"),
+                    r["location_detail"],
+                    "; ".join(t["name"] for t in r["tags"]),
+                )
             ]
             + [_csv_field_cell(f, values.get(f["key"])) for f in fields]
         )
@@ -1319,14 +1364,15 @@ async def update_group(group_id: int, body: GroupUpdate):
 
 
 @router.get("/api/inventory/{group_id}")
-async def get_group(group_id: int):
+async def get_group(group_id: int, request: Request):
+    """A group with its hosts; ``tag=``, ``cf.<key>=`` and the device
+    filters keep only the matching hosts."""
     group = await db.get_group(group_id)
     if not group:
         raise HTTPException(404, "Group not found")
-    hosts = await db.get_hosts_for_group(group_id)
+    hosts = await _group_hosts(group_id, request)
     result = {**group, "hosts": hosts}
     await attach_custom_data("group", [result], _id_key)
-    await attach_custom_data("host", hosts, _id_key)
     return result
 
 
@@ -1344,13 +1390,18 @@ async def delete_group(group_id: int):
 
 @router.get("/api/inventory/{group_id}/hosts")
 async def list_hosts(group_id: int, request: Request):
-    """A group's hosts with their ``tags`` and ``custom_fields``; ``tag=`` and
-    ``cf.<key>=`` keep only the matching hosts."""
+    """A group's hosts with their ``tags``, ``custom_fields`` and device
+    model display objects; ``tag=``, ``cf.<key>=`` and the device filters
+    keep only the matching hosts."""
+    return await _group_hosts(group_id, request)
+
+
+async def _group_hosts(group_id: int, request: Request) -> list[dict]:
     keys = await matching_keys("host", request.query_params)
-    hosts = await db.get_hosts_for_group(group_id)
-    if keys is not None:
-        hosts = [h for h in hosts if _id_key(h) in keys]
+    host_ids = await matching_host_ids(request.query_params)
+    hosts = _filter_hosts(await db.get_hosts_for_group(group_id), keys, host_ids)
     await attach_custom_data("host", hosts, _id_key)
+    await attach_device_data(hosts)
     return hosts
 
 
@@ -1358,11 +1409,14 @@ async def _insert_host(group_id: int, body: HostCreate) -> int:
     """Validate and insert one host, then run the per-host follow-ups.
 
     Shared by the single and bulk add routes. Raises ``HTTPException`` for an
-    invalid address or instance ID and ``ValueError`` when the group already
-    has a host with that IP. The caller invalidates the topology cache.
+    invalid address, instance ID or device model id and ``ValueError`` when
+    the group already has a host with that IP. The caller invalidates the
+    topology cache and audits the device values.
     """
     _validate_host_ip(body.ip_address)
     aws_instance_id = _validate_aws_instance_id(body.aws_instance_id) or ""
+    device_values = sent_device_values(body)
+    await check_device_values(device_values)
     hid = await db.add_host(
         group_id,
         body.hostname,
@@ -1372,6 +1426,8 @@ async def _insert_host(group_id: int, body: HostCreate) -> int:
         vlan_id=str(body.vlan_id or ""),
         aws_instance_id=aws_instance_id,
     )
+    if device_values:
+        await db.set_host_device_fields(hid, device_values, lock=True)
     # Auto-apply graph templates to manually added host
     try:
         await db.apply_graph_templates_to_host(hid)
@@ -1387,11 +1443,14 @@ async def _insert_host(group_id: int, body: HostCreate) -> int:
 
 
 @router.post("/api/inventory/{group_id}/hosts", status_code=201)
-async def add_host(group_id: int, body: HostCreate):
+async def add_host(group_id: int, body: HostCreate, request: Request):
     try:
         hid = await _insert_host(group_id, body)
     except ValueError:
         raise HTTPException(409, "A host with that IP address already exists in this group")
+    device_values = sent_device_values(body)
+    if device_values:
+        await audit_device_write(request, "host_create", f"host={hid} {describe_values(device_values)}")
     # The map may have a place for the host already (an AWS instance with
     # its address or ID): show it on the next load, not after the cache TTL.
     _invalidate_topology_cache()
@@ -1483,7 +1542,8 @@ async def _bulk_add(entries: list[HostBulkEntry], default_group_id: int | None, 
                     continue
             hid = await _insert_host(group_id, entry)
         except HTTPException as exc:
-            errors.append({**names, "error": str(exc.detail)})
+            detail = exc.detail["message"] if isinstance(exc.detail, dict) else str(exc.detail)
+            errors.append({**names, "error": detail})
             continue
         except ValueError:
             errors.append({**names, "error": "A host with that IP address already exists in this group"})
@@ -1523,17 +1583,20 @@ async def bulk_add_hosts_grouped(body: HostBulkCreateGrouped, request: Request):
 @router.post("/api/inventory/{group_id}/hosts/bulk")
 async def bulk_add_hosts(group_id: int, body: HostBulkCreate, request: Request):
     """Add many hosts to one group (see ``_bulk_add``)."""
-    entries = [HostBulkEntry(**h.model_dump()) for h in body.hosts]
+    # exclude_unset: a device value an entry did not send stays unsent.
+    entries = [HostBulkEntry(**h.model_dump(exclude_unset=True)) for h in body.hosts]
     result = await _bulk_add(entries, group_id, request)
     result.pop("groups_created")
     return result
 
 
 @router.put("/api/hosts/{host_id}")
-async def update_host(host_id: int, body: HostUpdate):
+async def update_host(host_id: int, body: HostUpdate, request: Request):
     if body.ip_address:
         _validate_host_ip(body.ip_address)
     aws_instance_id = _validate_aws_instance_id(body.aws_instance_id)
+    device_values = sent_device_values(body)
+    await check_device_values(device_values)
     prior = await db.get_host(host_id)
     prior_ip = (prior.get("ip_address") if prior else "") or ""
     await db.update_host(
@@ -1545,6 +1608,8 @@ async def update_host(host_id: int, body: HostUpdate):
         vlan_id=body.vlan_id,
         aws_instance_id=aws_instance_id,
     )
+    if device_values and await db.set_host_device_fields(host_id, device_values, lock=True):
+        await audit_device_write(request, "host_update", f"host={host_id} {describe_values(device_values)}")
     _invalidate_topology_cache()
     # Optional re-group as part of the same edit. The (group_id, ip_address)
     # unique key means moving to a group that already has this IP will fail
@@ -1587,6 +1652,8 @@ async def update_host_category(host_id: int, body: dict):
         await _db.commit()
     finally:
         await _db.close()
+    # A category that names a role fills the host's role when it has none.
+    await db.link_host_hardware(host_id, category=category)
     return {"ok": True}
 
 

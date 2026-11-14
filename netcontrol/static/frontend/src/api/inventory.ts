@@ -8,6 +8,8 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
+import type { HostNetworkFields } from '@/lib/networkObjects';
+
 import { apiRequest, getCsrfToken } from './client';
 import type { CustomValue, TagRef } from './customData';
 
@@ -24,10 +26,52 @@ export interface InventoryHost {
   status?: string | null;
   /** Explicit EC2 instance ID pinning this host on the Topology map ('' when unset). */
   aws_instance_id?: string | null;
+  /** The host's VRF ('' for the global VRF); absent on rows of the all-groups listing. */
+  vrf_name?: string | null;
+  /** The host's VLAN id as text ('' when unset); absent on rows of the all-groups listing. */
+  vlan_id?: string | null;
   /** The host's tags (inline from the listing). */
   tags?: TagRef[];
   /** The host's custom field values by field key (stored values only). */
   custom_fields?: Record<string, CustomValue>;
+  /** Device model links (absent on rows from a server without the device model). */
+  device_type_id?: number | null;
+  role_id?: number | null;
+  lifecycle_status_id?: number | null;
+  site_id?: number | null;
+  /** Rack, room or other place inside the site ('' when unset). */
+  location_detail?: string | null;
+  /** The linked hardware device type, for display. */
+  hardware?: HostHardwareRef | null;
+  role?: HostColorRef | null;
+  lifecycle_status?: HostColorRef | null;
+  site?: { id: number; name: string } | null;
+}
+
+export interface HostHardwareRef {
+  id: number;
+  model: string;
+  manufacturer_id: number;
+  manufacturer: string;
+}
+
+/** A role or lifecycle status as shown on a host row. */
+export interface HostColorRef {
+  id: number;
+  name: string;
+  color: string;
+}
+
+/**
+ * The device model values a host create or update may carry. A key left out
+ * leaves the stored value alone; `null` clears it.
+ */
+export interface HostDeviceFields {
+  device_type_id?: number | null;
+  role_id?: number | null;
+  lifecycle_status_id?: number | null;
+  site_id?: number | null;
+  location_detail?: string;
 }
 
 export interface InventoryGroupFull {
@@ -244,6 +288,19 @@ export function invalidateInventory(qc: ReturnType<typeof useQueryClient>) {
   qc.invalidateQueries({ queryKey: ['inventory-groups'] });
 }
 
+/** The query key root of the device model catalogues (api/deviceModel). */
+export const DEVICE_MODEL_QUERY_ROOT = ['device-model'] as const;
+
+/**
+ * After a host is added, changed or deleted: the inventory listings, and the
+ * host counts of the device model catalogues and of the sites.
+ */
+function invalidateHosts(qc: ReturnType<typeof useQueryClient>) {
+  invalidateInventory(qc);
+  qc.invalidateQueries({ queryKey: DEVICE_MODEL_QUERY_ROOT });
+  qc.invalidateQueries({ queryKey: ['geo', 'sites'] });
+}
+
 export function useReorderInventoryGroups() {
   const qc = useQueryClient();
   return useMutation({
@@ -309,6 +366,8 @@ export function useAddHost() {
       ip_address,
       device_type,
       aws_instance_id,
+      device,
+      network,
     }: {
       groupId: number;
       hostname: string;
@@ -316,6 +375,10 @@ export function useAddHost() {
       device_type: string;
       /** Optional EC2 instance ID ('' or omitted leaves it unset). */
       aws_instance_id?: string;
+      /** Device model values to store with the host. */
+      device?: HostDeviceFields;
+      /** The host's VRF and VLAN id (omitted keys stay unset). */
+      network?: HostNetworkFields;
     }) =>
       apiRequest<{ id: number }>(`/inventory/${groupId}/hosts`, {
         method: 'POST',
@@ -324,9 +387,11 @@ export function useAddHost() {
           ip_address,
           device_type,
           ...(aws_instance_id !== undefined ? { aws_instance_id } : {}),
+          ...device,
+          ...network,
         },
       }),
-    onSuccess: () => invalidateInventory(qc),
+    onSuccess: () => invalidateHosts(qc),
   });
 }
 
@@ -408,6 +473,8 @@ export function useUpdateHost() {
       device_type,
       group_id,
       aws_instance_id,
+      device,
+      network,
     }: {
       hostId: number;
       hostname: string;
@@ -416,6 +483,10 @@ export function useUpdateHost() {
       group_id?: number;
       /** EC2 instance ID; '' clears it, omitted leaves it unchanged. */
       aws_instance_id?: string;
+      /** Changed device model values only: setting a device type or role locks it against discovery. */
+      device?: HostDeviceFields;
+      /** VRF and VLAN id; with neither key the stored values stay (build it with `hostNetworkBody`). */
+      network?: HostNetworkFields;
     }) =>
       apiRequest(`/hosts/${hostId}`, {
         method: 'PUT',
@@ -425,9 +496,11 @@ export function useUpdateHost() {
           device_type,
           group_id,
           ...(aws_instance_id !== undefined ? { aws_instance_id } : {}),
+          ...device,
+          ...network,
         },
       }),
-    onSuccess: () => invalidateInventory(qc),
+    onSuccess: () => invalidateHosts(qc),
   });
 }
 
@@ -436,7 +509,7 @@ export function useDeleteHost() {
   return useMutation({
     mutationFn: (hostId: number) =>
       apiRequest(`/hosts/${hostId}`, { method: 'DELETE' }),
-    onSuccess: () => invalidateInventory(qc),
+    onSuccess: () => invalidateHosts(qc),
   });
 }
 
@@ -448,7 +521,7 @@ export function useBulkDeleteHosts() {
         method: 'POST',
         body: { host_ids: hostIds },
       }),
-    onSuccess: () => invalidateInventory(qc),
+    onSuccess: () => invalidateHosts(qc),
   });
 }
 

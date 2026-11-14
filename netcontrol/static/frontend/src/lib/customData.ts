@@ -13,6 +13,8 @@ import type {
   TagRef,
 } from '@/api/customData';
 
+import { deviceFilterCount, type DeviceFilterValue } from './deviceModel';
+
 /** Tag color palette slots; the stylesheet maps each to a theme-aware pair. */
 export const TAG_COLORS = ['gray', 'red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple'] as const;
 export type TagColor = (typeof TAG_COLORS)[number];
@@ -58,10 +60,15 @@ export function countObjects(count: number, type?: ObjectType): string {
 
 // ── Filter ─────────────────────────────────────────────────────────────────
 
-/** A filter over inline tags and values. A field value of `'*'` means "has any value". */
+/**
+ * A filter over inline tags and values. A field value of `'*'` means "has any
+ * value". Host lists add `device`, the device model facets (applied by
+ * `matchesDeviceFilter`, not by `matchesCustomData`).
+ */
 export interface CustomDataFilterValue {
   tagIds: number[];
   fields: Record<string, string>;
+  device?: DeviceFilterValue;
 }
 
 export const HAS_VALUE = '*';
@@ -74,12 +81,12 @@ export interface CustomDataRow {
 }
 
 export function isEmptyFilter(filter: CustomDataFilterValue): boolean {
-  return filter.tagIds.length === 0 && Object.keys(filter.fields).length === 0;
+  return filterCount(filter) === 0;
 }
 
 /** How many criteria the filter holds (for the count badge). */
 export function filterCount(filter: CustomDataFilterValue): number {
-  return filter.tagIds.length + Object.keys(filter.fields).length;
+  return filter.tagIds.length + Object.keys(filter.fields).length + deviceFilterCount(filter.device);
 }
 
 /** A stored value as text: `true`, `2`, `prod`. Missing values are ''. */

@@ -270,5 +270,38 @@ describe('filterGroupsByCustomData', () => {
 
   it('returns the input unchanged for an empty filter', () => {
     expect(filterGroupsByCustomData(tree, { tagIds: [], fields: {} })).toBe(tree);
+    expect(filterGroupsByCustomData(tree, { tagIds: [], fields: {}, device: { role: [] } })).toBe(tree);
+  });
+});
+
+describe('filterGroupsByCustomData with device model facets', () => {
+  const core = { id: 1, name: 'core', color: 'blue' };
+  const tree = [
+    group(1, 'Campus', [
+      host(1, { ip_address: '192.0.2.1', role_id: 10, site_id: 3 }),
+      host(2, { ip_address: '192.0.2.2', role_id: 11, tags: [core] }),
+      host(3, { ip_address: '192.0.2.3' }),
+    ]),
+    group(2, 'Lab', [host(4, { ip_address: '198.51.100.4', role_id: 10 }), host(5, { ip_address: '198.51.100.5' })], {
+      tags: [core],
+    }),
+  ];
+  const ids = (groups: InventoryGroupFull[]) => groups.map((g) => [g.id, (g.hosts ?? []).map((h) => h.id)]);
+
+  it('keeps only hosts that match the facets, and groups that have one', () => {
+    expect(ids(filterGroupsByCustomData(tree, { tagIds: [], fields: {}, device: { role: [11] } }))).toEqual([[1, [2]]]);
+    expect(ids(filterGroupsByCustomData(tree, { tagIds: [], fields: {}, device: { role: [10, 'none'] } }))).toEqual([
+      [1, [1, 3]],
+      [2, [4, 5]],
+    ]);
+  });
+
+  it('applies the facets to the hosts of a group that matches by its own tags', () => {
+    expect(ids(filterGroupsByCustomData(tree, { tagIds: [1], fields: {}, device: { role: [10] } }))).toEqual([[2, [4]]]);
+  });
+
+  it('needs the tags and the facets on a host of a group that does not match itself', () => {
+    expect(ids(filterGroupsByCustomData(tree, { tagIds: [1], fields: {}, device: { role: [11] } }))).toEqual([[1, [2]]]);
+    expect(filterGroupsByCustomData(tree, { tagIds: [1], fields: {}, device: { site: [3] } })).toEqual([]);
   });
 });

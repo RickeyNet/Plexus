@@ -5,6 +5,7 @@ import type {
   SshEnrichmentSummary,
 } from '@/api/inventory';
 import { type CustomDataFilterValue, isEmptyFilter, matchesCustomData } from '@/lib/customData';
+import { isEmptyDeviceFilter, matchesDeviceFilter } from '@/lib/deviceModel';
 import { descendantIdsOf, treeOrder } from '@/lib/tree';
 
 const groupIdOf = (g: InventoryGroupFull) => g.id;
@@ -69,25 +70,35 @@ export function filterGroups(
 }
 
 /**
- * Groups and hosts that match a tag / custom field filter. A group that
- * matches by its own tags or fields keeps all its hosts; a group that matches
- * only through some of its hosts keeps just those; a group with neither is
- * dropped, unless it is the ancestor of a kept group, which stays (without
- * hosts) so the tree still reads from the top. An empty filter returns
- * `groups` unchanged.
+ * Groups and hosts that match a tag / custom field / device model filter. A
+ * group that matches by its own tags or fields keeps all its hosts; a group
+ * that matches only through some of its hosts keeps just those; a group with
+ * neither is dropped, unless it is the ancestor of a kept group, which stays
+ * (without hosts) so the tree still reads from the top. The device model
+ * facets are host filters: with any set, only hosts that match them are kept,
+ * and a group needs at least one such host. An empty filter returns `groups`
+ * unchanged.
  */
 export function filterGroupsByCustomData(
   groups: InventoryGroupFull[],
   filter: CustomDataFilterValue,
 ): InventoryGroupFull[] {
   if (isEmptyFilter(filter)) return groups;
+  const byDevice = !isEmptyDeviceFilter(filter.device);
+  const deviceMatch = (host: InventoryHost) => matchesDeviceFilter(host, filter.device);
   const kept = new Map<number, InventoryGroupFull>();
   for (const group of groups) {
+    const all = group.hosts ?? [];
     if (matchesCustomData(group, filter)) {
-      kept.set(group.id, group);
+      if (!byDevice) {
+        kept.set(group.id, group);
+        continue;
+      }
+      const hosts = all.filter(deviceMatch);
+      if (hosts.length > 0) kept.set(group.id, { ...group, hosts });
       continue;
     }
-    const hosts = (group.hosts ?? []).filter((host) => matchesCustomData(host, filter));
+    const hosts = all.filter((host) => matchesCustomData(host, filter) && deviceMatch(host));
     if (hosts.length > 0) kept.set(group.id, { ...group, hosts });
   }
   const parentOf = new Map(groups.map((g) => [g.id, g.parent_id ?? null]));

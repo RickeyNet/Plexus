@@ -10,9 +10,10 @@ import { PageHelp } from '@/components/PageHelp';
 import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
-import { TagChips } from '@/components/TagChips';
+import { TagChip, TagChips } from '@/components/TagChips';
 import { clickableProps } from '@/lib/clickable';
 import { type CustomDataFilterValue, EMPTY_CUSTOM_DATA_FILTER, isEmptyFilter } from '@/lib/customData';
+import { hostModelText } from '@/lib/deviceModel';
 import { useLinkedParam } from '@/lib/useLinkedParam';
 
 import {
@@ -30,6 +31,7 @@ import {
   useSnmpProfiles,
 } from '@/api/inventory';
 
+import { BulkEditModal } from './BulkEditModal';
 import { BulkMoveModal } from './BulkMoveModal';
 import { BulkTagModal } from './BulkTagModal';
 import { DiscoveryModal, type DiscoveryMode } from './DiscoveryModal';
@@ -63,6 +65,7 @@ type ModalState =
     }
   | { kind: 'bulk-move'; sourceGroupId: number; hostIds: number[] }
   | { kind: 'bulk-tag'; hostIds: number[] }
+  | { kind: 'bulk-edit'; hostIds: number[] }
   | { kind: 'serial'; target: SerialTarget }
   | { kind: 'snmp-profiles' }
   | {
@@ -320,7 +323,7 @@ export function Inventory() {
           onChange={(e) => setQuery(e.target.value)}
           style={{ maxWidth: 280, flex: '1 1 200px' }}
         />
-        <CustomDataFilter objectType="host" value={dataFilter} onChange={changeDataFilter} />
+        <CustomDataFilter objectType="host" value={dataFilter} onChange={changeDataFilter} deviceFacets />
         <select
           className="form-select form-select-sm"
           value={sort}
@@ -460,6 +463,10 @@ export function Inventory() {
               const ids = Array.from(selectedHosts.get(group.id) ?? []);
               if (ids.length) setModal({ kind: 'bulk-tag', hostIds: ids });
             }}
+            onBulkEdit={() => {
+              const ids = Array.from(selectedHosts.get(group.id) ?? []);
+              if (ids.length) setModal({ kind: 'bulk-edit', hostIds: ids });
+            }}
           />
         ))}
       </div>
@@ -503,6 +510,9 @@ export function Inventory() {
       )}
       {modal.kind === 'bulk-tag' && (
         <BulkTagModal hostIds={modal.hostIds} onClose={closeModal} />
+      )}
+      {modal.kind === 'bulk-edit' && (
+        <BulkEditModal hostIds={modal.hostIds} onClose={closeModal} />
       )}
       {modal.kind === 'serial' && (
         <SerialModal target={modal.target} onClose={closeModal} />
@@ -551,6 +561,7 @@ interface GroupCardProps {
   onBulkMove: () => void;
   onBulkDelete: () => void;
   onBulkTag: () => void;
+  onBulkEdit: () => void;
 }
 
 /** How far each level of sub-groups is indented. */
@@ -584,6 +595,7 @@ function GroupCard({
   onBulkMove,
   onBulkDelete,
   onBulkTag,
+  onBulkEdit,
 }: GroupCardProps) {
   const hosts = group.hosts ?? [];
   const sortedHosts = sortHostsForQuery(hosts, query);
@@ -745,6 +757,8 @@ function GroupCard({
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '0.5rem',
               marginBottom: '0.5rem',
             }}
           >
@@ -763,7 +777,7 @@ function GroupCard({
               )}
               <strong>Hosts</strong>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.25rem' }}>
               {selectedSet.size > 0 && (
                 <>
                   {singleSelected && selectedHostObj && (
@@ -788,6 +802,13 @@ function GroupCard({
                     onClick={onBulkTag}
                   >
                     Tag…
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-secondary"
+                    onClick={onBulkEdit}
+                  >
+                    Edit…
                   </button>
                   <DeleteButton onClick={onBulkDelete} />
                 </>
@@ -827,7 +848,7 @@ function GroupCard({
                     <th style={{ width: 32 }}></th>
                     <th>Hostname</th>
                     <th>IP Address</th>
-                    <th>Type</th>
+                    <th>Platform</th>
                     <th>Model</th>
                     <th>Serial</th>
                     <th>Software</th>
@@ -874,6 +895,24 @@ function GroupCard({
                               </td>
                               <td>
                                 {host.hostname}
+                                {(host.role || host.lifecycle_status) && (
+                                  <div style={{ marginTop: 'var(--space-1)' }}>
+                                    <span className="tag-chips">
+                                      {host.role && (
+                                        <TagChip color={host.role.color} title="Role">
+                                          <span className="sr-only">Role: </span>
+                                          {host.role.name}
+                                        </TagChip>
+                                      )}
+                                      {host.lifecycle_status && (
+                                        <TagChip color={host.lifecycle_status.color} title="Lifecycle status">
+                                          <span className="sr-only">Lifecycle status: </span>
+                                          {host.lifecycle_status.name}
+                                        </TagChip>
+                                      )}
+                                    </span>
+                                  </div>
+                                )}
                                 {host.tags && host.tags.length > 0 && (
                                   <div style={{ marginTop: 'var(--space-1)' }}>
                                     <TagChips tags={host.tags} max={3} />
@@ -882,7 +921,9 @@ function GroupCard({
                               </td>
                               <td>{host.ip_address}</td>
                               <td>{host.device_type || 'cisco_ios'}</td>
-                              <td>{host.model || '-'}</td>
+                              <td title={host.hardware && host.model ? `Discovered model: ${host.model}` : undefined}>
+                                {hostModelText(host)}
+                              </td>
                               <td>
                                 {host.serial_number || '-'}
                                 {host.aws_instance_id && (

@@ -46,12 +46,15 @@ __all__ = [
 
 
 async def list_geo_sites() -> list:
+    """Every site with its ``floor_count``, ``placed_device_count`` and
+    ``host_count`` (hosts whose ``site_id`` is the site)."""
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT s.*,
                       COUNT(DISTINCT f.id)                                AS floor_count,
-                      COUNT(DISTINCT p.id)                                AS placed_device_count
+                      COUNT(DISTINCT p.id)                                AS placed_device_count,
+                      (SELECT COUNT(*) FROM hosts h WHERE h.site_id = s.id) AS host_count
                FROM geo_sites s
                LEFT JOIN geo_floors f ON f.site_id = s.id
                LEFT JOIN geo_placements p ON p.floor_id = f.id
@@ -235,6 +238,7 @@ async def get_geo_placements(floor_id: int) -> list:
 
 
 async def upsert_geo_placement(floor_id: int, host_id: int, x_pct: float, y_pct: float) -> dict:
+    """Place a host on a floor; a host with no site takes the floor's site."""
     db = await _dbcore.get_db()
     try:
         await db.execute(
@@ -245,6 +249,11 @@ async def upsert_geo_placement(floor_id: int, host_id: int, x_pct: float, y_pct:
                              y_pct = excluded.y_pct,
                              updated_at = datetime('now')""",
             (floor_id, host_id, x_pct, y_pct),
+        )
+        await db.execute(
+            """UPDATE hosts SET site_id = (SELECT site_id FROM geo_floors WHERE id = ?)
+               WHERE id = ? AND site_id IS NULL""",
+            (floor_id, host_id),
         )
         await db.commit()
         cursor = await db.execute(

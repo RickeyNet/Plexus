@@ -163,6 +163,11 @@ from netcontrol.routes.deployments import (
     router as deployments_router,
     ws_router as deployments_ws_router,
 )
+from netcontrol.routes.device_model import (
+    admin_router as device_model_admin_router,
+    inventory_router as device_model_inventory_router,
+    router as device_model_router,
+)
 from netcontrol.routes.dhcp import init_dhcp, router as dhcp_router, sync_dhcp_server
 from netcontrol.routes.dhcp_adapters import DhcpAdapterError, collect_dhcp_snapshot
 from netcontrol.routes.federation import (
@@ -260,6 +265,12 @@ from netcontrol.routes.monitoring import (
     _sla_rollup_loop,
     admin_router as monitoring_admin_router,
     router as monitoring_router,
+)
+from netcontrol.routes.network_objects import (
+    admin_router as network_objects_admin_router,
+    backfill_interface_addresses,
+    host_router as network_objects_host_router,
+    router as network_objects_router,
 )
 from netcontrol.routes.playbooks import (
     PlaybookCreate,
@@ -1324,6 +1335,25 @@ async def _dhcp_sync_loop() -> None:
                 )
 
 
+# How long after start the one-off read of the stored configurations into
+# interface addresses waits: startup is not slowed by it, and a short-lived
+# app (a test client) never runs it.
+INTERFACE_ADDRESSES_BACKFILL_DELAY_SECONDS = 120
+
+
+async def _interface_addresses_backfill() -> None:
+    """Once, after the upgrade to migration 0086, read every host's newest
+    stored configuration into its interface addresses (see
+    ``netcontrol.routes.network_objects.backfill_interface_addresses``)."""
+    await asyncio.sleep(INTERFACE_ADDRESSES_BACKFILL_DELAY_SECONDS)
+    try:
+        await backfill_interface_addresses()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        LOGGER.warning("interface address backfill failed: %s", type(exc).__name__)
+
+
 async def _record_sync_status(coro, what: str) -> None:
     """Await a status-recording DB write from a sync loop's error path.
 
@@ -1616,6 +1646,7 @@ async def lifespan(app: FastAPI):
             _software_refresh_loop,
             lab_runtime_ttl_loop,
             lab_drift_scheduler_loop,
+            _interface_addresses_backfill,
         )
     ]
     for task in background_tasks:
@@ -2263,6 +2294,27 @@ app.include_router(
 app.include_router(
     custom_fields_ipam_router,
     dependencies=[Depends(require_auth), Depends(require_feature_method("ipam"))],
+)
+# Device model: the catalogues are readable by any signed-in user and
+# managed by admins; bulk edit of hosts sits with inventory access.
+app.include_router(device_model_router, dependencies=[Depends(require_auth)])
+app.include_router(device_model_admin_router, dependencies=[Depends(require_admin)])
+app.include_router(
+    device_model_inventory_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("inventory"))],
+)
+# VRF and VLAN records: read with IPAM access, managed by admins. Registered
+# before the IPAM router so its greedy ``/api/ipam/subnets/{subnet:path}``
+# can never shadow these paths. A host's interface addresses sit with its
+# interface inventory (the reports feature).
+app.include_router(
+    network_objects_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("ipam"))],
+)
+app.include_router(network_objects_admin_router, dependencies=[Depends(require_admin)])
+app.include_router(
+    network_objects_host_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("reports"))],
 )
 # Ansible dynamic inventory provider
 app.include_router(

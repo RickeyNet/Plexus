@@ -45,6 +45,7 @@ All API endpoints and their required authentication/authorization levels.
 | CRUD | `/api/flow-collector/*` | flow_collector |
 | CRUD | `/api/baseline-alerting/*` | baseline_alerting |
 | GET | `/api/custom-fields` (`?object_type=`), `/api/tags` (with usage counts) | custom_fields |
+| GET | `/api/dcim/manufacturers`, `/api/dcim/device-types` (`?manufacturer_id=`), `/api/dcim/roles`, `/api/dcim/statuses` (with host counts) | device_model |
 
 ### Feature-gated (auth + feature flag)
 
@@ -69,7 +70,10 @@ All API endpoints and their required authentication/authorization levels.
 | `monitoring` | `GET /api/monitoring/meraki-alerts` (the Meraki alert list) | meraki_alerts |
 | `upgrades` | `/api/upgrades/*` | upgrades |
 | `inventory` | `POST /api/tags`, `GET/PUT /api/hosts/{host_id}/custom-data`, `GET/PUT /api/inventory/{group_id}/custom-data`, `POST /api/hosts/bulk-tags` | custom_fields (inventory_router) |
+| `inventory` | `POST /api/hosts/bulk-edit` (set device type, role, lifecycle status, site, location detail on many hosts; audited as `device_model` / `bulk_edit`) | device_model (inventory_router) |
 | `ipam` | `GET /api/ipam/prefix-custom-data?subnet=&vrf=`; `PUT` needs `ipam.write` and admin (an admin dependency on the route, like every IPAM write) | custom_fields (ipam_router) |
+| `ipam` | `GET /api/ipam/vrfs`, `GET /api/ipam/vrfs/{vrf_id}`, `GET /api/ipam/vlans`, `GET /api/ipam/vlans/{vlan_id}` (registered before the IPAM router) | network_objects (router) |
+| `reports` | `GET /api/hosts/{host_id}/interface-addresses` (gated like `GET /api/hosts/{host_id}/interface-inventory`) | network_objects (host_router) |
 
 ### Admin-only
 
@@ -78,6 +82,8 @@ All API endpoints and their required authentication/authorization levels.
 | `/api/admin/*` | admin |
 | `/api/admin/mcp/settings`, `/api/admin/mcp/tokens*` | mcp_tokens (AI access settings and MCP token create, list, revoke) |
 | `POST /api/custom-fields`, `PUT/DELETE /api/custom-fields/{field_id}`, `PUT/DELETE /api/tags/{tag_id}` | custom_fields (admin_router) |
+| `POST /api/dcim/{manufacturers,device-types,roles,statuses}`, `PUT/DELETE /api/dcim/{manufacturers,device-types,roles,statuses}/{id}` (`?confirm=true` to delete a record hosts use) | device_model (admin_router) |
+| `POST /api/ipam/vrfs`, `PUT/DELETE /api/ipam/vrfs/{vrf_id}`, `POST /api/ipam/vlans`, `PUT/DELETE /api/ipam/vlans/{vlan_id}`, `POST /api/ipam/interface-addresses/rebuild` (audited as `network_objects`) | network_objects (admin_router) |
 | `/api/secret-variables/*` | (admin enforced in handlers; reads and writes both) |
 | `/api/inventory/admin/*` | inventory_admin |
 | `/api/topology/admin/*` | topology_admin |
