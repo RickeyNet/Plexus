@@ -33,6 +33,15 @@ DEFAULT_RULES = {
     # tests/test_custom_fields_*.py; do not lower them to land a change.
     "netcontrol/custom_fields.py": 95.0,
     "netcontrol/routes/custom_fields.py": 85.0,
+    # Device model: the rules and the API. Measured by
+    # tests/test_device_model_*.py; do not lower them to land a change.
+    "netcontrol/device_model.py": 95.0,
+    "netcontrol/routes/device_model.py": 85.0,
+    # VRF and VLAN records and interface addresses: the rules and the API.
+    # Measured by tests/test_network_objects_*.py; do not lower them to
+    # land a change.
+    "netcontrol/network_objects.py": 95.0,
+    "netcontrol/routes/network_objects.py": 85.0,
 }
 
 

@@ -128,7 +128,8 @@ export function toCustomDataError(err: unknown): unknown {
   return new CustomDataError(message, err.status, fields, affected);
 }
 
-async function request<T>(endpoint: string, options?: Parameters<typeof apiRequest>[1]): Promise<T> {
+/** `apiRequest` whose failures carry the structured detail (see `toCustomDataError`). */
+export async function detailRequest<T>(endpoint: string, options?: Parameters<typeof apiRequest>[1]): Promise<T> {
   try {
     return await apiRequest<T>(endpoint, options);
   } catch (err) {
@@ -136,8 +137,8 @@ async function request<T>(endpoint: string, options?: Parameters<typeof apiReque
   }
 }
 
-/** The list a definitions endpoint returned, bare or wrapped as `{<key>: [...]}`. */
-function listOf<T>(body: unknown, key: string): T[] {
+/** The list a catalogue endpoint returned, bare or wrapped as `{<key>: [...]}`. */
+export function listOf<T>(body: unknown, key: string): T[] {
   if (Array.isArray(body)) return body as T[];
   const wrapped = asRecord(body)?.[key];
   return Array.isArray(wrapped) ? (wrapped as T[]) : [];
@@ -185,7 +186,7 @@ function invalidateLists(qc: QC) {
 export function useTags() {
   return useQuery<TagWithUsage[]>({
     queryKey: KEYS.tags,
-    queryFn: async () => listOf<TagWithUsage>(await request('/tags'), 'tags'),
+    queryFn: async () => listOf<TagWithUsage>(await detailRequest('/tags'), 'tags'),
   });
 }
 
@@ -195,7 +196,7 @@ export function useCustomFields(objectType?: ObjectType) {
     queryKey: KEYS.fields(objectType),
     queryFn: async () => {
       const qs = objectType ? `?object_type=${objectType}` : '';
-      return listOf<CustomField>(await request(`/custom-fields${qs}`), 'fields');
+      return listOf<CustomField>(await detailRequest(`/custom-fields${qs}`), 'fields');
     },
   });
 }
@@ -203,7 +204,7 @@ export function useCustomFields(objectType?: ObjectType) {
 export function useObjectData(ref: ObjectRef | null, enabled = true) {
   return useQuery<ObjectData>({
     queryKey: ref ? KEYS.object(ref) : [...KEYS.allObjects, 'none'],
-    queryFn: () => request<ObjectData>(objectDataPath(ref!)),
+    queryFn: () => detailRequest<ObjectData>(objectDataPath(ref!)),
     enabled: enabled && ref != null,
   });
 }
@@ -214,7 +215,7 @@ export function useObjectData(ref: ObjectRef | null, enabled = true) {
 export function useSaveObjectData() {
   const qc = useQueryClient();
   return useMutation<ObjectData, Error, { ref: ObjectRef; data: ObjectDataPut }>({
-    mutationFn: ({ ref, data }) => request<ObjectData>(objectDataPath(ref), { method: 'PUT', body: data }),
+    mutationFn: ({ ref, data }) => detailRequest<ObjectData>(objectDataPath(ref), { method: 'PUT', body: data }),
     onSuccess: (_saved, { ref }) => {
       qc.invalidateQueries({ queryKey: KEYS.object(ref) });
       qc.invalidateQueries({ queryKey: KEYS.tags });
@@ -228,7 +229,7 @@ export function useBulkTagHosts() {
   const qc = useQueryClient();
   return useMutation<unknown, Error, { hostIds: number[]; addTagIds: number[]; removeTagIds: number[] }>({
     mutationFn: ({ hostIds, addTagIds, removeTagIds }) =>
-      request('/hosts/bulk-tags', {
+      detailRequest('/hosts/bulk-tags', {
         method: 'POST',
         body: { host_ids: hostIds, add_tag_ids: addTagIds, remove_tag_ids: removeTagIds },
       }),
@@ -247,7 +248,7 @@ export function useCreateTag() {
   const qc = useQueryClient();
   return useMutation<Tag, Error, Partial<TagInput> & { name: string }>({
     mutationFn: (input) =>
-      request<Tag>('/tags', {
+      detailRequest<Tag>('/tags', {
         method: 'POST',
         body: { color: 'gray', description: '', ...input },
       }),
@@ -265,7 +266,7 @@ export function useCreateTag() {
 export function useUpdateTag() {
   const qc = useQueryClient();
   return useMutation<Tag, Error, { id: number; data: TagInput }>({
-    mutationFn: ({ id, data }) => request<Tag>(`/tags/${id}`, { method: 'PUT', body: data }),
+    mutationFn: ({ id, data }) => detailRequest<Tag>(`/tags/${id}`, { method: 'PUT', body: data }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: KEYS.tags });
       qc.invalidateQueries({ queryKey: KEYS.allObjects });
@@ -277,7 +278,7 @@ export function useUpdateTag() {
 export function useDeleteTag() {
   const qc = useQueryClient();
   return useMutation<{ ok: boolean; removed: number }, Error, number>({
-    mutationFn: (id) => request(`/tags/${id}`, { method: 'DELETE' }),
+    mutationFn: (id) => detailRequest(`/tags/${id}`, { method: 'DELETE' }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: KEYS.tags });
       qc.invalidateQueries({ queryKey: KEYS.allObjects });
@@ -298,7 +299,7 @@ function invalidateFields(qc: QC) {
 export function useCreateCustomField() {
   const qc = useQueryClient();
   return useMutation<CustomField, Error, CustomFieldInput>({
-    mutationFn: (data) => request<CustomField>('/custom-fields', { method: 'POST', body: data }),
+    mutationFn: (data) => detailRequest<CustomField>('/custom-fields', { method: 'POST', body: data }),
     onSuccess: () => invalidateFields(qc),
   });
 }
@@ -312,7 +313,7 @@ export function useUpdateCustomField() {
   const qc = useQueryClient();
   return useMutation<CustomField, Error, { id: number; data: Omit<CustomFieldInput, 'key' | 'field_type'>; confirm?: boolean }>({
     mutationFn: ({ id, data, confirm }) =>
-      request<CustomField>(`/custom-fields/${id}${confirm ? '?confirm=true' : ''}`, { method: 'PUT', body: data }),
+      detailRequest<CustomField>(`/custom-fields/${id}${confirm ? '?confirm=true' : ''}`, { method: 'PUT', body: data }),
     onSuccess: () => invalidateFields(qc),
   });
 }
@@ -320,7 +321,7 @@ export function useUpdateCustomField() {
 export function useDeleteCustomField() {
   const qc = useQueryClient();
   return useMutation<{ ok: boolean; removed: number }, Error, number>({
-    mutationFn: (id) => request(`/custom-fields/${id}`, { method: 'DELETE' }),
+    mutationFn: (id) => detailRequest(`/custom-fields/${id}`, { method: 'DELETE' }),
     onSuccess: () => invalidateFields(qc),
   });
 }

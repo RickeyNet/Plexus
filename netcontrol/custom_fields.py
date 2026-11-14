@@ -155,11 +155,17 @@ def typed_value(field_type: str, stored: str) -> str | int | float | bool:
     return stored
 
 
-def clean_tag_name(raw: object) -> str:
-    """A tag name trimmed; 1 to ``TAG_NAME_MAX`` characters."""
+def clean_name(raw: object, label: str, limit: int) -> str:
+    """A name trimmed; 1 to ``limit`` characters. ``label`` starts the error
+    message (``"Tag name"``)."""
     name = raw.strip() if isinstance(raw, str) else ""
     if not name:
-        raise CustomFieldError("Tag name must not be empty.")
-    if len(name) > TAG_NAME_MAX:
-        raise CustomFieldError(f"Tag name must be at most {TAG_NAME_MAX} characters.")
+        raise CustomFieldError(f"{label} must not be empty.")
+    if len(name) > limit:
+        raise CustomFieldError(f"{label} must be at most {limit} characters.")
     return name
+
+
+def clean_tag_name(raw: object) -> str:
+    """A tag name trimmed; 1 to ``TAG_NAME_MAX`` characters."""
+    return clean_name(raw, "Tag name", TAG_NAME_MAX)

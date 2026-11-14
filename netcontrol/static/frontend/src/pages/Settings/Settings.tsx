@@ -17,6 +17,7 @@ import { AiAccessTab } from './AiAccessTab';
 import { AppearanceTab } from './AppearanceTab';
 import { AuthTab } from './AuthTab';
 import { CustomDataTab } from './CustomDataTab';
+import { DeviceModelTab } from './DeviceModelTab';
 import { DiscoveryTab } from './DiscoveryTab';
 import { FeaturesTab } from './FeaturesTab';
 import { JobRetentionSection } from './JobRetentionSection';
@@ -42,6 +43,7 @@ type Tab =
   | 'notifications'
   | 'features'
   | 'custom-data'
+  | 'device-model'
   | 'ai-access'
   | 'system';
 
@@ -95,6 +97,10 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
     title: 'Custom Fields & Tags',
     text: 'Define extra fields and tags for hosts, groups and IPAM prefixes. Values are set on the object itself.',
   },
+  'device-model': {
+    title: 'Device Model',
+    text: 'Curate the manufacturers, device types, roles and lifecycle statuses that hosts link to. Discovery adds manufacturers and device types it finds; a value set by hand on a host is never overwritten. Sites are managed on the Geolocation page.',
+  },
   'ai-access': {
     title: 'AI Access',
     text: 'Let AI clients such as Claude read Plexus data through a read-only MCP endpoint: turn the endpoint on, set its limits, and create or revoke the tokens clients sign in with. Each token is limited to the data categories you choose and to what its owner can see, and every call is written to the audit log.',
@@ -118,6 +124,7 @@ const ADMIN_TABS: { key: Tab; label: string }[] = [
   { key: 'notifications', label: 'Notifications' },
   { key: 'features', label: 'Features' },
   { key: 'custom-data', label: 'Custom Fields & Tags' },
+  { key: 'device-model', label: 'Device Model' },
   { key: 'ai-access', label: 'AI Access' },
   { key: 'system', label: 'System' },
 ];
@@ -243,6 +250,7 @@ export function Settings() {
           {tab === 'notifications' && <NotificationsTab />}
           {tab === 'features' && <FeaturesTab capabilities={caps} />}
           {tab === 'custom-data' && <CustomDataTab />}
+          {tab === 'device-model' && <DeviceModelTab />}
           {tab === 'ai-access' && <AiAccessTab />}
           {tab === 'system' && (
             <div className="stack">

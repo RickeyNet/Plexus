@@ -24,7 +24,9 @@ from routes.database import (
     rows_to_list,
 )
 from routes.db.custom_fields import purge_object_data
+from routes.db.device_model import link_host_hardware
 from routes.db.ipam import record_ip_assignment, record_ip_release
+from routes.db.network_objects import ensure_vrfs
 
 __all__ = [
     "get_all_groups",
@@ -140,9 +142,25 @@ _GROUP_LISTING_HOST_COLUMNS = (
     "device_category",
     "serial_number",
     "aws_instance_id",
+    "vrf_name",
+    "vlan_id",
+    "device_type_id",
+    "role_id",
+    "lifecycle_status_id",
+    "site_id",
+    "location_detail",
 )
 # Host columns read back as '' when NULL.
-_GROUP_LISTING_TEXT_COLUMNS = ("model", "software_version", "device_category", "serial_number", "aws_instance_id")
+_GROUP_LISTING_TEXT_COLUMNS = (
+    "model",
+    "software_version",
+    "device_category",
+    "serial_number",
+    "aws_instance_id",
+    "vrf_name",
+    "vlan_id",
+    "location_detail",
+)
 _GROUP_LISTING_HOST_SELECT = ",\n                ".join(f"h.{c} AS host_{c}" for c in _GROUP_LISTING_HOST_COLUMNS)
 
 
@@ -670,11 +688,14 @@ async def add_host(
     vlan_id: str = "",
     aws_instance_id: str = "",
 ) -> int:
+    """Insert a host. It gets the default lifecycle status (none when no
+    status is the default)."""
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "INSERT INTO hosts (group_id, hostname, ip_address, device_type, vrf_name, vlan_id, aws_instance_id)"
-            " VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO hosts (group_id, hostname, ip_address, device_type, vrf_name, vlan_id, aws_instance_id,"
+            " lifecycle_status_id)"
+            " VALUES (?,?,?,?,?,?,?,(SELECT id FROM host_statuses WHERE is_default = 1 ORDER BY id LIMIT 1))",
             (
                 group_id,
                 hostname,
@@ -693,6 +714,8 @@ async def add_host(
         raise
     finally:
         await db.close()
+    if vrf_name:
+        await ensure_vrfs([vrf_name], "manual")
     if ip_address:
         try:
             await record_ip_assignment(
@@ -748,7 +771,8 @@ async def update_host(
     vlan_id: str | None = None,
     aws_instance_id: str | None = None,
 ):
-    """``None`` leaves ``vrf_name``/``vlan_id`` (together) and ``aws_instance_id`` unchanged."""
+    """``None`` leaves ``vrf_name``, ``vlan_id`` and ``aws_instance_id``
+    unchanged, each on its own; a string sets it (``""`` clears it)."""
     db = await _dbcore.get_db()
     try:
         cur = await db.execute("SELECT ip_address, vrf_name FROM hosts WHERE id = ?", (host_id,))
@@ -757,16 +781,14 @@ async def update_host(
         prior_ip = (prior.get("ip_address") or "").strip()
         prior_vrf = (prior.get("vrf_name") or "").strip()
 
-        if vrf_name is None and vlan_id is None:
-            await db.execute(
-                "UPDATE hosts SET hostname=?, ip_address=?, device_type=? WHERE id=?",
-                (hostname, ip_address, device_type, host_id),
-            )
-        else:
-            await db.execute(
-                "UPDATE hosts SET hostname=?, ip_address=?, device_type=?, vrf_name=?, vlan_id=? WHERE id=?",
-                (hostname, ip_address, device_type, vrf_name or "", str(vlan_id or ""), host_id),
-            )
+        await db.execute(
+            "UPDATE hosts SET hostname=?, ip_address=?, device_type=? WHERE id=?",
+            (hostname, ip_address, device_type, host_id),
+        )
+        if vrf_name is not None:
+            await db.execute("UPDATE hosts SET vrf_name=? WHERE id=?", (vrf_name, host_id))
+        if vlan_id is not None:
+            await db.execute("UPDATE hosts SET vlan_id=? WHERE id=?", (str(vlan_id), host_id))
         if aws_instance_id is not None:
             await db.execute(
                 "UPDATE hosts SET aws_instance_id=? WHERE id=?",
@@ -776,7 +798,9 @@ async def update_host(
     finally:
         await db.close()
 
-    new_vrf = (vrf_name or prior_vrf) if vrf_name is not None else prior_vrf
+    if vrf_name:
+        await ensure_vrfs([vrf_name], "manual")
+    new_vrf = vrf_name.strip() if vrf_name is not None else prior_vrf
     new_ip = (ip_address or "").strip()
     try:
         if prior_ip and (prior_ip != new_ip or prior_vrf != new_vrf):
@@ -862,7 +886,9 @@ async def update_host_status(host_id: int, status: str):
 
 
 async def update_host_device_info(host_id: int, model: str, software_version: str, device_category: str = ""):
-    """Update the model, software_version, and device_category fields for a host."""
+    """Update the model, software_version, and device_category fields for a
+    host, then link it to the device model catalogues
+    (``link_host_hardware``, which never raises)."""
     db = await _dbcore.get_db()
     try:
         if device_category:
@@ -878,6 +904,7 @@ async def update_host_device_info(host_id: int, model: str, software_version: st
         await db.commit()
     finally:
         await db.close()
+    await link_host_hardware(host_id, "", model, device_category)
 
 
 async def update_host_serial(host_id: int, serial_number: str) -> None:
@@ -899,7 +926,8 @@ async def get_all_hosts_for_export() -> list[dict]:
     try:
         cursor = await db.execute("""
             SELECT h.id, h.hostname, h.ip_address, h.device_type, h.status,
-                   h.model, h.software_version, g.name AS group_name
+                   h.model, h.software_version, g.name AS group_name,
+                   h.device_type_id, h.role_id, h.lifecycle_status_id, h.site_id, h.location_detail
             FROM hosts h
             LEFT JOIN inventory_groups g ON g.id = h.group_id
             ORDER BY g.name, h.hostname

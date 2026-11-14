@@ -14,6 +14,7 @@ import {
   useGeoFloor,
   useGeoOverview,
   useGeoSite,
+  useGeoSites,
   useInventoryGroupsWithHosts,
 } from '@/api/floorPlan';
 import { clickableProps } from '@/lib/clickable';
@@ -33,6 +34,12 @@ type ModalKind = 'add-site' | 'add-floor' | 'edit-floor' | 'upload-image' | null
 export function FloorPlan() {
   const { alert } = useDialogs();
   const sites = useGeoOverview();
+  // Host counts per site come with the site list (GET /geo/sites).
+  const siteRows = useGeoSites();
+  const hostCounts = useMemo(
+    () => new Map((siteRows.data ?? []).map((s) => [s.id, s.host_count])),
+    [siteRows.data],
+  );
   const [siteId, setSiteId] = useState<number | null>(null);
   const [floorId, setFloorId] = useState<number | null>(null);
   const [placeMode, setPlaceMode] = useState(false);
@@ -115,6 +122,7 @@ export function FloorPlan() {
       >
         <SitesPanel
           sites={sites.data}
+          hostCounts={hostCounts}
           loading={sites.isPending}
           loadError={sitesError}
           activeSiteId={siteId}
@@ -178,6 +186,7 @@ export function FloorPlan() {
 
 function SitesPanel({
   sites,
+  hostCounts,
   loading,
   loadError,
   activeSiteId,
@@ -188,6 +197,8 @@ function SitesPanel({
   onSelectFloor,
 }: {
   sites: GeoSiteSummary[] | undefined;
+  /** Hosts linked to each site, by site id, when the server reports it. */
+  hostCounts: Map<number, number | null | undefined>;
   loading: boolean;
   loadError: ReactNode;
   activeSiteId: number | null;
@@ -226,6 +237,7 @@ function SitesPanel({
         const unknown = Number(s.unknown_count) || 0;
         const placed = Number(s.placed_device_count) || 0;
         const floors = Number(s.floor_count) || 0;
+        const hosts = s.host_count ?? hostCounts.get(s.id);
         return (
           <div
             key={s.id}
@@ -255,6 +267,7 @@ function SitesPanel({
                 }}
               >
                 {floors} floor{floors !== 1 ? 's' : ''} · {placed} pinned
+                {typeof hosts === 'number' && ` · ${hosts} host${hosts !== 1 ? 's' : ''}`}
                 {online > 0 && (
                   <span style={{ color: 'var(--success)', marginLeft: 4 }}>● {online}</span>
                 )}
