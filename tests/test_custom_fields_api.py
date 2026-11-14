@@ -538,7 +538,7 @@ def test_csv_has_tags_and_field_columns(admin):
     edge = _tag(admin, "edge")
     assert _put_host(admin, h1, [edge["id"], core["id"]], {"owner": "net", "rack_units": 2}).status_code == 200
     header, *rows = _csv_rows(admin)
-    assert header[-5:] == ["Status", "Group", "Tags", "Owner", "Rack units"]
+    assert header[-5:] == ["Site", "Location Detail", "Tags", "Owner", "Rack units"]
     assert "Site code" not in header
     by_name = {r[0]: r for r in rows}
     assert by_name["sw1"][-3:] == ["core; edge", "net", "2"]

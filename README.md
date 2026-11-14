@@ -18,6 +18,8 @@ stream live job output - all through a REST API with WebSocket support.
 - **Digital-twin lab mode** - rehearse changes against lab copies of devices.
 - **Alerting** - alert rules routed to email, PagerDuty, webhook and Microsoft Teams channels.
 - **Custom fields and tags** - admin-defined fields and tags on hosts, groups and IPAM prefixes, with filtering, CSV export and an API.
+- **Device model** - managed manufacturers, device types, roles and lifecycle statuses on hosts, plus a site, filled in by discovery and used for filtering, bulk edit and export.
+- **VRFs and VLANs** - VRF and VLAN records with their devices, ports and subnets, filled from collected data, and every address a device's interfaces carry with its network and VRF, read from the stored running configuration.
 - **AI access** - a read-only MCP endpoint so an AI client such as Claude can query Plexus data for diagnosis and reports, with scoped tokens, secret masking and an audit trail.
 
 ## Quick Start
@@ -129,6 +131,8 @@ groups, playbooks, templates and a default credential.
 - [docs/flow-collector.md](docs/flow-collector.md) - NetFlow / sFlow / IPFIX collector
 - [docs/alert-notification-channels.md](docs/alert-notification-channels.md) - email, PagerDuty, webhook and Teams alerts
 - [docs/custom-fields-and-tags.md](docs/custom-fields-and-tags.md) - admin-defined fields and tags on hosts, groups and IPAM prefixes: types, rules, permissions, API
+- [docs/device-model.md](docs/device-model.md) - manufacturers, device types, roles, lifecycle statuses and sites on hosts: discovery, locks, filters, API
+- [docs/vrfs-and-vlans.md](docs/vrfs-and-vlans.md) - VRF and VLAN records, how a device's VLAN finds its record, interface addresses and their limits, API
 - [docs/ai-access.md](docs/ai-access.md) - connecting an AI client over MCP: tokens, tools, secret masking, limits
 
 ## Repository layout

@@ -2957,6 +2957,7 @@ from routes.db.cato_egress import *  # noqa: E402,F403
 from routes.db.cloud import *  # noqa: E402,F403
 from routes.db.credentials import *  # noqa: E402,F403
 from routes.db.custom_fields import *  # noqa: E402,F403
+from routes.db.device_model import *  # noqa: E402,F403
 from routes.db.flows import *  # noqa: E402,F403
 from routes.db.geolocation import *  # noqa: E402,F403
 from routes.db.graphs import *  # noqa: E402,F403
@@ -2972,6 +2973,7 @@ from routes.db.meraki_alerts import *  # noqa: E402,F403
 from routes.db.meraki_compliance import *  # noqa: E402,F403
 from routes.db.metrics import *  # noqa: E402,F403
 from routes.db.monitoring import *  # noqa: E402,F403
+from routes.db.network_objects import *  # noqa: E402,F403
 from routes.db.playbooks import *  # noqa: E402,F403
 from routes.db.reporting import *  # noqa: E402,F403
 from routes.db.software import *  # noqa: E402,F403

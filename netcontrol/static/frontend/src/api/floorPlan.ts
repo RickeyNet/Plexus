@@ -24,6 +24,17 @@ export interface GeoSiteSummary {
   unknown_count: number;
   placed_device_count: number;
   floor_count: number;
+  /** Hosts whose site is this one, when the server reports it. */
+  host_count?: number | null;
+}
+
+/** A row of GET `/api/geo/sites`. */
+export interface GeoSiteRow {
+  id: number;
+  name: string;
+  address?: string | null;
+  /** Hosts whose site is this one, when the server reports it. */
+  host_count?: number | null;
 }
 
 export interface GeoSite extends GeoSiteSummary {
@@ -78,6 +89,17 @@ export function useGeoOverview() {
   return useQuery({
     queryKey: ['geo', 'overview'],
     queryFn: () => apiRequest<GeoSiteSummary[]>('/geo/overview'),
+  });
+}
+
+/** Every site, by name: the choices of a host's site and the site host counts. */
+export function useGeoSites() {
+  return useQuery({
+    queryKey: ['geo', 'sites'],
+    queryFn: async () => {
+      const rows = await apiRequest<GeoSiteRow[]>('/geo/sites');
+      return [...(rows ?? [])].sort((a, b) => a.name.localeCompare(b.name));
+    },
   });
 }
 
