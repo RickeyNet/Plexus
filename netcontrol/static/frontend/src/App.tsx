@@ -186,7 +186,7 @@ export function App() {
           <Route path="/federation" element={<Federation />} />
           <Route path="/floor-plan" element={<FloorPlan />} />
           <Route path="/inventory" element={<Inventory />} />
-          <Route path="/ipam" element={<Ipam />} />
+          <Route path="/ipam/:tab?" element={<Ipam />} />
           {/* Software: one page renders the Versions and Upgrades tabs.
               /upgrades is the upgrade tool's old path (it was a Delegator
               tab); bookmarks to it are sent to the Upgrades tab. */}

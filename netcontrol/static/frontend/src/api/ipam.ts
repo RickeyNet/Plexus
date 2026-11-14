@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { apiRequest } from './client';
 import type { CustomValue, TagRef } from './customData';
+import type { InterfaceAddress } from './networkObjects';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -148,6 +149,8 @@ export interface IpamSubnetDetail {
     status?: string;
   }>;
   available_preview?: string[];
+  /** Addresses device interfaces carry inside the subnet (at most 1024; absent on older servers). */
+  interfaces?: InterfaceAddress[];
 }
 
 export interface IpamProvider {

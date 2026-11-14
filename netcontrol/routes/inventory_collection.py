@@ -314,6 +314,7 @@ async def _store_vlans(host_id: int, vlans: list[dict]) -> None:
             host_id=host_id, vlan_id=int(vlan["vlan_id"]), name=str(vlan["name"]), state=str(vlan["state"])
         )
     await db.delete_vlan_definitions_except(host_id, [int(vlan["vlan_id"]) for vlan in vlans])
+    await db.ensure_vlans_for_host(host_id)
 
 
 async def _store_neighbors(host: dict, neighbors: list[dict]) -> None:
@@ -381,9 +382,11 @@ async def _store_host(host: dict, outcome: dict[str, Any], rename_lock: asyncio.
     config = outcome.get("config")
     if config:
         # An unchanged configuration writes no new backup; the host still counts.
-        await store_device_config(host_id, config, str(outcome.get("config_full") or ""), capture_method="topology")
-        stored["configs"] = True
         device_type = str(outcome.get("device_type") or host.get("device_type") or "")
+        await store_device_config(
+            host_id, config, str(outcome.get("config_full") or ""), capture_method="topology", device_type=device_type
+        )
+        stored["configs"] = True
         await _store_identity(host, device_type, config, rename_lock)
     # None: not read, so what SNMP or an earlier run stored stays.
     if outcome.get("vlans") is not None:

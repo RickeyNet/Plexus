@@ -1057,6 +1057,8 @@ async def collect_interface_inventory(
             vlans_written += 1
         except Exception as exc:
             LOGGER.warning("interface_inventory: host %s VLAN upsert failed for vlan %s: %s", host_id, vid, exc)
+    if vlans_written:
+        await db.ensure_vlans_for_host(host_id)
 
     LOGGER.info(
         "interface_inventory: host %s (%s) - %d ports, %d VLANs collected",
