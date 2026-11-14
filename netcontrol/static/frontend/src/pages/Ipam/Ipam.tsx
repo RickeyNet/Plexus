@@ -10,6 +10,7 @@ import { LoadingState } from '@/components/LoadingState';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { QueryError } from '@/components/QueryError';
+import { TabBar } from '@/components/TabBar';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
 import { TagChips } from '@/components/TagChips';
@@ -17,6 +18,7 @@ import { cloudProviderTerms } from '@/lib/cloudProviderTerms';
 import { type CustomDataFilterValue, EMPTY_CUSTOM_DATA_FILTER, isEmptyFilter } from '@/lib/customData';
 import { formatCount } from '@/lib/formatCount';
 import { usePendingKeys } from '@/lib/usePendingKeys';
+import { usePathTab } from '@/lib/usePathTab';
 
 import {
   type DhcpServer,
@@ -49,6 +51,8 @@ import { DefineSubnetModal } from './DefineSubnetModal';
 import { DhcpServerModal } from './DhcpServerModal';
 import { IpamSourceModal } from './IpamSourceModal';
 import { SubnetDrilldown } from './SubnetDrilldown';
+import { VlansTab } from './VlansTab';
+import { VrfsTab } from './VrfsTab';
 import {
   driftBadgeClass,
   driftLabel,
@@ -78,7 +82,29 @@ function loadError(query: UseQueryResult<unknown>, what: string): ReactNode {
   );
 }
 
+const TABS = [
+  { key: 'subnets', label: 'Subnets' },
+  { key: 'vrfs', label: 'VRFs' },
+  { key: 'vlans', label: 'VLANs' },
+] as const;
+type IpamTab = (typeof TABS)[number]['key'];
+const TAB_KEYS: readonly IpamTab[] = TABS.map((t) => t.key);
+
+/** The IPAM page: subnets (the address space), and the VRF and VLAN records. */
 export function Ipam() {
+  const [tab, selectTab] = usePathTab<IpamTab>('/ipam', TAB_KEYS, 'subnets');
+  const tabBar = <TabBar tabs={TABS} active={tab} onChange={selectTab} aria-label="IPAM sections" />;
+  if (tab === 'subnets') return <SubnetsView tabBar={tabBar} />;
+  return (
+    <div>
+      <PageHeader title="IP Address Management" />
+      {tabBar}
+      {tab === 'vrfs' ? <VrfsTab /> : <VlansTab />}
+    </div>
+  );
+}
+
+function SubnetsView({ tabBar }: { tabBar: ReactNode }) {
   const qc = useQueryClient();
   const [groupId, setGroupId] = useState<number | null>(null);
   const [includeCloud, setIncludeCloud] = useState(true);
@@ -221,6 +247,8 @@ export function Ipam() {
         title="Address Space, Utilization & Conflicts"
         text="Review inferred on-prem subnets, discovered cloud CIDRs, the subnets of your Meraki, Cato and Cisco FMC topology collections, duplicate IPs and ranges two sites both claim in one place so addressing issues are visible before they become outages."
       />
+
+      {tabBar}
 
       {!overviewError && (
         <div style={{ marginBottom: '1rem' }}>

@@ -24,6 +24,7 @@ import {
 } from '@/api/host-details';
 import { useConfigBackupDetail } from '@/api/configuration';
 import { SeverityBadge } from '@/components/Badge';
+import { InterfaceAddressesTable } from '@/components/InterfaceAddressesTable';
 import { Modal } from '@/components/Modal';
 import { TabBar } from '@/components/TabBar';
 import {
@@ -596,6 +597,17 @@ function OverviewTab(props: {
 // ── Tab content: Interfaces ────────────────────────────────────────────────
 
 function InterfacesTab({ hostId }: { hostId: number }) {
+  return (
+    <>
+      <InterfaceInventoryTable hostId={hostId} />
+      <div style={{ marginTop: '0.75rem' }}>
+        <InterfaceAddressesTable hostId={hostId} dense />
+      </div>
+    </>
+  );
+}
+
+function InterfaceInventoryTable({ hostId }: { hostId: number }) {
   const q = useHostInterfaceInventory(hostId);
   if (q.isPending) return <Loading />;
   if (q.error) return <ErrorRow error={q.error} />;
