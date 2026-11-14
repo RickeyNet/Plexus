@@ -59,6 +59,7 @@ All API endpoints and their required authentication/authorization levels.
 | `credentials` | `/api/credentials/*` | credentials |
 | `playbooks` | `/api/playbooks/*` | playbooks |
 | `config-drift` | `/api/config-drift/*` | config_drift |
+| `config-drift` | `GET /api/intended-config/templates`, `GET /api/intended-config/templates/{id}`, `GET /api/intended-config/contexts`, `GET /api/intended-config/contexts/{id}`, `GET /api/intended-config/hosts`, `GET /api/intended-config/hosts/{host_id}`, `GET /api/intended-config/hosts/{host_id}/variables`, `POST /api/intended-config/generate` (renders and compares stored data only, no device session; audited as `config` / `intended_generate`) | intended_config (router) |
 | `config-backups` | `/api/config-backups/*` | config_backups |
 | `compliance` | `/api/compliance/*` | compliance |
 | `compliance` | `/api/compliance/meraki/*` (scans use the organization's stored Dashboard API key, read-only; organizations themselves are managed under `/api/sources*`, admin-only) | meraki_compliance |
@@ -84,6 +85,7 @@ All API endpoints and their required authentication/authorization levels.
 | `POST /api/custom-fields`, `PUT/DELETE /api/custom-fields/{field_id}`, `PUT/DELETE /api/tags/{tag_id}` | custom_fields (admin_router) |
 | `POST /api/dcim/{manufacturers,device-types,roles,statuses}`, `PUT/DELETE /api/dcim/{manufacturers,device-types,roles,statuses}/{id}` (`?confirm=true` to delete a record hosts use) | device_model (admin_router) |
 | `POST /api/ipam/vrfs`, `PUT/DELETE /api/ipam/vrfs/{vrf_id}`, `POST /api/ipam/vlans`, `PUT/DELETE /api/ipam/vlans/{vlan_id}`, `POST /api/ipam/interface-addresses/rebuild` (audited as `network_objects`) | network_objects (admin_router) |
+| `POST /api/intended-config/templates`, `PUT/DELETE /api/intended-config/templates/{id}`, `POST /api/intended-config/contexts`, `PUT/DELETE /api/intended-config/contexts/{id}`, `POST /api/intended-config/preview` (writes audited as `config`; the preview stores nothing) | intended_config (admin_router) |
 | `/api/secret-variables/*` | (admin enforced in handlers; reads and writes both) |
 | `/api/inventory/admin/*` | inventory_admin |
 | `/api/topology/admin/*` | topology_admin |

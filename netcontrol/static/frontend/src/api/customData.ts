@@ -91,7 +91,8 @@ export interface TagInput {
 /**
  * A failed custom-data request with what the server said: a 400 names the
  * fields it rejected (`fields`), a 409 on a field update the number of values
- * the change would remove (`affected`).
+ * the change would remove (`affected`), a template syntax error the line it
+ * is on (`line`).
  */
 export class CustomDataError extends Error {
   constructor(
@@ -99,6 +100,7 @@ export class CustomDataError extends Error {
     public readonly status: number,
     public readonly fields: Record<string, string> = {},
     public readonly affected: number | null = null,
+    public readonly line: number | null = null,
   ) {
     super(message);
     this.name = 'CustomDataError';
@@ -110,8 +112,8 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 /**
- * Turns an ApiError whose body carries `detail = {message, fields?, affected?}`
- * into a CustomDataError; anything else is returned unchanged.
+ * Turns an ApiError whose body carries `detail = {message, fields?, affected?,
+ * line?}` into a CustomDataError; anything else is returned unchanged.
  */
 export function toCustomDataError(err: unknown): unknown {
   if (!(err instanceof ApiError)) return err;
@@ -121,11 +123,12 @@ export function toCustomDataError(err: unknown): unknown {
   const fields: Record<string, string> = {};
   for (const [key, message] of Object.entries(rawFields)) fields[key] = String(message);
   const affected = typeof detail?.affected === 'number' ? detail.affected : null;
+  const line = typeof detail?.line === 'number' ? detail.line : null;
   const message =
     (typeof detail?.message === 'string' && detail.message) ||
     (typeof asRecord(body?.error)?.message === 'string' && (asRecord(body?.error)?.message as string)) ||
     err.message;
-  return new CustomDataError(message, err.status, fields, affected);
+  return new CustomDataError(message, err.status, fields, affected, line);
 }
 
 /** `apiRequest` whose failures carry the structured detail (see `toCustomDataError`). */

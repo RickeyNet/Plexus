@@ -42,6 +42,11 @@ DEFAULT_RULES = {
     # land a change.
     "netcontrol/network_objects.py": 95.0,
     "netcontrol/routes/network_objects.py": 85.0,
+    # Intended configuration generation: the rules (sandboxed render,
+    # comparison) and the API. Measured by tests/test_intended_config_*.py;
+    # do not lower them to land a change.
+    "netcontrol/intended_config.py": 95.0,
+    "netcontrol/routes/intended_config.py": 85.0,
 }
 
 

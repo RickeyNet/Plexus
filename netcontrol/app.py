@@ -187,6 +187,11 @@ from netcontrol.routes.flow_collector import (
 from netcontrol.routes.geolocation import router as geolocation_router
 from netcontrol.routes.graph_export import router as graph_export_router
 from netcontrol.routes.graph_templates import router as graph_templates_router
+from netcontrol.routes.intended_config import (
+    admin_router as intended_config_admin_router,
+    intended_config_loop,
+    router as intended_config_router,
+)
 from netcontrol.routes.interface_errors import (
     router as interface_errors_router,
 )
@@ -1647,6 +1652,7 @@ async def lifespan(app: FastAPI):
             lab_runtime_ttl_loop,
             lab_drift_scheduler_loop,
             _interface_addresses_backfill,
+            intended_config_loop,
         )
     ]
     for task in background_tasks:
@@ -2363,6 +2369,13 @@ app.include_router(
     dependencies=[Depends(require_admin)],
 )
 app.include_router(config_drift_ws_router)  # WebSocket - handles its own auth
+# Intended configuration: read and generate with Config Drift access;
+# templates, contexts and previews are managed by admins.
+app.include_router(
+    intended_config_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("config-drift"))],
+)
+app.include_router(intended_config_admin_router, dependencies=[Depends(require_admin)])
 # Config Backups + admin
 app.include_router(
     config_backups_router,

@@ -62,6 +62,29 @@ Admin only (and the `topology` and `inventory` features). See [After adding a so
 | PUT    | `/api/templates/{id}` | Update `{name, content, description}`   |
 | DELETE | `/api/templates/{id}` | Delete                                  |
 
+### Intended configuration
+Everything needs the `config-drift` feature; the rows marked *Admin* need an administrator. Template and context writes and `generate` are audited (category `config`). Errors use the usual `{ok: false, error: {code, message}}` envelope: `400` for bad input, `404` for an unknown id, `409` when the name is taken ignoring case. See [intended-config.md](intended-config.md).
+
+A Template: `id`, `name`, `kind` (`device` or `snippet`), `device_type` (`""`: any driver), `role_id`, `site_id`, `group_id` (null: any; always empty on a snippet), `template_text`, `description`, `enabled`, `created_at`, `updated_at`, `updated_by`, `host_count` (hosts whose stored intended configuration came from it). A Context: `id`, `name`, `weight` (0 to 100000), `data` (a JSON object), `description`, `enabled`, `device_type`, `role_id`, `site_id`, `group_id`, `host_id`, `created_at`, `updated_at`, `updated_by`. A Row: `host_id`, `hostname`, `ip_address`, `group_id`, `group_name`, `template_id`, `template_name`, `status` (`ok`, `error`), `error` (text or null), `compliance` (`compliant`, `non_compliant`, `unknown`), `missing_count`, `extra_count`, `backup_id`, `generated_at`, `changed_at`, `compared_at`.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET    | `/api/intended-config/templates` | `{"templates": [Template]}` by name |
+| POST   | `/api/intended-config/templates` | *Admin.* `{name, kind, device_type?, role_id?, site_id?, group_id?, template_text?, description?, enabled?}`. `201` with the Template. A Jinja syntax error gives `400` with `detail = {message, line}` |
+| GET    | `/api/intended-config/templates/{id}` | The Template |
+| PUT    | `/api/intended-config/templates/{id}` | *Admin.* Full replace, same body and checks |
+| DELETE | `/api/intended-config/templates/{id}` | *Admin.* `{"ok": true}` |
+| GET    | `/api/intended-config/contexts` | `{"contexts": [Context]}` by weight, then name |
+| POST   | `/api/intended-config/contexts` | *Admin.* `{name, data, weight?, description?, enabled?, device_type?, role_id?, site_id?, group_id?, host_id?}`; `data` must be a JSON object of at most 65536 characters. `201` with the Context |
+| GET    | `/api/intended-config/contexts/{id}` | The Context |
+| PUT    | `/api/intended-config/contexts/{id}` | *Admin.* Full replace |
+| DELETE | `/api/intended-config/contexts/{id}` | *Admin.* `{"ok": true}` |
+| POST   | `/api/intended-config/preview` | *Admin.* `{host_id, template_id?, template_text?}`: renders `template_text` (under the named template's name when `template_id` is given too), else the named template, else the template the host selects. `{template_name, config_text, error}`; `error` is null or `{message, template, line}`. Stores nothing |
+| GET    | `/api/intended-config/hosts/{host_id}/variables` | `{variables, contexts: [{id, name, weight}]}`: what the host's template sees and the contexts merged, in merge order |
+| GET    | `/api/intended-config/hosts` | `?group_id=`, `?compliance=`, `?status=`. `{rows: [Row], counts: {hosts, generated, errors, compliant, non_compliant, unknown, no_template}}`; the counts cover every host whatever the filters |
+| GET    | `/api/intended-config/hosts/{host_id}` | The Row plus `config_text`, `lines: [{text, missing}]`, `extra: [{path, text}]` and `backup: {id, captured_at}` (null when not compared). `404` when the host has no intended configuration |
+| POST   | `/api/intended-config/generate` | `{host_ids?, group_id?}` (neither: every host). Renders and compares now: `{hosts, generated, changed, errors, no_template}` |
+
 ### Credentials
 | Method | Endpoint                | Description                                   |
 |--------|-------------------------|-----------------------------------------------|

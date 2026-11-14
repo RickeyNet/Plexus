@@ -6,13 +6,45 @@ import { LoadingState } from './LoadingState';
 import { QueryError } from './QueryError';
 
 /**
- * Shared parts of the record catalogues (device model, VRFs, VLANs): the
- * table body states, the row actions, and the create / edit dialog's
- * description input and save failure.
+ * Shared parts of the record catalogues (device model, VRFs, VLANs, intended
+ * configuration templates and contexts): the card header, the table body
+ * states, the row actions, the empty-cell dash, and the create / edit
+ * dialog's description input and save failure.
  */
 
 /** The longest description a catalogue record takes. */
 export const CATALOGUE_DESCRIPTION_MAX = 500;
+
+/** A card header: title, a muted count line and the actions. */
+export function CardHeader({ title, sub, actions }: { title: string; sub?: ReactNode; actions?: ReactNode }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        gap: '1rem',
+        marginBottom: '0.75rem',
+        flexWrap: 'wrap',
+      }}
+    >
+      <div>
+        <h3 style={{ margin: 0 }}>{title}</h3>
+        {sub && (
+          <div className="text-muted" style={{ fontSize: '0.88em', marginTop: '0.2rem' }}>
+            {sub}
+          </div>
+        )}
+      </div>
+      {actions && <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>{actions}</div>}
+    </div>
+  );
+}
+
+/** A muted dash for an empty cell. */
+export function Dash() {
+  return <span className="text-muted">-</span>;
+}
 
 /** A section's body: error, loading, empty state with the create action, or the table. */
 export function CatalogueBody<T>({

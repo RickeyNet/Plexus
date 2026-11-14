@@ -26,32 +26,6 @@ export function SplitLayout({ list, detail }: { list: ReactNode; detail: ReactNo
   );
 }
 
-/** A card header: title, a muted count line and the actions. */
-export function CardHeader({ title, sub, actions }: { title: string; sub?: ReactNode; actions?: ReactNode }) {
-  return (
-    <div
-      style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        gap: '1rem',
-        marginBottom: '0.75rem',
-        flexWrap: 'wrap',
-      }}
-    >
-      <div>
-        <h3 style={{ margin: 0 }}>{title}</h3>
-        {sub && (
-          <div className="text-muted" style={{ fontSize: '0.88em', marginTop: '0.2rem' }}>
-            {sub}
-          </div>
-        )}
-      </div>
-      {actions && <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>{actions}</div>}
-    </div>
-  );
-}
-
 /** A titled list of the detail panel; an empty one shows `empty` instead. */
 export function DetailSection({
   title,
@@ -88,9 +62,4 @@ export function OriginBadge({ origin }: { origin: string }) {
       {origin === 'manual' ? 'Manual' : 'Discovered'}
     </Badge>
   );
-}
-
-/** A muted dash for an empty cell. */
-export function Dash() {
-  return <span className="text-muted">-</span>;
 }

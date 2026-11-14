@@ -557,13 +557,13 @@ async def get_device_display_objects(rows: list[dict]) -> dict[str, dict[int, di
     queries = {
         "device_type_id": (
             "hardware",
-            "SELECT dt.id, dt.model, dt.manufacturer_id, m.name AS manufacturer "
+            "SELECT dt.id, dt.model, dt.part_number, dt.manufacturer_id, m.name AS manufacturer "
             "FROM device_types dt JOIN manufacturers m ON m.id = dt.manufacturer_id",
             "dt.id",
         ),
         "role_id": ("role", "SELECT id, name, color FROM device_roles", "id"),
         "lifecycle_status_id": ("lifecycle_status", "SELECT id, name, color FROM host_statuses", "id"),
-        "site_id": ("site", "SELECT id, name FROM geo_sites", "id"),
+        "site_id": ("site", "SELECT id, name, description, address FROM geo_sites", "id"),
     }
     out: dict[str, dict[int, dict]] = {name: {} for name, _sql, _col in queries.values()}
     db = await _dbcore.get_db(read_only=True)

@@ -4,7 +4,7 @@ import { useAuthStatus } from '@/api/auth';
 import { useGeoSites } from '@/api/floorPlan';
 import { type Vlan, useDeleteVlan, useVlan, useVlans } from '@/api/networkObjects';
 import { Badge } from '@/components/Badge';
-import { CatalogueBody, RowActions } from '@/components/CatalogueParts';
+import { CardHeader, CatalogueBody, Dash, RowActions } from '@/components/CatalogueParts';
 import { DataTable } from '@/components/DataTable';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { EmptyState } from '@/components/EmptyState';
@@ -15,7 +15,7 @@ import { siteFilterFromSelect, siteFilterToSelect, type VlanSiteFilter, vrfLabel
 import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import { VlanModal } from './NetworkObjectModals';
-import { CardHeader, Dash, DetailSection, OriginBadge, SplitLayout } from './NetworkObjectParts';
+import { DetailSection, OriginBadge, SplitLayout } from './NetworkObjectParts';
 
 const RIGHT = { textAlign: 'right' } as const;
 

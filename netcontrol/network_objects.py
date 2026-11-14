@@ -15,7 +15,7 @@ from __future__ import annotations
 import ipaddress
 import re
 
-from netcontrol.custom_fields import CustomFieldError, clean_name
+from netcontrol.custom_fields import CustomFieldError, clean_name, clean_text
 from netcontrol.integrations.pathtrace.device_config import RunningConfig
 from netcontrol.integrations.pathtrace.route_tables import interface_key
 
@@ -56,13 +56,6 @@ ROLES: tuple[str, ...] = ("primary", "secondary", "virtual")
 _SVI = re.compile(r"^(?:vlan\s*\.?\s*|irb\.)(\d+)$", re.IGNORECASE)
 
 
-def _limited(raw: object, label: str, limit: int) -> str:
-    text = raw.strip() if isinstance(raw, str) else ""
-    if len(text) > limit:
-        raise CustomFieldError(f"{label} must be at most {limit} characters.")
-    return text
-
-
 def clean_vrf_name(raw: object) -> str:
     """A VRF name trimmed; 1 to ``VRF_NAME_MAX`` characters."""
     return clean_name(raw, "VRF name", VRF_NAME_MAX)
@@ -70,17 +63,17 @@ def clean_vrf_name(raw: object) -> str:
 
 def clean_rd(raw: object) -> str:
     """A route distinguisher trimmed; may be empty."""
-    return _limited(raw, "Route distinguisher", RD_MAX)
+    return clean_text(raw, "Route distinguisher", RD_MAX)
 
 
 def clean_vlan_name(raw: object) -> str:
     """A VLAN name trimmed; may be empty."""
-    return _limited(raw, "VLAN name", VLAN_NAME_MAX)
+    return clean_text(raw, "VLAN name", VLAN_NAME_MAX)
 
 
 def clean_description(raw: object) -> str:
     """A description trimmed; may be empty."""
-    return _limited(raw, "Description", DESCRIPTION_MAX)
+    return clean_text(raw, "Description", DESCRIPTION_MAX)
 
 
 def clean_vid(raw: object) -> int:
