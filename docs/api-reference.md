@@ -1,5 +1,31 @@
 # API Reference
 
+### Authentication and single sign-on
+OpenID Connect single sign-on next to the password login. See [sso-oidc.md](sso-oidc.md).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET    | `/api/auth/status` | Signed out, the body also holds `sso: {oidc: {enabled, label, primary}}` (`enabled` only when SSO is on and an issuer and client id are set) |
+| GET    | `/api/auth/oidc/login?next=/path` | Public. Redirects (302) to the provider's authorization endpoint with `state`, `nonce` and an S256 `code_challenge`, setting the signed `oidc_tx` cookie (HttpOnly, SameSite=Lax, 600 s, path `/api/auth/oidc`). `next` is kept only when it is a same-site path, else `/`. When SSO is off or discovery fails, 303 to `/login?sso_error=disabled` or `provider` |
+| GET    | `/api/auth/oidc/callback` | Public. On success sets the session cookie, drops `oidc_tx` and redirects (303) to `next`; audited `login.success` with `source=oidc`. On failure 303 to `/login?sso_error=<code>` with `code` one of `disabled`, `state`, `provider`, `token`, `claims`, `account`, `denied`; audited `login.failure` naming the failed step, and counted toward the per-IP login lockout |
+| GET    | `/api/admin/auth-config` | Admin. Includes `oidc` (see sso-oidc.md for the fields); `client_secret` is the mask when one is stored, else `""` |
+| PUT    | `/api/admin/auth-config` | Admin. `oidc` is optional (omitted = keep the saved block); its `client_secret` set to the mask keeps the stored secret, `""` clears it (public client), any other value replaces it (stored encrypted). `400` when `oidc.enabled` and the issuer is empty or not https or the client id is empty, on a non-https `redirect_uri`, more than 200 `group_mappings` or a `button_label` over 60 characters |
+| POST   | `/api/admin/auth-config/oidc/test` | Admin. Optional body `{issuer, ca_cert_file}` (default: the saved values). Fetches discovery and the JWKS fresh. Returns `{ok, issuer, authorization_endpoint, token_endpoint, userinfo_endpoint, algorithms, key_count, redirect_uri, error}` |
+
+### Object-level permissions
+Access groups limited to selected inventory groups. See [object-permissions.md](object-permissions.md).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET    | `/api/auth/status` | Signed in, the body also holds `object_scope: {restricted, write_group_ids}` (ids expanded with sub-groups; empty when unrestricted). The login response carries the same field |
+| GET    | `/api/admin/access-groups` | Admin. Each group carries `object_scope` (`all` or `groups`) and `inventory_scopes: [{inventory_group_id, can_write}]` |
+| POST   | `/api/admin/access-groups` | Admin. Body `{name, description, feature_keys, object_scope?, inventory_scopes?}` (default `all`). Unknown inventory group id or `object_scope`: 400. With `all` the grants are ignored and cleared. Audited `access_group.create` |
+| PUT    | `/api/admin/access-groups/{id}` | Admin. As create; `object_scope` left out keeps the scope and grants. Audited `access_group.update` with the scope change |
+| DELETE | `/api/admin/access-groups/{id}` | Admin. Audited `access_group.delete` |
+| GET    | `/api/admin/users` | Admin. Each user carries `object_scope_restricted` |
+
+For a scoped user the inventory, config backup, config drift and intended configuration routes answer `404` (same body as an unknown id) for groups, hosts and records of hosts (backups, policies, baselines, snapshots, drift events, intended configurations, capture jobs) outside the read scope and `403 Read-only access to this inventory group` for writes to read-only ones (in the configuration modules: captures, checks, analyses, restores, reverts, status changes, baselines, deletes, policy changes and runs, generate). Lists, counts, summaries, searches, the CSV export, the backup ZIP download and the Ansible inventory hold readable rows only; `POST /api/intended-config/generate` with no ids acts on writable hosts only. Feature gates other than `inventory`, `config-backups` and `config-drift` answer `403`, and MCP tokens they own are refused with `403`.
+
 ### Dashboard
 | Method | Endpoint         | Description                                          |
 |--------|------------------|------------------------------------------------------|

@@ -21,6 +21,8 @@ stream live job output - all through a REST API with WebSocket support.
 - **Device model** - managed manufacturers, device types, roles and lifecycle statuses on hosts, plus a site, filled in by discovery and used for filtering, bulk edit and export.
 - **VRFs and VLANs** - VRF and VLAN records with their devices, ports and subnets, filled from collected data, and every address a device's interfaces carry with its network and VRF, read from the stored running configuration.
 - **Intended configuration** - Jinja2 templates and JSON config contexts render each device's intended configuration in a sandbox, compared with its newest backup to show which intended lines the device lacks.
+- **Single sign-on** - OpenID Connect sign-in through Entra ID, Okta, Keycloak and other providers, with admin and access-group mapping from the groups claim, next to local, RADIUS, TACACS+ and LDAP passwords. See [docs/sso-oidc.md](docs/sso-oidc.md).
+- **Object-level permissions** - access groups can limit their members to selected inventory groups (and their sub-groups), read only or read and write; pages that do not enforce the limit yet are closed to those accounts. See [docs/object-permissions.md](docs/object-permissions.md).
 - **AI access** - a read-only MCP endpoint so an AI client such as Claude can query Plexus data for diagnosis and reports, with scoped tokens, secret masking and an audit trail.
 
 ## Quick Start

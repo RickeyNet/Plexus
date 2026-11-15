@@ -37,6 +37,7 @@ from netcontrol.mcp import registry
 from netcontrol.mcp.auth import McpContext, extract_bearer, resolve_token
 from netcontrol.mcp.dispatch import call_tool, rate_limited
 from netcontrol.mcp.settings import load_settings
+from netcontrol.object_scope import MCP_SCOPED_DETAIL
 from netcontrol.routes.shared import _audit
 from netcontrol.telemetry import configure_logging
 from netcontrol.version import APP_VERSION
@@ -164,6 +165,11 @@ class McpEndpoint:
                 await _respond(send, 429, {"error": "too_many_requests"}, {"Retry-After": "60"})
             else:
                 await _respond(send, 401, {"error": "unauthorized"}, {"WWW-Authenticate": "Bearer"})
+            return
+        if caller.object_scoped:
+            # MCP tools read every device: an owner limited to selected
+            # inventory groups would see past that limit, so refuse.
+            await _respond(send, 403, {"error": "forbidden", "message": MCP_SCOPED_DETAIL})
             return
 
         token = _caller.set(caller)

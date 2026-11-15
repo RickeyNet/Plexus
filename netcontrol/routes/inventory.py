@@ -17,11 +17,22 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
+from routes.db.inventory import _tree_ordered
 
 import netcontrol.routes.state as state
 from netcontrol.drivers import DriverCapabilityError, GenericDriver, get_driver
 from netcontrol.drivers.show_version import ShowVersionFacts, parse_show_version
 from netcontrol.integrations.software.versions import classify_host
+from netcontrol.object_scope import (
+    READ_ONLY_DETAIL,
+    ObjectScope,
+    request_scope,
+    require_group,
+    require_host,
+    require_hosts,
+    scope_exempt,
+    scoped,
+)
 from netcontrol.routes import background_jobs
 from netcontrol.routes.custom_fields import attach_custom_data, matching_keys
 from netcontrol.routes.device_model import (
@@ -1066,6 +1077,7 @@ async def admin_get_snmp_discovery_profiles():
 
 
 @router.get("/api/admin/snmp-profiles")
+@scope_exempt("SNMP profile definitions: no host or inventory group data")
 async def admin_list_snmp_profiles():
     return list(state.SNMP_PROFILES.values())
 
@@ -1139,10 +1151,15 @@ async def admin_delete_snmp_profile(profile_id: str):
 
 
 @router.get("/api/inventory/snmp-profile-assignments")
-async def list_snmp_profile_assignments():
-    """Return SNMP profile assignments for all inventory groups in one call."""
+@scoped("list")
+async def list_snmp_profile_assignments(request: Request):
+    """Return SNMP profile assignments for all inventory groups in one call
+    (the groups the caller may read)."""
+    scope = await request_scope(request)
     assignments = []
     for group_id, profile_id in state.GROUP_SNMP_ASSIGNMENTS.items():
+        if not scope.can_read_group(group_id):
+            continue
         profile = state.SNMP_PROFILES.get(profile_id) if profile_id else None
         assignments.append(
             {
@@ -1155,10 +1172,9 @@ async def list_snmp_profile_assignments():
 
 
 @router.get("/api/inventory/{group_id}/snmp-profile-assignment")
-async def get_group_snmp_profile_assignment(group_id: int):
-    group = await db.get_group(group_id)
-    if not group:
-        raise HTTPException(404, "Group not found")
+@scoped("group")
+async def get_group_snmp_profile_assignment(group_id: int, request: Request):
+    await require_group(request, group_id)
     profile_id = state.GROUP_SNMP_ASSIGNMENTS.get(group_id, "")
     profile = state.SNMP_PROFILES.get(profile_id) if profile_id else None
     return {"group_id": group_id, "snmp_profile_id": profile_id, "profile_name": profile["name"] if profile else ""}
@@ -1181,10 +1197,9 @@ async def assign_group_snmp_profile(group_id: int, profile_id: str) -> dict:
 
 
 @router.put("/api/inventory/{group_id}/snmp-profile-assignment")
-async def update_group_snmp_profile_assignment(group_id: int, body: dict):
-    group = await db.get_group(group_id)
-    if not group:
-        raise HTTPException(404, "Group not found")
+@scoped("group")
+async def update_group_snmp_profile_assignment(group_id: int, body: dict, request: Request):
+    await require_group(request, group_id, write=True)
     return await assign_group_snmp_profile(group_id, str(body.get("snmp_profile_id", "")))
 
 
@@ -1207,7 +1222,21 @@ def _csv_field_cell(field: dict, value: object) -> str:
     return _csv_text_cell(value)
 
 
+def _visible_tree(scope: ObjectScope, groups: list[dict]) -> list[dict]:
+    """The groups a scoped caller may read, as a tree of their own: a group
+    whose parent is hidden becomes a top-level group (``parent_id`` None) and
+    ``path``/``depth`` are recomputed over the visible groups only."""
+    if scope.unrestricted:
+        return groups
+    visible = scope.filter_groups(groups)
+    for group in visible:
+        if not scope.can_read_group(group.get("parent_id")):
+            group["parent_id"] = None
+    return _tree_ordered(visible)
+
+
 @router.get("/api/inventory")
+@scoped("list")
 async def list_groups(request: Request, include_hosts: bool = Query(default=False)):
     """Every group (with its hosts when ``include_hosts``), each carrying its
     ``tags`` and ``custom_fields``; hosts also carry their device model
@@ -1229,6 +1258,7 @@ async def list_groups(request: Request, include_hosts: bool = Query(default=Fals
         groups = await db.get_all_groups_with_hosts()
     else:
         groups = await db.get_all_groups()
+    groups = _visible_tree(await request_scope(request), groups)
     if include_hosts and (keys is not None or host_ids is not None):
         for group in groups:
             group["hosts"] = _filter_hosts(group["hosts"], keys, host_ids)
@@ -1258,12 +1288,16 @@ class GroupReorderRequest(BaseModel):
 
 
 @router.post("/api/inventory/groups/reorder")
+@scoped("list")
 async def reorder_groups(payload: GroupReorderRequest, request: Request):
     session = _get_session(request)
     user_id = session.get("user_id") if session else None
     if user_id is None:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    await db.set_user_group_order(int(user_id), payload.ordered_ids)
+    # A scoped caller orders only the groups they may read.
+    scope = await request_scope(request)
+    ordered_ids = [gid for gid in payload.ordered_ids if scope.can_read_group(gid)]
+    await db.set_user_group_order(int(user_id), ordered_ids)
     return {"ok": True}
 
 
@@ -1280,12 +1314,13 @@ def _csv_text_cell(value: object) -> str:
 
 
 @router.get("/api/inventory/export/csv")
-async def export_inventory_csv():
-    """Export all inventory hosts as a CSV file: the host columns (the
-    driver key as ``Platform``), the device model columns, then ``Tags``
-    (names joined with ``; ``) and one column per custom field that applies
-    to hosts, in display order."""
-    rows = await db.get_all_hosts_for_export()
+@scoped("list")
+async def export_inventory_csv(request: Request):
+    """Export all inventory hosts (that the caller may read) as a CSV file:
+    the host columns (the driver key as ``Platform``), the device model
+    columns, then ``Tags`` (names joined with ``; ``) and one column per
+    custom field that applies to hosts, in display order."""
+    rows = (await request_scope(request)).filter_hosts(await db.get_all_hosts_for_export())
     fields = await db.list_custom_fields("host")
     await attach_custom_data("host", rows, _id_key)
     await attach_device_data(rows)
@@ -1333,8 +1368,23 @@ async def export_inventory_csv():
 _SIBLING_NAME_TAKEN = "A group with that name already exists at this level"
 
 
+# A scoped caller cannot create or move a group to the top level.
+_TOP_LEVEL_NEEDS_ALL = "Only accounts with access to all devices can place a group at the top level"
+
+
+async def _check_group_parent(request: Request, scope: ObjectScope, parent_id: int | None) -> None:
+    """A scoped caller may put a group only under a group they may write."""
+    if scope.unrestricted:
+        return
+    if parent_id is None:
+        raise HTTPException(403, _TOP_LEVEL_NEEDS_ALL)
+    await require_group(request, parent_id, write=True)
+
+
 @router.post("/api/inventory", status_code=201)
-async def create_group(body: GroupCreate):
+@scoped("create")
+async def create_group(body: GroupCreate, request: Request):
+    await _check_group_parent(request, await request_scope(request), body.parent_id)
     try:
         gid = await db.create_group(body.name, body.description, parent_id=body.parent_id)
     except ValueError as exc:
@@ -1347,11 +1397,15 @@ async def create_group(body: GroupCreate):
 
 
 @router.put("/api/inventory/{group_id}")
-async def update_group(group_id: int, body: GroupUpdate):
-    group = await db.get_group(group_id)
-    if not group:
-        raise HTTPException(404, "Group not found")
+@scoped("group")
+async def update_group(group_id: int, body: GroupUpdate, request: Request):
+    group = await require_group(request, group_id, write=True)
     move = {"parent_id": body.parent_id} if "parent_id" in body.model_fields_set else {}
+    scope = await request_scope(request)
+    if move and scope.restricted and body.parent_id != group.get("parent_id"):
+        # Moving needs write on where the group is and where it goes.
+        await _check_group_parent(request, scope, group.get("parent_id"))
+        await _check_group_parent(request, scope, body.parent_id)
     try:
         await db.update_group(group_id, body.name, body.description, **move)
     except ValueError as exc:
@@ -1364,12 +1418,16 @@ async def update_group(group_id: int, body: GroupUpdate):
 
 
 @router.get("/api/inventory/{group_id}")
+@scoped("group")
 async def get_group(group_id: int, request: Request):
     """A group with its hosts; ``tag=``, ``cf.<key>=`` and the device
     filters keep only the matching hosts."""
-    group = await db.get_group(group_id)
-    if not group:
-        raise HTTPException(404, "Group not found")
+    group = await require_group(request, group_id)
+    scope = await request_scope(request)
+    if scope.restricted:
+        # Its place in the caller's own tree (see _visible_tree).
+        mine = next(g for g in _visible_tree(scope, await db.get_all_groups()) if g["id"] == group["id"])
+        group.update(parent_id=mine["parent_id"], path=mine["path"], depth=mine["depth"])
     hosts = await _group_hosts(group_id, request)
     result = {**group, "hosts": hosts}
     await attach_custom_data("group", [result], _id_key)
@@ -1377,7 +1435,10 @@ async def get_group(group_id: int, request: Request):
 
 
 @router.delete("/api/inventory/{group_id}")
-async def delete_group(group_id: int):
+@scoped("group")
+async def delete_group(group_id: int, request: Request):
+    if (await request_scope(request)).restricted:
+        await require_group(request, group_id, write=True)
     try:
         await db.delete_group(group_id)
     except ValueError as exc:
@@ -1389,10 +1450,13 @@ async def delete_group(group_id: int):
 
 
 @router.get("/api/inventory/{group_id}/hosts")
+@scoped("group")
 async def list_hosts(group_id: int, request: Request):
     """A group's hosts with their ``tags``, ``custom_fields`` and device
     model display objects; ``tag=``, ``cf.<key>=`` and the device filters
     keep only the matching hosts."""
+    if (await request_scope(request)).restricted:
+        await require_group(request, group_id)
     return await _group_hosts(group_id, request)
 
 
@@ -1443,7 +1507,10 @@ async def _insert_host(group_id: int, body: HostCreate) -> int:
 
 
 @router.post("/api/inventory/{group_id}/hosts", status_code=201)
+@scoped("group")
 async def add_host(group_id: int, body: HostCreate, request: Request):
+    if (await request_scope(request)).restricted:
+        await require_group(request, group_id, write=True)
     try:
         hid = await _insert_host(group_id, body)
     except ValueError:
@@ -1471,6 +1538,9 @@ async def _bulk_add(entries: list[HostBulkEntry], default_group_id: int | None, 
     """
     if len(entries) > BULK_ADD_MAX_HOSTS:
         raise HTTPException(400, f"At most {BULK_ADD_MAX_HOSTS} hosts can be added at once")
+    scope = await request_scope(request)
+    if scope.restricted and default_group_id is not None:
+        await require_group(request, default_group_id, write=True)
     groups = await db.get_all_groups()
     name_by_id: dict[int, str] = {g["id"]: g["name"] for g in groups}
     path_by_id: dict[int, str] = {g["id"]: g["path"] for g in groups}
@@ -1514,17 +1584,26 @@ async def _bulk_add(entries: list[HostBulkEntry], default_group_id: int | None, 
         if group_id is None and not group_path:
             errors.append({**names, "error": "No group given"})
             continue
-        if group_id is not None and group_id not in name_by_id:
+        if scope.restricted and group_path:
+            # Named groups may be created at the top level: all devices only.
+            errors.append({**names, "error": _TOP_LEVEL_NEEDS_ALL})
+            continue
+        if group_id is not None and (group_id not in name_by_id or not scope.can_read_group(group_id)):
             errors.append({**names, "error": "Group not found"})
+            continue
+        if group_id is not None and not scope.can_write_group(group_id):
+            errors.append({**names, "error": READ_ONLY_DETAIL})
             continue
         existing = await db.find_host_by_ip(entry.ip_address) if entry.ip_address else None
         if existing:
+            seen = scope.can_read_group(existing.get("group_id"))
             skipped.append(
                 {
                     **names,
                     "reason": "IP address is already in inventory",
-                    "host_id": existing.get("id"),
-                    "group_id": existing.get("group_id"),
+                    # A host the caller may not read is not named.
+                    "host_id": existing.get("id") if seen else None,
+                    "group_id": existing.get("group_id") if seen else None,
                 }
             )
             continue
@@ -1575,12 +1654,14 @@ async def _bulk_add(entries: list[HostBulkEntry], default_group_id: int | None, 
 
 
 @router.post("/api/inventory/hosts/bulk")
+@scoped("hosts")
 async def bulk_add_hosts_grouped(body: HostBulkCreateGrouped, request: Request):
     """Add many hosts, each to the group it names (created when missing)."""
     return await _bulk_add(body.hosts, body.group_id, request)
 
 
 @router.post("/api/inventory/{group_id}/hosts/bulk")
+@scoped("group")
 async def bulk_add_hosts(group_id: int, body: HostBulkCreate, request: Request):
     """Add many hosts to one group (see ``_bulk_add``)."""
     # exclude_unset: a device value an entry did not send stays unsent.
@@ -1591,7 +1672,12 @@ async def bulk_add_hosts(group_id: int, body: HostBulkCreate, request: Request):
 
 
 @router.put("/api/hosts/{host_id}")
+@scoped("host")
 async def update_host(host_id: int, body: HostUpdate, request: Request):
+    if (await request_scope(request)).restricted:
+        host = await require_host(request, host_id, write=True)
+        if body.group_id is not None and int(body.group_id) != host.get("group_id"):
+            await require_group(request, int(body.group_id), write=True)
     if body.ip_address:
         _validate_host_ip(body.ip_address)
     aws_instance_id = _validate_aws_instance_id(body.aws_instance_id)
@@ -1639,7 +1725,10 @@ _VALID_CATEGORIES = {"router", "switch", "firewall", "wireless", "wlc", "phone",
 
 
 @router.patch("/api/hosts/{host_id}/category")
-async def update_host_category(host_id: int, body: dict):
+@scoped("host")
+async def update_host_category(host_id: int, body: dict, request: Request):
+    if (await request_scope(request)).restricted:
+        await require_host(request, host_id, write=True)
     category = str(body.get("device_category", "")).strip().lower()
     if category not in _VALID_CATEGORIES:
         raise HTTPException(400, "Invalid device category")
@@ -1658,7 +1747,10 @@ async def update_host_category(host_id: int, body: dict):
 
 
 @router.delete("/api/hosts/{host_id}")
-async def remove_host(host_id: int):
+@scoped("host")
+async def remove_host(host_id: int, request: Request):
+    if (await request_scope(request)).restricted:
+        await require_host(request, host_id, write=True)
     prior = await db.get_host(host_id)
     prior_ip = (prior.get("ip_address") if prior else "") or ""
     await db.remove_host(host_id)
@@ -1668,6 +1760,7 @@ async def remove_host(host_id: int):
 
 
 @router.post("/api/hosts/{host_id}/fetch-serial")
+@scoped("host")
 async def fetch_host_serial(host_id: int, body: FetchSerialRequest, request: Request):
     """SSH to the device and pull its chassis serial via the vendor driver.
 
@@ -1678,9 +1771,7 @@ async def fetch_host_serial(host_id: int, body: FetchSerialRequest, request: Req
     Serial Number") and future non-Cisco vendors work without branching
     here.
     """
-    host = await db.get_host(host_id)
-    if not host:
-        raise HTTPException(404, "Host not found")
+    host = await require_host(request, host_id, write=True)
     cred = await require_credential_access(body.credential_id, session=_get_session(request))
 
     driver = get_driver(host.get("device_type"))
@@ -1715,11 +1806,10 @@ async def fetch_host_serial(host_id: int, body: FetchSerialRequest, request: Req
 
 
 @router.post("/api/groups/{group_id}/fetch-serials")
+@scoped("group")
 async def bulk_fetch_group_serials(group_id: int, body: FetchSerialRequest, request: Request):
     """Fetch serial numbers for all hosts in a group concurrently (max 5 SSH at a time)."""
-    group = await db.get_group(group_id)
-    if not group:
-        raise HTTPException(404, "Group not found")
+    await require_group(request, group_id, write=True)
     cred = await require_credential_access(body.credential_id, session=_get_session(request))
     hosts = await db.get_hosts_for_group(group_id)
     if not hosts:
@@ -1776,11 +1866,14 @@ async def bulk_fetch_group_serials(group_id: int, body: FetchSerialRequest, requ
 
 
 @router.post("/api/hosts/bulk-delete")
-async def bulk_delete_hosts(body: dict):
+@scoped("hosts")
+async def bulk_delete_hosts(body: dict, request: Request):
     host_ids = body.get("host_ids", [])
     if not host_ids or not isinstance(host_ids, list):
         raise HTTPException(400, "host_ids must be a non-empty list")
     host_ids = [int(h) for h in host_ids]
+    # Every host must be writable for a scoped caller (else nothing is deleted).
+    await require_hosts(request, host_ids, write=True)
     deleted = await db.bulk_delete_hosts(host_ids)
     # Refresh the flow collector cache once for the whole batch; specific
     # exporter rows are unlinked by the ON DELETE SET NULL FK so we just
@@ -1790,7 +1883,8 @@ async def bulk_delete_hosts(body: dict):
 
 
 @router.post("/api/hosts/move")
-async def move_hosts(body: dict):
+@scoped("hosts")
+async def move_hosts(body: dict, request: Request):
     host_ids = body.get("host_ids", [])
     target_group_id = body.get("target_group_id")
     if not host_ids or not isinstance(host_ids, list):
@@ -1798,10 +1892,15 @@ async def move_hosts(body: dict):
     if not target_group_id:
         raise HTTPException(400, "target_group_id is required")
     target_group_id = int(target_group_id)
+    scope = await request_scope(request)
     group = await db.get_group(target_group_id)
-    if not group:
+    if not group or not scope.can_read_group(target_group_id):
         raise HTTPException(404, "Target group not found")
+    if not scope.can_write_group(target_group_id):
+        raise HTTPException(403, READ_ONLY_DETAIL)
     host_ids = [int(h) for h in host_ids]
+    # Moving needs write on every host's group too.
+    await require_hosts(request, host_ids, write=True)
     moved = await db.move_hosts(host_ids, target_group_id)
     return {"moved": moved}
 
@@ -1810,6 +1909,7 @@ async def move_hosts(body: dict):
 
 
 @router.get("/api/inventory/discovery/ssh-defaults")
+@scope_exempt("which service credential discovery uses: no host or inventory group data")
 async def discovery_ssh_defaults():
     """The credential discovery reads ``show version`` with by default: the
     Plexus service credential, when one is set."""
@@ -1822,6 +1922,7 @@ async def discovery_ssh_defaults():
 
 
 @router.post("/api/inventory/{group_id}/discovery/scan", status_code=202)
+@scoped("group")
 async def discovery_scan(group_id: int, body: DiscoveryScanRequest, request: Request):
     """Launch a discovery scan as a background job.
 
@@ -1831,9 +1932,7 @@ async def discovery_scan(group_id: int, body: DiscoveryScanRequest, request: Req
     progress and the result (same payload shape the inline response had).
     The SSE variant at .../discovery/scan/stream is unchanged.
     """
-    group = await db.get_group(group_id)
-    if not group:
-        raise HTTPException(404, "Group not found")
+    await require_group(request, group_id, write=True)
     try:
         targets = _expand_scan_targets(body.cidrs, body.max_hosts)
     except ValueError as exc:
@@ -1898,21 +1997,28 @@ async def _run_discovery_scan_job(
         background_jobs.finish_job(job_id, "failed", error=str(exc))
 
 
+def _job_group_id(job: dict) -> int | None:
+    """The inventory group a discovery-scan job scans for."""
+    group_id = (job.get("progress") or {}).get("group_id")
+    return int(group_id) if group_id is not None else None
+
+
 @router.get("/api/inventory/discovery/jobs/{job_id}")
-async def get_discovery_scan_job(job_id: str):
+@scoped("job")
+async def get_discovery_scan_job(job_id: str, request: Request = None):
     """Poll a discovery-scan job launched by POST .../discovery/scan."""
     job = background_jobs.get_job(job_id, kind="discovery-scan")
-    if job is None:
+    # A job of a group the caller may not read answers like an unknown one.
+    if job is None or not (await request_scope(request)).can_read_group(_job_group_id(job)):
         raise HTTPException(404, "Discovery job not found (it may have expired)")
     return job
 
 
 @router.post("/api/inventory/{group_id}/discovery/scan/stream")
+@scoped("group")
 async def discovery_scan_stream(group_id: int, body: DiscoveryScanRequest, request: Request):
     """SSE streaming scan -- yields per-host results as they complete."""
-    group = await db.get_group(group_id)
-    if not group:
-        raise HTTPException(404, "Group not found")
+    await require_group(request, group_id, write=True)
 
     try:
         targets = _expand_scan_targets(body.cidrs, body.max_hosts)
@@ -1955,10 +2061,9 @@ async def discovery_scan_stream(group_id: int, body: DiscoveryScanRequest, reque
 
 
 @router.get("/api/inventory/{group_id}/snmp-discovery-profile")
-async def get_group_snmp_discovery_profile(group_id: int):
-    group = await db.get_group(group_id)
-    if not group:
-        raise HTTPException(404, "Group not found")
+@scoped("group")
+async def get_group_snmp_discovery_profile(group_id: int, request: Request):
+    await require_group(request, group_id)
     profile = state.SNMP_DISCOVERY_PROFILES.get(group_id)
     if profile:
         return profile
@@ -1966,10 +2071,9 @@ async def get_group_snmp_discovery_profile(group_id: int):
 
 
 @router.put("/api/inventory/{group_id}/snmp-discovery-profile")
-async def update_group_snmp_discovery_profile(group_id: int, body: dict):
-    group = await db.get_group(group_id)
-    if not group:
-        raise HTTPException(404, "Group not found")
+@scoped("group")
+async def update_group_snmp_discovery_profile(group_id: int, body: dict, request: Request):
+    await require_group(request, group_id, write=True)
     profile = state._sanitize_snmp_discovery_profile(group_id, body)
     state.SNMP_DISCOVERY_PROFILES[group_id] = profile
     await db.set_auth_setting("snmp_discovery_profiles", state.SNMP_DISCOVERY_PROFILES)
@@ -1977,10 +2081,10 @@ async def update_group_snmp_discovery_profile(group_id: int, body: dict):
 
 
 @router.post("/api/inventory/{group_id}/snmp-discovery-profile/test")
-async def test_group_snmp_profile(group_id: int, body: dict):
-    group = await db.get_group(group_id)
-    if not group:
-        raise HTTPException(404, "Group not found")
+@scoped("group")
+async def test_group_snmp_profile(group_id: int, body: dict, request: Request):
+    # Uses the group's SNMP credentials against any address: a write.
+    await require_group(request, group_id, write=True)
     target_ip = str(body.get("target_ip", "")).strip()
     if not target_ip:
         raise HTTPException(400, "target_ip is required")
@@ -2007,10 +2111,9 @@ async def test_group_snmp_profile(group_id: int, body: dict):
 
 
 @router.post("/api/inventory/{group_id}/discovery/sync")
+@scoped("group")
 async def discovery_sync(group_id: int, body: DiscoverySyncRequest, request: Request):
-    group = await db.get_group(group_id)
-    if not group:
-        raise HTTPException(404, "Group not found")
+    await require_group(request, group_id, write=True)
 
     # If no CIDRs provided, auto-populate from the group's existing host IPs
     if not body.cidrs:
@@ -2047,13 +2150,12 @@ async def discovery_sync(group_id: int, body: DiscoverySyncRequest, request: Req
 
 
 @router.post("/api/inventory/{group_id}/discovery/sync/stream")
+@scoped("group")
 async def discovery_sync_stream(group_id: int, body: DiscoverySyncRequest, request: Request):
     """SSE streaming sync -- yields per-host probe progress, then a final
     'done' event carrying the add/update/remove counts. Mirrors
     discovery_scan_stream so the frontend can reuse its progress UI."""
-    group = await db.get_group(group_id)
-    if not group:
-        raise HTTPException(404, "Group not found")
+    await require_group(request, group_id, write=True)
 
     # If no CIDRs provided, auto-populate from the group's existing host IPs
     # (same behaviour as the non-streaming /discovery/sync endpoint).
@@ -2124,10 +2226,9 @@ async def discovery_sync_stream(group_id: int, body: DiscoverySyncRequest, reque
 
 
 @router.post("/api/inventory/{group_id}/discovery/onboard")
+@scoped("group")
 async def discovery_onboard(group_id: int, body: DiscoveryOnboardRequest, request: Request):
-    group = await db.get_group(group_id)
-    if not group:
-        raise HTTPException(404, "Group not found")
+    await require_group(request, group_id, write=True)
     if not body.discovered_hosts:
         raise HTTPException(400, "No discovered hosts provided")
 

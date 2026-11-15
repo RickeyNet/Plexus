@@ -21,6 +21,7 @@ from collections.abc import Iterable
 import routes.database as _dbcore
 from routes.db.custom_fields import _chunks, _marks, _now
 from routes.db.device_model import _insert, _select, _update
+from routes.db.inventory import group_ids_condition
 
 __all__ = [
     "count_hosts",
@@ -45,14 +46,27 @@ __all__ = [
     "update_config_template",
 ]
 
-_TEMPLATE_SELECT = """
+_TEMPLATE_COUNTS = "(SELECT template_id, COUNT(*) AS n FROM intended_configs GROUP BY template_id)"
+_TEMPLATE_SELECT = f"""
     SELECT t.id, t.name, t.kind, t.device_type, t.role_id, t.site_id, t.group_id, t.template_text,
            t.description, t.enabled, t.created_at, t.updated_at, t.updated_by, COALESCE(u.n, 0) AS host_count
     FROM config_templates t
-    LEFT JOIN (SELECT template_id, COUNT(*) AS n FROM intended_configs GROUP BY template_id) u
+    LEFT JOIN {_TEMPLATE_COUNTS} u
            ON u.template_id = t.id
 """
 _TEMPLATE_ORDER = " ORDER BY lower(t.name), t.id"
+
+
+def _template_select(group_ids: Iterable[int] | None) -> tuple[str, tuple]:
+    """``_TEMPLATE_SELECT``; with ``group_ids`` its ``host_count`` counts
+    only the hosts in those inventory groups."""
+    scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+    if not scope_sql:
+        return _TEMPLATE_SELECT, ()
+    counted = f"""(SELECT ic.template_id, COUNT(*) AS n FROM intended_configs ic
+        JOIN hosts h ON h.id = ic.host_id WHERE {scope_sql} GROUP BY ic.template_id)"""  # nosec B608 - placeholders only
+    return _TEMPLATE_SELECT.replace(_TEMPLATE_COUNTS, counted), scope_params
+
 
 _CONTEXT_SELECT = """
     SELECT id, name, weight, data, description, enabled, device_type, role_id, site_id, group_id, host_id,
@@ -145,14 +159,17 @@ def _written(values: dict, user: str) -> dict:
 # ── Templates ────────────────────────────────────────────────────────────────
 
 
-async def list_config_templates() -> list[dict]:
+async def list_config_templates(group_ids: Iterable[int] | None = None) -> list[dict]:
     """Every template by name, with ``host_count``: the hosts whose stored
-    intended configuration came from it."""
-    return [_template(r) for r in await _select(_TEMPLATE_SELECT + _TEMPLATE_ORDER)]
+    intended configuration came from it (``group_ids``: of those hosts, the
+    ones in these inventory groups)."""
+    sql, params = _template_select(group_ids)
+    return [_template(r) for r in await _select(sql + _TEMPLATE_ORDER, params)]
 
 
-async def get_config_template(template_id: int) -> dict | None:
-    rows = await _select(_TEMPLATE_SELECT + " WHERE t.id = ?", (int(template_id),))
+async def get_config_template(template_id: int, group_ids: Iterable[int] | None = None) -> dict | None:
+    sql, params = _template_select(group_ids)
+    rows = await _select(sql + " WHERE t.id = ?", (*params, int(template_id)))
     return _template(rows[0]) if rows else None
 
 
@@ -326,12 +343,21 @@ def _row(row: dict) -> dict:
 
 
 async def list_intended_configs(
-    *, group_id: int | None = None, compliance: str | None = None, status: str | None = None
+    *,
+    group_id: int | None = None,
+    compliance: str | None = None,
+    status: str | None = None,
+    group_ids: Iterable[int] | None = None,
 ) -> list[dict]:
     """The stored rows (without the text) by host name; each filter given
-    keeps only matching rows."""
+    keeps only matching rows (``group_ids``: hosts in those inventory
+    groups)."""
     clauses: list[str] = []
     params: list = []
+    scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+    if scope_sql:
+        clauses.append(scope_sql)
+        params.extend(scope_params)
     for clause, value in (("h.group_id = ?", group_id), ("ic.compliance = ?", compliance), ("ic.status = ?", status)):
         if value is not None:
             clauses.append(clause)
@@ -341,18 +367,25 @@ async def list_intended_configs(
     return [_row(r) for r in rows]
 
 
-async def summarize_intended_configs() -> dict[str, int]:
+async def summarize_intended_configs(group_ids: Iterable[int] | None = None) -> dict[str, int]:
     """``{hosts, generated, errors, compliant, non_compliant, unknown,
-    no_template}`` over every host."""
+    no_template}`` over every host (``group_ids``: the hosts in those
+    inventory groups)."""
+    scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+    scoped = f" JOIN hosts h ON h.id = ic.host_id WHERE {scope_sql}" if scope_sql else ""
     rows = await _select(
-        """SELECT COUNT(*) AS generated,
-                  SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS errors,
-                  SUM(CASE WHEN compliance = 'compliant' THEN 1 ELSE 0 END) AS compliant,
-                  SUM(CASE WHEN compliance = 'non_compliant' THEN 1 ELSE 0 END) AS non_compliant,
-                  SUM(CASE WHEN compliance = 'unknown' THEN 1 ELSE 0 END) AS unknown
-           FROM intended_configs"""
+        f"""SELECT COUNT(*) AS generated,
+                  SUM(CASE WHEN ic.status = 'error' THEN 1 ELSE 0 END) AS errors,
+                  SUM(CASE WHEN ic.compliance = 'compliant' THEN 1 ELSE 0 END) AS compliant,
+                  SUM(CASE WHEN ic.compliance = 'non_compliant' THEN 1 ELSE 0 END) AS non_compliant,
+                  SUM(CASE WHEN ic.compliance = 'unknown' THEN 1 ELSE 0 END) AS unknown
+           FROM intended_configs ic{scoped}""",  # nosec B608 - placeholders only
+        scope_params,
     )
-    hosts = await count_hosts()
+    if scope_sql:
+        hosts = int((await _select(f"SELECT COUNT(*) AS n FROM hosts h WHERE {scope_sql}", scope_params))[0]["n"])  # nosec B608 - placeholders only
+    else:
+        hosts = await count_hosts()
     counts = {key: int(rows[0][key] or 0) for key in ("generated", "errors", "compliant", "non_compliant", "unknown")}
     return {"hosts": hosts, **counts, "no_template": max(0, hosts - counts["generated"])}
 

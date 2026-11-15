@@ -11,8 +11,10 @@ import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { QueryError } from '@/components/QueryError';
 import { formatBackendDateTime } from '@/lib/datetime';
+import { useCanWriteGroup } from '@/lib/objectScope';
 
 import { extraParentText, generateSummary } from './intendedHelpers';
+import { writeControl } from './scopeGating';
 
 /**
  * The intended text, one line per row. A line the device's backup lacks is
@@ -62,6 +64,8 @@ export function IntendedDetailModal({ hostId, onClose }: { hostId: number; onClo
   const generate = useGenerateIntended();
   const [notice, setNotice] = useState<{ tone: 'success' | 'danger'; text: string } | null>(null);
   const d = q.data;
+  // Regenerating stores the host's intended configuration: a write.
+  const canWrite = useCanWriteGroup(d?.group_id);
 
   const regenerate = async () => {
     setNotice(null);
@@ -142,7 +146,13 @@ export function IntendedDetailModal({ hostId, onClose }: { hostId: number; onClo
             Close
           </button>
           <CopyButton className="btn btn-secondary" text={d?.config_text ?? ''} disabled={!d?.config_text} />
-          <BusyButton className="btn btn-primary" busy={generate.isPending} busyLabel="Regenerating…" onClick={() => void regenerate()}>
+          <BusyButton
+            className="btn btn-primary"
+            busy={generate.isPending}
+            busyLabel="Regenerating…"
+            {...writeControl(canWrite)}
+            onClick={() => void regenerate()}
+          >
             Regenerate
           </BusyButton>
         </>

@@ -12,6 +12,7 @@ import ipaddress
 import json
 import os
 import re
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 
 import routes.database as _dbcore
@@ -22,6 +23,8 @@ from routes.database import (
     row_to_dict,
     rows_to_list,
 )
+from routes.db.device_model import _select
+from routes.db.inventory import group_ids_condition
 from routes.user_regex import UserRegex, compile_user_regex
 
 __all__ = [
@@ -1253,8 +1256,22 @@ async def get_config_baseline_for_host(host_id: int) -> dict | None:
 async def get_config_baselines(
     host_id: int | None = None,
     limit: int = 200,
+    group_ids: Iterable[int] | None = None,
 ) -> list[dict]:
-    """Return config baselines, optionally filtered by host_id."""
+    """Return config baselines, optionally filtered by host_id;
+    ``group_ids``: only hosts in those inventory groups (before the limit)."""
+    if group_ids is not None:
+        scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+        host_sql = " AND b.host_id = ?" if host_id is not None else ""
+        host_params = (host_id,) if host_id is not None else ()
+        return await _select(
+            f"""SELECT b.*, h.hostname, h.ip_address
+                FROM config_baselines b
+                JOIN hosts h ON h.id = b.host_id
+                WHERE {scope_sql}{host_sql}
+                ORDER BY b.updated_at DESC LIMIT ?""",  # nosec B608 - placeholders only
+            (*scope_params, *host_params, limit),
+        )
     db = await _dbcore.get_db(read_only=True)
     try:
         if host_id is not None:
@@ -1559,12 +1576,18 @@ async def get_config_drift_events(
     status: str | None = None,
     host_id: int | None = None,
     limit: int = 100,
+    group_ids: Iterable[int] | None = None,
 ) -> list[dict]:
-    """Return drift events with optional filters."""
+    """Return drift events with optional filters; ``group_ids``: only hosts
+    in those inventory groups (before the limit)."""
     db = await _dbcore.get_db(read_only=True)
     try:
         clauses: list[str] = []
         params: list = []
+        scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+        if scope_sql:
+            clauses.append(scope_sql)
+            params.extend(scope_params)
         if status:
             clauses.append("e.status = ?")
             params.append(status)
@@ -1589,8 +1612,11 @@ async def get_config_drift_events(
         await db.close()
 
 
-async def get_config_drift_summary() -> dict:
-    """Return drift summary stats."""
+async def get_config_drift_summary(group_ids: Iterable[int] | None = None) -> dict:
+    """Return drift summary stats; ``group_ids``: over the hosts in those
+    inventory groups only."""
+    if group_ids is not None:
+        return await _scoped_config_drift_summary(group_ids)
     db = await _dbcore.get_db(read_only=True)
     try:
         # Count hosts with baselines
@@ -1622,6 +1648,34 @@ async def get_config_drift_summary() -> dict:
         }
     finally:
         await db.close()
+
+
+async def _scoped_config_drift_summary(group_ids: Iterable[int]) -> dict:
+    """``get_config_drift_summary`` over the hosts in the inventory groups
+    ``group_ids``."""
+    scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+    baselined = await _select(
+        f"""SELECT COUNT(*) AS n FROM config_baselines b JOIN hosts h ON h.id = b.host_id
+            WHERE {scope_sql}""",  # nosec B608 - placeholders only
+        scope_params,
+    )
+    events = await _select(
+        f"""SELECT COUNT(DISTINCT CASE WHEN e.status = 'open' THEN e.host_id END) AS drifted,
+                   COUNT(CASE WHEN e.status = 'open' THEN 1 END) AS open_events,
+                   COUNT(CASE WHEN e.status = 'accepted' THEN 1 END) AS accepted_events
+            FROM config_drift_events e JOIN hosts h ON h.id = e.host_id
+            WHERE {scope_sql}""",  # nosec B608 - placeholders only
+        scope_params,
+    )
+    total_baselined = int(baselined[0]["n"] or 0)
+    drifted = int(events[0]["drifted"] or 0)
+    return {
+        "total_baselined": total_baselined,
+        "compliant": max(0, total_baselined - drifted),
+        "drifted": drifted,
+        "open_events": int(events[0]["open_events"] or 0),
+        "accepted_events": int(events[0]["accepted_events"] or 0),
+    }
 
 
 async def update_config_drift_event_status(event_id: int, status: str, resolved_by: str = "") -> None:
@@ -2099,15 +2153,21 @@ async def get_config_backups(
     policy_id: int | None = None,
     limit: int = 100,
     status: str | None = None,
+    group_ids: Iterable[int] | None = None,
 ) -> list[dict]:
     """List backups with host info, newest first, optionally filtered.
     ``status='success'`` leaves out failed attempts, which hold no config and
     can be newer than the config a host still has (an unchanged re-read
-    updates ``checked_at`` rather than writing a row)."""
+    updates ``checked_at`` rather than writing a row). ``group_ids``: only
+    hosts in those inventory groups (before the limit)."""
     db = await _dbcore.get_db(read_only=True)
     try:
         conditions = []
         params: list = []
+        scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+        if scope_sql:
+            conditions.append(scope_sql)
+            params.extend(scope_params)
         if status is not None:
             conditions.append("b.status = ?")
             params.append(status)
@@ -2134,12 +2194,15 @@ async def get_config_backups(
         await db.close()
 
 
-async def get_latest_config_backups_per_host() -> list[dict]:
-    """Return the most recent backup row for each host (dashboard rollup)."""
+async def get_latest_config_backups_per_host(group_ids: Iterable[int] | None = None) -> list[dict]:
+    """Return the most recent backup row for each host (dashboard rollup);
+    ``group_ids``: only hosts in those inventory groups."""
+    scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+    where = f"WHERE {scope_sql}" if scope_sql else ""
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
-            """SELECT b.id, b.policy_id, b.host_id, b.capture_method, b.status,
+            f"""SELECT b.id, b.policy_id, b.host_id, b.capture_method, b.status,
                       b.error_message, b.captured_at, LENGTH(b.config_text) as config_length,
                       h.hostname, h.ip_address, h.device_type
                FROM config_backups b
@@ -2150,7 +2213,9 @@ async def get_latest_config_backups_per_host() -> list[dict]:
                    GROUP BY host_id
                ) latest ON b.id = latest.max_id
                LEFT JOIN hosts h ON h.id = b.host_id
-               ORDER BY h.hostname"""
+               {where}
+               ORDER BY h.hostname""",  # nosec B608 - placeholders only
+            scope_params,
         )
         return rows_to_list(await cursor.fetchall())
     finally:
@@ -2228,8 +2293,10 @@ async def search_config_backups(
     mode: str = "fulltext",
     limit: int = 50,
     context_lines: int = 1,
+    group_ids: Iterable[int] | None = None,
 ) -> dict:
-    """Search backed-up configurations and return contextual matches."""
+    """Search backed-up configurations and return contextual matches;
+    ``group_ids``: only hosts in those inventory groups."""
     query = (search_query or "").strip()
     requested_mode = _normalize_config_backup_search_mode(mode)
     row_limit = max(1, min(int(limit), 200))
@@ -2263,26 +2330,30 @@ async def search_config_backups(
         FROM config_backups b
         LEFT JOIN hosts h ON h.id = b.host_id
     """
+    # Object-level permissions: the hosts' groups, ahead of the mode's
+    # parameters (the condition comes first in each WHERE).
+    scope_sql, scope_params = group_ids_condition("h.group_id", group_ids)
+    success = f"b.status = 'success' AND {scope_sql}" if scope_sql else "b.status = 'success'"
     cursor = None
     db = await _dbcore.get_db(read_only=True)
     try:
         if requested_mode == "fulltext":
             cursor = await db.execute(
                 f"""{base_select}
-                    WHERE b.status = 'success'
+                    WHERE {success}
                       AND to_tsvector('simple', {searched})
                           @@ plainto_tsquery('simple', ?)
                     ORDER BY b.captured_at DESC, b.id DESC""",
-                (query,),
+                (*scope_params, query),
             )
 
         if cursor is None and effective_mode == "substring":
             cursor = await db.execute(
                 f"""{base_select}
-                    WHERE b.status = 'success'
+                    WHERE {success}
                       AND POSITION(LOWER(?) IN LOWER({searched})) > 0
                     ORDER BY b.captured_at DESC, b.id DESC""",
-                (query,),
+                (*scope_params, query),
             )
 
         if cursor is None and effective_mode == "regex":
@@ -2295,11 +2366,11 @@ async def search_config_backups(
                 raise ValueError("regex_needs_literal")
             cursor = await db.execute(
                 f"""{base_select}
-                    WHERE b.status = 'success'
+                    WHERE {success}
                       AND POSITION(? IN LOWER({searched})) > 0
                       AND {searched} ~* ?
                     ORDER BY b.captured_at DESC, b.id DESC""",
-                (literal, query),
+                (*scope_params, literal, query),
             )
 
         if cursor is None:
@@ -2404,8 +2475,11 @@ async def delete_old_config_backups(days: int = 30) -> int:
         await db.close()
 
 
-async def get_config_backup_summary() -> dict:
-    """Return summary stats for config backups."""
+async def get_config_backup_summary(group_ids: Iterable[int] | None = None) -> dict:
+    """Return summary stats for config backups; ``group_ids``: over the
+    policies of those inventory groups and the backups of their hosts only."""
+    if group_ids is not None:
+        return await _scoped_config_backup_summary(group_ids)
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT COUNT(*) FROM config_backup_policies")
@@ -2429,6 +2503,38 @@ async def get_config_backup_summary() -> dict:
             "total_backups": total_backups,
             "hosts_backed_up": hosts_backed_up,
             "last_backup_at": last_backup_at,
+        }
+    finally:
+        await db.close()
+
+
+async def _scoped_config_backup_summary(group_ids: Iterable[int]) -> dict:
+    """``get_config_backup_summary`` over the inventory groups ``group_ids``."""
+    ids = frozenset(group_ids)
+    policy_sql, policy_params = group_ids_condition("p.group_id", ids)
+    host_sql, host_params = group_ids_condition("h.group_id", ids)
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(
+            f"SELECT COUNT(*) FROM config_backup_policies p WHERE {policy_sql}",  # nosec B608 - placeholders only
+            policy_params,
+        )
+        row = await cursor.fetchone()
+        total_policies = row[0] if row else 0
+        cursor = await db.execute(
+            f"""SELECT COUNT(*),
+                       COUNT(DISTINCT CASE WHEN b.status = 'success' THEN b.host_id END),
+                       MAX(b.captured_at)
+                FROM config_backups b JOIN hosts h ON h.id = b.host_id
+                WHERE {host_sql}""",  # nosec B608 - placeholders only
+            host_params,
+        )
+        row = await cursor.fetchone()
+        return {
+            "total_policies": total_policies,
+            "total_backups": row[0] if row else 0,
+            "hosts_backed_up": row[1] if row else 0,
+            "last_backup_at": row[2] if row else None,
         }
     finally:
         await db.close()

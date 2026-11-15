@@ -29,6 +29,17 @@ export interface AdminUser {
   group_ids: number[];
   feature_access: string[];
   session_never_expires?: boolean;
+  /** Limited to selected inventory groups by its access groups. */
+  object_scope_restricted?: boolean;
+}
+
+/** ``all``: every device. ``groups``: only the granted inventory groups
+ * (each with its sub-groups). */
+export type ObjectScope = 'all' | 'groups';
+
+export interface InventoryScopeGrant {
+  inventory_group_id: number;
+  can_write: boolean;
 }
 
 export interface AccessGroup {
@@ -37,6 +48,8 @@ export interface AccessGroup {
   description: string;
   feature_keys: string[];
   member_count?: number;
+  object_scope?: ObjectScope;
+  inventory_scopes?: InventoryScopeGrant[];
 }
 
 export interface LoginRules {
@@ -111,6 +124,49 @@ export interface LdapConfig {
   default_group_ids: number[];
 }
 
+export interface OidcGroupMapping {
+  group: string;
+  access_group_id: number;
+}
+
+// OpenID Connect single sign-on: an extra sign-in method next to the
+// password form (docs/sso-oidc.md).
+export interface OidcConfig {
+  enabled: boolean;
+  issuer: string;
+  client_id: string;
+  // Write-only: shown masked; sending the mask back keeps the saved secret,
+  // empty = public client.
+  client_secret: string;
+  token_auth_method: 'client_secret_basic' | 'client_secret_post' | string;
+  scopes: string;
+  username_claim: string;
+  display_name_claim: string;
+  groups_claim: string;
+  admin_groups: string[];
+  default_role: string;
+  default_group_ids: number[];
+  sync_groups: boolean;
+  group_mappings: OidcGroupMapping[];
+  button_label: string;
+  primary: boolean;
+  // Empty = derived from the request.
+  redirect_uri: string;
+  ca_cert_file: string;
+}
+
+export interface OidcTestResult {
+  ok: boolean;
+  issuer: string;
+  authorization_endpoint: string;
+  token_endpoint: string;
+  userinfo_endpoint: string;
+  algorithms: string[];
+  key_count: number;
+  redirect_uri: string;
+  error: string;
+}
+
 export interface AuthConfig {
   provider: 'local' | 'radius' | 'tacacs' | 'ldap' | string;
   default_credential_id: number | null;
@@ -119,6 +175,7 @@ export interface AuthConfig {
   radius: RadiusConfig;
   tacacs: TacacsConfig;
   ldap: LdapConfig;
+  oidc: OidcConfig;
 }
 
 export interface SyslogConfig {
@@ -314,6 +371,8 @@ export interface AccessGroupPayload {
   name: string;
   description: string;
   feature_keys: string[];
+  object_scope?: ObjectScope;
+  inventory_scopes?: InventoryScopeGrant[];
 }
 
 export function useCreateAccessGroup() {
@@ -386,6 +445,16 @@ export function useUpdateAuthConfig() {
       apiRequest<AuthConfig>('/admin/auth-config', { method: 'PUT', body: data }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'auth-config'] }),
   });
+}
+
+/** Fetch the provider's discovery document and keys. Fields left out fall
+ * back to the saved settings on the server. */
+export function testOidcConnection(body: { issuer?: string; ca_cert_file?: string } = {}) {
+  return apiRequest<OidcTestResult>('/admin/auth-config/oidc/test', { method: 'POST', body });
+}
+
+export function useTestOidcConnection() {
+  return useMutation({ mutationFn: testOidcConnection });
 }
 
 // ── Syslog ─────────────────────────────────────────────────────────────────

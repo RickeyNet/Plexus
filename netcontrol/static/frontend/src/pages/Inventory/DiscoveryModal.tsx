@@ -19,6 +19,7 @@ import {
   groupLabel,
 } from '@/api/inventory';
 import { credentialIdFromChoice } from '@/lib/credentialChoice';
+import { useObjectScope } from '@/lib/objectScope';
 import { useCredentialChoice } from '@/lib/useCredentialChoice';
 
 import {
@@ -77,7 +78,10 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
     : '';
 
   const [phase, setPhase] = useState<Phase>('form');
-  const [groupId, setGroupId] = useState<number>(group?.id ?? groups[0]?.id ?? 0);
+  // Discovered devices are onboarded into the target group: a limited
+  // account picks from the groups it may change.
+  const targetChoices = useObjectScope().writableGroups(groups);
+  const [groupId, setGroupId] = useState<number>(group?.id ?? targetChoices[0]?.id ?? 0);
   const [cidrs, setCidrs] = useState(initialCidrs);
   const [timeoutSeconds, setTimeoutSeconds] = useState(0.35);
   const [maxHosts, setMaxHosts] = useState(256);
@@ -776,7 +780,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
               onChange={(e) => setGroupId(Number(e.target.value))}
               required
             >
-              {groups.map((g) => (
+              {targetChoices.map((g) => (
                 <option key={g.id} value={g.id}>
                   {groupLabel(g)}
                 </option>

@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from 'react';
+import { useId, useState } from 'react';
 
 import { groupLabel } from '@/api/inventory';
 import { useCredentials, useInventoryGroups } from '@/api/compliance';
@@ -10,6 +10,7 @@ import { Callout } from '@/components/Callout';
 import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
 import { QueryError } from '@/components/QueryError';
+import { useObjectScope } from '@/lib/objectScope';
 
 interface Props {
   onClose: () => void;
@@ -18,6 +19,10 @@ interface Props {
 
 export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
   const groups = useInventoryGroups(true);
+  // Capturing writes snapshots: a limited account picks from the groups
+  // (and their hosts) it may change.
+  const { writableGroups } = useObjectScope();
+  const groupChoices = writableGroups(groups.data || []);
   const creds = useCredentials();
   const single = useStartCaptureSingleJob();
   const group = useStartCaptureGroupJob();
@@ -29,13 +34,7 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
   const [saveError, setSaveError] = useState<string | null>(null);
   const formId = useId();
 
-  const hosts = useMemo(() => {
-    const list: { id: number; hostname: string; ip_address: string }[] = [];
-    for (const g of groups.data || []) {
-      for (const h of g.hosts || []) list.push(h);
-    }
-    return list;
-  }, [groups.data]);
+  const hosts = groupChoices.flatMap((g) => g.hosts || []);
 
   const isPending = single.isPending || group.isPending;
 
@@ -122,7 +121,7 @@ export function CaptureSnapshotModal({ onClose, onJobStarted }: Props) {
             aria-invalid={!!targetError}
           >
             <option value="">- Or select entire group -</option>
-            {(groups.data || []).map((g) => (
+            {groupChoices.map((g) => (
               <option key={g.id} value={g.id}>
                 {groupLabel(g)} ({(g.hosts || []).length} hosts)
               </option>

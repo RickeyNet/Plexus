@@ -47,6 +47,15 @@ from netcontrol.intended_config import (
     select_template,
     verdict,
 )
+from netcontrol.object_scope import (
+    group_filter,
+    request_scope,
+    require_group,
+    require_host,
+    require_hosts,
+    require_object_host,
+    scoped,
+)
 from netcontrol.routes.custom_fields import attach_custom_data
 from netcontrol.routes.device_model import check_device_values
 from netcontrol.routes.shared import _audit, _corr_id, _session_user
@@ -430,14 +439,50 @@ async def intended_config_loop() -> None:
 # ── Templates ────────────────────────────────────────────────────────────────
 
 
+# Templates and contexts are global records, not host data. For a caller
+# limited to selected inventory groups, a template's ``host_count`` counts
+# only the hosts it may read, and a template or context that targets an
+# inventory group (or, a context, a host) it may not read is hidden.
+
+
+async def _visible_records(request: Request, records: list[dict]) -> list[dict]:
+    """The templates or contexts the caller may see: every one for an
+    unrestricted caller; else those whose ``group_id`` (and ``host_id``'s
+    group) is unset or readable."""
+    scope = await request_scope(request)
+    if scope.unrestricted:
+        return records
+    host_ids = sorted({int(r["host_id"]) for r in records if r.get("host_id") is not None})
+    host_groups = {int(h["id"]): h.get("group_id") for h in await db.get_hosts_by_ids(host_ids)} if host_ids else {}
+
+    def visible(record: dict) -> bool:
+        if record.get("group_id") is not None and not scope.can_read_group(record["group_id"]):
+            return False
+        host_id = record.get("host_id")
+        return host_id is None or scope.can_read_group(host_groups.get(int(host_id)))
+
+    return [r for r in records if visible(r)]
+
+
+async def _visible_record(request: Request, record: dict | None, what: str) -> dict:
+    """``record`` when the caller may see it; 404 like an unknown id otherwise."""
+    record = _found(record, what)
+    return _found(next(iter(await _visible_records(request, [record])), None), what)
+
+
 @router.get(f"{PREFIX}/templates")
-async def list_templates() -> dict:
-    return {"templates": await db.list_config_templates()}
+@scoped("list")
+async def list_templates(request: Request) -> dict:
+    templates = await db.list_config_templates(**await group_filter(request))
+    return {"templates": await _visible_records(request, templates)}
 
 
 @router.get(f"{PREFIX}/templates/{{template_id}}")
-async def get_template(template_id: int) -> dict:
-    return _found(await db.get_config_template(template_id), "Template")
+@scoped("template")
+async def get_template(template_id: int, request: Request) -> dict:
+    return await _visible_record(
+        request, await db.get_config_template(template_id, **await group_filter(request)), "Template"
+    )
 
 
 @admin_router.post(f"{PREFIX}/templates", status_code=201)
@@ -479,13 +524,15 @@ async def delete_template(template_id: int, request: Request) -> dict:
 
 
 @router.get(f"{PREFIX}/contexts")
-async def list_contexts() -> dict:
-    return {"contexts": await db.list_config_contexts()}
+@scoped("list")
+async def list_contexts(request: Request) -> dict:
+    return {"contexts": await _visible_records(request, await db.list_config_contexts())}
 
 
 @router.get(f"{PREFIX}/contexts/{{context_id}}")
-async def get_context(context_id: int) -> dict:
-    return _found(await db.get_config_context(context_id), "Context")
+@scoped("context")
+async def get_context(context_id: int, request: Request) -> dict:
+    return await _visible_record(request, await db.get_config_context(context_id), "Context")
 
 
 @admin_router.post(f"{PREFIX}/contexts", status_code=201)
@@ -564,7 +611,10 @@ async def preview(body: PreviewBody) -> dict:
 
 
 @router.get(f"{PREFIX}/hosts/{{host_id}}/variables")
-async def host_variables(host_id: int) -> dict:
+@scoped("host")
+async def host_variables(host_id: int, request: Request) -> dict:
+    if (await request_scope(request)).restricted:
+        await require_host(request, host_id)
     _host, variables, used = await _host_variables(host_id)
     return {
         "variables": variables,
@@ -576,7 +626,9 @@ async def host_variables(host_id: int) -> dict:
 
 
 @router.get(f"{PREFIX}/hosts")
+@scoped("list")
 async def list_hosts(
+    request: Request,
     group_id: int | None = Query(default=None, ge=1, le=MAX_ID),
     compliance: str | None = Query(default=None, max_length=20),
     status: str | None = Query(default=None, max_length=20),
@@ -585,16 +637,22 @@ async def list_hosts(
         raise HTTPException(status_code=400, detail=f"compliance must be one of: {', '.join(COMPLIANCE_STATES)}.")
     if status is not None and status not in STATUSES:
         raise HTTPException(status_code=400, detail=f"status must be one of: {', '.join(STATUSES)}.")
+    scope_filter = await group_filter(request)
     return {
-        "rows": await db.list_intended_configs(group_id=group_id, compliance=compliance, status=status),
-        "counts": await db.summarize_intended_configs(),
+        "rows": await db.list_intended_configs(group_id=group_id, compliance=compliance, status=status, **scope_filter),
+        "counts": await db.summarize_intended_configs(**scope_filter),
     }
 
 
+_INTENDED_NOT_FOUND = "Intended configuration not found"
+
+
 @router.get(f"{PREFIX}/hosts/{{host_id}}")
-async def get_host_detail(host_id: int) -> dict:
+@scoped("host")
+async def get_host_detail(host_id: int, request: Request) -> dict:
     """The row with its text, each intended line marked when the compared
     backup lacks it, the backup's extra lines, and that backup."""
+    await require_object_host(request, host_id, not_found=_INTENDED_NOT_FOUND)
     row = _found(await db.get_intended_config(host_id), "Intended configuration")
     backup = await db.get_config_backup(row["backup_id"]) if row["backup_id"] else None
     if backup is not None and int(backup.get("host_id") or 0) != host_id:
@@ -614,16 +672,31 @@ def _lines(row: dict) -> list[str]:
 
 
 @router.post(f"{PREFIX}/generate")
+@scoped("hosts")
 async def generate(body: GenerateBody, request: Request) -> dict:
     """Render and compare now: ``host_ids``, else the hosts of ``group_id``,
-    else every host."""
+    else every host. Storing a host's intended configuration is a write: a
+    caller limited to selected inventory groups needs write on each host
+    or the group named, and "every host" means every host it may write."""
+    restricted = (await request_scope(request)).restricted
     if body.host_ids is not None:
         scope = f"hosts={len(body.host_ids)}"
+        if restricted:
+            await require_hosts(request, body.host_ids, write=True)
         result = await generate_for_hosts(body.host_ids)
     elif body.group_id is not None:
-        _found(await db.get_group(body.group_id), "Group")
+        if restricted:
+            await require_group(request, body.group_id, write=True)
+        else:
+            _found(await db.get_group(body.group_id), "Group")
         scope = f"group_id={body.group_id}"
         result = await generate_for_hosts([int(h["id"]) for h in await db.get_hosts_for_group(body.group_id)])
+    elif restricted:
+        scope = "all writable"
+        writable = (await request_scope(request)).write_groups
+        result = await generate_for_hosts(
+            [int(h["id"]) for h in await db.get_all_hosts() if h.get("group_id") in writable]
+        )
     else:
         scope = "all"
         result = await generate_for_hosts(None)

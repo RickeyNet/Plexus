@@ -22,6 +22,7 @@ import { SegmentedControl } from '@/components/SegmentedControl';
 import { ShowMoreButton } from '@/components/ShowMoreButton';
 import { SummaryStrip } from '@/components/SummaryStrip';
 import { formatBackendDateTime, formatInterval, formatRelativeTime } from '@/lib/datetime';
+import { useObjectScope } from '@/lib/objectScope';
 import { useLinkedParam } from '@/lib/useLinkedParam';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 import { useShowMore } from '@/lib/useShowMore';
@@ -30,6 +31,7 @@ import { BackupModal } from './BackupModal';
 import { BackupPolicyModal } from './BackupPolicyModal';
 import { RestoreBackupModal } from './RestoreBackupModal';
 import { type BackupView } from './helpers';
+import { useCanWriteHost, writeControl } from './scopeGating';
 
 type SubTab = 'policies' | 'history';
 
@@ -173,6 +175,7 @@ function PoliciesList({
   const run = useRunBackupPolicy();
   const remove = useDeleteBackupPolicy();
   const pending = usePendingKeys<string>();
+  const objectScope = useObjectScope();
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return policies;
@@ -195,6 +198,8 @@ function PoliciesList({
   return (
     <div className="stack stack-sm">
       {filtered.map((p) => {
+        // A policy of a read-only inventory group cannot be run or changed.
+        const canWrite = objectScope.canWriteGroup(p.group_id);
         return (
           <div key={p.id} className="card">
             <div
@@ -236,6 +241,7 @@ function PoliciesList({
                   className="btn btn-sm btn-secondary"
                   busy={pending.isPending(`run:${p.id}`)}
                   busyLabel="Running…"
+                  {...writeControl(canWrite)}
                   onClick={() =>
                     void pending.run(`run:${p.id}`, async () => {
                       try {
@@ -253,11 +259,13 @@ function PoliciesList({
                   Run Now
                 </BusyButton>
                 <KebabMenu label={`Actions for ${p.name}`}>
-                  <MenuItem onSelect={() => onEdit(p)}>Edit</MenuItem>
+                  <MenuItem {...writeControl(canWrite)} onSelect={() => onEdit(p)}>
+                    Edit
+                  </MenuItem>
                   <MenuSeparator />
                   <MenuItem
                     danger
-                    disabled={pending.isPending(`delete:${p.id}`)}
+                    {...writeControl(canWrite, pending.isPending(`delete:${p.id}`))}
                     onSelect={async () => {
                       if (
                         !(await confirm({
@@ -316,6 +324,7 @@ function HistoryList({
   const { confirm, alert } = useDialogs();
   const remove = useDeleteBackup();
   const deleting = usePendingKeys<number>();
+  const canWriteHost = useCanWriteHost();
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return backups;
@@ -339,6 +348,7 @@ function HistoryList({
           b.config_length != null
             ? `${(b.config_length / 1024).toFixed(1)} KB`
             : '-';
+        const canWrite = canWriteHost(b.host_id);
         return (
           <div key={b.id} className="card">
             <div
@@ -401,12 +411,12 @@ function HistoryList({
                       <MenuSeparator />
                     </>
                   )}
-                  <MenuItem danger onSelect={() => onRestore(b.id)}>
+                  <MenuItem danger {...writeControl(canWrite)} onSelect={() => onRestore(b.id)}>
                     Restore
                   </MenuItem>
                   <MenuItem
                     danger
-                    disabled={deleting.isPending(b.id)}
+                    {...writeControl(canWrite, deleting.isPending(b.id))}
                     onSelect={async () => {
                       if (
                         !(await confirm({

@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router';
 
-import { useLogin, useRegister } from '@/api/auth';
+import { type SsoStatus, ssoErrorMessage, ssoLoginHref, useLogin, useRegister } from '@/api/auth';
 import { ApiError } from '@/api/client';
 import { StarfieldCanvas } from '@/components/StarfieldCanvas';
 
@@ -17,15 +18,32 @@ interface Props {
   // reported by /auth/status). Off in most deployments, so the Register
   // link is hidden unless the server says it is on.
   allowRegister?: boolean;
+  // Single sign-on offered by the server (/auth/status, signed out).
+  sso?: SsoStatus;
 }
 
-export function Login({ allowRegister = false }: Props) {
+export function Login({ allowRegister = false, sso }: Props) {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
+  // A failed single sign-on comes back as /login?sso_error=<code>; the code
+  // maps to a fixed sentence and is then dropped from the address bar.
+  const [ssoError, setSsoError] = useState<string | null>(() => ssoErrorMessage(location.search));
+  const [showLocal, setShowLocal] = useState(false);
+  const oidc = sso?.oidc?.enabled ? sso.oidc : null;
+  const ssoFirst = !!oidc?.primary && !showLocal;
+  const ssoHref = ssoLoginHref(location.pathname, location.search);
+
+  useEffect(() => {
+    if (new URLSearchParams(location.search).has('sso_error')) {
+      navigate(location.pathname === '/login' ? '/' : location.pathname, { replace: true });
+    }
+  }, [location.pathname, location.search, navigate]);
 
   const login = useLogin();
   const register = useRegister();
@@ -39,6 +57,7 @@ export function Login({ allowRegister = false }: Props) {
   async function onLogin(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setSsoError(null);
     try {
       await login.mutateAsync({ username, password });
     } catch (err) {
@@ -80,7 +99,31 @@ export function Login({ allowRegister = false }: Props) {
         <h1 className="login-title">Plexus</h1>
         <p className="login-subtitle">Network Automation Hub</p>
 
-        {mode === 'login' ? (
+        {mode === 'login' && ssoFirst && oidc ? (
+          <div className="login-sso">
+            {ssoError && <div className="login-error" role="alert">{ssoError}</div>}
+            <a className="btn btn-primary login-btn" href={ssoHref}>
+              {oidc.label}
+            </a>
+            <div className="login-switch">
+              <button
+                type="button"
+                className="btn-link"
+                style={{
+                  color: 'var(--primary-light)',
+                  background: 'none',
+                  border: 'none',
+                  padding: 0,
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                }}
+                onClick={() => setShowLocal(true)}
+              >
+                Use a local account
+              </button>
+            </div>
+          </div>
+        ) : mode === 'login' ? (
           <form onSubmit={onLogin}>
             <div className="form-group">
               <label className="form-label" htmlFor="login-username">Username</label>
@@ -107,10 +150,21 @@ export function Login({ allowRegister = false }: Props) {
                 autoComplete="current-password"
               />
             </div>
-            {error && <div className="login-error">{error}</div>}
+            {(error || ssoError) && (
+              <div className="login-error" role="alert">{error || ssoError}</div>
+            )}
             <button type="submit" className="btn btn-primary login-btn" disabled={pending}>
               {pending ? 'Signing in…' : 'Sign In'}
             </button>
+            {oidc && (
+              <a
+                className="btn btn-secondary login-btn"
+                href={ssoHref}
+                style={{ marginTop: '0.75rem', display: 'block', textAlign: 'center' }}
+              >
+                {oidc.label}
+              </a>
+            )}
           </form>
         ) : (
           <form onSubmit={onRegister}>

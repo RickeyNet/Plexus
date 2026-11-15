@@ -17,10 +17,12 @@ import {
   useLoginRules,
   useServiceCredentialsList,
   useUpdateAuthConfig,
+  useTestOidcConnection,
   useUpdateLoginRules,
   useUpdateServiceCredential,
 } from '@/api/settings';
 import { Callout } from '@/components/Callout';
+import { CopyButton } from '@/components/CopyButton';
 import { DataTable } from '@/components/DataTable';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
@@ -34,6 +36,15 @@ import { SaveBar } from './SaveBar';
 import { SectionCard } from './SectionCard';
 import { FormStatus, StatusLine } from './StatusLine';
 import { useReportUnsaved } from './unsaved-context';
+import {
+  OIDC_BUTTON_LABEL_MAX,
+  OIDC_MAX_GROUP_MAPPINGS,
+  oidcProblem,
+  oidcRedirectUri,
+  parseGroupLines,
+  removeMapping,
+  updateMapping,
+} from './oidcSettings';
 import { GroupCheckboxes } from './UserModals';
 import { useSavedDraft } from './useSavedDraft';
 
@@ -162,6 +173,11 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
       onSubmit={(e) => {
         e.preventDefault();
         setStatus(null);
+        const problem = draft.oidc ? oidcProblem(draft.oidc) : null;
+        if (problem) {
+          setStatus({ kind: 'error', message: problem });
+          return;
+        }
         // Submit the server's current retention, never the copy this draft
         // was seeded with, so a retention change saved meanwhile survives.
         const payload: AuthConfig = {
@@ -262,6 +278,7 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
       {draft.provider === 'ldap' && (
         <LdapPanel draft={draft} setDraft={setDraft} groups={groups} />
       )}
+      {draft.oidc && <OidcPanel draft={draft} setDraft={setDraft} groups={groups} />}
 
       <SaveBar
         name="Authentication"
@@ -608,6 +625,274 @@ function LdapPanel({ draft, setDraft, groups }: PanelProps) {
         onChange={(ids) => setL({ default_group_ids: ids })}
       />
     </ProviderFieldset>
+  );
+}
+
+/** OpenID Connect single sign-on. Not a provider choice: it is offered on
+ * the login page next to the password form, whichever provider is set. */
+export function OidcPanel({ draft, setDraft, groups }: PanelProps) {
+  const o = draft.oidc;
+  const fid = useId();
+  const test = useTestOidcConnection();
+  const setO = (patch: Partial<typeof o>) => setDraft({ ...draft, oidc: { ...o, ...patch } });
+  const origin = typeof window === 'undefined' ? '' : window.location.origin;
+  const redirectUri = oidcRedirectUri(o.redirect_uri, origin);
+  const result = test.data;
+
+  return (
+    <ProviderFieldset legend="Single sign-on (OpenID Connect)">
+      <p className="form-help" style={{ marginTop: 0 }}>
+        Adds a sign-in button that sends the browser to your identity provider (Entra ID, Okta,
+        Keycloak and others). The password form and the local break-glass admin keep working.
+        Register Plexus at the provider as a web application with the redirect URI below.
+      </p>
+      <CheckboxRow>
+        <CheckboxField label="Enabled" checked={o.enabled} onChange={(v) => setO({ enabled: v })} />
+        <CheckboxField
+          label="Lead with SSO on the login page"
+          checked={o.primary}
+          onChange={(v) => setO({ primary: v })}
+          help="The password form folds behind “Use a local account”."
+        />
+        <CheckboxField
+          label="Sync access groups on every login"
+          checked={o.sync_groups}
+          onChange={(v) => setO({ sync_groups: v })}
+          help="Sets the account's groups to the defaults plus every mapped group in the token."
+        />
+      </CheckboxRow>
+      <div className="form-group">
+        <label className="form-label" htmlFor={`${fid}-redirect`}>Redirect URI to register</label>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <input
+            id={`${fid}-redirect`}
+            className="form-input"
+            readOnly
+            value={result?.redirect_uri || redirectUri}
+            aria-describedby={`${fid}-redirect-help`}
+          />
+          <CopyButton text={result?.redirect_uri || redirectUri} />
+        </div>
+        <div className="form-help" id={`${fid}-redirect-help`}>
+          Behind a proxy that changes the host name, set the redirect URI override below.
+        </div>
+      </div>
+      <FormRow>
+        <TextField
+          label="Issuer"
+          value={o.issuer}
+          onChange={(v) => setO({ issuer: v })}
+          flex="1 1 280px"
+          placeholder="https://idp.example.com/realms/plexus"
+          help="Must equal the issuer in the provider's discovery document exactly."
+        />
+        <TextField
+          label="Client ID"
+          value={o.client_id}
+          onChange={(v) => setO({ client_id: v })}
+          flex="1 1 200px"
+          autoComplete="off"
+        />
+        <TextField
+          label="Client Secret"
+          type="password"
+          value={o.client_secret}
+          onChange={(v) => setO({ client_secret: v })}
+          flex="1 1 200px"
+          autoComplete="new-password"
+          help="Stored encrypted. Leave empty for a public client."
+        />
+        <div className="form-group" style={{ flex: '1 1 200px' }}>
+          <label className="form-label" htmlFor={`${fid}-auth-method`}>Token Endpoint Auth</label>
+          <select
+            id={`${fid}-auth-method`}
+            className="form-select"
+            value={o.token_auth_method}
+            onChange={(e) => setO({ token_auth_method: e.target.value })}
+          >
+            <option value="client_secret_basic">client_secret_basic</option>
+            <option value="client_secret_post">client_secret_post</option>
+          </select>
+        </div>
+      </FormRow>
+      <FormRow>
+        <TextField
+          label="Scopes"
+          value={o.scopes}
+          onChange={(v) => setO({ scopes: v })}
+          flex="1 1 220px"
+          help="openid is always sent."
+        />
+        <TextField
+          label="Username Claim"
+          value={o.username_claim}
+          onChange={(v) => setO({ username_claim: v })}
+          flex="1 1 160px"
+        />
+        <TextField
+          label="Display Name Claim"
+          value={o.display_name_claim}
+          onChange={(v) => setO({ display_name_claim: v })}
+          flex="1 1 160px"
+        />
+        <TextField
+          label="Groups Claim"
+          value={o.groups_claim}
+          onChange={(v) => setO({ groups_claim: v })}
+          flex="1 1 160px"
+        />
+      </FormRow>
+      <FormRow>
+        <div className="form-group" style={{ flex: '1 1 260px' }}>
+          <label className="form-label" htmlFor={`${fid}-admin-groups`}>Admin Groups</label>
+          <textarea
+            id={`${fid}-admin-groups`}
+            className="form-input"
+            rows={3}
+            value={o.admin_groups.join('\n')}
+            aria-describedby={`${fid}-admin-groups-help`}
+            onChange={(e) => setO({ admin_groups: parseGroupLines(e.target.value) })}
+          />
+          <div className="form-help" id={`${fid}-admin-groups-help`}>
+            One group claim value per line. Members get the admin role; re-checked on every login.
+          </div>
+        </div>
+        <div className="form-group" style={{ flex: '0 1 160px' }}>
+          <label className="form-label" htmlFor={`${fid}-default-role`}>Default Role</label>
+          <select
+            id={`${fid}-default-role`}
+            className="form-select"
+            value={o.default_role}
+            onChange={(e) => setO({ default_role: e.target.value })}
+          >
+            <option value="user">user</option>
+            <option value="admin">admin</option>
+          </select>
+        </div>
+        <TextField
+          label="Button Label"
+          value={o.button_label}
+          onChange={(v) => setO({ button_label: v })}
+          flex="1 1 200px"
+          help={`At most ${OIDC_BUTTON_LABEL_MAX} characters.`}
+        />
+      </FormRow>
+      <FormRow>
+        <TextField
+          label="Redirect URI Override (optional)"
+          value={o.redirect_uri}
+          onChange={(v) => setO({ redirect_uri: v })}
+          flex="1 1 280px"
+          help="Blank derives it from the request."
+        />
+        <TextField
+          label="CA Certificate File (optional)"
+          value={o.ca_cert_file}
+          onChange={(v) => setO({ ca_cert_file: v })}
+          flex="1 1 220px"
+          help="Path on the Plexus host for a private CA; blank uses the system trust store."
+        />
+      </FormRow>
+      <OidcMappingsField
+        mappings={o.group_mappings}
+        groups={groups}
+        onChange={(group_mappings) => setO({ group_mappings })}
+      />
+      <DefaultGroupsField
+        groups={groups}
+        selected={o.default_group_ids}
+        onChange={(ids) => setO({ default_group_ids: ids })}
+      />
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          className="btn btn-sm btn-secondary"
+          disabled={test.isPending || !o.issuer.trim()}
+          onClick={() => test.mutate({ issuer: o.issuer.trim(), ca_cert_file: o.ca_cert_file.trim() })}
+        >
+          {test.isPending ? 'Testing…' : 'Test connection'}
+        </button>
+        <span className="form-help">Fetches the discovery document and signing keys of the issuer above.</span>
+      </div>
+      {test.isError && (
+        <Callout tone="danger">Connection test failed: {(test.error as Error).message}</Callout>
+      )}
+      {result && (
+        <Callout tone={result.ok ? 'success' : 'danger'}>
+          {result.ok
+            ? `Reached ${result.issuer}: ${result.key_count} signing key(s), algorithms ${result.algorithms.join(', ')}.`
+            : `Could not use ${result.issuer || 'the issuer'}: ${result.error}`}
+        </Callout>
+      )}
+    </ProviderFieldset>
+  );
+}
+
+function OidcMappingsField({
+  mappings,
+  groups,
+  onChange,
+}: {
+  mappings: { group: string; access_group_id: number }[];
+  groups: AccessGroup[];
+  onChange: (next: { group: string; access_group_id: number }[]) => void;
+}) {
+  const id = useId();
+  return (
+    <div className="form-group">
+      <span className="form-label" id={id}>Group Mappings</span>
+      {mappings.length === 0 && (
+        <div className="form-help">No mappings. With access group sync on, a mapping adds an access group for a group claim value.</div>
+      )}
+      {mappings.map((m, i) => (
+        <div key={i} className="form-row" role="group" aria-labelledby={id}>
+          <div className="form-group" style={{ flex: '1 1 220px' }}>
+            <label className="form-label" htmlFor={`${id}-group-${i}`}>Group claim value</label>
+            <input
+              id={`${id}-group-${i}`}
+              className="form-input"
+              value={m.group}
+              onChange={(e) => onChange(updateMapping(mappings, i, { group: e.target.value }))}
+            />
+          </div>
+          <div className="form-group" style={{ flex: '1 1 200px' }}>
+            <label className="form-label" htmlFor={`${id}-ag-${i}`}>Access group</label>
+            <select
+              id={`${id}-ag-${i}`}
+              className="form-select"
+              value={m.access_group_id || ''}
+              onChange={(e) => onChange(updateMapping(mappings, i, { access_group_id: Number(e.target.value) }))}
+            >
+              <option value="">- Choose -</option>
+              {groups.map((g) => (
+                <option key={g.id} value={g.id}>{g.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="form-group form-check-field" style={{ flex: '0 0 auto' }}>
+            <span className="form-label" aria-hidden="true">&nbsp;</span>
+            <button
+              type="button"
+              className="btn btn-sm btn-secondary"
+              aria-label={`Remove mapping ${m.group || i + 1}`}
+              onClick={() => onChange(removeMapping(mappings, i))}
+            >
+              Remove
+            </button>
+          </div>
+        </div>
+      ))}
+      <div>
+        <button
+          type="button"
+          className="btn btn-sm btn-secondary"
+          disabled={mappings.length >= OIDC_MAX_GROUP_MAPPINGS}
+          onClick={() => onChange([...mappings, { group: '', access_group_id: 0 }])}
+        >
+          + Add Mapping
+        </button>
+      </div>
+    </div>
   );
 }
 

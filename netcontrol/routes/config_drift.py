@@ -13,6 +13,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
 from pydantic import BaseModel
 
 import netcontrol.routes.state as state
+from netcontrol.object_scope import (
+    ObjectScope,
+    group_filter,
+    request_scope,
+    require_group,
+    require_host,
+    require_hosts,
+    require_object_host,
+    scoped,
+    ws_scope,
+)
 from netcontrol.routes.device_config import get_device_config
 from netcontrol.routes.shared import (
     _audit,
@@ -116,6 +127,28 @@ _revert_sockets_lock = asyncio.Lock()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+# Object-level permissions: a record addressed by its own id answers what an
+# unknown id answers when its host is outside the caller's read scope.
+_BASELINE_NOT_FOUND = "Baseline not found"
+_SNAPSHOT_NOT_FOUND = "Snapshot not found"
+_EVENT_NOT_FOUND = "Drift event not found"
+_NO_GROUP_HOSTS = "No hosts found in group"
+
+
+def _job_visible(scope: ObjectScope, job: dict) -> bool:
+    """Whether the caller may see a capture or revert job's device output:
+    every host it touches must be readable (``group_ids`` is recorded when
+    the job starts)."""
+    group_ids = job.get("group_ids")
+    if group_ids is None:
+        return scope.unrestricted
+    return all(scope.can_read_group(g) for g in group_ids)
+
+
+def _group_ids(hosts: list[dict]) -> list[int | None]:
+    return sorted({h.get("group_id") for h in hosts}, key=lambda g: (g is None, g or 0))
+
 
 _MAX_OUTPUT_LINES = 10_000
 _MAX_OUTPUT_SIZE = 10 * 1024 * 1024  # 10 MB cap on revert output string
@@ -663,31 +696,54 @@ async def _config_drift_check_loop() -> None:
 # ── Routes: Baselines ────────────────────────────────────────────────────────
 
 
+async def _require_baseline(request: Request | None, baseline_id: int, *, write: bool = False) -> dict:
+    baseline = await db.get_config_baseline(baseline_id)
+    if not baseline:
+        raise HTTPException(status_code=404, detail=_BASELINE_NOT_FOUND)
+    await require_object_host(request, baseline.get("host_id"), write=write, not_found=_BASELINE_NOT_FOUND)
+    return baseline
+
+
+async def _require_snapshot(request: Request, snapshot_id: int, *, write: bool = False) -> dict:
+    snapshot = await db.get_config_snapshot(snapshot_id)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail=_SNAPSHOT_NOT_FOUND)
+    await require_object_host(request, snapshot.get("host_id"), write=write, not_found=_SNAPSHOT_NOT_FOUND)
+    return snapshot
+
+
+async def _require_event(request: Request, event_id: int, *, write: bool = False) -> dict:
+    event = await db.get_config_drift_event(event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail=_EVENT_NOT_FOUND)
+    await require_object_host(request, event.get("host_id"), write=write, not_found=_EVENT_NOT_FOUND)
+    return event
+
+
 @router.get("/api/config-drift/baselines")
-async def list_config_baselines(host_id: int | None = Query(default=None)):
+@scoped("list")
+async def list_config_baselines(request: Request, host_id: int | None = Query(default=None)):
     """List config baselines, optionally filtered by host."""
+    scope_filter = await group_filter(request)
     try:
-        return await db.get_config_baselines(host_id=host_id)
+        return await db.get_config_baselines(host_id=host_id, **scope_filter)
     except Exception as exc:
         LOGGER.error("config-drift: list baselines error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to list config baselines")
 
 
 @router.get("/api/config-drift/baselines/{baseline_id}")
-async def get_config_baseline(baseline_id: int):
+@scoped("baseline")
+async def get_config_baseline(baseline_id: int, request: Request = None):
     """Get a single config baseline."""
-    baseline = await db.get_config_baseline(baseline_id)
-    if not baseline:
-        raise HTTPException(status_code=404, detail="Baseline not found")
-    return baseline
+    return await _require_baseline(request, baseline_id)
 
 
 @router.post("/api/config-drift/baselines", status_code=201)
+@scoped("host")
 async def create_config_baseline(body: ConfigBaselineCreate, request: Request):
     """Create or replace a config baseline for a host."""
-    host = await db.get_host(body.host_id)
-    if not host:
-        raise HTTPException(status_code=404, detail="Host not found")
+    await require_host(request, body.host_id, write=True)
     session = _get_session(request)
     user = session["user"] if session else ""
     baseline_id = await db.create_config_baseline(
@@ -708,11 +764,10 @@ async def create_config_baseline(body: ConfigBaselineCreate, request: Request):
 
 
 @router.put("/api/config-drift/baselines/{baseline_id}")
+@scoped("baseline")
 async def update_config_baseline_endpoint(baseline_id: int, body: ConfigBaselineUpdate, request: Request):
     """Update a config baseline."""
-    existing = await db.get_config_baseline(baseline_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Baseline not found")
+    await _require_baseline(request, baseline_id, write=True)
     await db.update_config_baseline(
         baseline_id,
         name=body.name,
@@ -731,11 +786,10 @@ async def update_config_baseline_endpoint(baseline_id: int, body: ConfigBaseline
 
 
 @router.delete("/api/config-drift/baselines/{baseline_id}")
+@scoped("baseline")
 async def delete_config_baseline_endpoint(baseline_id: int, request: Request):
     """Delete a config baseline."""
-    existing = await db.get_config_baseline(baseline_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Baseline not found")
+    existing = await _require_baseline(request, baseline_id, write=True)
     await db.delete_config_baseline(baseline_id)
     session = _get_session(request)
     await _audit(
@@ -752,26 +806,32 @@ async def delete_config_baseline_endpoint(baseline_id: int, request: Request):
 
 
 @router.get("/api/config-drift/snapshots")
-async def list_config_snapshots(host_id: int = Query(), limit: int = Query(default=50, ge=1, le=10000)):
-    """List config snapshots for a host."""
+@scoped("host")
+async def list_config_snapshots(
+    request: Request, host_id: int = Query(), limit: int = Query(default=50, ge=1, le=10000)
+):
+    """List config snapshots for a host (none for a host outside the
+    caller's read scope, as for an unknown host)."""
+    scope = await request_scope(request)
+    if scope.restricted:
+        host = await db.get_host(host_id)
+        if not host or not scope.can_read_group(host.get("group_id")):
+            return []
     return await db.get_config_snapshots_for_host(host_id, limit=limit)
 
 
 @router.get("/api/config-drift/snapshots/{snapshot_id}")
-async def get_config_snapshot(snapshot_id: int):
+@scoped("snapshot")
+async def get_config_snapshot(snapshot_id: int, request: Request):
     """Get a single snapshot with full config text."""
-    snapshot = await db.get_config_snapshot(snapshot_id)
-    if not snapshot:
-        raise HTTPException(status_code=404, detail="Snapshot not found")
-    return snapshot
+    return await _require_snapshot(request, snapshot_id)
 
 
 @router.post("/api/config-drift/snapshots/capture")
+@scoped("host")
 async def capture_config_snapshot(body: ConfigSnapshotCaptureRequest, request: Request):
     """SSH to a device and capture its running-config."""
-    host = await db.get_host(body.host_id)
-    if not host:
-        raise HTTPException(status_code=404, detail="Host not found")
+    host = await require_host(request, body.host_id, write=True)
     cred = await require_credential_access(body.credential_id, session=_get_session(request))
     try:
         config_text = (await get_device_config(host, cred, capture_method="drift")).config_text
@@ -794,9 +854,18 @@ async def capture_config_snapshot(body: ConfigSnapshotCaptureRequest, request: R
     return {"snapshot_id": snapshot_id, "config_length": len(config_text)}
 
 
+async def _require_capture_group(request: Request, group_id: int) -> None:
+    """A caller limited to selected inventory groups captures only a group
+    it may write (an unreadable one answers like an empty group)."""
+    if (await request_scope(request)).restricted:
+        await require_group(request, group_id, write=True, not_found=_NO_GROUP_HOSTS)
+
+
 @router.post("/api/config-drift/snapshots/capture-group")
+@scoped("group")
 async def capture_group_config_snapshots(body: ConfigGroupCaptureRequest, request: Request):
     """Capture running-config for all hosts in a group."""
+    await _require_capture_group(request, body.group_id)
     hosts = await db.get_hosts_for_group(body.group_id)
     if not hosts:
         raise HTTPException(status_code=404, detail="No hosts found in group")
@@ -835,8 +904,10 @@ async def capture_group_config_snapshots(body: ConfigGroupCaptureRequest, reques
 
 
 @router.post("/api/config-drift/snapshots/capture-job")
+@scoped("group")
 async def capture_config_job(body: ConfigGroupCaptureRequest, request: Request):
     """Start a background config capture job for a group, returning a job_id for WebSocket streaming."""
+    await _require_capture_group(request, body.group_id)
     hosts = await db.get_hosts_for_group(body.group_id)
     if not hosts:
         raise HTTPException(status_code=404, detail="No hosts found in group")
@@ -852,6 +923,7 @@ async def capture_config_job(body: ConfigGroupCaptureRequest, request: Request):
         "finished_at": None,
         "output_lines": [],
         "launched_by": launched_by,
+        "group_ids": _group_ids(hosts),
     }
 
     supervise_task(
@@ -870,11 +942,10 @@ async def capture_config_job(body: ConfigGroupCaptureRequest, request: Request):
 
 
 @router.post("/api/config-drift/snapshots/capture-single-job")
+@scoped("host")
 async def capture_config_single_job(body: ConfigSnapshotCaptureRequest, request: Request):
     """Start a background config capture job for a single host, returning a job_id for WebSocket streaming."""
-    host = await db.get_host(body.host_id)
-    if not host:
-        raise HTTPException(status_code=404, detail="Host not found")
+    host = await require_host(request, body.host_id, write=True)
     cred = await require_credential_access(body.credential_id, session=_get_session(request))
 
     session = _get_session(request)
@@ -887,6 +958,7 @@ async def capture_config_single_job(body: ConfigSnapshotCaptureRequest, request:
         "finished_at": None,
         "output_lines": [],
         "launched_by": launched_by,
+        "group_ids": _group_ids([host]),
     }
 
     supervise_task(
@@ -905,10 +977,12 @@ async def capture_config_single_job(body: ConfigSnapshotCaptureRequest, request:
 
 
 @router.get("/api/config-drift/capture-job/{job_id}")
-async def get_capture_job(job_id: str):
-    """Return status and output for a config capture job."""
+@scoped("job")
+async def get_capture_job(job_id: str, request: Request):
+    """Return status and output for a config capture job (not found for a
+    caller who may not read every host it captures)."""
     job = _capture_jobs.get(job_id)
-    if not job:
+    if not job or not _job_visible(await request_scope(request), job):
         raise HTTPException(status_code=404, detail="Capture job not found")
     return {
         "job_id": job["job_id"],
@@ -920,6 +994,7 @@ async def get_capture_job(job_id: str):
 
 
 @ws_router.websocket("/ws/config-capture/{job_id}")
+@scoped("job")
 async def websocket_config_capture(websocket: WebSocket, job_id: str):
     """Stream config capture job output in real-time."""
     token = websocket.cookies.get("session")
@@ -939,6 +1014,10 @@ async def websocket_config_capture(websocket: WebSocket, job_id: str):
         return
 
     job = _capture_jobs.get(job_id)
+    # Object-level permissions: a job touching a host the caller may not
+    # read answers like an unknown job.
+    if job and not _job_visible(await ws_scope(session), job):
+        job = None
     if not job:
         await websocket.accept()
         await websocket.send_json({"type": "error", "message": "Job not found"})
@@ -987,11 +1066,10 @@ async def websocket_config_capture(websocket: WebSocket, job_id: str):
 
 
 @router.delete("/api/config-drift/snapshots/{snapshot_id}")
+@scoped("snapshot")
 async def delete_config_snapshot_endpoint(snapshot_id: int, request: Request):
     """Delete a config snapshot."""
-    existing = await db.get_config_snapshot(snapshot_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Snapshot not found")
+    existing = await _require_snapshot(request, snapshot_id, write=True)
     await db.delete_config_snapshot(snapshot_id)
     session = _get_session(request)
     user = session["user"] if session else ""
@@ -1009,13 +1087,15 @@ async def delete_config_snapshot_endpoint(snapshot_id: int, request: Request):
 
 
 @router.get("/api/config-drift/events")
+@scoped("list")
 async def list_config_drift_events(
+    request: Request,
     status: str | None = Query(default=None),
     host_id: int | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=10000),
 ):
     """List drift events with optional filters."""
-    return await db.get_config_drift_events(status=status, host_id=host_id, limit=limit)
+    return await db.get_config_drift_events(status=status, host_id=host_id, limit=limit, **await group_filter(request))
 
 
 async def _bulk_close_drift_events(event_ids: list[int], to_status: str, request: Request) -> int:
@@ -1029,7 +1109,13 @@ async def _bulk_close_drift_events(event_ids: list[int], to_status: str, request
         raise HTTPException(status_code=400, detail="event_ids required")
     session = _get_session(request)
     user = session["user"] if session else ""
-    events = await db.get_config_drift_events_by_ids(list(dict.fromkeys(event_ids)))
+    unique_ids = list(dict.fromkeys(event_ids))
+    events = await db.get_config_drift_events_by_ids(unique_ids)
+    if (await request_scope(request)).restricted:
+        # Every event must be known and its host writable, else nothing changes.
+        if len(events) != len(unique_ids):
+            raise HTTPException(status_code=404, detail=_EVENT_NOT_FOUND)
+        await require_hosts(request, [e["host_id"] for e in events], write=True, not_found=_EVENT_NOT_FOUND)
     open_events = [e for e in events if e.get("status") == "open"]
     snapshots_by_id: dict = {}
     if to_status == "accepted":
@@ -1071,6 +1157,7 @@ async def _bulk_close_drift_events(event_ids: list[int], to_status: str, request
 
 
 @router.post("/api/config-drift/events/bulk-accept")
+@scoped("hosts")
 async def bulk_accept_drift_events(body: ConfigDriftBulkEventsRequest, request: Request):
     """Accept multiple drift events at once, updating baselines for each."""
     accepted = await _bulk_close_drift_events(body.event_ids, "accepted", request)
@@ -1078,6 +1165,7 @@ async def bulk_accept_drift_events(body: ConfigDriftBulkEventsRequest, request: 
 
 
 @router.post("/api/config-drift/events/bulk-resolve")
+@scoped("hosts")
 async def bulk_resolve_drift_events(body: ConfigDriftBulkEventsRequest, request: Request):
     """Mark multiple drift events resolved at once; baselines are unchanged."""
     resolved = await _bulk_close_drift_events(body.event_ids, "resolved", request)
@@ -1085,31 +1173,29 @@ async def bulk_resolve_drift_events(body: ConfigDriftBulkEventsRequest, request:
 
 
 @router.get("/api/config-drift/events/{event_id}")
-async def get_config_drift_event(event_id: int):
+@scoped("event")
+async def get_config_drift_event(event_id: int, request: Request):
     """Get a single drift event with diff text."""
-    event = await db.get_config_drift_event(event_id)
-    if not event:
-        raise HTTPException(status_code=404, detail="Drift event not found")
-    return event
+    return await _require_event(request, event_id)
 
 
 @router.get("/api/config-drift/events/{event_id}/history")
-async def get_config_drift_event_history(event_id: int, limit: int = Query(default=200, ge=1, le=2000)):
+@scoped("event")
+async def get_config_drift_event_history(
+    event_id: int, request: Request, limit: int = Query(default=200, ge=1, le=2000)
+):
     """Return lifecycle history entries for a single drift event."""
-    event = await db.get_config_drift_event(event_id)
-    if not event:
-        raise HTTPException(status_code=404, detail="Drift event not found")
+    await _require_event(request, event_id)
     return await db.get_config_drift_event_history(event_id, limit=limit)
 
 
 @router.put("/api/config-drift/events/{event_id}/status")
+@scoped("event")
 async def update_config_drift_event_status(event_id: int, body: ConfigDriftStatusUpdate, request: Request):
     """Update drift event status to resolved or accepted."""
     if body.status not in ("resolved", "accepted", "open"):
         raise HTTPException(status_code=400, detail="Status must be 'open', 'resolved', or 'accepted'")
-    event = await db.get_config_drift_event(event_id)
-    if not event:
-        raise HTTPException(status_code=404, detail="Drift event not found")
+    event = await _require_event(request, event_id, write=True)
     session = _get_session(request)
     user = session["user"] if session else ""
     from_status = event.get("status", "")
@@ -1156,11 +1242,10 @@ async def update_config_drift_event_status(event_id: int, body: ConfigDriftStatu
 
 
 @router.post("/api/config-drift/events/revert")
+@scoped("event")
 async def revert_drift_event(body: ConfigDriftRevertRequest, request: Request):
     """Revert a device to its baseline config by pushing the baseline via SSH."""
-    event = await db.get_config_drift_event(body.event_id)
-    if not event:
-        raise HTTPException(status_code=404, detail="Drift event not found")
+    event = await _require_event(request, body.event_id, write=True)
 
     host = await db.get_host(event["host_id"])
     if not host:
@@ -1181,6 +1266,7 @@ async def revert_drift_event(body: ConfigDriftRevertRequest, request: Request):
         "event_id": body.event_id,
         "host_id": event["host_id"],
         "launched_by": user,
+        "group_ids": _group_ids([host]),
     }
     _revert_job_sockets[job_id] = []
 
@@ -1209,6 +1295,7 @@ async def revert_drift_event(body: ConfigDriftRevertRequest, request: Request):
 
 
 @ws_router.websocket("/ws/config-revert/{job_id}")
+@scoped("job")
 async def ws_config_revert(websocket: WebSocket, job_id: str):
     """WebSocket for streaming revert job output."""
     token = websocket.cookies.get("session")
@@ -1228,6 +1315,10 @@ async def ws_config_revert(websocket: WebSocket, job_id: str):
         return
 
     job = _revert_jobs.get(job_id)
+    # Object-level permissions: a job on a host the caller may not read
+    # answers like an unknown job.
+    if job and not _job_visible(await ws_scope(session), job):
+        job = None
     if not job:
         await websocket.accept()
         await websocket.send_json({"type": "error", "data": "Job not found"})
@@ -1273,11 +1364,11 @@ async def ws_config_revert(websocket: WebSocket, job_id: str):
 
 
 @router.post("/api/config-drift/analyze")
+@scoped("host")
 async def analyze_config_drift(body: ConfigDriftAnalyzeRequest, request: Request):
-    """Run drift analysis for a single host."""
-    host = await db.get_host(body.host_id)
-    if not host:
-        raise HTTPException(status_code=404, detail="Host not found")
+    """Run drift analysis for a single host (it may open a drift event: a
+    write)."""
+    host = await require_host(request, body.host_id, write=True)
     result = await _analyze_drift_for_host(body.host_id)
     session = _get_session(request)
     await _audit(
@@ -1293,8 +1384,10 @@ async def analyze_config_drift(body: ConfigDriftAnalyzeRequest, request: Request
 
 
 @router.post("/api/config-drift/analyze-group")
+@scoped("group")
 async def analyze_group_config_drift(body: ConfigDriftAnalyzeGroupRequest, request: Request):
     """Run drift analysis for all hosts in a group."""
+    await _require_capture_group(request, body.group_id)
     hosts = await db.get_hosts_for_group(body.group_id)
     if not hosts:
         raise HTTPException(status_code=404, detail="No hosts found in group")
@@ -1317,11 +1410,10 @@ async def analyze_group_config_drift(body: ConfigDriftAnalyzeGroupRequest, reque
 
 
 @router.post("/api/config-drift/check")
+@scoped("host")
 async def full_config_drift_check(body: ConfigDriftCheckRequest, request: Request):
     """Full cycle: capture running-config then analyze drift for one host."""
-    host = await db.get_host(body.host_id)
-    if not host:
-        raise HTTPException(status_code=404, detail="Host not found")
+    host = await require_host(request, body.host_id, write=True)
     cred = await require_credential_access(body.credential_id, session=_get_session(request))
     try:
         config_text = (await get_device_config(host, cred, capture_method="drift")).config_text
@@ -1352,9 +1444,11 @@ async def full_config_drift_check(body: ConfigDriftCheckRequest, request: Reques
 
 
 @router.get("/api/config-drift/summary")
-async def get_config_drift_summary():
-    """Return drift detection summary stats."""
-    return await db.get_config_drift_summary()
+@scoped("list")
+async def get_config_drift_summary(request: Request = None):
+    """Return drift detection summary stats (over the hosts the caller may
+    read)."""
+    return await db.get_config_drift_summary(**await group_filter(request))
 
 
 # ── Routes: Admin Config Drift Schedule ──────────────────────────────────────

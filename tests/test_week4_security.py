@@ -215,7 +215,10 @@ async def test_logged_out_status_reports_self_register_flag(monkeypatch, env, ex
 
     result = await auth_module.auth_status(cast(Request, DummyRequest()), Response())
 
-    assert result == {"authenticated": False, "allow_self_register": expected}
+    assert result["authenticated"] is False
+    assert result["allow_self_register"] == expected
+    # The signed-out status also tells the login screen about single sign-on.
+    assert set(result["sso"]["oidc"]) == {"enabled", "label", "primary"}
 
 
 @pytest.mark.asyncio

@@ -279,6 +279,8 @@ CREATE TABLE IF NOT EXISTS users (
     -- Which external provider manages this account ('ldap'/'radius', '' = local).
     -- Provider-managed accounts get role/display_name re-synced on every login.
     auth_provider TEXT NOT NULL DEFAULT '',
+    -- OIDC subject (sub) bound on the first SSO login ('' = none); migration 0088.
+    external_id TEXT NOT NULL DEFAULT '',
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 

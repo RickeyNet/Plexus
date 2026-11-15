@@ -79,6 +79,12 @@ def _corr_id(request) -> str:
     return getattr(request.state, "correlation_id", "") if hasattr(request, "state") else ""
 
 
+def _request_scheme(request) -> str:
+    """The scheme the browser used: ``X-Forwarded-Proto`` from a reverse
+    proxy, else the request's own scheme (direct TLS termination)."""
+    return request.headers.get("x-forwarded-proto", request.url.scheme).strip().lower()
+
+
 # ── Session helper (initialized by app.py) ───────────────────────────────────
 
 _verify_session_token_fn = None

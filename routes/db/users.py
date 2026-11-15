@@ -23,6 +23,7 @@ from routes.database import (
     row_to_dict,
     rows_to_list,
 )
+from routes.db.inventory import GROUP_SUBTREE_SQL
 
 __all__ = [
     "get_user_by_username",
@@ -33,6 +34,7 @@ __all__ = [
     "update_user_profile",
     "update_user_admin",
     "set_user_auth_provider",
+    "set_user_external_id",
     "get_all_users",
     "delete_user",
     "delete_user_guarded",
@@ -43,6 +45,8 @@ __all__ = [
     "create_access_group",
     "update_access_group",
     "delete_access_group",
+    "OBJECT_SCOPES",
+    "get_user_object_scope",
     "get_user_effective_features",
     "set_auth_setting",
     "get_auth_setting",
@@ -143,6 +147,16 @@ async def set_user_auth_provider(user_id: int, provider: str):
     db = await _dbcore.get_db()
     try:
         await db.execute("UPDATE users SET auth_provider = ? WHERE id = ?", (provider, user_id))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def set_user_external_id(user_id: int, external_id: str):
+    """Bind an account to its OIDC subject (``sub``); see migration 0088."""
+    db = await _dbcore.get_db()
+    try:
+        await db.execute("UPDATE users SET external_id = ? WHERE id = ?", (external_id, user_id))
         await db.commit()
     finally:
         await db.close()
@@ -288,12 +302,59 @@ async def set_user_groups(user_id: int, group_ids: list[int]):
         await db.close()
 
 
+# ``access_groups.object_scope``: ``all`` (every device) or ``groups`` (the
+# inventory groups in ``access_group_inventory_scopes`` and their sub-groups).
+OBJECT_SCOPES = ("all", "groups")
+
+
+async def _attach_inventory_scopes(db, groups: list[dict]) -> None:
+    """Set each access group's ``inventory_scopes`` (``[{inventory_group_id,
+    can_write}]`` by inventory group id; empty for ``object_scope='all'``)."""
+    for group in groups:
+        group["object_scope"] = group.get("object_scope") or "all"
+        cursor = await db.execute(
+            "SELECT inventory_group_id, can_write FROM access_group_inventory_scopes "
+            "WHERE access_group_id = ? ORDER BY inventory_group_id",
+            (group["id"],),
+        )
+        group["inventory_scopes"] = [
+            {"inventory_group_id": int(r[0]), "can_write": bool(r[1])} for r in await cursor.fetchall()
+        ]
+
+
+async def _replace_inventory_scopes(db, group_id: int, object_scope: str, inventory_scopes: list[dict]) -> None:
+    """Set an access group's scope and replace its grants (in the caller's
+    transaction). Grants are kept only for ``object_scope='groups'``. An
+    unknown inventory group id fails the foreign key."""
+    await db.execute("UPDATE access_groups SET object_scope = ? WHERE id = ?", (object_scope, group_id))
+    await db.execute("DELETE FROM access_group_inventory_scopes WHERE access_group_id = ?", (group_id,))
+    if object_scope != "groups":
+        return
+    grants: dict[int, bool] = {}
+    for grant in inventory_scopes:
+        gid = int(grant["inventory_group_id"])
+        grants[gid] = grants.get(gid, False) or bool(grant.get("can_write"))
+    for gid, can_write in sorted(grants.items()):
+        await db.execute(
+            "INSERT INTO access_group_inventory_scopes (access_group_id, inventory_group_id, can_write) VALUES (?, ?, ?)",
+            (group_id, gid, int(can_write)),
+        )
+
+
+def _access_group_write_error(e: Exception) -> ValueError | None:
+    if _is_unique_violation(e):
+        return ValueError("Access group name already exists")
+    if _is_foreign_key_violation(e):
+        return ValueError("One or more selected inventory groups do not exist")
+    return None
+
+
 async def get_all_access_groups() -> list[dict]:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
             """
-            SELECT g.id, g.name, g.description, g.created_at, COUNT(m.user_id) AS member_count
+            SELECT g.id, g.name, g.description, g.object_scope, g.created_at, COUNT(m.user_id) AS member_count
             FROM access_groups g
             LEFT JOIN user_group_memberships m ON m.group_id = g.id
             GROUP BY g.id
@@ -308,6 +369,7 @@ async def get_all_access_groups() -> list[dict]:
                 (group["id"],),
             )
             group["feature_keys"] = [r[0] for r in await fcur.fetchall()]
+        await _attach_inventory_scopes(db, groups)
         return groups
     finally:
         await db.close()
@@ -317,7 +379,7 @@ async def get_access_group(group_id: int) -> dict | None:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "SELECT id, name, description, created_at FROM access_groups WHERE id = ?",
+            "SELECT id, name, description, object_scope, created_at FROM access_groups WHERE id = ?",
             (group_id,),
         )
         group = row_to_dict(await cursor.fetchone())
@@ -334,12 +396,22 @@ async def get_access_group(group_id: int) -> dict | None:
         )
         group["feature_keys"] = [r[0] for r in await fcur.fetchall()]
         group["member_count"] = int((await mcur.fetchone())[0])
+        await _attach_inventory_scopes(db, [group])
         return group
     finally:
         await db.close()
 
 
-async def create_access_group(name: str, description: str, feature_keys: list[str]) -> int:
+async def create_access_group(
+    name: str,
+    description: str,
+    feature_keys: list[str],
+    object_scope: str = "all",
+    inventory_scopes: list[dict] | None = None,
+) -> int:
+    """Create an access group. ``inventory_scopes`` (``[{inventory_group_id,
+    can_write}]``) apply only when ``object_scope`` is ``groups``. Raises
+    ``ValueError`` for a taken name or an unknown inventory group."""
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
@@ -352,18 +424,29 @@ async def create_access_group(name: str, description: str, feature_keys: list[st
                 "INSERT INTO access_group_features (group_id, feature_key) VALUES (?, ?)",
                 (group_id, feature),
             )
+        await _replace_inventory_scopes(db, int(group_id), object_scope, inventory_scopes or [])
         await db.commit()
         return int(group_id)
     except Exception as e:
         await db.rollback()
-        if _is_unique_violation(e):
-            raise ValueError("Access group name already exists")
+        error = _access_group_write_error(e)
+        if error is not None:
+            raise error
         raise
     finally:
         await db.close()
 
 
-async def update_access_group(group_id: int, name: str, description: str, feature_keys: list[str]):
+async def update_access_group(
+    group_id: int,
+    name: str,
+    description: str,
+    feature_keys: list[str],
+    object_scope: str | None = None,
+    inventory_scopes: list[dict] | None = None,
+):
+    """Update an access group. ``object_scope=None`` leaves the scope and its
+    grants as they are; otherwise both are replaced (see ``create_access_group``)."""
     db = await _dbcore.get_db()
     try:
         await db.execute(
@@ -376,11 +459,14 @@ async def update_access_group(group_id: int, name: str, description: str, featur
                 "INSERT INTO access_group_features (group_id, feature_key) VALUES (?, ?)",
                 (group_id, feature),
             )
+        if object_scope is not None:
+            await _replace_inventory_scopes(db, group_id, object_scope, inventory_scopes or [])
         await db.commit()
     except Exception as e:
         await db.rollback()
-        if _is_unique_violation(e):
-            raise ValueError("Access group name already exists")
+        error = _access_group_write_error(e)
+        if error is not None:
+            raise error
         raise
     finally:
         await db.close()
@@ -393,6 +479,61 @@ async def delete_access_group(group_id: int):
         await db.commit()
     finally:
         await db.close()
+
+
+async def get_user_object_scope(user_id: int) -> dict:
+    """The inventory groups a (non-admin) user may see and change, from the
+    access groups the user belongs to.
+
+    ``{"unrestricted": True, ...}`` when any of the user's access groups has
+    ``object_scope='all'``. Otherwise the user is scoped: ``read_group_ids``
+    and ``write_group_ids`` are the granted inventory groups expanded with
+    all of their sub-groups (writable when any covering grant has
+    ``can_write``). A user with no access group, or with no grants, is
+    scoped and sees nothing.
+    """
+    # Hot path: runs once per request of a non-admin user on scoped routes.
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(
+            """
+            SELECT g.object_scope
+            FROM access_groups g
+            INNER JOIN user_group_memberships m ON m.group_id = g.id
+            WHERE m.user_id = ?
+            """,
+            (user_id,),
+        )
+        scopes = [r[0] for r in await cursor.fetchall()]
+        if any(s == "all" for s in scopes):
+            return {"unrestricted": True, "read_group_ids": [], "write_group_ids": []}
+
+        cursor = await db.execute(
+            """
+            SELECT s.inventory_group_id, MAX(s.can_write) AS can_write
+            FROM access_group_inventory_scopes s
+            INNER JOIN access_groups g ON g.id = s.access_group_id
+            INNER JOIN user_group_memberships m ON m.group_id = s.access_group_id
+            WHERE m.user_id = ? AND g.object_scope = 'groups'
+            GROUP BY s.inventory_group_id
+            """,
+            (user_id,),
+        )
+        grants = [(int(r[0]), bool(r[1])) for r in await cursor.fetchall()]
+        read: set[int] = set()
+        write: set[int] = set()
+        for group_id, can_write in grants:
+            sub = await db.execute(
+                f"SELECT id FROM inventory_groups WHERE id IN {GROUP_SUBTREE_SQL}",  # noqa: S608  # nosec B608 - fixed SQL
+                (group_id,),
+            )
+            ids = {int(r[0]) for r in await sub.fetchall()}
+            read |= ids
+            if can_write:
+                write |= ids
+    finally:
+        await db.close()
+    return {"unrestricted": False, "read_group_ids": sorted(read), "write_group_ids": sorted(write)}
 
 
 async def get_user_effective_features(user_id: int) -> list[str] | None:

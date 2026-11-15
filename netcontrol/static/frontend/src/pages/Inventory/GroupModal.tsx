@@ -11,6 +11,7 @@ import {
   useCreateInventoryGroup,
   useUpdateInventoryGroup,
 } from '@/api/inventory';
+import { TOP_LEVEL_GROUP_REASON, useObjectScope } from '@/lib/objectScope';
 import { saveCustomDataDraft, useCustomDataDraft } from '@/lib/useCustomDataDraft';
 
 import { descendantIds } from './helpers';
@@ -43,12 +44,19 @@ export function GroupModal({ group, isCreate, groups, defaultParentId = null, on
   const [saveError, setSaveError] = useState<string | null>(null);
 
   // A group cannot be its own parent or move under one of its sub-groups.
-  const parentChoices = useMemo(() => {
+  const allowedParents = useMemo(() => {
     if (!group) return groups;
     const excluded = descendantIds(groups, group.id);
     excluded.add(group.id);
     return groups.filter((g) => !excluded.has(g.id));
   }, [groups, group]);
+  // A limited account places a group only under a group it may change (the
+  // current parent stays listed so the field shows it), never at the top level.
+  const objectScope = useObjectScope();
+  const currentParent = group?.parent_id ?? defaultParentId;
+  const parentChoices = objectScope.restricted
+    ? allowedParents.filter((g) => g.id === currentParent || objectScope.canWriteGroup(g.id))
+    : allowedParents;
 
   const isPending = create.isPending || update.isPending || saveData.isPending;
 
@@ -141,7 +149,13 @@ export function GroupModal({ group, isCreate, groups, defaultParentId = null, on
               value={parentId ?? ''}
               onChange={(e) => setParentId(e.target.value ? Number(e.target.value) : null)}
             >
-              <option value="">None (top level)</option>
+              <option
+                value=""
+                disabled={objectScope.restricted}
+                title={objectScope.restricted ? TOP_LEVEL_GROUP_REASON : undefined}
+              >
+                None (top level)
+              </option>
               {parentChoices.map((g) => (
                 <option key={g.id} value={g.id}>
                   {groupLabel(g)}

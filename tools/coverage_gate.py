@@ -47,6 +47,14 @@ DEFAULT_RULES = {
     # do not lower them to land a change.
     "netcontrol/intended_config.py": 95.0,
     "netcontrol/routes/intended_config.py": 85.0,
+    # OIDC single sign-on protocol (discovery, JWKS, token exchange, ID
+    # token validation). Measured by tests/test_oidc_*.py; do not lower it
+    # to land a change.
+    "netcontrol/oidc.py": 95.0,
+    # Object-level permissions (inventory group scopes, the fail-closed
+    # rule's helpers). Measured by tests/test_object_scope_*.py; do not
+    # lower it to land a change.
+    "netcontrol/object_scope.py": 95.0,
 }
 
 
