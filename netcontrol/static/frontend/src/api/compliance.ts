@@ -195,11 +195,12 @@ export function useComplianceHostStatus() {
   });
 }
 
-export function useInventoryGroups(includeHosts = false) {
+export function useInventoryGroups(includeHosts = false, enabled = true) {
   return useQuery<InventoryGroup[]>({
     queryKey: ['inventory-groups', includeHosts],
     queryFn: () =>
       apiRequest(includeHosts ? '/inventory?include_hosts=true' : '/inventory'),
+    enabled,
   });
 }
 

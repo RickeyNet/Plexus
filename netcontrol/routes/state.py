@@ -396,7 +396,41 @@ AUTH_CONFIG_DEFAULTS = {
         "fallback_on_reject": False,
         "default_group_ids": [],
     },
+    # OpenID Connect single sign-on: an additional sign-in method next to the
+    # password form, not a value of "provider" (netcontrol/oidc.py, the
+    # /api/auth/oidc/* routes in routes/auth.py, docs/sso-oidc.md).
+    "oidc": {
+        "enabled": False,
+        "issuer": "",
+        "client_id": "",
+        # The client secret encrypted with routes.crypto (as the Meraki
+        # webhook secret is). The API shows it masked as "client_secret";
+        # empty = a public client.
+        "client_secret_enc": "",
+        "token_auth_method": "client_secret_basic",
+        "scopes": "openid profile email",
+        "username_claim": "preferred_username",
+        "display_name_claim": "name",
+        "groups_claim": "groups",
+        "admin_groups": [],
+        "default_role": "user",
+        "default_group_ids": [],
+        "sync_groups": False,
+        # [{"group": <claim value>, "access_group_id": <int>}], at most 200.
+        "group_mappings": [],
+        "button_label": "Sign in with SSO",
+        # Display only: the login page leads with the SSO button.
+        "primary": False,
+        # Empty = derived from the request (scheme as the HTTPS redirect
+        # middleware reads it, Host, plus /api/auth/oidc/callback).
+        "redirect_uri": "",
+        "ca_cert_file": "",
+    },
 }
+
+OIDC_MAX_GROUP_MAPPINGS = 200
+OIDC_BUTTON_LABEL_MAX = 60
+_OIDC_TOKEN_AUTH_METHODS = {"client_secret_basic", "client_secret_post"}
 
 _LDAP_TLS_VERIFY_LEVELS = {"never", "allow", "try", "demand", "hard"}
 _EXTERNAL_AUTH_ROLES = {"user", "admin"}
@@ -861,6 +895,69 @@ def _sanitize_auth_config(data: dict | None) -> dict:
     # silently stranding every LDAP user as feature-less; normalize instead.
     if cfg["ldap"]["default_role"] not in _EXTERNAL_AUTH_ROLES:
         cfg["ldap"]["default_role"] = "user"
+    cfg["oidc"] = _sanitize_oidc_config(data.get("oidc") if isinstance(data, dict) else None)
+    return cfg
+
+
+def _sanitize_string_list(value, limit: int = 200) -> list[str]:
+    if isinstance(value, str):
+        value = value.splitlines()
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        text = str(item).strip() if isinstance(item, (str, int)) else ""
+        if text and text not in out:
+            out.append(text)
+    return out[:limit]
+
+
+def _sanitize_oidc_config(data) -> dict:
+    """The OIDC block of the auth config. ``client_secret_enc`` is kept as
+    given (ciphertext); the admin route turns a submitted secret into it."""
+    defaults = AUTH_CONFIG_DEFAULTS["oidc"]
+    src = data if isinstance(data, dict) else {}
+
+    def text(name: str) -> str:
+        value = src.get(name, defaults[name])
+        return str(value).strip() if value is not None else ""
+
+    mappings: list[dict] = []
+    raw_mappings = src.get("group_mappings")
+    for item in raw_mappings if isinstance(raw_mappings, list) else []:
+        if not isinstance(item, dict):
+            continue
+        group = str(item.get("group") or "").strip()
+        try:
+            group_id = int(item.get("access_group_id"))
+        except TypeError, ValueError:
+            continue
+        if group and group_id > 0:
+            mappings.append({"group": group, "access_group_id": group_id})
+    cfg = {
+        "enabled": bool(src.get("enabled", defaults["enabled"])),
+        "issuer": text("issuer"),
+        "client_id": text("client_id"),
+        "client_secret_enc": str(src.get("client_secret_enc") or ""),
+        "token_auth_method": text("token_auth_method"),
+        "scopes": " ".join(text("scopes").split()) or defaults["scopes"],
+        "username_claim": text("username_claim") or defaults["username_claim"],
+        "display_name_claim": text("display_name_claim"),
+        "groups_claim": text("groups_claim"),
+        "admin_groups": _sanitize_string_list(src.get("admin_groups", [])),
+        "default_role": text("default_role").lower(),
+        "default_group_ids": _sanitize_positive_int_list(src.get("default_group_ids", [])),
+        "sync_groups": bool(src.get("sync_groups", defaults["sync_groups"])),
+        "group_mappings": mappings[:OIDC_MAX_GROUP_MAPPINGS],
+        "button_label": text("button_label")[:OIDC_BUTTON_LABEL_MAX] or defaults["button_label"],
+        "primary": bool(src.get("primary", defaults["primary"])),
+        "redirect_uri": text("redirect_uri"),
+        "ca_cert_file": text("ca_cert_file"),
+    }
+    if cfg["token_auth_method"] not in _OIDC_TOKEN_AUTH_METHODS:
+        cfg["token_auth_method"] = "client_secret_basic"
+    if cfg["default_role"] not in _EXTERNAL_AUTH_ROLES:
+        cfg["default_role"] = "user"
     return cfg
 
 

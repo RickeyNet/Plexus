@@ -10,6 +10,8 @@ export interface AuthStatus {
   csrf_token?: string;
   feature_access?: string[];
   feature_visibility_hidden?: string[];
+  /** Sent with a signed-in status: the account's inventory group limits. */
+  object_scope?: ObjectScopeStatus;
   must_change_password?: boolean;
   idle_timeout_seconds?: number;
   session_last_activity?: number;
@@ -17,6 +19,58 @@ export interface AuthStatus {
   server_time?: number;
   /** Sent with a logged-out status: whether the server accepts /auth/register. */
   allow_self_register?: boolean;
+  /** Sent with a logged-out status: single sign-on offered on the login screen. */
+  sso?: SsoStatus;
+}
+
+/** Object-level permissions: ``restricted`` accounts see only the inventory
+ * groups they are granted and may change only ``write_group_ids`` (expanded
+ * with sub-groups; empty when unrestricted). */
+export interface ObjectScopeStatus {
+  restricted: boolean;
+  write_group_ids: number[];
+}
+
+export interface SsoStatus {
+  oidc?: {
+    enabled: boolean;
+    label: string;
+    /** Lead with the SSO button and fold the password form away. */
+    primary: boolean;
+  };
+}
+
+/** Codes the OIDC callback puts in /login?sso_error=, each with a fixed
+ * sentence. Nothing the provider sends is ever shown. */
+export const SSO_ERROR_MESSAGES: Record<string, string> = {
+  disabled: 'Single sign-on is not enabled. Sign in with a local account.',
+  state: 'The sign-in request expired or did not match. Try again.',
+  provider: 'The identity provider could not be reached or returned an error. Try again or contact an administrator.',
+  token: 'The identity provider’s response could not be verified. Contact an administrator.',
+  claims: 'Your identity provider account is missing information Plexus needs. Contact an administrator.',
+  account: 'Your account could not be signed in through single sign-on. Contact an administrator.',
+  denied: 'Sign-in was refused. Wait a few minutes and try again, or contact an administrator.',
+};
+
+/** The sentence for an sso_error code in a query string, or null. */
+export function ssoErrorMessage(search: string): string | null {
+  const code = new URLSearchParams(search).get('sso_error');
+  if (!code) return null;
+  return SSO_ERROR_MESSAGES[code] ?? SSO_ERROR_MESSAGES.provider;
+}
+
+/** Where the SSO button navigates: the OIDC login route, carrying the page
+ * the user was on (the login screen renders at any path) so they come back
+ * to it. /login itself is not worth returning to. */
+export function ssoLoginHref(pathname: string, search = ''): string {
+  const params = new URLSearchParams(search);
+  params.delete('sso_error');
+  const rest = params.toString();
+  const next = `${pathname}${rest ? `?${rest}` : ''}`;
+  if (!pathname.startsWith('/') || pathname === '/' || pathname === '/login') {
+    return '/api/auth/oidc/login';
+  }
+  return `/api/auth/oidc/login?next=${encodeURIComponent(next)}`;
 }
 
 export interface LoginResponse {
@@ -28,6 +82,7 @@ export interface LoginResponse {
   auth_source?: string;
   feature_access: string[];
   feature_visibility_hidden: string[];
+  object_scope?: ObjectScopeStatus;
   must_change_password: boolean;
   csrf_token: string;
 }

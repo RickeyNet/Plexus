@@ -12,6 +12,7 @@ import ipaddress
 import json
 import os
 import re
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -324,6 +325,20 @@ GROUP_SUBTREE_SQL = f"""(
     )
     SELECT id FROM sub
 )"""
+
+
+def group_ids_condition(column: str, group_ids: Iterable[int] | None) -> tuple[str, tuple[int, ...]]:
+    """A SQL condition (and its parameters) keeping rows whose ``column`` (a
+    host's inventory group id, e.g. ``h.group_id``) is one of ``group_ids``:
+    object-level permissions (``netcontrol.object_scope.group_filter``).
+    ``None``: no condition (``("", ())``). An empty set matches nothing; a
+    NULL group id never matches. ``column`` is a fixed identifier."""
+    if group_ids is None:
+        return "", ()
+    ids = tuple(sorted({int(g) for g in group_ids}))
+    if not ids:
+        return "1 = 0", ()
+    return f"{column} IN ({','.join('?' * len(ids))})", ids
 
 
 async def _check_parent(db, group_id: int | None, parent_id: int | None) -> None:
@@ -921,12 +936,12 @@ async def update_host_serial(host_id: int, serial_number: str) -> None:
 
 
 async def get_all_hosts_for_export() -> list[dict]:
-    """Return all hosts with group name for CSV export."""
+    """Return all hosts with group id and name for CSV export."""
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("""
             SELECT h.id, h.hostname, h.ip_address, h.device_type, h.status,
-                   h.model, h.software_version, g.name AS group_name,
+                   h.model, h.software_version, h.group_id, g.name AS group_name,
                    h.device_type_id, h.role_id, h.lifecycle_status_id, h.site_id, h.location_detail
             FROM hosts h
             LEFT JOIN inventory_groups g ON g.id = h.group_id

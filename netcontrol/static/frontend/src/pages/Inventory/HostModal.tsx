@@ -24,6 +24,7 @@ import {
 } from '@/lib/deviceModel';
 import { DEFAULT_DEVICE_TYPE, DEVICE_TYPES } from '@/lib/deviceTypes';
 import { hostNetworkBody } from '@/lib/networkObjects';
+import { useObjectScope } from '@/lib/objectScope';
 import { saveCustomDataDraft, useCustomDataDraft } from '@/lib/useCustomDataDraft';
 
 import { type DeviceFieldErrors, DeviceModelFields } from './DeviceModelFields';
@@ -53,8 +54,10 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
   const [deviceType, setDeviceType] = useState(
     host?.device_type ?? DEFAULT_DEVICE_TYPE,
   );
+  // A limited account moves a host only into a group it may change.
+  const groupChoices = useObjectScope().writableGroups(groups);
   const [selectedGroupId, setSelectedGroupId] = useState<number>(
-    host?.group_id ?? groupId ?? groups[0]?.id ?? 0,
+    host?.group_id ?? groupId ?? groupChoices[0]?.id ?? 0,
   );
   const [awsInstanceId, setAwsInstanceId] = useState(
     host?.aws_instance_id ?? '',
@@ -305,7 +308,7 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
                 value={String(selectedGroupId)}
                 onChange={(e) => setSelectedGroupId(Number(e.target.value))}
               >
-                {groups.map((g) => (
+                {groupChoices.map((g) => (
                   <option key={g.id} value={g.id}>
                     {groupLabel(g)}
                   </option>

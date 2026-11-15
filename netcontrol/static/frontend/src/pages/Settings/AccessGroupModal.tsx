@@ -3,11 +3,16 @@ import { useId, useState } from 'react';
 import { BusyButton } from '@/components/BusyButton';
 import { Callout } from '@/components/Callout';
 import { Modal } from '@/components/Modal';
+import { SegmentedControl } from '@/components/SegmentedControl';
+import { groupLabel, useInventoryGroupsFull } from '@/api/inventory';
 import {
   AccessGroup,
+  type ObjectScope,
   useCreateAccessGroup,
   useUpdateAccessGroup,
 } from '@/api/settings';
+
+import { choicesFromGrants, type GrantChoice, SCOPED_ACCOUNT_PAGES, scopePayload } from './accessGroupScope';
 
 const featureLabel = (feature: string): string =>
   feature.charAt(0).toUpperCase() + feature.slice(1);
@@ -47,6 +52,13 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
   const [featureKeys, setFeatureKeys] = useState<string[]>(
     isEdit ? props.group.feature_keys : [],
   );
+  const [objectScope, setObjectScope] = useState<ObjectScope>(
+    isEdit && props.group.object_scope === 'groups' ? 'groups' : 'all',
+  );
+  const [choices, setChoices] = useState<Map<number, GrantChoice>>(() =>
+    choicesFromGrants(isEdit ? props.group.inventory_scopes : []),
+  );
+  const inventoryGroups = useInventoryGroupsFull(false);
   const [error, setError] = useState<string | null>(null);
 
   const pending = isEdit ? update.isPending : create.isPending;
@@ -121,6 +133,7 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
                 name: name.trim(),
                 description: description.trim(),
                 feature_keys: featureKeys,
+                ...scopePayload(objectScope, choices),
               };
               const opts = {
                 onSuccess: () => props.onClose(),
@@ -231,6 +244,67 @@ export function AccessGroupModal(props: CreateProps | EditProps) {
             ];
           })}
         </div>
+      </div>
+      <div className="form-group">
+        <span className="form-label" id={`${fid}-scope`}>Device access</span>
+        <SegmentedControl<ObjectScope>
+          aria-label="Device access"
+          value={objectScope}
+          onChange={setObjectScope}
+          options={[
+            { key: 'all', label: 'All devices' },
+            { key: 'groups', label: 'Selected inventory groups' },
+          ]}
+        />
+        {objectScope === 'groups' && (
+          <>
+            <div className="form-help" style={{ margin: '0.4rem 0' }}>
+              Members see only these inventory groups and their sub-groups. A member of any
+              access group with All devices sees everything. Accounts limited this way can use
+              these pages only: {SCOPED_ACCOUNT_PAGES.join(', ')}. Other pages and AI access are
+              closed to them.
+            </div>
+            {inventoryGroups.isLoading && <div className="form-help">Loading inventory groups...</div>}
+            {inventoryGroups.data && inventoryGroups.data.length === 0 && (
+              <div className="form-help">No inventory groups yet.</div>
+            )}
+            <div
+              role="group"
+              aria-labelledby={`${fid}-scope`}
+              style={{ maxHeight: 260, overflowY: 'auto', display: 'grid', rowGap: '0.25rem' }}
+            >
+              {(inventoryGroups.data ?? []).map((g) => (
+                <div
+                  key={g.id}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                    paddingLeft: `${(g.depth ?? 0) * 1.25}rem`,
+                  }}
+                >
+                  <span title={groupLabel(g)}>{g.name}</span>
+                  <select
+                    className="form-select form-select-sm"
+                    style={{ maxWidth: 170 }}
+                    aria-label={`Access to ${groupLabel(g)}`}
+                    value={choices.get(g.id) ?? 'none'}
+                    onChange={(e) => {
+                      const next = new Map(choices);
+                      next.set(g.id, e.target.value as GrantChoice);
+                      setChoices(next);
+                    }}
+                  >
+                    <option value="none">No access</option>
+                    <option value="read">Read</option>
+                    <option value="write">Read and write</option>
+                  </select>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
       </div>
       {error && <Callout tone="danger">{error}</Callout>}
     </Modal>

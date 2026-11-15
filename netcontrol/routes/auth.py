@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import os
 import re
 import secrets
@@ -15,12 +16,14 @@ import sys
 import time
 
 import routes.database as db
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse, RedirectResponse
+from itsdangerous import BadSignature, URLSafeTimedSerializer
 from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
-from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol import object_scope, oidc
+from netcontrol.routes.shared import _audit, _corr_id, _get_session, _request_scheme
 from netcontrol.routes.state import _env_flag
 from netcontrol.telemetry import configure_logging
 
@@ -788,6 +791,71 @@ async def upsert_ldap_user(username: str, ldap_attrs: dict) -> dict | None:
     return user
 
 
+async def _existing_access_group_ids(group_ids: list[int], username: str) -> list[int]:
+    """``group_ids`` without the ones that no longer exist (warned)."""
+    known = {int(g["id"]) for g in await db.get_all_access_groups()}
+    kept = sorted({gid for gid in group_ids if gid in known})
+    skipped = sorted({gid for gid in group_ids if gid not in known})
+    if skipped:
+        LOGGER.warning("oidc: skipping unknown access group ids %s for user '%s'", skipped, username)
+    return kept
+
+
+async def upsert_oidc_user(identity: oidc.OidcIdentity, oidc_cfg: dict) -> tuple[dict | None, str]:
+    """Provision or re-sync the account of an OIDC sign-in.
+
+    Returns ``(user, "")`` or ``(None, reason)``. The account is bound to
+    the provider's ``sub`` on its first OIDC login (``users.external_id``);
+    a later login whose ``sub`` differs from the bound one is refused.
+    Role: ``admin`` when a groups-claim value is in ``admin_groups``, else
+    ``default_role``, re-synced every login through upsert_external_user
+    (whose admin name-collision guard applies). Access groups: the defaults
+    on first login; with ``sync_groups`` the defaults plus every mapped
+    group on each login. When the groups are unknown (overage), an existing
+    account keeps its role and groups.
+    """
+    username = identity.username
+    existing = await db.get_user_by_username(username)
+    oidc_managed = bool(existing) and (existing.get("auth_provider") or "") == "oidc"
+    bound_sub = str((existing or {}).get("external_id") or "") if oidc_managed else ""
+    if bound_sub and not hmac.compare_digest(bound_sub.encode(), identity.sub.encode()):
+        return None, "subject does not match the subject bound to this account"
+
+    groups = set(identity.groups)
+    current_role = ((existing or {}).get("role") or "user").lower()
+    # Overage: the groups are unknown, so keep the role. Not for adopting an
+    # unmanaged local admin: that still needs an explicit grant.
+    if existing and identity.overage and (oidc_managed or current_role != "admin"):
+        role = current_role
+    elif groups & set(oidc_cfg.get("admin_groups") or []):
+        role = "admin"
+    else:
+        role = oidc_cfg.get("default_role") or "user"
+
+    user = await upsert_external_user(
+        username, display_name=identity.display_name, role=role, provider="oidc", sync_role=True
+    )
+    if not user:
+        return None, "local account provisioning refused (name collides with a local admin) or failed"
+    user_id = int(user["id"])
+    if not bound_sub:
+        await db.set_user_external_id(user_id, identity.sub)
+
+    if not existing or (oidc_cfg.get("sync_groups") and not identity.overage):
+        group_ids = list(oidc_cfg.get("default_group_ids") or [])
+        if oidc_cfg.get("sync_groups") and not identity.overage:
+            group_ids += [
+                int(m["access_group_id"]) for m in oidc_cfg.get("group_mappings") or [] if m.get("group") in groups
+            ]
+        group_ids = await _existing_access_group_ids(group_ids, username)
+        if existing or group_ids:
+            try:
+                await db.set_user_groups(user_id, group_ids)
+            except ValueError:
+                LOGGER.warning("oidc: access group assignment failed for user '%s'", username)
+    return await db.get_user_by_id(user_id), ""
+
+
 def _dev_bootstrap_enabled() -> bool:
     # Require explicit opt-in via env var; "test" alone is not sufficient
     # to avoid accidental bootstrap with real data.
@@ -990,7 +1058,13 @@ async def _get_user_features(user: dict) -> list[str]:
         # No group_memberships rows at all - legacy/unassigned user.
         # Default to empty (least-privilege).  Admins should assign groups.
         return []
-    return [f for f in FEATURE_FLAGS if f in set(effective)]
+    features = [f for f in FEATURE_FLAGS if f in set(effective)]
+    # Fail closed: a user limited to selected inventory groups keeps only
+    # the features whose modules enforce that limit, so every other
+    # feature gate (HTTP, WebSocket, MCP, the sidebar) refuses them.
+    if features and (await object_scope.scope_for_user(user)).restricted:
+        features = object_scope.enforced_features(features)
+    return features
 
 
 # ── Pydantic models ──────────────────────────────────────────────────────────
@@ -1023,6 +1097,69 @@ router = APIRouter()
 _login_lock = asyncio.Lock()
 
 
+def _login_throttle_state() -> tuple[dict, dict]:
+    """The per-IP failure and lockout maps (late-bound so tests can swap them)."""
+    _app = _app_module()
+    return getattr(_app, "LOGIN_ATTEMPTS", state.LOGIN_ATTEMPTS), getattr(_app, "LOCKED_OUT", state.LOCKED_OUT)
+
+
+async def _login_blocked(ip: str, now: float) -> str | None:
+    """Why a sign-in from ``ip`` is refused right now (lockout or failure
+    rate limit), else ``None``. Shared by password login and the OIDC callback."""
+    attempts_by_ip, locked_out = _login_throttle_state()
+    rules = state.LOGIN_RULES
+    # Lock prevents concurrent requests from bypassing the check.
+    async with _login_lock:
+        if ip in locked_out:
+            if now < locked_out[ip]:
+                return f"Account locked. Try again in {int((locked_out[ip] - now) // 60) + 1} min."
+            del locked_out[ip]
+            attempts_by_ip.pop(ip, None)
+        attempts = [t for t in attempts_by_ip.get(ip, []) if now - t < rules["rate_limit_window"]]
+        if len(attempts) >= rules["rate_limit_max"]:
+            return "Too many login attempts. Please wait a minute."
+    return None
+
+
+async def _note_login_failure(ip: str, now: float) -> bool:
+    """Count a failed sign-in from ``ip``; True when it locked the IP out."""
+    attempts_by_ip, locked_out = _login_throttle_state()
+    rules = state.LOGIN_RULES
+    async with _login_lock:
+        # Re-read the canonical list: a concurrent request may have changed it.
+        attempts = [t for t in attempts_by_ip.get(ip, []) if now - t < rules["rate_limit_window"]]
+        attempts.append(now)
+        attempts_by_ip[ip] = attempts
+        if len(attempts) >= rules["max_attempts"]:
+            locked_out[ip] = now + rules["lockout_time"]
+            return True
+    return False
+
+
+async def _note_login_success(ip: str) -> None:
+    attempts_by_ip, _ = _login_throttle_state()
+    async with _login_lock:
+        attempts_by_ip.pop(ip, None)
+
+
+def _session_cookie_secure() -> bool:
+    return bool(getattr(_app_module(), "APP_HTTPS_ENABLED", _APP_HTTPS_ENABLED))
+
+
+def _set_session_cookie(response: Response, user: dict) -> None:
+    """Issue the session cookie for ``user`` on ``response``: the one place
+    password login and the OIDC callback sign a browser in."""
+    token = _create_session_token_fn(user["username"], user["id"], user.get("session_epoch") or 0)
+    response.set_cookie(
+        key="session",
+        value=token,
+        httponly=True,
+        samesite="strict",
+        max_age=_SESSION_MAX_AGE,
+        secure=_session_cookie_secure(),
+    )
+
+
 @router.post("/api/auth/login")
 async def login(body: LoginRequest, request: Request):
     _app = _app_module()
@@ -1033,63 +1170,31 @@ async def login(body: LoginRequest, request: Request):
     ip = request.client.host
     now = time.time()
 
-    LOGIN_ATTEMPTS = getattr(_app, "LOGIN_ATTEMPTS", state.LOGIN_ATTEMPTS)
-    LOCKED_OUT = getattr(_app, "LOCKED_OUT", state.LOCKED_OUT)
-    LOGIN_RULES = state.LOGIN_RULES
-
-    # Acquire lock for rate-limit check (prevent concurrent bypass)
-    async with _login_lock:
-        # Account lockout check
-        if ip in LOCKED_OUT:
-            if now < LOCKED_OUT[ip]:
-                raise HTTPException(
-                    status_code=429, detail=f"Account locked. Try again in {int((LOCKED_OUT[ip] - now) // 60) + 1} min."
-                )
-            else:
-                del LOCKED_OUT[ip]
-                LOGIN_ATTEMPTS.pop(ip, None)
-
-        # Rate limiting
-        attempts = LOGIN_ATTEMPTS.get(ip, [])
-        # Remove old attempts
-        attempts = [t for t in attempts if now - t < LOGIN_RULES["rate_limit_window"]]
-        if len(attempts) >= LOGIN_RULES["rate_limit_max"]:
-            raise HTTPException(status_code=429, detail="Too many login attempts. Please wait a minute.")
+    blocked = await _login_blocked(ip, now)
+    if blocked:
+        raise HTTPException(status_code=429, detail=blocked)
 
     # Auth identity check runs outside lock (may be slow: LDAP/RADIUS)
     user, auth_source, auth_error = await _auth_identity(body.username, body.password)
 
-    # Re-acquire lock for result tracking
-    async with _login_lock:
-        if not user:
-            # Re-fetch the canonical list (may have been mutated by a
-            # concurrent request while we were outside the lock).
-            attempts = LOGIN_ATTEMPTS.get(ip, [])
-            attempts = [t for t in attempts if now - t < LOGIN_RULES["rate_limit_window"]]
-            attempts.append(now)
-            LOGIN_ATTEMPTS[ip] = attempts
-            await _audit_fn(
-                "auth",
-                "login.failure",
-                user=body.username,
-                detail=auth_error or "bad credentials",
-                correlation_id=_corr_id(request),
-            )
-            # Lockout if too many failed attempts
-            if len(attempts) >= LOGIN_RULES["max_attempts"]:
-                LOCKED_OUT[ip] = now + LOGIN_RULES["lockout_time"]
-                raise HTTPException(
-                    status_code=429, detail="Account locked due to too many failed attempts. Try again later."
-                )
-            raise HTTPException(status_code=401, detail=auth_error or "Invalid username or password")
-        # On success, reset attempts
-        LOGIN_ATTEMPTS.pop(ip, None)
+    if not user:
+        locked = await _note_login_failure(ip, now)
+        await _audit_fn(
+            "auth",
+            "login.failure",
+            user=body.username,
+            detail=auth_error or "bad credentials",
+            correlation_id=_corr_id(request),
+        )
+        if locked:
+            raise HTTPException(status_code=429, detail="Account locked due to too many failed attempts. Try again later.")
+        raise HTTPException(status_code=401, detail=auth_error or "Invalid username or password")
+    await _note_login_success(ip)
     # Use the canonical username from the DB (may differ in case from input)
     canonical_user = user["username"]
     await _audit_fn(
         "auth", "login.success", user=canonical_user, detail=f"source={auth_source}", correlation_id=_corr_id(request)
     )
-    token = _create_session_token_fn(canonical_user, user["id"], user.get("session_epoch") or 0)
     csrf_token = _generate_csrf_token(canonical_user)
     response = JSONResponse(
         {
@@ -1101,19 +1206,12 @@ async def login(body: LoginRequest, request: Request):
             "auth_source": auth_source,
             "feature_access": await _features_fn(user),
             "feature_visibility_hidden": list(state.FEATURE_VISIBILITY_HIDDEN),
+            "object_scope": (await object_scope.scope_for_user(user)).status(),
             "must_change_password": bool(user.get("must_change_password")),
             "csrf_token": csrf_token,
         }
     )
-    _https = getattr(_app, "APP_HTTPS_ENABLED", _APP_HTTPS_ENABLED)
-    response.set_cookie(
-        key="session",
-        value=token,
-        httponly=True,
-        samesite="strict",
-        max_age=_SESSION_MAX_AGE,
-        secure=_https,
-    )
+    _set_session_cookie(response, user)
     return response
 
 
@@ -1137,7 +1235,6 @@ async def register(body: RegisterRequest, request: Request = None):
     user_id = await db.create_user(body.username, pw_hash, salt, display_name=display, role="user")
     user = await db.get_user_by_id(user_id)
     await _audit("auth", "register", user=body.username, correlation_id=_corr_id(request) if request else "")
-    token = _create_session_token_fn(body.username, user_id)
     csrf_token = _generate_csrf_token(body.username)
     response = JSONResponse(
         {
@@ -1148,18 +1245,11 @@ async def register(body: RegisterRequest, request: Request = None):
             "role": "user",
             "feature_access": await _features_fn(user),
             "feature_visibility_hidden": list(state.FEATURE_VISIBILITY_HIDDEN),
+            "object_scope": (await object_scope.scope_for_user(user)).status(),
             "csrf_token": csrf_token,
         }
     )
-    _https = getattr(_app, "APP_HTTPS_ENABLED", _APP_HTTPS_ENABLED)
-    response.set_cookie(
-        key="session",
-        value=token,
-        httponly=True,
-        samesite="strict",
-        max_age=_SESSION_MAX_AGE,
-        secure=_https,
-    )
+    _set_session_cookie(response, user)
     return response
 
 
@@ -1197,9 +1287,18 @@ def _logged_out_status() -> dict:
     allow_self_register lets the login screen offer the Register link only
     when /api/auth/register would accept the request.
     """
+    oidc_cfg = _oidc_config()
     return {
         "authenticated": False,
         "allow_self_register": _env_flag("APP_ALLOW_SELF_REGISTER", False),
+        # Single sign-on offered on the login screen (display data only).
+        "sso": {
+            "oidc": {
+                "enabled": _oidc_ready(oidc_cfg),
+                "label": oidc_cfg.get("button_label") or "Sign in with SSO",
+                "primary": bool(oidc_cfg.get("primary")),
+            }
+        },
     }
 
 
@@ -1245,6 +1344,7 @@ async def auth_status(request: Request, response: Response):
         "role": user["role"],
         "feature_access": await _features_fn(user),
         "feature_visibility_hidden": list(state.FEATURE_VISIBILITY_HIDDEN),
+        "object_scope": (await object_scope.scope_for_user(user)).status(),
         "csrf_token": _generate_csrf_token(user["username"]),
         "must_change_password": bool(user.get("must_change_password")),
         # Drives the SPA idle-countdown banner. The SPA computes
@@ -1331,3 +1431,189 @@ async def update_profile(body: UpdateProfileRequest, request: Request):
         raise HTTPException(status_code=401, detail="Not authenticated")
     await db.update_user_profile(session["user_id"], display_name=body.display_name)
     return {"ok": True}
+
+
+# ── OpenID Connect single sign-on ────────────────────────────────────────────
+#
+# An additional sign-in method next to the password form (which keeps its
+# provider chain and the break-glass local admin). The protocol lives in
+# netcontrol/oidc.py; these routes hold the browser side: a signed,
+# short-lived ``oidc_tx`` cookie carries state, nonce, PKCE verifier, the
+# redirect URI and where to return, and the callback signs the browser in
+# with the same session cookie as password login. Both routes are GET and
+# need no session; they stay under the anonymous API rate limit, and
+# callback failures count toward the login lockout like a bad password.
+
+_OIDC_TX_COOKIE = "oidc_tx"
+_OIDC_TX_SALT = "plexus-oidc-tx"
+_OIDC_TX_MAX_AGE = 600
+_OIDC_COOKIE_PATH = "/api/auth/oidc"
+
+
+def _oidc_config() -> dict:
+    return state.AUTH_CONFIG.get("oidc") or {}
+
+
+def _oidc_ready(cfg: dict) -> bool:
+    return bool(cfg.get("enabled") and cfg.get("issuer") and cfg.get("client_id"))
+
+
+def _oidc_client_secret(cfg: dict) -> str:
+    """The decrypted client secret, ``""`` for a public client."""
+    stored = str(cfg.get("client_secret_enc") or "")
+    if not stored:
+        return ""
+    from routes.crypto import decrypt
+
+    try:
+        return decrypt(stored) or ""
+    except Exception as exc:  # a key change makes the secret unreadable
+        raise oidc.OidcError("provider", "the stored client secret could not be decrypted") from exc
+
+
+def _oidc_redirect_uri(request: Request, cfg: dict) -> str:
+    """The configured redirect URI, else one derived from the request."""
+    return oidc.derive_redirect_uri(str(cfg.get("redirect_uri") or ""), _request_scheme(request), request.url.netloc)
+
+
+def _oidc_tx_serializer() -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(_app_module()._secret_key, salt=_OIDC_TX_SALT)
+
+
+def _drop_oidc_tx_cookie(response: Response) -> None:
+    response.delete_cookie(
+        _OIDC_TX_COOKIE, path=_OIDC_COOKIE_PATH, secure=_session_cookie_secure(), httponly=True, samesite="lax"
+    )
+
+
+def _sso_error_redirect(code: str) -> RedirectResponse:
+    """Back to the login screen with one of the fixed error codes; the
+    transaction cookie is always dropped."""
+    response = RedirectResponse(f"/login?sso_error={code}", status_code=303)
+    _drop_oidc_tx_cookie(response)
+    return response
+
+
+@router.get(oidc.LOGIN_PATH)
+async def oidc_login(request: Request, next_path: str = Query("/", alias="next")):
+    """Start an OIDC sign-in: remember the transaction, send the browser to
+    the provider."""
+    cfg = _oidc_config()
+    if not _oidc_ready(cfg):
+        return _sso_error_redirect("disabled")
+    try:
+        meta = await oidc.CLIENT.discover(str(cfg["issuer"]), str(cfg.get("ca_cert_file") or ""))
+    except oidc.OidcError as exc:
+        LOGGER.warning("oidc: sign-in could not start: %s", exc.step)
+        return _sso_error_redirect(exc.code)
+    verifier = oidc.new_code_verifier()
+    tx = {
+        "state": oidc.new_state(),
+        "nonce": oidc.new_nonce(),
+        "verifier": verifier,
+        "redirect_uri": _oidc_redirect_uri(request, cfg),
+        "next": oidc.safe_next(next_path),
+    }
+    url = oidc.CLIENT.authorization_url(
+        meta,
+        client_id=str(cfg["client_id"]),
+        redirect_uri=tx["redirect_uri"],
+        scopes=str(cfg.get("scopes") or ""),
+        state=tx["state"],
+        nonce=tx["nonce"],
+        challenge=oidc.code_challenge(verifier),
+    )
+    response = RedirectResponse(url, status_code=302)
+    response.headers["Cache-Control"] = "no-store"
+    response.set_cookie(
+        _OIDC_TX_COOKIE,
+        _oidc_tx_serializer().dumps(tx),
+        max_age=_OIDC_TX_MAX_AGE,
+        path=_OIDC_COOKIE_PATH,
+        httponly=True,
+        samesite="lax",
+        secure=_session_cookie_secure(),
+    )
+    return response
+
+
+def _load_oidc_tx(request: Request) -> dict | None:
+    raw = request.cookies.get(_OIDC_TX_COOKIE)
+    if not raw:
+        return None
+    try:
+        tx = _oidc_tx_serializer().loads(raw, max_age=_OIDC_TX_MAX_AGE)
+    except BadSignature:  # also covers SignatureExpired
+        return None
+    if not isinstance(tx, dict) or not all(isinstance(tx.get(k), str) for k in ("state", "nonce", "verifier")):
+        return None
+    return tx
+
+
+@router.get(oidc.CALLBACK_PATH)
+async def oidc_callback(request: Request):
+    """The provider sends the browser back here with a code (or an error)."""
+    _audit_fn = getattr(_app_module(), "_audit", _audit)
+    ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    params = request.query_params
+
+    async def fail(code: str, step: str, *, user: str = "", count: bool = True) -> RedirectResponse:
+        # ``step`` never carries a token, code, secret or verifier.
+        if count:
+            await _note_login_failure(ip, now)
+        await _audit_fn(
+            "auth", "login.failure", user=user, detail=f"source=oidc step={step}", correlation_id=_corr_id(request)
+        )
+        return _sso_error_redirect(code)
+
+    blocked = await _login_blocked(ip, now)
+    if blocked:
+        return await fail("denied", f"refused, {blocked}", count=False)
+    cfg = _oidc_config()
+    if not _oidc_ready(cfg):
+        return await fail("disabled", "single sign-on is disabled")
+    tx = _load_oidc_tx(request)
+    if tx is None:
+        return await fail("state", "transaction cookie is missing, expired or invalid")
+    state_param = params.get("state") or ""
+    if not state_param or not hmac.compare_digest(state_param.encode(), tx["state"].encode()):
+        return await fail("state", "state does not match the transaction")
+    if params.get("error"):
+        error = oidc.log_safe(params.get("error"), 60)
+        LOGGER.warning(
+            "oidc: provider returned error=%s description=%s", error, oidc.log_safe(params.get("error_description"))
+        )
+        return await fail("denied" if params.get("error") == "access_denied" else "provider", f"provider error {error}")
+    code = params.get("code") or ""
+    if not code:
+        return await fail("provider", "no authorization code in the callback")
+
+    try:
+        identity = await oidc.CLIENT.complete_login(
+            cfg,
+            code=code,
+            redirect_uri=str(tx.get("redirect_uri") or _oidc_redirect_uri(request, cfg)),
+            code_verifier=tx["verifier"],
+            nonce=tx["nonce"],
+            client_secret=_oidc_client_secret(cfg),
+        )
+    except oidc.OidcError as exc:
+        LOGGER.warning("oidc: sign-in failed: %s", exc.step)
+        return await fail(exc.code, exc.step)
+
+    user, reason = await upsert_oidc_user(identity, cfg)
+    if not user:
+        LOGGER.warning("oidc: sign-in refused for '%s': %s", identity.username, reason)
+        return await fail("account", reason, user=identity.username)
+
+    await _note_login_success(ip)
+    detail = "source=oidc"
+    if identity.overage:
+        detail += " groups=unknown (overage): role and access groups left unchanged"
+    await _audit_fn("auth", "login.success", user=user["username"], detail=detail, correlation_id=_corr_id(request))
+    response = RedirectResponse(oidc.safe_next(tx.get("next")), status_code=303)
+    response.headers["Cache-Control"] = "no-store"
+    _set_session_cookie(response, user)
+    _drop_oidc_tx_cookie(response)
+    return response

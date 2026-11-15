@@ -22,7 +22,9 @@ All API endpoints and their required authentication/authorization levels.
 | GET | `/` | Frontend SPA |
 | POST | `/api/auth/login` | Rate-limited (brute-force protection) |
 | POST | `/api/auth/register` | Gated by `APP_ALLOW_SELF_REGISTER` env flag |
-| GET | `/api/auth/status` | Returns current session info |
+| GET | `/api/auth/status` | Returns current session info; signed out it also carries `sso.oidc` (`enabled`, `label`, `primary`) for the login page |
+| GET | `/api/auth/oidc/login` | Starts an OIDC sign-in (`?next=<same-site path>`): sets the signed `oidc_tx` cookie and redirects to the identity provider. Under the anonymous API rate limit. See `docs/sso-oidc.md` |
+| GET | `/api/auth/oidc/callback` | OIDC redirect target: checks state, exchanges the code, validates the ID token, provisions the account and sets the session cookie; on failure redirects to `/login?sso_error=<code>`. Failures count toward the login lockout |
 | GET | `/api/health` | Health check (uptime, metrics) |
 | GET | `/favicon.ico` | Static |
 | GET | `/static/*` | Static files |
@@ -81,6 +83,7 @@ All API endpoints and their required authentication/authorization levels.
 | Paths | Router |
 |-------|--------|
 | `/api/admin/*` | admin |
+| `GET/PUT /api/admin/auth-config` (now with `oidc`; the client secret is write-only), `POST /api/admin/auth-config/oidc/test` | admin (OIDC single sign-on settings and connection test) |
 | `/api/admin/mcp/settings`, `/api/admin/mcp/tokens*` | mcp_tokens (AI access settings and MCP token create, list, revoke) |
 | `POST /api/custom-fields`, `PUT/DELETE /api/custom-fields/{field_id}`, `PUT/DELETE /api/tags/{tag_id}` | custom_fields (admin_router) |
 | `POST /api/dcim/{manufacturers,device-types,roles,statuses}`, `PUT/DELETE /api/dcim/{manufacturers,device-types,roles,statuses}/{id}` (`?confirm=true` to delete a record hosts use) | device_model (admin_router) |
@@ -155,11 +158,32 @@ What a token may call is decided per request, from the token row and its owner a
 | Rule | Detail |
 |------|--------|
 | Token state | Refused when revoked, expired, or when its owner no longer exists |
+| Object scope | Refused (`403`, `{"error": "forbidden", "message": ...}`) when its owner is limited to selected inventory groups (see Object-level permissions) |
 | Category | A tool is listed and callable only if its category is on the token |
 | Owner feature | The owner must hold the category's feature: `inventory`, `config-backups` (configs; `config-drift` as well for `list_config_drift`), `compliance`, `monitoring`, `topology`, `software`, `mac-tracking` (`search_mac_or_ip`), `traffic-analysis` (`get_top_talkers`). An admin owner passes every feature check |
 | Audit category | `search_audit_log` needs an admin owner; a token cannot be given `audit` for a non-admin owner |
 | Hidden tools | A tool the token may not use answers "Unknown tool", the same as one that does not exist |
 | Always available | `plexus_overview`, which reports only on the categories the token can use: device counts need `inventory`, the data source list needs `inventory`, `monitoring` or `topology` |
+
+### Object-level permissions (scoped users)
+
+An access group with `object_scope = 'groups'` limits its members to the
+inventory groups it grants (and their sub-groups), read only or read and
+write. Admins, `APP_API_TOKEN` and members of any access group with `all`
+are unrestricted. See [docs/object-permissions.md](docs/object-permissions.md).
+
+| Layer | Rule for a scoped user |
+|-------|------------------------|
+| Feature gates | Effective features keep only `SCOPE_ENFORCED_FEATURES` (`inventory`, `config-backups`, `config-drift`, `credentials` and their `.write` keys; credentials are per owner and need no filtering): every other `feature(X)` route, WebSocket and the dashboard answer `403` (fail closed) |
+| Enforced routers | `inventory`, `custom_fields.inventory_router`, `device_model.inventory_router`, `ansible_inventory`, `config_backups`, `config_drift` (HTTP and the `ws_router` WebSockets), `intended_config` (`router`): every HTTP and WebSocket route is marked `@scoped` or `@scope_exempt` (checked by a test). Admin routers are unchanged |
+| Out of read scope | `404` with the body an unknown id gets, also for records addressed by their own id (backup, policy, baseline, snapshot, drift event, intended configuration, template, context, capture job) |
+| Read only | Writes answer `403 Read-only access to this inventory group`: in the configuration modules also captures, checks, analyses, restores, reverts, accepting or resolving drift, baselines, deletes, policy changes and runs, and generating intended configurations |
+| Top level | Creating a top-level group or moving a group to the top level: `403` |
+| Lists and exports | Readable rows only, filtered before limits and counts (`/api/inventory`, CSV export, Ansible inventory, SNMP assignments, backup lists, summary, latest per host, search and ZIP download, drift events, baselines, snapshots and summary, intended configuration rows and counts, template `host_count`) |
+| Bulk and "all hosts" actions | Every host or drift event id checked; nothing changes when one fails. Generating intended configurations with no ids acts on writable hosts only |
+| Global records | Backup policies, intended configuration templates and contexts: a scoped user sees one only when the inventory group (and, for a context, the host) it targets is readable, and changes or runs a policy only when its group is writable |
+| WebSockets | `/ws/config-capture/{job_id}` and `/ws/config-revert/{job_id}` answer "Job not found" for a job touching a host outside the read scope |
+| MCP | Tokens owned by a scoped user are refused (`403`) |
 
 ## Notes
 

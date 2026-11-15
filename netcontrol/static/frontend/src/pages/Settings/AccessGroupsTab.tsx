@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -12,8 +12,10 @@ import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
 import { usePendingKeys } from '@/lib/usePendingKeys';
+import { groupLabel, useInventoryGroupsFull } from '@/api/inventory';
 
 import { AccessGroupModal } from './AccessGroupModal';
+import { scopeSummary } from './accessGroupScope';
 
 export function AccessGroupsTab({
   capabilities,
@@ -22,6 +24,11 @@ export function AccessGroupsTab({
 }) {
   const { confirm, alert } = useDialogs();
   const groups = useAccessGroups();
+  const inventoryGroups = useInventoryGroupsFull(false);
+  const groupNames = useMemo(
+    () => new Map((inventoryGroups.data ?? []).map((g) => [g.id, groupLabel(g)])),
+    [inventoryGroups.data],
+  );
   const remove = useDeleteAccessGroup();
   const deleting = usePendingKeys<number>();
 
@@ -64,6 +71,7 @@ export function AccessGroupsTab({
               <div className="card-description">
                 {g.member_count || 0} member(s)
               </div>
+              <div className="card-description">Devices: {scopeSummary(g, groupNames)}</div>
             </div>
             <div style={{ display: 'flex', gap: '0.4rem' }}>
               <button

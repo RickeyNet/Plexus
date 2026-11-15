@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 
 import routes.database as db
 
+from netcontrol.object_scope import scope_for_user
 from netcontrol.routes.auth import _get_user_features
 
 TOKEN_PREFIX = "plx_mcp_"  # nosec B105 - a public prefix, not a credential
@@ -34,6 +35,9 @@ class McpContext:
     owner_is_admin: bool
     categories: frozenset[str]  # as stored on the token
     features: frozenset[str]  # the owner's current features
+    # The owner is limited to selected inventory groups (object-level
+    # permissions): such tokens are refused, since MCP tools do not enforce it.
+    object_scoped: bool = False
 
 
 def hash_token(plaintext: str) -> str:
@@ -87,4 +91,5 @@ async def resolve_token(plaintext: str) -> McpContext | None:
         owner_is_admin=owner.get("role") == "admin",
         categories=frozenset(row["categories"]) & frozenset(CATEGORIES),
         features=frozenset(await _get_user_features(owner)),
+        object_scoped=(await scope_for_user(owner)).restricted,
     )

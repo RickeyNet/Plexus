@@ -25,6 +25,7 @@ from netcontrol.mcp import redact, registry
 from netcontrol.mcp.auth import McpContext
 from netcontrol.mcp.registry import ToolError
 from netcontrol.mcp.settings import DEFAULTS, load_settings
+from netcontrol.object_scope import MCP_SCOPED_DETAIL
 from netcontrol.routes import state
 from netcontrol.routes.shared import _audit
 from netcontrol.telemetry import configure_logging
@@ -190,6 +191,9 @@ async def _record(ctx: McpContext, name: str, arguments: Any, outcome: str, rows
 async def call_tool(ctx: McpContext, name: str, arguments: dict[str, Any] | None) -> tuple[str, bool]:
     """Run one tool call for ``ctx``. Returns ``(text, is_error)``; on
     success ``text`` is JSON."""
+    if ctx.object_scoped:
+        # Refused at the endpoint too: tools do not enforce object scope.
+        return MCP_SCOPED_DETAIL, True
     started = time.monotonic()
     name = str(name)
     args: Any = {} if arguments is None else arguments

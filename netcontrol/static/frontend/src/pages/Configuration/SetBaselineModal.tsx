@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from 'react';
+import { useId, useState } from 'react';
 
 import { useInventoryGroups } from '@/api/compliance';
 import {
@@ -10,6 +10,7 @@ import { Callout } from '@/components/Callout';
 import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
 import { QueryError } from '@/components/QueryError';
+import { useObjectScope } from '@/lib/objectScope';
 
 interface Props {
   onClose: () => void;
@@ -26,13 +27,10 @@ export function SetBaselineModal({ onClose }: Props) {
   const [formError, setFormError] = useState<string | null>(null);
   const formId = useId();
 
-  const hosts = useMemo(() => {
-    const list: { id: number; hostname: string; ip_address: string }[] = [];
-    for (const g of groups.data || []) {
-      for (const h of g.hosts || []) list.push(h);
-    }
-    return list;
-  }, [groups.data]);
+  // A baseline is stored host data: a limited account picks from the hosts
+  // of the groups it may change.
+  const { writableGroups } = useObjectScope();
+  const hosts = writableGroups(groups.data || []).flatMap((g) => g.hosts || []);
 
   // Lazy fetch only when user clicks "Use Latest Snapshot"
   const [fillingSnapshot, setFillingSnapshot] = useState(false);

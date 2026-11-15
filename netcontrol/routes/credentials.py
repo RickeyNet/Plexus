@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from routes.crypto import encrypt
 
+from netcontrol.object_scope import scope_exempt
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 
 router = APIRouter()
@@ -78,6 +79,7 @@ class CredentialUpdate(BaseModel):
 
 
 @router.get("/api/credentials/service")
+@scope_exempt("service credentials: admin only, no host or inventory group data")
 async def list_service_credentials(request: Request):
     session = _get_session(request)
     await _require_admin_session(session)
@@ -85,6 +87,7 @@ async def list_service_credentials(request: Request):
 
 
 @router.post("/api/credentials/service", status_code=201)
+@scope_exempt("service credentials: admin only, no host or inventory group data")
 async def create_service_credential(body: CredentialCreate, request: Request):
     session = await _require_admin_session(_get_session(request))
     cid = await db.create_credential(
@@ -106,6 +109,7 @@ async def create_service_credential(body: CredentialCreate, request: Request):
 
 
 @router.put("/api/credentials/service/{cred_id}")
+@scope_exempt("service credentials: admin only, no host or inventory group data")
 async def update_service_credential(cred_id: int, body: CredentialUpdate, request: Request):
     session = await _require_admin_session(_get_session(request))
     cred = await db.get_credential_raw(cred_id)
@@ -140,6 +144,7 @@ async def update_service_credential(cred_id: int, body: CredentialUpdate, reques
 
 
 @router.delete("/api/credentials/service/{cred_id}")
+@scope_exempt("service credentials: admin only, no host or inventory group data")
 async def delete_service_credential(cred_id: int, request: Request):
     session = await _require_admin_session(_get_session(request))
     cred = await db.get_credential_raw(cred_id)
@@ -160,6 +165,7 @@ async def delete_service_credential(cred_id: int, request: Request):
 
 
 @router.get("/api/credentials")
+@scope_exempt("credentials are per owner: no host or inventory group data")
 async def list_credentials(request: Request):
     session = _get_session(request)
     if not session:
@@ -172,6 +178,7 @@ async def list_credentials(request: Request):
 
 
 @router.post("/api/credentials", status_code=201)
+@scope_exempt("credentials are per owner: no host or inventory group data")
 async def create_credential(body: CredentialCreate, request: Request):
     session = _get_session(request)
     if not session:
@@ -195,6 +202,7 @@ async def create_credential(body: CredentialCreate, request: Request):
 
 
 @router.delete("/api/credentials/{cred_id}")
+@scope_exempt("credentials are per owner: no host or inventory group data")
 async def delete_credential(cred_id: int, request: Request):
     session = _get_session(request)
     if not session:
@@ -216,6 +224,7 @@ async def delete_credential(cred_id: int, request: Request):
 
 
 @router.put("/api/credentials/{cred_id}")
+@scope_exempt("credentials are per owner: no host or inventory group data")
 async def update_credential(cred_id: int, body: CredentialUpdate, request: Request):
     session = _get_session(request)
     if not session:

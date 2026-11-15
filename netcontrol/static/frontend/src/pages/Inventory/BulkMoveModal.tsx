@@ -4,6 +4,7 @@ import { Callout } from '@/components/Callout';
 import { EmptyState } from '@/components/EmptyState';
 import { Modal } from '@/components/Modal';
 import { groupLabel, type InventoryGroupFull, useMoveHosts } from '@/api/inventory';
+import { useObjectScope } from '@/lib/objectScope';
 
 interface Props {
   hostIds: number[];
@@ -15,7 +16,10 @@ interface Props {
 export function BulkMoveModal({ hostIds, sourceGroupId, groups, onClose }: Props) {
   const move = useMoveHosts();
   const formId = useId();
-  const candidates = groups.filter((g) => g.id !== sourceGroupId);
+  // A limited account moves hosts only into groups it may change.
+  const candidates = useObjectScope()
+    .writableGroups(groups)
+    .filter((g) => g.id !== sourceGroupId);
   const [targetGroupId, setTargetGroupId] = useState<number>(
     candidates[0]?.id ?? 0,
   );

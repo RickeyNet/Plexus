@@ -15,7 +15,9 @@ from __future__ import annotations
 import logging
 
 import routes.database as db
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
+
+from netcontrol.object_scope import ObjectScope, request_scope, scoped
 
 _LOGGER = logging.getLogger("plexus.ansible_inventory")
 
@@ -69,13 +71,15 @@ async def _fetch_inventory(
     group: str | None,
     device_type: str | None,
     device_category: str | None,
+    scope: ObjectScope,
 ) -> dict:
     """Build the full Ansible dynamic inventory JSON payload.
 
     Returns the ``--list`` format with ``_meta.hostvars`` so Ansible
-    does not need to make per-host callbacks.
+    does not need to make per-host callbacks. Only the groups ``scope``
+    may read are listed.
     """
-    groups_data = await db.get_all_groups_with_hosts()
+    groups_data = scope.filter_groups(await db.get_all_groups_with_hosts())
 
     inventory: dict = {"_meta": {"hostvars": {}}}
     all_hosts: list[str] = []
@@ -132,7 +136,9 @@ async def _fetch_inventory(
 
 
 @router.get("/api/ansible/inventory")
+@scoped("list")
 async def ansible_inventory_list(
+    request: Request,
     group: str | None = Query(default=None, description="Filter by Plexus group name"),
     device_type: str | None = Query(default=None, description="Filter by device_type (e.g. cisco_ios)"),
     device_category: str | None = Query(default=None, description="Filter by device_category (e.g. router, switch)"),
@@ -142,16 +148,18 @@ async def ansible_inventory_list(
     This endpoint returns all groups with their hosts and a ``_meta.hostvars``
     section so Ansible does not need to issue per-host callbacks.
     """
-    return await _fetch_inventory(group, device_type, device_category)
+    return await _fetch_inventory(group, device_type, device_category, await request_scope(request))
 
 
 @router.get("/api/ansible/inventory/host/{hostname}")
-async def ansible_inventory_host(hostname: str):
+@scoped("list")
+async def ansible_inventory_host(hostname: str, request: Request):
     """Return host variables for a single host (``--host`` format).
 
-    Looks up the host by hostname across all inventory groups.
+    Looks up the host by hostname across the inventory groups the caller
+    may read.
     """
-    inv = await _fetch_inventory(group=None, device_type=None, device_category=None)
+    inv = await _fetch_inventory(group=None, device_type=None, device_category=None, scope=await request_scope(request))
     hostvars = inv.get("_meta", {}).get("hostvars", {}).get(hostname)
     if hostvars is None:
         raise HTTPException(status_code=404, detail="Host not found")

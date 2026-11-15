@@ -24,6 +24,7 @@ import { SummaryStrip } from '@/components/SummaryStrip';
 import { clickableProps } from '@/lib/clickable';
 import { formatBackendDateTime } from '@/lib/datetime';
 import { idToSelect, selectToId } from '@/lib/deviceModel';
+import { useObjectScope } from '@/lib/objectScope';
 import { complianceStatusRank } from '@/lib/severity';
 import {
   type Comparator,
@@ -77,6 +78,7 @@ export function IntendedDevicesView({ isAdmin, onShowTemplates }: { isAdmin: boo
   const q = useIntendedHosts(filter);
   const groupsQ = useInventoryGroups(true);
   const generate = useGenerateIntended();
+  const { restricted } = useObjectScope();
   const { confirm, alert } = useDialogs();
   const rows = q.data?.rows ?? [];
   const sorted = useTableSort(rows, COMPARATORS, INITIAL_SORT, SORT_OPTIONS);
@@ -86,7 +88,10 @@ export function IntendedDevicesView({ isAdmin, onShowTemplates }: { isAdmin: boo
     const hosts = q.data?.counts.hosts;
     const agreed = await confirm({
       title: 'Generate intended configurations',
-      message: `Render the intended configuration of every host${hosts !== undefined ? ` (${hosts.toLocaleString()})` : ''} and compare each with its newest backup? Nothing is sent to the devices.`,
+      // A limited account generates for the hosts of the groups it may change.
+      message: restricted
+        ? 'Render the intended configuration of every host in the inventory groups you can change and compare each with its newest backup? Nothing is sent to the devices.'
+        : `Render the intended configuration of every host${hosts !== undefined ? ` (${hosts.toLocaleString()})` : ''} and compare each with its newest backup? Nothing is sent to the devices.`,
       confirmLabel: 'Generate all',
       confirmVariant: 'primary',
     });

@@ -14,6 +14,7 @@ import { TagChip, TagChips } from '@/components/TagChips';
 import { clickableProps } from '@/lib/clickable';
 import { type CustomDataFilterValue, EMPTY_CUSTOM_DATA_FILTER, isEmptyFilter } from '@/lib/customData';
 import { hostModelText } from '@/lib/deviceModel';
+import { READ_ONLY_GROUP_REASON, TOP_LEVEL_GROUP_REASON, useObjectScope } from '@/lib/objectScope';
 import { useLinkedParam } from '@/lib/useLinkedParam';
 
 import {
@@ -76,6 +77,7 @@ type ModalState =
 
 export function Inventory() {
   const { confirm, alert } = useDialogs();
+  const objectScope = useObjectScope();
   const groupsQ = useInventoryGroupsFull(true);
   const profilesQ = useSnmpProfiles();
   const groups = useMemo(() => groupsQ.data ?? [], [groupsQ.data]);
@@ -303,6 +305,8 @@ export function Inventory() {
           type="button"
           className="btn btn-sm btn-primary"
           onClick={() => setModal({ kind: 'create-group', parentId: null })}
+          disabled={objectScope.restricted}
+          title={objectScope.restricted ? TOP_LEVEL_GROUP_REASON : undefined}
         >
           + New Group
         </button>
@@ -393,6 +397,7 @@ export function Inventory() {
           <GroupCard
             key={group.id}
             group={group}
+            canWrite={objectScope.canWriteGroup(group.id)}
             subGroupCount={subGroupCounts.get(group.id) ?? 0}
             query={query}
             compact={compact}
@@ -534,6 +539,9 @@ export function Inventory() {
 
 interface GroupCardProps {
   group: InventoryGroupFull;
+  /** The account may change this group (object-level permissions); when
+   * false every write control is disabled with the reason. */
+  canWrite: boolean;
   /** Sub-groups shown under this group (hidden with it when collapsed). */
   subGroupCount: number;
   query: string;
@@ -567,8 +575,9 @@ interface GroupCardProps {
 /** How far each level of sub-groups is indented. */
 const GROUP_INDENT_REM = 1.5;
 
-function GroupCard({
+export function GroupCard({
   group,
+  canWrite,
   subGroupCount,
   query,
   compact,
@@ -599,6 +608,9 @@ function GroupCard({
 }: GroupCardProps) {
   const hosts = group.hosts ?? [];
   const sortedHosts = sortHostsForQuery(hosts, query);
+  // Write controls of a group the account may only read: disabled, with why.
+  const readOnly = !canWrite;
+  const readOnlyTitle = readOnly ? READ_ONLY_GROUP_REASON : undefined;
 
   // Virtualize the host rows so only the rows in view are mounted. Each group
   // scrolls inside its own max-height container, so a group with thousands of
@@ -721,7 +733,8 @@ function GroupCard({
             style={{ minWidth: 130 }}
             value={assignedProfileId}
             onChange={(e) => onAssignProfile(e.target.value)}
-            title="SNMP Profile"
+            disabled={readOnly}
+            title={readOnlyTitle ?? 'SNMP Profile'}
             aria-label={`SNMP profile for ${groupLabel(group)}`}
           >
             <option value="">No SNMP Profile</option>
@@ -735,15 +748,23 @@ function GroupCard({
             type="button"
             className="btn btn-sm btn-secondary"
             onClick={onSyncDiscovery}
+            disabled={readOnly}
+            title={readOnlyTitle}
           >
             Sync
           </button>
           <KebabMenu label={`Actions for ${groupLabel(group)}`}>
-            <MenuItem onSelect={onBulkSerial}>Fetch Serials</MenuItem>
-            <MenuItem onSelect={onEditGroup}>Edit</MenuItem>
-            <MenuItem onSelect={onAddSubGroup}>New Sub-group</MenuItem>
+            <MenuItem onSelect={onBulkSerial} disabled={readOnly} title={readOnlyTitle}>
+              Fetch Serials
+            </MenuItem>
+            <MenuItem onSelect={onEditGroup} disabled={readOnly} title={readOnlyTitle}>
+              Edit
+            </MenuItem>
+            <MenuItem onSelect={onAddSubGroup} disabled={readOnly} title={readOnlyTitle}>
+              New Sub-group
+            </MenuItem>
             <MenuSeparator />
-            <MenuItem danger onSelect={onDeleteGroup}>
+            <MenuItem danger onSelect={onDeleteGroup} disabled={readOnly} title={readOnlyTitle}>
               Delete
             </MenuItem>
           </KebabMenu>
@@ -785,6 +806,8 @@ function GroupCard({
                       type="button"
                       className="btn btn-sm btn-secondary"
                       onClick={() => onFetchSerial(selectedHostObj)}
+                      disabled={readOnly}
+                      title={readOnlyTitle}
                     >
                       Serial
                     </button>
@@ -793,6 +816,8 @@ function GroupCard({
                     type="button"
                     className="btn btn-sm btn-secondary"
                     onClick={onBulkMove}
+                    disabled={readOnly}
+                    title={readOnlyTitle}
                   >
                     Move
                   </button>
@@ -800,6 +825,8 @@ function GroupCard({
                     type="button"
                     className="btn btn-sm btn-secondary"
                     onClick={onBulkTag}
+                    disabled={readOnly}
+                    title={readOnlyTitle}
                   >
                     Tag…
                   </button>
@@ -807,16 +834,20 @@ function GroupCard({
                     type="button"
                     className="btn btn-sm btn-secondary"
                     onClick={onBulkEdit}
+                    disabled={readOnly}
+                    title={readOnlyTitle}
                   >
                     Edit…
                   </button>
-                  <DeleteButton onClick={onBulkDelete} />
+                  <DeleteButton onClick={onBulkDelete} disabled={readOnly} title={readOnlyTitle} />
                 </>
               )}
               <button
                 type="button"
                 className="btn btn-sm btn-primary"
                 onClick={onAddHost}
+                disabled={readOnly}
+                title={readOnlyTitle}
               >
                 + Add Host
               </button>
@@ -943,10 +974,16 @@ function GroupCard({
                                     type="button"
                                     className="btn btn-sm btn-secondary"
                                     onClick={() => onEditHost(host)}
+                                    disabled={readOnly}
+                                    title={readOnlyTitle}
                                   >
                                     Edit
                                   </button>
-                                  <DeleteButton onClick={() => onDeleteHost(host)} />
+                                  <DeleteButton
+                                    onClick={() => onDeleteHost(host)}
+                                    disabled={readOnly}
+                                    title={readOnlyTitle}
+                                  />
                                 </div>
                               </td>
                             </tr>

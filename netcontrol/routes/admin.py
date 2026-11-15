@@ -18,7 +18,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
-from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol import oidc
+from netcontrol.object_scope import scope_for_user
+from netcontrol.routes.auth import _oidc_redirect_uri
+from netcontrol.routes.shared import _audit, _corr_id, _get_session, _session_user
 from netcontrol.routes.state import _env_flag
 from netcontrol.telemetry import configure_logging, configure_syslog_logging, syslog_logging_enabled
 
@@ -83,16 +86,27 @@ class AdminUserGroupAssignmentRequest(BaseModel):
     group_ids: list[int]
 
 
+class InventoryScopeGrant(BaseModel):
+    inventory_group_id: int
+    can_write: bool = False
+
+
 class AdminAccessGroupCreateRequest(BaseModel):
     name: str
     description: str = ""
     feature_keys: list[str] = []
+    # "all" (every device) or "groups" (only inventory_scopes and their sub-groups).
+    object_scope: str = "all"
+    inventory_scopes: list[InventoryScopeGrant] = Field(default_factory=list, max_length=500)
 
 
 class AdminAccessGroupUpdateRequest(BaseModel):
     name: str
     description: str = ""
     feature_keys: list[str] = []
+    # Omitted: the scope and its grants stay as they are.
+    object_scope: str | None = None
+    inventory_scopes: list[InventoryScopeGrant] = Field(default_factory=list, max_length=500)
 
 
 class AdminLoginRulesRequest(BaseModel):
@@ -155,6 +169,33 @@ class LdapConfigRequest(BaseModel):
     default_group_ids: list[int] = []
 
 
+class OidcGroupMappingRequest(BaseModel):
+    group: str
+    access_group_id: int
+
+
+class OidcConfigRequest(BaseModel):
+    enabled: bool = False
+    issuer: str = ""
+    client_id: str = ""
+    # Write-only: answered masked; send the mask back to keep the saved one.
+    client_secret: str = ""
+    token_auth_method: str = "client_secret_basic"
+    scopes: str = "openid profile email"
+    username_claim: str = "preferred_username"
+    display_name_claim: str = "name"
+    groups_claim: str = "groups"
+    admin_groups: list[str] = []
+    default_role: str = "user"
+    default_group_ids: list[int] = []
+    sync_groups: bool = False
+    group_mappings: list[OidcGroupMappingRequest] = []
+    button_label: str = "Sign in with SSO"
+    primary: bool = False
+    redirect_uri: str = ""
+    ca_cert_file: str = ""
+
+
 class AuthConfigRequest(BaseModel):
     provider: str = "local"
     default_credential_id: int | None = None
@@ -163,6 +204,13 @@ class AuthConfigRequest(BaseModel):
     radius: RadiusConfigRequest = RadiusConfigRequest()
     tacacs: TacacsConfigRequest = TacacsConfigRequest()
     ldap: LdapConfigRequest = LdapConfigRequest()
+    # Omitted = keep the saved OIDC settings (older clients do not send it).
+    oidc: OidcConfigRequest | None = None
+
+
+class OidcTestRequest(BaseModel):
+    issuer: str | None = None
+    ca_cert_file: str | None = None
 
 
 class SyslogConfigRequest(BaseModel):
@@ -271,6 +319,7 @@ async def _admin_user_payload(user: dict) -> dict:
         "group_ids": group_ids,
         "feature_access": features,
         "session_never_expires": bool(user.get("session_never_expires")),
+        "object_scope_restricted": (await scope_for_user(user)).restricted,
     }
 
 
@@ -557,49 +606,97 @@ async def admin_list_access_groups():
     return await db.get_all_access_groups()
 
 
+def _object_scope_values(object_scope: str, grants: list[InventoryScopeGrant]) -> tuple[str, list[dict]]:
+    """The validated ``(object_scope, inventory_scopes)`` of an access group
+    request; grants are dropped for ``all``. Unknown inventory group ids are
+    rejected by the database (400)."""
+    scope = (object_scope or "").strip().lower()
+    if scope not in db.OBJECT_SCOPES:
+        raise HTTPException(status_code=400, detail="object_scope must be 'all' or 'groups'")
+    if scope == "all":
+        return scope, []
+    return scope, [g.model_dump() for g in grants]
+
+
+def _object_scope_summary(group: dict | None) -> str:
+    """The audit text of an access group's object scope."""
+    if not group:
+        return "object_scope=-"
+    if group.get("object_scope") != "groups":
+        return "object_scope=all"
+    grants = ",".join(
+        f"{g['inventory_group_id']}:{'rw' if g['can_write'] else 'r'}" for g in group.get("inventory_scopes") or []
+    )
+    return f"object_scope=groups grants=[{grants}]"
+
+
+async def _audit_access_group(request: Request, action: str, detail: str) -> None:
+    await _audit("auth", action, user=_session_user(request), detail=detail, correlation_id=_corr_id(request))
+
+
 @router.post("/api/admin/access-groups", status_code=201)
-async def admin_create_access_group(body: AdminAccessGroupCreateRequest):
+async def admin_create_access_group(body: AdminAccessGroupCreateRequest, request: Request):
     name = body.name.strip()
     if len(name) < 2:
         raise HTTPException(status_code=400, detail="Group name must be at least 2 characters")
+    scope, grants = _object_scope_values(body.object_scope, body.inventory_scopes)
     try:
         group_id = await db.create_access_group(
             name,
             body.description.strip(),
             _validate_feature_keys(body.feature_keys),
+            object_scope=scope,
+            inventory_scopes=grants,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     group = await db.get_access_group(group_id)
+    await _audit_access_group(
+        request, "access_group.create", f"created access group id={group_id} '{name}' {_object_scope_summary(group)}"
+    )
     return group
 
 
 @router.put("/api/admin/access-groups/{group_id}")
-async def admin_update_access_group(group_id: int, body: AdminAccessGroupUpdateRequest):
+async def admin_update_access_group(group_id: int, body: AdminAccessGroupUpdateRequest, request: Request):
     existing = await db.get_access_group(group_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Access group not found")
     name = body.name.strip()
     if len(name) < 2:
         raise HTTPException(status_code=400, detail="Group name must be at least 2 characters")
+    scope_change: dict = {}
+    if body.object_scope is not None:
+        scope, grants = _object_scope_values(body.object_scope, body.inventory_scopes)
+        scope_change = {"object_scope": scope, "inventory_scopes": grants}
     try:
         await db.update_access_group(
             group_id,
             name,
             body.description.strip(),
             _validate_feature_keys(body.feature_keys),
+            **scope_change,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return await db.get_access_group(group_id)
+    group = await db.get_access_group(group_id)
+    before, after = _object_scope_summary(existing), _object_scope_summary(group)
+    scope_text = after if before == after else f"{before} -> {after}"
+    await _audit_access_group(request, "access_group.update", f"updated access group id={group_id} {scope_text}")
+    return group
 
 
 @router.delete("/api/admin/access-groups/{group_id}")
-async def admin_delete_access_group(group_id: int):
+async def admin_delete_access_group(group_id: int, request: Request):
     existing = await db.get_access_group(group_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Access group not found")
     await db.delete_access_group(group_id)
+    await _audit_access_group(
+        request,
+        "access_group.delete",
+        f"deleted access group id={group_id} '{existing['name']}' {_object_scope_summary(existing)}",
+    )
     return {"ok": True}
 
 
@@ -641,7 +738,46 @@ def _redact_auth_config(cfg: dict) -> dict:
         redacted["tacacs"]["secret"] = _SECRET_MASK
     if redacted.get("ldap", {}).get("bind_password"):
         redacted["ldap"]["bind_password"] = _SECRET_MASK
+    oidc_cfg = redacted.get("oidc")
+    if isinstance(oidc_cfg, dict):
+        # The ciphertext never leaves the server; the API shows the mask.
+        stored = oidc_cfg.pop("client_secret_enc", "")
+        oidc_cfg["client_secret"] = _SECRET_MASK if stored else ""
     return redacted
+
+
+def _oidc_config_to_store(submitted: dict) -> dict:
+    """Validate a submitted OIDC block and turn its client secret into the
+    stored ciphertext (mask = keep the saved one, empty = public client)."""
+    current = state.AUTH_CONFIG.get("oidc") or {}
+    issuer = str(submitted.get("issuer") or "").strip()
+    if submitted.get("enabled"):
+        if not issuer or not oidc.is_allowed_url(issuer):
+            raise HTTPException(status_code=400, detail="OIDC issuer must be an https URL")
+        if not str(submitted.get("client_id") or "").strip():
+            raise HTTPException(status_code=400, detail="OIDC client id is required")
+    redirect_uri = str(submitted.get("redirect_uri") or "").strip()
+    if redirect_uri and not oidc.is_allowed_url(redirect_uri):
+        raise HTTPException(status_code=400, detail="OIDC redirect URI must be an https URL")
+    if len(submitted.get("group_mappings") or []) > state.OIDC_MAX_GROUP_MAPPINGS:
+        raise HTTPException(
+            status_code=400, detail=f"At most {state.OIDC_MAX_GROUP_MAPPINGS} OIDC group mappings are allowed"
+        )
+    if len(str(submitted.get("button_label") or "").strip()) > state.OIDC_BUTTON_LABEL_MAX:
+        raise HTTPException(
+            status_code=400, detail=f"The SSO button label is limited to {state.OIDC_BUTTON_LABEL_MAX} characters"
+        )
+    out = dict(submitted)
+    secret = str(out.pop("client_secret", "") or "")
+    if secret == _SECRET_MASK:
+        out["client_secret_enc"] = current.get("client_secret_enc", "")
+    elif secret:
+        from routes.crypto import encrypt
+
+        out["client_secret_enc"] = encrypt(secret)
+    else:
+        out["client_secret_enc"] = ""
+    return out
 
 
 @router.get("/api/admin/auth-config")
@@ -659,9 +795,50 @@ async def admin_update_auth_config(body: AuthConfigRequest):
         data["tacacs"]["secret"] = state.AUTH_CONFIG.get("tacacs", {}).get("secret", "")
     if data.get("ldap", {}).get("bind_password") == _SECRET_MASK:
         data["ldap"]["bind_password"] = state.AUTH_CONFIG.get("ldap", {}).get("bind_password", "")
+    submitted_oidc = data.pop("oidc", None)
+    if submitted_oidc is None:
+        data["oidc"] = dict(state.AUTH_CONFIG.get("oidc") or {})
+    else:
+        data["oidc"] = _oidc_config_to_store(submitted_oidc)
     state.AUTH_CONFIG = state._sanitize_auth_config(data)
     await db.set_auth_setting("auth_config", state.AUTH_CONFIG)
     return _redact_auth_config(state.AUTH_CONFIG)
+
+
+@router.post("/api/admin/auth-config/oidc/test")
+async def admin_test_oidc(request: Request, body: OidcTestRequest | None = None):
+    """Fetch the provider's discovery document and JWKS (fresh, not from
+    cache) for the given or saved issuer, and show the redirect URI to
+    register."""
+    cfg = state.AUTH_CONFIG.get("oidc") or {}
+    issuer = (body.issuer if body and body.issuer is not None else str(cfg.get("issuer") or "")).strip()
+    ca = (body.ca_cert_file if body and body.ca_cert_file is not None else str(cfg.get("ca_cert_file") or "")).strip()
+    result: dict = {
+        "ok": False,
+        "issuer": issuer,
+        "authorization_endpoint": "",
+        "token_endpoint": "",
+        "userinfo_endpoint": "",
+        "algorithms": [],
+        "key_count": 0,
+        "redirect_uri": _oidc_redirect_uri(request, cfg),
+        "error": "",
+    }
+    try:
+        meta, key_count = await oidc.CLIENT.probe(issuer, ca)
+    except oidc.OidcError as exc:
+        result["error"] = exc.step
+        return result
+    result.update(
+        ok=key_count > 0,
+        authorization_endpoint=meta.authorization_endpoint,
+        token_endpoint=meta.token_endpoint,
+        userinfo_endpoint=meta.userinfo_endpoint,
+        algorithms=list(meta.algorithms),
+        key_count=key_count,
+        error="" if key_count else "the JWKS holds no usable signing key",
+    )
+    return result
 
 
 def _syslog_config_payload() -> dict:

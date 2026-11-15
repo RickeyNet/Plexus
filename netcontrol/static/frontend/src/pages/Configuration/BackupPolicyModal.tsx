@@ -13,6 +13,7 @@ import { Callout } from '@/components/Callout';
 import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
 import { QueryError } from '@/components/QueryError';
+import { useObjectScope } from '@/lib/objectScope';
 
 interface Props {
   policy: ConfigBackupPolicy | null; // null = create mode
@@ -22,6 +23,9 @@ interface Props {
 export function BackupPolicyModal({ policy, onClose }: Props) {
   const isEdit = policy != null;
   const groups = useInventoryGroups();
+  // A limited account creates policies only for groups it may change.
+  const objectScope = useObjectScope();
+  const groupChoices = groups.data ? objectScope.writableGroups(groups.data) : undefined;
   const creds = useCredentials();
   const auth = useAuthStatus();
   const isAdmin = auth.data?.role === 'admin';
@@ -52,8 +56,8 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
   const [prevGroups, setPrevGroups] = useState(groups.data);
   if (groups.data !== prevGroups) {
     setPrevGroups(groups.data);
-    if (!isEdit && groups.data && groupId == null && groups.data.length > 0) {
-      setGroupId(groups.data[0].id);
+    if (!isEdit && groupChoices && groupId == null && groupChoices.length > 0) {
+      setGroupId(groupChoices[0].id);
     }
   }
   const [prevCreds, setPrevCreds] = useState(creds.data);
@@ -205,7 +209,7 @@ export function BackupPolicyModal({ policy, onClose }: Props) {
                   Select a group…
                 </option>
               )}
-              {(groups.data || []).map((g) => (
+              {(groupChoices || []).map((g) => (
                 <option key={g.id} value={g.id}>
                   {groupLabel(g)}
                 </option>

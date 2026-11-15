@@ -31,6 +31,7 @@ import {
   groupDriftEvents,
   statusColor,
 } from './helpers';
+import { useCanWriteHost, writeControl } from './scopeGating';
 
 type DriftStatusFilter = 'open' | 'accepted' | 'resolved';
 type ViewMode = 'grouped' | 'flat';
@@ -59,6 +60,9 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
   const { confirm, alert } = useDialogs();
   const pending = usePendingKeys<string>();
   const isEventBusy = (id: number) => pending.isPending(`event:${id}`);
+  // Accept, resolve and revert change a host's data: only on writable hosts.
+  const canWriteHost = useCanWriteHost();
+  const canWriteEvent = (ev: ConfigDriftEvent) => canWriteHost(ev.host_id);
 
   const [logEventId, setLogEventId] = useState<number | null>(null);
   const [revertEventId, setRevertEventId] = useState<number | null>(null);
@@ -70,10 +74,8 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
     [events.data, query],
   );
 
-  const openIds = useMemo(
-    () => filtered.filter((e) => e.status === 'open').map((e) => e.id),
-    [filtered],
-  );
+  // The bulk buttons act on the open events the account may change.
+  const openIds = filtered.filter((e) => e.status === 'open' && canWriteEvent(e)).map((e) => e.id);
 
   const groups = useMemo(() => groupDriftEvents(filtered), [filtered]);
   const shownGroups = useShowMore(groups, CARD_STEP);
@@ -207,6 +209,7 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
                   key={group.representative_id}
                   group={group}
                   isEventBusy={isEventBusy}
+                  canWriteEvent={canWriteEvent}
                   isGroupBusy={pending.isPending(`group:${group.representative_id}`)}
                   onShowLog={(id) => setLogEventId(id)}
                   onShowRevert={(id) => setRevertEventId(id)}
@@ -222,6 +225,7 @@ export function DriftTab({ onCaptureStarted, onRevertStarted }: Props) {
                   key={ev.id}
                   ev={ev}
                   isBusy={isEventBusy(ev.id)}
+                  canWrite={canWriteEvent(ev)}
                   onShowLog={(id) => setLogEventId(id)}
                   onShowRevert={(id) => setRevertEventId(id)}
                   onAccept={(id) => void setEventStatus(id, 'accepted')}
@@ -295,6 +299,8 @@ interface CardProps {
   inset?: boolean;
   /** An accept or resolve of this event is in flight. */
   isBusy: boolean;
+  /** The account may change this event's host. */
+  canWrite: boolean;
   onShowLog: (id: number) => void;
   onShowRevert: (id: number) => void;
   onAccept: (id: number) => void;
@@ -305,6 +311,7 @@ function DriftEventCard({
   ev,
   inset = false,
   isBusy,
+  canWrite,
   onShowLog,
   onShowRevert,
   onAccept,
@@ -368,14 +375,14 @@ function DriftEventCard({
           <MenuItem onSelect={() => onShowLog(ev.id)}>Event Log</MenuItem>
           {ev.status === 'open' && (
             <>
-              <MenuItem disabled={isBusy} onSelect={() => onAccept(ev.id)}>
+              <MenuItem {...writeControl(canWrite, isBusy)} onSelect={() => onAccept(ev.id)}>
                 Accept
               </MenuItem>
-              <MenuItem disabled={isBusy} onSelect={() => onResolve(ev.id)}>
+              <MenuItem {...writeControl(canWrite, isBusy)} onSelect={() => onResolve(ev.id)}>
                 Resolve
               </MenuItem>
               <MenuSeparator />
-              <MenuItem danger onSelect={() => onShowRevert(ev.id)}>
+              <MenuItem danger {...writeControl(canWrite)} onSelect={() => onShowRevert(ev.id)}>
                 Revert
               </MenuItem>
             </>
@@ -391,6 +398,7 @@ function DriftEventCard({
 interface GroupCardProps {
   group: DriftGroup;
   isEventBusy: (id: number) => boolean;
+  canWriteEvent: (ev: ConfigDriftEvent) => boolean;
   /** Accept Group is in flight for this group. */
   isGroupBusy: boolean;
   onShowLog: (id: number) => void;
@@ -403,6 +411,7 @@ interface GroupCardProps {
 function DriftGroupCard({
   group,
   isEventBusy,
+  canWriteEvent,
   isGroupBusy,
   onShowLog,
   onShowRevert,
@@ -414,6 +423,8 @@ function DriftGroupCard({
   const [showHosts, setShowHosts] = useState(false);
   const evs = group.events;
   const openInGroup = evs.filter((e) => e.status === 'open').map((e) => e.id);
+  // Accept Group needs every open event's host to be writable.
+  const canWriteGroup = evs.every((e) => e.status !== 'open' || canWriteEvent(e));
 
   const groupTitle =
     evs.length > 1 ? (
@@ -465,6 +476,7 @@ function DriftGroupCard({
             <BusyButton
               className="btn btn-sm btn-primary"
               busy={isGroupBusy}
+              {...writeControl(canWriteGroup)}
               onClick={() => onAcceptGroup(openInGroup)}
             >
               Accept Group ({openInGroup.length})
@@ -473,6 +485,7 @@ function DriftGroupCard({
             <BusyButton
               className="btn btn-sm btn-primary"
               busy={isEventBusy(openInGroup[0])}
+              {...writeControl(canWriteGroup)}
               onClick={() => onAccept(openInGroup[0])}
             >
               Accept
@@ -483,11 +496,14 @@ function DriftGroupCard({
               <MenuItem onSelect={() => onShowLog(evs[0].id)}>Event Log</MenuItem>
               {openInGroup.length === 1 && (
                 <>
-                  <MenuItem disabled={isEventBusy(evs[0].id)} onSelect={() => onResolve(evs[0].id)}>
+                  <MenuItem
+                    {...writeControl(canWriteGroup, isEventBusy(evs[0].id))}
+                    onSelect={() => onResolve(evs[0].id)}
+                  >
                     Resolve
                   </MenuItem>
                   <MenuSeparator />
-                  <MenuItem danger onSelect={() => onShowRevert(evs[0].id)}>
+                  <MenuItem danger {...writeControl(canWriteGroup)} onSelect={() => onShowRevert(evs[0].id)}>
                     Revert
                   </MenuItem>
                 </>
@@ -575,6 +591,7 @@ function DriftGroupCard({
                   ev={ev}
                   inset
                   isBusy={isEventBusy(ev.id)}
+                  canWrite={canWriteEvent(ev)}
                   onShowLog={onShowLog}
                   onShowRevert={onShowRevert}
                   onAccept={onAccept}

@@ -38,6 +38,7 @@ from netcontrol.custom_fields import (
     clean_tag_name,
     typed_value,
 )
+from netcontrol.object_scope import require_group, require_host, require_hosts, scope_exempt, scoped
 from netcontrol.routes.shared import _audit, _corr_id, _session_user
 
 router = APIRouter()
@@ -333,6 +334,7 @@ def _tag_name(raw: str) -> str:
 
 
 @inventory_router.post("/api/tags", status_code=201)
+@scope_exempt("creates a global tag definition: no host or inventory group data")
 async def create_tag(body: TagCreate, request: Request) -> dict:
     name = _tag_name(body.name)
     try:
@@ -429,15 +431,13 @@ async def _save_object(object_type: str, key: str, body: ObjectDataPut, request:
     return await _read_object(object_type, key)
 
 
-async def _host_key(host_id: int) -> str:
-    if not await db.get_host(host_id):
-        raise HTTPException(status_code=404, detail="Host not found")
+async def _host_key(request: Request, host_id: int, *, write: bool = False) -> str:
+    await require_host(request, host_id, write=write)
     return str(host_id)
 
 
-async def _group_key(group_id: int) -> str:
-    if not await db.get_group(group_id):
-        raise HTTPException(status_code=404, detail="Group not found")
+async def _group_key(request: Request, group_id: int, *, write: bool = False) -> str:
+    await require_group(request, group_id, write=write)
     return str(group_id)
 
 
@@ -449,28 +449,34 @@ def _prefix_key(subnet: str, vrf: str) -> str:
 
 
 @inventory_router.get("/api/hosts/{host_id}/custom-data")
-async def get_host_data(host_id: int) -> dict:
-    return await _read_object("host", await _host_key(host_id))
+@scoped("host")
+async def get_host_data(host_id: int, request: Request) -> dict:
+    return await _read_object("host", await _host_key(request, host_id))
 
 
 @inventory_router.put("/api/hosts/{host_id}/custom-data")
+@scoped("host")
 async def put_host_data(host_id: int, body: ObjectDataPut, request: Request) -> dict:
-    return await _save_object("host", await _host_key(host_id), body, request)
+    return await _save_object("host", await _host_key(request, host_id, write=True), body, request)
 
 
 @inventory_router.get("/api/inventory/{group_id}/custom-data")
-async def get_group_data(group_id: int) -> dict:
-    return await _read_object("group", await _group_key(group_id))
+@scoped("group")
+async def get_group_data(group_id: int, request: Request) -> dict:
+    return await _read_object("group", await _group_key(request, group_id))
 
 
 @inventory_router.put("/api/inventory/{group_id}/custom-data")
+@scoped("group")
 async def put_group_data(group_id: int, body: ObjectDataPut, request: Request) -> dict:
-    return await _save_object("group", await _group_key(group_id), body, request)
+    return await _save_object("group", await _group_key(request, group_id, write=True), body, request)
 
 
 @inventory_router.post("/api/hosts/bulk-tags")
+@scoped("hosts")
 async def bulk_tag_hosts(body: BulkTags, request: Request) -> dict:
-    hosts = await db.get_hosts_by_ids(list(dict.fromkeys(body.host_ids)))
+    # Unknown ids are skipped; a scoped caller must be able to write every one.
+    hosts = await require_hosts(request, body.host_ids, write=True)
     keys = [str(h["id"]) for h in hosts]
     try:
         updated = await db.bulk_update_tags("host", keys, body.add_tag_ids, body.remove_tag_ids)

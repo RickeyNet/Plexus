@@ -2082,7 +2082,8 @@ async def https_redirect_middleware(request: Request, call_next):
 
     # Detect scheme: trust X-Forwarded-Proto from reverse proxy, fall back to
     # the actual request scheme (covers direct TLS termination by uvicorn).
-    scheme = request.headers.get("x-forwarded-proto", request.url.scheme).strip().lower()
+    # The OIDC redirect URI is derived with the same helper.
+    scheme = shared._request_scheme(request)
 
     if scheme != "https":
         target = request.url.replace(scheme="https")

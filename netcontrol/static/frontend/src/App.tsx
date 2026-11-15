@@ -129,7 +129,7 @@ export function App() {
   }
 
   if (!auth?.authenticated) {
-    return <Login allowRegister={auth?.allow_self_register === true} />;
+    return <Login allowRegister={auth?.allow_self_register === true} sso={auth?.sso} />;
   }
 
   const username = auth.display_name ?? auth.username ?? 'admin';

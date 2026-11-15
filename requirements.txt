@@ -68,3 +68,7 @@ jsonschema>=4.26,<5
 # (netcontrol/intended_config.py) in its sandboxed environment. Pinned
 # exactly: templates are admin-written text run on the server.
 jinja2==3.1.6
+# PyJWT validates OpenID Connect ID tokens for single sign-on
+# (netcontrol/oidc.py); [crypto] pulls cryptography for RS/PS/ES signatures.
+# Already locked as an mcp dependency; listed because Plexus imports it.
+pyjwt[crypto]==2.15.1

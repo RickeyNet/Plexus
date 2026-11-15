@@ -121,6 +121,15 @@ export function UsersTab() {
               <div className="card-description">
                 @{u.username} · {u.role} · Created {formatBackendDate(u.created_at)}
               </div>
+              {u.object_scope_restricted && (
+                <span
+                  className="badge badge-warning"
+                  title="Sees only the inventory groups its access groups grant"
+                  style={{ marginTop: '0.25rem', display: 'inline-block' }}
+                >
+                  Limited to selected inventory groups
+                </span>
+              )}
             </div>
             <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
               <button

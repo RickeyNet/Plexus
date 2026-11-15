@@ -34,6 +34,7 @@ from netcontrol.device_model import (
     clean_name,
     parse_device_filters,
 )
+from netcontrol.object_scope import require_hosts, scoped
 from netcontrol.routes.shared import _audit, _corr_id, _session_user
 
 router = APIRouter()
@@ -434,12 +435,15 @@ async def delete_status(status_id: int, request: Request, confirm: bool = Query(
 
 
 @inventory_router.post("/api/hosts/bulk-edit")
+@scoped("hosts")
 async def bulk_edit_hosts(body: BulkEdit, request: Request) -> dict:
     """Set the given device values on many hosts; unknown host ids are
-    skipped. ``updated`` is the number of hosts written."""
+    skipped (for a scoped caller every host must be writable). ``updated``
+    is the number of hosts written."""
     values = sent_device_values(body.values)
     if not values:
         raise _invalid("Choose at least one value to set.", {"set": "Choose at least one value to set."})
+    await require_hosts(request, body.host_ids, write=True)
     await check_device_values(values)
     updated = await db.bulk_set_host_device_fields(body.host_ids, values, lock=True)
     await audit_device_write(request, "bulk_edit", f"hosts={updated} {describe_values(values)}")

@@ -17,6 +17,13 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 import netcontrol.routes.state as state
+from netcontrol.object_scope import (
+    group_filter,
+    request_scope,
+    require_group,
+    require_object_host,
+    scoped,
+)
 from netcontrol.routes.device_config import get_device_config
 from netcontrol.routes.shared import (
     _audit,
@@ -60,21 +67,50 @@ class ConfigBackupRestoreRequest(BaseModel):
 
 
 # ── Backup Policy CRUD ───────────────────────────────────────────────────────
+#
+# A policy is a global record that targets one inventory group: a caller
+# limited to selected inventory groups sees a policy only when its group is
+# readable and changes or runs it only when the group is writable.
+
+_POLICY_NOT_FOUND = "Policy not found"
+_BACKUP_NOT_FOUND = "Backup not found"
+
+
+async def _require_policy(request: Request | None, policy_id: int, *, write: bool = False) -> dict:
+    """The policy; 404 when unknown or (scoped caller) its inventory group is
+    not readable, 403 on ``write`` when the group is read only."""
+    policy = await db.get_config_backup_policy(policy_id)
+    if not policy:
+        raise HTTPException(status_code=404, detail=_POLICY_NOT_FOUND)
+    if (await request_scope(request)).restricted:
+        await require_group(request, policy["group_id"], write=write, not_found=_POLICY_NOT_FOUND)
+    return policy
+
+
+async def _require_backup(request: Request | None, backup_id: int, *, write: bool = False) -> dict:
+    """The backup; 404 when unknown or (scoped caller) its host is not
+    readable, 403 on ``write`` when the host's group is read only."""
+    backup = await db.get_config_backup(backup_id)
+    if not backup:
+        raise HTTPException(status_code=404, detail=_BACKUP_NOT_FOUND)
+    await require_object_host(request, backup.get("host_id"), write=write, not_found=_BACKUP_NOT_FOUND)
+    return backup
 
 
 @router.get("/api/config-backups/policies")
-async def list_config_backup_policies(group_id: int | None = Query(default=None)):
-    return await db.get_config_backup_policies(group_id)
+@scoped("list")
+async def list_config_backup_policies(request: Request, group_id: int | None = Query(default=None)):
+    policies = await db.get_config_backup_policies(group_id)
+    return (await request_scope(request)).filter_groups(policies, key="group_id")
 
 
 async def create_backup_policy(body: ConfigBackupPolicyCreate, request: Request) -> dict:
     """Create a backup policy for an inventory group, as the requesting
-    user: the group must exist and the user may use the credential (or it
+    user: the group must exist (and be writable for a caller limited to
+    selected inventory groups) and the user may use the credential (or it
     is the service credential); the interval and retention are clamped to
     their bounds. Audited. Returns the stored policy."""
-    group = await db.get_group(body.group_id)
-    if not group:
-        raise HTTPException(status_code=404, detail="Inventory group not found")
+    await require_group(request, body.group_id, write=True, not_found="Inventory group not found")
     session = _get_session(request)
     await require_credential_access(body.credential_id, session=session, allow_service=True)
     interval = max(
@@ -102,23 +138,21 @@ async def create_backup_policy(body: ConfigBackupPolicyCreate, request: Request)
 
 
 @router.post("/api/config-backups/policies", status_code=201)
+@scoped("group")
 async def create_config_backup_policy(body: ConfigBackupPolicyCreate, request: Request):
     return await create_backup_policy(body, request)
 
 
 @router.get("/api/config-backups/policies/{policy_id}")
-async def get_config_backup_policy(policy_id: int):
-    policy = await db.get_config_backup_policy(policy_id)
-    if not policy:
-        raise HTTPException(status_code=404, detail="Policy not found")
-    return policy
+@scoped("policy")
+async def get_config_backup_policy(policy_id: int, request: Request):
+    return await _require_policy(request, policy_id)
 
 
 @router.put("/api/config-backups/policies/{policy_id}")
+@scoped("policy")
 async def update_config_backup_policy(policy_id: int, body: ConfigBackupPolicyUpdate, request: Request):
-    policy = await db.get_config_backup_policy(policy_id)
-    if not policy:
-        raise HTTPException(status_code=404, detail="Policy not found")
+    await _require_policy(request, policy_id, write=True)
     updates = {}
     if body.name is not None:
         updates["name"] = body.name
@@ -152,10 +186,9 @@ async def update_config_backup_policy(policy_id: int, body: ConfigBackupPolicyUp
 
 
 @router.delete("/api/config-backups/policies/{policy_id}")
+@scoped("policy")
 async def delete_config_backup_policy_route(policy_id: int, request: Request):
-    policy = await db.get_config_backup_policy(policy_id)
-    if not policy:
-        raise HTTPException(status_code=404, detail="Policy not found")
+    policy = await _require_policy(request, policy_id, write=True)
     await db.delete_config_backup_policy(policy_id)
     session = _get_session(request)
     await _audit(
@@ -172,31 +205,39 @@ async def delete_config_backup_policy_route(policy_id: int, request: Request):
 
 
 @router.get("/api/config-backups")
+@scoped("list")
 async def list_config_backups(
+    request: Request,
     host_id: int | None = Query(default=None),
     policy_id: int | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
     status: Literal["success", "error"] | None = Query(default=None),
 ):
-    return await db.get_config_backups(host_id=host_id, policy_id=policy_id, limit=limit, status=status)
+    return await db.get_config_backups(
+        host_id=host_id, policy_id=policy_id, limit=limit, status=status, **await group_filter(request)
+    )
 
 
 @router.get("/api/config-backups/summary")
-async def get_config_backup_summary():
-    return await db.get_config_backup_summary()
+@scoped("list")
+async def get_config_backup_summary(request: Request):
+    return await db.get_config_backup_summary(**await group_filter(request))
 
 
 @router.get("/api/config-backups/latest-per-host")
-async def list_latest_config_backups_per_host():
-    return await db.get_latest_config_backups_per_host()
+@scoped("list")
+async def list_latest_config_backups_per_host(request: Request):
+    return await db.get_latest_config_backups_per_host(**await group_filter(request))
 
 
 @router.get("/api/config-backups/search")
+@scoped("list")
 async def search_config_backup_records(
     q: str = Query(..., min_length=1, max_length=400),
     mode: str = Query(default="fulltext"),
     limit: int = Query(default=50, ge=1, le=200),
     context_lines: int = Query(default=1, ge=0, le=5),
+    request: Request = None,
 ):
     try:
         return await db.search_config_backups(
@@ -204,6 +245,7 @@ async def search_config_backup_records(
             mode=mode,
             limit=limit,
             context_lines=context_lines,
+            **await group_filter(request),
         )
     except ValueError as exc:
         code = (exc.args[0] if exc.args else "").strip().lower()
@@ -224,10 +266,9 @@ async def search_config_backup_records(
 
 
 @router.get("/api/config-backups/{backup_id}/diff")
-async def get_config_backup_diff(backup_id: int):
-    current = await db.get_config_backup(backup_id)
-    if not current:
-        raise HTTPException(status_code=404, detail="Backup not found")
+@scoped("backup")
+async def get_config_backup_diff(backup_id: int, request: Request = None):
+    current = await _require_backup(request, backup_id)
     if current.get("status") != "success" or not current.get("config_text"):
         raise HTTPException(status_code=400, detail="Backup does not contain a successful config capture")
 
@@ -290,6 +331,7 @@ def _backup_filename(backup: dict) -> str:
 
 
 @router.get("/api/config-backups/download")
+@scoped("list")
 async def download_config_backups_bulk(
     request: Request,
     host_id: int | None = Query(default=None),
@@ -301,7 +343,7 @@ async def download_config_backups_bulk(
     Declared *before* ``/api/config-backups/{backup_id}`` so the literal
     ``download`` path segment doesn't get parsed as an integer ID.
     """
-    rows = await db.get_config_backups(host_id=host_id, policy_id=policy_id, limit=limit)
+    rows = await db.get_config_backups(host_id=host_id, policy_id=policy_id, limit=limit, **await group_filter(request))
     # Only successful captures have config_text worth exporting.
     successful = [r for r in rows if r.get("status") == "success"]
     if not successful:
@@ -346,11 +388,10 @@ async def download_config_backups_bulk(
 
 
 @router.get("/api/config-backups/{backup_id}/download")
+@scoped("backup")
 async def download_config_backup(backup_id: int, request: Request):
     """Return a single backup as a plain ``.txt`` attachment."""
-    backup = await db.get_config_backup(backup_id)
-    if not backup:
-        raise HTTPException(status_code=404, detail="Backup not found")
+    backup = await _require_backup(request, backup_id)
     if backup.get("status") != "success" or not backup.get("config_text"):
         raise HTTPException(status_code=400, detail="Backup does not contain a successful config capture")
 
@@ -371,18 +412,15 @@ async def download_config_backup(backup_id: int, request: Request):
 
 
 @router.get("/api/config-backups/{backup_id}")
-async def get_config_backup_detail(backup_id: int):
-    backup = await db.get_config_backup(backup_id)
-    if not backup:
-        raise HTTPException(status_code=404, detail="Backup not found")
-    return backup
+@scoped("backup")
+async def get_config_backup_detail(backup_id: int, request: Request):
+    return await _require_backup(request, backup_id)
 
 
 @router.delete("/api/config-backups/{backup_id}")
+@scoped("backup")
 async def delete_config_backup_route(backup_id: int, request: Request):
-    backup = await db.get_config_backup(backup_id)
-    if not backup:
-        raise HTTPException(status_code=404, detail="Backup not found")
+    backup = await _require_backup(request, backup_id, write=True)
     await db.delete_config_backup(backup_id)
     session = _get_session(request)
     await _audit(
@@ -399,8 +437,13 @@ async def delete_config_backup_route(backup_id: int, request: Request):
 
 
 @router.post("/api/config-backups/policies/{policy_id}/run-now")
+@scoped("policy")
 async def run_config_backup_policy_now(policy_id: int, request: Request):
-    """Trigger an immediate backup run for a specific policy."""
+    """Trigger an immediate backup run for a specific policy (its group must
+    be writable for a caller limited to selected inventory groups)."""
+    if (await request_scope(request)).restricted:
+        # Before the running check, so a hidden policy is not revealed by 409.
+        await _require_policy(request, policy_id, write=True)
     # Prevent concurrent runs of the same policy
     if policy_id in _running_policies:
         raise HTTPException(status_code=409, detail="This backup policy is already running")
@@ -461,11 +504,11 @@ async def run_config_backup_policy_now(policy_id: int, request: Request):
 
 
 @router.post("/api/config-backups/restore")
+@scoped("backup")
 async def restore_config_from_backup(body: ConfigBackupRestoreRequest, request: Request):
-    """Restore configuration from a backup and validate."""
-    backup = await db.get_config_backup(body.backup_id)
-    if not backup:
-        raise HTTPException(status_code=404, detail="Backup not found")
+    """Restore configuration from a backup and validate (pushes to the
+    device: the host's group must be writable)."""
+    backup = await _require_backup(request, body.backup_id, write=True)
     if not backup.get("config_text"):
         raise HTTPException(status_code=400, detail="Backup has no config text")
     host = await db.get_host(backup["host_id"])

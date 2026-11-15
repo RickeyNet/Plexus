@@ -137,7 +137,9 @@ def test_owner_features_gate_tools(monkeypatch, request):
     schema = {"type": "object", "properties": {}, "additionalProperties": False}
     registry.register(Tool("throwaway_inventory", "d", "inventory", schema, _handler))
     admin, client, _ = setup(monkeypatch, request)
-    owner = create_user(admin, "no-features")
+    # In an access group (covering all devices) that grants no tool category;
+    # a user in no access group is object-scoped and refused outright.
+    owner = create_user(admin, "no-features", features=["dashboard"])
     token = create_token(admin, owner=owner, categories=("inventory",), name="limited-bot")
     names = {t["name"] for t in rpc(client, token, "tools/list")["tools"]}
     assert names == {"plexus_overview"}
