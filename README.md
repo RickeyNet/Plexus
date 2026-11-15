@@ -90,6 +90,11 @@ groups, playbooks, templates and a default credential.
 
 ## Guides
 
+The same guides are published as the [GitHub wiki](https://github.com/RickeyNet/Plexus/wiki).
+The wiki is generated from this repository by `tools/build_wiki.py`
+(`wiki/Home.md` is its front page), so edit the files here, not the wiki.
+A new file under `docs/` must be added to `PAGES` in that tool.
+
 **Operators**
 
 - [deploy/DEPLOYMENT.md](deploy/DEPLOYMENT.md) - Docker deployment guide (install, .env reference, operations, backups, troubleshooting)
