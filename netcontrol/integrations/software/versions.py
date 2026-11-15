@@ -49,6 +49,9 @@ PLATFORMS: dict[str, dict[str, Any]] = {
     "panorama": {"label": "Palo Alto Panorama", "psirt": None},
     "appgate": {"label": "Appgate SDP appliance", "psirt": None},
     "opnsense": {"label": "OPNsense", "psirt": None},
+    "aos-cx": {"label": "Aruba AOS-CX", "psirt": None},
+    "aos-switch": {"label": "Aruba AOS-Switch / HP ProCurve", "psirt": None},
+    "instant-on": {"label": "Aruba Instant On", "psirt": None},
     "other": {"label": "Other", "psirt": None},
 }
 
@@ -69,6 +72,11 @@ DEVICE_TYPE_PLATFORMS = {
     "fortinet_fortios": "fortios",
     "fortinet": "fortios",
     "paloalto_panos": "pan-os",
+    "aruba_aoscx": "aos-cx",
+    "aruba_osswitch": "aos-switch",
+    "aruba_procurve": "aos-switch",
+    "hp_procurve": "aos-switch",
+    "aruba_instant_on": "instant-on",
 }
 
 _MERAKI_KIND_PLATFORMS = {
@@ -98,6 +106,9 @@ _TEXT_PLATFORMS = (
     ("forti", "fortios"),
     ("pan-os", "pan-os"),
     ("palo alto", "pan-os"),
+    ("instant on", "instant-on"),
+    ("aos-cx", "aos-cx"),
+    ("procurve", "aos-switch"),
 )
 
 # An IOS XE release is 16.x or later with three dotted parts; classic IOS

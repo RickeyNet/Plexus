@@ -577,13 +577,15 @@ comes from any of:
 
   | Table | Commands | Stored as |
   |---|---|---|
-  | VLANs | `show vlan brief` (IOS, IOS-XE, NX-OS, EOS), `show vlans` (Junos) | the node's VLANs; when the command is rejected or not parsed, the `vlan N` / `name X` blocks of the configuration just read |
-  | Ports | `show interfaces status` and `show interfaces switchport` (IOS, IOS-XE), `show interface status` and `show interface switchport` (NX-OS), `show interfaces status` (EOS) | the node's interfaces: state, speed, duplex, description, access VLAN, a trunk's allowed VLANs (`1-4094` when it allows all) |
-  | Neighbors | `show cdp neighbors detail` and `show lldp neighbors detail` (IOS, IOS-XE, NX-OS, IOS-XR), `show lldp neighbors detail` (EOS), `show lldp neighbors` (Junos) | the map's links, with the neighbor's capabilities; an LLDP entry for a neighbor CDP also reports on that port is one link. A neighbor that is a Meraki (or other integration's) device on the map becomes a link to that device. A neighbor whose capabilities make it an end device (a phone, or a station such as a server or a camera), or an LLDP neighbor that advertises nothing but its name (a workstation's host agent), stays off the map until **View → End Devices** is ticked; a name several neighbors print (a phone model) is one node per address, not one shared node |
-  | MAC addresses | `show mac address-table` (IOS, IOS-XE, NX-OS, EOS) | the MAC address table |
+  | VLANs | `show vlan brief` (IOS, IOS-XE, NX-OS, EOS), `show vlans` (Junos, AOS-Switch), `show vlan` (AOS-CX) | the node's VLANs; when the command is rejected or not parsed, the `vlan N` / `name X` blocks of the configuration just read |
+  | Ports | `show interfaces status` and `show interfaces switchport` (IOS, IOS-XE), `show interface status` and `show interface switchport` (NX-OS), `show interfaces status` (EOS), `show interface` (AOS-CX), `show interfaces brief` and `show interfaces status` (AOS-Switch) | the node's interfaces: state, speed, duplex, description, access VLAN, a trunk's allowed VLANs (`1-4094` when it allows all) |
+  | Neighbors | `show cdp neighbors detail` and `show lldp neighbors detail` (IOS, IOS-XE, NX-OS, IOS-XR), `show lldp neighbors detail` (EOS), `show lldp neighbors` (Junos), `show lldp neighbor-info detail` (AOS-CX), `show cdp neighbors detail` and `show lldp info remote-device` (AOS-Switch) | the map's links, with the neighbor's capabilities; an LLDP entry for a neighbor CDP also reports on that port is one link. A neighbor that is a Meraki (or other integration's) device on the map becomes a link to that device. A neighbor whose capabilities make it an end device (a phone, or a station such as a server or a camera), or an LLDP neighbor that advertises nothing but its name (a workstation's host agent), stays off the map until **View → End Devices** is ticked; a name several neighbors print (a phone model) is one node per address, not one shared node |
+  | MAC addresses | `show mac address-table` (IOS, IOS-XE, NX-OS, EOS), `show mac-address-table` (AOS-CX), `show mac-address` (AOS-Switch) | the MAC address table |
 
   The output is parsed with ntc-templates. A device type without a driver
-  (Aruba, for one) gets the Cisco IOS commands. A table that is read
+  (HP Comware, for one) gets the Cisco IOS commands; one with no command
+  line (an Aruba Instant On switch, see [HPE Aruba and HP
+  switches](aruba-switches.md)) is not read. A table that is read
   replaces what SNMP stored for that device (a VLAN the device no longer
   lists is removed); a table the platform has no command for, or one the
   device rejects, is skipped and the stored one stays; one the device
@@ -998,8 +1000,10 @@ network the filters keep overlaps it.
   monitoring poll reads the table with the device type's commands (`show
   ip route` and `show ip route vrf *` on IOS and IOS-XE, `vrf all` on
   NX-OS and EOS, `show route` on ASA, FTD, IOS-XR and Junos, `get router
-  info routing-table all` on FortiOS, `show routing route` on PAN-OS; a
-  type without a driver, such as Aruba, gets the IOS commands) and stores
+  info routing-table all` on FortiOS, `show routing route` on PAN-OS,
+  `show ip route` and `show ip route all-vrfs` on AOS-CX, `show ip route`
+  on AOS-Switch; a type without a driver, such as HP Comware, gets the IOS
+  commands) and stores
   the first 250,000 characters of a capture (the global table, then the
   VRF tables); routes past that are *not collected*.
 - A reply to an address a firewall translated the source to, when that

@@ -118,10 +118,10 @@ def test_capture_reads_routes_and_configuration_in_one_session(monkeypatch):
 
 
 def test_capture_sends_a_type_without_a_driver_the_ios_commands_and_keeps_partial_reads(monkeypatch):
-    # Aruba has no driver: the IOS commands, as the monitoring poll and Config Backups send.
+    # Comware has no driver: the IOS commands, as the monitoring poll and Config Backups send.
     fake = _FakeSsh({"show ip route": _TABLE, "show running-config": _CONFIG})
     opened = _fake_session(monkeypatch, fake)
-    outcome = collection._capture_host({"ip_address": "10.0.0.3", "device_type": "aruba_aoscx"}, {})
+    outcome = collection._capture_host({"ip_address": "10.0.0.3", "device_type": "hp_comware"}, {})
     assert opened == ["10.0.0.3"] and not outcome["skipped"]
     assert outcome["routes"] == (_TABLE.strip(), 2) and outcome["config"] == _CONFIG
     # The table commands too (a rejected or empty status table sends no switchport command).
@@ -742,8 +742,10 @@ def test_platform_table_commands():
         with pytest.raises(NotImplementedError):
             get_driver(firewall).vlan_show_command()
     # A type without a driver reads its tables with the Cisco IOS driver.
-    assert collection._table_driver("aruba_aoscx") is not None
-    assert type(collection._table_driver("aruba_aoscx")).__name__ == "CiscoIOSDriver"
+    assert type(collection._table_driver("hp_comware")).__name__ == "CiscoIOSDriver"
+    # An Aruba switch has its own.
+    assert type(collection._table_driver("aruba_aoscx")).__name__ == "ArubaAOSCXDriver"
+    assert type(collection._table_driver("hp_procurve")).__name__ == "ArubaOSSwitchDriver"
 
 
 def test_config_vlan_blocks_are_the_fallback():

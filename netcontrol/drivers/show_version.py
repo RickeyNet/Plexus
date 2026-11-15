@@ -29,6 +29,9 @@ _OS_MARKERS: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(r"^\s*Junos:\s|\bJUNOS (?:Software Release|Base OS|OS Kernel)", re.IGNORECASE | re.MULTILINE),
         "juniper_junos",
     ),
+    (re.compile(r"ArubaOS-CX|\bAOS-CX\b", re.IGNORECASE), "aruba_aoscx"),
+    # AOS-Switch / ProCurve names no OS: its output opens with the image stamp.
+    (re.compile(r"^\s*Image stamp:", re.IGNORECASE | re.MULTILINE), "aruba_osswitch"),
 )
 
 # Version, per OS; the first group is the version.
@@ -47,6 +50,9 @@ _VERSION_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
         re.compile(r"^\s*Junos:\s*(\S+)", re.IGNORECASE | re.MULTILINE),
         re.compile(r"JUNOS (?:Software Release|Base OS boot) \[([^\]]+)\]", re.IGNORECASE),
     ),
+    "aruba_aoscx": (re.compile(r"^\s*Version\s*:\s*(\S+)", re.IGNORECASE | re.MULTILINE),),
+    # A line of its own under the image stamp: WC.16.10.0003, K.15.18.0013, Q.11.57.
+    "aruba_osswitch": (re.compile(r"^\s+([A-Z]{1,2}\.\d+\.\d+(?:\.\d+)?\w*)\s*$", re.MULTILINE),),
 }
 # Any other output: the first "Version x.y..." on a line.
 _GENERIC_VERSION = re.compile(r"\bVersion\s+(\d+\.\d+[\w.()\-]*)")

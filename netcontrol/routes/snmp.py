@@ -114,6 +114,42 @@ def _infer_device_category(model: str, sys_descr: str, device_type: str) -> str:
     # Fallback: Fortinet device_type → firewall
     if device_type == "fortinet":
         return "firewall"
+    # Every Aruba platform Plexus detects is a switch.
+    if device_type.startswith("aruba_"):
+        return "switch"
+    return ""
+
+
+# sysDescr of the HPE Aruba switch lines (none names its OS in words Plexus
+# could match otherwise). An Instant On switch is told by the words
+# "Instant On" alone, whatever surrounds them in a given firmware:
+#   Instant On:  "Aruba Instant On 1830 24G 2SFP Switch JL812A, InstantOn_1830_2.9.1.17 (...)"
+#   AOS-CX:      "Aruba JL668A FL.10.10.1020"
+#   AOS-Switch:  "Aruba JL253A 2930F-24G-4SFP+ Switch, revision WC.16.10.0003, ROM WC.16.01.0006 (...)"
+#                "ProCurve J9019B Switch 2510B-24, revision Q.11.57, ROM Q.10.02 (...)"
+_INSTANT_ON = re.compile(r"instant\s*on", re.IGNORECASE)
+_INSTANT_ON_VERSION = re.compile(r"InstantOn_\w+?_(\d[\d.]*)", re.IGNORECASE)
+_AOSCX = re.compile(r"arubaos-cx|aos-cx|\b[A-Z]{2}\.10\.\d{2}\.\d{4}\b")
+_AOSCX_VERSION = re.compile(r"\b([A-Z]{2}\.10\.\d{2}\.\d{4}\w*)")
+_AOS_SWITCH = re.compile(r"procurve|\brevision\s+[A-Z]{1,2}\.\d+\.\d+.*\bROM\b", re.IGNORECASE)
+_AOS_SWITCH_VERSION = re.compile(r"\brevision\s+([A-Z]{1,2}\.\d+\.\d+(?:\.\d+)?\w*)", re.IGNORECASE)
+# The HPE product number (JL812A, J9773A) and, on AOS-Switch, the model after it.
+_HPE_PRODUCT_NUMBER = re.compile(r"\b(J[A-Z0-9]\d{3,4}[A-Z])\b")
+_AOS_SWITCH_MODEL = re.compile(r"\bJ[A-Z0-9]\d{3,4}[A-Z]\s+(?:Switch\s+)?([\w+/-]*\d[\w+/-]*)")
+
+
+_ARUBA_OS_NAMES = {"aruba_instant_on": "instant-on", "aruba_aoscx": "aos-cx", "aruba_osswitch": "aos-switch"}
+
+
+def _aruba_device_type(sys_descr: str) -> str:
+    """The Aruba device type a sysDescr names, or ``""``."""
+    text = sys_descr or ""
+    if _INSTANT_ON.search(text):
+        return "aruba_instant_on"
+    if _AOS_SWITCH.search(text):
+        return "aruba_osswitch"
+    if _AOSCX.search(text):
+        return "aruba_aoscx"
     return ""
 
 
@@ -145,8 +181,13 @@ def _infer_vendor_os_from_text(raw_text: str) -> tuple[str, str, str]:
     elif "forti" in lowered:
         vendor = "fortinet"
         detected_type = "fortinet"
+    elif _aruba_device_type(raw_text or ""):
+        vendor = "aruba"
+        detected_type = _aruba_device_type(raw_text or "")
 
-    if "ios-xe" in lowered or "iosxe" in lowered or "ios xe" in lowered:
+    if detected_type in _ARUBA_OS_NAMES:
+        os_name = _ARUBA_OS_NAMES[detected_type]
+    elif "ios-xe" in lowered or "iosxe" in lowered or "ios xe" in lowered:
         os_name = "ios-xe"
     elif "ios-xr" in lowered or "iosxr" in lowered or "ios xr" in lowered:
         os_name = "ios-xr"
@@ -205,6 +246,22 @@ def _parse_model_and_version(sys_descr: str) -> tuple[str, str]:
         m = re.search(r"(DCS-[\w-]+)", sys_descr)
         if m:
             model = m.group(1)
+
+    # HPE Aruba (formats above ``_aruba_device_type``): the version has its
+    # own pattern per line; the model is the one printed after the product
+    # number on AOS-Switch, else the product number.
+    aruba_type = _aruba_device_type(sys_descr)
+    if aruba_type:
+        version_pattern = {
+            "aruba_instant_on": _INSTANT_ON_VERSION,
+            "aruba_aoscx": _AOSCX_VERSION,
+            "aruba_osswitch": _AOS_SWITCH_VERSION,
+        }[aruba_type]
+        m = version_pattern.search(sys_descr)
+        version = m.group(1) if m else version
+        m = _AOS_SWITCH_MODEL.search(sys_descr) if aruba_type == "aruba_osswitch" else None
+        m = m or _HPE_PRODUCT_NUMBER.search(sys_descr)
+        model = m.group(1) if m else ""
 
     return model, version
 

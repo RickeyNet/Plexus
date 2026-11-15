@@ -47,7 +47,14 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
-from netcontrol.drivers import Driver, DriverCapabilityError, GenericDriver, RouteTableCommands, get_driver
+from netcontrol.drivers import (
+    Driver,
+    DriverCapabilityError,
+    GenericDriver,
+    RouteTableCommands,
+    get_driver,
+    supports_cli,
+)
 from netcontrol.integrations.pathtrace.platforms import interface_addresses
 from netcontrol.integrations.pathtrace.route_tables import interface_key
 from netcontrol.routes import background_jobs
@@ -102,14 +109,14 @@ _running: dict[str, str] = {}
 
 
 def _collectable(host: dict) -> bool:
-    return str(host.get("device_type") or "") != "icmp_only"
+    return supports_cli(host.get("device_type"))
 
 
 def _commands(device_type: str) -> tuple[RouteTableCommands, str, str | None]:
     """The route table commands and the configuration commands (plain, and
     with defaults included or None) of a device type: its driver's, or the
-    Cisco IOS ones for a type without a driver (Aruba, for one), which is
-    what the monitoring poll and Config Backups send such a device."""
+    Cisco IOS ones for a type without a driver, which is what the
+    monitoring poll and Config Backups send such a device."""
     config, config_full = _config_capture_commands(device_type)
     return _route_table_commands(device_type), config, config_full
 
