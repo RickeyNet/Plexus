@@ -91,6 +91,11 @@ jobs:
       - name: Type check (mypy)
         run: mypy netcontrol templates
 
+      # Every document under docs/ is a wiki page (or listed as not
+      # published) and no page links to a file that does not exist.
+      - name: Wiki build check
+        run: python tools/build_wiki.py --check
+
       - name: Security audit (pip-audit)
         run: pip-audit --progress-spinner off
 

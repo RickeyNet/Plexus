@@ -76,7 +76,7 @@ docker compose version  # confirm compose v2 plugin is installed
 ```bash
 sudo usermod -aG docker $USER  # only takes effect in **new** login sessions, so your
 # current shell can't talk to the Docker socket yet. Pick one:
-```
+
 # Option A (cleanest) - log out and SSH back in
 
 exit  # close current shell so next login picks up group change
