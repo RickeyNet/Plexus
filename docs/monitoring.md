@@ -27,7 +27,9 @@ Related guides: [SLA monitoring](sla-monitoring.md),
   1. **Settings > Monitoring**: tick **Enabled** and click **Save
      Monitoring Settings**. Polling is off on a new install.
   2. **Inventory > SNMP Profiles**: create an SNMP profile and assign it to
-     the inventory groups to poll over SNMP.
+     the inventory groups to poll over SNMP. A host can have its own
+     profile, which overrides its group's (see
+     [Discovery](discovery.md#set-up-snmp)).
   3. **Settings > Authentication > Service Credentials**: the service
      credential is used for the SSH part of the poll (VPN and routes).
 
@@ -38,7 +40,7 @@ with a limit of 90 seconds per host. A poll has three independent parts:
 
 | Part | When it runs | What it reads |
 |---|---|---|
-| SNMP | The SNMP settings of the host's group (its SNMP profile, else the global SNMP settings) are enabled | CPU, memory, uptime, interface status, speed, traffic and error counters |
+| SNMP | The host's effective SNMP settings are enabled: its own SNMP profile, else its group's profile, else the group's legacy profile, else the global SNMP settings | CPU, memory, uptime, interface status, speed, traffic and error counters |
 | SSH | A service credential is set | VPN tunnels (`show crypto isakmp sa`, or `show vpn-sessiondb summary` on an ASA) and the route table |
 | ICMP | When the server can ping and ICMP is not switched off | Response time and packet loss (3 pings, 2 second timeout) |
 

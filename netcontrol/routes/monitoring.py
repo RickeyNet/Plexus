@@ -923,14 +923,14 @@ async def _build_poll_targets() -> list[tuple[dict, dict | None, dict]]:
     resolution and target building can't drift apart. Prefers the dedicated
     service credential; falls back to the legacy default_credential_id for
     deployments that haven't migrated yet."""
-    from netcontrol.routes.state import _resolve_snmp_discovery_config
-
     cred_id = state.AUTH_CONFIG.get("service_credential_id") or state.AUTH_CONFIG.get("default_credential_id")
     default_cred = await db.get_credential_raw(cred_id) if cred_id else None
     targets: list[tuple[dict, dict | None, dict]] = []
     for group in await db.get_all_groups():
-        snmp_cfg = _resolve_snmp_discovery_config(group["id"])
-        for h in await db.get_hosts_for_group(group["id"]):
+        hosts = await db.get_hosts_for_group(group["id"])
+        # Every host is a target whatever its SNMP state, carrying its own
+        # effective SNMP config.
+        for h, snmp_cfg in state._hosts_with_snmp_config(hosts, group["id"], enabled_only=False):
             targets.append((h, default_cred, snmp_cfg))
     return targets
 

@@ -51,6 +51,7 @@ function render(canWrite: boolean, selected: number[] = []): string {
         onBulkDelete={noop}
         onBulkTag={noop}
         onBulkEdit={noop}
+        onBulkSnmpProfile={noop}
       />
     </QueryClientProvider>,
   );
@@ -65,7 +66,7 @@ function button(html: string, label: string): string {
 describe('GroupCard write controls', () => {
   it('are enabled for a writable group', () => {
     const html = render(true, [40]);
-    for (const label of ['Sync', '+ Add Host', 'Move', 'Tag…', 'Edit…']) {
+    for (const label of ['Sync', '+ Add Host', 'Move', 'Tag…', 'Edit…', 'Set SNMP…']) {
       expect(button(html, label), label).not.toBe('');
       expect(button(html, label), label).not.toContain('disabled');
     }
@@ -76,7 +77,7 @@ describe('GroupCard write controls', () => {
     const html = render(false, [40]);
     // (Host rows are virtualized and not rendered without a browser; their
     // Edit and Delete use the same readOnly flag.)
-    for (const label of ['Sync', '+ Add Host', 'Move', 'Tag…', 'Edit…', 'Delete', 'Serial']) {
+    for (const label of ['Sync', '+ Add Host', 'Move', 'Tag…', 'Edit…', 'Set SNMP…', 'Delete', 'Serial']) {
       const tag = button(html, label);
       expect(tag, label).toContain('disabled');
       expect(tag, label).toContain(`title="${READ_ONLY_GROUP_REASON}"`);

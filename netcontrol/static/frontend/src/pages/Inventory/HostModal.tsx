@@ -11,6 +11,8 @@ import {
   type InventoryGroupFull,
   type InventoryHost,
   useAddHost,
+  useSnmpProfiles,
+  useTestHostSnmpProfile,
   useUpdateHost,
   groupLabel,
 } from '@/api/inventory';
@@ -28,7 +30,13 @@ import { useObjectScope } from '@/lib/objectScope';
 import { saveCustomDataDraft, useCustomDataDraft } from '@/lib/useCustomDataDraft';
 
 import { type DeviceFieldErrors, DeviceModelFields } from './DeviceModelFields';
-import { isAwsInstanceId } from './helpers';
+import {
+  hostSnmpProfileToSend,
+  isAwsInstanceId,
+  type SnmpTestOutcome,
+  snmpTestOutcome,
+} from './helpers';
+import { SnmpTestResultCard } from './SnmpTestResultCard';
 
 interface Props {
   /** When set, edit mode. When null, create mode (groupId required). */
@@ -66,6 +74,26 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
   // empty and are only sent when typed, so an edit never clears them.
   const [vrfName, setVrfName] = useState(host?.vrf_name ?? '');
   const [vlanId, setVlanId] = useState(host?.vlan_id ?? '');
+  // '' = the host uses its group's profile.
+  const savedSnmpProfileId = host?.snmp_profile_id ?? '';
+  const [snmpProfileId, setSnmpProfileId] = useState(savedSnmpProfileId);
+  const profilesQ = useSnmpProfiles();
+  const testSnmp = useTestHostSnmpProfile();
+  const [snmpTest, setSnmpTest] = useState<SnmpTestOutcome | null>(null);
+  // The test runs the saved profile, so an unsaved choice would test the wrong one.
+  const snmpUnsaved = snmpProfileId !== savedSnmpProfileId;
+  const runSnmpTest = () => {
+    if (!host) return;
+    setSnmpTest(null);
+    testSnmp.mutate(
+      { hostId: host.id },
+      {
+        onSuccess: (r) => setSnmpTest(snmpTestOutcome(r)),
+        onError: (err) =>
+          setSnmpTest({ ok: false, error: `The test did not run: ${err.message} Try again.` }),
+      },
+    );
+  };
   const vrfsQ = useVrfs();
   const vlansQ = useVlans();
   const [errors, setErrors] = useState<{
@@ -109,6 +137,7 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
       vrfName,
       vlanId,
     );
+    const snmpProfileToSend = hostSnmpProfileToSend(savedSnmpProfileId, snmpProfileId, isEdit);
     const withData = draft.ready && (draft.dirty || (!isEdit && draft.hasData));
     if (withData && Object.keys(draft.checkRequired()).length > 0) return;
     let hostId = savedId;
@@ -123,6 +152,7 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
           device_type: deviceType,
           group_id: selectedGroupId,
           aws_instance_id: instanceId,
+          snmp_profile_id: snmpProfileToSend,
           device: deviceFields,
           network,
         });
@@ -134,6 +164,7 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
           ip_address: ip,
           device_type: deviceType,
           aws_instance_id: instanceId,
+          snmp_profile_id: snmpProfileToSend,
           device: deviceFields,
           network,
         });
@@ -298,6 +329,53 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
                 </option>
               ))}
             </datalist>
+          </div>
+          <div className="form-group">
+            <label className="form-label" htmlFor={`${formId}-snmp-profile`}>SNMP profile</label>
+            <select
+              id={`${formId}-snmp-profile`}
+              className="form-select"
+              value={snmpProfileId}
+              onChange={(e) => {
+                setSnmpProfileId(e.target.value);
+                setSnmpTest(null);
+              }}
+              aria-describedby={`${formId}-snmp-profile-help`}
+            >
+              <option value="">Use the group&apos;s profile</option>
+              {(profilesQ.data ?? []).map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            <div className="form-help" id={`${formId}-snmp-profile-help`}>
+              A profile set here overrides the group&apos;s for this host&apos;s monitoring, topology and
+              MAC/ARP collection.
+            </div>
+            {isEdit && (
+              <div style={{ marginTop: 'var(--space-2)' }}>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-secondary"
+                  onClick={runSnmpTest}
+                  disabled={snmpUnsaved || testSnmp.isPending}
+                  aria-describedby={snmpUnsaved ? `${formId}-snmp-test-hint` : undefined}
+                >
+                  {testSnmp.isPending ? 'Testing…' : 'Test SNMP'}
+                </button>
+                {snmpUnsaved && (
+                  <div className="form-help" id={`${formId}-snmp-test-hint`}>
+                    Save the host first: the test uses its saved profile.
+                  </div>
+                )}
+                {snmpTest && (
+                  <div style={{ marginTop: 'var(--space-2)' }} role="status">
+                    <SnmpTestResultCard outcome={snmpTest} />
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           {isEdit && (
             <div className="form-group">

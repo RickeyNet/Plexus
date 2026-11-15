@@ -1006,6 +1006,7 @@ _sanitize_snmp_profile = state._sanitize_snmp_profile
 _sanitize_snmp_profiles = state._sanitize_snmp_profiles
 _sanitize_group_snmp_assignments = state._sanitize_group_snmp_assignments
 _resolve_snmp_discovery_config = state._resolve_snmp_discovery_config
+_resolve_host_snmp_config = state._resolve_host_snmp_config
 
 
 async def _cleanup_expired_jobs() -> int:

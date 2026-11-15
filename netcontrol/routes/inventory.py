@@ -118,6 +118,17 @@ def _validate_aws_instance_id(value: str | None) -> str | None:
     return value
 
 
+def _check_snmp_profile_id(value: str | None) -> str | None:
+    """Trim an SNMP profile id; ``''`` clears an assignment, ``None`` leaves
+    it as is, and an id that names no profile is a 400."""
+    if value is None:
+        return None
+    value = str(value).strip()
+    if value and value not in state.SNMP_PROFILES:
+        raise HTTPException(400, "SNMP profile not found")
+    return value
+
+
 def _invalidate_topology_cache() -> None:
     """Drop the assembled /api/topology cache after a host changes, so a host
     that is an AWS instance (by address or ID) is on the map at once."""
@@ -155,6 +166,8 @@ class HostCreate(HostDeviceValues):
     vlan_id: str = ""
     # The EC2 instance this host is, matched before its addresses on the AWS map.
     aws_instance_id: str = ""
+    # The host's own SNMP profile, used instead of its group's; "" inherits.
+    snmp_profile_id: str = ""
 
 
 # The most hosts one bulk add takes (the Topology page's "Add to inventory").
@@ -196,6 +209,8 @@ class HostUpdate(HostDeviceValues):
     vlan_id: str | None = None
     # None leaves it unchanged; "" clears it.
     aws_instance_id: str | None = None
+    # None leaves it unchanged; "" returns the host to its group's SNMP config.
+    snmp_profile_id: str | None = None
     # Optional - when present, the host is moved to the new group as part
     # of the update so renaming and re-grouping happen in one round-trip.
     group_id: int | None = None
@@ -203,6 +218,12 @@ class HostUpdate(HostDeviceValues):
 
 class FetchSerialRequest(BaseModel):
     credential_id: int
+
+
+class HostSnmpProfileAssign(BaseModel):
+    host_ids: list[int] = Field(default_factory=list)
+    # "" returns the hosts to their group's SNMP config.
+    snmp_profile_id: str = ""
 
 
 class DiscoveryScanRequest(BaseModel):
@@ -1139,6 +1160,8 @@ async def admin_delete_snmp_profile(profile_id: str):
     await db.set_auth_setting("snmp_profiles", state.SNMP_PROFILES)
     if changed:
         await db.set_auth_setting("group_snmp_assignments", state.GROUP_SNMP_ASSIGNMENTS)
+    # Hosts that used it fall back to their group's config.
+    await db.clear_host_snmp_profile(profile_id)
     return {"ok": True}
 
 
@@ -1184,9 +1207,7 @@ async def assign_group_snmp_profile(group_id: int, profile_id: str) -> dict:
     """Assign the named SNMP profile to an inventory group (``""`` removes
     the assignment) and persist it. The caller checks that the group
     exists; an unknown profile raises 400."""
-    profile_id = str(profile_id or "").strip()
-    if profile_id and profile_id not in state.SNMP_PROFILES:
-        raise HTTPException(400, "SNMP profile not found")
+    profile_id = _check_snmp_profile_id(str(profile_id or "")) or ""
     if profile_id:
         state.GROUP_SNMP_ASSIGNMENTS[group_id] = profile_id
     else:
@@ -1473,12 +1494,13 @@ async def _insert_host(group_id: int, body: HostCreate) -> int:
     """Validate and insert one host, then run the per-host follow-ups.
 
     Shared by the single and bulk add routes. Raises ``HTTPException`` for an
-    invalid address, instance ID or device model id and ``ValueError`` when
-    the group already has a host with that IP. The caller invalidates the
-    topology cache and audits the device values.
+    invalid address, instance ID, SNMP profile or device model id and
+    ``ValueError`` when the group already has a host with that IP. The caller
+    invalidates the topology cache and audits the device values.
     """
     _validate_host_ip(body.ip_address)
     aws_instance_id = _validate_aws_instance_id(body.aws_instance_id) or ""
+    snmp_profile_id = _check_snmp_profile_id(body.snmp_profile_id) or ""
     device_values = sent_device_values(body)
     await check_device_values(device_values)
     hid = await db.add_host(
@@ -1489,6 +1511,7 @@ async def _insert_host(group_id: int, body: HostCreate) -> int:
         vrf_name=body.vrf_name or "",
         vlan_id=str(body.vlan_id or ""),
         aws_instance_id=aws_instance_id,
+        snmp_profile_id=snmp_profile_id,
     )
     if device_values:
         await db.set_host_device_fields(hid, device_values, lock=True)
@@ -1611,6 +1634,7 @@ async def _bulk_add(entries: list[HostBulkEntry], default_group_id: int | None, 
             # Validate before creating a group, so a bad entry leaves none behind.
             _validate_host_ip(entry.ip_address)
             _validate_aws_instance_id(entry.aws_instance_id)
+            _check_snmp_profile_id(entry.snmp_profile_id)
             if group_id is None:
                 label = db.GROUP_PATH_SEPARATOR.join(group_path)
                 try:
@@ -1681,6 +1705,7 @@ async def update_host(host_id: int, body: HostUpdate, request: Request):
     if body.ip_address:
         _validate_host_ip(body.ip_address)
     aws_instance_id = _validate_aws_instance_id(body.aws_instance_id)
+    snmp_profile_id = _check_snmp_profile_id(body.snmp_profile_id)
     device_values = sent_device_values(body)
     await check_device_values(device_values)
     prior = await db.get_host(host_id)
@@ -1693,6 +1718,7 @@ async def update_host(host_id: int, body: HostUpdate, request: Request):
         vrf_name=body.vrf_name,
         vlan_id=body.vlan_id,
         aws_instance_id=aws_instance_id,
+        snmp_profile_id=snmp_profile_id,
     )
     if device_values and await db.set_host_device_fields(host_id, device_values, lock=True):
         await audit_device_write(request, "host_update", f"host={host_id} {describe_values(device_values)}")
@@ -1905,6 +1931,20 @@ async def move_hosts(body: dict, request: Request):
     return {"moved": moved}
 
 
+@router.post("/api/hosts/snmp-profile")
+@scoped("hosts")
+async def set_hosts_snmp_profile(body: HostSnmpProfileAssign, request: Request):
+    """Give many hosts their own SNMP profile (``""``: inherit the group's).
+    ``updated`` is the number of hosts written; unknown ids are skipped."""
+    if not body.host_ids:
+        raise HTTPException(400, "host_ids must be a non-empty list")
+    profile_id = _check_snmp_profile_id(body.snmp_profile_id) or ""
+    host_ids = list(dict.fromkeys(body.host_ids))
+    await require_hosts(request, host_ids, write=True)
+    updated = await db.set_hosts_snmp_profile(host_ids, profile_id)
+    return {"ok": True, "updated": updated}
+
+
 # ── Discovery routes ─────────────────────────────────────────────────────────
 
 
@@ -2091,6 +2131,28 @@ async def test_group_snmp_profile(group_id: int, body: dict, request: Request):
     snmp_config = state._resolve_snmp_discovery_config(group_id)
     if not snmp_config.get("enabled"):
         raise HTTPException(400, "SNMP is not enabled for this group")
+    return await _snmp_test(target_ip, snmp_config)
+
+
+@router.post("/api/hosts/{host_id}/snmp-profile/test")
+@scoped("host")
+async def test_host_snmp_profile(host_id: int, request: Request):
+    """SNMP GET against the host's address with its effective SNMP config
+    (its own profile, else its group's)."""
+    # Sends the SNMP credentials to the device: a write, like the group test.
+    host = await require_host(request, host_id, write=True)
+    target_ip = str(host.get("ip_address") or "").strip()
+    if not target_ip:
+        raise HTTPException(400, "Host has no IP address")
+    snmp_config = state._resolve_host_snmp_config(host)
+    if not snmp_config.get("enabled"):
+        raise HTTPException(400, "SNMP is not enabled for this host (its own profile or its group's)")
+    return await _snmp_test(target_ip, snmp_config)
+
+
+async def _snmp_test(target_ip: str, snmp_config: dict) -> dict:
+    """One SNMP GET of ``target_ip`` with ``snmp_config``: the SNMP test
+    response of the group and host routes."""
     timeout = float(snmp_config.get("timeout_seconds", 1.2))
     try:
         result = await _snmp_get(target_ip, timeout, snmp_config)

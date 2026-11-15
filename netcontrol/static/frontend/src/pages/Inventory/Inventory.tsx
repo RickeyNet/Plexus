@@ -34,6 +34,7 @@ import {
 
 import { BulkEditModal } from './BulkEditModal';
 import { BulkMoveModal } from './BulkMoveModal';
+import { BulkSnmpProfileModal } from './BulkSnmpProfileModal';
 import { BulkTagModal } from './BulkTagModal';
 import { DiscoveryModal, type DiscoveryMode } from './DiscoveryModal';
 import { GroupModal } from './GroupModal';
@@ -46,6 +47,7 @@ import {
   filterGroupsByCustomData,
   hiddenByCollapsedAncestor,
   hostMatchesQuery,
+  hostSnmpProfileName,
   loadCollapsedSet,
   loadCompactMode,
   saveCollapsedSet,
@@ -67,6 +69,7 @@ type ModalState =
   | { kind: 'bulk-move'; sourceGroupId: number; hostIds: number[] }
   | { kind: 'bulk-tag'; hostIds: number[] }
   | { kind: 'bulk-edit'; hostIds: number[] }
+  | { kind: 'bulk-snmp'; hostIds: number[] }
   | { kind: 'serial'; target: SerialTarget }
   | { kind: 'snmp-profiles' }
   | {
@@ -472,6 +475,10 @@ export function Inventory() {
               const ids = Array.from(selectedHosts.get(group.id) ?? []);
               if (ids.length) setModal({ kind: 'bulk-edit', hostIds: ids });
             }}
+            onBulkSnmpProfile={() => {
+              const ids = Array.from(selectedHosts.get(group.id) ?? []);
+              if (ids.length) setModal({ kind: 'bulk-snmp', hostIds: ids });
+            }}
           />
         ))}
       </div>
@@ -518,6 +525,9 @@ export function Inventory() {
       )}
       {modal.kind === 'bulk-edit' && (
         <BulkEditModal hostIds={modal.hostIds} onClose={closeModal} />
+      )}
+      {modal.kind === 'bulk-snmp' && (
+        <BulkSnmpProfileModal hostIds={modal.hostIds} onClose={closeModal} />
       )}
       {modal.kind === 'serial' && (
         <SerialModal target={modal.target} onClose={closeModal} />
@@ -570,6 +580,7 @@ interface GroupCardProps {
   onBulkDelete: () => void;
   onBulkTag: () => void;
   onBulkEdit: () => void;
+  onBulkSnmpProfile: () => void;
 }
 
 /** How far each level of sub-groups is indented. */
@@ -605,6 +616,7 @@ export function GroupCard({
   onBulkDelete,
   onBulkTag,
   onBulkEdit,
+  onBulkSnmpProfile,
 }: GroupCardProps) {
   const hosts = group.hosts ?? [];
   const sortedHosts = sortHostsForQuery(hosts, query);
@@ -734,7 +746,7 @@ export function GroupCard({
             value={assignedProfileId}
             onChange={(e) => onAssignProfile(e.target.value)}
             disabled={readOnly}
-            title={readOnlyTitle ?? 'SNMP Profile'}
+            title={readOnlyTitle ?? "The group's SNMP profile; a host's own profile overrides it"}
             aria-label={`SNMP profile for ${groupLabel(group)}`}
           >
             <option value="">No SNMP Profile</option>
@@ -839,6 +851,15 @@ export function GroupCard({
                   >
                     Edit…
                   </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-secondary"
+                    onClick={onBulkSnmpProfile}
+                    disabled={readOnly}
+                    title={readOnlyTitle}
+                  >
+                    Set SNMP…
+                  </button>
                   <DeleteButton onClick={onBulkDelete} disabled={readOnly} title={readOnlyTitle} />
                 </>
               )}
@@ -903,6 +924,7 @@ export function GroupCard({
                         {items.map((vi) => {
                           const host = sortedHosts[vi.index];
                           const isMatch = query && hostMatchesQuery(host, query);
+                          const ownSnmpProfile = hostSnmpProfileName(host, snmpProfiles);
                           return (
                             <tr
                               key={host.id}
@@ -926,7 +948,7 @@ export function GroupCard({
                               </td>
                               <td>
                                 {host.hostname}
-                                {(host.role || host.lifecycle_status) && (
+                                {(host.role || host.lifecycle_status || ownSnmpProfile) && (
                                   <div style={{ marginTop: 'var(--space-1)' }}>
                                     <span className="tag-chips">
                                       {host.role && (
@@ -939,6 +961,11 @@ export function GroupCard({
                                         <TagChip color={host.lifecycle_status.color} title="Lifecycle status">
                                           <span className="sr-only">Lifecycle status: </span>
                                           {host.lifecycle_status.name}
+                                        </TagChip>
+                                      )}
+                                      {ownSnmpProfile && (
+                                        <TagChip color={null} title="This host's own SNMP profile (overrides the group's)">
+                                          SNMP: {ownSnmpProfile}
                                         </TagChip>
                                       )}
                                     </span>

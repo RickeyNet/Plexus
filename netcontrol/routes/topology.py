@@ -982,25 +982,46 @@ async def _correlate_fdb_topology(
     return inferred_by_host
 
 
+_SNMP_NOT_ENABLED_DETAIL = (
+    "SNMP is not enabled for this group or any of its hosts. Configure an SNMP profile first."
+)
+
+
+def _snmp_hosts(hosts: list[dict], group_id: int | None) -> tuple[list[dict], dict[int, dict]]:
+    """The hosts of a group that have SNMP enabled (their own profile, else
+    the group's config) and each one's effective config by host id."""
+    pairs = state._hosts_with_snmp_config(hosts, group_id)
+    return [h for h, _ in pairs], {h["id"]: cfg for h, cfg in pairs}
+
+
+def _any_inferred_topology(snmp_cfgs: dict[int, dict]) -> bool:
+    return any(cfg.get("enable_inferred_topology") for cfg in snmp_cfgs.values())
+
+
 async def _apply_inferred_topology(
     walk_results: list[tuple[dict, list[dict] | None, list[dict]]],
-    snmp_cfg: dict,
+    snmp_cfgs: dict[int, dict],
 ) -> tuple[list[tuple[dict, list[dict] | None, list[dict]]], int]:
-    """If snmp_cfg enables inferred topology, refresh FDB/ARP/ifPhysAddress for
-    every successfully walked host, run _correlate_fdb_topology, and merge
-    inferred neighbors into each host's neighbor list.
+    """For every successfully walked host whose SNMP config (``snmp_cfgs``,
+    by host id) enables inferred topology, refresh FDB/ARP/ifPhysAddress, run
+    _correlate_fdb_topology, and merge inferred neighbors into each host's
+    neighbor list.
 
     Returns (new_walk_results, inferred_count). On any failure, returns the
     input walk_results unchanged with inferred_count=0 - discovery should never
     fail because correlation failed.
     """
-    if not snmp_cfg.get("enable_inferred_topology"):
+    if not _any_inferred_topology(snmp_cfgs):
         return walk_results, 0
     try:
         from netcontrol.routes.mac_tracking import collect_mac_arp_tables
         from netcontrol.routes.snmp import auto_discover_data_sources
 
-        walked_hosts = [h for h, n, _ in walk_results if n is not None]
+        walked_hosts = [
+            h
+            for h, n, _ in walk_results
+            if n is not None and snmp_cfgs.get(h["id"], {}).get("enable_inferred_topology")
+        ]
         if not walked_hosts:
             return walk_results, 0
 
@@ -1011,16 +1032,17 @@ async def _apply_inferred_topology(
         sem = state.device_op_semaphore()
 
         async def _refresh_one(h: dict) -> None:
+            cfg = snmp_cfgs[h["id"]]
             async with sem:
                 await collect_mac_arp_tables(
                     h["id"],
                     h["ip_address"],
-                    snmp_cfg,
+                    cfg,
                     device_type=h.get("device_type", ""),
                     host=h,
                 )
             async with sem:
-                await auto_discover_data_sources(h["id"], h["ip_address"], snmp_cfg)
+                await auto_discover_data_sources(h["id"], h["ip_address"], cfg)
 
         await asyncio.gather(*(_refresh_one(h) for h in walked_hosts), return_exceptions=True)
 
@@ -1058,23 +1080,20 @@ async def _run_topology_discovery_once() -> dict:
     groups_scanned = 0
 
     for group in groups:
-        snmp_cfg = state._resolve_snmp_discovery_config(group["id"])
-        if not snmp_cfg.get("enabled", False):
-            continue
-        hosts = await db.get_hosts_for_group(group["id"])
+        hosts, snmp_cfgs = _snmp_hosts(await db.get_hosts_for_group(group["id"]), group["id"])
         if not hosts:
             continue
 
         groups_scanned += 1
         semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
 
-        async def _walk_host(host: dict, _cfg=snmp_cfg) -> tuple[dict, list[dict] | None, list[dict]]:
+        async def _walk_host(host: dict, _cfgs=snmp_cfgs) -> tuple[dict, list[dict] | None, list[dict]]:
             async with semaphore:
                 try:
                     neighbors, if_stats = await _discover_neighbors(
                         host["id"],
                         host["ip_address"],
-                        _cfg,
+                        _cfgs[host["id"]],
                         timeout_seconds=5.0,
                     )
                     return host, neighbors, if_stats
@@ -1083,7 +1102,7 @@ async def _run_topology_discovery_once() -> dict:
                     return host, None, []
 
         walk_results = await asyncio.gather(*[_walk_host(h) for h in hosts])
-        walk_results, _inferred_count = await _apply_inferred_topology(list(walk_results), snmp_cfg)
+        walk_results, _inferred_count = await _apply_inferred_topology(list(walk_results), snmp_cfgs)
 
         for host, neighbors, if_stats in walk_results:
             if neighbors is None:
@@ -1122,7 +1141,7 @@ async def _run_topology_discovery_once() -> dict:
                 try:
                     from netcontrol.routes.snmp import auto_discover_data_sources
 
-                    await auto_discover_data_sources(host["id"], host["ip_address"], snmp_cfg)
+                    await auto_discover_data_sources(host["id"], host["ip_address"], snmp_cfgs[host["id"]])
                 except Exception as exc:
                     LOGGER.warning(
                         "topology scheduled: data source auto-discovery failed for %s: %s", host["ip_address"], exc
@@ -1134,7 +1153,7 @@ async def _run_topology_discovery_once() -> dict:
                     await collect_mac_arp_tables(
                         host["id"],
                         host["ip_address"],
-                        snmp_cfg,
+                        snmp_cfgs[host["id"]],
                         device_type=host.get("device_type", ""),
                         host=host,
                     )
@@ -1144,7 +1163,7 @@ async def _run_topology_discovery_once() -> dict:
                 try:
                     from netcontrol.routes.mac_tracking import collect_interface_inventory
 
-                    await collect_interface_inventory(host["id"], host["ip_address"], snmp_cfg)
+                    await collect_interface_inventory(host["id"], host["ip_address"], snmp_cfgs[host["id"]])
                 except Exception as exc:
                     LOGGER.warning(
                         "topology scheduled: interface inventory collection failed for %s: %s", host["ip_address"], exc
@@ -1899,15 +1918,12 @@ async def discover_topology_stream():
     async def _event_generator():
         try:
             groups = await db.get_all_groups()
-            # Collect all (group, hosts, snmp_cfg) tuples for enabled groups
-            work: list[tuple[dict, list[dict], dict]] = []
+            # (group, SNMP-enabled hosts, their configs by host id) per group
+            work: list[tuple[dict, list[dict], dict[int, dict]]] = []
             for group in groups:
-                snmp_cfg = state._resolve_snmp_discovery_config(group["id"])
-                if not snmp_cfg.get("enabled", False):
-                    continue
-                hosts = await db.get_hosts_for_group(group["id"])
+                hosts, snmp_cfgs = _snmp_hosts(await db.get_hosts_for_group(group["id"]), group["id"])
                 if hosts:
-                    work.append((group, hosts, snmp_cfg))
+                    work.append((group, hosts, snmp_cfgs))
 
             total_hosts = sum(len(hosts) for _, hosts, _ in work)
             yield f"data: {json.dumps({'type': 'start', 'total_hosts': total_hosts, 'total_groups': len(work)})}\n\n"
@@ -1921,20 +1937,20 @@ async def discover_topology_stream():
             total_errors = 0
             semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
 
-            for group, hosts, snmp_cfg in work:
+            for group, hosts, snmp_cfgs in work:
                 group_name = group.get("name", f"Group {group['id']}")
                 yield f"data: {json.dumps({'type': 'group_start', 'group': group_name, 'host_count': len(hosts)})}\n\n"
 
                 # Phase 1: concurrent SNMP walks with per-host progress
                 walk_results: list[tuple[dict, list[dict] | None, list[dict]]] = []
 
-                async def _walk_host(host: dict, _cfg=snmp_cfg):
+                async def _walk_host(host: dict, _cfgs=snmp_cfgs):
                     async with semaphore:
                         try:
                             neighbors, if_stats = await _discover_neighbors(
                                 host["id"],
                                 host["ip_address"],
-                                _cfg,
+                                _cfgs[host["id"]],
                                 timeout_seconds=5.0,
                             )
                             return host, neighbors, if_stats
@@ -1951,9 +1967,9 @@ async def discover_topology_stream():
                     yield f"data: {json.dumps({'type': 'host_walked', 'scanned': scanned, 'total_hosts': total_hosts, 'hostname': host['hostname'], 'ip': host['ip_address'], 'neighbors': neighbor_count, 'ok': neighbors is not None})}\n\n"
 
                 # Phase 1b: optional inferred topology via FDB+ARP correlation.
-                if snmp_cfg.get("enable_inferred_topology"):
+                if _any_inferred_topology(snmp_cfgs):
                     yield f"data: {json.dumps({'type': 'inferred_start', 'group': group_name})}\n\n"
-                    walk_results, _inferred_count = await _apply_inferred_topology(walk_results, snmp_cfg)
+                    walk_results, _inferred_count = await _apply_inferred_topology(walk_results, snmp_cfgs)
                     yield f"data: {json.dumps({'type': 'inferred_done', 'group': group_name, 'inferred_links': _inferred_count})}\n\n"
 
                 # Phase 2: sequential DB writes
@@ -2019,11 +2035,9 @@ async def discover_topology_for_group(group_id: int):
         if not hosts:
             return {"hosts_scanned": 0, "links_discovered": 0, "errors": 0}
 
-        snmp_cfg = state._resolve_snmp_discovery_config(group_id)
-        if not snmp_cfg.get("enabled", False):
-            raise HTTPException(
-                status_code=400, detail="SNMP is not enabled for this group. Configure an SNMP profile first."
-            )
+        hosts, snmp_cfgs = _snmp_hosts(hosts, group_id)
+        if not hosts:
+            raise HTTPException(status_code=400, detail=_SNMP_NOT_ENABLED_DETAIL)
 
         LOGGER.info(
             "topology: starting discovery for group %d (%s) -- %d hosts", group_id, group.get("name", "?"), len(hosts)
@@ -2041,7 +2055,7 @@ async def discover_topology_for_group(group_id: int):
                     neighbors, if_stats = await _discover_neighbors(
                         host["id"],
                         host["ip_address"],
-                        snmp_cfg,
+                        snmp_cfgs[host["id"]],
                         timeout_seconds=5.0,
                     )
                     LOGGER.info(
@@ -2058,7 +2072,7 @@ async def discover_topology_for_group(group_id: int):
                     return host, None, []
 
         walk_results = await asyncio.gather(*[_walk_host(h) for h in hosts])
-        walk_results, _inferred_count = await _apply_inferred_topology(list(walk_results), snmp_cfg)
+        walk_results, _inferred_count = await _apply_inferred_topology(list(walk_results), snmp_cfgs)
         LOGGER.info("topology: all SNMP walks complete, writing results to DB...")
 
         # Phase 2: sequential DB writes (avoids "database is locked")
@@ -2135,23 +2149,20 @@ async def discover_topology_all():
         total_errors = 0
 
         for group in groups:
-            snmp_cfg = state._resolve_snmp_discovery_config(group["id"])
-            if not snmp_cfg.get("enabled", False):
-                continue
-            hosts = await db.get_hosts_for_group(group["id"])
+            hosts, snmp_cfgs = _snmp_hosts(await db.get_hosts_for_group(group["id"]), group["id"])
             if not hosts:
                 continue
 
             semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
 
             # Phase 1: concurrent SNMP walks (no DB writes)
-            async def _walk_host(host: dict, _cfg=snmp_cfg) -> tuple[dict, list[dict] | None, list[dict]]:
+            async def _walk_host(host: dict, _cfgs=snmp_cfgs) -> tuple[dict, list[dict] | None, list[dict]]:
                 async with semaphore:
                     try:
                         neighbors, if_stats = await _discover_neighbors(
                             host["id"],
                             host["ip_address"],
-                            _cfg,
+                            _cfgs[host["id"]],
                             timeout_seconds=5.0,
                         )
                         return host, neighbors, if_stats
@@ -2160,7 +2171,7 @@ async def discover_topology_all():
                         return host, None, []
 
             walk_results = await asyncio.gather(*[_walk_host(h) for h in hosts])
-            walk_results, _inferred_count = await _apply_inferred_topology(list(walk_results), snmp_cfg)
+            walk_results, _inferred_count = await _apply_inferred_topology(list(walk_results), snmp_cfgs)
 
             # Phase 2: sequential DB writes (avoids "database is locked")
             for host, neighbors, if_stats in walk_results:
@@ -2223,12 +2234,11 @@ async def discover_topology_for_group_stream(group_id: int):
     group = await db.get_group(group_id)
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
-    snmp_cfg = state._resolve_snmp_discovery_config(group_id)
-    if not snmp_cfg.get("enabled", False):
-        raise HTTPException(
-            status_code=400, detail="SNMP is not enabled for this group. Configure an SNMP profile first."
-        )
-    hosts = await db.get_hosts_for_group(group_id)
+    group_hosts = await db.get_hosts_for_group(group_id)
+    hosts, snmp_cfgs = _snmp_hosts(group_hosts, group_id)
+    # An empty group is only an error when the group itself has SNMP off.
+    if not hosts and (group_hosts or not state._resolve_snmp_discovery_config(group_id).get("enabled", False)):
+        raise HTTPException(status_code=400, detail=_SNMP_NOT_ENABLED_DETAIL)
 
     async def _event_generator():
         try:
@@ -2256,7 +2266,7 @@ async def discover_topology_for_group_stream(group_id: int):
                         neighbors, if_stats = await _discover_neighbors(
                             host["id"],
                             host["ip_address"],
-                            snmp_cfg,
+                            snmp_cfgs[host["id"]],
                             timeout_seconds=5.0,
                         )
                         return host, neighbors, if_stats
@@ -2278,9 +2288,9 @@ async def discover_topology_for_group_stream(group_id: int):
                 yield f"data: {json.dumps({'type': 'host_walked', 'scanned': scanned, 'total_hosts': total_hosts, 'hostname': host['hostname'], 'ip': host['ip_address'], 'neighbors': neighbor_count, 'ok': neighbors is not None})}\n\n"
 
             # Phase 1b: optional inferred topology via FDB+ARP correlation.
-            if snmp_cfg.get("enable_inferred_topology"):
+            if _any_inferred_topology(snmp_cfgs):
                 yield f"data: {json.dumps({'type': 'inferred_start'})}\n\n"
-                walk_results, inferred_count = await _apply_inferred_topology(walk_results, snmp_cfg)
+                walk_results, inferred_count = await _apply_inferred_topology(walk_results, snmp_cfgs)
                 yield f"data: {json.dumps({'type': 'inferred_done', 'inferred_links': inferred_count})}\n\n"
 
             # Phase 2: sequential DB writes
@@ -2426,11 +2436,7 @@ async def _run_stp_discovery_once(
     vlan_ids_seen: set[int] = set()
 
     for group in groups:
-        snmp_cfg = state._resolve_snmp_discovery_config(group["id"])
-        if not snmp_cfg.get("enabled", False):
-            continue
-
-        hosts = await db.get_hosts_for_group(group["id"])
+        hosts, snmp_cfgs = _snmp_hosts(await db.get_hosts_for_group(group["id"]), group["id"])
         if not hosts:
             continue
 
@@ -2438,7 +2444,8 @@ async def _run_stp_discovery_once(
         total_hosts += len(hosts)
         semaphore = asyncio.Semaphore(max(1, state.DISCOVERY_MAX_CONCURRENT_PROBES))
 
-        async def _collect_host(host: dict, _cfg=snmp_cfg):
+        async def _collect_host(host: dict, _cfgs=snmp_cfgs):
+            _cfg = _cfgs[host["id"]]
             async with semaphore:
                 target_vlans: list[int]
                 if all_vlans_flag or vlan_id_int == 0:

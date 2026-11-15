@@ -683,6 +683,7 @@ async def get_mac_collection_by_host() -> list[dict]:
                       h.ip_address      AS ip_address,
                       h.device_type     AS device_type,
                       h.group_id        AS group_id,
+                      h.snmp_profile_id AS snmp_profile_id,
                       g.name            AS group_name,
                       COALESCE(m.mac_count, 0)        AS mac_count,
                       COALESCE(m.unique_macs, 0)      AS unique_macs,

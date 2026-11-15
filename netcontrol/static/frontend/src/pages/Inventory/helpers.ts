@@ -2,6 +2,7 @@ import type {
   DiscoveredHost,
   InventoryGroupFull,
   InventoryHost,
+  SnmpTestResponse,
   SshEnrichmentSummary,
 } from '@/api/inventory';
 import { type CustomDataFilterValue, isEmptyFilter, matchesCustomData } from '@/lib/customData';
@@ -268,4 +269,42 @@ export function discoveredHostFacts(host: DiscoveredHost): string {
 export function discoveredHostSshError(host: DiscoveredHost): string {
   const ssh = host.discovery?.ssh;
   return ssh && !ssh.ok ? ssh.error || 'SSH failed' : '';
+}
+
+/**
+ * The `snmp_profile_id` a host save sends: on an edit only when the choice
+ * differs from the saved one (so an edit that leaves it alone never touches
+ * it), on a create only when a profile was chosen. undefined: send nothing.
+ */
+export function hostSnmpProfileToSend(
+  saved: string | null | undefined,
+  chosen: string,
+  isEdit: boolean,
+): string | undefined {
+  if (isEdit) return chosen !== (saved ?? '') ? chosen : undefined;
+  return chosen || undefined;
+}
+
+/**
+ * The name of the host's own SNMP profile, for its row badge. null when the
+ * host uses its group's profile, or its profile is not in the list (deleted).
+ */
+export function hostSnmpProfileName(
+  host: Pick<InventoryHost, 'snmp_profile_id'>,
+  profiles: { id: string; name: string }[],
+): string | null {
+  if (!host.snmp_profile_id) return null;
+  return profiles.find((p) => p.id === host.snmp_profile_id)?.name ?? null;
+}
+
+/** What an SNMP profile test showed: the device it read, or why it failed. */
+export type SnmpTestOutcome =
+  | { ok: true; data: SnmpTestResponse['result'] }
+  | { ok: false; error: string };
+
+/** The outcome of an SNMP test response. */
+export function snmpTestOutcome(response: SnmpTestResponse): SnmpTestOutcome {
+  return response.success
+    ? { ok: true, data: response.result }
+    : { ok: false, error: response.error || 'Unknown error' };
 }

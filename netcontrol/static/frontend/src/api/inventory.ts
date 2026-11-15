@@ -46,6 +46,8 @@ export interface InventoryHost {
   role?: HostColorRef | null;
   lifecycle_status?: HostColorRef | null;
   site?: { id: number; name: string } | null;
+  /** The host's own SNMP profile ('' or absent: it uses its group's profile). */
+  snmp_profile_id?: string;
 }
 
 export interface HostHardwareRef {
@@ -366,6 +368,7 @@ export function useAddHost() {
       ip_address,
       device_type,
       aws_instance_id,
+      snmp_profile_id,
       device,
       network,
     }: {
@@ -375,6 +378,8 @@ export function useAddHost() {
       device_type: string;
       /** Optional EC2 instance ID ('' or omitted leaves it unset). */
       aws_instance_id?: string;
+      /** The host's own SNMP profile ('' or omitted: it uses its group's). */
+      snmp_profile_id?: string;
       /** Device model values to store with the host. */
       device?: HostDeviceFields;
       /** The host's VRF and VLAN id (omitted keys stay unset). */
@@ -387,6 +392,7 @@ export function useAddHost() {
           ip_address,
           device_type,
           ...(aws_instance_id !== undefined ? { aws_instance_id } : {}),
+          ...(snmp_profile_id !== undefined ? { snmp_profile_id } : {}),
           ...device,
           ...network,
         },
@@ -473,6 +479,7 @@ export function useUpdateHost() {
       device_type,
       group_id,
       aws_instance_id,
+      snmp_profile_id,
       device,
       network,
     }: {
@@ -483,6 +490,8 @@ export function useUpdateHost() {
       group_id?: number;
       /** EC2 instance ID; '' clears it, omitted leaves it unchanged. */
       aws_instance_id?: string;
+      /** The host's own SNMP profile; '' clears it (back to the group's), omitted leaves it unchanged. */
+      snmp_profile_id?: string;
       /** Changed device model values only: setting a device type or role locks it against discovery. */
       device?: HostDeviceFields;
       /** VRF and VLAN id; with neither key the stored values stay (build it with `hostNetworkBody`). */
@@ -496,6 +505,7 @@ export function useUpdateHost() {
           device_type,
           group_id,
           ...(aws_instance_id !== undefined ? { aws_instance_id } : {}),
+          ...(snmp_profile_id !== undefined ? { snmp_profile_id } : {}),
           ...device,
           ...network,
         },
@@ -586,6 +596,32 @@ export function useAssignSnmpProfile() {
         body: { snmp_profile_id: profileId },
       }),
     onSuccess: () => invalidateSnmp(qc),
+  });
+}
+
+/** Gives the hosts their own SNMP profile; '' puts them back on their group's. */
+export function useSetHostsSnmpProfile() {
+  const qc = useQueryClient();
+  return useMutation<
+    { ok: boolean; updated: number },
+    Error,
+    { hostIds: number[]; profileId: string }
+  >({
+    mutationFn: ({ hostIds, profileId }) =>
+      apiRequest('/hosts/snmp-profile', {
+        method: 'POST',
+        body: { host_ids: hostIds, snmp_profile_id: profileId },
+      }),
+    // The profile id rides on the host rows.
+    onSuccess: () => invalidateInventory(qc),
+  });
+}
+
+/** Tests the host's saved effective profile (its own, else its group's) against its IP. */
+export function useTestHostSnmpProfile() {
+  return useMutation<SnmpTestResponse, Error, { hostId: number }>({
+    mutationFn: ({ hostId }) =>
+      apiRequest(`/hosts/${hostId}/snmp-profile/test`, { method: 'POST' }),
   });
 }
 

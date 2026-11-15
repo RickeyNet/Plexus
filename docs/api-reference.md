@@ -40,9 +40,11 @@ For a scoped user the inventory, config backup, config drift and intended config
 | GET    | `/api/inventory/{id}`         | Group detail with hosts                          |
 | DELETE | `/api/inventory/{id}`         | Delete group and its hosts                       |
 | GET    | `/api/inventory/{id}/hosts`   | List hosts in group                              |
-| POST   | `/api/inventory/{id}/hosts`   | Add host `{hostname, ip_address, device_type}`   |
-| PUT    | `/api/hosts/{id}`             | Update a host `{hostname, ip_address, device_type, vrf_name?, vlan_id?, ...}`; `vrf_name` and `vlan_id` are each left alone when absent or null and set (`""` clears) when sent |
+| POST   | `/api/inventory/{id}/hosts`   | Add host `{hostname, ip_address, device_type, snmp_profile_id?}`; `snmp_profile_id` (default `""`: use the group's SNMP config) names the host's own SNMP profile; unknown: 400 `SNMP profile not found` |
+| PUT    | `/api/hosts/{id}`             | Update a host `{hostname, ip_address, device_type, vrf_name?, vlan_id?, snmp_profile_id?, ...}`; `vrf_name`, `vlan_id` and `snmp_profile_id` are each left alone when absent or null and set (`""` clears) when sent |
 | DELETE | `/api/hosts/{id}`             | Remove a host                                    |
+| POST   | `/api/hosts/snmp-profile`     | `{host_ids, snmp_profile_id}`: give the hosts their own SNMP profile (`""`: back to the group's). Write access to every host. `{"ok": true, "updated": <n>}`; empty `host_ids` or an unknown profile: 400 |
+| POST   | `/api/hosts/{id}/snmp-profile/test` | SNMP GET of the host's address with its effective SNMP config (own profile, else the group's). Write access to the host. `{success, target_ip, result?, error?}`, like the group test; 400 when SNMP is off for the host |
 
 ### VRFs, VLANs and interface addresses
 Reads need the `ipam` feature, writes are admin only and audited (`network_objects`). See [vrfs-and-vlans.md](vrfs-and-vlans.md).
