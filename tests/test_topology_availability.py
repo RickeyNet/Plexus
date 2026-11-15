@@ -14,6 +14,10 @@ Covers, with no network access:
                   AWS account; parameter validation
   * retention   - purge of old transitions and stale entities, and its call
                   from the monitoring retention cleanup
+  * metrics/SLA - the latency / jitter / loss a vendor reports (OPNsense
+                  gateways) stored raw and per day, the daily rows outliving
+                  the raw retention, SLA targets of topology entities
+                  evaluated in the SLA pass, alerting once, and their API
 """
 
 from __future__ import annotations
@@ -186,8 +190,9 @@ def test_opnsense_gateways_and_tunnels_map_every_state():
     assert by_name[("uplink", f"{host} WAN_GW6")] == "degraded"
     assert by_name[("uplink", f"{host} CORE_GW")] == "unknown"
     tunnels = Counter(e.state for e in entities if e.entity_type == "tunnel")
-    # IPsec up and down, WireGuard online and stale, OpenVPN connected and reconnecting.
-    assert tunnels == {"up": 3, "down": 1, "degraded": 2}
+    # IPsec up, down and up without an installed child SA, WireGuard online and
+    # stale, OpenVPN connected and reconnecting.
+    assert tunnels == {"up": 3, "down": 1, "degraded": 3}
     devices = {e.entity_id: e.state for e in entities if e.entity_type == "device"}
     assert devices == {f"d:{host}": "up", "ovpn:server:1": "up", "ovpn:server:3": "down"}
     # Gateway stubs and VPN peers are no devices; no site entities.
@@ -691,3 +696,151 @@ def test_api_validates_parameters(api):
     assert client.get("/api/availability/topology/summary?days=0").status_code == 422
     assert client.get("/api/availability/topology/outages?limit=0").status_code == 422
     assert client.get("/api/availability/topology/transitions?days=366").status_code == 422
+
+
+# ── Metrics and SLA targets of topology entities ─────────────────────────────
+
+_GW = "uplink:w:{name}>d:fw-edge-1.example.com:Gateway"
+
+
+async def test_reported_metrics_are_stored_and_outlive_the_raw_retention(notifications):
+    snapshot = SNAPSHOTS["opnsense"]()
+    await tracking.record_snapshot_states("opnsense", 31, snapshot, now=T0)
+    await tracking.record_snapshot_states("opnsense", 31, snapshot, now=T1)
+    values = await db_module.get_topology_entity_metric_values(7, now=T2, provider="opnsense", org_ref=31)
+    wan = values["entities"][("opnsense", 31, "uplink", _GW.format(name="WAN_GW"))]
+    assert wan["avg_latency_ms"] == 4.2 and wan["jitter_ms"] == 0.3 and wan["avg_packet_loss_pct"] == 0.0
+    assert wan["latency_samples"] == 2 and wan["packet_loss_samples"] == 2
+    down = values["entities"][("opnsense", 31, "uplink", _GW.format(name="WAN2_GW"))]
+    assert down["avg_latency_ms"] is None and down["avg_packet_loss_pct"] == 100.0
+    # Gateways without monitor data and tunnels report nothing.
+    assert ("opnsense", 31, "uplink", _GW.format(name="CORE_GW")) not in values["entities"]
+    assert all(key[2] == "uplink" for key in values["entities"])
+
+    history = await db_module.get_topology_entity_metric_history(
+        "opnsense", 31, "uplink", _GW.format(name="WAN_GW6"), days=7, now=T2
+    )
+    assert [s["latency_ms"] for s in history["samples"]] == [182.5, 182.5]
+    assert [d["day"] for d in history["daily"]] == ["2026-01-01", "2026-01-02"]
+    assert history["daily"][0]["latency"] == {"avg": 182.5, "min": 182.5, "max": 182.5, "samples": 1}
+
+    # The raw samples are gone after the monitoring retention; the daily rows stay.
+    await db_module.purge_topology_entity_metrics(30, 3650)
+    history = await db_module.get_topology_entity_metric_history(
+        "opnsense", 31, "uplink", _GW.format(name="WAN_GW"), days=365, now=T2
+    )
+    assert history["samples"] == [] and len(history["daily"]) == 2
+    assert history["summary"]["avg_latency_ms"] == 4.2 and history["summary"]["latency_samples"] == 2
+
+
+async def test_topology_sla_targets_are_evaluated_and_alert_once(notifications):
+    from datetime import UTC, datetime
+
+    snapshot = SNAPSHOTS["opnsense"]()
+    await tracking.record_snapshot_states("opnsense", 32, snapshot, now=T0)
+    await tracking.record_snapshot_states("opnsense", 32, snapshot, now=T1)
+    latency = await db_module.create_sla_target(
+        "Gateway latency", "latency", 50.0, 100.0, window_days=7, provider="opnsense", org_ref=32, entity_type="uplink"
+    )
+    uptime = await db_module.create_sla_target(
+        "Gateway uptime", "uptime", 99.0, 95.0, window_days=7, provider="opnsense", org_ref=32, entity_type="uplink"
+    )
+    try:
+        result = await monitoring_routes.run_sla_cycle(datetime(2026, 1, 2, 12, tzinfo=UTC))
+        topology = result["topology_evaluation"]
+        assert topology["targets"] >= 2 and topology["breach"] >= 2
+        # A topology target is never evaluated for inventory hosts.
+        assert await db_module.get_sla_compliance(target_id=latency) == []
+
+        rows = await db_module.get_topology_sla_compliance(provider="opnsense", org_ref=32, target_id=latency)
+        by_name = {r["name"]: (r["status"], r["value"], r["sample_count"]) for r in rows}
+        assert by_name["fw-edge-1.example.com WAN_GW"] == ("met", 4.2, 2)
+        assert by_name["fw-edge-1.example.com WAN_GW6"] == ("breach", 182.5, 2)
+        assert by_name["fw-edge-1.example.com WAN2_GW"][0] == "no_data"
+        assert by_name["fw-edge-1.example.com CORE_GW"][0] == "no_data"
+        uptimes = {
+            r["name"]: r["status"]
+            for r in await db_module.get_topology_sla_compliance(provider="opnsense", org_ref=32, target_id=uptime)
+        }
+        assert uptimes["fw-edge-1.example.com WAN2_GW"] == "breach"  # down the whole window
+        assert uptimes["fw-edge-1.example.com WAN_GW"] == "met"
+
+        alerts = [e for e in notifications if e["alert_type"] == "sla_breach" and ":opnsense:32:" in e["dedup_key"]]
+        assert {e["dedup_key"] for e in alerts} == {
+            f"sla:topo:{latency}:opnsense:32:uplink:{_GW.format(name='WAN_GW6')}",
+            f"sla:topo:{uptime}:opnsense:32:uplink:{_GW.format(name='WAN2_GW')}",
+        }
+        assert all(e["severity"] == "critical" and e["host_id"] is None for e in alerts)
+        assert "Gateway latency" in next(e["message"] for e in alerts if str(latency) in e["dedup_key"])
+
+        # Unchanged status: no second alert; the history has one row per entity.
+        await monitoring_routes.run_sla_cycle(datetime(2026, 1, 2, 13, tzinfo=UTC))
+        again = [e for e in notifications if e["alert_type"] == "sla_breach" and ":opnsense:32:" in e["dedup_key"]]
+        assert len(again) == len(alerts)
+        history = await db_module.get_topology_sla_compliance_history(target_id=latency)
+        assert len(history) == len(rows)
+    finally:
+        await db_module.delete_sla_target(latency)
+        await db_module.delete_sla_target(uptime)
+    assert await db_module.get_topology_sla_compliance(provider="opnsense", org_ref=32) == []
+
+
+def test_api_topology_sla_targets_metrics_and_compliance(api):
+    import netcontrol.routes.meraki_topology as topology_routes
+
+    client, headers = api
+    built = client.post("/api/sources/sample?provider=opnsense", headers=headers)
+    assert built.status_code == 201, built.text
+    org_ref = built.json()["org_ref"]
+
+    bad = {"name": "x", "metric": "latency", "provider": "opnsense", "host_id": 1}
+    assert client.post("/api/sla/targets", json=bad, headers=headers).status_code == 400
+    bad = {"name": "x", "metric": "latency", "provider": "bogus"}
+    assert client.post("/api/sla/targets", json=bad, headers=headers).status_code == 400
+    bad = {"name": "x", "metric": "latency", "provider": "opnsense", "entity_type": "vpc"}
+    assert client.post("/api/sla/targets", json=bad, headers=headers).status_code == 400
+    body = {
+        "name": "OPNsense gateway latency",
+        "metric": "latency",
+        "target_value": 50,
+        "warning_value": 100,
+        "window_days": 7,
+        "provider": "opnsense",
+        "org_ref": org_ref,
+        "entity_type": "uplink",
+    }
+    created = client.post("/api/sla/targets", json=body, headers=headers)
+    assert created.status_code == 201, created.text
+    target_id = created.json()["id"]
+    try:
+        target = next(t for t in client.get("/api/sla/targets").json() if t["id"] == target_id)
+        assert (target["provider"], target["org_ref"], target["entity_type"]) == ("opnsense", org_ref, "uplink")
+        assert client.post("/api/sla/evaluate", headers=headers).status_code == 200
+
+        rows = client.get(f"/api/sla/compliance?scope=topology&provider=opnsense&org_ref={org_ref}").json()
+        statuses = {r["name"]: r["status"] for r in rows if r["target_id"] == target_id}
+        assert statuses["fw-edge-1.example.com WAN_GW"] == "met"
+        assert statuses["fw-edge-1.example.com WAN_GW6"] == "breach"
+        assert all(r["target_id"] != target_id for r in client.get("/api/sla/compliance").json())
+        history = client.get(f"/api/sla/compliance/history?scope=topology&target_id={target_id}").json()
+        assert len(history) == len(statuses)
+
+        summary = client.get(f"/api/availability/topology/summary?provider=opnsense&org_ref={org_ref}").json()
+        gw6 = next(e for e in summary["entities"] if e["name"] == "fw-edge-1.example.com WAN_GW6")
+        assert gw6["avg_latency_ms"] == 182.5 and gw6["jitter_ms"] == 40.1 and gw6["sla_status"] == "breach"
+        tunnel = next(e for e in summary["entities"] if e["entity_type"] == "tunnel")
+        assert tunnel["avg_latency_ms"] is None and tunnel["sla_status"] is None
+
+        metrics = client.get(
+            "/api/availability/topology/metrics",
+            params={"provider": "opnsense", "org_ref": org_ref, "entity_type": "uplink", "entity_id": gw6["entity_id"]},
+        )
+        assert metrics.status_code == 200, metrics.text
+        found = metrics.json()
+        assert found["samples"][-1]["latency_ms"] == 182.5 and found["daily"] and found["summary"]["jitter_ms"] == 40.1
+        assert client.get("/api/availability/topology/metrics?provider=opnsense").status_code == 422
+    finally:
+        assert client.delete(f"/api/sla/targets/{target_id}", headers=headers).status_code == 200
+        # The demo firewall's subnets must not reach other test files' maps.
+        assert client.delete(f"/api/sources/{org_ref}", headers=headers).status_code == 200
+        topology_routes._SNAPSHOT_CACHE.clear()

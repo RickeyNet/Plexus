@@ -20,11 +20,18 @@ is stored:
   - ``sync_audit_advisories``: the findings of the firewall's security
     audit become software advisories of the ``opnsense`` platform at the
     firewall's version (source ``opnsense-audit``), upserted by VuXML id so
-    repeated collections update rather than duplicate them. A finding the
-    audit no longer reports has the version taken off its advisory, so its
-    alert resolves. The software refresh that follows every stored
-    collection matches them to the tracked firewall and raises
-    ``software_alerts`` the normal way.
+    repeated collections update rather than duplicate them, and limited to
+    the firewall(s) whose audit reported them (``device_keys``: the tracked
+    device key of this firewall), so another firewall on the same version
+    is not alerted. A finding this firewall's audit no longer reports has
+    this firewall taken off its advisory (and the versions too once no
+    firewall is left), so its alert resolves while another firewall's stays.
+    Only an audit that verifiably completed (``completed``, see
+    ``collector.parse_audit_log``) changes anything: an audit whose
+    vulnerability database could not be fetched, that timed out or whose
+    log is cut short says nothing about what is fixed. The software refresh
+    that follows every stored collection matches the advisories to the
+    tracked firewall and raises ``software_alerts`` the normal way.
 
 Both are best-effort: a failure is logged and noted in the snapshot, and
 the collection is stored anyway.
@@ -45,7 +52,7 @@ from netcontrol.integrations.opnsense.normalize import (
     PROVIDER,
     audit_advisories,
 )
-from netcontrol.integrations.software.versions import canonical_version
+from netcontrol.integrations.software.versions import canonical_version, snapshot_device_key, snapshot_devices
 from netcontrol.routes.device_config import store_device_config
 from netcontrol.telemetry import configure_logging
 
@@ -142,13 +149,23 @@ async def store_config_backup(raw: dict, snapshot: dict) -> dict[str, Any] | Non
     return {"stored": True, "created": stored.created, "backup_id": stored.backup_id, "host_id": host.get("id")}
 
 
-async def sync_audit_advisories(raw: dict, snapshot: dict) -> dict[str, int] | None:
+def firewall_device_key(snapshot: dict, org_ref: int) -> str:
+    """The software tracker's key of the snapshot's firewall (``""`` when it
+    reports no version)."""
+    device = next((d for d in snapshot_devices(snapshot, PROVIDER) if d["kind"] == "appliance"), None)
+    return snapshot_device_key(PROVIDER, org_ref, device) if device else ""
+
+
+async def sync_audit_advisories(raw: dict, snapshot: dict, org_ref: int) -> dict[str, int] | None:
     """Bring the ``opnsense-audit`` advisories up to date with this
-    firewall's audit. ``None`` when the audit did not run (nothing is
-    changed then)."""
+    firewall's audit. ``None`` when the audit did not run or did not
+    verifiably complete (nothing is changed then)."""
     audit = raw.get("audit")
     version = canonical_version((snapshot.get("summary") or {}).get("version"))
-    if not isinstance(audit, dict) or not version:
+    if not isinstance(audit, dict) or not audit.get("completed") or not version:
+        return None
+    device_key = firewall_device_key(snapshot, org_ref)
+    if not device_key:
         return None
     found = audit_advisories(audit, version)
     current = {a["advisory_id"] for a in found}
@@ -158,11 +175,28 @@ async def sync_audit_advisories(raw: dict, snapshot: dict) -> dict[str, int] | N
         if existing:
             # An administrator's severity and enabled switch are kept.
             advisory["severity"] = existing.get("severity") or advisory["severity"]
-        await db.upsert_software_advisory(advisory, merge_lists=True)
+        # Merged into the firewalls already on the advisory.
+        await db.upsert_software_advisory({**advisory, "device_keys": [device_key]}, merge_lists=True)
         upserted += 1
     for existing in await db.list_software_advisories():
         if existing.get("source") != ADVISORY_SOURCE or existing["advisory_id"] in current:
             continue
+        devices = list(existing.get("device_keys") or [])
+        if devices:
+            if device_key not in devices:
+                continue  # found on other firewalls only
+            devices.remove(device_key)
+            update = {**existing, "device_keys": devices}
+            if not devices:
+                # No firewall reports it any more: it must match nothing (an
+                # empty device list alone would mean every firewall).
+                update["affected_versions"] = []
+            await db.upsert_software_advisory(update)
+            withdrawn += 1
+            continue
+        # Stored before advisories were limited to their firewalls: taken
+        # off by version, as then; a firewall that still reports it adds it
+        # back limited to itself.
         versions = list(existing.get("affected_versions") or [])
         if version not in versions:
             continue
@@ -172,9 +206,9 @@ async def sync_audit_advisories(raw: dict, snapshot: dict) -> dict[str, int] | N
     return {"upserted": upserted, "withdrawn": withdrawn}
 
 
-async def after_collection(raw: dict, snapshot: dict) -> None:
+async def after_collection(raw: dict, snapshot: dict, org_ref: int) -> None:
     """Store the config backup and sync the audit advisories of one
-    collection. Never raises."""
+    collection of source ``org_ref``. Never raises."""
     try:
         if (raw.get("options") or {}).get("config_backup", True):
             await store_config_backup(raw, snapshot)
@@ -182,6 +216,6 @@ async def after_collection(raw: dict, snapshot: dict) -> None:
         # Whatever happened above, the XML never outlives this call.
         raw.pop("config_xml", None)
     try:
-        await sync_audit_advisories(raw, snapshot)
+        await sync_audit_advisories(raw, snapshot, org_ref)
     except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
         LOGGER.warning("opnsense: audit advisories not synced: %s", type(exc).__name__)

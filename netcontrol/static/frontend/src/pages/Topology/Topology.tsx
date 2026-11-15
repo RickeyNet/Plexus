@@ -47,11 +47,11 @@ import { exportJSON, exportPNG, exportSVG } from './exporters';
 import {
   abbreviateInterface,
   edgeProtocolColor,
+  edgeStatusLinkColor,
   filterBySource,
   getTopoThemeColors,
   mapProviders,
   providerLabel,
-  isEdgeDown,
   isManagedNode,
   isMerakiEndpointNode,
   isRemoteUserNode,
@@ -63,6 +63,8 @@ import {
   merakiNodeShape,
   nodeColor,
   nodeIconUrl,
+  nodeKindIconUrl,
+  nodeKindLabel,
   nodeProvider,
   nodeSearchText,
   nodeShape,
@@ -748,10 +750,8 @@ export function Topology() {
       : edge.protocol === 'wan' ? [4, 4]
       : edge.protocol === 'management' ? [2, 4]
       : false;
-    // A Meraki VPN tunnel / WAN uplink the Dashboard reports as down.
-    const downColor = isEdgeDown(edge)
-      ? { color: tc.status.danger, highlight: tc.status.danger, hover: tc.status.danger, opacity: 0.9 }
-      : null;
+    // An integration VPN tunnel / WAN uplink reported down (danger) or degraded (warning).
+    const linkStatusColor = edgeStatusLinkColor(edge, tc.status);
     const baseWidth = edge.protocol === 'stack' ? Math.max(utilWidth, 4) : utilWidth;
     // Status overlay paints the edge with the worst-endpoint badge color
     // *only* when neither STP nor live-util is overriding (those are more
@@ -764,7 +764,7 @@ export function Topology() {
       label,
       color: stpStl
         ? stpStl.color
-        : (utilColorOverride || (statusHex ? { color: statusHex, highlight: statusHex, hover: statusHex, opacity: 0.9 } : (downColor ?? protocolColor))),
+        : (utilColorOverride || (statusHex ? { color: statusHex, highlight: statusHex, hover: statusHex, opacity: 0.9 } : (linkStatusColor ?? protocolColor))),
       width: stpStl ? Math.max(utilWidth, stpStl.width) : (statusHex ? Math.max(utilWidth, 3) : baseWidth),
       dashes: protoDash,
       shadowColor: stpStl
@@ -1979,6 +1979,9 @@ export function Topology() {
 
   const hasMap = !!data && data.nodes.length > 0;
   const showIntegrationLegend = hasMeraki && activeFilter !== 'inventory';
+  // Kinds drawn with an icon of their own get a legend entry while one is on the map.
+  const vpnServerIcon = nodeKindIconUrl('vpn_server');
+  const showVpnServerLegend = showIntegrationLegend && !!data?.nodes.some((n) => n.source === 'meraki' && n.meraki?.kind === 'vpn_server');
 
   // The map ends at the bottom of the window whatever is above it (a wrapped
   // toolbar, the path card, the STP bar), so it is measured rather than given
@@ -2563,6 +2566,11 @@ export function Topology() {
                 <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'var(--danger)' }} /> Offline / unreachable</span>
               </>
             )}
+            {showVpnServerLegend && vpnServerIcon && (
+              <span className="topology-legend-item" title="An OpenVPN server instance on an OPNsense firewall">
+                <img src={vpnServerIcon} alt="" width={12} height={12} /> {nodeKindLabel('vpn_server')}
+              </span>
+            )}
           </span>
           <span className="topology-legend-group">
             <span className="topology-legend-title">Links</span>
@@ -2578,6 +2586,15 @@ export function Topology() {
               </>
             )}
           </span>
+          {showIntegrationLegend && (
+            // Tunnels and uplinks an integration reports a status for; a
+            // healthy one keeps its link colour above.
+            <span className="topology-legend-group">
+              <span className="topology-legend-title">Link status</span>
+              <span className="topology-legend-item"><span className="topology-legend-line" style={{ background: 'var(--warning)', color: 'var(--warning)' }} /> Degraded</span>
+              <span className="topology-legend-item"><span className="topology-legend-line" style={{ background: 'var(--danger)', color: 'var(--danger)' }} /> Down</span>
+            </span>
+          )}
           {utilOverlay && (
             <span className="topology-legend-group">
               <span className="topology-legend-title">Utilization</span>

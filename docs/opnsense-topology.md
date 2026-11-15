@@ -68,7 +68,9 @@ default) as described in [Scheduled collection](meraki-topology.md#scheduled-col
    that has them). OPNsense has no read-only API role: each privilege opens
    a page and its API calls, including the calls that change it. Plexus only
    sends the read calls listed under [What is collected](#what-is-collected),
-   plus the one call that starts the security audit.
+   plus the one call that starts the security audit (the IPsec phase 2
+   search is a `POST` too, but it only reads: OPNsense takes its connection
+   from the request body).
 3. In the user's **API keys** section, click **+** to create a key. The
    browser downloads a file with the key and the secret. Enter them in
    Plexus as `key:secret`.
@@ -80,7 +82,9 @@ default) as described in [Scheduled collection](meraki-topology.md#scheduled-col
 | Status: Interfaces | interfaces, addresses, link state, VLAN tags |
 | System: Gateways | gateway status (loss, delay, deviation) |
 | Diagnostics: Routing tables | the routing table |
-| Status: IPsec | IPsec connections and their state |
+| Status: IPsec | IPsec connections and their state, and their installed child SAs (phase 2) |
+| VPN: IPsec: Connections | the child SAs configured for each connection (only with the "Connections" model, 23.1+) |
+| Status: CARP | CARP virtual IPs, their state, demotion and maintenance mode |
 | VPN: WireGuard: Status | WireGuard peers and their latest handshake |
 | Status: OpenVPN | OpenVPN instances and connected clients |
 | Diagnostics: Configuration History | the config.xml download (only with **Config backup** on) |
@@ -134,7 +138,7 @@ A tunnel is `reachable` (up), `degraded` or `unreachable` (down):
 
 | Tunnel | Up | Degraded | Down |
 |---|---|---|---|
-| IPsec | the connection has an SA | | no SA |
+| IPsec | the connection has an SA | an SA, but none of the connection's configured child SAs is installed | no SA |
 | WireGuard | latest handshake within 5 minutes (OPNsense's *online*) | handshake older than that (*stale*) | no handshake (*offline*) |
 | OpenVPN client | `connected` | any other state (reconnecting, waiting, authenticating) | not running |
 
@@ -159,7 +163,14 @@ Click the firewall for its sections:
   `S`, not the default route)
 - **Routing table**: the whole routing table, 2000 rows at most
 - **IPsec tunnels**, **WireGuard peers**, **OpenVPN instances**: the tunnels
-  and their state
+  and their state; an IPsec connection also shows its child SAs as
+  `installed of configured` (for example `1 of 2 installed`)
+- **High availability**: each CARP virtual IP with its interface, VHID,
+  address, state (`MASTER`, `BACKUP`, `INIT`, `DISABLED`), advertisement
+  base and skew, and the firewall's maintenance mode and CARP demotion. A
+  VIP in `INIT` or a demotion other than 0 is a collection warning (not an
+  informational one). Only this firewall is drawn: its CARP peer is a
+  firewall of its own, added as another source
 - **Firmware**: version, latest version, whether an update is pending, the
   status message, packages to update, reboot required, major upgrade, last
   check
@@ -170,7 +181,16 @@ Click the firewall for its sections:
 
 Click a gateway stub for its **Gateway** details, a peer for its **IPsec
 peer**, **WireGuard peer** or **OpenVPN peer** details, and an OpenVPN
-server for its **OpenVPN server** details and **Connected clients**.
+server for its **OpenVPN server** details and **Connected clients**. An
+IPsec tunnel's details list its **Child SAs**: each installed child SA with
+its state, local and remote networks, mode, encryption and traffic.
+
+The installed child SAs are read per connection that has an SA
+(`ipsec/sessions/search_phase2`), the configured ones per connection of the
+"Connections" model (`ipsec/connections/search_child`; a legacy tunnel has
+no configured count and is never shown degraded for its child SAs). When
+either call is refused or unknown it is not repeated for the next
+connection: one warning, and the tunnels keep their phase 1 state.
 
 ### Search, Path Mode and IPAM
 
@@ -192,16 +212,27 @@ and alerts, the same way as for every other source:
 - each IPsec connection, WireGuard peer and OpenVPN client instance, as a
   tunnel, mapped as in the table above
 
-The loss, RTT and RTT deviation of each gateway are in its details and in
-the uplink's detail text at every collection. They are not stored as a
-time series and no SLA target compares them. Gateway stubs and VPN peers are
-not devices of their own. The state mapping, alerting, muting and retention
+The loss, RTT and RTT deviation of each gateway are in its details, and
+are stored at every collection as the uplink's loss, latency and jitter
+(the RTT deviation): raw samples for the monitoring retention, and one row
+per day that is kept for the SLA retention (400 days by default). A gateway
+with 100 % loss stores its loss only. The window means are shown per uplink
+by `GET /api/availability/topology/summary`, the history by `GET
+/api/availability/topology/metrics`, and SLA targets on latency, jitter,
+packet loss or uptime can cover the gateways (a target with `provider`
+`opnsense` and `entity_type` `uplink`; see [SLA
+monitoring](sla-monitoring.md#targets-of-integration-entities)). They are
+evaluated on the server at every SLA pass and alert into the monitoring
+alerts or the notification channels. Gateway stubs and VPN peers are not
+devices of their own. The state mapping, alerting, muting and retention
 are described in [Meraki in the Topology Map](meraki-topology.md#availability-tracking).
 
-A firmware update or an audit finding is added to the collection's
-warnings, so the collection shows as **partial**, but such a warning does
-not stop availability tracking from removing a tunnel or gateway the
-firewall no longer reports.
+A firmware update, an audit finding or an incomplete audit is added to
+the collection's warnings, so the collection shows as **partial**, but such
+a warning does not stop availability tracking from removing a tunnel or
+gateway the firewall no longer reports. A CARP warning (a VIP in `INIT`, a
+demotion) and a failed call do: until a collection without them, a missing
+entity turns unknown instead of being removed.
 
 ## Config backup
 
@@ -246,16 +277,32 @@ and VuXML link. It is skipped, with a warning, when another firmware task is
 running on the firewall. The findings are shown under **Security audit**
 and **Vulnerable packages** and added to the collection's warnings.
 
+An audit counts only when it verifiably completed: its log has `pkg
+audit`'s result line (`N problem(s) in M package(s) found.`, printed also
+when nothing is vulnerable) and no error line (the vulnerability database
+could not be fetched, opened or read, for example without internet access or
+DNS; the package database was locked; any other `pkg:` error). An audit
+that is still running when the collection stops waiting (about 90 seconds),
+that the firewall reports as failed, or whose log is cut short does not
+count either. Then **Security audit** shows **Audit incomplete** with the
+reason, the collection gets an informational warning, and the software
+advisories are not changed: a failed fetch is never read as "nothing
+vulnerable".
+
 Each finding also becomes a software advisory (source `opnsense-audit`,
 named after its VuXML entry, platform **OPNsense**, affected version the
-firewall's version, with its CVE ids and link). Repeated collections update
-the same advisory instead of adding another, so the Software page raises one
-alert per advisory and firewall, with the usual notifications. When the
-audit no longer reports a finding, the firewall's version is taken off the
-advisory and its alert resolves. `pkg audit` gives no severity, so a new
-advisory is `medium`; a severity you change is kept. Two firewalls on the
-same version share the advisories found on either, since advisories match
-by platform and version.
+firewall's version, with its CVE ids and link), limited to the firewall
+whose audit reported it (the advisory's `device_keys`: the firewall's key on
+the Software page). Repeated collections update the same advisory instead
+of adding another, so the Software page raises one alert per advisory and
+firewall, with the usual notifications. A second firewall on the same
+version is alerted only when its own audit reports the finding, and is then
+added to the same advisory. When a firewall's audit no longer reports a
+finding, that firewall is taken off the advisory and its alert resolves;
+the other firewalls keep theirs. `pkg audit` gives no severity, and Plexus
+has no CVE severity source it could look the CVE ids up in, so a new
+advisory is `medium`; a severity you change is kept, and so is the list of
+firewalls when you edit the advisory.
 
 ## What is collected
 
@@ -266,15 +313,18 @@ by platform and version.
 | Interfaces, addresses, link state, VLAN tags | `GET interfaces/overview/interfaces_info` (`interfacesInfo`) | always |
 | Gateways: status, loss, delay, deviation | `GET routes/gateway/status` | Gateways |
 | IPsec connections | `GET ipsec/sessions/search_phase1` (`searchPhase1`) | VPN tunnels |
+| IPsec installed child SAs, per connection with an SA | `POST ipsec/sessions/search_phase2` (`searchPhase2`), body `{"id": "<connection>"}` | VPN tunnels |
+| IPsec configured child SAs, per connection of the Connections model | `GET ipsec/connections/search_child?connection=<uuid>` (`searchChild`) | VPN tunnels |
 | WireGuard peers | `GET wireguard/service/show` | VPN tunnels |
 | OpenVPN instances and clients | `GET openvpn/service/search_sessions` (`searchSessions`) | VPN tunnels |
 | Routing table | `GET diagnostics/interface/get_routes` (`getRoutes`) | Routing table |
+| CARP virtual IPs, demotion, maintenance mode | `GET diagnostics/interface/get_vip_status` (`getVipStatus`) | High availability |
 | Security audit | `GET core/firmware/running`, `POST core/firmware/audit`, `GET core/firmware/upgradestatus` | Firmware security audit |
 | config.xml | `GET core/backup/download/this` | Config backup |
 
 The options are `verify_tls`, `include_gateways`, `include_vpn`,
-`include_routes`, `include_firmware_audit`, `config_backup` and
-`inventory_enrich`, all on by default.
+`include_ha`, `include_routes`, `include_firmware_audit`, `config_backup`
+and `inventory_enrich`, all on by default.
 
 Calls are sent one at a time and spaced out. A rate-limit or server error
 answer is retried after a pause (honouring `Retry-After`); a refused call is
@@ -296,10 +346,10 @@ Not in phase 1:
 
 - firewall rules, aliases and NAT, and the hop by hop trace through the
   firewall in Path Mode (the firewall has no forwarding model yet)
-- IPsec phase 2 entries (the per connection child SAs; the state is read
-  per connection)
-- loss and latency history of gateways and SLA targets on them
-- CARP and high availability state
+- the CARP peer as a node: each firewall of a pair is a source of its own;
+  the pair is not drawn as one HA cluster
+- child SA counts of legacy IPsec tunnels (only connections of the
+  "Connections" model have a configured count)
 - any change to the firewall: Plexus never applies updates, reboots or
   edits anything
 

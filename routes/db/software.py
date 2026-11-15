@@ -50,7 +50,9 @@ _DEVICE_FIELDS = (
     "version",
     "raw_version",
 )
-_ADVISORY_LISTS = ("affected_versions", "fixed_versions", "cves")
+# ``device_keys`` (migration 0091): the tracked devices an advisory is
+# limited to; empty means every device it otherwise matches.
+_ADVISORY_LISTS = ("affected_versions", "fixed_versions", "cves", "device_keys")
 _ADVISORY_FIELDS = (
     "source",
     "title",
@@ -61,6 +63,7 @@ _ADVISORY_FIELDS = (
     "affected_versions_json",
     "fixed_versions_json",
     "cves_json",
+    "device_keys_json",
     "url",
     "published",
     "summary",
@@ -314,6 +317,8 @@ async def upsert_software_advisory(advisory: dict, *, merge_lists: bool = False)
     With ``merge_lists`` the affected versions, fixed versions and CVEs
     already stored are kept and the new ones added, which is how a PSIRT
     sync accumulates the versions Cisco answered for one advisory.
+    An advisory without a ``device_keys`` field keeps the stored one (an
+    edit or a PSIRT sync never widens or narrows a device scope).
     """
     advisory = dict(advisory)
     advisory_id = str(advisory.get("advisory_id") or "").strip()
@@ -321,8 +326,10 @@ async def upsert_software_advisory(advisory: dict, *, merge_lists: bool = False)
         return None
     advisory["advisory_id"] = advisory_id
     now = _now()
+    existing = await get_software_advisory(advisory_id) if merge_lists or "device_keys" not in advisory else None
+    if "device_keys" not in advisory:
+        advisory["device_keys"] = list((existing or {}).get("device_keys") or [])
     if merge_lists:
-        existing = await get_software_advisory(advisory_id)
         if existing:
             for name in _ADVISORY_LISTS:
                 merged = list(existing.get(name) or [])

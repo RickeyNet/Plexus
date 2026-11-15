@@ -2,8 +2,10 @@
 
 ``sample_api_answers`` is what an OPNsense firewall answers on each API
 path the collector reads, shaped like the answers of the OPNsense core
-controllers (``opnsense/core``, 25.7); ``build_sample_raw`` is the
-collector's output for it. Every name and address is invented: the
+controllers (``opnsense/core``, 25.7); the two IPsec child SA searches,
+which answer per connection, map the connection (the phase 1 name for
+``search_phase2``, its UUID for ``search_child``) to the answer.
+``build_sample_raw`` is the collector's output for it. Every name and address is invented: the
 addresses are documentation ranges (192.0.2.0/24, 198.51.100.0/24,
 203.0.113.0/24, 2001:db8::/32) and the names are under example.com.
 Nothing here is ever sent anywhere.
@@ -19,6 +21,10 @@ SAMPLE_VERSION = "25.7.6"
 SAMPLE_LATEST = "25.7.7"
 # The address the demo entry is registered with: never contacted.
 SAMPLE_URL = "https://192.0.2.1"
+# IPsec connections (phase 1 UUIDs of the Connections model).
+IPSEC_BRANCH_1 = "a1b2c3d4-0000-4000-8000-000000000001"
+IPSEC_PARTNER = "a1b2c3d4-0000-4000-8000-000000000002"
+IPSEC_BRANCH_4 = "a1b2c3d4-0000-4000-8000-000000000003"
 
 SAMPLE_CONFIG_XML = """<?xml version="1.0"?>
 <opnsense>
@@ -102,6 +108,66 @@ def _interface(
             "password": "not-a-real-secret",
         },
     }
+
+
+def _phase1(uuid: str, description: str, remote: str, remote_id: str, *, connected: bool) -> dict[str, Any]:
+    return {
+        "name": uuid,
+        "ikeid": uuid,
+        "phase1desc": description,
+        "version": "IKEv2",
+        "local-addrs": "203.0.113.10",
+        "remote-addrs": remote,
+        "local-id": "203.0.113.10",
+        "remote-id": remote_id,
+        "local-class": "pre-shared key",
+        "remote-class": "pre-shared key",
+        "routed": True,
+        "connected": connected,
+        "install-time": 3600 if connected else None,
+        "bytes-in": 104857600 if connected else 0,
+        "bytes-out": 52428800 if connected else 0,
+        "packets-in": 81000 if connected else 0,
+        "packets-out": 64000 if connected else 0,
+    }
+
+
+def _child_sa(ikeid: str, name: str, description: str, local: str, remote: str, remote_host: str) -> dict[str, Any]:
+    """A row of ``ipsec/sessions/search_phase2``: a strongSwan child SA
+    (``list-sas``) with the phase 2 description OPNsense adds."""
+    return {
+        "name": name,
+        "uniqueid": "5",
+        "reqid": "1",
+        "state": "INSTALLED",
+        "mode": "TUNNEL",
+        "protocol": "ESP",
+        "encap": "no",
+        "encr-alg": "AES_GCM_16",
+        "encr-keysize": "256",
+        "dh-group": "ECP_256",
+        "bytes-in": "104857600",
+        "bytes-out": "52428800",
+        "packets-in": "81000",
+        "packets-out": "64000",
+        "rekey-time": "3000",
+        "life-time": "3420",
+        "install-time": "180",
+        "local-ts": local,
+        "remote-ts": remote,
+        "remote-host": remote_host,
+        "ikeid": ikeid,
+        "phase2desc": description,
+    }
+
+
+def _search(rows: list[dict]) -> dict[str, Any]:
+    return {"total": len(rows), "rowCount": len(rows), "current": 1, "rows": rows}
+
+
+def _child_config(uuid: str, description: str, local: str, remote: str, enabled: str = "1") -> dict[str, Any]:
+    """A row of ``ipsec/connections/search_child``: one configured child SA."""
+    return {"uuid": uuid, "enabled": enabled, "description": description, "local_ts": local, "remote_ts": remote}
 
 
 def _route(destination: str, gateway: str, flags: str, netif: str, description: str, proto: str = "ipv4") -> dict:
@@ -267,50 +333,56 @@ def sample_api_answers() -> dict[str, Any]:
             _route("203.0.113.0/28", "link#1", "U", "igb0", "WAN"),
             _route("2001:db8:10::/64", "link#2", "U", "igb1", "LAN", proto="ipv6"),
         ],
-        "ipsec/sessions/search_phase1": {
-            "total": 2,
-            "rowCount": 2,
-            "current": 1,
-            "rows": [
-                {
-                    "name": "a1b2c3d4-0000-4000-8000-000000000001",
-                    "ikeid": "a1b2c3d4-0000-4000-8000-000000000001",
-                    "phase1desc": "Branch office 1",
-                    "version": "IKEv2",
-                    "local-addrs": "203.0.113.10",
-                    "remote-addrs": "198.51.100.20",
-                    "local-id": "203.0.113.10",
-                    "remote-id": "198.51.100.20",
-                    "local-class": "pre-shared key",
-                    "remote-class": "pre-shared key",
-                    "routed": True,
-                    "connected": True,
-                    "install-time": 3600,
-                    "bytes-in": 104857600,
-                    "bytes-out": 52428800,
-                    "packets-in": 81000,
-                    "packets-out": 64000,
-                },
-                {
-                    "name": "a1b2c3d4-0000-4000-8000-000000000002",
-                    "ikeid": "a1b2c3d4-0000-4000-8000-000000000002",
-                    "phase1desc": "Partner VPN",
-                    "version": "IKEv2",
-                    "local-addrs": "203.0.113.10",
-                    "remote-addrs": "203.0.113.200",
-                    "local-id": "203.0.113.10",
-                    "remote-id": "partner.example.com",
-                    "local-class": "pre-shared key",
-                    "remote-class": "pre-shared key",
-                    "routed": True,
-                    "connected": False,
-                    "install-time": None,
-                    "bytes-in": 0,
-                    "bytes-out": 0,
-                    "packets-in": 0,
-                    "packets-out": 0,
-                },
-            ],
+        "ipsec/sessions/search_phase1": _search(
+            [
+                _phase1(IPSEC_BRANCH_1, "Branch office 1", "198.51.100.20", "198.51.100.20", connected=True),
+                _phase1(IPSEC_PARTNER, "Partner VPN", "203.0.113.200", "partner.example.com", connected=False),
+                # Phase 1 up, its one child SA not installed: degraded.
+                _phase1(IPSEC_BRANCH_4, "Branch office 4", "198.51.100.30", "198.51.100.30", connected=True),
+            ]
+        ),
+        # Per connection (POST {"id": <phase 1 name>}): the installed child SAs.
+        "ipsec/sessions/search_phase2": {
+            IPSEC_BRANCH_1: _search(
+                [
+                    _child_sa(
+                        IPSEC_BRANCH_1,
+                        "child-lan",
+                        "LAN to branch 1",
+                        "192.0.2.0/25",
+                        "198.51.100.0/27",
+                        "198.51.100.20",
+                    )
+                ]
+            ),
+            IPSEC_BRANCH_4: _search([]),
+        },
+        # Per connection (?connection=<uuid>): the configured child SAs.
+        "ipsec/connections/search_child": {
+            IPSEC_BRANCH_1: _search(
+                [
+                    _child_config(
+                        "c0000000-0000-4000-8000-000000000011", "LAN to branch 1", "192.0.2.0/25", "198.51.100.0/27"
+                    ),
+                    _child_config(
+                        "c0000000-0000-4000-8000-000000000012", "DMZ to branch 1", "192.0.2.128/26", "198.51.100.32/27"
+                    ),
+                ]
+            ),
+            IPSEC_PARTNER: _search(
+                [
+                    _child_config(
+                        "c0000000-0000-4000-8000-000000000021", "Partner exchange", "192.0.2.0/25", "203.0.113.208/28"
+                    )
+                ]
+            ),
+            IPSEC_BRANCH_4: _search(
+                [
+                    _child_config(
+                        "c0000000-0000-4000-8000-000000000031", "LAN to branch 4", "192.0.2.0/25", "198.51.100.64/27"
+                    )
+                ]
+            ),
         },
         "wireguard/service/show": {
             "total": 3,
@@ -413,6 +485,35 @@ def sample_api_answers() -> dict[str, Any]:
                 },
             ],
         },
+        "diagnostics/interface/get_vip_status": {
+            **_search(
+                [
+                    {
+                        "interface": "lan",
+                        "vhid": "1",
+                        "advbase": "1",
+                        "advskew": "0",
+                        "subnet": "192.0.2.3",
+                        "status": "MASTER",
+                        "mode": "carp",
+                        "status_txt": "MASTER",
+                        "vhid_txt": "1 (freq. 1/0)",
+                    },
+                    {
+                        "interface": "wan",
+                        "vhid": "2",
+                        "advbase": "1",
+                        "advskew": "0",
+                        "subnet": "203.0.113.11",
+                        "status": "MASTER",
+                        "mode": "carp",
+                        "status_txt": "MASTER",
+                        "vhid_txt": "2 (freq. 1/0)",
+                    },
+                ]
+            ),
+            "carp": {"demotion": "0", "allow": "1", "maintenancemode": False, "status_msg": ""},
+        },
         "core/firmware/running": {"status": "ready"},
         "core/firmware/audit": {"status": "ok", "msg_uuid": "00000000-0000-4000-8000-0000000000aa"},
         "core/firmware/upgradestatus": {"status": "done", "log": AUDIT_LOG},
@@ -426,6 +527,7 @@ def build_sample_raw() -> dict[str, Any]:
     # Imported here: the collector's scrubbers shape the sample like a collection.
     from netcontrol.integrations.meraki.collector import scrub_secrets
     from netcontrol.integrations.opnsense.collector import (
+        _UUID,
         DEFAULT_OPTIONS,
         _rows,
         parse_audit_log,
@@ -434,6 +536,10 @@ def build_sample_raw() -> dict[str, Any]:
     )
 
     answers = copy.deepcopy(sample_api_answers())
+    ipsec = _rows(answers["ipsec/sessions/search_phase1"])
+    phase2 = answers["ipsec/sessions/search_phase2"]
+    children = answers["ipsec/connections/search_child"]
+    vips = answers["diagnostics/interface/get_vip_status"]
     return {
         "firewall": {"name": "", "base_url": SAMPLE_URL, "address": SAMPLE_URL.removeprefix("https://")},
         "timestamp": "2026-11-14T09:00:00+00:00",
@@ -442,9 +548,12 @@ def build_sample_raw() -> dict[str, Any]:
         "interfaces": [scrub_interface(r) for r in _rows(answers["interfaces/overview/interfaces_info"])],
         "gateways": scrub_secrets(_rows(answers["routes/gateway/status"], "items")),
         "routes": _rows(answers["diagnostics/interface/get_routes"]),
-        "ipsec": _rows(answers["ipsec/sessions/search_phase1"]),
+        "ipsec": ipsec,
+        "ipsec_phase2": {r["name"]: _rows(phase2[r["name"]]) for r in ipsec if r.get("connected")},
+        "ipsec_child_config": {r["ikeid"]: _rows(children[r["ikeid"]]) for r in ipsec if _UUID.match(r["ikeid"])},
         "wireguard": _rows(answers["wireguard/service/show"]),
         "openvpn": _rows(answers["openvpn/service/search_sessions"]),
+        "carp": {"rows": _rows(vips), "carp": vips["carp"]},
         "audit": {"ran_at": "2026-11-14T09:00:05+00:00", **parse_audit_log(AUDIT_LOG)},
         "config_xml": None,
         "errors": [],

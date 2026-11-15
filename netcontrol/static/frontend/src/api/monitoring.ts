@@ -177,6 +177,10 @@ export interface SlaTarget {
   group_name?: string | null;
   /** Days the target is evaluated over (1-365). */
   window_days?: number;
+  /** Set on a target of integration (topology) entities instead of hosts. */
+  provider?: string;
+  /** Narrows an integration target to one kind of entity ('' = every kind). */
+  entity_type?: string;
 }
 
 /** Latest evaluation of one SLA target for one host (GET /sla/compliance). */
@@ -226,6 +230,15 @@ export interface SlaEvaluateResult {
     alerts: number;
     suppressed: number;
     evaluated_at: string;
+  };
+  /** The targets of integration (topology) entities, evaluated in the same pass. */
+  topology_evaluation?: {
+    evaluated: number;
+    met: number;
+    warn: number;
+    breach: number;
+    no_data: number;
+    alerts: number;
   };
 }
 
@@ -583,6 +596,9 @@ export interface SlaTargetCreate {
   host_id?: number | null;
   group_id?: number | null;
   window_days?: number;
+  /** '' for a target of hosts. */
+  provider?: string;
+  entity_type?: string;
 }
 
 export function useCreateSlaTarget() {

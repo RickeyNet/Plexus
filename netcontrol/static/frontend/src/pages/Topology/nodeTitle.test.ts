@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { TopologyInstanceRef, TopologyNode } from '@/api/topology';
 
-import { nodeSearchText, nodeTitle } from './helpers';
+import { merakiNodeShape, nodeIconUrl, nodeKindIconUrl, nodeKindLabel, nodeSearchText, nodeTitle } from './helpers';
 
 const INSTANCE: TopologyInstanceRef = {
   provider: 'aws',
@@ -132,5 +132,52 @@ describe('nodeSearchText', () => {
 
   it("includes the instance ID of the node's AWS reference", () => {
     expect(nodeSearchText({ ...AWS_NODE, instance: undefined })).toContain('i-0123456789abcdef0');
+  });
+});
+
+/** An OpenVPN server instance on an OPNsense firewall. */
+const VPN_SERVER_NODE: TopologyNode = {
+  id: 'meraki:12:ovpn:server:1',
+  label: 'Road warrior',
+  ip: '',
+  device_type: 'opnsense',
+  device_category: 'vpn_server',
+  in_inventory: false,
+  source: 'meraki',
+  meraki: {
+    org_ref: 12,
+    node_id: 'ovpn:server:1',
+    site_id: 'site-branch',
+    site_name: 'Branch Office',
+    kind: 'vpn_server',
+    status: 'online',
+    provider: 'opnsense',
+  },
+};
+
+describe('vpn_server nodes', () => {
+  it('labels the kind "VPN server" and leaves other kinds as they are', () => {
+    expect(nodeKindLabel('vpn_server')).toBe('VPN server');
+    expect(nodeKindLabel('vpn_peer')).toBe('VPN peer');
+    expect(nodeKindLabel('appliance')).toBe('appliance');
+    expect(nodeKindLabel(undefined)).toBe('');
+  });
+
+  it('names the kind in the tooltip', () => {
+    expect(nodeTitle(VPN_SERVER_NODE)).toContain('\nOPNsense VPN server · online');
+  });
+
+  it('draws a VPN server with the server icon, and other integration kinds without one', () => {
+    expect(nodeKindIconUrl('vpn_server')).toBe('/static/img/topo/server.svg');
+    expect(nodeIconUrl(VPN_SERVER_NODE)).toBe('/static/img/topo/server.svg');
+    expect(nodeKindIconUrl('vpn_peer')).toBeUndefined();
+    const peer = { ...VPN_SERVER_NODE, device_category: 'vpn_peer', meraki: { ...VPN_SERVER_NODE.meraki!, kind: 'vpn_peer' } };
+    expect(nodeIconUrl(peer)).toBeUndefined();
+    expect(merakiNodeShape(peer)).toBe('hexagon');
+  });
+
+  it('is found by searching for its kind', () => {
+    expect(nodeSearchText(VPN_SERVER_NODE)).toContain('vpn server');
+    expect(nodeSearchText(AWS_NODE)).not.toContain('server');
   });
 });

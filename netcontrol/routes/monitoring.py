@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import re
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Literal
@@ -965,6 +966,10 @@ async def _run_retention_cleanup_throttled() -> None:
         )
         await metrics_retention_cleanup()
         await db.purge_topology_availability(retention_days)
+        await db.purge_topology_entity_metrics(
+            retention_days,
+            int(state.MONITORING_CONFIG.get("sla_retention_days", state.MONITORING_DEFAULTS["sla_retention_days"])),
+        )
         await db.purge_meraki_alerts(retention_days)
     except Exception as exc:
         LOGGER.warning("monitoring: retention cleanup failed: %s", redact_value(_exc_text(exc)))
@@ -1297,8 +1302,9 @@ def _sla_sample_count(metric: str, values: dict | None) -> int:
 async def evaluate_sla_targets(now: datetime | None = None) -> dict:
     """Evaluate every enabled SLA target for every host it applies to, store
     the result (latest status + history of changes) and open an alert for
-    each warn/breach that no active suppression covers."""
-    targets = [t for t in await db.get_sla_targets() if t.get("enabled")]
+    each warn/breach that no active suppression covers. Targets of topology
+    entities (with a ``provider``) are left to ``topology_sla``."""
+    targets = [t for t in await db.get_sla_targets() if t.get("enabled") and not str(t.get("provider") or "").strip()]
     evaluated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
     suppressions = await db.get_active_alert_suppressions()
     metrics_by_window: dict[int, dict] = {}
@@ -1368,9 +1374,18 @@ async def evaluate_sla_targets(now: datetime | None = None) -> dict:
 
 
 async def run_sla_cycle(now: datetime | None = None) -> dict:
-    """One SLA pass: roll up the completed hours and days, then evaluate."""
+    """One SLA pass: roll up the completed hours and days, then evaluate the
+    host targets and the targets of topology entities."""
+    # Imported here: topology_sla imports this module.
+    from netcontrol.routes.topology_sla import evaluate_topology_sla_targets
+
     rollups = await db.rollup_sla_metrics(now)
     evaluation = await evaluate_sla_targets(now)
+    try:
+        topology = await evaluate_topology_sla_targets(await db.get_sla_targets(), now)
+    except Exception as exc:
+        LOGGER.warning("sla: topology targets not evaluated: %s", redact_value(_exc_text(exc)))
+        topology = {"targets": 0, "evaluated": 0, "met": 0, "warn": 0, "breach": 0, "no_data": 0, "alerts": 0}
     LOGGER.info(
         "sla: rollup %d hourly / %d daily rows; %d evaluations (%d met, %d warn, %d breach, %d no data), %d alerts",
         rollups["hourly_rows"],
@@ -1382,7 +1397,17 @@ async def run_sla_cycle(now: datetime | None = None) -> dict:
         evaluation["no_data"],
         evaluation["alerts"],
     )
-    return {"rollups": rollups, "evaluation": evaluation}
+    if topology["evaluated"]:
+        LOGGER.info(
+            "sla: %d topology evaluations (%d met, %d warn, %d breach, %d no data), %d alerts",
+            topology["evaluated"],
+            topology["met"],
+            topology["warn"],
+            topology["breach"],
+            topology["no_data"],
+            topology["alerts"],
+        )
+    return {"rollups": rollups, "evaluation": evaluation, "topology_evaluation": topology}
 
 
 async def _sla_rollup_loop() -> None:
@@ -1899,6 +1924,11 @@ async def bulk_acknowledge_alerts_endpoint(body: dict, request: Request):
     return {"ok": True, "acknowledged": count}
 
 
+# Topology source types and tracked entity types (query parameter patterns).
+_TOPOLOGY_PROVIDER_RE = r"^(meraki|cato|fmc|panorama|appgate|opnsense|aws|azure|gcp)$"
+_TOPOLOGY_ENTITY_RE = r"^(device|site|uplink|tunnel|vpn_connection|circuit|peering|link)$"
+
+
 # ── SLA Dashboard Routes ─────────────────────────────────────────────────────
 
 
@@ -1915,9 +1945,21 @@ async def sla_compliance(
     group_id: int | None = Query(default=None),
     host_id: int | None = Query(default=None),
     target_id: int | None = Query(default=None),
+    scope: Literal["hosts", "topology"] = Query(default="hosts"),
+    provider: str | None = Query(default=None, pattern=_TOPOLOGY_PROVIDER_RE),
+    org_ref: int | None = Query(default=None),
+    entity_type: str | None = Query(default=None, pattern=_TOPOLOGY_ENTITY_RE),
+    entity_id: str | None = Query(default=None, max_length=500),
 ):
     """Latest server-side evaluation of every SLA target for every host it
-    applies to (``group_id`` includes the group's sub-groups)."""
+    applies to (``group_id`` includes the group's sub-groups). With
+    ``scope=topology``: of every topology target for every tracked entity it
+    applies to (filtered by ``provider``, ``org_ref``, ``entity_type``,
+    ``entity_id``), worst first."""
+    if scope == "topology":
+        return await db.get_topology_sla_compliance(
+            provider=provider, org_ref=org_ref, entity_type=entity_type, entity_id=entity_id, target_id=target_id
+        )
     return await db.get_sla_compliance(group_id=group_id, host_id=host_id, target_id=target_id)
 
 
@@ -1926,8 +1968,17 @@ async def sla_compliance_history(
     target_id: int | None = Query(default=None),
     host_id: int | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
+    scope: Literal["hosts", "topology"] = Query(default="hosts"),
+    provider: str | None = Query(default=None, pattern=_TOPOLOGY_PROVIDER_RE),
+    org_ref: int | None = Query(default=None),
+    entity_id: str | None = Query(default=None, max_length=500),
 ):
-    """SLA status changes, newest first."""
+    """SLA status changes, newest first (``scope=topology``: of the targets
+    of topology entities)."""
+    if scope == "topology":
+        return await db.get_topology_sla_compliance_history(
+            target_id=target_id, provider=provider, org_ref=org_ref, entity_id=entity_id, limit=limit
+        )
     return await db.get_sla_compliance_history(target_id=target_id, host_id=host_id, limit=limit)
 
 
@@ -1968,6 +2019,38 @@ def _validate_sla_target_fields(body: dict) -> dict:
                 status_code=400, detail=f"window_days must be a whole number from 1 to {_SLA_WINDOW_DAYS_MAX}"
             )
         out["window_days"] = window_days
+    out.update(_validate_sla_target_scope(body))
+    return out
+
+
+def _validate_sla_target_scope(body: dict) -> dict:
+    """The topology scope fields present in ``body``: ``provider`` (a target
+    of topology entities instead of hosts; ``""`` for hosts), ``org_ref``,
+    ``entity_type`` and ``entity_id`` (HTTP 400 for a bad value, or for a
+    provider combined with a host or group)."""
+    out: dict = {}
+    provider = str(body.get("provider") or "").strip()
+    if "provider" in body:
+        if provider and not re.fullmatch(_TOPOLOGY_PROVIDER_RE, provider):
+            raise HTTPException(status_code=400, detail="provider must be a topology source type (e.g. opnsense)")
+        out["provider"] = provider
+    if provider and (body.get("host_id") is not None or body.get("group_id") is not None):
+        raise HTTPException(status_code=400, detail="A target of topology entities has no host_id or group_id")
+    if body.get("org_ref") is not None:
+        try:
+            out["org_ref"] = int(body["org_ref"])
+        except ValueError, TypeError:
+            raise HTTPException(status_code=400, detail="org_ref must be a whole number")
+    if "entity_type" in body:
+        entity_type = str(body.get("entity_type") or "").strip()
+        if entity_type and not re.fullmatch(_TOPOLOGY_ENTITY_RE, entity_type):
+            raise HTTPException(status_code=400, detail="entity_type is not a tracked entity type")
+        out["entity_type"] = entity_type
+    if "entity_id" in body:
+        entity_id = str(body.get("entity_id") or "").strip()
+        if len(entity_id) > 500:
+            raise HTTPException(status_code=400, detail="entity_id is too long")
+        out["entity_id"] = entity_id
     return out
 
 
@@ -1987,6 +2070,10 @@ async def sla_target_create(body: dict, request: Request):
         group_id=body.get("group_id"),
         created_by=user,
         window_days=fields["window_days"],
+        provider=fields.get("provider", ""),
+        org_ref=fields.get("org_ref"),
+        entity_type=fields.get("entity_type", ""),
+        entity_id=fields.get("entity_id", ""),
     )
     await _audit(
         "sla",
@@ -2003,7 +2090,13 @@ async def sla_target_update(target_id: int, body: dict, request: Request):
     target = await db.get_sla_target(target_id)
     if not target:
         raise HTTPException(status_code=404, detail="Target not found")
-    await db.update_sla_target(target_id, **{**body, **_validate_sla_target_fields(body)})
+    fields = _validate_sla_target_fields(body)
+    merged = {**target, **body, **fields}
+    if str(merged.get("provider") or "").strip() and (
+        merged.get("host_id") is not None or merged.get("group_id") is not None
+    ):
+        raise HTTPException(status_code=400, detail="A target of topology entities has no host_id or group_id")
+    await db.update_sla_target(target_id, **{**body, **fields})
     session = _get_session(request)
     await _audit(
         "sla",
@@ -2083,10 +2176,6 @@ async def availability_outages_api(
     }
 
 
-_TOPOLOGY_PROVIDER_RE = r"^(meraki|cato|fmc|panorama|appgate|opnsense|aws|azure|gcp)$"
-_TOPOLOGY_ENTITY_RE = r"^(device|site|uplink|tunnel|vpn_connection|circuit|peering|link)$"
-
-
 @router.get("/api/availability/topology/summary")
 async def topology_availability_summary_api(
     provider: str | None = Query(default=None, pattern=_TOPOLOGY_PROVIDER_RE),
@@ -2095,8 +2184,44 @@ async def topology_availability_summary_api(
     days: int = Query(default=30, ge=1, le=365),
 ):
     """Uptime of the devices, sites, uplinks, tunnels, VPN connections,
-    circuits, peerings and links that integrations collect."""
-    return await db.get_topology_availability_summary(provider, org_ref, entity_type, days)
+    circuits, peerings and links that integrations collect. Each entity also
+    carries the window means of the latency, jitter and loss its vendor
+    reports (``null`` when none: only OPNsense gateways today) and
+    ``sla_status``, the worst latest status of the SLA targets that apply
+    to it (``null`` when none)."""
+    summary = await db.get_topology_availability_summary(provider, org_ref, entity_type, days)
+    metrics = await db.get_topology_entity_metric_values(
+        days, provider=provider, org_ref=org_ref, entity_type=entity_type
+    )
+    statuses: dict[tuple, list[str]] = {}
+    for row in await db.get_topology_sla_compliance(provider=provider, org_ref=org_ref, entity_type=entity_type):
+        key = (row["provider"], int(row["org_ref"]), row["entity_type"], row["entity_id"])
+        statuses.setdefault(key, []).append(row["status"])
+    rank = {"breach": 3, "warn": 2, "met": 1, "no_data": 0}
+    for entity in summary["entities"]:
+        key = (entity["provider"], int(entity["org_ref"]), entity["entity_type"], entity["entity_id"])
+        values = metrics["entities"].get(key) or {}
+        for field in ("avg_latency_ms", "jitter_ms", "avg_packet_loss_pct"):
+            entity[field] = values.get(field)
+        found = statuses.get(key)
+        entity["sla_status"] = max(found, key=lambda s: rank.get(s, 0)) if found else None
+    return summary
+
+
+@router.get("/api/availability/topology/metrics")
+async def topology_availability_metrics_api(
+    provider: str = Query(pattern=_TOPOLOGY_PROVIDER_RE),
+    org_ref: int = Query(),
+    entity_type: str = Query(pattern=_TOPOLOGY_ENTITY_RE),
+    entity_id: str = Query(min_length=1, max_length=500),
+    days: int = Query(default=7, ge=1, le=365),
+    limit: int = Query(default=5000, ge=1, le=50000),
+):
+    """The latency, jitter and loss history of one tracked entity (an
+    OPNsense gateway uplink): the raw samples still retained, one row per
+    day from the daily rollups (which outlive the raw retention), and the
+    window means."""
+    return await db.get_topology_entity_metric_history(provider, org_ref, entity_type, entity_id, days, limit=limit)
 
 
 @router.get("/api/availability/topology/transitions")

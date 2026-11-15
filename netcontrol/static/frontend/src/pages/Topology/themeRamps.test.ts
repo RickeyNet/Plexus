@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
-import { stpStyle, stpTone, utilColor, utilShadow, type TopoStatusColors } from './helpers';
+import type { TopologyEdge } from '@/api/topology';
+
+import {
+  edgeStatusLinkColor,
+  edgeStatusTone,
+  isEdgeDown,
+  stpStyle,
+  stpTone,
+  utilColor,
+  utilShadow,
+  type TopoStatusColors,
+} from './helpers';
 
 const STATUS: TopoStatusColors = {
   success: '#008000',
@@ -50,5 +61,52 @@ describe('stpStyle', () => {
       shadow: 'rgba(255,0,0,0.45)',
     });
     expect(stpStyle('unknown', STATUS)).toBeNull();
+  });
+});
+
+function link(protocol: string, status?: string): TopologyEdge {
+  return { id: 'e', from: 'a', to: 'b', protocol, source: 'meraki', provider: 'opnsense', status };
+}
+
+describe('edgeStatusTone', () => {
+  it('reads a degraded uplink or tunnel as a warning, distinct from down', () => {
+    expect(edgeStatusTone(link('wan', 'degraded'))).toBe('warning');
+    expect(edgeStatusTone(link('vpn-ipsec', 'Degraded'))).toBe('warning');
+    expect(edgeStatusTone(link('wan', 'failed'))).toBe('danger');
+    expect(edgeStatusTone(link('vpn-ipsec', 'unreachable'))).toBe('danger');
+  });
+
+  it('leaves healthy and unknown statuses of every provider to the protocol colour', () => {
+    for (const status of ['active', 'ready', 'reachable', 'connecting', 'unknown', '', undefined]) {
+      expect(edgeStatusTone(link('wan', status))).toBeNull();
+    }
+  });
+
+  it('counts only down links as down, so a degraded tunnel still carries a path', () => {
+    expect(isEdgeDown(link('wan', 'failed'))).toBe(true);
+    expect(isEdgeDown(link('vpn-ipsec', 'unreachable'))).toBe(true);
+    expect(isEdgeDown(link('wan', 'degraded'))).toBe(false);
+  });
+});
+
+describe('edgeStatusLinkColor', () => {
+  it('draws a degraded link in the warning colour and a down one in danger', () => {
+    expect(edgeStatusLinkColor(link('wan', 'degraded'), STATUS)).toEqual({
+      color: '#ff8000',
+      highlight: '#ff8000',
+      hover: '#ff8000',
+      opacity: 0.9,
+    });
+    expect(edgeStatusLinkColor(link('vpn-ipsec', 'unreachable'), STATUS)).toEqual({
+      color: '#ff0000',
+      highlight: '#ff0000',
+      hover: '#ff0000',
+      opacity: 0.9,
+    });
+  });
+
+  it('has no colour for a healthy link', () => {
+    expect(edgeStatusLinkColor(link('wan', 'active'), STATUS)).toBeNull();
+    expect(edgeStatusLinkColor(link('vpn-ipsec', 'reachable'), STATUS)).toBeNull();
   });
 });

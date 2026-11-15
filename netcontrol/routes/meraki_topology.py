@@ -1407,7 +1407,7 @@ async def _run_build(job_id: str, org: dict, user: str) -> None:
             # and the audit findings advisories, before the software refresh.
             from netcontrol.routes.opnsense_collection import after_collection
 
-            await after_collection(raw, snapshot)
+            await after_collection(raw, snapshot, org_ref)
 
         progress({"phase": "saving"})
         result = await _store_snapshot(org, snapshot, user=user, started=started)

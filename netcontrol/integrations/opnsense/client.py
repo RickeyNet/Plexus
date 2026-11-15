@@ -20,7 +20,9 @@ to the older one on 403 or 404.
 Scope
 -----
 Read-only: ``GET`` only, besides ``POST core/firmware/audit``, which starts
-the built-in security audit (``pkg audit -F``). It changes no setting.
+the built-in security audit (``pkg audit -F``), and ``POST
+ipsec/sessions/search_phase2``, a search that reads the connection it lists
+from the POST body. Neither changes a setting.
 
 Failures
 --------
@@ -31,6 +33,7 @@ of a JSON body is kept as :attr:`OpnsenseApiError.detail`.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -231,7 +234,8 @@ class OpnsenseClient:
         return resp.text
 
     async def post(self, path: str, body: dict | None = None) -> Any:
-        """One ``POST`` under ``/api`` (only the security audit uses it)."""
+        """One ``POST`` under ``/api`` (the security audit, and the IPsec
+        phase 2 search, which reads its connection from the body)."""
         async with self._lock:
             resp = await self._request("POST", path, params=None, body=body or {})
         return self._json(resp, "POST", path)
@@ -241,10 +245,21 @@ class OpnsenseClient:
         when one is refused (403) or unknown (404), or answers with a page
         that is not JSON. Answers ``(path, body)``; raises the error of the
         last path when none answers."""
+        return await self._first(paths, lambda path: self.get(path, params))
+
+    async def post_first(self, paths: tuple[str, ...] | list[str], body: dict | None = None) -> tuple[str, Any]:
+        """``POST`` to the first of ``paths`` that answers, like
+        :meth:`get_first`. Only for search calls that read their parameters
+        from the POST body (``ipsec/sessions/search_phase2``): they change
+        nothing."""
+        return await self._first(paths, lambda path: self.post(path, body))
+
+    @staticmethod
+    async def _first(paths: tuple[str, ...] | list[str], call: Callable[[str], Awaitable[Any]]) -> tuple[str, Any]:
         last: OpnsenseApiError | None = None
         for path in paths:
             try:
-                return path, await self.get(path, params)
+                return path, await call(path)
             except OpnsenseApiError as exc:
                 status = exc.status_code
                 if status is None or not (status in (403, 404) or status < 300):

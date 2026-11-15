@@ -362,14 +362,25 @@ def snapshot_devices(snapshot: dict, provider: str) -> list[dict[str, Any]]:
     return devices
 
 
+def snapshot_device_key(provider: str, org_ref: int, device: dict) -> str:
+    """The tracked-device key of a ``snapshot_devices`` entry of one source:
+    ``<provider>:<org_ref>:<serial, else node id>``."""
+    return f"{provider}:{org_ref}:{device.get('serial') or device.get('node_id')}"
+
+
 # ── Advisory matching ────────────────────────────────────────────────────────
 
 
 def advisory_applies(device: dict, advisory: dict) -> bool:
     """Whether ``advisory`` names the platform, product and version of
     ``device``. An advisory without a platform applies to every platform;
-    ``product_match`` is a case-insensitive substring of the model."""
+    ``product_match`` is a case-insensitive substring of the model. An
+    advisory with ``device_keys`` (one found on given devices, such as an
+    OPNsense audit finding) applies only to those devices."""
     if not advisory.get("enabled", True):
+        return False
+    scope = advisory.get("device_keys") or []
+    if scope and str(device.get("device_key") or "") not in scope:
         return False
     platform = str(advisory.get("platform") or "")
     if platform and platform != str(device.get("platform") or ""):

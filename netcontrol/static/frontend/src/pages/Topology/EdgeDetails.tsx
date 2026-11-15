@@ -3,7 +3,7 @@ import {
   type InterfaceInventoryRow,
   useHostInterfaceInventory,
 } from '@/api/host-details';
-import { MAP_PANEL_MAX_WIDTH, abbreviateInterface, edgeProtocolLabel, formatBps, isEdgeDown } from './helpers';
+import { MAP_PANEL_MAX_WIDTH, abbreviateInterface, edgeProtocolLabel, edgeStatusTone, formatBps } from './helpers';
 
 interface Props {
   edge: TopologyEdge;
@@ -91,7 +91,7 @@ export function EdgeDetails({ edge, fromNode, toNode, onClose }: Props) {
           {protoLabel}
         </span>
         {edge.status && (
-          <span className={`badge ${isEdgeDown(edge) ? 'badge-danger' : 'badge-success'}`}>
+          <span className={`badge badge-${edgeStatusTone(edge) ?? 'success'}`}>
             {edge.status}
           </span>
         )}

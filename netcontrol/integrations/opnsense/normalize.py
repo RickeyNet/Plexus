@@ -17,12 +17,18 @@ How a firewall maps onto the map:
     state: ``active`` (online), ``degraded`` (latency or loss alarm),
     ``failed`` (down, or forced down) or ``unknown`` (no monitor data: the
     gateway is not monitored, or its state is pending). The loss, RTT and
-    RTT deviation are in the edge's ``detail`` and the stub's details.
+    RTT deviation are in the edge's ``detail`` (display text), the stub's
+    details and, as numbers, the edge's ``metrics`` (``latency_ms``,
+    ``jitter_ms`` (the RTT deviation), ``loss_pct``; latency and jitter
+    are left out of a gateway with 100 % loss), which availability tracking
+    stores as a time series for SLA targets.
   - every IPsec connection, WireGuard peer and OpenVPN client instance is a
     ``vpn3p`` tunnel edge to a ``vpn_peer`` node in a "VPN peers" box, with
-    the status ``reachable`` (up), ``degraded`` (a WireGuard handshake older
-    than 5 minutes, an OpenVPN client that is (re)connecting) or
-    ``unreachable`` (down).
+    the status ``reachable`` (up), ``degraded`` (an IPsec connection whose
+    phase 1 is up while none of its configured child SAs is installed, a
+    WireGuard handshake older than 5 minutes, an OpenVPN client that is
+    (re)connecting) or ``unreachable`` (down). An IPsec tunnel lists its
+    child SAs (phase 2) in its details.
   - every OpenVPN server instance is a ``vpn_server`` node next to the
     firewall (``ovpn:server:<id>``): ``online`` when it runs, ``offline``
     when it is enabled but not running. The clients connected to it are
@@ -31,7 +37,10 @@ How a firewall maps onto the map:
 The firmware status (a pending update) and the findings of the security
 audit are shown in the firewall's details and added to the collection
 report as informational warnings (``info``: they do not mean the collection
-was incomplete).
+was incomplete); so is an audit that did not verifiably complete ("Audit
+incomplete"). The CARP virtual IPs are the firewall's "High availability"
+section; a VIP in ``INIT`` or a non-zero CARP demotion is a (non ``info``)
+warning.
 """
 
 from __future__ import annotations
@@ -80,9 +89,11 @@ SECTION_UPDATES = "Pending updates"
 SECTION_AUDIT = "Security audit"
 SECTION_VULNERABLE = "Vulnerable packages"
 SECTION_INVENTORY = "Plexus inventory"
+SECTION_HA = "High availability"
 # Section titles of the gateway, tunnel peer and OpenVPN server nodes.
 SECTION_GATEWAY = "Gateway"
 SECTION_IPSEC_PEER = "IPsec peer"
+SECTION_IPSEC_CHILDREN = "Child SAs"
 SECTION_WIREGUARD_PEER = "WireGuard peer"
 SECTION_OPENVPN_PEER = "OpenVPN peer"
 SECTION_OPENVPN_SERVER = "OpenVPN server"
@@ -116,6 +127,9 @@ _WIREGUARD_EDGE_STATUS = {"online": "reachable", "stale": "degraded", "offline":
 # (OPNsense's own rule; peers shake hands about every 2 minutes).
 WIREGUARD_ONLINE_SECONDS = 300
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
+# strongSwan child SA states (``state`` of a ``search_phase2`` row) in which
+# the SA carries traffic.
+_CHILD_SA_UP = frozenset({"INSTALLED", "REKEYING", "REKEYED", "UPDATING"})
 
 
 def _text(value: Any) -> str:
@@ -188,6 +202,70 @@ def openvpn_client_status(row: dict) -> str:
     if not state or state in ("failed", "exiting"):
         return "unreachable"
     return "degraded"
+
+
+def child_sa_installed(row: dict) -> bool:
+    """Whether a child SA row of ``ipsec/sessions/search_phase2`` carries
+    traffic. The rows are the SAs strongSwan has, so a row without a
+    ``state`` counts as installed."""
+    state = _text(row.get("state")).upper()
+    return not state or state in _CHILD_SA_UP
+
+
+def ipsec_status(connected: bool, installed: int | None, configured: int | None) -> str:
+    """``reachable`` / ``degraded`` / ``unreachable`` of an IPsec connection:
+    no SA is down; an SA with configured child SAs none of which is
+    installed is degraded (phase 1 up, no traffic). Unknown counts (a call
+    that did not answer, a legacy tunnel) never degrade."""
+    if not connected:
+        return "unreachable"
+    if configured and installed == 0:
+        return "degraded"
+    return "reachable"
+
+
+def gateway_metrics(item: dict) -> dict[str, float]:
+    """The numbers of a gateway's monitor (dpinger): ``latency_ms`` (RTT),
+    ``jitter_ms`` (RTT deviation) and ``loss_pct``. A gateway with 100 %
+    loss has no meaningful RTT: only its loss is kept."""
+    found = {
+        "latency_ms": _number(item.get("delay")),
+        "jitter_ms": _number(item.get("stddev")),
+        "loss_pct": _number(item.get("loss")),
+    }
+    if (found["loss_pct"] or 0) >= 100:
+        found["latency_ms"] = found["jitter_ms"] = None
+    return {k: v for k, v in found.items() if v is not None}
+
+
+def carp_problems(carp: dict | None) -> list[str]:
+    """What is wrong with the firewall's CARP state: a VIP in ``INIT``
+    (its interface is down or CARP cannot run on it), a non-zero demotion
+    (the firewall gives up being master)."""
+    if not carp:
+        return []
+    problems = [
+        f"{_text(r.get('interface')) or '?'} VHID {_text(r.get('vhid')) or '?'} ({_text(r.get('subnet'))})"
+        for r in _dicts(carp.get("rows"))
+        if _text(r.get("status")).upper() == "INIT"
+    ]
+    found = [f"CARP VIP in INIT: {', '.join(problems)}"] if problems else []
+    demotion = _number(_dict(carp.get("carp")).get("demotion"))
+    if demotion:
+        found.append(f"CARP demotion is {demotion:g} (the firewall does not take or keep the master role)")
+    return found
+
+
+_IPSEC_STATE_TEXT = {"reachable": "up", "degraded": "up, no child SA installed", "unreachable": "down"}
+
+
+def _child_count_text(installed: int | None, configured: int | None) -> str:
+    """``1 of 2 installed``, ``1 installed``, ``2 configured`` or ``""``."""
+    if installed is not None and configured is not None:
+        return f"{installed} of {configured} installed"
+    if installed is not None:
+        return f"{installed} installed"
+    return f"{configured} configured" if configured is not None else ""
 
 
 def _specific_peer(remote: str) -> bool:
@@ -302,6 +380,11 @@ class _Builder:
         self.gateways = _dicts(raw.get("gateways"))
         self.routes = _dicts(raw.get("routes"))
         self.ipsec = _dicts(raw.get("ipsec"))
+        self.ipsec_phase2 = raw.get("ipsec_phase2") if isinstance(raw.get("ipsec_phase2"), dict) else None
+        self.ipsec_child_config = (
+            raw.get("ipsec_child_config") if isinstance(raw.get("ipsec_child_config"), dict) else None
+        )
+        self.carp = raw.get("carp") if isinstance(raw.get("carp"), dict) else None
         self.wireguard = _dicts(raw.get("wireguard"))
         self.openvpn = _dicts(raw.get("openvpn"))
         self.audit = raw.get("audit") if isinstance(raw.get("audit"), dict) else None
@@ -437,6 +520,7 @@ class _Builder:
         _add(sections, self._ipsec_table())
         _add(sections, self._wireguard_table())
         _add(sections, self._openvpn_table())
+        _add(sections, self._ha_table())
         self._firmware_sections(sections, version)
         host = node.pop("_host", None)
         if host:
@@ -572,23 +656,68 @@ class _Builder:
             rows,
         )
 
+    def ipsec_children(self, row: dict) -> tuple[list[dict], int | None, int | None]:
+        """The child SA rows of one connection, how many are installed and
+        how many are configured (``None`` when not known)."""
+        children: list[dict] = []
+        installed: int | None = None
+        name = _text(row.get("name"))
+        if self.ipsec_phase2 is not None and row.get("connected") and name in self.ipsec_phase2:
+            children = _dicts(self.ipsec_phase2.get(name))
+            installed = sum(1 for c in children if child_sa_installed(c))
+        configured: int | None = None
+        config = self.ipsec_child_config or {}
+        ikeid = _text(row.get("ikeid"))
+        if ikeid in config:
+            configured = sum(1 for c in _dicts(config.get(ikeid)) if _text(c.get("enabled")) not in ("0", "False", ""))
+        return children, installed, configured
+
     def _ipsec_table(self) -> dict | None:
-        rows = [
-            [
-                r.get("phase1desc") or r.get("name"),
-                r.get("version"),
-                r.get("local-addrs"),
-                r.get("remote-addrs"),
-                r.get("remote-id"),
-                "up" if r.get("connected") else "down",
-                r.get("bytes-in"),
-                r.get("bytes-out"),
-            ]
-            for r in self.ipsec
-        ]
+        rows = []
+        for r in self.ipsec:
+            _children, installed, configured = self.ipsec_children(r)
+            rows.append(
+                [
+                    r.get("phase1desc") or r.get("name"),
+                    r.get("version"),
+                    r.get("local-addrs"),
+                    r.get("remote-addrs"),
+                    r.get("remote-id"),
+                    _IPSEC_STATE_TEXT[ipsec_status(bool(r.get("connected")), installed, configured)],
+                    _child_count_text(installed, configured),
+                    r.get("bytes-in"),
+                    r.get("bytes-out"),
+                ]
+            )
         return table_section(
             SECTION_IPSEC,
-            ["Connection", "IKE", "Local", "Remote", "Remote ID", "State", "Bytes in", "Bytes out"],
+            ["Connection", "IKE", "Local", "Remote", "Remote ID", "State", "Child SAs", "Bytes in", "Bytes out"],
+            rows,
+        )
+
+    def _ha_table(self) -> dict | None:
+        if self.carp is None:
+            return None
+        state = _dict(self.carp.get("carp"))
+        maintenance = state.get("maintenancemode")
+        demotion = _text(state.get("demotion"))
+        rows = [
+            [
+                r.get("interface"),
+                r.get("vhid"),
+                r.get("subnet"),
+                r.get("status_txt") or r.get("status"),
+                r.get("advbase"),
+                r.get("advskew"),
+                "" if maintenance is None else ("Yes" if maintenance in (True, 1, "1", "true") else "No"),
+                demotion,
+            ]
+            for r in _dicts(self.carp.get("rows"))
+            if _text(r.get("vhid"))
+        ]
+        return table_section(
+            SECTION_HA,
+            ["Interface", "VHID", "Virtual IP", "State", "Advbase", "Advskew", "Maintenance mode", "Demotion"],
             rows,
         )
 
@@ -666,14 +795,18 @@ class _Builder:
         if self.audit is not None:
             findings = _dicts(self.audit.get("findings"))
             packages = sorted({f"{_text(f.get('package'))}-{_text(f.get('version'))}" for f in findings})
+            complete = self.audit_completed()
             _add(
                 sections,
                 kv_section(
                     SECTION_AUDIT,
                     [
+                        ("Result", "Completed" if complete else "Audit incomplete"),
+                        ("Reason", "" if complete else self.audit.get("incomplete_reason") or "not verified"),
                         ("Ran at", self.audit.get("ran_at")),
-                        ("Problems found", len(findings)),
-                        ("Vulnerable packages", packages or "None"),
+                        ("Problems found", len(findings) if complete else f"{len(findings)} so far (partial)"),
+                        ("Vulnerable packages", packages or ("None" if complete else "")),
+                        ("Software advisories", "Updated" if complete else "Not changed"),
                         ("Source", "OPNsense security audit (pkg audit)"),
                     ],
                 ),
@@ -690,6 +823,17 @@ class _Builder:
                 ),
             )
 
+    def audit_completed(self) -> bool:
+        """Whether the audit verifiably ran to its end (an audit result
+        without the flag, from before it existed, is not trusted)."""
+        return bool(self.audit and self.audit.get("completed"))
+
+    def ha_warnings(self) -> None:
+        for problem in carp_problems(self.carp):
+            self.warnings.append(
+                {"scope": "ha", "path": "/diagnostics/interface/get_vip_status", "status": None, "message": problem}
+            )
+
     def firmware_warnings(self, version: str) -> None:
         if self.firmware and self.update_pending():
             latest = _text(self.product.get("product_latest"))
@@ -702,7 +846,17 @@ class _Builder:
                     + _text(self.firmware.get("status_msg")),
                 )
             )
-        if self.audit is not None:
+        if self.audit is not None and not self.audit_completed():
+            self.warnings.append(
+                info_warning(
+                    "firmware",
+                    "/core/firmware/audit",
+                    "Security audit incomplete: "
+                    + (_text(self.audit.get("incomplete_reason")) or "its completion could not be verified")
+                    + ". The software advisories were not changed.",
+                )
+            )
+        elif self.audit is not None:
             findings = _dicts(self.audit.get("findings"))
             if findings:
                 packages = sorted({f"{_text(f.get('package'))}-{_text(f.get('version'))}" for f in findings})
@@ -734,11 +888,6 @@ class _Builder:
                 ip=address if _is_ip(address) else "",
                 parent=self.firewall_id,
             )
-            metrics = {
-                "loss_pct": _number(item.get("loss")),
-                "rtt_ms": _number(item.get("delay")),
-                "rttsd_ms": _number(item.get("stddev")),
-            }
             detail = ", ".join(
                 f"{label} {item.get(key)}"
                 for label, key in (("RTT", "delay"), ("RTTsd", "stddev"), ("loss", "loss"))
@@ -770,7 +919,7 @@ class _Builder:
                 status=status,
                 label="Gateway",
                 detail=detail,
-                metrics={k: v for k, v in metrics.items() if v is not None},
+                metrics=gateway_metrics(item),
             )
 
     # ── Tunnels ────────────────────────────────────────────────────────────
@@ -782,8 +931,10 @@ class _Builder:
         _add(node["sections"], kv_section(title, [*rows, ("Source", SOURCE)]))
         return node
 
-    def _tunnel(self, peer: dict, status: str, label: str, detail: str, a_port: str = "", b_port: str = "") -> None:
-        if self._edge(
+    def _tunnel(
+        self, peer: dict, status: str, label: str, detail: str, a_port: str = "", b_port: str = ""
+    ) -> dict | None:
+        edge = self._edge(
             self.firewall_id,
             peer["id"],
             "vpn3p",
@@ -792,8 +943,10 @@ class _Builder:
             detail=detail,
             a_port=a_port,
             b_port=b_port,
-        ):
+        )
+        if edge:
             self.tunnel_count += 1
+        return edge
 
     def build_ipsec(self) -> None:
         for row in self.ipsec:
@@ -814,13 +967,17 @@ class _Builder:
                     ("Authentication", row.get("remote-class")),
                 ],
             )
-            self._tunnel(
+            children, installed, configured = self.ipsec_children(row)
+            counts = _child_count_text(installed, configured)
+            edge = self._tunnel(
                 peer,
-                "reachable" if row.get("connected") else "unreachable",
+                ipsec_status(bool(row.get("connected")), installed, configured),
                 "IPsec",
                 name,
                 a_port=_text(row.get("local-addrs")),
             )
+            if edge is not None:
+                edge["_children"] = (children, counts)
 
     def build_wireguard(self) -> None:
         for row in self.wireguard:
@@ -927,9 +1084,41 @@ class _Builder:
                 rows += [("Gateway", edge.get("b_port")), ("Monitor", edge.get("detail"))]
             else:
                 rows.append(("Tunnel", edge.get("detail")))
+            children, counts = edge.pop("_children", ([], ""))
+            if counts:
+                rows.append(("Child SAs", counts))
             rows += [("Status", edge.get("status")), ("Discovered via", SOURCE)]
             section = kv_section(edge.get("label") or "Link", rows)
             edge["sections"] = [section] if section else []
+            _add(
+                edge["sections"],
+                table_section(
+                    SECTION_IPSEC_CHILDREN,
+                    [
+                        "Child SA",
+                        "State",
+                        "Local network",
+                        "Remote network",
+                        "Mode",
+                        "Encryption",
+                        "Bytes in",
+                        "Bytes out",
+                    ],
+                    [
+                        [
+                            c.get("phase2desc") or c.get("name"),
+                            c.get("state") or "installed",
+                            c.get("local-ts"),
+                            c.get("remote-ts"),
+                            c.get("mode"),
+                            c.get("encr-alg"),
+                            c.get("bytes-in"),
+                            c.get("bytes-out"),
+                        ]
+                        for c in children
+                    ],
+                ),
+            )
 
 
 def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[str, Any]:
@@ -944,6 +1133,7 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
     builder.firewall_sections(firewall)
     version = builder.version()
     builder.firmware_warnings(version)
+    builder.ha_warnings()
     builder.build_edge_sections()
 
     site_members = [n for n in builder.nodes.values() if n["site"] == builder.site_id]
@@ -1005,7 +1195,13 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
             "gateways": len(builder.gateways),
             "version": version,
             "update_pending": builder.update_pending() if builder.firmware else None,
-            "vulnerable_packages": len({_text(f.get("package")) for f in findings}) if builder.audit else None,
+            "vulnerable_packages": len({_text(f.get("package")) for f in findings})
+            if builder.audit_completed()
+            else None,
+            "audit_completed": builder.audit_completed() if builder.audit is not None else None,
+            "carp_vips": len([r for r in _dicts(_dict(builder.carp).get("rows")) if _text(r.get("vhid"))])
+            if builder.carp is not None
+            else None,
         },
         "collection": {
             "sources": [SOURCE],

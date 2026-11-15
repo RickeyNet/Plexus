@@ -96,6 +96,45 @@ The **SLA** tab shows a compliance strip (hosts per worst target status), a
 status badge per host and, in the host detail, each target's value, status and
 recent status changes.
 
+## Targets of integration entities
+
+A target can also apply to the entities that integrations collect (the
+devices, uplinks and tunnels of **Monitoring > Availability > Integrations
+and cloud**) instead of inventory hosts: give it a `provider` (`opnsense`,
+`meraki`, `cato`, ...) and optionally `org_ref` (one source), `entity_type`
+(`uplink`, `tunnel`, `device`...) and `entity_id` (one entity). In the
+target form, choose the scope **Integration**, then the integration and what
+it applies to (everything it tracks, or one entity type); narrowing to one
+source or one entity is done through the API. It is evaluated in the same
+pass, with the same metrics and the same met / warn / breach rule:
+
+- `uptime`: the entity's time-weighted uptime over the window, as the
+  availability page computes it (degraded counts as available, unknown time
+  is left out);
+- `latency`, `jitter`, `packet_loss`: the mean of what the vendor reported
+  for the entity in the window. Only some entities report them; today these
+  are **OPNsense gateways** (dpinger RTT, RTT deviation as jitter, and loss;
+  a gateway with 100 % loss reports loss only). Every other entity is *no
+  data* for these metrics.
+
+Each collection stores one raw sample per entity that reported a value
+(`topology_entity_metrics`, kept for `retention_days`) and adds it to that
+entity's row of the day (`topology_entity_metric_daily`: count, sum, sum of
+squares, min, max; kept for `sla_retention_days`, default 400), so a window
+longer than the raw retention is read from the daily rows (whole UTC days;
+the partial first day comes from the raw samples while they are kept).
+
+Results go to `topology_sla_target_status` and its history. A status that
+gets worse (to warning, or to breach) raises an `sla_breach` alert once, on
+the entity's inventory host when it has one, else straight to the
+notification channels; it is not raised again while the status stays the
+same. A muted entity (see [Muting](meraki-topology.md#muting)) is evaluated
+and recorded but raises nothing. Host alert suppressions do not apply to
+these targets.
+
+The SLA Targets form does not offer this scope yet; create such targets
+through the API (`POST /api/sla/targets` with `provider`).
+
 ## API
 
 | Method and path | Purpose |
@@ -105,4 +144,7 @@ recent status changes.
 | `GET /api/sla/targets`, `POST`, `PUT /{id}`, `DELETE /{id}` | Target CRUD; `window_days` 1-365, `metric` one of the four above (HTTP 400 otherwise) |
 | `GET /api/sla/compliance?group_id=&host_id=&target_id=` | Latest status of every (target, host); `group_id` includes sub-groups |
 | `GET /api/sla/compliance/history?target_id=&host_id=&limit=` | Status changes, newest first (`limit` 1-1000, default 100) |
-| `POST /api/sla/evaluate` | Admin: roll up and evaluate now; returns the rollup and evaluation counts |
+| `POST /api/sla/evaluate` | Admin: roll up and evaluate now; returns the rollup and evaluation counts (`topology_evaluation` for the targets of integration entities) |
+| `GET /api/sla/compliance?scope=topology&provider=&org_ref=&entity_type=&entity_id=&target_id=` | Latest status of every (target, integration entity) |
+| `GET /api/sla/compliance/history?scope=topology&target_id=&provider=&org_ref=&entity_id=&limit=` | Their status changes |
+| `GET /api/availability/topology/metrics?provider=&org_ref=&entity_type=&entity_id=&days=` | Latency / jitter / loss history of one integration entity: raw samples, daily rollups, window means |

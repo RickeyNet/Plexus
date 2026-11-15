@@ -41,6 +41,7 @@ from netcontrol.integrations.software.versions import (
     find_advisory_matches,
     normalize_severity,
     severity_at_least,
+    snapshot_device_key,
     snapshot_devices,
     validate_version_spec,
     version_spread,
@@ -227,7 +228,7 @@ async def collect_software_entries() -> list[dict[str, Any]]:
                 claimed_hosts.add(int(host_id))
             entries.append(
                 {
-                    "device_key": f"{provider}:{org_ref}:{device['serial'] or device['node_id']}",
+                    "device_key": snapshot_device_key(provider, org_ref, device),
                     "source": provider,
                     "org_ref": org_ref,
                     "host_id": int(host_id) if host_id else None,

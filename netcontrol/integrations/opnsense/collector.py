@@ -22,10 +22,25 @@ the API reference at docs.opnsense.org:
   - ``diagnostics/interface/get_routes``         the routing table
   - ``ipsec/sessions/search_phase1``             IPsec connections and whether
                                                  each has an SA
+  - ``ipsec/sessions/search_phase2`` (POST,      the child SAs (phase 2) of each
+    ``{"id": <phase 1 name>}``)                  connection that has an SA; the
+                                                 action reads ``id`` with
+                                                 ``getPost``, so it is a POST that
+                                                 only reads
+  - ``ipsec/connections/search_child``           the child SAs configured for a
+    (``?connection=<uuid>``)                     connection of the "Connections"
+                                                 model (23.1+): only for phase 1
+                                                 rows whose ``ikeid`` is a UUID;
+                                                 legacy tunnels are not counted
   - ``wireguard/service/show``                   WireGuard interfaces and peers
                                                  with their latest handshake
   - ``openvpn/service/search_sessions``          OpenVPN instances and the
                                                  clients connected to servers
+  - ``diagnostics/interface/get_vip_status``     CARP virtual IPs (interface,
+                                                 VHID, MASTER / BACKUP / INIT /
+                                                 DISABLED) and the global
+                                                 ``carp`` state (demotion,
+                                                 allow, maintenance mode)
   - ``core/firmware/running``, ``core/firmware/audit`` (POST),
     ``core/firmware/upgradestatus``              the security audit
                                                  (``pkg audit -F``), run in the
@@ -53,7 +68,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
@@ -69,8 +84,10 @@ DEFAULT_OPTIONS: dict[str, Any] = {
     "verify_tls": True,
     # Gateway status (dpinger): status, loss, delay, stddev.
     "include_gateways": True,
-    # IPsec, WireGuard and OpenVPN tunnel state.
+    # IPsec (with the phase 2 child SAs), WireGuard and OpenVPN tunnel state.
     "include_vpn": True,
+    # CARP / high availability: the virtual IPs and their state.
+    "include_ha": True,
     # The routing table.
     "include_routes": True,
     # The security audit of the installed packages (pkg audit).
@@ -92,6 +109,7 @@ PHASE_INTERFACES = "opnsense interfaces"
 PHASE_GATEWAYS = "opnsense gateways"
 PHASE_VPN = "opnsense vpn"
 PHASE_ROUTES = "opnsense routes"
+PHASE_HA = "opnsense ha"
 PHASE_FIRMWARE = "opnsense firmware"
 PHASE_CONFIG = "opnsense config"
 
@@ -102,6 +120,9 @@ PATH_INTERFACES = ("interfaces/overview/interfaces_info", "interfaces/overview/i
 PATH_GATEWAYS = ("routes/gateway/status",)
 PATH_ROUTES = ("diagnostics/interface/get_routes", "diagnostics/interface/getRoutes")
 PATH_IPSEC = ("ipsec/sessions/search_phase1", "ipsec/sessions/searchPhase1")
+PATH_IPSEC_PHASE2 = ("ipsec/sessions/search_phase2", "ipsec/sessions/searchPhase2")
+PATH_IPSEC_CHILDREN = ("ipsec/connections/search_child", "ipsec/connections/searchChild")
+PATH_CARP = ("diagnostics/interface/get_vip_status", "diagnostics/interface/getVipStatus")
 PATH_WIREGUARD = ("wireguard/service/show",)
 PATH_OPENVPN = ("openvpn/service/search_sessions", "openvpn/service/searchSessions")
 PATH_FIRMWARE_RUNNING = "core/firmware/running"
@@ -145,6 +166,26 @@ _PRODUCT_KEPT = (
 
 _VULNERABLE = re.compile(r"^(?P<name>\S+)-(?P<version>[^-\s]+) is vulnerable:?\s*$")
 _PROBLEMS = re.compile(r"(\d+) problem\(s\) in (\d+) (?:installed )?package\(s\) found")
+_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+# What ``pkg audit -F`` (freebsd/pkg ``src/audit.c``, ``libpkg/pkg_audit.c``)
+# and OPNsense's ``output_cmd`` print when the audit did not run to its end:
+# the vulnerability database could not be fetched, opened or read, or the
+# package database could not be. Lower case.
+_AUDIT_FAILURES = (
+    "cannot fetch vulnxml",
+    "cannot process vulnxml",
+    "unable to open vulnxml",
+    "try running 'pkg audit -f' first",
+    "insufficient privileges to read the package database",
+    "error accessing the package database",
+    "cannot get a read lock",
+    "cannot get an advisory lock",
+    "insufficient space for audit database",
+    "audit database exceeds size limit",
+    "cannot extract audit database",
+    "cannot read audit database",
+    "safety violation",
+)
 _VUXML_ID = re.compile(r"/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.html", re.IGNORECASE)
 
 
@@ -221,10 +262,23 @@ def scrub_firmware(status: Any) -> dict | None:
     return scrub_secrets(cleaned)
 
 
+def _audit_failure(line: str) -> str:
+    """The line when it reports that the audit could not run (see
+    ``_AUDIT_FAILURES``; any other ``pkg:`` error line too, e.g. a fetch
+    error such as ``pkg: https://...: No address record``), else ``""``."""
+    lowered = line.lower()
+    if any(marker in lowered for marker in _AUDIT_FAILURES):
+        return line
+    if lowered.startswith("pkg:") and not lowered.startswith("pkg: warning"):
+        return line
+    return ""
+
+
 def parse_audit_log(text: str) -> dict[str, Any]:
     """The findings of a ``pkg audit`` run from its log, as the firmware
     progress log carries it: per vulnerable package its name and version,
-    and per issue its description, CVE ids and VuXML link.
+    and per issue its description, CVE ids and VuXML link; and whether the
+    audit verifiably ran to its end (``completed``).
 
     ``pkg audit`` prints (freebsd/pkg ``src/audit.c``)::
 
@@ -234,18 +288,29 @@ def parse_audit_log(text: str) -> dict[str, Any]:
           WWW: https://vuxml.FreeBSD.org/freebsd/<id>.html
 
         1 problem(s) in 1 package(s) found.
+
+    The result line is printed only when the vulnerability database was
+    fetched and processed, also when nothing is vulnerable ("0 problem(s)
+    in 0 package(s) found."); a failed fetch ends ``pkg audit`` before it.
+    The audit is ``completed`` only with that line, no failure line (see
+    ``_audit_failure``) and findings that agree with it. Otherwise
+    ``incomplete_reason`` says why and the findings (if any) are partial:
+    "no findings" then means nothing.
     """
     findings: list[dict[str, Any]] = []
     package: dict[str, str] | None = None
     issue: dict[str, Any] | None = None
     problems: int | None = None
+    packages: int | None = None
+    failure = ""
     for line in (text or "").splitlines():
         stripped = line.strip()
         counted = _PROBLEMS.search(stripped)
         if counted:
-            problems = int(counted.group(1))
+            problems, packages = int(counted.group(1)), int(counted.group(2))
             package = issue = None
             continue
+        failure = failure or _audit_failure(stripped)
         match = _VULNERABLE.match(stripped) if not line.startswith((" ", "\t")) else None
         if match:
             package = {"package": match.group("name"), "version": match.group("version")}
@@ -272,7 +337,30 @@ def parse_audit_log(text: str) -> dict[str, Any]:
         if issue is None:
             issue = {**package, "description": stripped, "cves": [], "url": "", "vuxml_id": ""}
             findings.append(issue)
-    return {"findings": findings, "problems": problems if problems is not None else len(findings)}
+    reason = ""
+    if failure:
+        reason = f"pkg audit reported an error: {failure[:200]}"
+    elif problems is None:
+        reason = "the log has no pkg audit result line (the audit was cut short or its output is incomplete)"
+    elif bool(packages) != bool(findings):
+        reason = f"the result line reports {packages} vulnerable package(s) but the log lists {len(findings)} issue(s)"
+    return {
+        "findings": findings,
+        "problems": problems if problems is not None else len(findings),
+        "completed": not reason,
+        "incomplete_reason": reason,
+    }
+
+
+def incomplete_audit(log: str, reason: str) -> dict[str, Any]:
+    """The result of an audit that did not verifiably finish: whatever the
+    log shows so far, never ``completed``."""
+    return {
+        "ran_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        **parse_audit_log(log),
+        "completed": False,
+        "incomplete_reason": reason,
+    }
 
 
 async def collect_opnsense(
@@ -290,7 +378,7 @@ async def collect_opnsense(
         want_config = bool(opts["config_backup"])
     errors: list[dict[str, Any]] = []
     total = 3 + int(opts["include_gateways"]) + 3 * int(opts["include_vpn"]) + int(opts["include_routes"])
-    total += 3 * int(opts["include_firmware_audit"]) + int(want_config)
+    total += int(opts["include_ha"]) + 3 * int(opts["include_firmware_audit"]) + int(want_config)
     done = 0
     answered = 0
     first_error: OpnsenseApiError | None = None
@@ -299,12 +387,17 @@ async def collect_opnsense(
         if progress is not None:
             progress({"phase": phase, "calls_done": done, "calls_total": total, **fields})
 
-    async def best_effort(scope: str, paths: tuple[str, ...]) -> Any:
+    async def best_effort(
+        scope: str, paths: tuple[str, ...], *, params: dict | None = None, body: dict | None = None
+    ) -> Any:
         nonlocal done, answered, first_error
         try:
-            _path, body = await client.get_first(paths)
+            if body is not None:
+                _path, found = await client.post_first(paths, body)
+            else:
+                _path, found = await client.get_first(paths, params)
             answered += 1
-            return body
+            return found
         except OpnsenseApiError as exc:
             if exc.transport or exc.status_code == 401:
                 # A wrong key or a firewall that cannot be reached: nothing
@@ -335,15 +428,29 @@ async def collect_opnsense(
         report(PHASE_GATEWAYS, gateways=len(gateways or []))
 
     ipsec = wireguard = openvpn = None
+    ipsec_phase2: dict[str, list[dict]] | None = None
+    ipsec_child_config: dict[str, list[dict]] | None = None
     if opts["include_vpn"]:
         report(PHASE_VPN)
         found = await best_effort("vpn", PATH_IPSEC)
         ipsec = scrub_secrets(_rows(found)) if found is not None else None
+        if ipsec:
+            total += sum(1 for r in ipsec if r.get("connected") and r.get("name"))
+            total += sum(1 for r in ipsec if _UUID.match(str(r.get("ikeid") or "")))
+            ipsec_phase2, ipsec_child_config = await _collect_ipsec_children(ipsec, best_effort)
         found = await best_effort("vpn", PATH_WIREGUARD)
         wireguard = scrub_secrets(_rows(found)) if found is not None else None
         found = await best_effort("vpn", PATH_OPENVPN)
         openvpn = scrub_secrets(_rows(found)) if found is not None else None
         report(PHASE_VPN, tunnels=len(ipsec or []) + len(wireguard or []) + len(openvpn or []))
+
+    carp: dict[str, Any] | None = None
+    if opts["include_ha"]:
+        report(PHASE_HA)
+        found = await best_effort("ha", PATH_CARP)
+        if isinstance(found, dict):
+            state = found.get("carp")
+            carp = scrub_secrets({"rows": _rows(found), "carp": state if isinstance(state, dict) else {}})
 
     routes: list[dict] | None = None
     if opts["include_routes"]:
@@ -408,8 +515,11 @@ async def collect_opnsense(
         "gateways": gateways,
         "routes": routes,
         "ipsec": ipsec,
+        "ipsec_phase2": ipsec_phase2,
+        "ipsec_child_config": ipsec_child_config,
         "wireguard": wireguard,
         "openvpn": openvpn,
+        "carp": carp,
         "audit": audit,
         # Never part of the snapshot: the caller stores it as a config backup.
         "config_xml": config_xml,
@@ -419,9 +529,46 @@ async def collect_opnsense(
     }
 
 
+async def _collect_ipsec_children(
+    ipsec: list[dict], best_effort: Callable[..., Awaitable[Any]]
+) -> tuple[dict[str, list[dict]] | None, dict[str, list[dict]] | None]:
+    """The child SAs of each IPsec connection: the installed ones of every
+    connection that has an SA (``search_phase2``, by phase 1 name) and the
+    configured ones of every connection of the Connections model
+    (``search_child``, by its UUID). A call that is refused or unknown is
+    not repeated for the next connection (one warning, the map without
+    that part). ``None`` for a part that never answered."""
+    phase2: dict[str, list[dict]] | None = None
+    configured: dict[str, list[dict]] | None = None
+    phase2_ok = config_ok = True
+    for row in ipsec:
+        name = str(row.get("name") or "")
+        if phase2_ok and row.get("connected") and name:
+            found = await best_effort("vpn", PATH_IPSEC_PHASE2, body={"id": name})
+            if found is None:
+                phase2_ok = False
+            else:
+                phase2 = phase2 if phase2 is not None else {}
+                phase2[name] = scrub_secrets(_rows(found))
+        ikeid = str(row.get("ikeid") or "")
+        if config_ok and _UUID.match(ikeid):
+            found = await best_effort("vpn", PATH_IPSEC_CHILDREN, params={"connection": ikeid})
+            if found is None:
+                config_ok = False
+            else:
+                configured = configured if configured is not None else {}
+                configured[ikeid] = scrub_secrets(_rows(found))
+    return phase2, configured
+
+
 async def _run_audit(client: OpnsenseClient, errors: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Start the security audit and wait for its result. ``None`` (with a
-    warning) when it could not run or did not finish in time."""
+    warning) when it could not be started; an audit that started but did
+    not verifiably finish (still running when the wait ends, a firmware
+    task error, a log without pkg audit's result line, a fetch error) is
+    returned with ``completed`` false and the reason, so nothing is
+    concluded from it."""
+    log = ""
     try:
         running = await client.get(PATH_FIRMWARE_RUNNING)
         if isinstance(running, dict) and str(running.get("status") or "").strip().lower() == "busy":
@@ -442,18 +589,10 @@ async def _run_audit(client: OpnsenseClient, errors: list[dict[str, Any]]) -> di
             if str(status.get("status") or "") == "done" and _AUDIT_MARKER in log and _DONE_MARKER in log:
                 return {"ran_at": datetime.now(UTC).isoformat(timespec="seconds"), **parse_audit_log(log)}
             if str(status.get("status") or "") == "error":
-                break
+                return incomplete_audit(log, "the firmware task reported an error")
     except OpnsenseApiError as exc:
         if exc.transport or exc.status_code == 401:
             raise
         errors.append(_error("firmware", exc, paths=(PATH_AUDIT,)))
         return None
-    errors.append(
-        {
-            "scope": "firmware",
-            "path": "/" + PATH_AUDIT_STATUS,
-            "status": None,
-            "message": "The security audit did not finish while the collection waited for it",
-        }
-    )
-    return None
+    return incomplete_audit(log, "the audit did not finish while the collection waited for it")

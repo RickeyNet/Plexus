@@ -17,7 +17,10 @@ entity turns ``degraded`` or ``down``:
     (``notification_channels.on_alert_created``), like software alerts.
 
 No alert is raised again while the entity stays down (or degraded); one
-that recovers to ``up`` can alert again. An entity seen for the first time
+that recovers to ``up`` can alert again. The latency, jitter and loss a
+vendor reports for an entity (``EntityState.metrics``) are stored as a time
+series with daily rollups (``record_topology_entity_metrics``) for the SLA
+targets of topology entities (``netcontrol.routes.topology_sla``). An entity seen for the first time
 is a baseline and raises nothing. Best-effort throughout: a failure is
 logged and never fails the collection.
 """
@@ -90,45 +93,69 @@ async def _meraki_alert_already_raised(t: dict) -> bool:
         return False
 
 
-async def _raise_alert(t: dict) -> str:
-    """Raise the alert of one transition. Returns how: ``monitoring``,
-    ``notification`` or ``meraki`` (already raised by the Meraki alerts)."""
-    if await _meraki_alert_already_raised(t):
-        return "meraki"
-    severity = "critical" if t["new_state"] == "down" else "warning"
-    message = _message(t)
-    metric = f"topology {t['entity_type']}"
-    host_id = t.get("host_id")
+async def deliver_alert(
+    *,
+    host_id: Any,
+    name: str,
+    alert_type: str,
+    metric: str,
+    message: str,
+    severity: str,
+    dedup_key: str,
+    value: float | None = None,
+    threshold: float | None = None,
+) -> str:
+    """Raise an alert about a topology entity: a monitoring alert on its
+    inventory host when it has one, else straight to the notification
+    channels. Returns how: ``monitoring`` or ``notification``."""
     if host_id and await db.get_host(int(host_id)):
         await db.create_monitoring_alert(
             host_id=int(host_id),
             poll_id=None,
-            alert_type=ALERT_TYPE,
+            alert_type=alert_type,
             metric=metric,
             message=message,
             severity=severity,
-            dedup_key=dedup_key(t),
-            hostname=t["name"],
+            value=value,
+            threshold=threshold,
+            dedup_key=dedup_key,
+            hostname=name,
         )
         return "monitoring"
     event = {
-        "alert_id": dedup_key(t),
+        "alert_id": dedup_key,
         "host_id": None,
-        "hostname": t["name"],
+        "hostname": name,
         "poll_id": None,
         "rule_id": None,
-        "alert_type": ALERT_TYPE,
+        "alert_type": alert_type,
         "metric": metric,
         "message": message,
         "severity": severity,
-        "value": None,
-        "threshold": None,
-        "dedup_key": dedup_key(t),
+        "value": value,
+        "threshold": threshold,
+        "dedup_key": dedup_key,
         "channel_ids": "",
         "timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     await notification_channels.on_alert_created(event)
     return "notification"
+
+
+async def _raise_alert(t: dict) -> str:
+    """Raise the alert of one transition. Returns how: ``monitoring``,
+    ``notification`` or ``meraki`` (already raised by the Meraki alerts)."""
+    if await _meraki_alert_already_raised(t):
+        return "meraki"
+    return await deliver_alert(
+        host_id=t.get("host_id"),
+        name=t["name"],
+        alert_type=ALERT_TYPE,
+        metric=f"topology {t['entity_type']}",
+        message=_message(t),
+        severity="critical" if t["new_state"] == "down" else "warning",
+        dedup_key=dedup_key(t),
+    )
 
 
 async def _mute_index(provider: str | None = None, org_ref: int | None = None) -> db.TopologyMuteIndex | None:
@@ -139,6 +166,21 @@ async def _mute_index(provider: str | None = None, org_ref: int | None = None) -
     except Exception as exc:  # noqa: BLE001 - best effort
         LOGGER.warning("topology availability: mutes not read: %s", type(exc).__name__)
         return None
+
+
+async def _record_metrics(provider: str, org_ref: int, entities: list[dict], now: str | None) -> int:
+    """Store the latency / jitter / loss the snapshot reported for its
+    entities (``EntityState.metrics``). Never raises."""
+    samples = [e for e in entities if e.get("metrics")]
+    if not samples:
+        return 0
+    try:
+        return await db.record_topology_entity_metrics(provider, org_ref, samples, now=now)
+    except Exception as exc:  # noqa: BLE001 - the collection is already stored
+        LOGGER.warning(
+            "topology availability: %s org %s metrics not recorded: %s", provider, org_ref, type(exc).__name__
+        )
+        return 0
 
 
 async def record_snapshot_states(
@@ -176,6 +218,7 @@ async def record_snapshot_states(
             "muted_alerts": 0,
             "removed": 0,
         }
+    await _record_metrics(provider, org_ref, entities, now)
     removed = await finish_removal(result["removed"])
     if "device" in clean:
         await _drop_site_mutes_of_gone_sites(provider, org_ref, snapshot)
