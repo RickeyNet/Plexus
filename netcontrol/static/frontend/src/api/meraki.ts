@@ -21,10 +21,33 @@ export interface MerakiBuildOptions {
 }
 
 /** Integrations that feed the map through the same organization pipeline. */
-export type CloudProvider = "meraki" | "cato" | "fmc" | "panorama" | "appgate";
+export type CloudProvider =
+  | "meraki"
+  | "cato"
+  | "fmc"
+  | "panorama"
+  | "appgate"
+  | "opnsense";
 
 /** Clouds whose accounts are Cloud Visibility accounts that also feed the map. */
 export type CloudAccountProvider = "aws" | "azure" | "gcp";
+
+/** Every organization-pipeline integration, in display order. */
+export const ORG_PROVIDERS: readonly CloudProvider[] = [
+  "meraki",
+  "cato",
+  "fmc",
+  "panorama",
+  "appgate",
+  "opnsense",
+];
+
+/** Every Cloud Visibility cloud, in display order. */
+export const CLOUD_ACCOUNT_PROVIDERS: readonly CloudAccountProvider[] = [
+  "aws",
+  "azure",
+  "gcp",
+];
 
 export function isCloudAccountProvider(
   type: string | null | undefined,
@@ -118,23 +141,45 @@ export interface AppgateBuildOptions {
   inventory_enrich: boolean;
 }
 
+/**
+ * An OPNsense firewall, read over its API with a key and secret (the entry's
+ * write-only secret is `<key>:<secret>`). Every boolean but `verify_tls` and
+ * `config_backup` is one kind of data the collector reads; see the toggles in
+ * `OPNSENSE_OPTION_TOGGLES`.
+ */
+export interface OpnsenseBuildOptions {
+  verify_tls: boolean;
+  /** Gateways with their status, loss and latency. */
+  include_gateways: boolean;
+  /** IPsec, WireGuard and OpenVPN tunnels. */
+  include_vpn: boolean;
+  include_routes: boolean;
+  /** The firmware security audit of the installed packages. */
+  include_firmware_audit: boolean;
+  /** Store config.xml as a config backup of the matching inventory host. */
+  config_backup: boolean;
+  inventory_enrich: boolean;
+}
+
 export type OrgBuildOptions =
   | MerakiBuildOptions
   | CatoBuildOptions
   | FmcBuildOptions
   | PanoramaBuildOptions
-  | AppgateBuildOptions;
+  | AppgateBuildOptions
+  | OpnsenseBuildOptions;
 
 /**
  * A Meraki organization, a Cato account (`provider` 'cato'), a Cisco FMC
  * (`provider` 'fmc'), a Palo Alto Panorama (`provider` 'panorama') or an
- * Appgate SDP collective (`provider` 'appgate').
+ * Appgate SDP collective (`provider` 'appgate') or an OPNsense firewall
+ * (`provider` 'opnsense').
  */
 export interface MerakiOrg {
   id: number;
   name: string;
   provider: CloudProvider;
-  /** Meraki organization ID, Cato account ID, FMC domain, Panorama device group or Appgate identity provider. */
+  /** Meraki organization ID, Cato account ID, FMC domain, Panorama device group or Appgate identity provider ('local' for OPNsense). */
   org_id: string;
   base_url: string;
   /** The API key / password is write-only: the API only reports whether one is stored. */
@@ -166,7 +211,7 @@ export interface MerakiOrgInput {
   collect_interval_seconds?: number;
 }
 
-/** The schedule that collects the organization sources (Meraki, Cato, FMC, Panorama, Appgate). */
+/** The schedule that collects the organization sources (Meraki, Cato, FMC, Panorama, Appgate, OPNsense). */
 export interface SourceScheduleConfig {
   enabled: boolean;
   /** The default interval; an entry can set its own. */
@@ -462,7 +507,7 @@ export interface PathHop {
   edge: number | string | null;
   label: string;
   site: string;
-  /** meraki | fmc | panorama | cato | appgate | aws | azure | gcp | inventory | internet | unknown */
+  /** meraki | fmc | panorama | cato | appgate | opnsense | aws | azure | gcp | inventory | internet | unknown */
   provider: string;
   /** Ingress interface or subnet, "" when none. */
   in: string;
@@ -862,6 +907,7 @@ export function useMerakiOrgs() {
         fmc_default_options: FmcBuildOptions;
         panorama_default_options: PanoramaBuildOptions;
         appgate_default_options: AppgateBuildOptions;
+        opnsense_default_options: OpnsenseBuildOptions;
       }>("/sources"),
     // Keeps the "Building" badge honest for builds this tab isn't tracking
     // (started in another tab, or before a page reload).
@@ -891,7 +937,7 @@ export interface TopologySource {
   /** What the last collection found, e.g. "12 sites, 80 devices". */
   detail: string;
   warning_count: number;
-  /** The snapshot on the map (Meraki, Cato, Cisco FMC, Palo Alto Panorama, Appgate SDP), whose warnings can be listed. */
+  /** The snapshot on the map (Meraki, Cato, Cisco FMC, Palo Alto Panorama, Appgate SDP, OPNsense), whose warnings can be listed. */
   snapshot_id?: number | null;
   collecting: boolean;
   /**

@@ -75,6 +75,8 @@ def test_capabilities_follow_the_driver():
     assert capabilities("cisco_ftd") == {"snmp_polling": True, "config_backup": False}
     assert capabilities("paloalto_panos") == {"snmp_polling": True, "config_backup": False}
     assert supports_config_capture("juniper_junos") and not supports_config_capture("no_such_driver")
+    # OPNsense: SNMP polling, and its config backup comes from the collection, not SSH.
+    assert capabilities("opnsense") == {"snmp_polling": True, "config_backup": False}
 
 
 @pytest.mark.parametrize(
@@ -90,6 +92,8 @@ def test_capabilities_follow_the_driver():
         ("anyconnect", _node("d:u-3", "appliance", "ftd2", model="Threat Defense"), "cisco_ftd"),
         ("panorama", _node("d:0001", "appliance", "fw1", model="PA-440"), "paloalto_panos"),
         ("appgate", _node("a:1", "appliance", "gw1", model="Appgate Gateway"), "icmp_only"),
+        # No SSH driver, but polled over SNMP like any host.
+        ("opnsense", _node("d:fw1.example.com", "appliance", "fw1", model="OPNsense"), "opnsense"),
     ],
 )
 def test_device_type_per_provider(provider, node, expected):
@@ -109,7 +113,7 @@ def test_an_unknown_provider_gives_a_reason():
 
 
 def test_every_organization_provider_has_a_note():
-    assert set(PROVIDER_NOTES) == {"meraki", "cato", "fmc", "panorama", "appgate"}
+    assert set(PROVIDER_NOTES) == {"meraki", "cato", "fmc", "panorama", "appgate", "opnsense"}
 
 
 def test_only_devices_with_a_usable_address_are_candidates():
@@ -202,7 +206,7 @@ def test_a_snapshot_without_device_addresses_gives_a_reason():
     assert importable_devices(snapshot, "cato") == {"devices": [], "reason": NO_DEVICES_REASON}
 
 
-@pytest.mark.parametrize("provider", ["meraki", "cato", "fmc", "panorama", "appgate"])
+@pytest.mark.parametrize("provider", ["meraki", "cato", "fmc", "panorama", "appgate", "opnsense"])
 def test_the_bundled_sample_of_every_provider_is_read(provider):
     """Every provider's own sample snapshot goes through without error and
     each candidate it yields has the full shape (vendor parity)."""

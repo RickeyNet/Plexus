@@ -24,7 +24,7 @@ export interface SourceFormModalProps {
 const HELP_STYLE = { fontSize: '0.85em', marginTop: '0.25rem' } as const;
 
 /**
- * Add or edit a topology source (Meraki, Cato, FMC, Panorama, Appgate), laid
+ * Add or edit a topology source (Meraki, Cato, FMC, Panorama, Appgate, OPNsense), laid
  * out from its provider config. Adding goes on to the setup steps (check the
  * credentials, first collection, import devices); a failed check comes back
  * here to edit the source just added. Editing an existing source just saves.
@@ -43,7 +43,8 @@ export function SourceFormModal({ provider, existing, defaultOptions, onClose }:
   const create = useCreateMerakiOrg();
   const update = useUpdateMerakiOrg();
   const pending = create.isPending || update.isPending;
-  const ready = isSourceFormReady(sourceFormFields(config), values, isEdit);
+  const invalid = config.validate?.(values, isEdit) ?? null;
+  const ready = isSourceFormReady(sourceFormFields(config), values, isEdit) && !invalid;
 
   const setValue = (name: string, value: string | number | boolean) => setValues((prev) => ({ ...prev, [name]: value }));
 
@@ -184,6 +185,12 @@ export function SourceFormModal({ provider, existing, defaultOptions, onClose }:
             );
         }
       })}
+
+      {invalid && (
+        <div role="alert" style={{ color: 'var(--danger)', fontSize: '0.85em', marginBottom: '0.75rem' }}>
+          {invalid}
+        </div>
+      )}
 
       {errMsg && (
         <Callout tone="danger">

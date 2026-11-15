@@ -1,4 +1,4 @@
-import type { CloudAccountProvider, CloudProvider } from '@/api/meraki';
+import { CLOUD_ACCOUNT_PROVIDERS, ORG_PROVIDERS, type CloudAccountProvider, type CloudProvider } from '@/api/meraki';
 import type { AddSourceAccess } from '@/lib/addSource';
 import { cloudProviderTerms } from '@/lib/cloudProviderTerms';
 
@@ -22,6 +22,7 @@ const ORG_DESCRIPTIONS: Record<CloudProvider, string> = {
   fmc: 'A Cisco Secure Firewall Management Center and the FTDs it manages',
   panorama: 'A Palo Alto Networks Panorama and the firewalls it manages',
   appgate: 'An Appgate SDP collective: its Controllers, Gateways, sites, entitlements and connected users',
+  opnsense: 'An OPNsense firewall: its interfaces, gateways, VPN tunnels, routes and firmware audit',
 };
 
 const CLOUD_DESCRIPTIONS: Record<CloudAccountProvider, string> = {
@@ -30,8 +31,6 @@ const CLOUD_DESCRIPTIONS: Record<CloudAccountProvider, string> = {
   gcp: 'VPC networks, subnets and instances; also used for flow logs and policy',
 };
 
-const ORG_ORDER: readonly CloudProvider[] = ['meraki', 'cato', 'fmc', 'panorama', 'appgate'];
-const CLOUD_ORDER: readonly CloudAccountProvider[] = ['aws', 'azure', 'gcp'];
 
 /** "AWS account" -> "AWS Account": the option labels are in title case. */
 function titleCase(text: string): string {
@@ -42,7 +41,7 @@ function titleCase(text: string): string {
 export function addSourceOptions(access: AddSourceAccess): AddSourceOption[] {
   const options: AddSourceOption[] = [];
   if (access.org) {
-    for (const provider of ORG_ORDER) {
+    for (const provider of ORG_PROVIDERS) {
       options.push({
         kind: 'org',
         provider,
@@ -52,7 +51,7 @@ export function addSourceOptions(access: AddSourceAccess): AddSourceOption[] {
     }
   }
   if (access.cloud) {
-    for (const provider of CLOUD_ORDER) {
+    for (const provider of CLOUD_ACCOUNT_PROVIDERS) {
       options.push({
         kind: 'cloud',
         provider,

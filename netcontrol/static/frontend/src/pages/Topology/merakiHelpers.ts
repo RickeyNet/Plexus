@@ -8,6 +8,7 @@ import {
   type MerakiBuildJob,
   type MerakiBuildOptions,
   type MerakiNodeDetails,
+  type OpnsenseBuildOptions,
   type PanoramaBuildOptions,
   type TopologySource,
 } from "@/api/meraki";
@@ -298,6 +299,60 @@ export const APPGATE_OPTION_TOGGLES: {
   },
 ];
 
+export const OPNSENSE_URL_PLACEHOLDER = "https://fw1.example.com";
+
+// Used until the server reports its own defaults (`opnsense_default_options`).
+export const FALLBACK_OPNSENSE_OPTIONS: OpnsenseBuildOptions = {
+  verify_tls: true,
+  include_gateways: true,
+  include_vpn: true,
+  include_routes: true,
+  include_firmware_audit: true,
+  config_backup: true,
+  inventory_enrich: true,
+};
+
+// verify_tls is a checkbox of its own next to the credentials, not a kind of data.
+type OpnsenseToggleKey = Exclude<keyof OpnsenseBuildOptions, "verify_tls">;
+
+export const OPNSENSE_OPTION_TOGGLES: {
+  key: OpnsenseToggleKey;
+  label: string;
+  hint: string;
+}[] = [
+  {
+    key: "include_gateways",
+    label: "Gateways (status, loss, latency)",
+    hint: "Every gateway with its monitor status, packet loss and round-trip time.",
+  },
+  {
+    key: "include_vpn",
+    label: "VPN tunnels (IPsec, WireGuard, OpenVPN)",
+    hint: "IPsec phase 1 and phase 2, WireGuard peers and OpenVPN instances with their state. Keys are never read.",
+  },
+  {
+    key: "include_routes",
+    label: "Routing table",
+    hint: "The firewall's routing table, which path tracing uses.",
+  },
+  {
+    key: "include_firmware_audit",
+    label: "Security audit of installed packages",
+    hint: "The firmware security audit: installed packages with known vulnerabilities.",
+  },
+  {
+    key: "config_backup",
+    label:
+      "Store config.xml as a config backup (the firewall must be an inventory host)",
+    hint: "Saves the configuration with the config backups of the matching inventory host.",
+  },
+  {
+    key: "inventory_enrich",
+    label: "Correlate with Plexus inventory",
+    hint: "Attach SNMP/SSH data Plexus already holds for a firewall that is also an inventory host.",
+  },
+];
+
 type ToggleKey = {
   [K in keyof MerakiBuildOptions]: MerakiBuildOptions[K] extends boolean
     ? K
@@ -378,6 +433,7 @@ export function sourceTypeLabel(type: string): string {
   if (type === "fmc") return "Cisco FMC";
   if (type === "panorama") return "Palo Alto Panorama";
   if (type === "appgate") return "Appgate";
+  if (type === "opnsense") return "OPNsense";
   return type === "cato" ? "Cato" : "Meraki";
 }
 
@@ -430,6 +486,13 @@ const PHASE_LABELS: Record<string, string> = {
   "appgate pools": "Reading IP pools and identity providers",
   "appgate users": "Reading connected users",
   "appgate sessions": "Reading per-user access",
+  "opnsense system": "Reading the firewall's system information",
+  "opnsense interfaces": "Reading interfaces",
+  "opnsense gateways": "Reading gateways",
+  "opnsense vpn": "Reading VPN tunnels",
+  "opnsense routes": "Reading the routing table",
+  "opnsense firmware": "Reading the firmware version and security audit",
+  "opnsense config": "Reading config.xml",
   "building map": "Building the map",
   saving: "Saving snapshot",
   "aws login": "Signing in to AWS",
@@ -656,6 +719,7 @@ const VIEW_TITLES: Record<Exclude<MerakiView, "meraki">, string[]> = {
     "Learned routes",
     "Routing table",
     "BGP peers",
+    "Gateways",
   ],
   vpn: [
     "Site-to-site VPN",
@@ -671,6 +735,8 @@ const VIEW_TITLES: Record<Exclude<MerakiView, "meraki">, string[]> = {
     "IKE gateways",
     "IPsec tunnels",
     "GlobalProtect gateways",
+    "WireGuard peers",
+    "OpenVPN instances",
   ],
   firewall: [
     "Layer 3 firewall rules",

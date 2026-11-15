@@ -52,7 +52,7 @@ const SUB_TABS: { key: SubTab; label: string }[] = [
 
 /**
  * Availability of what the integrations collect (Meraki, Cato, Cisco FMC,
- * Palo Alto Panorama, Appgate SDP, AWS, Azure, GCP): devices, sites, uplinks,
+ * Palo Alto Panorama, Appgate SDP, OPNsense, AWS, Azure, GCP): devices, sites, uplinks,
  * tunnels, VPN connections, circuits, peerings and HA links, with uptime
  * over the period picked above.
  */
@@ -123,7 +123,7 @@ export function TopologyAvailabilityPanel({ days }: { days: number }) {
       <h3 style={{ marginBottom: '0.5rem' }}>Integrations and cloud</h3>
       <p className="text-muted" style={{ marginTop: 0, fontSize: '0.85em' }}>
         Devices, sites, uplinks, tunnels and cloud connections reported by each collection of a Meraki, Cato, FMC,
-        Panorama or Appgate source and each AWS, Azure or GCP discovery.
+        Panorama, Appgate or OPNsense source and each AWS, Azure or GCP discovery.
       </p>
 
       <div className="toolbar">

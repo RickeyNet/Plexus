@@ -102,6 +102,7 @@ PAGES: list[tuple[str, list[tuple[str, str]]]] = [
             ("Cisco-FMC-Topology", "docs/fmc-topology.md"),
             ("Panorama-Topology", "docs/panorama-topology.md"),
             ("Appgate-SDP-Topology", "docs/appgate-topology.md"),
+            ("OPNsense-Topology", "docs/opnsense-topology.md"),
             ("Cloud-Visibility", "docs/cloud-visibility.md"),
         ],
     ),

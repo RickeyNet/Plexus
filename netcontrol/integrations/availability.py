@@ -1,13 +1,14 @@
 """Availability states of the entities in a topology snapshot.
 
 Every integration (Meraki, Cato, Cisco FMC, Palo Alto Panorama, Appgate SDP,
-AWS, Azure, GCP) builds the same snapshot format (see
+OPNsense, AWS, Azure, GCP) builds the same snapshot format (see
 ``netcontrol.integrations.meraki.normalize``): nodes carry a ``status`` from
 the shared node vocabulary (``online`` / ``alerting`` / ``dormant`` /
 ``offline`` / ``unknown``) and edges that stand for a live connection carry a
 link status (``active`` / ``ready`` / ``connecting`` / ``failed`` for an
-uplink, ``reachable`` / ``ready`` / ``degraded`` / ``unreachable`` for a
-tunnel, ``active`` / ``failed`` for a cloud attachment, peering or circuit).
+uplink (an OPNsense gateway also ``degraded`` for a latency or loss alarm
+and ``unknown`` when it is not monitored), ``reachable`` / ``ready`` /
+``degraded`` / ``unreachable`` for a tunnel, ``active`` / ``failed`` for a cloud attachment, peering or circuit).
 
 ``extract_entity_states`` reads one snapshot and returns what availability
 tracking keeps of it: one ``EntityState`` per device, site, uplink, tunnel,
@@ -200,12 +201,19 @@ def clean_entity_types(provider: str, snapshot: dict | None) -> frozenset[str]:
       detail call does not feed any tracked entity.
     - Every other provider: every type when the collection reported no
       error, else none (its errors do not say which entity type they feed).
+      A warning marked ``info`` (an OPNsense firmware update or audit
+      finding) reports what the device said, not a failed call: it does not
+      count.
     """
     if not snapshot:
         return frozenset()
     if any(isinstance(s, dict) and s.get("not_collected") for s in snapshot.get("sites") or []):
         return frozenset()
-    errors = [e for e in (snapshot.get("collection") or {}).get("errors") or [] if e]
+    errors = [
+        e
+        for e in (snapshot.get("collection") or {}).get("errors") or []
+        if e and not (isinstance(e, dict) and e.get("info"))
+    ]
     if _text(provider).lower() == "meraki":
         if any(isinstance(e, dict) and _text(e.get("scope")) == "org" for e in errors):
             return frozenset({"device"})

@@ -2080,7 +2080,7 @@ async def availability_outages_api(
     }
 
 
-_TOPOLOGY_PROVIDER_RE = r"^(meraki|cato|fmc|panorama|appgate|aws|azure|gcp)$"
+_TOPOLOGY_PROVIDER_RE = r"^(meraki|cato|fmc|panorama|appgate|opnsense|aws|azure|gcp)$"
 _TOPOLOGY_ENTITY_RE = r"^(device|site|uplink|tunnel|vpn_connection|circuit|peering|link)$"
 
 

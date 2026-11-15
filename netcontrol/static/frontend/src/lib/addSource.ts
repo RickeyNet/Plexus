@@ -4,7 +4,7 @@ import { canUseFeature } from './tabGating';
 
 /** Which kinds of source this user may add from the app-wide Add source action. */
 export interface AddSourceAccess {
-  /** Meraki, Cato, FMC, Panorama, Appgate: admin-only, behind the topology feature. */
+  /** Meraki, Cato, FMC, Panorama, Appgate, OPNsense: admin-only, behind the topology feature. */
   org: boolean;
   /** AWS, Azure, GCP accounts: admin-only, added under Cloud Visibility. */
   cloud: boolean;

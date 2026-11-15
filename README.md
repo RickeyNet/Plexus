@@ -11,7 +11,7 @@ stream live job output - all through a REST API with WebSocket support.
 - **Inventory and playbooks** - device groups and hosts, Python playbooks, live job output over WebSocket.
 - **Configuration management** - config templates, config backups, drift detection and compliance audits.
 - **SNMP discovery and IPAM** - find devices on the network and track address space.
-- **Topology** - CDP/LLDP map plus Meraki, Cato, Cisco FMC, Palo Alto Panorama, Appgate SDP, AWS, Azure and GCP sources, with path trace across them.
+- **Topology** - CDP/LLDP map plus Meraki, Cato, Cisco FMC, Palo Alto Panorama, Appgate SDP, OPNsense, AWS, Azure and GCP sources, with path trace across them.
 - **Flow collector** - built-in NetFlow / sFlow / IPFIX receiver with traffic summaries.
 - **Cloud Visibility** - discovery of AWS accounts, Azure subscriptions and GCP projects and their networks.
 - **Software upgrades** - software version inventory, vulnerability alerts and an IOS-XE upgrade tool.
@@ -127,6 +127,7 @@ A new file under `docs/` must be added to `PAGES` in that tool.
 - [docs/fmc-topology.md](docs/fmc-topology.md) - Cisco FMC in the topology map
 - [docs/panorama-topology.md](docs/panorama-topology.md) - Palo Alto Panorama in the topology map
 - [docs/appgate-topology.md](docs/appgate-topology.md) - Appgate SDP in the topology map
+- [docs/opnsense-topology.md](docs/opnsense-topology.md) - OPNsense firewalls in the topology map
 - [docs/meraki-topology.md](docs/meraki-topology.md) - Meraki in the topology map
 - [docs/meraki-alerts.md](docs/meraki-alerts.md) - near-real-time Meraki alerts (polling and webhook receiver, per deployment scenario)
 - [docs/meraki-compliance.md](docs/meraki-compliance.md) - Meraki security compliance audits
@@ -171,7 +172,7 @@ netcontrol/
 ├── app.py                  # FastAPI application entry (routers, lifespan)
 ├── routes/                 # API route modules and background engines
 ├── drivers/                # Per-vendor device drivers (IOS, NX-OS, Junos, ...)
-├── integrations/           # Meraki, Cato, FMC, Panorama, Appgate, AWS, Azure, GCP, path trace, software
+├── integrations/           # Meraki, Cato, FMC, Panorama, Appgate, OPNsense, AWS, Azure, GCP, path trace, software
 └── static/frontend/        # React + TypeScript SPA (Vite; build output in dist/)
 routes/
 ├── database.py             # Data layer (PostgreSQL, with the SQL dialect translator)

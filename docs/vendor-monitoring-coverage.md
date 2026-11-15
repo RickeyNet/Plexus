@@ -36,6 +36,7 @@ uptime % and alerts on down/degraded.
 | GCP | instances, Cloud Routers, HA VPN gateways, Cloud NAT, Interconnects; HA VPN tunnels, Interconnect attachments, VPC peerings | state fields in the project discovery, recorded by the hourly discovery loop | No | Topology tracker only | |
 | Palo Alto via Panorama | managed firewalls; uplinks, tunnels, HA links | Panorama snapshot status, recorded per collection (scheduled, hourly by default, per-source interval or opt-out) | No | Topology tracker only | Full pipeline when the firewall is an inventory host. Its devices can be imported into the inventory from the steps after adding the source (`/api/sources/{id}/import-devices`, see `docs/meraki-topology.md#after-adding-a-source`), as `paloalto_panos` hosts polled over SNMP. |
 | Appgate SDP | appliances, sites; appliance peer links | `/appliances/status` health, recorded per collection (scheduled, hourly by default, per-source interval or opt-out) | No | Topology tracker only | Its devices can be imported into the inventory from the steps after adding the source (`/api/sources/{id}/import-devices`, see `docs/meraki-topology.md#after-adding-a-source`), as ICMP-only hosts. |
+| OPNsense | the firewall, OpenVPN server instances; gateways (as uplinks), IPsec connections, WireGuard peers and OpenVPN client instances (as tunnels) | `routes/gateway/status` (dpinger: `none` with monitor data up, `delay` / `loss` / `delay+loss` degraded, `down` / `force_down` down, no monitor data unknown), `ipsec/sessions/search_phase1` (SA or not), `wireguard/service/show` (`peer-status` online / stale / offline, else handshake age), `openvpn/service/search_sessions` (client state; server running or not), recorded per collection (scheduled, hourly by default, per-source interval or opt-out) | Partial: gateway loss, RTT and RTT deviation shown in the details and the uplink's detail text per collection; not stored as a time series, no SLA target on them | Topology tracker only | Full pipeline when the firewall is an inventory host. The firewall can be imported into the inventory from the steps after adding the source (`/api/sources/{id}/import-devices`), as an `opnsense` host polled over SNMP (no SSH driver). `docs/opnsense-topology.md`. |
 | Juniper / Arista / Fortinet / PAN-OS (inventory) | host, interfaces | SNMP + ICMP poll | Yes (ICMP) | Yes | Full pipeline. |
 | ICMP-only hosts | host | ICMP | Yes | Yes | |
 
@@ -51,6 +52,7 @@ acknowledge and Suppressions instead.
 | Cisco Meraki | Yes | Yes: devices at any stored collection; uplinks and tunnels when no organization-wide call failed | Yes, for a device that had an open Meraki alert: confirmed with one API call by the alert poll, about a minute |
 | Cato Networks | Yes | Yes, at a collection with no warnings and no site marked not collected | No |
 | Cisco FMC, Palo Alto Panorama, Appgate SDP | Yes | Yes, at a collection with no warnings | No |
+| OPNsense | Yes | Yes, at a collection with no warnings other than informational ones (a pending firmware update, audit findings, config.xml not stored) | No |
 | AWS, Azure, GCP | Yes | Partly: at a discovery with no warnings and no *not collected* network (a peered VPC or VNet outside the collected accounts and regions). One failed region or account, or one such peering, keeps everything of that cloud `unknown` until the retention cleanup. Gap: removal per account and region | No |
 
 A removal that cannot be trusted (any other collection) leaves the entity
@@ -74,6 +76,7 @@ platform.
 | GCP | None | None | No | |
 | Palo Alto PAN-OS / Panorama | SNMP/SSH, Panorama snapshot | Manual / import | Manual | Candidate: Palo Alto security advisories feed. Discovery's SSH `show version` does not read PAN-OS (`show system info`): gap. |
 | Appgate SDP | collective snapshot appliance version | Manual / import | Manual | |
+| OPNsense | OPNsense snapshot: `core/firmware/status` product version (platform `opnsense`); pending update shown and warned | The firewall's own security audit (`pkg audit -F` via `core/firmware/audit`), synced at each collection as advisories of source `opnsense-audit` (one per VuXML entry, affected version the firewall's version, CVE ids, link), upserted by id and withdrawn when the audit no longer reports them; manual / import as well | Partial | Covers vulnerable FreeBSD packages installed on the firewall, not OPNsense's own security advisories (OPNsense publishes no version-matched vulnerability API). `pkg audit` gives no severity: new advisories are `medium`. Advisories match by platform and version, so two firewalls on one version share findings. |
 | Juniper Junos | SNMP/SSH; SSH `show version` at inventory discovery / sync (model, version, hostname; serial needs `show chassis hardware`) | Manual / import | Manual | Candidate: Juniper JSA feed. |
 | Arista EOS | SNMP/SSH; SSH `show version` at inventory discovery / sync | Manual / import | Manual | |
 | Fortinet FortiOS | SNMP/SSH | Manual / import | Manual | Candidate: FortiGuard PSIRT feed. Discovery's SSH `show version` does not read FortiOS (`get system status`): gap. |
@@ -122,7 +125,7 @@ matched inventory host) or the notification channels.
 | Cato Networks | None | No | Gap. Candidates: the Cato events feed (`eventsFeed` GraphQL query, polled) and Cato's webhook / SIEM integrations. |
 | AWS | None | No | Gap. Candidates: EventBridge rules (EC2 state change, VPN tunnel state, Direct Connect, AWS Health) delivered through SNS to an HTTPS receiver, or AWS Health API polling. |
 | Azure | None | No | Gap. Candidates: Azure Monitor action groups (webhook action, common alert schema) for metric, activity log and Resource Health alerts; Resource Health API polling. |
-| GCP, Cisco FMC, Palo Alto Panorama, Appgate SDP | None | No | Gap. Their state reaches Plexus only through the scheduled collection (topology availability tracker). |
+| GCP, Cisco FMC, Palo Alto Panorama, Appgate SDP, OPNsense | None | No | Gap. Their state reaches Plexus only through the scheduled collection (topology availability tracker). OPNsense candidate: its monit alerts or syslog forwarding. |
 
 ## Known gaps, priority order
 

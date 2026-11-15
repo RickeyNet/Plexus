@@ -1,3 +1,4 @@
+import { CLOUD_ACCOUNT_PROVIDERS, ORG_PROVIDERS } from '@/api/meraki';
 import type { TopologyData, TopologyEdge, TopologyNode } from '@/api/topology';
 import { LIGHT_THEMES } from '@/lib/appearance';
 import { cloudProviderTerms } from '@/lib/cloudProviderTerms';
@@ -202,6 +203,7 @@ export function providerLabel(provider?: string | null): string {
   if (provider === 'fmc') return 'Cisco FMC';
   if (provider === 'panorama') return 'Palo Alto Panorama';
   if (provider === 'appgate') return 'Appgate SDP';
+  if (provider === 'opnsense') return 'OPNsense';
   return provider === 'cato' ? 'Cato' : 'Meraki';
 }
 
@@ -282,6 +284,7 @@ export function providerSourceName(provider?: string | null): string {
   if (provider === 'fmc') return 'FMC API';
   if (provider === 'panorama') return 'Panorama API';
   if (provider === 'appgate') return 'Appgate SDP API';
+  if (provider === 'opnsense') return 'OPNsense API';
   return provider === 'cato' ? 'Cato API' : 'Meraki Dashboard';
 }
 
@@ -308,6 +311,7 @@ export function providerScopeName(provider?: string | null): string {
   if (provider === 'fmc') return 'Cisco FMC';
   if (provider === 'panorama') return 'Panorama';
   if (provider === 'appgate') return 'Appgate collective';
+  if (provider === 'opnsense') return 'OPNsense firewall';
   return provider === 'cato' ? 'Cato account' : 'Meraki organization';
 }
 
@@ -569,7 +573,7 @@ export function nodeTitle(node: TopologyNode): string {
  */
 export type SourceFilter = 'all' | 'inventory' | 'meraki' | `provider:${string}`;
 
-export const PROVIDER_ORDER = ['meraki', 'cato', 'fmc', 'panorama', 'appgate', 'aws', 'azure', 'gcp'];
+export const PROVIDER_ORDER: readonly string[] = [...ORG_PROVIDERS, ...CLOUD_ACCOUNT_PROVIDERS];
 
 /** The integration a node belongs to, or '' for an inventory-only node. */
 export function nodeProvider(node: TopologyNode): string {

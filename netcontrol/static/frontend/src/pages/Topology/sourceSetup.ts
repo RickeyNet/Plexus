@@ -1,6 +1,6 @@
 /**
  * Pure helpers for the steps that follow adding a map source (Meraki, Cato,
- * FMC, Panorama, Appgate): check its credentials, run its first collection,
+ * FMC, Panorama, Appgate, OPNsense): check its credentials, run its first collection,
  * then optionally import the devices it found into the inventory with an
  * SNMP profile and a backup policy. The component (SourceSetupModal) only
  * renders what these return.

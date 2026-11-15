@@ -18,7 +18,10 @@ firewalls it manages (interfaces, zones, routing, IPsec and GlobalProtect,
 security and NAT rules); see [panorama-topology.md](panorama-topology.md),
 and an Appgate SDP collective (its sites, Gateways, Controllers, the users
 connected with the Appgate Client and the entitlements each Gateway grants
-them); see [appgate-topology.md](appgate-topology.md).
+them); see [appgate-topology.md](appgate-topology.md), and an OPNsense
+firewall (its interfaces, gateways, IPsec, WireGuard and OpenVPN tunnels,
+firmware and security audit, and its config.xml as a configuration backup);
+see [opnsense-topology.md](opnsense-topology.md).
 AWS accounts, Azure subscriptions and
 GCP projects discovered by Cloud Visibility join the map as well; see
 [aws-topology.md](aws-topology.md), [azure-topology.md](azure-topology.md) and
@@ -32,8 +35,8 @@ other hardening controls; see [meraki-compliance.md](meraki-compliance.md).
 
 1. Open **Network → Topology** and click **Sources** in the toolbar. The
    dialog lists everything that feeds the map (Meraki organizations, Cato
-   accounts, Cisco FMCs, Palo Alto Panoramas, Appgate SDP collectives, AWS
-   accounts, neighbor discovery of the inventory, and **All other devices
+   accounts, Cisco FMCs, Palo Alto Panoramas, Appgate SDP collectives, OPNsense
+   firewalls, AWS accounts, neighbor discovery of the inventory, and **All other devices
    (SSH)**, which reads every inventory device the integrations do not
    cover: its route table and running configuration for the
    [path trace](path-trace.md#inventory-devices-and-configuration-backups)
@@ -79,7 +82,7 @@ belong to no inventory group).
 
 - The map opens in the **Tidy tree** layout, top to bottom. Each source is
   a region of its own, framed and titled, side by side from left to right: the
-  inventory, then Meraki, Cato, Cisco FMC, Palo Alto Panorama, Appgate SDP, AWS, Azure and GCP. Links between
+  inventory, then Meraki, Cato, Cisco FMC, Palo Alto Panorama, Appgate SDP, OPNsense, AWS, Azure and GCP. Links between
   sources are still drawn, but they do not pull a device into another
   source's region, and they go around the sources rather than through them:
   up from each end, around the other sites' boxes and devices, to a lane
@@ -294,7 +297,8 @@ single LAN, switch SVI and static route is a row with source **topology**,
 its VLAN ID, and the sites that hold it in the **Preview** column (the same
 goes for Cato and Appgate network ranges and the connected subnets, static routes and
 VPN address pools of a Cisco FMC's FTDs and of a Palo Alto Panorama's
-firewalls). The addresses of connected Cato and Appgate remote users, which
+firewalls, and the connected subnets and static routes of an OPNsense
+firewall). The addresses of connected Cato and Appgate remote users, which
 Path Mode lists as `/32` subnets, are not rows here. Untick **Include
 Topology Subnets** to leave them out (`GET /api/ipam/overview?include_topology=false`).
 
@@ -416,8 +420,8 @@ collection is marked *partial*; the rest of the data is still used.
 
 ## After adding a source
 
-Adding a Meraki organization, Cato account, Cisco FMC, Palo Alto Panorama or
-Appgate SDP collective (admins: **Add source** at the top of the sidebar or
+Adding a Meraki organization, Cato account, Cisco FMC, Palo Alto Panorama,
+Appgate SDP collective or OPNsense firewall (admins: **Add source** at the top of the sidebar or
 in the Dashboard header, from any page, or **Sources → Add Source** on the
 Topology page) does not just close
 the form: the dialog goes on through three steps. **Close** leaves at any
@@ -462,6 +466,7 @@ What each source's devices become:
 | Cisco FMC | managed FTDs (ASAs) with a management address | `cisco_ftd` (`cisco_asa`) | ping, SNMP polling; no backup (the configuration lives in the FMC) |
 | Palo Alto Panorama | managed firewalls with a management address | `paloalto_panos` | ping, SNMP polling; no backup (the configuration lives in Panorama) |
 | Appgate SDP | Controllers, Gateways and other appliances with an address | ICMP-only | ping |
+| OPNsense | the firewall (the API address when that is an IP address, else its LAN address) | `opnsense` (no SSH driver) | ping, SNMP polling; config backup from the OPNsense collection (config.xml over the API), not from a backup policy |
 
 A source whose collection has no device addresses (a Cato account whose
 Sockets report no LAN address, for example) lists nothing and says why.
@@ -475,8 +480,8 @@ scheduled discovery is on (it is off by default) with a button to turn it on.
 
 ## Scheduled collection
 
-Meraki organizations, Cato accounts, Cisco FMCs, Palo Alto Panoramas and
-Appgate SDP collectives are collected on a schedule as well as by **Collect
+Meraki organizations, Cato accounts, Cisco FMCs, Palo Alto Panoramas,
+Appgate SDP collectives and OPNsense firewalls are collected on a schedule as well as by **Collect
 Now**, so their map, MAC tracking clients and availability stay current
 without anyone clicking. It is on by default: after an upgrade every source
 that has an API key or password is collected hourly.
@@ -507,7 +512,7 @@ Visibility instead.
 ## Availability tracking
 
 Every stored collection of a Meraki organization, Cato account, Cisco FMC,
-Palo Alto Panorama or Appgate SDP collective, and every AWS, Azure or GCP
+Palo Alto Panorama, Appgate SDP collective or OPNsense firewall, and every AWS, Azure or GCP
 discovery (scheduled or **Discover**), also records the state of what it
 reports, so devices Plexus knows only through an API get uptime and outage
 history like polled hosts. The results are under **Monitoring > Availability >
@@ -523,7 +528,7 @@ Each entity is `up`, `degraded`, `down` or `unknown`:
 | Node `offline`, `dormant` | down |
 | Node `unknown` (not collected, pending) | unknown |
 | Uplink `active`, `ready` | up |
-| Uplink `connecting` | degraded |
+| Uplink `connecting`, `degraded` (OPNsense gateway latency or loss alarm) | degraded |
 | Uplink `failed` | down |
 | Tunnel `reachable`, `ready` (a standby tunnel) | up |
 | Tunnel `degraded` (Cato site degraded) | degraded |
@@ -541,6 +546,7 @@ What is tracked, per source:
 | Cisco FMC | FTDs | outside uplinks, site-to-site tunnels, HA and cluster links |
 | Palo Alto Panorama | firewalls | uplinks, site-to-site tunnels, HA links |
 | Appgate SDP | Controllers, Gateways and other appliances | sites, appliance peer links |
+| OPNsense | the firewall, OpenVPN server instances | gateways (as uplinks), IPsec connections, WireGuard peers and OpenVPN client instances (as tunnels) |
 | AWS | instances drawn on the map, transit, VPN, NAT and Direct Connect gateways, Direct Connect connections | site-to-site VPN connections, Direct Connect (circuits), VPC peerings, transit gateway and VPN gateway attachments (links) |
 | Azure | virtual machines drawn on the map, virtual network gateways, firewalls, NAT gateways, ExpressRoute circuits | gateway connections (VPN), ExpressRoute connections (circuits), VNet peerings, gateway attachments (links) |
 | GCP | instances drawn on the map, Cloud Routers, HA VPN gateways, Cloud NAT, Interconnects and Interconnect attachments | HA VPN tunnels, Interconnect attachments and Interconnects (circuits), VPC peerings |
@@ -577,7 +583,7 @@ How it behaves:
   deleted, and so are entities no collection has reported for that long.
 - Collections are what drive it: AWS, Azure and GCP follow the cloud
   discovery schedule (hourly by default, when enabled under Cloud
-  Visibility); Meraki, Cato, FMC, Panorama and Appgate follow the source
+  Visibility); Meraki, Cato, FMC, Panorama, Appgate and OPNsense follow the source
   collection schedule (see [Scheduled collection](#scheduled-collection))
   and **Collect Now** in the Sources dialog.
 
@@ -648,6 +654,7 @@ everything:
 | Meraki devices | was stored at all (a collection that cannot list the networks and devices fails and stores nothing) |
 | Meraki uplinks and tunnels | had no failed organization-wide call |
 | Cato, FMC, Panorama, Appgate | finished with no collection warnings and no site marked not collected |
+| OPNsense | finished with no collection warnings other than informational ones (a pending firmware update, audit findings, config.xml not stored) |
 | AWS, Azure, GCP | finished with no warnings and drew no *not collected* network (a peered VPC or VNet outside the collected accounts and regions). A cloud that always has such a peering never removes on its own: its gone entities stay `unknown` until the retention cleanup |
 
 In any other case the entity turns `unknown` (*not in last collection*) as

@@ -16,6 +16,10 @@ what feeds and surrounds that merge:
     the same way (``provider`` "panorama")
   - Appgate SDP collectives (Controllers, Gateways, connected users), stored
     and collected the same way (``provider`` "appgate")
+  - OPNsense firewalls (interfaces, gateways, tunnels, firmware), stored and
+    collected the same way (``provider`` "opnsense"); a collection also stores
+    the firewall's config.xml as a configuration backup and its security
+    audit as software advisories (``netcontrol.routes.opnsense_collection``)
   - AWS, Azure and GCP: the accounts Cloud Visibility discovers are turned
     into one more snapshot per cloud (``provider`` "aws" / "azure" / "gcp")
     whenever their discovery changes
@@ -139,6 +143,23 @@ from netcontrol.integrations.meraki.unified import (
     virtual_appliance_pairs,
 )
 from netcontrol.integrations.meraki.vpn_reach import VpnCarrier
+from netcontrol.integrations.opnsense.client import (
+    OpnsenseApiError,
+    OpnsenseClient,
+    split_credentials as split_opnsense_credentials,
+    validate_base_url as validate_opnsense_base_url,
+)
+from netcontrol.integrations.opnsense.collector import (
+    DEFAULT_OPTIONS as OPNSENSE_DEFAULT_OPTIONS,
+    PATH_SYSTEM as OPNSENSE_PATH_SYSTEM,
+    collect_opnsense,
+    sanitize_options as sanitize_opnsense_options,
+)
+from netcontrol.integrations.opnsense.normalize import build_snapshot as build_opnsense_snapshot
+from netcontrol.integrations.opnsense.sample import (
+    SAMPLE_URL as SAMPLE_OPNSENSE_URL,
+    build_sample_raw as build_opnsense_sample_raw,
+)
 from netcontrol.integrations.panorama.client import (
     PanoramaApiError,
     PanoramaClient,
@@ -191,6 +212,7 @@ SAMPLE_FMC_NAME = "Sample Cisco FMC (demo data)"
 SAMPLE_FMC_LEGACY_NAME = "Sample AnyConnect FMC (demo data)"
 SAMPLE_PANORAMA_NAME = "Sample Palo Alto Panorama (demo data)"
 SAMPLE_APPGATE_NAME = "Sample Appgate SDP (demo data)"
+SAMPLE_OPNSENSE_NAME = "Sample OPNsense firewall (demo data)"
 SAMPLE_AWS_NAME = "Sample AWS Account (demo data)"
 SAMPLE_AZURE_NAME = "Sample Azure Subscription (demo data)"
 SAMPLE_GCP_NAME = "Sample GCP Project (demo data)"
@@ -211,7 +233,10 @@ PROVIDER_FMC = "fmc"
 PROVIDER_PANORAMA = "panorama"
 # An Appgate SDP collective: its Controllers, Gateways and connected users.
 PROVIDER_APPGATE = "appgate"
-PROVIDERS = (PROVIDER_MERAKI, PROVIDER_CATO, PROVIDER_FMC, PROVIDER_PANORAMA, PROVIDER_APPGATE)
+# An OPNsense firewall: its interfaces, gateways, tunnels and firmware.
+PROVIDER_OPNSENSE = "opnsense"
+PROVIDERS = (PROVIDER_MERAKI, PROVIDER_CATO, PROVIDER_FMC, PROVIDER_PANORAMA, PROVIDER_APPGATE, PROVIDER_OPNSENSE)
+PROVIDERS_TEXT = "meraki, cato, fmc, panorama, appgate or opnsense"
 # Provider keys of earlier releases, read as their current key: an FMC was
 # "anyconnect" while it only drew remote access VPN headends.
 LEGACY_PROVIDERS = {"anyconnect": PROVIDER_FMC}
@@ -222,6 +247,7 @@ SAMPLE_ORG_NAMES = (
     SAMPLE_FMC_LEGACY_NAME,
     SAMPLE_PANORAMA_NAME,
     SAMPLE_APPGATE_NAME,
+    SAMPLE_OPNSENSE_NAME,
 )
 # Not organization providers: AWS, Azure and GCP accounts are Cloud Visibility accounts.
 PROVIDER_AWS = "aws"
@@ -524,7 +550,8 @@ class MerakiOrgCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     # "meraki" (organization), "cato" (account), "fmc" (FMC; the legacy
     # "anyconnect" is accepted and stored as "fmc"), "panorama" (Palo Alto
-    # Panorama) or "appgate" (Appgate SDP collective). Fixed once created.
+    # Panorama), "appgate" (Appgate SDP collective) or "opnsense" (OPNsense
+    # firewall; its api_key is "<API key>:<API secret>"). Fixed once created.
     provider: str = Field(default=PROVIDER_MERAKI, max_length=20)
     org_id: str = Field(default="", max_length=64)
     base_url: str = Field(default="", max_length=200)
@@ -583,6 +610,17 @@ def _provider_of(org: dict) -> str:
 
 
 def _clean_base_url(raw: str | None, provider: str = PROVIDER_MERAKI) -> str:
+    if provider == PROVIDER_OPNSENSE:
+        try:
+            return validate_opnsense_base_url(raw or "")
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "OPNsense address must be an https URL of the firewall's web GUI, host and port only "
+                    "(for example https://fw1.example.com or https://192.0.2.1:8443)"
+                ),
+            ) from None
     if provider == PROVIDER_APPGATE:
         try:
             return validate_appgate_base_url(raw or "")
@@ -639,7 +677,19 @@ def _options_for(provider: str, raw: object) -> dict[str, Any]:
         return sanitize_panorama_options(raw)
     if provider == PROVIDER_APPGATE:
         return sanitize_appgate_options(raw)
+    if provider == PROVIDER_OPNSENSE:
+        return sanitize_opnsense_options(raw)
     return sanitize_options(raw)
+
+
+def _check_secret(provider: str, secret: str) -> None:
+    """Refuse a secret the provider cannot use: an OPNsense entry's must be
+    ``<API key>:<API secret>`` with both halves set."""
+    if provider == PROVIDER_OPNSENSE:
+        try:
+            split_opnsense_credentials(secret)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 def _serialize_org(org: dict) -> dict:
@@ -829,6 +879,20 @@ def _appgate_error_message(exc: AppgateApiError) -> str:
     return f"Appgate API error (HTTP {exc.status_code}): {exc.detail or exc}"
 
 
+def _opnsense_error_message(exc: OpnsenseApiError) -> str:
+    # ``detail`` is the message the firewall answered with.
+    detail = f": {exc.detail}" if exc.detail else ""
+    if exc.status_code == 401:
+        return "OPNsense rejected the API key and secret (HTTP 401)"
+    if exc.status_code == 403:
+        return f"The OPNsense API user lacks the privilege for {exc.path or 'this call'} (HTTP 403){detail}"
+    if exc.transport:
+        return "Could not reach the OPNsense firewall"
+    if exc.status_code is None:
+        return str(exc)
+    return f"OPNsense API error (HTTP {exc.status_code}){detail}"
+
+
 def _api_error_message(exc: MerakiApiError) -> str:
     if exc.status_code == 401:
         return "Meraki rejected the API key (HTTP 401)"
@@ -852,6 +916,7 @@ async def list_meraki_orgs_api():
         "fmc_default_options": dict(FMC_DEFAULT_OPTIONS),
         "panorama_default_options": dict(PANORAMA_DEFAULT_OPTIONS),
         "appgate_default_options": dict(APPGATE_DEFAULT_OPTIONS),
+        "opnsense_default_options": dict(OPNSENSE_DEFAULT_OPTIONS),
     }
 
 
@@ -860,11 +925,16 @@ async def create_meraki_org_api(body: MerakiOrgCreate, request: Request):
     user = _session_user(request)
     provider = _provider_key(body.provider) or PROVIDER_MERAKI
     if provider not in PROVIDERS:
-        raise HTTPException(status_code=400, detail="Provider must be meraki, cato, fmc, panorama or appgate")
+        raise HTTPException(status_code=400, detail=f"Provider must be {PROVIDERS_TEXT}")
+    _check_secret(provider, body.api_key)
+    org_id = body.org_id.strip()
+    if provider == PROVIDER_OPNSENSE:
+        # One firewall: there is no organization to pick.
+        org_id = org_id or "local"
     org = await db.create_meraki_org(
         body.name.strip(),
         provider=provider,
-        org_id=body.org_id.strip(),
+        org_id=org_id,
         base_url=_clean_base_url(body.base_url, provider),
         api_key=body.api_key.strip(),
         options=_options_for(provider, body.options),
@@ -930,6 +1000,7 @@ async def update_meraki_org_api(org_ref: int, body: MerakiOrgUpdate, request: Re
     if body.base_url is not None:
         updates["base_url"] = _clean_base_url(body.base_url, provider)
     if body.api_key and body.api_key.strip():
+        _check_secret(provider, body.api_key)
         updates["api_key"] = body.api_key.strip()
     if body.options is not None:
         updates["options"] = _options_for(provider, body.options)
@@ -970,7 +1041,7 @@ async def delete_meraki_org_api(org_ref: int, request: Request):
 @router.post("/api/sources/{org_ref}/validate", dependencies=[Depends(_require_admin_dep)])
 async def validate_meraki_org_api(org_ref: int):
     """Check the stored credentials of a source: the organizations a Meraki
-    key can see, or a sign-in to a Cato, FMC, Panorama or Appgate entry."""
+    key can see, or a sign-in to a Cato, FMC, Panorama, Appgate or OPNsense entry."""
     org = await _get_org_or_404(org_ref)
     api_key = await db.get_meraki_org_api_key(org_ref)
     if not api_key:
@@ -983,6 +1054,8 @@ async def validate_meraki_org_api(org_ref: int):
         return await _validate_panorama(org, api_key)
     if _provider_of(org) == PROVIDER_APPGATE:
         return await _validate_appgate(org, api_key)
+    if _provider_of(org) == PROVIDER_OPNSENSE:
+        return await _validate_opnsense(org, api_key)
     try:
         async with MerakiClient(api_key, base_url=org["base_url"] or DEFAULT_BASE_URL, max_retries=1) as client:
             visible = await client.get_all("organizations")
@@ -1153,7 +1226,48 @@ async def _validate_appgate(org: dict, password: str) -> dict:
     }
 
 
+def _opnsense_client(org: dict, secret: str, options: dict, **kwargs: Any) -> OpnsenseClient:
+    """An OPNsense client for an entry. Its write-only secret is
+    ``<API key>:<API secret>``."""
+    key, value = split_opnsense_credentials(secret)
+    return OpnsenseClient(
+        org.get("base_url") or "",
+        key,
+        value,
+        verify_tls=bool(options.get("verify_tls", True)),
+        **kwargs,
+    )
+
+
+async def _validate_opnsense(org: dict, secret: str) -> dict:
+    options = sanitize_opnsense_options(org.get("options"))
+    try:
+        async with _opnsense_client(org, secret, options, max_retries=1) as client:
+            _path, info = await client.get_first(OPNSENSE_PATH_SYSTEM)
+    except OpnsenseApiError as exc:
+        return {"ok": False, "message": _opnsense_error_message(exc), "organizations": []}
+    except ValueError as exc:
+        return {"ok": False, "message": str(exc), "organizations": []}
+    info = info if isinstance(info, dict) else {}
+    name = str(info.get("name") or "").strip() or str(org.get("base_url") or "")
+    versions = [str(v) for v in info.get("versions") or [] if v]
+    version = f" ({versions[0]})" if versions else ""
+    return {
+        "ok": True,
+        "message": f"API key OK: {name}{version}",
+        "organizations": [{"id": str(org.get("org_id") or "local"), "name": org["name"]}],
+    }
+
+
 # ── Builds ───────────────────────────────────────────────────────────────────
+
+
+async def _collect_opnsense(org: dict, secret: str, options: dict, progress) -> dict:
+    async with _opnsense_client(org, secret, options) as client:
+        raw = await collect_opnsense(client, options, progress)
+    # The snapshot is named after the entry.
+    raw["firewall"]["name"] = org["name"]
+    return raw
 
 
 async def _collect_appgate(org: dict, password: str, options: dict, progress) -> dict:
@@ -1240,6 +1354,7 @@ _SNAPSHOT_BUILDERS = {
     PROVIDER_FMC: build_fmc_snapshot,
     PROVIDER_PANORAMA: build_panorama_snapshot,
     PROVIDER_APPGATE: build_appgate_snapshot,
+    PROVIDER_OPNSENSE: build_opnsense_snapshot,
     # A capture stored under the legacy key builds the same way.
     "anyconnect": build_fmc_snapshot,
 }
@@ -1268,6 +1383,8 @@ async def _run_build(job_id: str, org: dict, user: str) -> None:
             raw = await _collect_panorama(org, api_key, options, progress)
         elif provider == PROVIDER_APPGATE:
             raw = await _collect_appgate(org, api_key, options, progress)
+        elif provider == PROVIDER_OPNSENSE:
+            raw = await _collect_opnsense(org, api_key, options, progress)
         else:
             async with MerakiClient(
                 api_key,
@@ -1285,6 +1402,12 @@ async def _run_build(job_id: str, org: dict, user: str) -> None:
         snapshot = await asyncio.to_thread(builder, raw, inventory)
         if options["inventory_enrich"]:
             await enrich_snapshot(snapshot, ssh=bool(options.get("ssh_enrich")), progress=progress)
+        if provider == PROVIDER_OPNSENSE:
+            # config.xml becomes a config backup (never part of the snapshot)
+            # and the audit findings advisories, before the software refresh.
+            from netcontrol.routes.opnsense_collection import after_collection
+
+            await after_collection(raw, snapshot)
 
         progress({"phase": "saving"})
         result = await _store_snapshot(org, snapshot, user=user, started=started)
@@ -1314,6 +1437,10 @@ async def _run_build(job_id: str, org: dict, user: str) -> None:
         error = _appgate_error_message(exc)
         # The message and detail never hold the password or the token.
         LOGGER.warning("appgate: build failed for %s: %s", org["name"], redact_value(f"{exc} {exc.detail}"))
+    except OpnsenseApiError as exc:
+        error = _opnsense_error_message(exc)
+        # The message and detail never hold the key or the secret.
+        LOGGER.warning("opnsense: build failed for %s: %s", org["name"], redact_value(f"{exc} {exc.detail}"))
     except ValueError as exc:
         error = str(exc)
     except Exception as exc:  # noqa: BLE001 - job must always reach a terminal state
@@ -1438,6 +1565,26 @@ async def _build_appgate_sample(user: str) -> dict:
     return {"ok": True, "org_ref": org["id"], **result}
 
 
+async def _build_opnsense_sample(user: str) -> dict:
+    started = time.monotonic()
+    org = await db.get_meraki_org_by_name(SAMPLE_OPNSENSE_NAME)
+    if not org:
+        org = await db.create_meraki_org(
+            SAMPLE_OPNSENSE_NAME,
+            provider=PROVIDER_OPNSENSE,
+            org_id="local",
+            base_url=SAMPLE_OPNSENSE_URL,
+            options=sanitize_opnsense_options({}),
+            created_by=user,
+        )
+    if not org:
+        raise HTTPException(status_code=500, detail="Could not create the sample OPNsense firewall")
+    raw = build_opnsense_sample_raw()
+    raw["firewall"]["name"] = org["name"]
+    result = await _store_snapshot(org, build_opnsense_snapshot(raw), user=user, started=started)
+    return {"ok": True, "org_ref": org["id"], **result}
+
+
 async def _build_cloud_sample(cloud: _Cloud, user: str) -> dict:
     """Discover the demo account of an AWS, Azure or GCP cloud. It is a Cloud
     Visibility account like any other (and is deleted there); only its data
@@ -1490,6 +1637,7 @@ async def build_sample_topology_api(request: Request, provider: str = Query(defa
     ``provider=fmc`` (or the legacy ``anyconnect``) the demo Cisco FMC and
     its FTDs, ``provider=panorama`` the demo Palo Alto Panorama and its
     firewalls, ``provider=appgate`` the demo Appgate SDP collective,
+    ``provider=opnsense`` the demo OPNsense firewall,
     ``provider=aws`` / ``provider=azure`` / ``provider=gcp`` the demo AWS
     account / Azure subscription / GCP project in Cloud Visibility."""
     user = _session_user(request)
@@ -1502,6 +1650,8 @@ async def build_sample_topology_api(request: Request, provider: str = Query(defa
         return await _build_panorama_sample(user)
     if provider == PROVIDER_APPGATE:
         return await _build_appgate_sample(user)
+    if provider == PROVIDER_OPNSENSE:
+        return await _build_opnsense_sample(user)
     if provider in _CLOUD_BY_PROVIDER:
         return await _build_cloud_sample(_CLOUD_BY_PROVIDER[provider], user)
     started = time.monotonic()
@@ -1707,7 +1857,7 @@ async def list_topology_sources_api():
     """Everything that feeds the topology map, with its last collection:
     neighbor discovery of the inventory, the SSH collection of its route tables
     and configurations, Meraki organizations, Cato accounts, Cisco FMCs, Palo
-    Alto Panoramas, Appgate SDP collectives and the AWS, Azure and GCP accounts
+    Alto Panoramas, Appgate SDP collectives, OPNsense firewalls and the AWS, Azure and GCP accounts
     of Cloud Visibility. Credentials are never included."""
     # Imported here: inventory_collection imports this module.
     from netcontrol.routes.inventory_collection import inventory_source

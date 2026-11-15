@@ -180,6 +180,7 @@ _PROVIDER_NAMES = {
     "cato": "Cato account",
     "panorama": "Palo Alto Panorama",
     "appgate": "Appgate SDP",
+    "opnsense": "OPNsense firewall",
 }
 # Who reports the state of a link, by the provider of the snapshot it is from.
 _REPORTERS = {
@@ -188,6 +189,7 @@ _REPORTERS = {
     "cato": "Cato",
     "panorama": "Panorama",
     "appgate": "Appgate",
+    "opnsense": "OPNsense",
     "aws": "AWS",
     "azure": "Azure",
     "gcp": "Google Cloud",

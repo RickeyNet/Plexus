@@ -50,6 +50,14 @@ describe('Appgate SDP names', () => {
   });
 });
 
+describe('OPNsense names', () => {
+  it('labels the opnsense provider everywhere', () => {
+    expect(providerLabel('opnsense')).toBe('OPNsense');
+    expect(providerSourceName('opnsense')).toBe('OPNsense API');
+    expect(providerScopeName('opnsense')).toBe('OPNsense firewall');
+  });
+});
+
 describe('GCP names', () => {
   it('labels the gcp provider everywhere', () => {
     expect(providerLabel('gcp')).toBe('GCP');

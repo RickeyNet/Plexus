@@ -1,8 +1,8 @@
 """
 source_import.py -- Import the devices a topology source found into the inventory.
 
-After a Meraki organization, Cato account, Cisco FMC, Palo Alto Panorama or
-Appgate SDP collective has been collected, an administrator can add the
+After a Meraki organization, Cato account, Cisco FMC, Palo Alto Panorama,
+Appgate SDP collective or OPNsense firewall has been collected, an administrator can add the
 devices of its latest collection to an inventory group in one step, and
 with them:
 

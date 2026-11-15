@@ -1,15 +1,16 @@
-import type {
-  MerakiSubnet,
-  NetworkRow,
-  PathTraceQuery,
-  PathVerdict,
-  ReachabilityQuery,
-  ReachabilityReport,
-  ReachabilityRow,
-  TopologySource,
+import {
+  ORG_PROVIDERS,
+  type MerakiSubnet,
+  type NetworkRow,
+  type PathTraceQuery,
+  type PathVerdict,
+  type ReachabilityQuery,
+  type ReachabilityReport,
+  type ReachabilityRow,
+  type TopologySource,
 } from '@/api/meraki';
 
-import { INVENTORY_ORG_REF, providerLabel, PROVIDER_INVENTORY } from './helpers';
+import { INVENTORY_ORG_REF, providerLabel, PROVIDER_INVENTORY, PROVIDER_ORDER } from './helpers';
 import { findNamedHosts, findSubnets, hostAddress, parseTraffic } from './paths';
 
 // Reachability sweep: one destination traced from every source network the
@@ -40,11 +41,11 @@ export const SWEEP_KINDS: { key: string; label: string }[] = [
 /** The kinds the server sweeps when none are named: the networks endpoints live in. */
 export const DEFAULT_SWEEP_KINDS = ['vlan', 'lan', 'svi', 'range', 'subnet', 'connected'];
 
-export const SWEEP_PROVIDERS = ['meraki', 'cato', 'fmc', 'panorama', 'appgate', 'aws', 'azure', 'gcp'];
+export const SWEEP_PROVIDERS: string[] = [...PROVIDER_ORDER];
 
 // Snapshot sources are filtered by id (org_ref); the clouds by provider, since
 // their accounts are not map sources.
-const SNAPSHOT_SOURCE_TYPES = ['meraki', 'cato', 'fmc', 'panorama', 'appgate'];
+const SNAPSHOT_SOURCE_TYPES: readonly string[] = ORG_PROVIDERS;
 
 function hasInventorySubnets(subnets: MerakiSubnet[]): boolean {
   return subnets.some((s) => s.provider === PROVIDER_INVENTORY);

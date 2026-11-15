@@ -20,6 +20,8 @@ export function sourceLabel(source: string | null | undefined): string {
       return 'Palo Alto Panorama';
     case 'appgate':
       return 'Appgate SDP';
+    case 'opnsense':
+      return 'OPNsense';
     case 'manual':
       return 'Manual';
     case 'import':

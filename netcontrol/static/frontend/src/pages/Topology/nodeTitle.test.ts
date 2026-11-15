@@ -97,6 +97,27 @@ describe('nodeTitle', () => {
     expect(title).toContain('\nSite: HQ Data Center');
   });
 
+  it('names the integration of an OPNsense node', () => {
+    const title = nodeTitle({
+      id: 'meraki:12:d:fw1',
+      label: 'branch-fw-1',
+      ip: '192.0.2.1',
+      in_inventory: false,
+      source: 'meraki',
+      meraki: {
+        org_ref: 12,
+        node_id: 'd:fw1',
+        site_id: 'site-branch',
+        site_name: 'Branch Office',
+        kind: 'appliance',
+        status: 'online',
+        provider: 'opnsense',
+      },
+    });
+    expect(title).toContain('\nOPNsense appliance · online');
+    expect(title).toContain('\nSite: Branch Office');
+  });
+
   it('adds nothing for a node without an instance', () => {
     const title = nodeTitle({ ...INVENTORY_NODE, instance: undefined });
     expect(title).not.toContain('Instance:');

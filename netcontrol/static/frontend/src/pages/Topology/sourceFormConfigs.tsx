@@ -10,6 +10,8 @@ import {
   DEFAULT_BASE_URL,
   FMC_OPTION_TOGGLES,
   FMC_URL_PLACEHOLDER,
+  OPNSENSE_OPTION_TOGGLES,
+  OPNSENSE_URL_PLACEHOLDER,
   OPTION_TOGGLES,
   PANORAMA_OPTION_TOGGLES,
   PANORAMA_URL_PLACEHOLDER,
@@ -19,6 +21,9 @@ import {
   catoForm,
   fmcForm,
   merakiForm,
+  OPNSENSE_KEY_FIELD,
+  OPNSENSE_SECRET_FIELD,
+  opnsenseForm,
   panoramaForm,
   type RequiredRule,
   type SourceFormValues,
@@ -53,6 +58,8 @@ export interface SourceFormConfig {
   blocks: SourceFormBlock[];
   fromRecord: (existing: MerakiOrg | null, defaults: OrgBuildOptions) => SourceFormValues;
   toPayload: (values: SourceFormValues) => MerakiOrgInput;
+  /** A rule the required-field check cannot express; the message blocks saving. */
+  validate?: (values: SourceFormValues, isEdit: boolean) => string | null;
 }
 
 function toggleFields(toggles: readonly { key: string; label: string; hint: string }[]): SourceFormBlock {
@@ -369,6 +376,60 @@ const APPGATE: SourceFormConfig = {
   ],
 };
 
+const OPNSENSE: SourceFormConfig = {
+  noun: 'OPNsense firewall',
+  addLabel: 'Add OPNsense',
+  idPrefix: 'opnsense',
+  ...opnsenseForm,
+  blocks: [
+    {
+      kind: 'note',
+      content:
+        'An OPNsense firewall. Plexus reads its interfaces, gateways, VPN tunnels, routes, firmware version and security audit over the OPNsense API (read-only), and can store its configuration as a config backup.',
+    },
+    { kind: 'fields', fields: [{ ...NAME_FIELD, placeholder: 'Branch firewall' }] },
+    {
+      kind: 'fields',
+      fields: [
+        {
+          name: 'base_url',
+          label: 'Firewall address',
+          type: 'url',
+          required: true,
+          placeholder: OPNSENSE_URL_PLACEHOLDER,
+          help: 'https only, the web GUI host (and port) without a path.',
+        },
+      ],
+    },
+    {
+      kind: 'fields',
+      columns: 2,
+      fields: [
+        { name: OPNSENSE_KEY_FIELD, label: 'API key', type: 'password', required: 'create' },
+        { name: OPNSENSE_SECRET_FIELD, label: 'API secret', type: 'password', required: 'create' },
+      ],
+    },
+    {
+      kind: 'note',
+      content:
+        'System > Access > Users > API keys. Use a user limited to read privileges. Plexus only reads, never changes anything, and stores the key and secret encrypted; they are never shown again. To keep the stored credential, leave both blank.',
+    },
+    {
+      kind: 'fields',
+      fields: [
+        {
+          name: 'verify_tls',
+          label: 'Verify the TLS certificate',
+          type: 'checkbox',
+          help: 'Turn off only for a firewall with a self-signed certificate.',
+        },
+      ],
+    },
+    { kind: 'heading', text: 'Data to collect' },
+    toggleFields(OPNSENSE_OPTION_TOGGLES),
+  ],
+};
+
 /** Scheduled collection, the same for every provider. */
 const SCHEDULE_BLOCKS: SourceFormBlock[] = [
   { kind: 'heading', text: 'Scheduled collection' },
@@ -409,6 +470,7 @@ export const SOURCE_FORM_CONFIGS: Record<CloudProvider, SourceFormConfig> = {
   fmc: withSchedule(FMC),
   panorama: withSchedule(PANORAMA),
   appgate: withSchedule(APPGATE),
+  opnsense: withSchedule(OPNSENSE),
 };
 
 /** Every field of a form, for the required-field check. */

@@ -8,6 +8,7 @@ import {
   useDiscoverCloudAccount,
 } from "@/api/cloud";
 import {
+  CLOUD_ACCOUNT_PROVIDERS,
   CloudAccountProvider,
   CloudProvider,
   InventoryCollectRequest,
@@ -29,6 +30,7 @@ import {
   useValidateMerakiOrg,
   isCloudAccountProvider,
   isInventoryCollectionResult,
+  ORG_PROVIDERS,
 } from "@/api/meraki";
 import { StatusBadge } from "@/components/Badge";
 import { DeleteButton } from "@/components/DeleteButton";
@@ -62,13 +64,7 @@ import { SourceScheduleBar } from "./SourceScheduleBar";
 import { defaultOptionsFor } from "./sourceForm";
 
 /** Sources that are entries of the organization dialog (collected as a tracked build). */
-const ORG_SOURCE_TYPES = new Set<string>([
-  "meraki",
-  "cato",
-  "fmc",
-  "panorama",
-  "appgate",
-]);
+const ORG_SOURCE_TYPES = new Set<string>(ORG_PROVIDERS);
 
 /** Organization sources that sign in with a user and password rather than an API key. */
 const LOGIN_SOURCE_TYPES = new Set<string>(["fmc", "panorama", "appgate"]);
@@ -392,7 +388,7 @@ export function SourcesModal({
       <p className="text-muted" style={{ marginTop: 0, fontSize: "0.9rem" }}>
         Everything on the map comes from one of these sources. Meraki
         organizations, Cato accounts, Cisco FMCs, Palo Alto Panoramas, Appgate
-        SDP collectives, AWS accounts, Azure subscriptions and GCP projects are
+        SDP collectives, OPNsense firewalls, AWS accounts, Azure subscriptions and GCP projects are
         read from their APIs. All other devices, the ones in the inventory, are
         scanned over SNMP for their CDP and LLDP neighbors, and read over SSH
         for their route tables and running configurations (which the path trace
@@ -493,18 +489,7 @@ export function SourcesModal({
               }}
             >
               <strong>Load demo data for:</strong>
-              {(
-                [
-                  "meraki",
-                  "cato",
-                  "fmc",
-                  "panorama",
-                  "appgate",
-                  "aws",
-                  "azure",
-                  "gcp",
-                ] as const
-              ).map((provider) => (
+              {[...ORG_PROVIDERS, ...CLOUD_ACCOUNT_PROVIDERS].map((provider) => (
                 <button
                   key={provider}
                   type="button"
@@ -625,8 +610,8 @@ export function SourcesModal({
 
 
       <h4 style={{ margin: "1.25rem 0 0.5rem" }}>
-        Collection history (Meraki, Cato, Cisco FMC, Palo Alto Panorama and
-        Appgate SDP)
+        Collection history (Meraki, Cato, Cisco FMC, Palo Alto Panorama,
+        Appgate SDP and OPNsense)
       </h4>
       {snapshots.error && !snapshots.data ? (
         <QueryError what="collection history" query={snapshots} />
@@ -715,6 +700,7 @@ function collectTitle(source: TopologySource, isAdmin: boolean): string {
     return `Collect from ${providerLabel(source.type)} and update the map`;
   if (source.type === "fmc" || source.type === "appgate")
     return "No password stored";
+  if (source.type === "opnsense") return "No API key and secret stored";
   return source.type === "panorama"
     ? "No password or API key stored"
     : "No API key stored";

@@ -36,9 +36,10 @@ import asyncio
 import time
 import xml.etree.ElementTree as ElementTree
 from typing import Any
-from urllib.parse import urlsplit
 
 import httpx
+
+from netcontrol.integrations.http_common import validate_https_host
 
 DEFAULT_TIMEOUT_SECONDS = 60.0
 # Panorama's management plane serves the XML API alongside the web UI; a
@@ -82,24 +83,7 @@ def validate_base_url(url: str) -> str:
     path, query or embedded user is allowed, and ``http`` is refused.
     Raises ``ValueError`` otherwise.
     """
-    cleaned = (url or "").strip()
-    if not cleaned:
-        raise ValueError("Panorama address is required")
-    if "://" not in cleaned:
-        cleaned = f"https://{cleaned}"
-    parts = urlsplit(cleaned)
-    if parts.scheme != "https" or not parts.hostname:
-        raise ValueError("Panorama address must be an https URL")
-    if parts.username or parts.password or parts.query or parts.fragment or parts.path.strip("/"):
-        raise ValueError("Panorama address must be the host only")
-    try:
-        port = parts.port
-    except ValueError:
-        raise ValueError("Panorama address has an invalid port") from None
-    host = parts.hostname
-    if ":" in host:
-        host = f"[{host}]"
-    return f"https://{host}" + (f":{port}" if port else "")
+    return validate_https_host(url, "Panorama")
 
 
 # ── XML -> data ──────────────────────────────────────────────────────────────

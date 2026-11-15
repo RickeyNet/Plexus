@@ -64,8 +64,8 @@ step, what the results mean, who may do what, and its API.
 
 - A CDP/LLDP map, with [AWS](AWS-Topology), [Azure](Azure-Topology),
   [GCP](GCP-Topology), [Meraki](Meraki-Topology), [Cato](Cato-Topology),
-  [Cisco FMC](Cisco-FMC-Topology), [Panorama](Panorama-Topology) and
-  [Appgate SDP](Appgate-SDP-Topology) as sources.
+  [Cisco FMC](Cisco-FMC-Topology), [Panorama](Panorama-Topology),
+  [Appgate SDP](Appgate-SDP-Topology) and [OPNsense](OPNsense-Topology) as sources.
 - [Path Trace](Path-Trace): follow traffic from one end to the other across
   all of them.
 - [Cloud Visibility](Cloud-Visibility): cloud accounts and their networks.

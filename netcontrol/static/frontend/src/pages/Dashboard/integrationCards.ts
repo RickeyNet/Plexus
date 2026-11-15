@@ -20,8 +20,8 @@ import {
 // tested; IntegrationsSection only renders the result.
 
 /**
- * Where a source's availability rows are. A Meraki, Cato, FMC, Panorama or
- * Appgate source is its organization (org_ref = its id). The AWS, Azure and
+ * Where a source's availability rows are. A Meraki, Cato, FMC, Panorama,
+ * Appgate or OPNsense source is its organization (org_ref = its id). The AWS, Azure and
  * GCP accounts of one cloud are discovered into one snapshot, so their rows
  * share one org_ref: an account maps to every row of its provider. null for
  * a source with no id (neighbor discovery, inventory collection).
