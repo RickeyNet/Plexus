@@ -6,7 +6,7 @@ import { QueryError } from "@/components/QueryError";
 
 /**
  * The schedule that collects every Meraki, Cato, Cisco FMC, Palo Alto
- * Panorama and Appgate SDP source on its own (administrators only). Each
+ * Panorama, Appgate SDP and OPNsense source on its own (administrators only). Each
  * source can opt out or set its own interval in its edit form.
  */
 export function SourceScheduleBar() {
@@ -115,8 +115,8 @@ export function SourceScheduleBar() {
         className="text-muted"
         style={{ fontSize: "0.85em", marginTop: "0.4rem" }}
       >
-        Collects every Meraki, Cato, Cisco FMC, Palo Alto Panorama and Appgate
-        SDP source that has an API key or password, one at a time, once its
+        Collects every Meraki, Cato, Cisco FMC, Palo Alto Panorama, Appgate
+        SDP and OPNsense source that has an API key or password, one at a time, once its
         interval has passed since its last collection (Collect Now restarts the
         clock). {minMinutes} to {maxMinutes} minutes; a source can turn this off
         or set its own interval in its Edit form. AWS, Azure and GCP discovery

@@ -47,7 +47,7 @@ and IOS-XE upgrades via SNMP, Netmiko, and Ansible.
 Every vendor Plexus supports must meet the same monitoring bar. "Supported" means an
 SSH/SNMP driver (`netcontrol/drivers/`: Cisco IOS/IOS XE/IOS XR/NX-OS/ASA/FTD, Juniper,
 Arista, Fortinet, PAN-OS), an API integration (`netcontrol/integrations/`: Meraki, Cato,
-Cisco FDM, Cisco FMC, Panorama, Appgate, AWS, Azure, GCP), or a cloud collector. Priority
+Cisco FDM, Cisco FMC, Panorama, Appgate, OPNsense, AWS, Azure, GCP), or a cloud collector. Priority
 vendors are Cisco, Cato, AWS and Azure; a gap there is a bug, not a backlog item.
 
 - **Availability and SLA.** Every device, site, link, tunnel or cloud connection the

@@ -11,6 +11,7 @@ describe('addSourceOptions', () => {
       'Cisco FMC',
       'Palo Alto Panorama',
       'Appgate SDP',
+      'OPNsense firewall',
       'AWS Account',
       'Azure Subscription',
       'GCP Project',

@@ -25,6 +25,8 @@ from netcontrol.integrations.fmc.normalize import build_snapshot as build_fmc_sn
 from netcontrol.integrations.fmc.sample import build_sample_raw as build_fmc_raw
 from netcontrol.integrations.meraki.normalize import build_snapshot as build_meraki_snapshot
 from netcontrol.integrations.meraki.sample import build_sample_raw as build_meraki_raw
+from netcontrol.integrations.opnsense.normalize import build_snapshot as build_opnsense_snapshot
+from netcontrol.integrations.opnsense.sample import build_sample_raw as build_opnsense_raw
 from netcontrol.integrations.software.psirt import OS_TYPES, PsirtApiError, PsirtClient, normalize_advisory
 from netcontrol.integrations.software.versions import (
     PLATFORMS,
@@ -116,6 +118,16 @@ def test_classify_host_tells_ios_xe_from_ios_and_knows_the_drivers():
     assert classify_host("unknown", "Arista DCS-7050", "4.28.3M") == ("eos", "4.28.3M")
     assert classify_host("unknown", "", "3.1.0") == ("other", "3.1.0")
     assert classify_host("cisco_ios", "", "") == ("ios", "")
+
+
+def test_snapshot_devices_read_the_opnsense_firewall_version():
+    assert PLATFORMS["opnsense"]["label"] == "OPNsense" and PLATFORMS["opnsense"]["psirt"] is None
+    snapshot = build_opnsense_snapshot(build_opnsense_raw())
+    devices = snapshot_devices(snapshot, "opnsense")
+    # The firewall only: its gateways, VPN peers and OpenVPN servers carry no version.
+    assert [(d["platform"], d["version"], d["name"]) for d in devices] == [
+        ("opnsense", "25.7.6", "fw-edge-1.example.com")
+    ]
 
 
 def test_snapshot_devices_read_firmware_from_meraki_and_software_from_fmc():

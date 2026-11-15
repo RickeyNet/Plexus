@@ -131,7 +131,7 @@ save it yourself if the result is what you want.
 |---|---|
 | Status `success` (green) | The configuration was read and stored. |
 | Status `error` (red) | The capture failed. The error text shows on the card. |
-| Method | Which feature took the backup: `scheduled`, `manual` (**Run Now**), `drift`, `restore`, `compliance`, `deployment`, `risk-analysis`, `topology` or `upgrade`. |
+| Method | Which feature took the backup: `scheduled`, `manual` (**Run Now**), `drift`, `restore`, `compliance`, `deployment`, `risk-analysis`, `topology`, `upgrade` or `opnsense-api` (an OPNsense firewall's config.xml, read by its topology collection; see [opnsense-topology.md](opnsense-topology.md#config-backup)). |
 | Summary strip | **Policies**, **Backups**, **Hosts** with a backup, **Last backup**. |
 
 ## Drift detection

@@ -2018,7 +2018,7 @@ export function Topology() {
       <PageHelp
         pageKey="topology"
         title="Interactive Network Map"
-        text="Visualize your network as an interactive graph. Drag nodes to rearrange, zoom in/out, and click devices to view details. Connections are discovered from device data (CDP/LLDP/OSPF/BGP) and, for Meraki organizations, Cato accounts, Cisco FMCs, Palo Alto Panoramas, Appgate SDP collectives, AWS accounts, Azure subscriptions and GCP projects, from their APIs. Search finds devices by name or address and Meraki devices by anything collected for them - VLANs, subnets, routes, VPN peers, firewall rules. Sources lists everything that feeds the map and collects it again. Export HTML saves the whole map as one shareable interactive file."
+        text="Visualize your network as an interactive graph. Drag nodes to rearrange, zoom in/out, and click devices to view details. Connections are discovered from device data (CDP/LLDP/OSPF/BGP) and, for Meraki organizations, Cato accounts, Cisco FMCs, Palo Alto Panoramas, Appgate SDP collectives, OPNsense firewalls, AWS accounts, Azure subscriptions and GCP projects, from their APIs. Search finds devices by name or address and Meraki devices by anything collected for them - VLANs, subnets, routes, VPN peers, firewall rules. Sources lists everything that feeds the map and collects it again. Export HTML saves the whole map as one shareable interactive file."
       />
 
       <div className="stack stack-sm">
@@ -2248,7 +2248,7 @@ export function Topology() {
           />
           <span className="toolbar-spacer" />
           <button type="button" className="btn btn-secondary btn-sm" onClick={handleRefresh}>Refresh</button>
-          <button type="button" className="btn btn-primary btn-sm" onClick={() => setSourcesOpen(true)} title="Everything that feeds the map - neighbor discovery, Meraki, Cato, Cisco FMC, Palo Alto Panorama, Appgate SDP, AWS, Azure, GCP: add, collect, history">Sources</button>
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => setSourcesOpen(true)} title="Everything that feeds the map - neighbor discovery, Meraki, Cato, Cisco FMC, Palo Alto Panorama, Appgate SDP, OPNsense, AWS, Azure, GCP: add, collect, history">Sources</button>
         </div>
 
         {highlightCount > 0 && (
@@ -2477,7 +2477,7 @@ export function Topology() {
 
         {data && !data.nodes.length && (
           <div className="card" style={{ padding: '1.5rem', textAlign: 'center' }}>
-            <p className="text-muted" style={{ marginTop: 0 }}>No topology data. Open Sources to discover the neighbors of your inventory devices, or to add a Meraki organization, a Cato account, a Cisco FMC, a Palo Alto Panorama, an Appgate SDP collective, an AWS account, an Azure subscription or a GCP project.</p>
+            <p className="text-muted" style={{ marginTop: 0 }}>No topology data. Open Sources to discover the neighbors of your inventory devices, or to add a Meraki organization, a Cato account, a Cisco FMC, a Palo Alto Panorama, an Appgate SDP collective, an OPNsense firewall, an AWS account, an Azure subscription or a GCP project.</p>
             <button className="btn btn-primary btn-sm" onClick={() => setSourcesOpen(true)}>Sources</button>
           </div>
         )}
@@ -2558,7 +2558,7 @@ export function Topology() {
             <span className="topology-legend-item"><span className="topology-legend-dot topology-legend-dot-dashed" /> External neighbor</span>
             {showIntegrationLegend && (
               <>
-                <span className="topology-legend-item" title="Meraki, Cato, Cisco FMC, Panorama, Appgate, AWS, Azure and GCP devices"><span className="topology-legend-dot" style={{ background: 'var(--success)' }} /> Integration</span>
+                <span className="topology-legend-item" title="Meraki, Cato, Cisco FMC, Panorama, Appgate, OPNsense, AWS, Azure and GCP devices"><span className="topology-legend-dot" style={{ background: 'var(--success)' }} /> Integration</span>
                 <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'var(--text-muted)' }} /> Managed by FMC / Panorama</span>
                 <span className="topology-legend-item"><span className="topology-legend-dot" style={{ background: 'var(--danger)' }} /> Offline / unreachable</span>
               </>

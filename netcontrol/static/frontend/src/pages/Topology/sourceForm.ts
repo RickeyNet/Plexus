@@ -6,6 +6,7 @@ import type {
   MerakiBuildOptions,
   MerakiOrg,
   MerakiOrgInput,
+  OpnsenseBuildOptions,
   OrgBuildOptions,
   PanoramaBuildOptions,
 } from '@/api/meraki';
@@ -16,6 +17,7 @@ import {
   FALLBACK_APPGATE_OPTIONS,
   FALLBACK_CATO_OPTIONS,
   FALLBACK_FMC_OPTIONS,
+  FALLBACK_OPNSENSE_OPTIONS,
   FALLBACK_OPTIONS,
   FALLBACK_PANORAMA_OPTIONS,
 } from './merakiHelpers';
@@ -139,6 +141,54 @@ export const appgateForm = {
   },
 };
 
+/** Form keys of the two halves of an OPNsense API credential, which are not build options. */
+export const OPNSENSE_KEY_FIELD = 'opnsense_api_key';
+export const OPNSENSE_SECRET_FIELD = 'opnsense_api_secret';
+
+/**
+ * The write-only secret of an OPNsense source from the two halves of its API
+ * credential: `<key>:<secret>`, trimmed. Both blank keeps the stored credential
+ * (`apiKey` null, no error); one half alone, or a colon in the key, is an error.
+ */
+export function joinOpnsenseCredential(key: string, secret: string): { apiKey: string | null; error: string | null } {
+  const k = key.trim();
+  const s = secret.trim();
+  if (!k && !s) return { apiKey: null, error: null };
+  if (!k || !s) return { apiKey: null, error: 'Enter both the API key and the API secret.' };
+  if (k.includes(':')) return { apiKey: null, error: 'The API key cannot contain a colon.' };
+  return { apiKey: `${k}:${s}`, error: null };
+}
+
+export const opnsenseForm = {
+  fromRecord(existing: MerakiOrg | null, defaults: OrgBuildOptions): SourceFormValues {
+    const values = recordValues(existing, defaults);
+    values.org_id = existing?.org_id || 'local';
+    values[OPNSENSE_KEY_FIELD] = '';
+    values[OPNSENSE_SECRET_FIELD] = '';
+    return values;
+  },
+  toPayload(values: SourceFormValues): MerakiOrgInput {
+    const { apiKey } = joinOpnsenseCredential(text(values, OPNSENSE_KEY_FIELD), text(values, OPNSENSE_SECRET_FIELD));
+    // The halves are not build options; the joined credential is the entry's secret.
+    const rest: SourceFormValues = { ...values, secret: apiKey ?? '' };
+    delete rest[OPNSENSE_KEY_FIELD];
+    delete rest[OPNSENSE_SECRET_FIELD];
+    const body = recordPayload(rest, 'opnsense');
+    body.org_id = 'local';
+    return body;
+  },
+  /**
+   * Why the credential cannot be saved, or null. When adding, both halves are
+   * required fields already, so a missing half is left to that check.
+   */
+  validate(values: SourceFormValues, isEdit: boolean): string | null {
+    const key = text(values, OPNSENSE_KEY_FIELD).trim();
+    const secret = text(values, OPNSENSE_SECRET_FIELD).trim();
+    if (!isEdit && (!key || !secret)) return null;
+    return joinOpnsenseCredential(key, secret).error;
+  },
+};
+
 /** True when every required field has a non-blank value. */
 export function isSourceFormReady(fields: readonly RequiredRule[], values: SourceFormValues, isEdit: boolean): boolean {
   return fields.every((f) => {
@@ -154,6 +204,7 @@ export interface SourceDefaults {
   fmc_default_options?: FmcBuildOptions;
   panorama_default_options?: PanoramaBuildOptions;
   appgate_default_options?: AppgateBuildOptions;
+  opnsense_default_options?: OpnsenseBuildOptions;
 }
 
 /** The server's default build options for a provider, or the built-in fallback until they load. */
@@ -169,5 +220,7 @@ export function defaultOptionsFor(provider: CloudProvider, data: SourceDefaults 
       return data?.panorama_default_options ?? FALLBACK_PANORAMA_OPTIONS;
     case 'appgate':
       return data?.appgate_default_options ?? FALLBACK_APPGATE_OPTIONS;
+    case 'opnsense':
+      return data?.opnsense_default_options ?? FALLBACK_OPNSENSE_OPTIONS;
   }
 }

@@ -1107,7 +1107,7 @@ def test_api_appgate_crud_keeps_the_password_write_only(api):
     bad["base_url"] = "https://appgate.example.com/ui"
     assert api.post("/api/sources", json=bad).status_code == 400
     unknown = api.post("/api/sources", json={"name": "X", "provider": "zscaler"})
-    assert unknown.status_code == 400 and "Provider must be meraki, cato, fmc, panorama or appgate" in unknown.text
+    assert unknown.status_code == 400 and "Provider must be meraki, cato, fmc, panorama, appgate or opnsense" in unknown.text
 
     updated = api.put(f"/api/sources/{org['id']}", json={"options": {"username": "ro"}})
     assert updated.json()["org"]["options"]["username"] == "ro" and updated.json()["org"]["has_api_key"] is True

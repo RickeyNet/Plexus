@@ -57,6 +57,10 @@ IOS = Platform(
 # Order matters: the first platform one of whose words the type holds wins,
 # so the platforms whose words are part of another's come first.
 PLATFORMS: tuple[Platform, ...] = (
+    # An OPNsense firewall imported from its collection: its config.xml
+    # backup is not read here (no parser yet), so the interface addresses
+    # Plexus holds for it are never replaced by an IOS reading of the XML.
+    Platform("opnsense", "OPNsense", ("opnsense",), stateful=True),
     Platform(
         "asa",
         "Cisco ASA / FTD",

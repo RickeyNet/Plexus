@@ -606,7 +606,8 @@ CLOUD_DISCOVERY_SYNC_MAX_INTERVAL = 86400
 CLOUD_DISCOVERY_SYNC_CONFIG: dict = dict(CLOUD_DISCOVERY_SYNC_DEFAULTS)
 
 # Scheduled collection of the integration sources (Meraki organizations, Cato
-# accounts, Cisco FMCs, Palo Alto Panoramas, Appgate SDP collectives): without
+# accounts, Cisco FMCs, Palo Alto Panoramas, Appgate SDP collectives, OPNsense
+# firewalls): without
 # it a source is only collected when someone clicks Collect, and its map and
 # availability go stale. ``interval_seconds`` is the default interval; a source
 # can override it (``meraki_orgs.collect_interval_seconds``).

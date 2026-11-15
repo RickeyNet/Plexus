@@ -1443,7 +1443,7 @@ async def _cloud_discovery_sync_loop() -> None:
 
 async def _source_collection_sync_loop() -> None:
     """Periodically collect the integration sources (Meraki, Cato, Cisco FMC,
-    Palo Alto Panorama, Appgate SDP) that are due.
+    Palo Alto Panorama, Appgate SDP, OPNsense) that are due.
 
     Wakes at most every five minutes so a source whose own interval is
     shorter than the default one is still collected on time; which sources

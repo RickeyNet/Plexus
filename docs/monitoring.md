@@ -176,7 +176,7 @@ a transition when a host (poll ok or failed) or an interface (up or down)
 changes state; an outage with no end is **Ongoing**.
 
 Below it, **Integrations and cloud** shows the same for the entities that
-Meraki, Cato, FMC, Panorama, Appgate, AWS, Azure and GCP report; see
+Meraki, Cato, FMC, Panorama, Appgate, OPNsense, AWS, Azure and GCP report; see
 [Availability tracking](meraki-topology.md#availability-tracking). The
 **Meraki alerts** and **Cato egress vs cloud allow-lists** panels follow.
 

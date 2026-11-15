@@ -57,6 +57,9 @@ describe('source filter', () => {
     // An Appgate SDP collective follows Panorama, before the clouds.
     const withAppgate = { ...withPanorama, nodes: [...withPanorama.nodes, node('ag1', 'appgate')] } as TopologyData;
     expect(mapProviders(withAppgate)).toEqual(['meraki', 'cato', 'fmc', 'panorama', 'appgate', 'aws']);
+    // An OPNsense firewall follows Appgate, before the clouds.
+    const withOpnsense = { ...withAppgate, nodes: [...withAppgate.nodes, node('fw1', 'opnsense')] } as TopologyData;
+    expect(mapProviders(withOpnsense)).toEqual(['meraki', 'cato', 'fmc', 'panorama', 'appgate', 'opnsense', 'aws']);
   });
 
   it('keeps only one provider and the links inside it', () => {

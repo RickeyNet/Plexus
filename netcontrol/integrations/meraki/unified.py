@@ -93,6 +93,7 @@ _SOURCE_NAME = {
     "fmc": "FMC API",
     "panorama": "Panorama API",
     "appgate": "Appgate SDP API",
+    "opnsense": "OPNsense API",
     # The FMC's provider key of earlier releases.
     "anyconnect": "FMC API",
 }

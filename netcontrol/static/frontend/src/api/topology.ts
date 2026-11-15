@@ -64,7 +64,7 @@ export interface TopologyMerakiRef {
   kind: string;
   status: string;
   serial?: string;
-  /** Integration the snapshot came from: 'meraki' (default), 'cato', 'fmc' (Cisco FMC), 'panorama' (Palo Alto Panorama), 'appgate' (Appgate SDP), 'aws', 'azure' or 'gcp'. */
+  /** Integration the snapshot came from: 'meraki' (default), 'cato', 'fmc' (Cisco FMC), 'panorama' (Palo Alto Panorama), 'appgate' (Appgate SDP), 'opnsense' (OPNsense), 'aws', 'azure' or 'gcp'. */
   provider?: string;
   /** EC2 instance ID, present when the ref is an AWS instance. */
   instance_id?: string;
@@ -96,7 +96,7 @@ export interface TopologyEdge {
   protocol?: string | null;
   utilization?: TopologyEdgeUtilization | null;
   source?: 'meraki' | string;
-  /** Integration a 'meraki'-source link came from: 'meraki', 'cato', 'fmc', 'panorama', 'appgate', 'aws', 'azure', 'gcp'. */
+  /** Integration a 'meraki'-source link came from: 'meraki', 'cato', 'fmc', 'panorama', 'appgate', 'opnsense', 'aws', 'azure', 'gcp'. */
   provider?: string;
   /** Meraki link state: VPN reachability or WAN uplink status. */
   status?: string | null;

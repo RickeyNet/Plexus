@@ -77,7 +77,7 @@ def test_a_source_never_collected_lists_nothing_and_cannot_import(api):  # noqa:
     assert refused.status_code == 409
 
 
-@pytest.mark.parametrize("provider", ["meraki", "cato", "fmc", "panorama", "appgate"])
+@pytest.mark.parametrize("provider", ["meraki", "cato", "fmc", "panorama", "appgate", "opnsense"])
 def test_every_provider_lists_its_devices_or_says_why_not(api, provider):  # noqa: F811
     found = _importable(api, _sample(api, provider))
     assert found["provider"] == provider and found["snapshot_id"]

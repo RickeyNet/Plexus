@@ -66,8 +66,8 @@ export interface SetupStep {
 }
 
 /**
- * Sources an administrator connects: Meraki, Cato, FMC, Panorama, Appgate
- * and cloud accounts. Neighbor discovery and inventory collection are always
+ * Sources an administrator connects: Meraki, Cato, FMC, Panorama, Appgate,
+ * OPNsense and cloud accounts. Neighbor discovery and inventory collection are always
  * listed, so they are not a sign that anything was connected.
  */
 export function isConnectedSource(s: TopologySource): boolean {
@@ -95,7 +95,7 @@ export function buildSetupSteps(inp: SetupInputs, now: number = Date.now()): Set
     steps.push({
       key: 'source',
       title: 'Connect a source',
-      why: 'Meraki, Cato, firewall managers and cloud accounts draw your sites, links and clouds on the topology map.',
+      why: 'Meraki, Cato, firewalls, firewall managers and cloud accounts draw your sites, links and clouds on the topology map.',
       done: sources.some(isConnectedSource),
       action: { to: SETUP_LINKS.sources, label: 'Add a source', addSource: true },
     });

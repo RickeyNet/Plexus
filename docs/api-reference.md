@@ -139,7 +139,7 @@ A Template: `id`, `name`, `kind` (`device` or `snippet`), `device_type` (`""`: a
 ```
 
 ### Integration availability mutes
-Mutes of the entities the integrations collect (Meraki, Cato, FMC, Panorama, Appgate, AWS, Azure, GCP). A muted entity is left off the Dashboard and raises no alert. See [meraki-topology.md](meraki-topology.md#muting).
+Mutes of the entities the integrations collect (Meraki, Cato, FMC, Panorama, Appgate, OPNsense, AWS, Azure, GCP). A muted entity is left off the Dashboard and raises no alert. See [meraki-topology.md](meraki-topology.md#muting).
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|

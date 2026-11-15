@@ -16,7 +16,10 @@ import {
   FALLBACK_APPGATE_OPTIONS,
   FALLBACK_FMC_OPTIONS,
   FMC_OPTION_TOGGLES,
+  FALLBACK_OPNSENSE_OPTIONS,
   FALLBACK_PANORAMA_OPTIONS,
+  OPNSENSE_OPTION_TOGGLES,
+  OPNSENSE_URL_PLACEHOLDER,
   PANORAMA_OPTION_TOGGLES,
   collectionProgressCards,
   defaultCollectCredential,
@@ -732,6 +735,35 @@ describe("appgate collection options", () => {
   });
 });
 
+describe("opnsense collection options", () => {
+  it("offers a toggle for every boolean option but certificate checking, in the documented order", () => {
+    expect(OPNSENSE_OPTION_TOGGLES.map((t) => t.label)).toEqual([
+      "Gateways (status, loss, latency)",
+      "VPN tunnels (IPsec, WireGuard, OpenVPN)",
+      "Routing table",
+      "Security audit of installed packages",
+      "Store config.xml as a config backup (the firewall must be an inventory host)",
+      "Correlate with Plexus inventory",
+    ]);
+    const booleans = Object.entries(FALLBACK_OPNSENSE_OPTIONS)
+      .filter(
+        ([key, value]) => typeof value === "boolean" && key !== "verify_tls",
+      )
+      .map(([key]) => key)
+      .sort();
+    expect(OPNSENSE_OPTION_TOGGLES.map((t) => t.key).sort()).toEqual(booleans);
+    expect(OPNSENSE_OPTION_TOGGLES.every((t) => t.hint.length > 0)).toBe(true);
+  });
+
+  it("collects everything by default and checks the certificate", () => {
+    expect(
+      OPNSENSE_OPTION_TOGGLES.every((t) => FALLBACK_OPNSENSE_OPTIONS[t.key]),
+    ).toBe(true);
+    expect(FALLBACK_OPNSENSE_OPTIONS.verify_tls).toBe(true);
+    expect(OPNSENSE_URL_PLACEHOLDER).toBe("https://fw1.example.com");
+  });
+});
+
 describe("appgate and cato progress", () => {
   const at = (phase: string) =>
     describeProgress({ progress: { phase } } as MerakiBuildJob).label;
@@ -867,6 +899,7 @@ describe("sourceTypeLabel", () => {
         "fmc",
         "panorama",
         "appgate",
+        "opnsense",
         "aws",
         "azure",
         "gcp",
@@ -879,6 +912,7 @@ describe("sourceTypeLabel", () => {
       "Cisco FMC",
       "Palo Alto Panorama",
       "Appgate",
+      "OPNsense",
       "AWS",
       "Azure",
       "GCP",

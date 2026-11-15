@@ -54,7 +54,7 @@ export function normalizeGroupName(name: string): string {
 /**
  * The inventory group a map node is suggested to go into, as the names from
  * the top group down, from what the node is associated with:
- * 1. a snapshot site (Meraki network, Cato site, FMC/Panorama/Appgate site,
+ * 1. a snapshot site (Meraki network, Cato site, FMC/Panorama/Appgate/OPNsense site,
  *    AWS VPC, Azure VNet, GCP network): `[<Provider>, <site>]`. A CDP/LLDP
  *    neighbor a Meraki device reported carries that device's site, so it
  *    lands there;

@@ -64,7 +64,7 @@ describe('notMerakiForm', () => {
   it('ticks every provider but Meraki and every kind, keeping the rest of the form', () => {
     const form = { ...emptySummarizeForm(), addresses: '10.0.0.1', providers: ['meraki'] };
     const next = notMerakiForm(form, [...SWEEP_PROVIDERS, 'inventory']);
-    expect(next.providers).toEqual(['cato', 'fmc', 'panorama', 'appgate', 'aws', 'azure', 'gcp', 'inventory']);
+    expect(next.providers).toEqual(['cato', 'fmc', 'panorama', 'appgate', 'opnsense', 'aws', 'azure', 'gcp', 'inventory']);
     expect(next.kinds).toEqual(SWEEP_KINDS.map((k) => k.key));
     expect(next.addresses).toBe('10.0.0.1');
     expect(emptySummarizeForm().kinds).toEqual(DEFAULT_SWEEP_KINDS);

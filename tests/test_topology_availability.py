@@ -3,7 +3,8 @@
 Covers, with no network access:
   * extraction  - the entities and states read from the sample snapshot of
                   every integration (Meraki, Cato, FMC, Panorama, Appgate,
-                  AWS, Azure, GCP), and the status vocabularies they map
+                  OPNsense, AWS, Azure, GCP), and the status vocabularies
+                  they map
   * tracking    - baseline, transitions, alerts (notification channels and
                   monitoring alerts), no re-alert while down, recovery,
                   entities missing from a collection
@@ -40,6 +41,8 @@ from netcontrol.integrations.gcp.normalize import build_snapshot as build_gcp
 from netcontrol.integrations.gcp.sample import build_sample as gcp_sample
 from netcontrol.integrations.meraki.normalize import _STATUS_RANK, _UPLINK_STATUS, build_snapshot as build_meraki
 from netcontrol.integrations.meraki.sample import build_sample_raw as meraki_raw
+from netcontrol.integrations.opnsense.normalize import build_snapshot as build_opnsense
+from netcontrol.integrations.opnsense.sample import build_sample_raw as opnsense_raw
 from netcontrol.integrations.panorama.normalize import build_snapshot as build_panorama
 from netcontrol.integrations.panorama.sample import build_sample_raw as panorama_raw
 
@@ -63,6 +66,7 @@ SNAPSHOTS = {
     "fmc": lambda: build_fmc(fmc_raw()),
     "panorama": lambda: build_panorama(panorama_raw()),
     "appgate": lambda: build_appgate(appgate_raw()),
+    "opnsense": lambda: build_opnsense(opnsense_raw()),
     "aws": lambda: _cloud(build_aws, aws_sample),
     "azure": lambda: _cloud(build_azure, azure_sample),
     "gcp": lambda: _cloud(build_gcp, gcp_sample),
@@ -170,6 +174,31 @@ def test_fmc_panorama_and_appgate_track_ha_and_peer_links():
     kinds = Counter((e.entity_type, e.state) for e in appgate)
     assert kinds[("link", "down")] == 1 and kinds[("site", "degraded")] == 1
     assert not any("user" in e.entity_id for e in appgate)
+
+
+def test_opnsense_gateways_and_tunnels_map_every_state():
+    entities = availability.extract_entity_states("opnsense", 6, SNAPSHOTS["opnsense"]())
+    by_name = {(e.entity_type, e.name): e.state for e in entities}
+    host = "fw-edge-1.example.com"
+    # Gateways: online, down, latency alarm, not monitored.
+    assert by_name[("uplink", f"{host} WAN_GW")] == "up"
+    assert by_name[("uplink", f"{host} WAN2_GW")] == "down"
+    assert by_name[("uplink", f"{host} WAN_GW6")] == "degraded"
+    assert by_name[("uplink", f"{host} CORE_GW")] == "unknown"
+    tunnels = Counter(e.state for e in entities if e.entity_type == "tunnel")
+    # IPsec up and down, WireGuard online and stale, OpenVPN connected and reconnecting.
+    assert tunnels == {"up": 3, "down": 1, "degraded": 2}
+    devices = {e.entity_id: e.state for e in entities if e.entity_type == "device"}
+    assert devices == {f"d:{host}": "up", "ovpn:server:1": "up", "ovpn:server:3": "down"}
+    # Gateway stubs and VPN peers are no devices; no site entities.
+    assert not any(e.entity_type == "site" for e in entities)
+
+
+def test_opnsense_info_warnings_keep_the_collection_clean():
+    snapshot = SNAPSHOTS["opnsense"]()
+    assert snapshot["collection"]["errors"] and all(e["info"] for e in snapshot["collection"]["errors"])
+    assert availability.clean_entity_types("opnsense", snapshot) == set(availability.ENTITY_TYPES)
+    assert availability.clean_entity_types("opnsense", _with_errors(snapshot)) == frozenset()
 
 
 def test_cloud_connections_circuits_and_peerings():
@@ -430,7 +459,7 @@ def test_clean_types_meraki_devices_always_edges_need_org_calls():
 
 
 def test_clean_types_other_providers_all_or_nothing():
-    for provider in ("cato", "fmc", "panorama", "appgate", "aws"):
+    for provider in ("cato", "fmc", "panorama", "appgate", "opnsense", "aws"):
         snapshot = SNAPSHOTS[provider]()
         assert availability.clean_entity_types(provider, snapshot) == set(availability.ENTITY_TYPES)
         assert availability.clean_entity_types(provider, _with_errors(snapshot)) == frozenset()

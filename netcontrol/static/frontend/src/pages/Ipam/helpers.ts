@@ -53,6 +53,8 @@ export function providerLabel(provider: string | undefined): string {
       return 'Palo Alto Panorama';
     case 'appgate':
       return 'Appgate SDP';
+    case 'opnsense':
+      return 'OPNsense';
     case 'aws':
       return 'AWS';
     case 'azure':

@@ -1,7 +1,8 @@
 """Availability tracking of the entities that integrations collect.
 
 ``record_snapshot_states`` is called after every stored collection (a Meraki,
-Cato, FMC, Panorama or Appgate snapshot, an AWS, Azure or GCP discovery; see
+Cato, FMC, Panorama, Appgate or OPNsense snapshot, an AWS, Azure or GCP
+discovery; see
 ``netcontrol.routes.meraki_topology``). It extracts the state of every
 tracked entity (``netcontrol.integrations.availability``), records the
 changes (``routes.db.topology_availability``) and raises an alert when an
@@ -41,6 +42,7 @@ PROVIDER_LABELS = {
     "fmc": "Cisco FMC",
     "panorama": "Panorama",
     "appgate": "Appgate SDP",
+    "opnsense": "OPNsense",
     "aws": "AWS",
     "azure": "Azure",
     "gcp": "GCP",

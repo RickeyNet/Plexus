@@ -1,7 +1,7 @@
 """Which devices of a source's topology snapshot can become inventory hosts.
 
-After a Meraki organization, Cato account, Cisco FMC, Palo Alto Panorama or
-Appgate SDP collective is collected, the administrator may import the
+After a Meraki organization, Cato account, Cisco FMC, Palo Alto Panorama,
+Appgate SDP collective or OPNsense firewall is collected, the administrator may import the
 devices it found into the inventory (``netcontrol.routes.source_import``).
 This module decides, from the snapshot alone, which devices those are and
 what Plexus can do with each once it is a host:
@@ -11,8 +11,10 @@ what Plexus can do with each once it is a host:
     WAN uplinks, VPN peers, remote users, the source's cloud/manager node
     and Cato IPsec sites (whose address is the far end of a tunnel) are not;
   - its device type is the inventory driver key of its platform, the same
-    platform the software tracker gives it; a platform with no driver
-    (Meraki, Cato Socket, Appgate appliance) or none known is ``icmp_only``;
+    platform the software tracker gives it; a platform with no driver that
+    still answers SNMP (OPNsense) gets a device type of its own
+    (``SNMP_DEVICE_TYPES``); any other platform with no driver (Meraki,
+    Cato Socket, Appgate appliance) or none known is ``icmp_only``;
   - SNMP polling works for every type but ``icmp_only`` (the monitoring
     poller skips SNMP for those and only pings them); configuration backup
     works where the driver names a capture command
@@ -35,13 +37,15 @@ ICMP_ONLY = "icmp_only"
 # The node ids of a provider's devices. Meraki: its devices ("d:") and the
 # CDP/LLDP neighbors they report ("x:"); Cato: Sockets ("d:"; an IPsec site
 # is "s:" and its address is the far end of the tunnel); FMC: its FTDs;
-# Panorama: its firewalls; Appgate: the appliances of the collective ("a:").
+# Panorama: its firewalls; Appgate: the appliances of the collective ("a:");
+# OPNsense: the firewall itself.
 DEVICE_NODE_PREFIXES: dict[str, tuple[str, ...]] = {
     "meraki": ("d:", "x:"),
     "cato": ("d:",),
     "fmc": ("d:",),
     "panorama": ("d:",),
     "appgate": ("a:",),
+    "opnsense": ("d:",),
 }
 # Read as their current key, like the rest of the source routes.
 _LEGACY_PROVIDERS = {"anyconnect": "fmc"}
@@ -66,16 +70,28 @@ PROVIDER_NOTES: dict[str, str] = {
         "lives in Panorama, so Config Backups does not read it from the device."
     ),
     "appgate": ("Appgate appliances are pinged; their status and version come from the Appgate collection."),
+    "opnsense": (
+        "OPNsense firewalls are polled over SNMP through the generic path once an SNMP profile is assigned. "
+        "Their configuration backup comes from the OPNsense collection (config.xml over the API), not from "
+        "SSH, once the firewall is an inventory host; status, gateways, tunnels and version come from the "
+        "OPNsense collection."
+    ),
 }
+
+# platform -> the inventory device type of a platform Plexus has no SSH
+# driver for but polls over SNMP like any host (``GenericDriver``: no
+# configuration capture over SSH).
+SNMP_DEVICE_TYPES: dict[str, str] = {"opnsense": "opnsense"}
 
 NO_SNAPSHOT_REASON = "This source has not been collected yet. Collect it first, then import its devices."
 NO_DEVICES_REASON = "The latest collection of this source found no devices with a management address."
 
 
 def _device_types_by_platform() -> dict[str, str]:
-    """platform -> the inventory device type of it that has a driver."""
+    """platform -> the inventory device type of it that has a driver, or
+    that is polled over SNMP without one."""
     registered = set(registered_device_types())
-    out: dict[str, str] = {}
+    out: dict[str, str] = dict(SNMP_DEVICE_TYPES)
     for device_type, platform in DEVICE_TYPE_PLATFORMS.items():
         if device_type in registered:
             out.setdefault(platform, device_type)
@@ -97,7 +113,7 @@ def device_platform(provider: str, node: dict) -> str:
 
 def device_type_for(provider: str, node: dict) -> str:
     """The inventory device type a device node gets: the driver of its
-    platform, or ``icmp_only``."""
+    platform, the SNMP-only type of it, or ``icmp_only``."""
     return _device_types_by_platform().get(device_platform(provider, node), ICMP_ONLY)
 
 

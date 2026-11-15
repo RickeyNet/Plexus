@@ -80,8 +80,8 @@ export interface TopologyProblem {
  * the monitoring feature (it is the data of /api/availability/topology/*).
  */
 /**
- * State counts of one entity type of one source. A Meraki, Cato, FMC, Panorama
- * or Appgate source's org_ref is its organization id; the AWS, Azure and GCP
+ * State counts of one entity type of one source. A Meraki, Cato, FMC, Panorama,
+ * Appgate or OPNsense source's org_ref is its organization id; the AWS, Azure and GCP
  * accounts of one cloud share one org_ref (one discovery snapshot per cloud).
  */
 export interface TopologySourceTypeCounts extends TopologyStateCounts {

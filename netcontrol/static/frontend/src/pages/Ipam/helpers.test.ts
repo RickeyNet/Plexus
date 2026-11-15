@@ -56,6 +56,7 @@ describe('providerLabel', () => {
     expect(providerLabel('fmc')).toBe('Cisco FMC');
     expect(providerLabel('panorama')).toBe('Palo Alto Panorama');
     expect(providerLabel('appgate')).toBe('Appgate SDP');
+    expect(providerLabel('opnsense')).toBe('OPNsense');
     expect(providerLabel('aws')).toBe('AWS');
     expect(providerLabel('other')).toBe('other');
     expect(providerLabel(undefined)).toBe('');

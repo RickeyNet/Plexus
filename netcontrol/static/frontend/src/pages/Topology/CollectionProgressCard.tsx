@@ -26,7 +26,9 @@ function progressNote(type: TopologySourceType): string {
             ? "A Panorama takes a few requests per device group and template, plus a few per firewall when device state is collected."
             : type === "appgate"
               ? "An Appgate collective takes one query per connected user for the access details; large user counts take a while."
-              : "Large organizations take several minutes: Meraki limits the API to 10 requests per second.";
+              : type === "opnsense"
+                ? "An OPNsense firewall takes a few requests per kind of data; it usually finishes in seconds."
+                : "Large organizations take several minutes: Meraki limits the API to 10 requests per second.";
   return `${cost} You can close this dialog; the map updates when collection finishes.`;
 }
 

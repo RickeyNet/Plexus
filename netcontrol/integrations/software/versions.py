@@ -48,6 +48,7 @@ PLATFORMS: dict[str, dict[str, Any]] = {
     "pan-os": {"label": "PAN-OS", "psirt": None},
     "panorama": {"label": "Palo Alto Panorama", "psirt": None},
     "appgate": {"label": "Appgate SDP appliance", "psirt": None},
+    "opnsense": {"label": "OPNsense", "psirt": None},
     "other": {"label": "Other", "psirt": None},
 }
 
@@ -296,6 +297,9 @@ def snapshot_platform(provider: str, node: dict) -> str:
     if provider == "appgate":
         # Every appliance (Controller, Gateway, Portal...) runs the same image.
         return "appgate" if kind == "appliance" else ""
+    if provider == "opnsense":
+        # The firewall itself; its OpenVPN servers and gateways carry no version.
+        return "opnsense" if kind == "appliance" else ""
     return ""
 
 
@@ -305,13 +309,14 @@ def snapshot_devices(snapshot: dict, provider: str) -> list[dict[str, Any]]:
     Meraki devices carry their firmware, Cato Sockets their Socket version,
     the FTDs of a Cisco FMC their software and the FMC its own version, the
     firewalls of a Palo Alto Panorama their PAN-OS and Panorama its own, the
-    appliances of an Appgate SDP collective their appliance version; all
+    appliances of an Appgate SDP collective their appliance version, an
+    OPNsense firewall its OPNsense version; all
     are read from the detail sections the snapshot already holds, so
     snapshots collected before the tracker existed are covered. Nodes
     without a version (a Cato IPsec site, a PoP, a users node) are skipped.
     AWS snapshots carry no software versions.
     """
-    if provider not in ("meraki", "cato", "panorama", "appgate", *_FMC_PROVIDERS):
+    if provider not in ("meraki", "cato", "panorama", "appgate", "opnsense", *_FMC_PROVIDERS):
         return []
     site_names = {s.get("id"): s.get("name") or s.get("id") or "" for s in snapshot.get("sites") or []}
     devices: list[dict[str, Any]] = []

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { TopologySourceTypeCounts } from '@/api/dashboard';
-import type { TopologySource } from '@/api/meraki';
+import { ORG_PROVIDERS, type TopologySource } from '@/api/meraki';
 
 import {
   availabilityRefOf,
@@ -45,7 +45,7 @@ function row(
 
 describe('availabilityRefOf', () => {
   it('maps an organization source to its provider and id', () => {
-    for (const type of ['meraki', 'cato', 'fmc', 'panorama', 'appgate'] as const) {
+    for (const type of ORG_PROVIDERS) {
       expect(availabilityRefOf(source({ type, id: 7, key: 'org:7' }))).toEqual({ provider: type, orgRef: 7 });
     }
   });

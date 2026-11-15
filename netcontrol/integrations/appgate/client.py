@@ -33,12 +33,12 @@ why a call was refused (a missing admin privilege, an unknown resource).
 from __future__ import annotations
 
 import asyncio
-import time
 import uuid
 from typing import Any
-from urllib.parse import urlsplit
 
 import httpx
+
+from netcontrol.integrations.http_common import RequestPacer, retry_delay, validate_https_host
 
 DEFAULT_TIMEOUT_SECONDS = 60.0
 # The admin API is served by the Controllers that also run the collective;
@@ -56,7 +56,6 @@ USER_AGENT = "Plexus-AppgateTopology/1.0"
 PAGE_SIZE = 500
 MAX_LIST_ITEMS = 20_000
 
-_MAX_RETRY_AFTER_SECONDS = 60.0
 _MAX_DETAIL_CHARS = 300
 
 
@@ -92,27 +91,7 @@ def validate_base_url(url: str) -> str:
     embedded user is allowed, and ``http`` is refused. Raises
     ``ValueError`` otherwise.
     """
-    cleaned = (url or "").strip()
-    if not cleaned:
-        raise ValueError("Appgate Controller address is required")
-    if "://" not in cleaned:
-        cleaned = f"https://{cleaned}"
-    parts = urlsplit(cleaned)
-    if parts.scheme != "https" or not parts.hostname:
-        raise ValueError("Appgate Controller address must be an https URL")
-    path = parts.path.rstrip("/")
-    if path.lower() == ADMIN_PATH:
-        path = ""
-    if parts.username or parts.password or parts.query or parts.fragment or path.strip("/"):
-        raise ValueError("Appgate Controller address must be the host only")
-    try:
-        port = parts.port
-    except ValueError:
-        raise ValueError("Appgate Controller address has an invalid port") from None
-    host = parts.hostname
-    if ":" in host:
-        host = f"[{host}]"
-    return f"https://{host}" + (f":{port}" if port else "")
+    return validate_https_host(url, "Appgate Controller", ignored_paths=(ADMIN_PATH,))
 
 
 def device_id(base_url: str, username: str) -> str:
@@ -191,9 +170,8 @@ class AppgateClient:
         self._client: httpx.AsyncClient | None = None
         self._token = ""
 
-        self._min_interval = 1.0 / max(0.1, float(requests_per_second))
+        self._pacer = RequestPacer(requests_per_second)
         self._lock = asyncio.Lock()
-        self._next_slot = 0.0
         # The negotiated peer API version, and what /admin/version answered.
         self.peer_version: int | None = None
         self.version_info: dict[str, Any] = {}
@@ -220,13 +198,6 @@ class AppgateClient:
                 transport=self._transport,
             )
         return self._client
-
-    async def _wait_for_slot(self) -> None:
-        now = time.monotonic()
-        start = max(now, self._next_slot)
-        self._next_slot = start + self._min_interval
-        if start > now:
-            await asyncio.sleep(start - now)
 
     async def _send(
         self, method: str, path: str, *, params: dict | None, body: dict | None, accept: str, auth: bool
@@ -256,7 +227,7 @@ class AppgateClient:
         attempt = 0
         while True:
             accept = peer_accept(self.peer_version) if auth and self.peer_version else "application/json"
-            await self._wait_for_slot()
+            await self._pacer.wait()
             resp = await self._send(method, path, params=params, body=body, accept=accept, auth=auth)
             if resp is not None and resp.status_code < 300:
                 if not resp.content:
@@ -287,15 +258,10 @@ class AppgateClient:
                 )
             attempt += 1
             self.stats["retries"] += 1
-            delay = min(2.0**attempt, 30.0)
             if rate_limited:
                 self.stats["rate_limited"] += 1
-                try:
-                    delay = float(resp.headers.get("Retry-After", delay)) if resp is not None else delay
-                except ValueError:
-                    pass
-                delay = min(max(delay, 1.0), _MAX_RETRY_AFTER_SECONDS)
-            await asyncio.sleep(delay)
+            retry_after = resp.headers.get("Retry-After") if resp is not None else None
+            await asyncio.sleep(retry_delay(attempt, rate_limited=rate_limited, retry_after=retry_after))
 
     # ── Version and login ──────────────────────────────────────────────────
 

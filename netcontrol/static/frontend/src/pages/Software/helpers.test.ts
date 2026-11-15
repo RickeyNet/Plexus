@@ -23,6 +23,7 @@ describe('sourceLabel', () => {
     expect(sourceLabel('fmc')).toBe('Cisco FMC');
     expect(sourceLabel('panorama')).toBe('Palo Alto Panorama');
     expect(sourceLabel('appgate')).toBe('Appgate SDP');
+    expect(sourceLabel('opnsense')).toBe('OPNsense');
     expect(sourceLabel('custom')).toBe('custom');
     expect(sourceLabel(null)).toBe('');
   });
