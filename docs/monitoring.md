@@ -107,7 +107,7 @@ Alerts come from these sources:
 | VPN tunnels down | `vpn_down` | Warning |
 | Route table changed between full reads | `route_churn` | Warning, critical for a change of 10 routes or more |
 | Alert rules | the rule's metric | the rule's severity |
-| SLA targets | `sla_<metric>` | see [SLA monitoring](sla-monitoring.md) |
+| SLA targets (of hosts, and of integration entities such as OPNsense gateways) | `sla_<metric>` | see [SLA monitoring](sla-monitoring.md) |
 | Baseline deviations, Meraki alerts, Cato egress findings, integration entities | various | see the linked guides |
 
 While an alert is unacknowledged, the same condition on the same host only

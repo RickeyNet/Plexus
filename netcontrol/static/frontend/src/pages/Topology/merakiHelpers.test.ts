@@ -740,6 +740,7 @@ describe("opnsense collection options", () => {
     expect(OPNSENSE_OPTION_TOGGLES.map((t) => t.label)).toEqual([
       "Gateways (status, loss, latency)",
       "VPN tunnels (IPsec, WireGuard, OpenVPN)",
+      "High availability (CARP)",
       "Routing table",
       "Security audit of installed packages",
       "Store config.xml as a config backup (the firewall must be an inventory host)",

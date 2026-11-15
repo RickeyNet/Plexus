@@ -13,8 +13,9 @@ and ``unknown`` when it is not monitored), ``reachable`` / ``ready`` /
 ``extract_entity_states`` reads one snapshot and returns what availability
 tracking keeps of it: one ``EntityState`` per device, site, uplink, tunnel,
 VPN connection, circuit, peering or HA / peer link, with that status mapped
-to ``up`` / ``degraded`` / ``down`` / ``unknown``. Pure: no database, no
-network.
+to ``up`` / ``degraded`` / ``down`` / ``unknown``, and the latency / jitter /
+loss the vendor reported for it (``metrics``, see ``METRIC_KEYS``). Pure: no
+database, no network.
 
 What is left out, because it is no entity whose availability means anything:
 WAN address nodes (their uplink edge is tracked instead), external CDP/LLDP
@@ -58,6 +59,11 @@ EDGE_STATES: dict[str, str] = {
     "unreachable": "down",
 }
 
+# Measurements a normaliser may put on an edge or node as ``metrics``
+# (an OPNsense gateway's dpinger loss, RTT and RTT deviation), and the
+# metric name each is stored and evaluated under by SLA targets.
+METRIC_KEYS: dict[str, str] = {"latency_ms": "latency", "jitter_ms": "jitter", "loss_pct": "packet_loss"}
+
 _SKIPPED_NODE_KINDS = frozenset({"wan", "external", "users", "user", "vpc", "vpn_peer"})
 _USER_KINDS = frozenset({"users", "user"})
 
@@ -97,6 +103,7 @@ class EntityState:
     model: str = ""
     host_id: int | None = None
     meta: dict[str, Any] = field(default_factory=dict)
+    metrics: dict[str, float] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -111,6 +118,7 @@ class EntityState:
             "model": self.model,
             "host_id": self.host_id,
             "meta": dict(self.meta),
+            "metrics": dict(self.metrics),
         }
 
 
@@ -124,6 +132,18 @@ def node_state(status: Any) -> str:
 
 def edge_state(status: Any) -> str:
     return EDGE_STATES.get(_text(status).lower(), "unknown")
+
+
+def entity_metrics(item: dict) -> dict[str, float]:
+    """The numeric ``METRIC_KEYS`` values of an edge's or node's ``metrics``."""
+    found = item.get("metrics")
+    if not isinstance(found, dict):
+        return {}
+    return {
+        key: float(value)
+        for key, value in found.items()
+        if key in METRIC_KEYS and isinstance(value, (int, float)) and not isinstance(value, bool)
+    }
 
 
 def _host_id(node: dict) -> int | None:
@@ -266,6 +286,7 @@ def extract_entity_states(provider: str, org_ref: int, snapshot: dict | None) ->
                 model=_text(node.get("model")),
                 host_id=_host_id(node),
                 meta={k: node[k] for k in ("kind", "ip", "serial") if _text(node.get(k))},
+                metrics=entity_metrics(node),
             )
         )
 
@@ -320,6 +341,7 @@ def extract_entity_states(provider: str, org_ref: int, snapshot: dict | None) ->
                 site=site_name(_text(device.get("site"))) if device else "",
                 model=label,
                 meta=meta,
+                metrics=entity_metrics(edge),
             )
         )
     return found

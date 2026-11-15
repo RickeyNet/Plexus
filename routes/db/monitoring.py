@@ -69,6 +69,7 @@ __all__ = [
     "rollup_sla_metrics",
     "get_sla_target_hosts",
     "record_sla_target_statuses",
+    "record_target_statuses",
     "get_sla_compliance",
     "get_sla_compliance_history",
 ]
@@ -1019,14 +1020,36 @@ async def create_sla_target(
     group_id: int | None = None,
     created_by: str = "",
     window_days: int = 30,
+    *,
+    provider: str = "",
+    org_ref: int | None = None,
+    entity_type: str = "",
+    entity_id: str = "",
 ) -> int:
+    """Create an SLA target. With ``provider`` it applies to the tracked
+    topology entities of that provider (narrowed by ``org_ref``,
+    ``entity_type`` and ``entity_id`` when set) instead of inventory hosts."""
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
             """INSERT INTO sla_targets
-               (name, metric, target_value, warning_value, host_id, group_id, created_by, window_days)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (name, metric, target_value, warning_value, host_id, group_id, created_by, window_days),
+               (name, metric, target_value, warning_value, host_id, group_id, created_by, window_days,
+                provider, org_ref, entity_type, entity_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                name,
+                metric,
+                target_value,
+                warning_value,
+                host_id,
+                group_id,
+                created_by,
+                window_days,
+                provider,
+                org_ref,
+                entity_type,
+                entity_id,
+            ),
         )
         await db.commit()
         return cursor.lastrowid
@@ -1035,7 +1058,20 @@ async def create_sla_target(
 
 
 async def update_sla_target(target_id: int, **kwargs) -> None:
-    allowed = {"name", "metric", "target_value", "warning_value", "enabled", "host_id", "group_id", "window_days"}
+    allowed = {
+        "name",
+        "metric",
+        "target_value",
+        "warning_value",
+        "enabled",
+        "host_id",
+        "group_id",
+        "window_days",
+        "provider",
+        "org_ref",
+        "entity_type",
+        "entity_id",
+    }
     fields = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
     if not fields:
         return
@@ -1641,24 +1677,59 @@ async def record_sla_target_statuses(results: list[dict], evaluated_at: str) -> 
     evaluate (a disabled or deleted target, a host that left the group).
 
     Returns ``results`` with ``previous_status`` ('' when new) on each."""
+    return await record_target_statuses(
+        results,
+        evaluated_at,
+        table="sla_target_status",
+        history_table="sla_target_status_history",
+        key_columns=("target_id", "host_id"),
+        status_columns=_SLA_STATUS_COLUMNS,
+    )
+
+
+# Key columns compared as integers; every other key column is text.
+_INT_KEY_COLUMNS = ("target_id", "host_id", "org_ref")
+
+
+def _status_key(row: dict, key_columns: tuple[str, ...]) -> tuple:
+    return tuple(int(row[c]) if c in _INT_KEY_COLUMNS else str(row[c]) for c in key_columns)
+
+
+async def record_target_statuses(
+    results: list[dict],
+    evaluated_at: str,
+    *,
+    table: str,
+    history_table: str,
+    key_columns: tuple[str, ...],
+    status_columns: tuple[str, ...],
+) -> list[dict]:
+    """One SLA evaluation pass into a latest-status table and its history
+    (``sla_target_status`` for inventory hosts, ``topology_sla_target_status``
+    for topology entities; the table names are constants of the callers).
+    ``key_columns`` identify one (target, subject) row and lead
+    ``status_columns``; the history rows carry the key, the metric, value,
+    status, previous status and window. Returns ``results`` with
+    ``previous_status`` ('' when new) and ``status_since`` on each."""
+    keys = ", ".join(key_columns)
     db = await _dbcore.get_db()
     try:
-        cursor = await db.execute("SELECT target_id, host_id, status, status_since FROM sla_target_status")
-        previous = {(int(r["target_id"]), int(r["host_id"])): r for r in rows_to_list(await cursor.fetchall())}
+        cursor = await db.execute(f"SELECT {keys}, status, status_since FROM {table}")
+        previous = {_status_key(r, key_columns): r for r in rows_to_list(await cursor.fetchall())}
         upserts = []
         history = []
         out = []
         for res in results:
-            prev = previous.get((int(res["target_id"]), int(res["host_id"])))
+            key = _status_key(res, key_columns)
+            prev = previous.get(key)
             prev_status = prev["status"] if prev else ""
             changed = prev_status != res["status"]
             since = evaluated_at if changed or not prev or not prev["status_since"] else prev["status_since"]
-            upserts.append((*(res[c] for c in _SLA_STATUS_COLUMNS), evaluated_at, since))
+            upserts.append((*(res[c] for c in status_columns), evaluated_at, since))
             if changed:
                 history.append(
                     (
-                        res["target_id"],
-                        res["host_id"],
+                        *(res[c] for c in key_columns),
                         res["metric"],
                         res["value"],
                         res["status"],
@@ -1670,36 +1741,28 @@ async def record_sla_target_statuses(results: list[dict], evaluated_at: str) -> 
                 )
             out.append({**res, "previous_status": prev_status, "status_since": since})
         if upserts:
+            updates = ", ".join(
+                f"{c} = excluded.{c}" for c in (*status_columns, "evaluated_at", "status_since") if c not in key_columns
+            )
             await db.executemany(
-                f"""INSERT INTO sla_target_status
-                    ({", ".join(_SLA_STATUS_COLUMNS)}, evaluated_at, status_since)
-                    VALUES ({", ".join("?" for _ in range(len(_SLA_STATUS_COLUMNS) + 2))})
-                    ON CONFLICT (target_id, host_id) DO UPDATE SET
-                        metric = excluded.metric,
-                        value = excluded.value,
-                        target_value = excluded.target_value,
-                        warning_value = excluded.warning_value,
-                        status = excluded.status,
-                        sample_count = excluded.sample_count,
-                        window_days = excluded.window_days,
-                        window_start = excluded.window_start,
-                        window_end = excluded.window_end,
-                        evaluated_at = excluded.evaluated_at,
-                        status_since = excluded.status_since""",
+                f"""INSERT INTO {table}
+                    ({", ".join(status_columns)}, evaluated_at, status_since)
+                    VALUES ({", ".join("?" for _ in range(len(status_columns) + 2))})
+                    ON CONFLICT ({keys}) DO UPDATE SET {updates}""",
                 upserts,
             )
         if history:
             await db.executemany(
-                """INSERT INTO sla_target_status_history
-                   (target_id, host_id, metric, value, status, previous_status,
-                    window_start, window_end, evaluated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                f"""INSERT INTO {history_table}
+                   ({keys}, metric, value, status, previous_status, window_start, window_end, evaluated_at)
+                   VALUES ({", ".join("?" for _ in range(len(key_columns) + 7))})""",
                 history,
             )
-        current = {(int(res["target_id"]), int(res["host_id"])) for res in results}
+        current = {_status_key(res, key_columns) for res in results}
         stale = [key for key in previous if key not in current]
         if stale:
-            await db.executemany("DELETE FROM sla_target_status WHERE target_id = ? AND host_id = ?", stale)
+            where = " AND ".join(f"{c} = ?" for c in key_columns)
+            await db.executemany(f"DELETE FROM {table} WHERE {where}", stale)
         await db.commit()
     finally:
         await db.close()

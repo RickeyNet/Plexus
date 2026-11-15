@@ -35,6 +35,7 @@ import {
   edgeProtocolLabel,
   formatBps,
   MAP_PANEL_MAX_WIDTH,
+  nodeKindLabel,
   providerLabel,
   providerScopeName,
   providerSourceName,
@@ -450,7 +451,7 @@ function OverviewTab(props: {
             ))}
           </select>
         ) : (
-          <span>{category || 'unknown'}</span>
+          <span>{nodeKindLabel(category) || 'unknown'}</span>
         )}
         {node.model && (
           <>
@@ -580,7 +581,7 @@ function OverviewTab(props: {
         </>
       )}
 
-      {!node.in_inventory && node.ip && !['wan', 'vpn_peer', 'cloud', 'users', 'user', 'vpc'].includes(node.meraki?.kind ?? '') && (
+      {!node.in_inventory && node.ip && !['wan', 'vpn_peer', 'vpn_server', 'cloud', 'users', 'user', 'vpc'].includes(node.meraki?.kind ?? '') && (
         <button
           type="button"
           className="btn btn-primary btn-sm"

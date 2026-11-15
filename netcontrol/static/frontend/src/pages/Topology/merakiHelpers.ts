@@ -306,6 +306,7 @@ export const FALLBACK_OPNSENSE_OPTIONS: OpnsenseBuildOptions = {
   verify_tls: true,
   include_gateways: true,
   include_vpn: true,
+  include_ha: true,
   include_routes: true,
   include_firmware_audit: true,
   config_backup: true,
@@ -329,6 +330,11 @@ export const OPNSENSE_OPTION_TOGGLES: {
     key: "include_vpn",
     label: "VPN tunnels (IPsec, WireGuard, OpenVPN)",
     hint: "IPsec phase 1 and phase 2, WireGuard peers and OpenVPN instances with their state. Keys are never read.",
+  },
+  {
+    key: "include_ha",
+    label: "High availability (CARP)",
+    hint: "CARP virtual IPs with their state (master, backup), maintenance mode and demotion.",
   },
   {
     key: "include_routes",
@@ -490,6 +496,7 @@ const PHASE_LABELS: Record<string, string> = {
   "opnsense interfaces": "Reading interfaces",
   "opnsense gateways": "Reading gateways",
   "opnsense vpn": "Reading VPN tunnels",
+  "opnsense ha": "Reading high availability (CARP) status",
   "opnsense routes": "Reading the routing table",
   "opnsense firmware": "Reading the firmware version and security audit",
   "opnsense config": "Reading config.xml",

@@ -153,6 +153,8 @@ export interface OpnsenseBuildOptions {
   include_gateways: boolean;
   /** IPsec, WireGuard and OpenVPN tunnels. */
   include_vpn: boolean;
+  /** CARP virtual IPs and their state. */
+  include_ha: boolean;
   include_routes: boolean;
   /** The firmware security audit of the installed packages. */
   include_firmware_audit: boolean;

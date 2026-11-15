@@ -20,11 +20,16 @@ import {
   type SlaTargetCreate,
 } from '@/api/monitoring';
 import { usePendingKeys } from '@/lib/usePendingKeys';
+import { providerLabel } from '@/pages/Topology/helpers';
+
+import { ENTITY_TYPE_LABELS, INTEGRATION_PROVIDERS, slaTargetScopeLabel, type TargetScope } from './slaTargetScope';
 
 // SLA targets are configuration (Monitoring -> Configure -> SLA Targets). The
 // server evaluates every enabled target over its window after each hourly
 // rollup (a group target covers the group's sub-groups too); the SLA tab
-// reports the result, and a warn or breach opens an alert.
+// reports the result, and a warn or breach opens an alert. A target of an
+// integration covers the entities that integration's collections track
+// (gateway uplinks, tunnels...) instead of inventory hosts.
 
 const DEFAULT_WINDOW_DAYS = 30;
 
@@ -50,7 +55,11 @@ export function SlaTargetsTab() {
     evaluateMut.mutate(undefined, {
       onSuccess: (r) => {
         const e = r.evaluation;
-        void alert(`Evaluated ${e.evaluated} target/host pairs: ${e.met} met, ${e.warn} warning, ${e.breach} breach, ${e.no_data} no data. ${e.alerts} alerts raised.`);
+        const topo = r.topology_evaluation;
+        const topoText = topo?.evaluated
+          ? ` Integration entities: ${topo.evaluated} evaluated, ${topo.met} met, ${topo.warn} warning, ${topo.breach} breach, ${topo.no_data} no data, ${topo.alerts} alerts raised.`
+          : '';
+        void alert(`Evaluated ${e.evaluated} target/host pairs: ${e.met} met, ${e.warn} warning, ${e.breach} breach, ${e.no_data} no data. ${e.alerts} alerts raised.${topoText}`);
       },
       onError: (e) => { void alert({ message: (e as Error).message, variant: 'error' }); },
     });
@@ -86,7 +95,7 @@ export function SlaTargetsTab() {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {targets.map((t) => {
-            const scope = t.host_name ? `Host: ${t.host_name}` : t.group_name ? `Group: ${t.group_name}` : 'Global';
+            const scope = slaTargetScopeLabel(t);
             return (
               <div key={t.id} className="card card-sm">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
@@ -137,9 +146,12 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
   const [targetValue, setTargetValue] = useState('99.9');
   const [warningValue, setWarningValue] = useState('99.0');
   const [windowDays, setWindowDays] = useState(String(DEFAULT_WINDOW_DAYS));
-  const [scope, setScope] = useState<'global' | 'group' | 'host'>('global');
+  const [scope, setScope] = useState<TargetScope>('global');
   const [groupId, setGroupId] = useState('');
   const [hostId, setHostId] = useState('');
+  const [provider, setProvider] = useState('');
+  const [entityType, setEntityType] = useState('');
+  const [providerError, setProviderError] = useState('');
   const [nameError, setNameError] = useState('');
   const [windowError, setWindowError] = useState('');
   const [saveError, setSaveError] = useState('');
@@ -149,14 +161,16 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
   if (target !== prevTarget || isCreate !== prevIsCreate) {
     setPrevTarget(target);
     setPrevIsCreate(isCreate);
-    setNameError(''); setWindowError(''); setSaveError('');
+    setNameError(''); setWindowError(''); setProviderError(''); setSaveError('');
+    setProvider(target?.provider ?? ''); setEntityType(target?.entity_type ?? '');
     if (target) {
       setName(target.name);
       setMetric(target.metric);
       setTargetValue(String(target.target_value));
       setWarningValue(String(target.warning_value));
       setWindowDays(String(target.window_days ?? DEFAULT_WINDOW_DAYS));
-      if (target.host_id != null) { setScope('host'); setHostId(String(target.host_id)); setGroupId(''); }
+      if (target.provider) { setScope('integration'); setHostId(''); setGroupId(''); }
+      else if (target.host_id != null) { setScope('host'); setHostId(String(target.host_id)); setGroupId(''); }
       else if (target.group_id != null) { setScope('group'); setGroupId(String(target.group_id)); setHostId(''); }
       else { setScope('global'); setHostId(''); setGroupId(''); }
     } else if (isCreate) {
@@ -172,9 +186,11 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
     const days = parseInt(windowDays, 10);
     const nameErr = name.trim() ? '' : 'Name is required';
     const windowErr = !Number.isFinite(days) || days < 1 || days > 365 ? 'Window must be 1 to 365 days' : '';
+    const providerErr = scope === 'integration' && !provider ? 'Select an integration' : '';
     setNameError(nameErr);
     setWindowError(windowErr);
-    if (nameErr || windowErr) return;
+    setProviderError(providerErr);
+    if (nameErr || windowErr || providerErr) return;
     const data: SlaTargetCreate = {
       name: name.trim(),
       metric,
@@ -183,6 +199,8 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
       window_days: days,
       host_id: scope === 'host' ? (Number.isFinite(parseInt(hostId, 10)) ? parseInt(hostId, 10) : null) : null,
       group_id: scope === 'group' ? (Number.isFinite(parseInt(groupId, 10)) ? parseInt(groupId, 10) : null) : null,
+      provider: scope === 'integration' ? provider : '',
+      entity_type: scope === 'integration' ? entityType : '',
     };
     if (target) {
       updateMut.mutate({ id: target.id, data }, {
@@ -268,12 +286,45 @@ function SlaTargetFormModal({ target, isCreate, onClose }: { target: SlaTarget |
         </div>
         <div className="form-group">
           <label className="form-label" htmlFor={`${formId}-scope`}>Scope</label>
-          <select id={`${formId}-scope`} className="form-select" value={scope} onChange={(e) => setScope(e.target.value as 'global' | 'group' | 'host')}>
+          <select id={`${formId}-scope`} className="form-select" value={scope} onChange={(e) => setScope(e.target.value as TargetScope)}>
             <option value="global">Global (all hosts)</option>
             <option value="group">Group</option>
             <option value="host">Host</option>
+            <option value="integration">Integration (gateways, tunnels, sites...)</option>
           </select>
         </div>
+        {scope === 'integration' && (
+          <>
+            <div className="form-group">
+              <label className="form-label" htmlFor={`${formId}-provider`}>Integration</label>
+              <select
+                id={`${formId}-provider`}
+                className="form-select"
+                value={provider}
+                onChange={(e) => { setProvider(e.target.value); setProviderError(''); }}
+                aria-invalid={!!providerError}
+              >
+                <option value="">Select integration…</option>
+                {INTEGRATION_PROVIDERS.map((p) => (
+                  <option key={p} value={p}>{providerLabel(p)}</option>
+                ))}
+              </select>
+              <FieldError>{providerError}</FieldError>
+            </div>
+            <div className="form-group">
+              <label className="form-label" htmlFor={`${formId}-entity-type`}>Applies to</label>
+              <select id={`${formId}-entity-type`} className="form-select" value={entityType} onChange={(e) => setEntityType(e.target.value)}>
+                <option value="">Everything the integration tracks</option>
+                {Object.entries(ENTITY_TYPE_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+              <div className="text-muted" style={{ fontSize: '0.8em', marginTop: '0.25rem' }}>
+                Uptime works for every tracked entity. Latency, jitter and packet loss need an integration that reports them (OPNsense gateways); others show no data.
+              </div>
+            </div>
+          </>
+        )}
         {scope === 'group' && (
           <div className="form-group">
             <label className="form-label" htmlFor={`${formId}-group`}>Group</label>

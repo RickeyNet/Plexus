@@ -149,6 +149,17 @@ Mutes of the entities the integrations collect (Meraki, Cato, FMC, Panorama, App
 | POST   | `/api/availability/topology/mutes` | `monitoring` feature, audited. `provider`, `org_ref`, `scope`, `reason` (1 to 500 characters) and, for `entity`, `entity_type` and `entity_id`, or for `site`, `site`. `404` when no tracked entity matches. Muting the same target again updates the reason. Returns `201` with `mute` and `acknowledged` (open host alerts acknowledged as `muted`) |
 | DELETE | `/api/availability/topology/mutes/{id}` | `monitoring` feature, audited. `404` when absent |
 
+### Integration entity metrics and SLA
+Latency, jitter and loss reported by an integration for an entity (OPNsense gateways: dpinger RTT, RTT deviation as jitter, loss), and SLA targets of integration entities. See [sla-monitoring.md](sla-monitoring.md#targets-of-integration-entities).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET    | `/api/availability/topology/metrics` | `monitoring` feature. `provider`, `org_ref`, `entity_type`, `entity_id` (all required), `days` (1 to 365, default 7), `limit` (raw samples, 1 to 50000, default 5000). Returns `window_start`, `window_end` (UTC), `summary` (`avg_latency_ms`, `jitter_ms`, `avg_packet_loss_pct` and their `*_samples` counts over the window), `samples` (the raw samples still retained: `sampled_at`, `latency_ms`, `jitter_ms`, `loss_pct`, oldest first) and `daily` (one row per UTC `day` with `latency`, `jitter`, `packet_loss` each `{avg, min, max, samples}`; kept for `sla_retention_days`) |
+| GET    | `/api/sla/compliance?scope=topology` | Latest status of every (target, entity) of the targets that have a `provider`, worst first: `target_id`, `target_name`, `provider`, `org_ref`, `entity_type`, `entity_id`, `name`, `site`, `metric`, `value`, `target_value`, `warning_value`, `status`, `sample_count`, `window_days`, `window_start`, `window_end`, `evaluated_at`, `status_since`. Filters `provider`, `org_ref`, `entity_type`, `entity_id`, `target_id`. Without `scope` (or `scope=hosts`) the host rows as before |
+| GET    | `/api/sla/compliance/history?scope=topology` | Status changes of those targets, newest first; filters `target_id`, `provider`, `org_ref`, `entity_id`, `limit` |
+
+`POST /api/sla/targets` and `PUT /api/sla/targets/{id}` accept `provider` (a source type such as `opnsense`), `org_ref`, `entity_type` and `entity_id`: a target with a `provider` applies to the tracked entities of that provider (narrowed by the others when set) instead of hosts, and must not have `host_id` or `group_id` (400). `GET /api/sla/targets` returns these fields. `GET /api/availability/topology/summary` gives each entity `avg_latency_ms`, `jitter_ms`, `avg_packet_loss_pct` (window means, `null` without samples) and `sla_status` (the worst latest status of its targets, `null` without one). `POST /api/sla/evaluate` also returns `topology_evaluation` (counts as `evaluation`, plus `muted`).
+
 `GET /api/availability/topology/summary` marks each entity with `muted` and `mute` (`id`, `scope`, `site`, `reason`, `created_by`, `created_at`, or null) and returns a `muted` total; its `up`, `degraded`, `down`, `unknown`, `avg_uptime_pct` and `total_outages` leave muted entities out. In `GET /api/dashboard`, `topology.entity_counts`, `by_provider` and `by_source` count a muted down or degraded entity under `muted`, and `problems` and `problem_count` leave it out.
 
 ### Meraki alerts

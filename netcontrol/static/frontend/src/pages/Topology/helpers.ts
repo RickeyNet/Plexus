@@ -325,7 +325,38 @@ export function isRemoteUserNode(node: TopologyNode): boolean {
   return node.source === 'meraki' && node.meraki?.kind === 'user';
 }
 
+/**
+ * Integration node kinds whose snapshot key does not read as words. Any other
+ * kind (`appliance`, `wan`, `cloud`...) is shown as it is.
+ */
+const NODE_KIND_LABELS: Record<string, string> = {
+  vpn_peer: 'VPN peer',
+  vpn_server: 'VPN server',
+};
+
+/** Display name of an integration node kind (or a node's role), for tooltips, the details panel and search. */
+export function nodeKindLabel(kind?: string | null): string {
+  const key = String(kind ?? '');
+  return NODE_KIND_LABELS[key] ?? key;
+}
+
+// Integration node kinds drawn with a device icon, not a bare shape: a VPN
+// server (an OpenVPN instance on an OPNsense firewall) is a service, drawn
+// as a server.
+const KIND_ICON: Record<string, string> = {
+  vpn_server: ICON_MAP.server,
+};
+
+/** The icon an integration node kind is drawn with, if it has one (the legend shows the same icon). */
+export function nodeKindIconUrl(kind?: string | null): string | undefined {
+  return KIND_ICON[String(kind ?? '')];
+}
+
 export function nodeIconUrl(node: TopologyNode): string | undefined {
+  if (node.source === 'meraki') {
+    const kindIcon = nodeKindIconUrl(node.meraki?.kind);
+    if (kindIcon) return kindIcon;
+  }
   const cat = (node.device_category || '').toLowerCase();
   if (cat && ICON_MAP[cat]) return ICON_MAP[cat];
   if (node.device_type && FIREWALL_DEVICE_TYPES.has(node.device_type)) return ICON_MAP.firewall;
@@ -399,11 +430,35 @@ export function edgeProtocolColor(protocol: string | null | undefined, tc: TopoT
   return tc.edgeCdp;
 }
 
-const DOWN_EDGE_STATUSES = new Set(['unreachable', 'failed']);
+/**
+ * The status tone of an integration link (a VPN tunnel, WAN uplink or cloud
+ * attachment): `danger` when its integration reports it down, `warning`
+ * when degraded (an OPNsense gateway with loss or delay, a stale WireGuard
+ * peer, a tunnel of a degraded Cato site). Null for a link that is up or has
+ * no status (`active`, `ready`, `reachable`, `connecting`, `unknown`...),
+ * which draws in its protocol's colour.
+ */
+export type EdgeStatusTone = 'danger' | 'warning';
+
+const EDGE_STATUS_TONES: Record<string, EdgeStatusTone> = {
+  unreachable: 'danger',
+  failed: 'danger',
+  degraded: 'warning',
+};
+
+export function edgeStatusTone(edge: TopologyEdge): EdgeStatusTone | null {
+  return EDGE_STATUS_TONES[String(edge.status ?? '').toLowerCase()] ?? null;
+}
 
 /** A Meraki VPN tunnel or WAN uplink that the Dashboard reports as down. */
 export function isEdgeDown(edge: TopologyEdge): boolean {
-  return DOWN_EDGE_STATUSES.has(String(edge.status ?? '').toLowerCase());
+  return edgeStatusTone(edge) === 'danger';
+}
+
+/** The colour a down or degraded integration link is drawn in, from the theme's status colours; null for a healthy one. */
+export function edgeStatusLinkColor(edge: TopologyEdge, status: TopoStatusColors): EdgeColor | null {
+  const tone = edgeStatusTone(edge);
+  return tone ? solidEdge(status[tone], 0.9) : null;
 }
 
 // ── Utilization color ramp ────────────────────────────────────────────────
@@ -559,7 +614,7 @@ export function nodeTitle(node: TopologyNode): string {
     const site = node.meraki?.site_name ? `\nSite: ${node.meraki.site_name}` : '';
     // An AWS node's site already is its VPC; another integration's names it here.
     const vpcInfo = instance?.vpc && node.meraki?.provider !== 'aws' ? `\nVPC: ${instance.vpc}` : '';
-    return `${node.label}\n${node.ip || ''}\n${providerLabel(node.meraki?.provider)} ${node.meraki?.kind ?? 'device'} · ${node.meraki?.status ?? 'unknown'}${modelInfo}${site}${instanceInfo}${vpcInfo}\nDrag to move · Right-click to unpin`;
+    return `${node.label}\n${node.ip || ''}\n${providerLabel(node.meraki?.provider)} ${nodeKindLabel(node.meraki?.kind) || 'device'} · ${node.meraki?.status ?? 'unknown'}${modelInfo}${site}${instanceInfo}${vpcInfo}\nDrag to move · Right-click to unpin`;
   }
   const vpcInfo = instance?.vpc ? `\nVPC: ${instance.vpc}` : '';
   return `${node.label}\n${node.ip || ''}\nType: ${node.device_type ?? ''}${categoryInfo}${modelInfo}${node.group_name ? '\nGroup: ' + node.group_name : ''}${node.in_inventory ? '' : '\n(External)'}${ipamInfo}${instanceInfo}${vpcInfo}\nDrag to move · Right-click to unpin`;
@@ -653,6 +708,8 @@ export function nodeSearchText(node: TopologyNode): string {
     node.meraki?.site_name,
     node.meraki?.instance_id,
     node.instance?.id,
+    // "VPN server" / "VPN peer": the kinds whose names say what they are.
+    NODE_KIND_LABELS[node.meraki?.kind ?? ''],
   ]
     .filter(Boolean)
     .join(' ')

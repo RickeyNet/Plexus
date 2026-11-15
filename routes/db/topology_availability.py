@@ -15,6 +15,11 @@ so uptime is time-weighted from the transitions, never counted per sample.
 Time in ``unknown`` (not collected, pending, not in the last collection) is
 left out of the uptime ratio; ``degraded`` counts as available.
 
+Migration 0091: ``topology_entity_metrics`` and
+``topology_entity_metric_daily`` (the latency / jitter / loss a vendor
+reports for an entity, raw and per day) and ``topology_sla_target_status``
+with its history (SLA targets of topology entities).
+
 Timestamps are UTC ``YYYY-MM-DD HH:MM:SS`` text.
 """
 
@@ -25,8 +30,11 @@ from collections.abc import Collection, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from netcontrol.integrations.availability import METRIC_KEYS
+
 import routes.database as _dbcore
 from routes.database import rows_to_list
+from routes.db.monitoring import record_target_statuses
 
 __all__ = [
     "MUTE_SCOPES",
@@ -46,6 +54,14 @@ __all__ = [
     "get_topology_transitions",
     "purge_topology_availability",
     "topology_uptime",
+    "TOPOLOGY_SLA_STATUS_COLUMNS",
+    "record_topology_entity_metrics",
+    "get_topology_entity_metric_values",
+    "get_topology_entity_metric_history",
+    "purge_topology_entity_metrics",
+    "record_topology_sla_target_statuses",
+    "get_topology_sla_compliance",
+    "get_topology_sla_compliance_history",
 ]
 
 _FMT = "%Y-%m-%d %H:%M:%S"
@@ -861,6 +877,342 @@ async def get_topology_transitions(
                 WHERE {where}
                 ORDER BY t.transition_at DESC, t.id DESC LIMIT ?""",
             (window_start, *params, max(1, int(limit))),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+# ── Metrics (latency / jitter / loss) ────────────────────────────────────────
+#
+# Migration 0091. A vendor that reports a measurement of an entity (an
+# OPNsense gateway's dpinger loss, RTT and RTT deviation) puts it on the
+# snapshot edge or node as ``metrics`` (``METRIC_KEYS``). Each collection
+# writes one raw ``topology_entity_metrics`` row per entity with a value,
+# and adds the values to that entity's ``topology_entity_metric_daily`` row
+# of the day (count, sum, sum of squares, min, max). Raw rows are purged
+# with the monitoring retention, daily rows with the SLA retention, so a
+# window longer than the raw retention is read from the daily rows.
+
+
+def _metric_value(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+async def record_topology_entity_metrics(
+    provider: str,
+    org_ref: int,
+    samples: list[dict],
+    *,
+    now: str | None = None,
+) -> int:
+    """Store one collection's measurements: ``samples`` are ``{"entity_type",
+    "entity_id", "metrics": {"latency_ms", "jitter_ms", "loss_pct"}}`` (a
+    missing or non-numeric value is skipped). Returns the raw rows written."""
+    now = now or _now()
+    day = now[:10]
+    raw: list[tuple] = []
+    daily: list[tuple] = []
+    for sample in samples:
+        metrics = sample.get("metrics") or {}
+        values = {key: _metric_value(metrics.get(key)) for key in METRIC_KEYS}
+        if all(v is None for v in values.values()):
+            continue
+        key = (str(provider), int(org_ref), str(sample["entity_type"]), str(sample["entity_id"]))
+        raw.append((*key, now, values["latency_ms"], values["jitter_ms"], values["loss_pct"]))
+        for metric_key, metric in METRIC_KEYS.items():
+            value = values[metric_key]
+            if value is not None:
+                daily.append((*key, day, metric, 1, value, value * value, value, value))
+    if not raw:
+        return 0
+    db = await _dbcore.get_db()
+    try:
+        await db.executemany(
+            """INSERT INTO topology_entity_metrics
+               (provider, org_ref, entity_type, entity_id, sampled_at, latency_ms, jitter_ms, loss_pct)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            raw,
+        )
+        await db.executemany(
+            """INSERT INTO topology_entity_metric_daily
+               (provider, org_ref, entity_type, entity_id, day, metric,
+                sample_count, sum_value, sum_sq, min_value, max_value)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT (provider, org_ref, entity_type, entity_id, day, metric) DO UPDATE SET
+                   sample_count = topology_entity_metric_daily.sample_count + excluded.sample_count,
+                   sum_value = topology_entity_metric_daily.sum_value + excluded.sum_value,
+                   sum_sq = topology_entity_metric_daily.sum_sq + excluded.sum_sq,
+                   min_value = LEAST(topology_entity_metric_daily.min_value, excluded.min_value),
+                   max_value = GREATEST(topology_entity_metric_daily.max_value, excluded.max_value)""",
+            daily,
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    return len(raw)
+
+
+def _metric_window(days: int, now: str | None) -> tuple[str, str, str]:
+    """``(window_start, first_whole_day, window_end)`` of the last ``days``:
+    the raw samples cover the partial first day, the daily rows every day
+    from ``first_whole_day`` on (today's row is kept up to date as samples
+    arrive)."""
+    window_start, window_end = _window(days, now)
+    start = _parse(window_start) or datetime.now(UTC).replace(tzinfo=None)
+    floor = start.replace(hour=0, minute=0, second=0, microsecond=0)
+    first_day = floor if floor == start else floor + timedelta(days=1)
+    return window_start, first_day.strftime("%Y-%m-%d"), window_end
+
+
+def _metric_stats(sums: dict[str, list[float]]) -> dict[str, Any]:
+    """Mean latency, mean jitter and mean loss with their sample counts from
+    ``{metric: [count, sum]}``."""
+
+    def mean(metric: str) -> float | None:
+        count, total = sums.get(metric, [0, 0.0])
+        return round(total / count, 2) if count else None
+
+    return {
+        "avg_latency_ms": mean("latency"),
+        "jitter_ms": mean("jitter"),
+        "avg_packet_loss_pct": mean("packet_loss"),
+        "latency_samples": int(sums.get("latency", [0, 0.0])[0]),
+        "jitter_samples": int(sums.get("jitter", [0, 0.0])[0]),
+        "packet_loss_samples": int(sums.get("packet_loss", [0, 0.0])[0]),
+    }
+
+
+async def get_topology_entity_metric_values(
+    days: int = 30,
+    *,
+    now: str | None = None,
+    provider: str | None = None,
+    org_ref: int | None = None,
+    entity_type: str | None = None,
+    entity_id: str | None = None,
+) -> dict[str, Any]:
+    """Per entity with a measurement in the last ``days``: mean latency, mean
+    jitter (the mean of the jitter the vendor reported per sample, e.g.
+    dpinger's RTT deviation) and mean packet loss, with sample counts.
+    ``{"window_start", "window_end", "entities": {(provider, org_ref,
+    entity_type, entity_id): values}}``."""
+    window_start, first_day, window_end = _metric_window(days, now)
+    clauses, params = _filters("m", provider, org_ref, entity_type, entity_id)
+    extra = "".join(f" AND {c}" for c in clauses)
+    sums: dict[tuple, dict[str, list[float]]] = {}
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(
+            f"""SELECT m.provider, m.org_ref, m.entity_type, m.entity_id,
+                       COUNT(m.latency_ms) AS latency_n, COALESCE(SUM(m.latency_ms), 0) AS latency_sum,
+                       COUNT(m.jitter_ms) AS jitter_n, COALESCE(SUM(m.jitter_ms), 0) AS jitter_sum,
+                       COUNT(m.loss_pct) AS loss_n, COALESCE(SUM(m.loss_pct), 0) AS loss_sum
+                FROM topology_entity_metrics m
+                WHERE m.sampled_at >= ? AND m.sampled_at < ? AND m.sampled_at <= ?{extra}
+                GROUP BY m.provider, m.org_ref, m.entity_type, m.entity_id""",
+            (window_start, f"{first_day} 00:00:00", window_end, *params),
+        )
+        for r in rows_to_list(await cursor.fetchall()):
+            entry = sums.setdefault(_key(r), {})
+            for metric, prefix in (("latency", "latency"), ("jitter", "jitter"), ("packet_loss", "loss")):
+                entry[metric] = [int(r[f"{prefix}_n"] or 0), float(r[f"{prefix}_sum"] or 0)]
+        cursor = await db.execute(
+            f"""SELECT m.provider, m.org_ref, m.entity_type, m.entity_id, m.metric,
+                       SUM(m.sample_count) AS n, SUM(m.sum_value) AS s
+                FROM topology_entity_metric_daily m
+                WHERE m.day >= ? AND m.day <= ?{extra}
+                GROUP BY m.provider, m.org_ref, m.entity_type, m.entity_id, m.metric""",
+            (first_day, window_end[:10], *params),
+        )
+        for r in rows_to_list(await cursor.fetchall()):
+            entry = sums.setdefault(_key(r), {})
+            count, total = entry.get(str(r["metric"]), [0, 0.0])
+            entry[str(r["metric"])] = [count + int(r["n"] or 0), total + float(r["s"] or 0)]
+    finally:
+        await db.close()
+    return {
+        "window_start": window_start,
+        "window_end": window_end,
+        "entities": {key: _metric_stats(entry) for key, entry in sums.items()},
+    }
+
+
+async def get_topology_entity_metric_history(
+    provider: str,
+    org_ref: int,
+    entity_type: str,
+    entity_id: str,
+    days: int = 7,
+    *,
+    now: str | None = None,
+    limit: int = 5000,
+) -> dict[str, Any]:
+    """The measurements of one entity: the raw samples of the last ``days``
+    still retained (oldest first, at most ``limit``), one row per day from
+    the daily rollups (mean, min and max per metric), and the window
+    averages (``summary``)."""
+    window_start, window_end = _window(days, now)
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(
+            """SELECT sampled_at, latency_ms, jitter_ms, loss_pct FROM topology_entity_metrics
+               WHERE provider = ? AND org_ref = ? AND entity_type = ? AND entity_id = ?
+                 AND sampled_at >= ? AND sampled_at <= ?
+               ORDER BY sampled_at, id LIMIT ?""",
+            (provider, int(org_ref), entity_type, entity_id, window_start, window_end, max(1, int(limit))),
+        )
+        samples = rows_to_list(await cursor.fetchall())
+        cursor = await db.execute(
+            """SELECT day, metric, sample_count, sum_value, min_value, max_value FROM topology_entity_metric_daily
+               WHERE provider = ? AND org_ref = ? AND entity_type = ? AND entity_id = ?
+                 AND day >= ? AND day <= ?
+               ORDER BY day, metric""",
+            (provider, int(org_ref), entity_type, entity_id, window_start[:10], window_end[:10]),
+        )
+        rollups = rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+    by_day: dict[str, dict[str, Any]] = {}
+    for r in rollups:
+        count = int(r["sample_count"] or 0)
+        by_day.setdefault(str(r["day"]), {"day": str(r["day"])})[str(r["metric"])] = {
+            "avg": round(float(r["sum_value"] or 0) / count, 2) if count else None,
+            "min": r["min_value"],
+            "max": r["max_value"],
+            "samples": count,
+        }
+    values = await get_topology_entity_metric_values(
+        days, now=window_end, provider=provider, org_ref=org_ref, entity_type=entity_type, entity_id=entity_id
+    )
+    return {
+        "provider": provider,
+        "org_ref": int(org_ref),
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "period_days": int(days),
+        "window_start": window_start,
+        "window_end": window_end,
+        "summary": values["entities"].get((provider, int(org_ref), entity_type, entity_id)) or _metric_stats({}),
+        "samples": samples,
+        "daily": list(by_day.values()),
+    }
+
+
+async def purge_topology_entity_metrics(raw_retention_days: int, rollup_retention_days: int) -> int:
+    """Delete raw samples older than ``raw_retention_days``, and daily rows
+    and topology SLA status history older than ``rollup_retention_days``.
+    Returns the number of metric rows deleted."""
+    now = datetime.now(UTC).replace(tzinfo=None)
+    raw_cutoff = _fmt(now - timedelta(days=max(1, int(raw_retention_days))))
+    rollup_cutoff = _fmt(now - timedelta(days=max(1, int(rollup_retention_days))))
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute("DELETE FROM topology_entity_metrics WHERE sampled_at < ?", (raw_cutoff,))
+        deleted = cursor.rowcount or 0
+        cursor = await db.execute("DELETE FROM topology_entity_metric_daily WHERE day < ?", (rollup_cutoff[:10],))
+        deleted += cursor.rowcount or 0
+        await db.execute("DELETE FROM topology_sla_target_status_history WHERE evaluated_at < ?", (rollup_cutoff,))
+        await db.commit()
+        return deleted
+    finally:
+        await db.close()
+
+
+# ── SLA targets of topology entities ─────────────────────────────────────────
+#
+# A row of ``sla_targets`` with a ``provider`` (migration 0091) applies to
+# the tracked entities of that provider (``org_ref``, ``entity_type`` and
+# ``entity_id`` narrow it when set). It is evaluated with the host targets
+# by the scheduled SLA pass (``netcontrol.routes.topology_sla``); the
+# results are kept here.
+
+TOPOLOGY_SLA_STATUS_COLUMNS = (
+    "target_id",
+    "provider",
+    "org_ref",
+    "entity_type",
+    "entity_id",
+    "name",
+    "site",
+    "metric",
+    "value",
+    "target_value",
+    "warning_value",
+    "status",
+    "sample_count",
+    "window_days",
+    "window_start",
+    "window_end",
+)
+_TOPOLOGY_SLA_KEY = ("target_id", "provider", "org_ref", "entity_type", "entity_id")
+
+
+async def record_topology_sla_target_statuses(results: list[dict], evaluated_at: str) -> list[dict]:
+    """Store one evaluation pass of the topology targets (see
+    ``record_target_statuses``): the latest status per (target, entity), a
+    history row per change, the rows not evaluated this pass dropped."""
+    return await record_target_statuses(
+        results,
+        evaluated_at,
+        table="topology_sla_target_status",
+        history_table="topology_sla_target_status_history",
+        key_columns=_TOPOLOGY_SLA_KEY,
+        status_columns=TOPOLOGY_SLA_STATUS_COLUMNS,
+    )
+
+
+async def get_topology_sla_compliance(
+    provider: str | None = None,
+    org_ref: int | None = None,
+    entity_type: str | None = None,
+    entity_id: str | None = None,
+    target_id: int | None = None,
+) -> list[dict]:
+    """The latest evaluation of every (topology target, entity), worst first."""
+    clauses, params = _filters("s", provider, org_ref, entity_type, entity_id)
+    if target_id is not None:
+        clauses.append("s.target_id = ?")
+        params.append(int(target_id))
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(
+            f"""SELECT s.*, t.name AS target_name FROM topology_sla_target_status s
+                JOIN sla_targets t ON t.id = s.target_id
+                {where}
+                ORDER BY CASE s.status WHEN 'breach' THEN 0 WHEN 'warn' THEN 1 WHEN 'met' THEN 2 ELSE 3 END,
+                         s.provider, s.org_ref, s.name, t.name""",
+            tuple(params),
+        )
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def get_topology_sla_compliance_history(
+    target_id: int | None = None,
+    provider: str | None = None,
+    org_ref: int | None = None,
+    entity_id: str | None = None,
+    limit: int = 100,
+) -> list[dict]:
+    """Status changes of the topology targets, newest first."""
+    clauses, params = _filters("x", provider, org_ref, None, entity_id)
+    if target_id is not None:
+        clauses.append("x.target_id = ?")
+        params.append(int(target_id))
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(
+            f"""SELECT x.*, t.name AS target_name FROM topology_sla_target_status_history x
+                JOIN sla_targets t ON t.id = x.target_id
+                {where}
+                ORDER BY x.id DESC LIMIT ?""",
+            (*params, max(1, int(limit))),
         )
         return rows_to_list(await cursor.fetchall())
     finally:
