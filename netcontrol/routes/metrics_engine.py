@@ -59,6 +59,17 @@ def _spawn_bg(coro) -> asyncio.Task:
 # 1.  VENDOR OID REGISTRY  (Multi-vendor SNMP support)
 # ═════════════════════════════════════════════════════════════════════════════
 
+_AOS_SWITCH_OIDS = {
+    "vendor": "Aruba",
+    "device_type": "aruba_osswitch",
+    "cpu_oid": "1.3.6.1.4.1.11.2.14.11.5.1.9.6.1",  # hpSwitchCpuStat (walked to its .0)
+    "cpu_walk": 1,
+    "mem_used_oid": "1.3.6.1.4.1.11.2.14.11.5.1.1.2.1.1.1.7",  # hpLocalMemAllocBytes
+    "mem_free_oid": "1.3.6.1.4.1.11.2.14.11.5.1.1.2.1.1.1.6",  # hpLocalMemFreeBytes
+    "mem_total_oid": "",
+    "uptime_oid": "1.3.6.1.2.1.1.3",
+}
+
 # Built-in vendor OID map.  The DB table lets operators add their own.
 # HOST-RESOURCES-MIB OIDs are the universal fallback.
 VENDOR_OID_DEFAULTS: dict[str, dict] = {
@@ -148,6 +159,13 @@ VENDOR_OID_DEFAULTS: dict[str, dict] = {
         "mem_total_oid": "",
         "uptime_oid": "1.3.6.1.2.1.1.3",
     },
+    # Aruba AOS-Switch / HP ProCurve: HP-ICF MIBs. CPU is one scalar
+    # (hpSwitchCpuStat, a percentage); memory is a table with one row per
+    # management module (hpLocalMemAllocBytes / hpLocalMemFreeBytes).
+    # AOS-CX and Instant On have no entry and use the fallback below.
+    "aruba_osswitch": _AOS_SWITCH_OIDS,
+    "hp_procurve": {**_AOS_SWITCH_OIDS, "device_type": "hp_procurve"},
+    "aruba_procurve": {**_AOS_SWITCH_OIDS, "device_type": "aruba_procurve"},
     # Universal fallback - HOST-RESOURCES-MIB works on most Linux/SNMP agents
     "_fallback": {
         "vendor": "Generic",

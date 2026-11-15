@@ -18,6 +18,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
+from netcontrol.drivers import supports_cli
 from netcontrol.routes import topology_availability as topology_tracking
 from netcontrol.routes.icmp import ICMP_AVAILABLE, ping_host
 from netcontrol.routes.maintenance_windows import _parse_iso
@@ -507,7 +508,9 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
             )
 
     # ── SSH polling for VPN and routes ──
-    if cred and not is_icmp_only_host:
+    # Not for a host that is only pinged, nor for a platform with no command
+    # line (an Aruba Instant On switch): it is polled over SNMP alone.
+    if cred and supports_cli(host.get("device_type")):
         try:
 
             def _ssh_poll():

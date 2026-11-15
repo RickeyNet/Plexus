@@ -16,6 +16,7 @@ export const DEVICE_TYPES: readonly { value: string; label: string }[] = [
   { value: 'paloalto_panos', label: 'Palo Alto PAN-OS' },
   { value: 'aruba_aoscx', label: 'Aruba AOS-CX' },
   { value: 'aruba_osswitch', label: 'Aruba AOS-Switch / HP ProCurve' },
+  { value: 'aruba_instant_on', label: 'Aruba Instant On (SNMP only, the switch has no SSH)' },
   { value: 'icmp_only', label: 'ICMP-only (ping liveness, no SNMP/SSH)' },
 ];
 

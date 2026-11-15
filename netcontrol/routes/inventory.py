@@ -429,6 +429,8 @@ _SSH_SESSION_TYPES = frozenset(
         "juniper_junos",
         "paloalto_panos",
         "fortinet",
+        "aruba_aoscx",
+        "aruba_osswitch",
     }
 )
 

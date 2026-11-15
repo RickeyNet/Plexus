@@ -83,6 +83,7 @@ const RULES: readonly { test: RegExp; types: readonly string[] }[] = [
   { test: /juniper|junos/i, types: ['juniper_junos'] },
   { test: /forti/i, types: ['fortinet'] },
   { test: /palo ?alto|pan-?os/i, types: ['paloalto_panos'] },
+  { test: /instant ?on/i, types: ['aruba_instant_on'] },
   { test: /aos-?cx|aruba.*\bcx\b/i, types: ['aruba_aoscx'] },
   { test: /aruba|procurve|\baos-?s(witch)?\b/i, types: ['aruba_osswitch', 'aruba_aoscx'] },
 ];

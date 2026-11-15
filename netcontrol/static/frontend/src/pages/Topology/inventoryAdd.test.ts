@@ -44,6 +44,9 @@ describe('guessDeviceType', () => {
     expect(guess('Palo Alto Networks PA-3220')).toBe('paloalto_panos');
     expect(guess('Aruba 6300M', 'ArubaOS-CX')).toBe('aruba_aoscx');
     expect(guess('HP ProCurve 2920')).toBe('aruba_osswitch');
+    // An Instant On switch has no CLI: its own SNMP-only type, not an SSH one.
+    expect(guess('Aruba Instant On 1830 24G 2SFP Switch JL812A')).toBe('aruba_instant_on');
+    expect(guess('HPE Networking InstantOn 1930')).toBe('aruba_instant_on');
   });
 
   it('makes unknown and Linux devices ICMP-only', () => {

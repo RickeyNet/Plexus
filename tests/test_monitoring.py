@@ -599,8 +599,14 @@ async def test_full_route_pull_sends_each_platform_its_own_commands(monkeypatch)
     )
     assert sent == ["get router info routing-table all"] and result["route_count"] == 2
     # A type without a driver is sent the IOS commands, as before.
-    sent, _result = await _poll_routes(monkeypatch, 906, "aruba_aoscx", {"show ip route": _GLOBAL_TABLE})
+    sent, _result = await _poll_routes(monkeypatch, 906, "hp_comware", {"show ip route": _GLOBAL_TABLE})
     assert sent == ["show ip route summary", "show ip route", "show ip route vrf *"]
+    # AOS-CX has no summary command and prints its VRFs with ``all-vrfs``.
+    sent, _result = await _poll_routes(monkeypatch, 907, "aruba_aoscx", {"show ip route": _GLOBAL_TABLE})
+    assert sent == ["show ip route", "show ip route all-vrfs"]
+    # An Instant On switch has no command line: no SSH session is opened.
+    sent, result = await _poll_routes(monkeypatch, 908, "aruba_instant_on", {"show ip route": _GLOBAL_TABLE})
+    assert sent == [] and result["route_snapshot"] == ""
     # A device that rejects the all-VRFs command keeps the global table alone.
     outputs = {"show ip route": _GLOBAL_TABLE, "show ip route vrf *": "% Invalid input detected at '^' marker."}
     _sent, rejected = await _poll_routes(monkeypatch, 903, "cisco_ios", outputs)

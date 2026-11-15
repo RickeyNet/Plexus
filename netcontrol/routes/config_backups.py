@@ -17,6 +17,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 import netcontrol.routes.state as state
+from netcontrol.drivers import get_driver
 from netcontrol.object_scope import (
     group_filter,
     request_scope,
@@ -514,6 +515,8 @@ async def restore_config_from_backup(body: ConfigBackupRestoreRequest, request: 
     host = await db.get_host(backup["host_id"])
     if not host:
         raise HTTPException(status_code=404, detail="Host not found")
+    if not get_driver(host.get("device_type")).cli:
+        raise HTTPException(status_code=400, detail="This device type has no command line: nothing can be pushed to it")
     cred = await require_credential_access(body.credential_id, session=_get_session(request))
 
     # Push config

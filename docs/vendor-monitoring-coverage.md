@@ -38,6 +38,8 @@ uptime % and alerts on down/degraded.
 | Appgate SDP | appliances, sites; appliance peer links | `/appliances/status` health, recorded per collection (scheduled, hourly by default, per-source interval or opt-out) | No | Topology tracker only | Its devices can be imported into the inventory from the steps after adding the source (`/api/sources/{id}/import-devices`, see `docs/meraki-topology.md#after-adding-a-source`), as ICMP-only hosts. |
 | OPNsense | the firewall, OpenVPN server instances; gateways (as uplinks), IPsec connections, WireGuard peers and OpenVPN client instances (as tunnels) | `routes/gateway/status` (dpinger: `none` with monitor data up, `delay` / `loss` / `delay+loss` degraded, `down` / `force_down` down, no monitor data unknown), `ipsec/sessions/search_phase1` (SA or not), `wireguard/service/show` (`peer-status` online / stale / offline, else handshake age), `openvpn/service/search_sessions` (client state; server running or not), recorded per collection (scheduled, hourly by default, per-source interval or opt-out) | Partial: gateway loss, RTT and RTT deviation shown in the details and the uplink's detail text per collection; not stored as a time series, no SLA target on them | Topology tracker only | Full pipeline when the firewall is an inventory host. The firewall can be imported into the inventory from the steps after adding the source (`/api/sources/{id}/import-devices`), as an `opnsense` host polled over SNMP (no SSH driver). `docs/opnsense-topology.md`. |
 | Juniper / Arista / Fortinet / PAN-OS (inventory) | host, interfaces | SNMP + ICMP poll | Yes (ICMP) | Yes | Full pipeline. |
+| HPE Aruba AOS-CX / AOS-Switch (HP ProCurve) (inventory) | host, interfaces | SNMP + ICMP poll | Yes (ICMP) | Yes | Full pipeline. CPU and memory: HP `STATISTICS-MIB` / `NETSWITCH-MIB` on AOS-Switch, HOST-RESOURCES-MIB on AOS-CX. `docs/aruba-switches.md`. |
+| HPE Aruba Instant On 1830 / 1930 / 1960 (inventory) | host, interfaces | SNMP + ICMP poll (`aruba_instant_on`, no SSH: the switch has no command line) | Yes (ICMP) | Yes | Full pipeline over SNMP. The switch answers SNMP only in local management mode (v1/v2c read-only on the 1830); a cloud-managed one is ICMP only. CPU and memory only when it answers HOST-RESOURCES-MIB. |
 | ICMP-only hosts | host | ICMP | Yes | Yes | |
 
 ### Muting and removal of API-collected entities
@@ -80,6 +82,8 @@ platform.
 | Juniper Junos | SNMP/SSH; SSH `show version` at inventory discovery / sync (model, version, hostname; serial needs `show chassis hardware`) | Manual / import | Manual | Candidate: Juniper JSA feed. |
 | Arista EOS | SNMP/SSH; SSH `show version` at inventory discovery / sync | Manual / import | Manual | |
 | Fortinet FortiOS | SNMP/SSH | Manual / import | Manual | Candidate: FortiGuard PSIRT feed. Discovery's SSH `show version` does not read FortiOS (`get system status`): gap. |
+| HPE Aruba AOS-CX / AOS-Switch (HP ProCurve) | SNMP sysDescr; SSH `show version` at inventory discovery / sync (platforms `aos-cx`, `aos-switch`) | Manual / import | Manual | Gap: HPE publishes security bulletins but no version-matched vulnerability API. Candidate: the HPE Aruba Networking security advisory feed, matched by product family. |
+| HPE Aruba Instant On | SNMP sysDescr (platform `instant-on`) | Manual / import | Manual | Same gap. No SSH on the switch, so the version comes from SNMP only. |
 
 ## Internet egress and cloud ingress (path trace)
 

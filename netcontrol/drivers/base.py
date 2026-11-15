@@ -181,6 +181,13 @@ class Driver:
     device_types: ClassVar[tuple[str, ...]] = ()
     vendor: ClassVar[str] = "generic"
     display_name: ClassVar[str] = "Generic"
+    # False for a device with no command line to log in to (an Aruba Instant
+    # On switch): nothing opens an SSH session to it, see ``supports_cli``.
+    cli: ClassVar[bool] = True
+    # The Netmiko platform a session is opened as, when it is not the device
+    # type itself: ntc-templates files its templates under one name per
+    # platform (``hp_procurve``), and Netmiko looks them up by the session's.
+    session_type: ClassVar[str | None] = None
 
     def build_netflow_config(self, cfg: NetflowConfig) -> list[str]:
         """Return the config-mode command lines that enable NetFlow export."""
@@ -396,7 +403,8 @@ class Driver:
                 continue
             name = _CONFIG_NAME.match(line)
             if current is not None and name:
-                found[current] = name.group(1)
+                # AOS-Switch quotes the name.
+                found[current] = name.group(1).strip('"')
             elif line.strip() and not line.startswith((" ", "\t")):
                 current = None
         return [{"vlan_id": vid, "name": found[vid], "state": "active"} for vid in sorted(found)]
@@ -835,6 +843,20 @@ def supports_config_capture(device_type: str | None) -> bool:
     except DriverCapabilityError:
         return False
     return True
+
+
+def supports_cli(device_type: str | None) -> bool:
+    """Whether an SSH session can be opened to a ``device_type``: not to a
+    host that is only pinged, nor to a platform with no command line (its
+    driver says ``cli = False``). A type without a driver says yes, as it
+    is sent the Cisco IOS commands."""
+    return str(device_type or "") != "icmp_only" and get_driver(device_type).cli
+
+
+def session_platform(device_type: str) -> str:
+    """The Netmiko platform a session to a ``device_type`` is opened as
+    (see ``Driver.session_type``)."""
+    return get_driver(device_type).session_type or device_type
 
 
 def registered_device_types() -> tuple[str, ...]:

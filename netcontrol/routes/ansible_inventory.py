@@ -45,6 +45,9 @@ _DEVICE_TYPE_MAP = {
     "fortinet": "fortinet.fortios.fortios",
     "hp_comware": "community.network.comware",
     "hp_procurve": "community.network.procurve",
+    "aruba_procurve": "community.network.procurve",
+    "aruba_osswitch": "community.network.procurve",
+    "aruba_aoscx": "arubanetworks.aoscx.aoscx",
     "dell_os10": "dellemc.os10.os10",
 }
 

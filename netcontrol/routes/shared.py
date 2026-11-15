@@ -391,6 +391,15 @@ def _open_netmiko_session(host: dict, credentials: dict, *, autodetect: bool = T
     from netmiko import SSHDetect
     from routes.crypto import decrypt
 
+    from netcontrol.drivers import DriverCapabilityError, get_driver, session_platform
+
+    # A platform with no command line (an Instant On switch) has no SSH
+    # server: say so instead of timing out on the connection.
+    if not get_driver(host.get("device_type")).cli:
+        raise DriverCapabilityError(
+            f"{host.get('device_type')} devices have no command line (SNMP only): no SSH session is opened"
+        )
+
     device = {
         "device_type": host.get("device_type", "cisco_ios"),
         "host": host["ip_address"],
@@ -421,7 +430,11 @@ def _open_netmiko_session(host: dict, credentials: dict, *, autodetect: bool = T
                 except Exception:
                     LOGGER.debug("SSHDetect disconnect failed for %s", device["host"])
 
-    net_connect = netmiko.ConnectHandler(**device, **connect_options)
+    # The session may be opened under another Netmiko name of the same
+    # platform (the one ntc-templates has its templates under); the type
+    # returned is still the host's, which the drivers are registered by.
+    session_device = {**device, "device_type": session_platform(device["device_type"])}
+    net_connect = netmiko.ConnectHandler(**session_device, **connect_options)
     if device["secret"]:
         net_connect.enable()
     return net_connect, device["device_type"]

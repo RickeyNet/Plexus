@@ -25,6 +25,7 @@ Public surface::
 # Importing the concrete drivers registers them as a side-effect.
 from netcontrol.drivers import (  # noqa: F401
     arista_eos,
+    aruba,
     cisco_ftd,
     cisco_ios,
     cisco_nxos,
@@ -45,6 +46,8 @@ from netcontrol.drivers.base import (
     parse_vlan_ranges,
     register_driver,
     registered_device_types,
+    session_platform,
+    supports_cli,
     supports_config_capture,
 )
 
@@ -59,5 +62,7 @@ __all__ = [
     "parse_vlan_ranges",
     "register_driver",
     "registered_device_types",
+    "session_platform",
+    "supports_cli",
     "supports_config_capture",
 ]
