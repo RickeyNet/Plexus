@@ -1,0 +1,256 @@
+# Discovery
+
+Discovery finds devices on your network and adds them to an inventory group.
+You give it one or more address ranges. Plexus probes each address with
+SNMP, a TCP connection, and ping, reads `show version` over SSH where it can,
+and lists what answered. You then add the devices you want to the group, or
+let a sync add, update and optionally remove hosts in one step.
+
+## Where it is and what you need
+
+Discovery lives on the **Inventory** page:
+
+| Control | Where | What it does |
+|---|---|---|
+| **Discover Devices** | Page header | Scans ranges and lets you pick devices to add to a group you choose. |
+| **Sync** | Each group's row | Scans and writes the result straight into that group. |
+| **SNMP Profiles** | Page header | Lists, creates and edits the SNMP settings that discovery uses. |
+| SNMP profile list | Each group's row | Chooses the SNMP profile for that group (**No SNMP Profile** for none). |
+
+Before you start:
+
+- You need the `inventory` feature and write access to the target group.
+  See [Object-level permissions](object-permissions.md) if your account is
+  limited to some groups.
+- For SNMP, an admin creates an SNMP profile and you assign it to the
+  group. A group with no profile uses the global SNMP setting, which is off
+  by default and set through the API (`/api/admin/snmp-discovery`, admin).
+  When SNMP is off for the group, discovery uses the other probes.
+- For SSH `show version`, set a Plexus service credential in Settings, or
+  pick a credential in the discovery dialog.
+
+## Set up SNMP
+
+1. Select **SNMP Profiles**, then **+ New Profile** (admins only).
+2. Fill in the profile:
+
+   | Field | Meaning |
+   |---|---|
+   | **Profile Name** | Required. |
+   | **Enabled** | The profile is used only when this is ticked. |
+   | **Version** | **SNMPv2c** or **SNMPv3**. |
+   | **Port** | Default `161`. |
+   | **Retries** | 0 to 5. Default `0`. |
+   | **Community (v2c)** | The read community. |
+   | **Timeout Seconds** | 0.2 to 10. Default `1.2`. |
+   | **Enable inferred topology (FDB+ARP)** | Adds dashed links on the topology map between devices that have no CDP or LLDP, from the MAC and ARP tables. It costs extra SNMP queries on busy switches. |
+   | **Username**, **Auth Protocol**, **Auth Password**, **Privacy Protocol**, **Privacy Password** | SNMPv3 settings. Auth protocols: SHA, SHA-256, SHA-512, MD5. Privacy protocols: AES128, AES192, AES256, DES. |
+
+3. Select **Create Profile**.
+4. In the group's row, choose the profile in the SNMP profile list.
+
+The SNMPv3 passwords can hold a secret reference such as
+`{{secret.SNMP_AUTH}}` instead of the password. The secret variable must
+already exist, or saving fails.
+
+To check the settings without scanning, open **Discover Devices**, choose
+the **Target Inventory Group**, tick **Test only**, enter a **Test Target
+IP** and select **Test SNMP**. The result shows the host name, device type,
+protocol, vendor, OS and `sysDescr` the device returned, or "SNMP Failed".
+
+## Scan and add devices
+
+1. Select **Discover Devices**.
+2. Choose the **Target Inventory Group**. You can pick only groups you may
+   change.
+3. Enter the **CIDR Targets**, one per line or separated by commas, for
+   example `192.0.2.0/24`.
+4. Check the options (see the table below) and select **Scan Network**.
+5. Watch the progress: addresses scanned, devices found, the address being
+   probed, and a line for each device found. **Cancel** stops the scan.
+6. In **Discovered Devices**, every device is ticked. Untick the ones you do
+   not want, or use **Select All** / **Deselect All**.
+7. Select **Onboard Selected**. The result shows how many hosts were
+   **Added** and **Updated**.
+
+| Option | Default | Meaning |
+|---|---|---|
+| **Timeout Seconds** | `0.35` | Wait for each probe, 0.05 to 5 seconds. |
+| **Max Hosts** | `256` | Stop after this many addresses, 1 to 4,096. |
+| **Device Type** | `unknown` | The platform given to a device that answers only on TCP 22 or 443 with nothing that names it. |
+| **Hostname Prefix** | `discovered` | The start of the name given to a device with no DNS name, for example `discovered-192-0-2-10`. |
+| **Use SNMP discovery first** | On | Try SNMP with the group's profile before the TCP probe. |
+| **Fall back to ICMP ping** | On | Ping addresses that answer neither SNMP nor TCP. |
+| **Read model/serial/version over SSH** | On | Log in and read `show version` from devices that answered SNMP or TCP 22. |
+| **SSH Credential** | The service credential | The credential used for `show version`. |
+
+## Sync a group
+
+**Sync** scans and writes the result into the group in one step. There is no
+pick list.
+
+1. Select **Sync** in the group's row.
+2. **CIDR Targets** is filled in with the group's host addresses. Keep it to
+   check the existing hosts, or change it to scan other ranges. If you clear
+   it, Plexus uses the group's host addresses.
+3. Tick **Remove hosts not found in this scan** only if hosts that do not
+   answer should be deleted. Plexus asks you to confirm and names the group
+   and its host count.
+4. Select **Run Sync**. The result shows **Added**, **Updated** and
+   **Removed**.
+
+## How a probe works
+
+Plexus probes each address in this order and stops at the first answer:
+
+| Probe | What it learns |
+|---|---|
+| SNMP (with the group's profile) | `sysName`, `sysDescr`, vendor, OS, platform, model and serial from the entity table, software version and device category. |
+| TCP 22, then TCP 443 | That the device is up. On port 22 the SSH banner can name the vendor and platform (Cisco, Juniper, Arista, Fortinet). The name comes from reverse DNS. |
+| ICMP ping | That the device is up. The platform is `icmp_only`, so monitoring does not try SNMP or SSH on it. |
+
+Then, if SSH is on and a credential is set, Plexus reads `show version` from
+each device that answered SNMP or TCP 22. A platform read this way replaces
+the guess from SNMP or the banner. Results marked `(SSH)` in the list come
+from `show version`. A login failure does not stop the scan; the error shows
+on that device and in a summary under the results.
+
+## What discovery fills in on a host
+
+| Host value | Where it comes from |
+|---|---|
+| Host name | The SNMP `sysName` or the name `show version` reports, else reverse DNS, else a name from the prefix and the address (`snmp-` for SNMP answers). |
+| Address | The address that answered. Other addresses of the same device become aliases. |
+| Platform | `show version` over SSH, then SNMP `sysDescr`, then the SSH banner, then the **Device Type** field. |
+| Status | `online` for every device found. |
+| Model, software version, serial, device category | SNMP and `show version`. |
+| Device type and role | See [Device model](device-model.md#how-discovery-fills-it-in). |
+
+### One device, one host
+
+A device with several addresses becomes one host. Discovery groups the
+addresses it found when they share a serial number, a real `sysName`, or
+appear in one device's own interface address table (read over SNMP).
+
+For each device, discovery looks for an existing host in the group: first by
+serial number, then by address (primary or alias), then by `sysName`. A
+match is updated; no match adds a new host.
+
+Existing hosts in the group that are clearly the same device are deleted:
+those with the same serial number, or whose address is in the device's
+interface address table. A matching name alone never deletes a host. These
+deletions count as **Removed**.
+
+## Rules worth knowing
+
+- **Large ranges are refused.** A range with more than 65,536 addresses, or
+  more than ten times **Max Hosts** if that is larger, is rejected.
+- **At most 64 probes run at once** by default. The server setting
+  `APP_DISCOVERY_MAX_CONCURRENT_PROBES` changes it.
+- **SSH reads time out after 45 seconds** per device.
+- **Updated** counts hosts whose name or platform changed. Model, version and
+  serial are written for every matched host.
+- **A weak guess does not overwrite a platform.** A platform guessed only
+  from an SSH banner or HTTPS fills an `unknown` platform but does not
+  replace one the host already has.
+- **Remove hosts not found** cannot be undone.
+- **Push to external IPAM.** Hosts that a sync or onboard adds or renames are
+  sent to external IPAM sources that have push on. See
+  [IP address management](ipam.md#external-ipam-sources).
+- **Scheduled discovery** can run a sync per group on a timer. It is off by
+  default, runs every 15 minutes when on (1 minute to 24 hours), and uses
+  only the Plexus service credential. It is set through the API only (see
+  below).
+- **Deleting an SNMP profile** unassigns it from every group that uses it.
+
+## Who can do what
+
+| Action | Needs |
+|---|---|
+| Scan, sync, onboard, test SNMP | The `inventory` feature and write access to the group |
+| Choose a group's SNMP profile | The `inventory` feature and write access to the group |
+| See SNMP profiles | The `inventory` feature |
+| Create, change or delete SNMP profiles | Admin |
+| Use a stored credential for SSH | Access to that credential (your own, or any as admin) |
+| Set scheduled discovery | Admin |
+
+Scans that write to the inventory are written to the audit log under the
+`inventory` category (`discovery.sync`, `discovery.onboard`).
+
+## API
+
+All routes are under the same session and CSRF rules as the rest of the
+Plexus API. Examples use invented data. See
+[API reference](api-reference.md) for the full list.
+
+```
+POST /api/inventory/{group_id}/discovery/scan
+GET  /api/inventory/discovery/jobs/{job_id}
+POST /api/inventory/{group_id}/discovery/onboard
+POST /api/inventory/{group_id}/discovery/sync
+POST /api/inventory/{group_id}/snmp-discovery-profile/test
+GET  /api/inventory/discovery/ssh-defaults
+GET  /api/admin/snmp-profiles
+PUT  /api/inventory/{group_id}/snmp-profile-assignment
+GET  /api/admin/discovery-sync
+PUT  /api/admin/discovery-sync
+POST /api/admin/discovery-sync/run-now
+```
+
+The scan and sync endpoints also have a `/stream` form that sends progress
+as server-sent events.
+
+Start a scan:
+
+```json
+POST /api/inventory/3/discovery/scan
+{
+  "cidrs": ["192.0.2.0/24"],
+  "timeout_seconds": 0.35,
+  "max_hosts": 256,
+  "use_snmp": true,
+  "use_icmp": true,
+  "use_ssh": true
+}
+```
+
+```json
+{ "job_id": "8c1d2e", "status": "running", "group_id": 3, "total_targets": 254 }
+```
+
+Poll the job until it is no longer `running`. Its `result.discovered_hosts`
+can be sent to the onboard endpoint as `{"discovered_hosts": [...]}`.
+
+Run a sync that removes hosts that do not answer:
+
+```json
+POST /api/inventory/3/discovery/sync
+{ "cidrs": ["192.0.2.0/24"], "remove_absent": true }
+```
+
+The answer (the `ssh_enrichment` summary left out):
+
+```json
+{
+  "group_id": 3,
+  "scanned_hosts": 254,
+  "discovered_count": 12,
+  "sync": { "added": 2, "updated": 1, "removed": 1, "matched": 12, "existing_before": 11, "existing_after": 12 }
+}
+```
+
+Set scheduled discovery:
+
+```json
+PUT /api/admin/discovery-sync
+{
+  "enabled": true,
+  "interval_seconds": 3600,
+  "profiles": [
+    { "group_id": 3, "cidrs": ["192.0.2.0/24"], "remove_absent": false }
+  ]
+}
+```
+
+Unknown fields in a scan or sync request give `422`. On the scan endpoint, a
+range that is too large gives `400`.

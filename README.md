@@ -140,6 +140,26 @@ A new file under `docs/` must be added to `PAGES` in that tool.
 - [docs/device-model.md](docs/device-model.md) - manufacturers, device types, roles, lifecycle statuses and sites on hosts: discovery, locks, filters, API
 - [docs/vrfs-and-vlans.md](docs/vrfs-and-vlans.md) - VRF and VLAN records, how a device's VLAN finds its record, interface addresses and their limits, API
 - [docs/intended-config.md](docs/intended-config.md) - intended configuration: templates, config contexts, template variables, the comparison with backups, limits, API
+- [docs/discovery.md](docs/discovery.md) - scanning address ranges, SNMP profiles, sync and onboarding
+- [docs/ipam.md](docs/ipam.md) - subnets, reservations, external IPAM sources, reconciliation and DHCP
+- [docs/floor-plan.md](docs/floor-plan.md) - sites, floors and placing hosts on a plan
+- [docs/network-tools.md](docs/network-tools.md) - MAC tracking and traffic analysis
+- [docs/jobs.md](docs/jobs.md) - launching and watching jobs; tasks, instruction sets, credentials and secrets
+- [docs/config-backups-and-drift.md](docs/config-backups-and-drift.md) - backup policies, search, restore and drift detection
+- [docs/compliance.md](docs/compliance.md) - compliance profiles, rules, scans and findings
+- [docs/change-management.md](docs/change-management.md) - how risk analysis, deployments and maintenance windows fit together
+- [docs/risk-analysis.md](docs/risk-analysis.md) - scoring a proposed change before it is made
+- [docs/deployments.md](docs/deployments.md) - pushing changes with approval, checks, verification and rollback
+- [docs/maintenance-windows.md](docs/maintenance-windows.md) - time windows that allow or block deployments
+- [docs/lab-mode.md](docs/lab-mode.md) - rehearsing changes on lab copies of devices
+- [docs/dashboard.md](docs/dashboard.md) - the overview panels and custom dashboards
+- [docs/monitoring.md](docs/monitoring.md) - polling, alerts, rules, suppressions and the device detail page
+- [docs/graph-templates.md](docs/graph-templates.md) - graph templates, host templates and graph trees
+- [docs/cloud-visibility.md](docs/cloud-visibility.md) - cloud accounts, sync schedules and what is discovered
+- [docs/reports.md](docs/reports.md) - report types, history, scheduling and bandwidth billing
+- [docs/audit-log.md](docs/audit-log.md) - audit events, the hash chain, verification and SIEM forwarding
+- [docs/federation.md](docs/federation.md) - linking Plexus servers: peers, trust model and known gaps
+- [docs/administration.md](docs/administration.md) - the Settings tabs, users, roles, access groups and API tokens
 - [docs/ai-access.md](docs/ai-access.md) - connecting an AI client over MCP: tokens, tools, secret masking, limits
 
 ## Repository layout

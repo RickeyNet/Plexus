@@ -30,21 +30,35 @@ production hosts, `.env`, backups and updates.
 
 ## What it does
 
-**Inventory and automation**
+Each guide says where the feature is in the UI, how to use it step by
+step, what the results mean, who may do what, and its API.
 
-- [Core Concepts](Core-Concepts): device groups and hosts, Python playbooks,
-  config templates, credentials and jobs with live output.
+**Inventory and addressing**
+
+- [Core Concepts](Core-Concepts): groups, hosts, playbooks, templates,
+  credentials and jobs.
+- [Discovery](Discovery): scan address ranges and add what answers to the
+  inventory.
 - [Device Model](Device-Model): manufacturers, device types, roles,
-  lifecycle statuses and sites on hosts, filled in by discovery.
-- [Custom Fields and Tags](Custom-Fields-and-Tags): admin-defined fields
-  and tags on hosts, groups and IPAM prefixes.
-- [VRFs and VLANs](VRFs-and-VLANs): VRF and VLAN records, and the addresses
-  each device interface carries.
-- [Intended Configuration](Intended-Configuration): Jinja2 templates and
-  config contexts that render what each host's configuration should be.
-- [Writing Playbooks](Writing-Playbooks) and the
-  [IOS-XE Upgrade Tool](IOS-XE-Upgrade-Tool).
-- [Network Documentation Reports](Network-Documentation-Reports).
+  lifecycle statuses and sites on hosts.
+- [Custom Fields and Tags](Custom-Fields-and-Tags) on hosts, groups and
+  IPAM prefixes.
+- [IPAM](IPAM): subnets, reservations, external IPAM sources and DHCP, and
+  [VRFs and VLANs](VRFs-and-VLANs).
+- [Floor Plan](Floor-Plan): sites, floors and where each host is.
+- [Network Tools](Network-Tools): MAC tracking and traffic analysis.
+
+**Configuration and change**
+
+- [Running Jobs](Running-Jobs) and [Writing Playbooks](Writing-Playbooks).
+- [Config Backups and Drift](Config-Backups-and-Drift) and
+  [Intended Configuration](Intended-Configuration).
+- [Compliance](Compliance): rules, scans and findings.
+- [Change Management](Change-Management):
+  [Risk Analysis](Risk-Analysis), [Deployments](Deployments) and
+  [Maintenance Windows](Maintenance-Windows).
+- [Lab Mode](Lab-Mode): rehearse a change on a copy of a device.
+- [IOS-XE Upgrade Tool](IOS-XE-Upgrade-Tool).
 
 **Topology**
 
@@ -54,15 +68,20 @@ production hosts, `.env`, backups and updates.
   [Appgate SDP](Appgate-SDP-Topology) as sources.
 - [Path Trace](Path-Trace): follow traffic from one end to the other across
   all of them.
+- [Cloud Visibility](Cloud-Visibility): cloud accounts and their networks.
 
-**Monitoring and compliance**
+**Monitoring and reports**
 
+- [Dashboard](Dashboard), [Monitoring](Monitoring) and
+  [Graph Templates](Graph-Templates).
 - [SLA Monitoring](SLA-Monitoring) and
   [Alert Notification Channels](Alert-Notification-Channels) (email,
   PagerDuty, webhook, Microsoft Teams).
 - [Software Versions and Vulnerabilities](Software-Versions-and-Vulnerabilities).
 - [Meraki Alerts](Meraki-Alerts) and [Meraki Compliance](Meraki-Compliance).
 - [Flow Collector](Flow-Collector): NetFlow, sFlow and IPFIX.
+- [Reports](Reports) and
+  [Network Documentation Reports](Network-Documentation-Reports).
 - [Vendor Monitoring Coverage](Vendor-Monitoring-Coverage): what is covered
   for each vendor.
 
@@ -72,6 +91,7 @@ production hosts, `.env`, backups and updates.
   [TACACS+](TACACS-Login) login.
 - [Object Permissions](Object-Permissions) and the
   [Authorization Matrix](Authorization-Matrix).
+- [Audit Log](Audit-Log): what is recorded and how to verify it.
 
 **API and AI access**
 
@@ -81,9 +101,12 @@ production hosts, `.env`, backups and updates.
 
 ## Operating it
 
+- [Administration](Administration): every Settings tab, users, roles and
+  API tokens.
 - [Firewall Rules](Firewall-Rules) for the host.
 - [Database Backends](Database-Backends) and
   [Data Retention](Data-Retention).
+- [Federation](Federation): link several Plexus servers.
 - [Versioning and Release](Versioning-and-Release) and the
   [Changelog](Changelog).
 
