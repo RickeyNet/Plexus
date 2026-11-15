@@ -1468,3 +1468,47 @@ def _resolve_snmp_discovery_config(group_id: int | None = None) -> dict:
     if isinstance(profile.get("v3"), dict):
         merged["v3"].update(profile["v3"])
     return _sanitize_snmp_discovery_config(merged)
+
+
+def _host_snmp_profile_config(host: dict | None) -> dict | None:
+    """The config of the host's own SNMP profile, or None when it has none
+    (or names a profile that no longer exists) and inherits its group's."""
+    profile_id = str((host or {}).get("snmp_profile_id") or "").strip()
+    if profile_id and profile_id in SNMP_PROFILES:
+        return _sanitize_snmp_discovery_config(SNMP_PROFILES[profile_id])
+    return None
+
+
+def _resolve_host_snmp_config(host: dict | None, group_id: int | None = None) -> dict:
+    """Effective SNMP config of an inventory host: its own profile, else its
+    group's config. ``group_id`` stands in for a host dict without one."""
+    own = _host_snmp_profile_config(host)
+    if own is not None:
+        return own
+    gid = (host or {}).get("group_id")
+    return _resolve_snmp_discovery_config(gid if gid is not None else group_id)
+
+
+def _hosts_with_snmp_config(
+    hosts: list[dict],
+    group_id: int | None = None,
+    enabled_only: bool = True,
+) -> list[tuple[dict, dict]]:
+    """``(host, effective SNMP config)`` for each host, dropping hosts whose
+    config is disabled unless ``enabled_only`` is False. A host with its own
+    enabled profile is kept even when its group has SNMP disabled. Each
+    group's config is resolved once."""
+    group_cfgs: dict[int | None, dict] = {}
+    pairs: list[tuple[dict, dict]] = []
+    for host in hosts:
+        cfg = _host_snmp_profile_config(host)
+        if cfg is None:
+            gid = host.get("group_id")
+            gid = gid if gid is not None else group_id
+            if gid not in group_cfgs:
+                group_cfgs[gid] = _resolve_snmp_discovery_config(gid)
+            cfg = group_cfgs[gid]
+        if enabled_only and not cfg.get("enabled"):
+            continue
+        pairs.append((host, cfg))
+    return pairs

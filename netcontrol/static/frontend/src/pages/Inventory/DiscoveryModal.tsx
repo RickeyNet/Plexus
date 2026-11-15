@@ -26,7 +26,10 @@ import {
   describeSshEnrichment,
   discoveredHostFacts,
   discoveredHostSshError,
+  type SnmpTestOutcome,
+  snmpTestOutcome,
 } from './helpers';
+import { SnmpTestResultCard } from './SnmpTestResultCard';
 
 export type DiscoveryMode = 'sync' | 'scan' | 'global';
 
@@ -98,11 +101,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
   const [scanState, setScanState] = useState<ScanState | null>(null);
   const [discovered, setDiscovered] = useState<DiscoveredHost[]>([]);
   const [selectedSet, setSelectedSet] = useState<Set<number>>(new Set());
-  const [snmpResult, setSnmpResult] = useState<
-    | null
-    | { ok: true; data: NonNullable<ReturnType<typeof useTestGroupSnmpProfile>['data']>['result'] }
-    | { ok: false; error: string }
-  >(null);
+  const [snmpResult, setSnmpResult] = useState<SnmpTestOutcome | null>(null);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
   const [onboardResult, setOnboardResult] = useState<{
     added: number;
@@ -166,11 +165,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
       }
       try {
         const r = await testSnmp.mutateAsync({ groupId, targetIp });
-        if (r.success) {
-          setSnmpResult({ ok: true, data: r.result });
-        } else {
-          setSnmpResult({ ok: false, error: r.error || 'Unknown error' });
-        }
+        setSnmpResult(snmpTestOutcome(r));
         setPhase('snmp-result');
       } catch (err) {
         setError(`SNMP test failed: ${(err as Error).message}`);
@@ -431,57 +426,7 @@ export function DiscoveryModal({ mode, group, groups, onClose }: Props) {
           </button>
         }
       >
-        {snmpResult.ok ? (
-          <div
-            className="card card-sm"
-            style={{ borderLeft: '3px solid var(--success)' }}
-          >
-            <strong>SNMP OK</strong> - credentials validated
-            <table className="data-table table-sm" style={{ marginTop: '0.5rem' }}>
-              <tbody>
-                <tr>
-                  <td style={{ opacity: 0.7 }}>Hostname</td>
-                  <td>{snmpResult.data?.hostname || ''}</td>
-                </tr>
-                <tr>
-                  <td style={{ opacity: 0.7 }}>IP</td>
-                  <td>{snmpResult.data?.ip_address || ''}</td>
-                </tr>
-                <tr>
-                  <td style={{ opacity: 0.7 }}>Device Type</td>
-                  <td>{snmpResult.data?.device_type || ''}</td>
-                </tr>
-                <tr>
-                  <td style={{ opacity: 0.7 }}>Protocol</td>
-                  <td>{snmpResult.data?.discovery?.protocol || ''}</td>
-                </tr>
-                <tr>
-                  <td style={{ opacity: 0.7 }}>Vendor</td>
-                  <td>{snmpResult.data?.discovery?.vendor || 'unknown'}</td>
-                </tr>
-                <tr>
-                  <td style={{ opacity: 0.7 }}>OS</td>
-                  <td>{snmpResult.data?.discovery?.os || 'unknown'}</td>
-                </tr>
-                <tr>
-                  <td style={{ opacity: 0.7 }}>sysDescr</td>
-                  <td style={{ wordBreak: 'break-word' }}>
-                    {snmpResult.data?.discovery?.sys_descr || ''}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div
-            className="card card-sm"
-            style={{ borderLeft: '3px solid var(--danger)' }}
-          >
-            <strong>SNMP Failed</strong>
-            <br />
-            <span style={{ opacity: 0.8 }}>{snmpResult.error}</span>
-          </div>
-        )}
+        <SnmpTestResultCard outcome={snmpResult} />
       </Modal>
     );
   }

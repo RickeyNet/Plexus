@@ -341,6 +341,7 @@ CREATE TABLE IF NOT EXISTS hosts (
     fdm_port          INTEGER NOT NULL DEFAULT 443,
     fdm_verify_tls    INTEGER NOT NULL DEFAULT 1,
     aws_instance_id   TEXT    NOT NULL DEFAULT '',
+    snmp_profile_id   TEXT    NOT NULL DEFAULT '',
     UNIQUE(group_id, ip_address)
 );
 

@@ -328,11 +328,8 @@ async def _reprobe_hosts_after_job(hosts: list[dict], credentials: dict, dry_run
             groups.setdefault(gid, []).append(h)
 
         for group_id, group_hosts in groups.items():
-            snmp_cfg = state._resolve_snmp_discovery_config(group_id)
-            if not snmp_cfg.get("enabled"):
-                continue
             discovered = []
-            for h in group_hosts:
+            for h, snmp_cfg in state._hosts_with_snmp_config(group_hosts, group_id):
                 ip = h.get("ip_address")
                 if not ip:
                     continue

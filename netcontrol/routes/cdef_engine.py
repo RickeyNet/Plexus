@@ -289,9 +289,9 @@ async def discover_data_sources(host_id: int):
     if not host:
         raise HTTPException(404, "Host not found")
 
-    snmp_cfg = state._resolve_snmp_discovery_config(host.get("group_id"))
+    snmp_cfg = state._resolve_host_snmp_config(host)
     if not snmp_cfg.get("enabled"):
-        raise HTTPException(400, "SNMP not enabled for this host's group")
+        raise HTTPException(400, "SNMP is not enabled for this host (its own profile or its group's)")
 
     result = await auto_discover_data_sources(
         host_id=host_id,

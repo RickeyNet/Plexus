@@ -615,7 +615,7 @@ function HostRollupTable({
                     <span
                       className="badge badge-sm badge-warning"
                       style={{ marginLeft: '0.5rem' }}
-                      title="SNMP is configured for this host's group but the FDB walk returned nothing. Likely causes: not an L2 bridging device, SNMP creds wrong, ACL blocking the poller, or device requires per-VLAN v3 contexts."
+                      title="SNMP is configured for this host but the FDB walk returned nothing. Likely causes: not an L2 bridging device, SNMP creds wrong, ACL blocking the poller, or device requires per-VLAN v3 contexts."
                     >
                       silent
                     </span>
@@ -647,7 +647,7 @@ function HostRollupTable({
                     title={
                       r.snmp_enabled
                         ? 'Trigger an immediate MAC/ARP walk against this host'
-                        : 'SNMP is not enabled for this host’s group'
+                        : 'SNMP is not enabled for this host or its group'
                     }
                   >
                     {isRunning ? 'Walking…' : 'Collect'}

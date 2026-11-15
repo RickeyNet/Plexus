@@ -38,7 +38,13 @@ import netcontrol.routes.state as state
 from netcontrol.integrations.inventory_import import PROVIDER_NOTES, importable_devices, provider_key
 from netcontrol.routes import meraki_topology
 from netcontrol.routes.config_backups import ConfigBackupPolicyCreate, create_backup_policy
-from netcontrol.routes.inventory import BULK_ADD_MAX_HOSTS, HostBulkEntry, _bulk_add, assign_group_snmp_profile
+from netcontrol.routes.inventory import (
+    BULK_ADD_MAX_HOSTS,
+    HostBulkEntry,
+    _bulk_add,
+    _check_snmp_profile_id,
+    assign_group_snmp_profile,
+)
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, require_credential_access
 
 router = APIRouter()
@@ -136,9 +142,7 @@ async def import_devices_api(org_ref: int, body: ImportDevicesRequest, request: 
     elif any(g.get("parent_id") is None and g["name"] == new_name for g in await db.get_all_groups()):
         raise HTTPException(409, f"A group named {new_name!r} already exists; choose it as the existing group")
 
-    profile_id = (body.snmp_profile_id or "").strip()
-    if profile_id and profile_id not in state.SNMP_PROFILES:
-        raise HTTPException(400, "SNMP profile not found")
+    profile_id = _check_snmp_profile_id(body.snmp_profile_id or "") or ""
 
     if body.backup_credential_id is not None:
         if not any(d["capabilities"]["config_backup"] for d in selected):

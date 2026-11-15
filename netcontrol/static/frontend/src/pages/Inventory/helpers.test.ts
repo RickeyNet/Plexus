@@ -12,7 +12,10 @@ import {
   filterGroupsByCustomData,
   hiddenByCollapsedAncestor,
   hostMatchesQuery,
+  hostSnmpProfileName,
+  hostSnmpProfileToSend,
   isAwsInstanceId,
+  snmpTestOutcome,
   sortGroups,
   sortHostsForQuery,
 } from './helpers';
@@ -303,5 +306,46 @@ describe('filterGroupsByCustomData with device model facets', () => {
   it('needs the tags and the facets on a host of a group that does not match itself', () => {
     expect(ids(filterGroupsByCustomData(tree, { tagIds: [1], fields: {}, device: { role: [11] } }))).toEqual([[1, [2]]]);
     expect(filterGroupsByCustomData(tree, { tagIds: [1], fields: {}, device: { site: [3] } })).toEqual([]);
+  });
+});
+
+describe('hostSnmpProfileToSend', () => {
+  it('sends an edit only when the choice changed', () => {
+    expect(hostSnmpProfileToSend('p1', 'p1', true)).toBeUndefined();
+    expect(hostSnmpProfileToSend(undefined, '', true)).toBeUndefined();
+    expect(hostSnmpProfileToSend('', 'p2', true)).toBe('p2');
+    // Back to the group's profile clears it.
+    expect(hostSnmpProfileToSend('p1', '', true)).toBe('');
+  });
+
+  it('sends a create only when a profile was chosen', () => {
+    expect(hostSnmpProfileToSend(undefined, '', false)).toBeUndefined();
+    expect(hostSnmpProfileToSend(undefined, 'p2', false)).toBe('p2');
+  });
+});
+
+describe('hostSnmpProfileName', () => {
+  const profiles = [{ id: 'p1', name: 'core-v3' }];
+
+  it('names the host profile', () => {
+    expect(hostSnmpProfileName({ snmp_profile_id: 'p1' }, profiles)).toBe('core-v3');
+  });
+
+  it('is null on the group profile or a deleted one', () => {
+    expect(hostSnmpProfileName({}, profiles)).toBeNull();
+    expect(hostSnmpProfileName({ snmp_profile_id: '' }, profiles)).toBeNull();
+    expect(hostSnmpProfileName({ snmp_profile_id: 'gone' }, profiles)).toBeNull();
+  });
+});
+
+describe('snmpTestOutcome', () => {
+  it('keeps the device read on success', () => {
+    const result = { hostname: 'edge-a', ip_address: '192.0.2.10' };
+    expect(snmpTestOutcome({ success: true, result })).toEqual({ ok: true, data: result });
+  });
+
+  it('keeps the error on failure', () => {
+    expect(snmpTestOutcome({ success: false, error: 'timeout' })).toEqual({ ok: false, error: 'timeout' });
+    expect(snmpTestOutcome({ success: false })).toEqual({ ok: false, error: 'Unknown error' });
   });
 });

@@ -49,6 +49,15 @@ Before you start:
 3. Select **Create Profile**.
 4. In the group's row, choose the profile in the SNMP profile list.
 
+A host can also have its own SNMP profile, set in the host's edit dialog
+or for many hosts at once (`POST /api/hosts/snmp-profile`). Polling,
+topology, MAC/ARP and data source discovery of an inventory host use, in
+order: the host's own profile, the group's profile, the group's legacy
+per-group profile, then the global SNMP setting. A host with its own
+enabled profile is polled even when its group has SNMP off. Range scans,
+syncs and onboards probe addresses, not hosts, so they always use the
+group's settings.
+
 The SNMPv3 passwords can hold a secret reference such as
 `{{secret.SNMP_AUTH}}` instead of the password. The secret variable must
 already exist, or saving fails.
@@ -161,7 +170,8 @@ deletions count as **Removed**.
   default, runs every 15 minutes when on (1 minute to 24 hours), and uses
   only the Plexus service credential. It is set through the API only (see
   below).
-- **Deleting an SNMP profile** unassigns it from every group that uses it.
+- **Deleting an SNMP profile** unassigns it from every group and host that
+  uses it; those hosts go back to their group's settings.
 
 ## Who can do what
 
@@ -169,6 +179,7 @@ deletions count as **Removed**.
 |---|---|
 | Scan, sync, onboard, test SNMP | The `inventory` feature and write access to the group |
 | Choose a group's SNMP profile | The `inventory` feature and write access to the group |
+| Choose a host's SNMP profile, test SNMP on a host | The `inventory` feature and write access to the host's group |
 | See SNMP profiles | The `inventory` feature |
 | Create, change or delete SNMP profiles | Admin |
 | Use a stored credential for SSH | Access to that credential (your own, or any as admin) |
@@ -192,6 +203,8 @@ POST /api/inventory/{group_id}/snmp-discovery-profile/test
 GET  /api/inventory/discovery/ssh-defaults
 GET  /api/admin/snmp-profiles
 PUT  /api/inventory/{group_id}/snmp-profile-assignment
+POST /api/hosts/snmp-profile
+POST /api/hosts/{host_id}/snmp-profile/test
 GET  /api/admin/discovery-sync
 PUT  /api/admin/discovery-sync
 POST /api/admin/discovery-sync/run-now

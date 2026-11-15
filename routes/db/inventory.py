@@ -57,6 +57,8 @@ __all__ = [
     "remove_host",
     "update_host",
     "move_hosts",
+    "set_hosts_snmp_profile",
+    "clear_host_snmp_profile",
     "bulk_delete_hosts",
     "update_host_status",
     "update_host_device_info",
@@ -143,6 +145,7 @@ _GROUP_LISTING_HOST_COLUMNS = (
     "device_category",
     "serial_number",
     "aws_instance_id",
+    "snmp_profile_id",
     "vrf_name",
     "vlan_id",
     "device_type_id",
@@ -158,6 +161,7 @@ _GROUP_LISTING_TEXT_COLUMNS = (
     "device_category",
     "serial_number",
     "aws_instance_id",
+    "snmp_profile_id",
     "vrf_name",
     "vlan_id",
     "location_detail",
@@ -702,6 +706,7 @@ async def add_host(
     vrf_name: str = "",
     vlan_id: str = "",
     aws_instance_id: str = "",
+    snmp_profile_id: str = "",
 ) -> int:
     """Insert a host. It gets the default lifecycle status (none when no
     status is the default)."""
@@ -709,8 +714,8 @@ async def add_host(
     try:
         cursor = await db.execute(
             "INSERT INTO hosts (group_id, hostname, ip_address, device_type, vrf_name, vlan_id, aws_instance_id,"
-            " lifecycle_status_id)"
-            " VALUES (?,?,?,?,?,?,?,(SELECT id FROM host_statuses WHERE is_default = 1 ORDER BY id LIMIT 1))",
+            " snmp_profile_id, lifecycle_status_id)"
+            " VALUES (?,?,?,?,?,?,?,?,(SELECT id FROM host_statuses WHERE is_default = 1 ORDER BY id LIMIT 1))",
             (
                 group_id,
                 hostname,
@@ -719,6 +724,7 @@ async def add_host(
                 vrf_name or "",
                 str(vlan_id or ""),
                 (aws_instance_id or "").strip(),
+                (snmp_profile_id or "").strip(),
             ),
         )
         await db.commit()
@@ -785,9 +791,11 @@ async def update_host(
     vrf_name: str | None = None,
     vlan_id: str | None = None,
     aws_instance_id: str | None = None,
+    snmp_profile_id: str | None = None,
 ):
-    """``None`` leaves ``vrf_name``, ``vlan_id`` and ``aws_instance_id``
-    unchanged, each on its own; a string sets it (``""`` clears it)."""
+    """``None`` leaves ``vrf_name``, ``vlan_id``, ``aws_instance_id`` and
+    ``snmp_profile_id`` unchanged, each on its own; a string sets it (``""``
+    clears it)."""
     db = await _dbcore.get_db()
     try:
         cur = await db.execute("SELECT ip_address, vrf_name FROM hosts WHERE id = ?", (host_id,))
@@ -808,6 +816,11 @@ async def update_host(
             await db.execute(
                 "UPDATE hosts SET aws_instance_id=? WHERE id=?",
                 (aws_instance_id.strip(), host_id),
+            )
+        if snmp_profile_id is not None:
+            await db.execute(
+                "UPDATE hosts SET snmp_profile_id=? WHERE id=?",
+                (snmp_profile_id.strip(), host_id),
             )
         await db.commit()
     finally:
@@ -846,6 +859,39 @@ async def move_hosts(host_ids: list[int], target_group_id: int) -> int:
         cursor = await db.execute(
             f"UPDATE hosts SET group_id = ? WHERE id IN ({placeholders})",
             (target_group_id, *host_ids),
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+async def set_hosts_snmp_profile(host_ids: list[int], profile_id: str) -> int:
+    """Give the hosts their own SNMP profile (``""``: inherit the group's)."""
+    if not host_ids:
+        return 0
+    db = await _dbcore.get_db()
+    try:
+        placeholders = ",".join("?" for _ in host_ids)
+        cursor = await db.execute(
+            f"UPDATE hosts SET snmp_profile_id = ? WHERE id IN ({placeholders})",
+            ((profile_id or "").strip(), *host_ids),
+        )
+        await db.commit()
+        return cursor.rowcount
+    finally:
+        await db.close()
+
+
+async def clear_host_snmp_profile(profile_id: str) -> int:
+    """Return the hosts using a (deleted) profile to their group's config."""
+    if not profile_id:
+        return 0
+    db = await _dbcore.get_db()
+    try:
+        cursor = await db.execute(
+            "UPDATE hosts SET snmp_profile_id = '' WHERE snmp_profile_id = ?",
+            (profile_id,),
         )
         await db.commit()
         return cursor.rowcount

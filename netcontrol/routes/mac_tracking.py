@@ -1118,26 +1118,21 @@ async def mac_tracking_stats():
 async def mac_tracking_by_host():
     """Per-host collection rollup. Silent hosts (mac_count == 0) sort first.
 
-    Each row is enriched with ``snmp_enabled`` resolved from the host's group
-    so the UI can tell the difference between "host has no SNMP configured"
-    and "host has SNMP configured but isn't returning FDB rows" — those are
-    very different debugging paths.
+    Each row is enriched with ``snmp_enabled`` resolved from the host's own
+    SNMP profile, else its group, so the UI can tell the difference between
+    "host has no SNMP configured" and "host has SNMP configured but isn't
+    returning FDB rows" — those are very different debugging paths.
     """
-    from netcontrol.routes.state import _resolve_snmp_discovery_config
+    from netcontrol.routes.state import _hosts_with_snmp_config
 
     rows = await db.get_mac_collection_by_host()
-    # Cache the SNMP-enabled decision per group_id so we don't re-resolve for
-    # every host in the same group.
-    snmp_by_group: dict[int | None, bool] = {}
     for row in rows:
-        gid = row.get("group_id")
-        if gid not in snmp_by_group:
-            try:
-                cfg = _resolve_snmp_discovery_config(gid)
-                snmp_by_group[gid] = bool(cfg.get("enabled"))
-            except Exception:
-                snmp_by_group[gid] = False
-        row["snmp_enabled"] = snmp_by_group[gid]
+        row["snmp_enabled"] = False
+    try:
+        for row, cfg in _hosts_with_snmp_config(rows, enabled_only=False):
+            row["snmp_enabled"] = bool(cfg.get("enabled"))
+    except Exception:
+        pass
     return rows
 
 
@@ -1175,15 +1170,15 @@ async def trigger_mac_collection(host_id: int | None = Query(None)):
     Otherwise, collect from all hosts with SNMP enabled.
     """
     global _full_collection_running
-    from netcontrol.routes.state import _resolve_snmp_discovery_config
+    from netcontrol.routes.state import _hosts_with_snmp_config, _resolve_host_snmp_config
 
     if host_id is not None:
         host = await db.get_host(host_id)
         if not host:
             raise HTTPException(404, "Host not found")
-        snmp_cfg = _resolve_snmp_discovery_config(host.get("group_id"))
+        snmp_cfg = _resolve_host_snmp_config(host)
         if not snmp_cfg.get("enabled"):
-            raise HTTPException(400, "SNMP not enabled for this host's group")
+            raise HTTPException(400, "SNMP is not enabled for this host (its own profile or its group's)")
         result = await collect_mac_arp_tables(
             host_id,
             host["ip_address"],
@@ -1205,11 +1200,8 @@ async def trigger_mac_collection(host_id: int | None = Query(None)):
         # group (one slow group no longer stalls the rest).
         targets: list[tuple[dict, dict]] = []
         for group in await db.get_all_groups():
-            snmp_cfg = _resolve_snmp_discovery_config(group["id"])
-            if not snmp_cfg.get("enabled"):
-                continue
-            for h in await db.get_hosts_for_group(group["id"]):
-                targets.append((h, snmp_cfg))
+            hosts = await db.get_hosts_for_group(group["id"])
+            targets.extend(_hosts_with_snmp_config(hosts, group["id"]))
     except Exception:
         _full_collection_running = False
         raise
