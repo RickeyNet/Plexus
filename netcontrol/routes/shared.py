@@ -440,6 +440,20 @@ def _open_netmiko_session(host: dict, credentials: dict, *, autodetect: bool = T
     return net_connect, device["device_type"]
 
 
+def _send_parsed(conn, command: str, driver=None, **send_options):
+    """Blocking: one show command parsed by ntc-templates. Returns the
+    parsed rows, or the raw text when no template parsed it (what Netmiko's
+    ``use_textfsm`` returns). The templates are those of the session's
+    platform, or of the driver's ``template_platform`` when it names one."""
+    from netmiko.utilities import get_structured_data
+
+    platform = driver.template_platform if driver is not None else None
+    if not platform:
+        return conn.send_command(command, use_textfsm=True, **send_options)
+    output = conn.send_command(command, **send_options)
+    return get_structured_data(str(output or ""), platform=platform, command=command)
+
+
 # Netmiko's default read timeout (10 s) is too short for a chassis to print
 # its configuration, and far too short with every default included.
 _CONFIG_READ_TIMEOUT_SECONDS = 120
@@ -567,7 +581,7 @@ async def _collect_mac_table_via_cli(host: dict, credentials: dict) -> list[dict
             # dicts).  When no template matches, Netmiko returns the raw
             # string instead - guard against that so we don't crash with
             # AttributeError downstream.
-            parsed = conn.send_command(cmd, use_textfsm=True)
+            parsed = _send_parsed(conn, cmd, driver)
             if not isinstance(parsed, list):
                 return []
             return driver.parse_mac_table(parsed)

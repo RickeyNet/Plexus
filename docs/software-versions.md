@@ -37,7 +37,7 @@ shown only to users with its feature.
 
 | Source | Devices | Version read | Platform |
 |---|---|---|---|
-| Inventory | every host with a stored software version | `software_version` of the host (SNMP sysDescr, or SSH `show version` read by inventory **Discover devices** / **Sync** with the Plexus service credential or a picked one; that read also sets the host's model, serial and device type, so IOS XE switches are `cisco_xe` without SNMP) | from the host's driver: `cisco_ios` is IOS XE when the version is 16.x or later, `cisco_nxos`, `cisco_xr`, `cisco_ftd` (ASA when the model says so), `juniper_junos`, `arista_eos`, `fortinet_fortios`, `paloalto_panos`, `aruba_aoscx` (AOS-CX), `aruba_osswitch` and `hp_procurve` (AOS-Switch), `aruba_instant_on` (Instant On); otherwise guessed from the text, else **Other** |
+| Inventory | every host with a stored software version | `software_version` of the host (SNMP sysDescr, or SSH `show version` read by inventory **Discover devices** / **Sync** with the Plexus service credential or a picked one; that read also sets the host's model, serial and device type, so IOS XE switches are `cisco_xe` without SNMP) | from the host's driver: `cisco_ios` is IOS XE when the version is 16.x or later, `cisco_nxos`, `cisco_xr`, `cisco_ftd` (ASA when the model says so), `juniper_junos`, `arista_eos`, `fortinet_fortios`, `paloalto_panos`, `aruba_aoscx` (AOS-CX), `aruba_osswitch` and `hp_procurve` (AOS-Switch), `aruba_instant_on` (Instant On), `netgear_prosafe`, `netgear_smart` and `netgear_ap` (Netgear managed switch, smart switch, access point); otherwise guessed from the text, else **Other** |
 | Meraki | every device of the latest collection | the device's firmware (`wired-18-107-2` is shown as `18.107.2`) | by product: Meraki MX, MS, MR, MG, MV, MT |
 | Cato | every Socket of the latest collection | the Socket version | Cato Socket |
 | Cisco FMC | every managed device and the FMC of the latest collection | the FTD software version; the FMC version | Cisco Secure Firewall Threat Defense, Management Center |
@@ -185,7 +185,7 @@ Every write is recorded in the audit log under category `software`. Tables:
   availability (the Dashboard's per-network upgrade information) is not
   read yet.
 - Cisco PSIRT is the only advisory feed. Advisories for Meraki, Cato,
-  Juniper, Arista, Fortinet and Palo Alto devices have to be entered or
+  Juniper, Arista, Fortinet, Palo Alto, Aruba and Netgear devices have to be entered or
   imported; the version specification grammar is meant to make that quick.
 - A version is matched as a string of parts; an advisory that depends on a
   feature being configured (most Cisco advisories list "vulnerable

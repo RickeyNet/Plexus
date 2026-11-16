@@ -33,6 +33,7 @@ from netcontrol.drivers import (  # noqa: F401
     cisco_xr,
     fortinet_fortios,
     juniper_junos,
+    netgear,
     paloalto_panos,
 )
 from netcontrol.drivers.base import (
