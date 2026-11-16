@@ -431,6 +431,7 @@ _SSH_SESSION_TYPES = frozenset(
         "fortinet",
         "aruba_aoscx",
         "aruba_osswitch",
+        "netgear_prosafe",
     }
 )
 

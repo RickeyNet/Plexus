@@ -52,6 +52,9 @@ PLATFORMS: dict[str, dict[str, Any]] = {
     "aos-cx": {"label": "Aruba AOS-CX", "psirt": None},
     "aos-switch": {"label": "Aruba AOS-Switch / HP ProCurve", "psirt": None},
     "instant-on": {"label": "Aruba Instant On", "psirt": None},
+    "netgear-managed": {"label": "Netgear managed switch", "psirt": None},
+    "netgear-smart": {"label": "Netgear smart switch", "psirt": None},
+    "netgear-ap": {"label": "Netgear access point", "psirt": None},
     "other": {"label": "Other", "psirt": None},
 }
 
@@ -77,6 +80,9 @@ DEVICE_TYPE_PLATFORMS = {
     "aruba_procurve": "aos-switch",
     "hp_procurve": "aos-switch",
     "aruba_instant_on": "instant-on",
+    "netgear_prosafe": "netgear-managed",
+    "netgear_smart": "netgear-smart",
+    "netgear_ap": "netgear-ap",
 }
 
 _MERAKI_KIND_PLATFORMS = {

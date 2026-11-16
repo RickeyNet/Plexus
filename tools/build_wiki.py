@@ -68,6 +68,7 @@ PAGES: list[tuple[str, list[tuple[str, str]]]] = [
             ("Discovery", "docs/discovery.md"),
             ("Device-Model", "docs/device-model.md"),
             ("HPE-Aruba-and-HP-Switches", "docs/aruba-switches.md"),
+            ("Netgear-Switches-and-Access-Points", "docs/netgear.md"),
             ("Custom-Fields-and-Tags", "docs/custom-fields-and-tags.md"),
             ("VRFs-and-VLANs", "docs/vrfs-and-vlans.md"),
             ("IPAM", "docs/ipam.md"),

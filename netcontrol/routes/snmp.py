@@ -117,6 +117,10 @@ def _infer_device_category(model: str, sys_descr: str, device_type: str) -> str:
     # Every Aruba platform Plexus detects is a switch.
     if device_type.startswith("aruba_"):
         return "switch"
+    if device_type == "netgear_ap":
+        return "wireless"
+    if device_type.startswith("netgear_"):
+        return "switch"
     return ""
 
 
@@ -153,6 +157,48 @@ def _aruba_device_type(sys_descr: str) -> str:
     return ""
 
 
+# sysDescr of the Netgear lines: the model, the product description, then
+# the firmware and the boot code. A recent one names neither "NETGEAR" nor
+# "ProSAFE", so a model that opens the text is enough:
+#   managed:  "M4300-28G ProSAFE 24-port 1G and 2-port 10GBASE-T and 2-port 10G SFP+, 12.0.17.6, B1.0.0.17"
+#             "M4250-10G2F-PoE+ 8x1G PoE+ 125W and 2x1G and 2xSFP Managed Switch, 13.0.4.26, 1.0.0.11"
+#   smart:    "GS724Tv4 ProSafe 24-port Gigabit Ethernet Smart Switch, 6.3.1.33, B1.0.0.4"
+#   AP:       names its model (WAX620, WAC510), seldom its firmware
+_NETGEAR = re.compile(r"netgear|prosafe", re.IGNORECASE)
+_NETGEAR_MANAGED_MODEL = re.compile(r"\b(M[4-7]\d{3}(?:-[\w+]+)*|[GX]SM\d{4}\w*)")
+_NETGEAR_SMART_MODEL = re.compile(r"\b((?:GS|XS|MS)\d{3,4}T\w*|GC\d{3}\w*)")
+# Zyxel names its access points WAX too.
+_NETGEAR_AP_MODEL = re.compile(r"\b(W(?:AX|AC|BE|NDAP|NAP)\d{3}\w*)")
+_NETGEAR_VERSION = re.compile(r",\s*(\d+\.\d+\.\d+(?:\.\d+)?)\s*(?:,|$)")
+_NETGEAR_MODELS = {
+    "netgear_ap": _NETGEAR_AP_MODEL,
+    "netgear_prosafe": _NETGEAR_MANAGED_MODEL,
+    "netgear_smart": _NETGEAR_SMART_MODEL,
+}
+_NETGEAR_OS_NAMES = {
+    "netgear_prosafe": "netgear-managed",
+    "netgear_smart": "netgear-smart",
+    "netgear_ap": "netgear-ap",
+}
+
+
+def _netgear_device_type(sys_descr: str) -> str:
+    """The Netgear device type a sysDescr names, or ``""``. A switch model
+    counts when it opens the text or the text names Netgear, so another
+    vendor's model with the same letters is not taken for one."""
+    text = (sys_descr or "").strip()
+    if "zyxel" in text.lower():
+        return ""
+    named = bool(_NETGEAR.search(text))
+    for device_type, pattern in _NETGEAR_MODELS.items():
+        match = pattern.search(text)
+        if match and (named or match.start() == 0 or device_type == "netgear_ap"):
+            return device_type
+    if named and "access point" in text.lower():
+        return "netgear_ap"
+    return ""
+
+
 def _infer_vendor_os_from_text(raw_text: str) -> tuple[str, str, str]:
     lowered = (raw_text or "").lower()
     vendor = "unknown"
@@ -184,9 +230,17 @@ def _infer_vendor_os_from_text(raw_text: str) -> tuple[str, str, str]:
     elif _aruba_device_type(raw_text or ""):
         vendor = "aruba"
         detected_type = _aruba_device_type(raw_text or "")
+    elif _netgear_device_type(raw_text or ""):
+        vendor = "netgear"
+        detected_type = _netgear_device_type(raw_text or "")
+    elif _NETGEAR.search(raw_text or ""):
+        # A Netgear device of a line Plexus does not tell: the type stays unknown.
+        vendor = "netgear"
 
     if detected_type in _ARUBA_OS_NAMES:
         os_name = _ARUBA_OS_NAMES[detected_type]
+    elif detected_type in _NETGEAR_OS_NAMES:
+        os_name = _NETGEAR_OS_NAMES[detected_type]
     elif "ios-xe" in lowered or "iosxe" in lowered or "ios xe" in lowered:
         os_name = "ios-xe"
     elif "ios-xr" in lowered or "iosxr" in lowered or "ios xr" in lowered:
@@ -262,6 +316,15 @@ def _parse_model_and_version(sys_descr: str) -> tuple[str, str]:
         m = _AOS_SWITCH_MODEL.search(sys_descr) if aruba_type == "aruba_osswitch" else None
         m = m or _HPE_PRODUCT_NUMBER.search(sys_descr)
         model = m.group(1) if m else ""
+
+    # Netgear (formats above ``_netgear_device_type``): the model, and the
+    # firmware as the first dotted number after a comma.
+    netgear_type = _netgear_device_type(sys_descr)
+    if netgear_type:
+        m = _NETGEAR_MODELS[netgear_type].search(sys_descr)
+        model = m.group(1) if m else ""
+        m = _NETGEAR_VERSION.search(sys_descr)
+        version = m.group(1) if m else ""
 
     return model, version
 

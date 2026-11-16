@@ -32,6 +32,12 @@ _OS_MARKERS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"ArubaOS-CX|\bAOS-CX\b", re.IGNORECASE), "aruba_aoscx"),
     # AOS-Switch / ProCurve names no OS: its output opens with the image stamp.
     (re.compile(r"^\s*Image stamp:", re.IGNORECASE | re.MULTILINE), "aruba_osswitch"),
+    # Netgear managed switches print the Broadcom ICOS field list, which
+    # names no vendor: told by the model (M4300-28G, XSM4348CS, GSM7228PS).
+    (
+        re.compile(r"^\s*Machine Model\s*\.{3,}\s*(?:M[4-7]\d{3}\b|[GX]SM\d{4})", re.IGNORECASE | re.MULTILINE),
+        "netgear_prosafe",
+    ),
 )
 
 # Version, per OS; the first group is the version.
@@ -53,6 +59,7 @@ _VERSION_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
     "aruba_aoscx": (re.compile(r"^\s*Version\s*:\s*(\S+)", re.IGNORECASE | re.MULTILINE),),
     # A line of its own under the image stamp: WC.16.10.0003, K.15.18.0013, Q.11.57.
     "aruba_osswitch": (re.compile(r"^\s+([A-Z]{1,2}\.\d+\.\d+(?:\.\d+)?\w*)\s*$", re.MULTILINE),),
+    "netgear_prosafe": (re.compile(r"^\s*Software Version\s*\.+\s*(\S+)", re.IGNORECASE | re.MULTILINE),),
 }
 # Any other output: the first "Version x.y..." on a line.
 _GENERIC_VERSION = re.compile(r"\bVersion\s+(\d+\.\d+[\w.()\-]*)")
@@ -73,6 +80,7 @@ _MODEL_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
     "cisco_ftd": (re.compile(r"^\s*Model\s*:\s*(.+?)\s*\(\d+\)", re.MULTILINE),),
     "arista_eos": (re.compile(r"^\s*Arista\s+(\S+)", re.MULTILINE),),
     "juniper_junos": (re.compile(r"^\s*Model:\s*(\S+)", re.MULTILINE),),
+    "netgear_prosafe": (re.compile(r"^\s*Machine Model\s*\.+\s*(\S+)", re.IGNORECASE | re.MULTILINE),),
 }
 
 # Hostname, per OS. IOS / IOS XE / IOS XR: "<name> uptime is ...".

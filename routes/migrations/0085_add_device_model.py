@@ -44,6 +44,7 @@ _MANUFACTURER_PREFIXES: tuple[tuple[str, str], ...] = (
     ("paloalto", "Palo Alto Networks"),
     ("aruba", "Aruba"),
     ("hp", "HPE"),
+    ("netgear", "Netgear"),
     ("dell", "Dell"),
     ("extreme", "Extreme Networks"),
     ("huawei", "Huawei"),

@@ -47,6 +47,12 @@ describe('guessDeviceType', () => {
     // An Instant On switch has no CLI: its own SNMP-only type, not an SSH one.
     expect(guess('Aruba Instant On 1830 24G 2SFP Switch JL812A')).toBe('aruba_instant_on');
     expect(guess('HPE Networking InstantOn 1930')).toBe('aruba_instant_on');
+    // Netgear: SSH on the fully managed switches only.
+    expect(guess('M4300-28G ProSAFE 24-port 1G')).toBe('netgear_prosafe');
+    expect(guess('NETGEAR M4250-10G2F-PoE+')).toBe('netgear_prosafe');
+    expect(guess('GS724Tv4 ProSafe 24-port Gigabit Ethernet Smart Switch')).toBe('netgear_smart');
+    expect(guess('NETGEAR WAX620')).toBe('netgear_ap');
+    expect(guess('Zyxel WAX650S')).toBe('icmp_only');
   });
 
   it('makes unknown and Linux devices ICMP-only', () => {

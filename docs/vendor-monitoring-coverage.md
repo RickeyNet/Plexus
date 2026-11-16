@@ -46,6 +46,8 @@ them) into `monitoring_alerts` / notification channels
 | Juniper / Arista / Fortinet / PAN-OS (inventory) | host, interfaces | SNMP + ICMP poll | Yes (ICMP) | Yes | Full pipeline. |
 | HPE Aruba AOS-CX / AOS-Switch (HP ProCurve) (inventory) | host, interfaces | SNMP + ICMP poll | Yes (ICMP) | Yes | Full pipeline. CPU and memory: HP `STATISTICS-MIB` / `NETSWITCH-MIB` on AOS-Switch, HOST-RESOURCES-MIB on AOS-CX. `docs/aruba-switches.md`. |
 | HPE Aruba Instant On 1830 / 1930 / 1960 (inventory) | host, interfaces | SNMP + ICMP poll (`aruba_instant_on`, no SSH: the switch has no command line) | Yes (ICMP) | Yes | Full pipeline over SNMP. The switch answers SNMP only in local management mode (v1/v2c read-only on the 1830); a cloud-managed one is ICMP only. CPU and memory only when it answers HOST-RESOURCES-MIB. |
+| Netgear managed switches (M4250 / M4300 / M4350 / M4500) (inventory) | host, interfaces | SNMP + ICMP poll | Yes (ICMP) | Yes | Full pipeline. CPU and memory only when the switch answers HOST-RESOURCES-MIB (no built-in vendor OIDs: gap). Not run against a device yet. `docs/netgear.md`. |
+| Netgear smart switches and access points (inventory) | host, interfaces | SNMP + ICMP poll (`netgear_smart`, `netgear_ap`, no SSH: no command line) | Yes (ICMP) | Yes | Full pipeline over SNMP. An access point answers SNMP only when it is enabled in standalone mode; one that offers none is ICMP only. No wireless client or radio data. |
 | ICMP-only hosts | host | ICMP | Yes | Yes | |
 
 ### Muting and removal of API-collected entities
@@ -90,6 +92,8 @@ platform.
 | Fortinet FortiOS | SNMP/SSH | Manual / import | Manual | Candidate: FortiGuard PSIRT feed. Discovery's SSH `show version` does not read FortiOS (`get system status`): gap. |
 | HPE Aruba AOS-CX / AOS-Switch (HP ProCurve) | SNMP sysDescr; SSH `show version` at inventory discovery / sync (platforms `aos-cx`, `aos-switch`) | Manual / import | Manual | Gap: HPE publishes security bulletins but no version-matched vulnerability API. Candidate: the HPE Aruba Networking security advisory feed, matched by product family. |
 | HPE Aruba Instant On | SNMP sysDescr (platform `instant-on`) | Manual / import | Manual | Same gap. No SSH on the switch, so the version comes from SNMP only. |
+| Netgear managed switches | SNMP sysDescr; SSH `show version` at inventory discovery / sync (platform `netgear-managed`) | Manual / import | Manual | Gap: Netgear publishes security advisories as web pages, with no version-matched vulnerability API. |
+| Netgear smart switches and access points | SNMP sysDescr (platforms `netgear-smart`, `netgear-ap`) | Manual / import | Manual | Same gap. No SSH, so the version comes from SNMP only; an access point's sysDescr seldom carries it (gap: the version is then not tracked). |
 
 ## Internet egress and cloud ingress (path trace)
 

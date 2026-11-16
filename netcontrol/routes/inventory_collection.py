@@ -75,6 +75,7 @@ from netcontrol.routes.shared import (
     _config_capture_commands,
     _get_session,
     _open_netmiko_session,
+    _send_parsed,
     require_credential_access,
     service_credential,
     supervise_task,
@@ -141,11 +142,12 @@ class _NotParsed(Exception):
     """The device printed the table but no ntc-template parsed it."""
 
 
-def _read_parsed(conn: Any, command: str) -> list[dict] | str | None:
+def _read_parsed(conn: Any, command: str, driver: Driver | None = None) -> list[dict] | str | None:
     """Blocking: one show command parsed by ntc-templates. Returns its rows,
     the raw text when no template parsed it, or ``None`` when the device
-    rejected the command or printed nothing."""
-    output = conn.send_command(command, use_textfsm=True, read_timeout=_READ_TIMEOUT_SECONDS)
+    rejected the command or printed nothing. ``driver`` picks the
+    templates of a platform parsed under another name (``_send_parsed``)."""
+    output = _send_parsed(conn, command, driver, read_timeout=_READ_TIMEOUT_SECONDS)
     if isinstance(output, list):
         return output
     text = str(output or "")
@@ -167,7 +169,7 @@ def _read_vlans(conn: Any, driver: Driver, config: str | None) -> list[dict] | N
     command = driver.vlan_show_command()
     from_config = _config_vlans(driver, config)
     try:
-        parsed = _read_parsed(conn, command)
+        parsed = _read_parsed(conn, command, driver)
     except Exception:
         if from_config:
             return from_config
@@ -183,14 +185,14 @@ def _read_vlans(conn: Any, driver: Driver, config: str | None) -> list[dict] | N
 def _read_interfaces(conn: Any, driver: Driver) -> list[dict] | None:
     """Blocking: the port table, merged with the switchport table when the
     platform has one (without it a trunk's allowed VLANs stay unknown)."""
-    status = _read_parsed(conn, driver.interface_status_show_command())
+    status = _read_parsed(conn, driver.interface_status_show_command(), driver)
     if status is None:
         return None
     if not isinstance(status, list):
         raise _NotParsed
     switchport: list[dict] = []
     try:
-        parsed = _read_parsed(conn, driver.interface_switchport_show_command())
+        parsed = _read_parsed(conn, driver.interface_switchport_show_command(), driver)
         switchport = parsed if isinstance(parsed, list) else []
     except DriverCapabilityError:
         pass
@@ -206,7 +208,7 @@ def _read_neighbors(conn: Any, driver: Driver) -> list[dict] | None:
     entries: list[dict] = []
     read = False
     for protocol, command in driver.neighbor_show_commands():
-        parsed = _read_parsed(conn, command)
+        parsed = _read_parsed(conn, command, driver)
         if parsed is None:
             continue
         if not isinstance(parsed, list):
@@ -234,7 +236,7 @@ def _merge_neighbors(entries: list[dict]) -> list[dict]:
 
 def _read_macs(conn: Any, driver: Driver) -> list[dict] | None:
     """Blocking: the MAC address table, as the driver's ``parse_mac_table`` rows."""
-    parsed = _read_parsed(conn, driver.mac_table_show_command())
+    parsed = _read_parsed(conn, driver.mac_table_show_command(), driver)
     if parsed is None:
         return None
     if not isinstance(parsed, list):

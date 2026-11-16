@@ -188,6 +188,10 @@ class Driver:
     # type itself: ntc-templates files its templates under one name per
     # platform (``hp_procurve``), and Netmiko looks them up by the session's.
     session_type: ClassVar[str | None] = None
+    # The ntc-templates platform the show commands are parsed as, when the
+    # session's has no templates: a Netgear managed switch is reached with
+    # Netmiko's ``netgear_prosafe`` and prints the Broadcom ICOS tables.
+    template_platform: ClassVar[str | None] = None
 
     def build_netflow_config(self, cfg: NetflowConfig) -> list[str]:
         """Return the config-mode command lines that enable NetFlow export."""

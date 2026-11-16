@@ -17,6 +17,9 @@ export const DEVICE_TYPES: readonly { value: string; label: string }[] = [
   { value: 'aruba_aoscx', label: 'Aruba AOS-CX' },
   { value: 'aruba_osswitch', label: 'Aruba AOS-Switch / HP ProCurve' },
   { value: 'aruba_instant_on', label: 'Aruba Instant On (SNMP only, the switch has no SSH)' },
+  { value: 'netgear_prosafe', label: 'Netgear managed switch (M4250, M4300, M4350, M4500)' },
+  { value: 'netgear_smart', label: 'Netgear smart switch (SNMP only, the switch has no SSH)' },
+  { value: 'netgear_ap', label: 'Netgear access point (SNMP only)' },
   { value: 'icmp_only', label: 'ICMP-only (ping liveness, no SNMP/SSH)' },
 ];
 

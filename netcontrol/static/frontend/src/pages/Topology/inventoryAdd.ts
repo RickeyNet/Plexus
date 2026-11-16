@@ -86,6 +86,12 @@ const RULES: readonly { test: RegExp; types: readonly string[] }[] = [
   { test: /instant ?on/i, types: ['aruba_instant_on'] },
   { test: /aos-?cx|aruba.*\bcx\b/i, types: ['aruba_aoscx'] },
   { test: /aruba|procurve|\baos-?s(witch)?\b/i, types: ['aruba_osswitch', 'aruba_aoscx'] },
+  // Netgear: only the fully managed switches have a command line. Zyxel
+  // names its access points WAX too.
+  { test: /zyxel/i, types: [] },
+  { test: /\bw(ax|ac|be)\d{3}|netgear.*access point/i, types: ['netgear_ap'] },
+  { test: /(^|netgear\s+|prosafe\s+)(m[4-7]\d{3}\b|[gx]sm\d{4})/i, types: ['netgear_prosafe'] },
+  { test: /netgear|prosafe/i, types: ['netgear_smart'] },
 ];
 
 /**
