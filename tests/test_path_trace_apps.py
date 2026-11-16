@@ -302,6 +302,31 @@ def test_network_rules_trace_items_word_the_application_reasons():
     )
 
 
+def test_network_rules_undecided_only_by_an_unknown_application_are_one_item():
+    raw = build_sample_raw()
+    raw["wan_network"]["rules"] = [
+        network_rule(1, "Wiki egress", "OPTIMIZED", application=[_ref("wiki", "Team Wiki")]),
+        network_rule(2, "Tracker egress", "OPTIMIZED", application=[_ref("tracker", "Issue Tracker")]),
+        network_rule(3, "Chat egress", "NONE", application=[_ref("chat", "Team Chat")]),
+    ]
+    found = network_rules.trace_egress(
+        network_rule_policy(raw),
+        net("10.88.0.11"),  # type: ignore[arg-type]
+        net("0.0.0.0/0"),  # type: ignore[arg-type]
+        "tcp",
+        (443, 443),
+        app=apps.target("shop.example.com", build_snapshot(raw)["applications"]),
+        dst_unknown=True,
+    )
+    routes = [item for item in found["items"] if item[0] == "route"]
+    # One item for the three rules, not one each that repeats the reason.
+    assert len([item for item in routes if "may apply" in item[3]]) == 1
+    text = next(item[3] for item in routes if "may apply" in item[3])
+    assert text.startswith("3 rules ahead may apply, and which one cannot be decided: they name application Team Wiki")
+    assert text.count("which application shop.example.com is is not known") == 1
+    assert "(Rule 1 Wiki egress and Rule 2 Tracker egress)" in text and "(Rule 3 Chat egress)" in text
+
+
 # ── Other vendors ───────────────────────────────────────────────────────────
 
 

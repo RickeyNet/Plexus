@@ -420,6 +420,47 @@ rule_label = _label
 route_text = _route_text
 
 
+def _unknown_target(rule: dict, asked: _Asked) -> tuple[list[str], str] | None:
+    """``(the names, what is not known)`` when all that leaves ``rule``
+    undecided is what the application asked about is (``apps.unknown_target``):
+    the same for every such rule, so the trace says it once for all of them.
+    ``None`` when anything else leaves it undecided."""
+    if asked.app is None or rule.get("src_unresolved") or rule.get("dst_unresolved"):
+        return None
+    names: list[str] = []
+    unknown: set[str] = set()
+    for criterion in rule.get("app") or []:
+        state, _ = _criterion(criterion, asked)
+        if state != _MAYBE:
+            continue
+        match = criterion.get("match")
+        why = trace_apps.unknown_target(match, asked.app) if isinstance(match, dict) else ""
+        if not why:
+            return None
+        names.append(trace_apps.criterion_text(match))
+        unknown.add(why)
+    return (names, unknown.pop()) if names and len(unknown) == 1 else None
+
+
+def _grouped_candidates(rules: list[dict], why: str, names: list[str]) -> str:
+    """One item for the rules ahead that may apply for the same reason, with
+    the route each would take, rules of one route together."""
+    routes: dict[str, list[str]] = {}
+    for rule in rules:
+        routes.setdefault(_route_text(rule["egress"])[0], []).append(_label(rule))
+    shown = list(dict.fromkeys(names))
+    named = _and(shown[:_NAMES_SHOWN] + ([f"{len(shown) - _NAMES_SHOWN} more"] if len(shown) > _NAMES_SHOWN else []))
+    would = "; ".join(f"{route} ({_and(labels)})" for route, labels in routes.items())
+    return (
+        f"{len(rules)} rules ahead may apply, and which one cannot be decided: they name {named}, and {why}. "
+        f"Their routes would be: {would}."
+    )
+
+
+# The names a grouped item lists before "and N more".
+_NAMES_SHOWN = 6
+
+
 def _route_status(egress: dict) -> str:
     route = _text(egress.get("route")).upper()
     if route == "NAT":
@@ -468,8 +509,27 @@ def trace_egress(
 
     rule = found["rule"]
     fallen = f"falls to {_label(rule)}" if rule is not None else "matches no rule"
+    # Rules left undecided only by what the application asked about is say so
+    # once, together, in the place of the first: one line each repeats it.
+    asked = _Asked(src, dst, _text(protocol).lower(), ports, app, dst_unknown)
+    alike: dict[str, tuple[list[dict], list[str]]] = {}
+    keys: list[str | None] = []
     for candidate in found["candidates"]:
+        same = _unknown_target(candidate["rule"], asked) if candidate["why"] == _MAYBE else None
+        keys.append(same[1] if same else None)
+        if same is not None:
+            group = alike.setdefault(same[1], ([], []))
+            group[0].append(candidate["rule"])
+            group[1].extend(same[0])
+    shown: set[str] = set()
+    for candidate, key in zip(found["candidates"], keys, strict=True):
         other = candidate["rule"]
+        if key is not None and len(alike[key][0]) > 1:
+            if key not in shown:
+                shown.add(key)
+                text = _grouped_candidates(alike[key][0], key, alike[key][1])
+                items.append((ROUTE, UNKNOWN, NAME, text, None))
+            continue
         # Asked about an application, each detail is a clause of its own.
         detail = ("; " if app is not None else ", ").join(candidate["detail"])
         would, _why = _route_text(other["egress"])
