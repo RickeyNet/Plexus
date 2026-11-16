@@ -743,6 +743,8 @@ describe("opnsense collection options", () => {
       "High availability (CARP)",
       "Routing table",
       "Security audit of installed packages",
+      "ARP, NDP and DHCP leases (MAC tracking and IPAM)",
+      "Rule counters (unused firewall rules)",
       "Store config.xml as a config backup (the firewall must be an inventory host)",
       "Correlate with Plexus inventory",
     ]);

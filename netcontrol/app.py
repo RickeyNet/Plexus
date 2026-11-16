@@ -170,7 +170,7 @@ from netcontrol.routes.device_model import (
     router as device_model_router,
 )
 from netcontrol.routes.dhcp import init_dhcp, router as dhcp_router, sync_dhcp_server
-from netcontrol.routes.dhcp_adapters import DhcpAdapterError, collect_dhcp_snapshot
+from netcontrol.routes.dhcp_adapters import DhcpAdapterError, collect_dhcp_snapshot, is_collection_fed
 from netcontrol.routes.federation import (
     federation_sync_loop,
     init_federation,
@@ -280,6 +280,7 @@ from netcontrol.routes.network_objects import (
     host_router as network_objects_host_router,
     router as network_objects_router,
 )
+from netcontrol.routes.opnsense_rules import router as opnsense_rules_router
 from netcontrol.routes.playbooks import (
     PlaybookCreate,
     PlaybookUpdate,
@@ -1313,7 +1314,8 @@ async def _dhcp_sync_loop() -> None:
             continue
         for server in servers:
             server_id = server.get("id")
-            if not server_id:
+            if not server_id or is_collection_fed(server.get("provider")):
+                # An OPNsense firewall's leases arrive with its topology collection.
                 continue
             try:
                 auth_config = await db.get_dhcp_server_auth_config(server_id)
@@ -2415,6 +2417,11 @@ app.include_router(git_sources_router, dependencies=[Depends(require_admin)])
 # Config Backups + admin
 app.include_router(
     config_backups_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("config-backups"))],
+)
+# The rule views of OPNsense firewalls, read from their config backups.
+app.include_router(
+    opnsense_rules_router,
     dependencies=[Depends(require_auth), Depends(require_feature("config-backups"))],
 )
 # Compliance + admin

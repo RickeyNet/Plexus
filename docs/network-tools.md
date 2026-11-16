@@ -42,6 +42,13 @@ Scheduled topology discovery also collects MAC and ARP tables from each host
 it walks, so the tables fill in without **Collect Now** when that schedule is
 on.
 
+An OPNsense firewall added as a Map source adds its ARP and NDP tables with
+every collection of that source, as the ARP table of its inventory host
+(the firewall must be imported into the inventory first). They fill in the
+**IP Address** of MAC rows that switches saw without one and show under
+**By Host** for the firewall. See
+[OPNsense in the Topology Map](opnsense-topology.md#arp-ndp-and-dhcp-leases).
+
 ### Search for a device
 
 1. Open **Search**.

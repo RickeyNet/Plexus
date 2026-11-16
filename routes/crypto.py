@@ -16,6 +16,8 @@ the upgrade without a migration step.
 
 import base64
 import binascii
+import hashlib
+import hmac
 import logging
 import os
 import stat
@@ -211,3 +213,11 @@ def decrypt(ciphertext: str) -> str:
         "Failed to decrypt credential - the encryption key may have changed. "
         "Re-enter the credential or restore the original netcontrol.key file."
     )
+
+
+def derive_key(purpose: str) -> bytes:
+    """A 32-byte key for ``purpose`` derived from this install's encryption
+    key (HMAC-SHA256), for keyed hashes that must not be reproducible
+    without it, such as the fingerprints of masked secrets. The encryption
+    key itself never leaves this module."""
+    return hmac.new(_key_raw, b"plexus-derived-key:" + purpose.encode("utf-8"), hashlib.sha256).digest()

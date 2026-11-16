@@ -696,6 +696,22 @@ NGFW policy-based mode the security policies are not read, so every policy
 entry is *unknown*. An interface address learned by DHCP or PPPoE is not in
 the configuration; the route capture supplies its network.
 
+**OPNsense.** Read from the `config.xml` the OPNsense collection stores as
+the host's config backup. Each interface's filter rules are a stateful
+access list bound in, in pf order (the quick rules in order, then the rules
+without quick, the last one first, then the default block); floating rules
+with direction `out` make an out list that ends in the default pass.
+Aliases (host, network, network group, port, nested) and interface
+networks and addresses (`lan`, `lanip`, `(self)`) are resolved; URL table,
+GeoIP and other dynamic aliases, host names, negations, schedules and OS
+fingerprints are unresolved. NAT: 1:1 NAT, port forwards (a `pass`
+association adds an allow entry before the rules), and outbound NAT by its
+mode (manual rules, then the automatic rules of each upstream interface).
+Routes: the static routes and the default gateway, as there is no route
+capture. Not collected: tunnels and their interface rules, policy-based
+routing, the bogon table, NPTv6. See
+[opnsense-topology.md](opnsense-topology.md#firewall-rules-and-path-trace).
+
 A device with no routing data, such as an external neighbor, is passed over
 the shortest way on the map, each such hop with one unknown item, and the
 asymmetry line then says *unknown*.

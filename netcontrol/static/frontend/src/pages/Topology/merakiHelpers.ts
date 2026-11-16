@@ -309,6 +309,8 @@ export const FALLBACK_OPNSENSE_OPTIONS: OpnsenseBuildOptions = {
   include_ha: true,
   include_routes: true,
   include_firmware_audit: true,
+  include_clients: true,
+  include_rule_stats: true,
   config_backup: true,
   inventory_enrich: true,
 };
@@ -345,6 +347,16 @@ export const OPNSENSE_OPTION_TOGGLES: {
     key: "include_firmware_audit",
     label: "Security audit of installed packages",
     hint: "The firmware security audit: installed packages with known vulnerabilities.",
+  },
+  {
+    key: "include_clients",
+    label: "ARP, NDP and DHCP leases (MAC tracking and IPAM)",
+    hint: "The ARP and NDP tables go into MAC tracking (the firewall must be an inventory host); the DHCP leases (ISC, Kea, Dnsmasq) into IPAM's DHCP servers.",
+  },
+  {
+    key: "include_rule_stats",
+    label: "Rule counters (unused firewall rules)",
+    hint: "The packet and state counters of each filter rule, so the Rules view can flag rules that matched nothing (OPNsense 24.1+).",
   },
   {
     key: "config_backup",
@@ -498,6 +510,7 @@ const PHASE_LABELS: Record<string, string> = {
   "opnsense vpn": "Reading VPN tunnels",
   "opnsense ha": "Reading high availability (CARP) status",
   "opnsense routes": "Reading the routing table",
+  "opnsense clients": "Reading ARP, NDP and DHCP leases",
   "opnsense firmware": "Reading the firmware version and security audit",
   "opnsense config": "Reading config.xml",
   "building map": "Building the map",

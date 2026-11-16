@@ -50,6 +50,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
+from netcontrol.integrations.meraki.clients import normalize_mac
 from netcontrol.integrations.meraki.forwarding import canonical
 from netcontrol.integrations.meraki.normalize import (
     SCHEMA_VERSION,
@@ -62,7 +63,7 @@ from netcontrol.integrations.meraki.normalize import (
     kv_section,
     table_section,
 )
-from netcontrol.integrations.opnsense.collector import info_warning
+from netcontrol.integrations.opnsense.collector import LEASE_BACKENDS, info_warning
 from netcontrol.integrations.software.versions import canonical_version
 
 PROVIDER = "opnsense"
@@ -90,6 +91,9 @@ SECTION_AUDIT = "Security audit"
 SECTION_VULNERABLE = "Vulnerable packages"
 SECTION_INVENTORY = "Plexus inventory"
 SECTION_HA = "High availability"
+SECTION_ARP = "ARP table"
+SECTION_NDP = "NDP table"
+SECTION_LEASES = "DHCP leases"
 # Section titles of the gateway, tunnel peer and OpenVPN server nodes.
 SECTION_GATEWAY = "Gateway"
 SECTION_IPSEC_PEER = "IPsec peer"
@@ -100,6 +104,9 @@ SECTION_OPENVPN_SERVER = "OpenVPN server"
 SECTION_OPENVPN_CLIENTS = "Connected clients"
 
 MAX_ROUTE_ROWS = 2000
+# The ARP, NDP and lease tables shown in the firewall's details (every row
+# still reaches MAC tracking and IPAM).
+MAX_CLIENT_ROWS = 2000
 
 # Gateway monitor status (``routes/gateway/status``; dpinger) -> uplink edge
 # status. "none" is OPNsense's "Online" (no alarm); see ``gateway_status``.
@@ -368,6 +375,173 @@ def audit_advisories(audit: dict | None, version: str) -> list[dict[str, Any]]:
     return advisories
 
 
+# ── Clients: ARP, NDP, DHCP leases ──────────────────────────────────────────
+
+
+def _address(value: Any) -> str:
+    """The canonical text of an IP address (``""`` when it is none: a
+    delegated prefix ``2001:db8:1::/56`` is no address)."""
+    try:
+        return str(ipaddress.ip_address(_text(value).split("%", 1)[0]))
+    except ValueError:
+        return ""
+
+
+def _neighbour_entries(rows: Any) -> list[dict[str, str]]:
+    """ARP or NDP rows (``search_arp`` / ``get_arp`` / ``search_ndp``) as
+    MAC tracking ``arp_table`` entries; incomplete entries (no MAC) and
+    duplicate addresses are left out."""
+    entries: dict[str, dict[str, str]] = {}
+    for row in _dicts(rows):
+        ip = _address(row.get("ip"))
+        mac = normalize_mac(row.get("mac"))
+        if not ip or not mac or ip in entries:
+            continue
+        entries[ip] = {
+            "ip_address": ip,
+            "mac_address": mac,
+            "interface_name": _text(row.get("intf_description")) or _text(row.get("intf")),
+            "device": _text(row.get("intf")),
+            "hostname": _text(row.get("hostname")),
+            "manufacturer": _text(row.get("manufacturer")),
+            "type": "permanent" if row.get("permanent") in (True, "1", 1, "true") else _text(row.get("type")),
+        }
+    return list(entries.values())
+
+
+def arp_entries(clients: Any) -> list[dict[str, str]]:
+    """The ARP table of a collection's ``clients`` part (see ``_neighbour_entries``)."""
+    return _neighbour_entries(_dict(clients).get("arp"))
+
+
+def ndp_entries(clients: Any) -> list[dict[str, str]]:
+    """The NDP (IPv6 neighbour) table of a collection's ``clients`` part."""
+    return _neighbour_entries(_dict(clients).get("ndp"))
+
+
+def _epoch_text(value: Any) -> str:
+    """UTC ISO text of epoch seconds (``""`` for 0, nothing or not a number)."""
+    number = _number(value)
+    if not number or number <= 0:
+        return ""
+    try:
+        return datetime.fromtimestamp(number, UTC).isoformat(timespec="seconds")
+    except OverflowError, OSError, ValueError:
+        return ""
+
+
+def _lease_time(value: Any) -> str:
+    """An ISC lease time (``2026/11/14 08:00:00``, UTC as dhcpd writes it)
+    as ISO text; epoch seconds too; ``""`` for ``never`` or nothing."""
+    text = _text(value)
+    if not text or text.lower() in ("never", "infinite"):
+        return ""
+    if text.isdigit():
+        return _epoch_text(text)
+    for layout in ("%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(text, layout).replace(tzinfo=UTC).isoformat(timespec="seconds")
+        except ValueError:
+            continue
+    return text
+
+
+# Kea lease ``state``: 0 default (active), 1 declined, 2 expired-reclaimed.
+_KEA_LEASE_STATE = {"0": "active", "1": "declined", "2": "expired"}
+
+
+def _lease(backend: str, row: dict) -> dict[str, Any] | None:
+    """One lease row of ``backend`` (a ``LEASE_BACKENDS`` key) as a
+    ``dhcp_leases`` record, or ``None`` when it has no address."""
+    address = _address(row.get("address"))
+    if not address:
+        return None
+    kind = _text(row.get("type")).lower()
+    starts = ends = ""
+    if backend.startswith("isc"):
+        mac = normalize_mac(row.get("mac") or row.get("hwaddr"))
+        hostname = _text(row.get("hostname")) or _text(row.get("client-hostname"))
+        client_id = _text(row.get("uid")) or _text(row.get("duid"))
+        state = "static" if kind == "static" else (_text(row.get("binding")) or _text(row.get("state")) or "active")
+        starts, ends = _lease_time(row.get("starts")), _lease_time(row.get("ends"))
+    else:
+        # Kea and Dnsmasq: ``hwaddr``, ``expire`` (epoch), Kea's ``valid_lifetime``.
+        mac = normalize_mac(row.get("hwaddr") or row.get("mac"))
+        hostname = _text(row.get("hostname")).rstrip(".")
+        client_id = _text(row.get("client_id")) or _text(row.get("duid"))
+        state = _KEA_LEASE_STATE.get(_text(row.get("state")), "active") if backend.startswith("kea") else "active"
+        ends = _epoch_text(row.get("expire"))
+        lifetime = _number(row.get("valid_lifetime"))
+        expire = _number(row.get("expire"))
+        if ends and lifetime and expire:
+            starts = _epoch_text(expire - lifetime)
+    interface = _text(row.get("if_descr")) or _text(row.get("if"))
+    return {
+        "address": address,
+        "scope_subnet": "",
+        "mac_address": mac,
+        "hostname": hostname,
+        "client_id": client_id,
+        "state": state.lower(),
+        "starts_at": starts,
+        "ends_at": ends,
+        "metadata": {
+            "source": PROVIDER,
+            "backend": backend,
+            "interface": interface,
+            "type": kind,
+            "description": _text(row.get("descr")),
+            "online": _text(row.get("status")),
+            "reserved": _text(row.get("is_reserved")).lower() in ("1", "true")
+            if _text(row.get("is_reserved"))
+            else None,
+        },
+    }
+
+
+def dhcp_leases(clients: Any, interfaces: Any = None) -> list[dict[str, Any]]:
+    """The DHCP leases of a collection's ``clients`` part, one per address
+    (the first backend in ``LEASE_BACKENDS`` order wins), as ``dhcp_leases``
+    records. ``scope_subnet`` is the network of the firewall interface the
+    address is in (``interfaces``: the collection's interface rows)."""
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for row in _dicts(interfaces):
+        for text in interface_addresses(row):
+            cidr = _cidr_of(text)
+            if cidr:
+                networks.append(ipaddress.ip_network(cidr))
+    # Most specific network first.
+    networks.sort(key=lambda n: n.prefixlen, reverse=True)
+    by_backend = _dict(_dict(clients).get("leases"))
+    leases: dict[str, dict[str, Any]] = {}
+    for backend, _name, _paths, _privilege in LEASE_BACKENDS:
+        for row in _dicts(by_backend.get(backend)):
+            lease = _lease(backend, row)
+            if lease is None or lease["address"] in leases:
+                continue
+            ip = ipaddress.ip_address(lease["address"])
+            lease["scope_subnet"] = next((str(n) for n in networks if n.version == ip.version and ip in n), "")
+            leases[lease["address"]] = lease
+    return list(leases.values())
+
+
+def client_counts(clients: Any) -> dict[str, Any]:
+    """The counts of a collection's ``clients`` part: ``arp`` / ``ndp``
+    entries and ``dhcp_leases`` (``None`` for a part that was not read),
+    and the lease count per backend that answered."""
+    found = _dict(clients)
+    backends = _dict(found.get("leases"))
+    leases = dhcp_leases(found) if found.get("leases") is not None else None
+    return {
+        "arp": len(arp_entries(found)) if found.get("arp") is not None else None,
+        "ndp": len(ndp_entries(found)) if found.get("ndp") is not None else None,
+        "dhcp_leases": len(leases) if leases is not None else None,
+        "lease_backends": {
+            name: len(_dicts(backends.get(key))) for key, name, _p, _v in LEASE_BACKENDS if key in backends
+        },
+    }
+
+
 class _Builder:
     def __init__(self, raw: dict, inventory: InventoryIndex) -> None:
         self.raw = raw
@@ -388,6 +562,7 @@ class _Builder:
         self.wireguard = _dicts(raw.get("wireguard"))
         self.openvpn = _dicts(raw.get("openvpn"))
         self.audit = raw.get("audit") if isinstance(raw.get("audit"), dict) else None
+        self.clients = raw.get("clients") if isinstance(raw.get("clients"), dict) else None
         self.nodes: dict[str, dict] = {}
         self.edges: list[dict] = []
         self.warnings: list[dict] = []
@@ -521,6 +696,8 @@ class _Builder:
         _add(sections, self._wireguard_table())
         _add(sections, self._openvpn_table())
         _add(sections, self._ha_table())
+        for table in self._client_tables():
+            _add(sections, table)
         self._firmware_sections(sections, version)
         host = node.pop("_host", None)
         if host:
@@ -655,6 +832,40 @@ class _Builder:
             ["Protocol", "Destination", "Gateway", "Flags", "Interface", "Interface name", "MTU"],
             rows,
         )
+
+    def _client_tables(self) -> list[dict | None]:
+        """The ARP, NDP and DHCP lease tables (capped at ``MAX_CLIENT_ROWS``)."""
+        neighbour_columns = ["IP address", "MAC address", "Interface", "Host name", "Manufacturer", "Type"]
+
+        def neighbours(entries: list[dict[str, str]]) -> list[list[Any]]:
+            return [
+                [e["ip_address"], e["mac_address"], e["interface_name"], e["hostname"], e["manufacturer"], e["type"]]
+                for e in entries[:MAX_CLIENT_ROWS]
+            ]
+
+        names = {key: name for key, name, _paths, _privilege in LEASE_BACKENDS}
+        leases = dhcp_leases(self.clients, self.interfaces)
+        return [
+            table_section(SECTION_ARP, neighbour_columns, neighbours(arp_entries(self.clients))),
+            table_section(SECTION_NDP, neighbour_columns, neighbours(ndp_entries(self.clients))),
+            table_section(
+                SECTION_LEASES,
+                ["Address", "MAC address", "Host name", "State", "Ends", "Interface", "Subnet", "Server"],
+                [
+                    [
+                        lease["address"],
+                        lease["mac_address"],
+                        lease["hostname"],
+                        lease["state"],
+                        lease["ends_at"],
+                        lease["metadata"]["interface"],
+                        lease["scope_subnet"],
+                        names.get(lease["metadata"]["backend"], ""),
+                    ]
+                    for lease in leases[:MAX_CLIENT_ROWS]
+                ],
+            ),
+        ]
 
     def ipsec_children(self, row: dict) -> tuple[list[dict], int | None, int | None]:
         """The child SA rows of one connection, how many are installed and
@@ -1172,6 +1383,7 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
         by_kind[node["kind"]] = by_kind.get(node["kind"], 0) + 1
         by_status[node["status"]] = by_status.get(node["status"], 0) + 1
     findings = _dicts(_dict(builder.audit).get("findings"))
+    counts = client_counts(builder.clients)
     return {
         "schema": SCHEMA_VERSION,
         "provider": PROVIDER,
@@ -1202,6 +1414,9 @@ def build_snapshot(raw: dict, inventory: InventoryIndex | None = None) -> dict[s
             "carp_vips": len([r for r in _dicts(_dict(builder.carp).get("rows")) if _text(r.get("vhid"))])
             if builder.carp is not None
             else None,
+            "arp_entries": counts["arp"],
+            "ndp_entries": counts["ndp"],
+            "dhcp_leases": counts["dhcp_leases"],
         },
         "collection": {
             "sources": [SOURCE],

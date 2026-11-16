@@ -196,6 +196,22 @@ resolved even when the device still differs after the push; in that case
 the window shows "Warning: device still shows drift after revert." Read
 the window before you move on.
 
+### OPNsense firewalls
+
+A host with device type `opnsense` is never read over SSH. Its snapshot
+is its newest config backup (stored by the OPNsense collection), and the
+scheduled drift check takes a new snapshot when a newer backup differs.
+Snapshots, baselines (a pasted one too) and drift diffs hold the
+normalized `config.xml` without its `<revision>` stamp, so a save that
+changes nothing is not drift. Every secret (password hashes, API key
+secrets, private keys, pre-shared keys, SNMP communities, RADIUS and LDAP
+secrets, TSIG keys and more) is shown as `[masked:1a2b3c4d]`: a changed
+secret is still drift, its value never appears. **Revert** and **Restore**
+are refused for these hosts. The backup view, compare and search mask the
+same values; the stored backup and its download stay as collected. The
+full list of masked elements is in
+[OPNsense, Config drift and masked secrets](opnsense-topology.md#config-drift-and-masked-secrets).
+
 ### Drift results
 
 | Item | Meaning |

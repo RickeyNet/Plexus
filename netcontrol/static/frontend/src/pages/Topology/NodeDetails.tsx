@@ -44,6 +44,8 @@ import {
   stpTone,
 } from './helpers';
 import { MerakiDetails } from './MerakiDetails';
+import { isOpnsenseDevice } from './opnsenseRules';
+import { OpnsenseRulesTab } from './OpnsenseRulesTab';
 import {
   type MerakiView,
   merakiViewSections,
@@ -66,7 +68,7 @@ interface Props {
 
 // 'aws' is the secondary AWS tab of a node whose primary reference is another
 // integration (a Meraki/Cato device that is also an EC2 instance).
-type TabKey = 'overview' | MerakiView | 'aws' | 'config' | 'errors' | 'audit';
+type TabKey = 'overview' | MerakiView | 'aws' | 'config' | 'rules' | 'errors' | 'audit';
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'overview', label: 'Overview' },
@@ -81,6 +83,8 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'wireless', label: 'Wireless' },
   { key: 'aws', label: 'AWS' },
   { key: 'config', label: 'Config' },
+  // An OPNsense firewall's filter rules, read from its config.xml backup.
+  { key: 'rules', label: 'Rules' },
   { key: 'errors', label: 'Errors' },
   { key: 'audit', label: 'Audit' },
 ];
@@ -165,6 +169,7 @@ export function NodeDetails({
 
   const tabs = TABS.filter((t) => {
     if (t.key === 'overview') return true;
+    if (t.key === 'rules') return hostId != null && isOpnsenseDevice(node.device_type);
     if (t.key === 'aws') return awsRef != null;
     if (INVENTORY_TABS.includes(t.key) && (hostId != null || !node.meraki)) return true;
     return merakiViews.includes(t.key as MerakiView);
@@ -352,6 +357,7 @@ export function NodeDetails({
           {shownTab === 'config' && hostId != null && (
             <ConfigTab hostId={hostId} />
           )}
+          {shownTab === 'rules' && hostId != null && <OpnsenseRulesTab hostId={hostId} />}
           {shownTab === 'errors' && hostId != null && (
             <ErrorsTab hostId={hostId} />
           )}

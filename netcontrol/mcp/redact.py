@@ -29,6 +29,7 @@ import re
 from typing import Any
 
 from netcontrol.integrations.meraki.collector import _SECRET_KEY_FRAGMENTS as _MERAKI_SECRET_KEY_FRAGMENTS
+from netcontrol.integrations.opnsense.secrets import mask_config_xml
 
 MASK = "********"
 
@@ -190,6 +191,11 @@ def redact_config_text(text: str, *, keep_lines: bool = False) -> str:
     """
     if not text:
         return text
+    if "</" in text:
+        # XML configuration (OPNsense config.xml, a diff of it): every
+        # element whose name holds a secret, and every key or certificate
+        # blob, whatever the vendor names it. Line count is kept.
+        text = mask_config_xml(text, fingerprint=False, keep_lines=True)
     if (
         "\n" not in text
         and "\r" not in text
