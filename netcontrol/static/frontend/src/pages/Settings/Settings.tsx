@@ -20,15 +20,18 @@ import { CustomDataTab } from './CustomDataTab';
 import { DeviceModelTab } from './DeviceModelTab';
 import { DiscoveryTab } from './DiscoveryTab';
 import { FeaturesTab } from './FeaturesTab';
+import { GitSourcesTab } from './GitSourcesTab';
 import { JobRetentionSection } from './JobRetentionSection';
 import { LoggingTab } from './LoggingTab';
 import { MonitoringTab } from './MonitoringTab';
 import { NetFlowTab } from './NetFlowTab';
 import { NotificationsTab } from './NotificationsTab';
+import { PluginsTab } from './PluginsTab';
 import { SiemTab } from './SiemTab';
 import { SystemTab } from './SystemTab';
 import { UnsavedContext, useUnsavedRegistry } from './unsaved-context';
 import { UsersTab } from './UsersTab';
+import { WebhooksTab } from './WebhooksTab';
 
 type Tab =
   | 'appearance'
@@ -41,10 +44,13 @@ type Tab =
   | 'monitoring'
   | 'netflow'
   | 'notifications'
+  | 'webhooks'
   | 'features'
   | 'custom-data'
   | 'device-model'
+  | 'git-sources'
   | 'ai-access'
+  | 'plugins'
   | 'system';
 
 // One intro per tab: describe only what the tab renders.
@@ -89,6 +95,10 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
     title: 'Alert Notification Channels',
     text: 'Send monitoring alerts to email, PagerDuty, a JSON webhook or Microsoft Teams. Alert rules pick their own channels; alerts without a rule go to the channels marked Default.',
   },
+  webhooks: {
+    title: 'Event Webhooks',
+    text: 'Send a signed HTTP request to a URL whenever a host, group, IPAM prefix or address, VLAN, VRF, credential, config backup or job is created, updated or deleted. Each webhook picks its objects, actions and optional groups; Deliveries shows every attempt and can send one again.',
+  },
   features: {
     title: 'Feature Visibility',
     text: 'Choose which features appear in the navigation for every user, admins included. Hiding a feature removes it from the menu; it does not disable it.',
@@ -101,9 +111,17 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
     title: 'Device Model',
     text: 'Curate the manufacturers, device types, roles and lifecycle statuses that hosts link to. Discovery adds manufacturers and device types it finds; a value set by hand on a host is never overwritten. Sites are managed on the Geolocation page.',
   },
+  'git-sources': {
+    title: 'Git Sources',
+    text: 'Keep templates, Ansible playbooks and config contexts in Git repositories. Each sync imports the branch head by folder (templates/, playbooks/, config_contexts/); imported records are read-only in Plexus, show their file and commit, and are removed when their file leaves the repository.',
+  },
   'ai-access': {
     title: 'AI Access',
     text: 'Let AI clients such as Claude read Plexus data through a read-only MCP endpoint: turn the endpoint on, set its limits, and create or revoke the tokens clients sign in with. Each token is limited to the data categories you choose and to what its owner can see, and every call is written to the audit log.',
+  },
+  plugins: {
+    title: 'Plugins',
+    text: 'Plugins installed on the server, with their version, status and any load or startup error. Only plugins named in the PLEXUS_PLUGINS setting load; each is gated by its own feature key, granted in Access Groups.',
   },
   system: {
     title: 'System & Updates',
@@ -122,10 +140,13 @@ const ADMIN_TABS: { key: Tab; label: string }[] = [
   { key: 'monitoring', label: 'Monitoring' },
   { key: 'netflow', label: 'NetFlow' },
   { key: 'notifications', label: 'Notifications' },
+  { key: 'webhooks', label: 'Webhooks' },
   { key: 'features', label: 'Features' },
   { key: 'custom-data', label: 'Custom Fields & Tags' },
   { key: 'device-model', label: 'Device Model' },
+  { key: 'git-sources', label: 'Git Sources' },
   { key: 'ai-access', label: 'AI Access' },
+  { key: 'plugins', label: 'Plugins' },
   { key: 'system', label: 'System' },
 ];
 const TAB_KEYS = ADMIN_TABS.map((t) => t.key);
@@ -248,10 +269,13 @@ export function Settings() {
           {tab === 'monitoring' && <MonitoringTab />}
           {tab === 'netflow' && <NetFlowTab />}
           {tab === 'notifications' && <NotificationsTab />}
+          {tab === 'webhooks' && <WebhooksTab />}
           {tab === 'features' && <FeaturesTab capabilities={caps} />}
           {tab === 'custom-data' && <CustomDataTab />}
           {tab === 'device-model' && <DeviceModelTab />}
+          {tab === 'git-sources' && <GitSourcesTab />}
           {tab === 'ai-access' && <AiAccessTab />}
+          {tab === 'plugins' && <PluginsTab />}
           {tab === 'system' && (
             <div className="stack">
               <SystemTab />

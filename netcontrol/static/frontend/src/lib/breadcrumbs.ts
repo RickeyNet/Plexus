@@ -65,6 +65,9 @@ export function breadcrumbTrail(pathname: string): Crumb[] {
   if (!label && pathname.startsWith('/devices/')) {
     return [{ label: 'Inventory', to: '/inventory' }, { label: 'Device Detail' }];
   }
+  if (!label && pathname.startsWith('/plugins/')) {
+    return [{ label: 'Plugins' }];
+  }
   if (!label && pathname.startsWith('/dashboards/')) {
     return [{ label: 'Dashboards', to: '/dashboards' }, { label: 'Dashboard' }];
   }

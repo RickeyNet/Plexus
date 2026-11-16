@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import difflib
+import os
 import re
 import time
 
@@ -72,6 +73,20 @@ def supervise_task(task: asyncio.Task, label: str) -> None:
             LOGGER.error("%s crashed: %s", label, exc, exc_info=exc)
 
     task.add_done_callback(_cb)
+
+
+def resolve_state_root() -> str | None:
+    """The directory Plexus keeps persistent on-disk state in:
+    ``PLEXUS_STATE_DIR``, else the folder of ``APP_SESSION_KEY_FILE`` (the
+    ``/app/state`` volume in the container), else ``None`` (a developer
+    checkout; callers fall back to a folder of the repository)."""
+    explicit = os.getenv("PLEXUS_STATE_DIR", "").strip()
+    if explicit:
+        return explicit
+    key_file = os.getenv("APP_SESSION_KEY_FILE", "").strip()
+    if key_file:
+        return os.path.dirname(key_file)
+    return None
 
 
 def _corr_id(request) -> str:

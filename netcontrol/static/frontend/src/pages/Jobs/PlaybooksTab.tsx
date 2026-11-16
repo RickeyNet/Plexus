@@ -3,8 +3,10 @@ import { lazy, Suspense, useMemo, useState } from 'react';
 import { Badge } from '@/components/Badge';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
+import { isGitOwned } from '@/api/gitSources';
 import { useDeletePlaybook, usePlaybooks, type Playbook } from '@/api/jobs';
 import { EmptyState } from '@/components/EmptyState';
+import { GitOwnedBadge } from '@/components/GitOwnedBadge';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
 import { usePendingKeys } from '@/lib/usePendingKeys';
@@ -124,6 +126,7 @@ function PlaybookRow({
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
           <Badge tone={isAnsible ? 'info' : 'primary'}>{isAnsible ? 'Ansible' : 'Python'}</Badge>
           <span style={{ fontWeight: 600 }}>{pb.name}</span>
+          <GitOwnedBadge record={pb} />
           {tags.map((tag) => (
             <span key={tag} className="badge badge-secondary">{tag}</span>
           ))}
@@ -132,8 +135,12 @@ function PlaybookRow({
         <div className="text-muted" style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>File: {pb.filename}</div>
       </div>
       <div style={{ display: 'flex', gap: '0.4rem' }}>
-        <button className="btn btn-sm btn-secondary" onClick={onEdit}>Edit</button>
-        <DeleteButton busy={isDeleting} onClick={onDelete} />
+        {!isGitOwned(pb) && (
+          <>
+            <button className="btn btn-sm btn-secondary" onClick={onEdit}>Edit</button>
+            <DeleteButton busy={isDeleting} onClick={onDelete} />
+          </>
+        )}
       </div>
     </div>
   );

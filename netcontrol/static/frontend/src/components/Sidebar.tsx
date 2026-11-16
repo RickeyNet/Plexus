@@ -2,6 +2,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { NavLink, useLocation } from 'react-router';
 
 import { useAuthStatus } from '@/api/auth';
+import { pluginNavEntries, usePluginManifest } from '@/api/plugins';
 import { safeGet, safeSet } from '@/lib/appearance';
 import { prefetchRoute } from '@/lib/pageLoaders';
 import {
@@ -208,6 +209,14 @@ const ic = {
       <line x1="9" y1="2" x2="15" y2="2" />
     </svg>
   ),
+  plugin: (
+    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4" y="4" width="16" height="16" rx="2" />
+      <path d="M9 4v4" />
+      <path d="M15 4v4" />
+      <path d="M8 12h8" />
+    </svg>
+  ),
   settings: (
     <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="3" />
@@ -388,6 +397,9 @@ export function Sidebar({ username, mobileOpen, onMobileClose, onOpenUserMenu }:
   const { pathname } = useLocation();
   const { data: auth } = useAuthStatus();
   const addSource = useAddSource();
+  // Plugin pages (docs/plugin-development.md): one Plugins group, listing the
+  // entries of every active plugin the user may use.
+  const { data: pluginManifest } = usePluginManifest(Boolean(auth?.authenticated));
 
   const visibleNav = useMemo(() => {
     const ctx = {
@@ -399,14 +411,26 @@ export function Sidebar({ username, mobileOpen, onMobileClose, onOpenUserMenu }:
     // globally only when every one of its features is - see navVisibility.ts.
     const isItemVisible = (i: RouteItem | LegacyItem): boolean => isNavItemVisible(i, ctx);
 
-    return NAV.flatMap((item): TopItem[] => {
+    const pluginChildren: RouteItem[] = pluginNavEntries(pluginManifest).map((e) => ({
+      label: e.label,
+      icon: ic.plugin,
+      to: e.to,
+      feature: e.feature,
+      // Not in the Features catalogue: never hidden globally.
+      visKey: '',
+    }));
+    const nav: TopItem[] = pluginChildren.length
+      ? [...NAV.slice(0, -1), { id: 'plugins', label: 'Plugins', icon: ic.plugin, children: pluginChildren }, NAV[NAV.length - 1]]
+      : NAV;
+
+    return nav.flatMap((item): TopItem[] => {
       if (!isGroup(item)) {
         return isItemVisible(item) ? [item] : [];
       }
       const children = item.children.filter(isItemVisible);
       return children.length ? [{ ...item, children }] : [];
     });
-  }, [auth?.role, auth?.feature_access, auth?.feature_visibility_hidden]);
+  }, [auth?.role, auth?.feature_access, auth?.feature_visibility_hidden, pluginManifest]);
 
   const navClass = [
     'sidebar',

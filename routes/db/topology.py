@@ -23,6 +23,7 @@ from routes.database import (
     row_to_dict,
     rows_to_list,
 )
+from routes.db.change_events import tracks_changes
 from routes.db.device_model import _select
 from routes.db.inventory import group_ids_condition
 from routes.user_regex import UserRegex, compile_user_regex
@@ -2076,6 +2077,7 @@ def _extract_config_backup_match_context(
     }
 
 
+@tracks_changes("config_backup", "create")
 async def create_config_backup(
     policy_id: int | None,
     host_id: int,
@@ -2447,6 +2449,7 @@ async def search_config_backups(
         await db.close()
 
 
+@tracks_changes("config_backup", "delete", id_arg="backup_id")
 async def delete_config_backup(backup_id: int) -> None:
     """Delete a single backup."""
     db = await _dbcore.get_db()

@@ -27,6 +27,7 @@ or the corresponding API endpoint without a restart.
 | IP history (IPAM)                | 365 days          | API-only - `routes.database.prune_ip_history(retention_days)` |
 | **Cloud flow records**           | **48 hours**      | Shares `flow_records` + NetFlow `retention_hours`; pruned by the cloud flow sync loop even when the NetFlow collector is disabled |
 | **Cloud traffic metrics**        | **7 days (168h)** | `PUT /api/cloud/traffic-sync/config` `retention_hours`; pruned by the cloud traffic sync loop |
+| Webhook delivery log (`webhook_deliveries`) | 30 days | `APP_WEBHOOK_DELIVERY_RETENTION_DAYS` (env, minimum 1); pruned hourly by the webhook dispatcher. Deleting a webhook deletes its log. See `docs/webhooks.md` |
 
 Minimums are enforced at the API layer (e.g. job history can't go below
 30 days). Increase a value freely; the next cleanup pass will simply

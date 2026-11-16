@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "plexus-plugin-example"
+version = "0.1.0"
+description = "Example Plexus plugin: a small spare-parts list with its own table, API and page."
+requires-python = ">=3.14"
+# Plexus itself is the host; the plugin imports netcontrol and routes from it.
+dependencies = []
+
+# Plexus discovers plugins through this group. Installing the package is not
+# enough to load it: the entry point name must also be listed in
+# PLEXUS_PLUGINS (e.g. PLEXUS_PLUGINS=example).
+[project.entry-points."plexus.plugins"]
+example = "plexus_plugin_example:plugin"
+
+[tool.setuptools.packages.find]
+include = ["plexus_plugin_example*"]

@@ -24,6 +24,8 @@ from routes.database import (
 
 __all__ = [
     "set_audit_event_hook",
+    "add_audit_event_hook",
+    "remove_audit_event_hook",
     "verify_audit_chain",
     "add_audit_event",
     "get_audit_events",
@@ -49,21 +51,34 @@ _audit_chain_lock = asyncio.Lock()
 _AUDIT_CHAIN_PG_LOCK_KEY = 0x506C_6578_4155_4454  # "PlexAUDT"
 
 
-# Optional async hook fired after every successful audit insert. The SIEM
-# forwarder registers itself here via ``set_audit_event_hook`` at app
-# startup. The hook is fire-and-forget - exceptions never propagate to the
-# caller, so a wedged SIEM cannot block audit writes.
+# Optional async hooks fired after every successful audit insert. The SIEM
+# forwarder registers itself in the primary slot via ``set_audit_event_hook``
+# at app startup; other subscribers add themselves to the list with
+# ``add_audit_event_hook``. Hooks are fire-and-forget - exceptions never
+# propagate to the caller, so a wedged SIEM cannot block audit writes, and
+# one failing hook does not stop the others.
 _audit_event_hook = None  # type: ignore[var-annotated]
+_audit_event_hooks: list = []
 
 
 def set_audit_event_hook(hook) -> None:
     """Register a coroutine fn(event: dict) -> None called after each insert.
 
-    Pass ``None`` to clear. Tests and the SIEM forwarder are the only
-    expected callers.
+    Replaces the primary slot only (the SIEM forwarder); pass ``None`` to
+    clear it. Hooks added with ``add_audit_event_hook`` are untouched.
     """
     global _audit_event_hook
     _audit_event_hook = hook
+
+
+def add_audit_event_hook(hook) -> None:
+    """Add another subscriber; adding the same hook twice is a no-op."""
+    if not any(h is hook for h in _audit_event_hooks):
+        _audit_event_hooks.append(hook)
+
+
+def remove_audit_event_hook(hook) -> None:
+    _audit_event_hooks[:] = [h for h in _audit_event_hooks if h is not hook]
 
 
 def _audit_canonical_bytes(
@@ -233,7 +248,8 @@ async def add_audit_event(
                     _LOGGER.warning("audit chain: failed to release pg advisory lock; pool reset will reclaim it")
             await conn.close()
 
-    if _audit_event_hook is not None:
+    hooks = ([_audit_event_hook] if _audit_event_hook is not None else []) + list(_audit_event_hooks)
+    if hooks:
         event = {
             "id": new_id,
             "timestamp": timestamp,
@@ -245,19 +261,20 @@ async def add_audit_event(
             "prev_hash": prev_hash,
             "row_hash": row_hash,
         }
-        try:
-            await _audit_event_hook(event)
-        except Exception as exc:
-            # Forwarding must never break audit ingestion. The DB row is
-            # already committed; downstream observability is best-effort —
-            # but a dropped event must not be invisible.
-            _LOGGER.warning(
-                "audit hook dropped event id=%s category=%s action=%s: %s",
-                new_id,
-                category,
-                action,
-                type(exc).__name__,
-            )
+        for hook in hooks:
+            try:
+                await hook(dict(event))
+            except Exception as exc:
+                # Forwarding must never break audit ingestion. The DB row is
+                # already committed; downstream observability is best-effort —
+                # but a dropped event must not be invisible.
+                _LOGGER.warning(
+                    "audit hook dropped event id=%s category=%s action=%s: %s",
+                    new_id,
+                    category,
+                    action,
+                    type(exc).__name__,
+                )
     return new_id
 
 

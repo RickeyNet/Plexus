@@ -22,6 +22,7 @@ from routes.database import (
     row_to_dict,
     rows_to_list,
 )
+from routes.db.change_events import tracks_changes
 
 __all__ = [
     "get_all_secret_variables",
@@ -193,6 +194,7 @@ async def get_credential_raw(cred_id: int) -> dict | None:
         await db.close()
 
 
+@tracks_changes("credential", "create")
 async def create_credential(
     name: str,
     username: str,
@@ -216,6 +218,7 @@ async def create_credential(
         await db.close()
 
 
+@tracks_changes("credential", "delete", id_arg="cred_id")
 async def delete_credential(cred_id: int):
     db = await _dbcore.get_db()
     try:
@@ -225,6 +228,7 @@ async def delete_credential(cred_id: int):
         await db.close()
 
 
+@tracks_changes("credential", "update", id_arg="cred_id")
 async def update_credential(
     cred_id: int,
     *,

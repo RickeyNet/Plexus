@@ -472,6 +472,10 @@ click==8.5.0 \
     # via
     #   -r requirements.txt
     #   uvicorn
+cross-web==0.9.0 \
+    --hash=sha256:8138718f3eefd191e44c84d635ec69e5d119cb35bc8a84ec622a4f6506ff0fe2 \
+    --hash=sha256:c6be38ebcf62454e7dd53012b47950c853175b8388d29e0e88c941669b4d57a5
+    # via strawberry-graphql
 cryptography==50.0.2 \
     --hash=sha256:0ddc924c04591c2811ca024d62ecad4f7f6f08af8939c211438f48a16bd23602 \
     --hash=sha256:0ec5f09541743261e66e291b4a0cbf0fb2997aeaab6d9e9c740b9dba1b58d1c2 \
@@ -597,6 +601,12 @@ google-re2==1.1.20251105 \
     --hash=sha256:f5f856ff5036a8f22b3bad57f376d4e3b97b59b64f311bdb1f83c8dabded2492 \
     --hash=sha256:f886c88d56233483c5fd5ed1234e7e72389b8331250100983443fa30855deb63
     # via -r requirements.txt
+graphql-core==3.3.2 \
+    --hash=sha256:15d6eee7d4364fbc202833bc6bd0d504004d8ae7c0aaf620fa884d8e437622f2 \
+    --hash=sha256:d83f49ee18d2db89fb575dab6ffefa8aa1bf5f60dff8a6781db6f63420041348
+    # via
+    #   -r requirements.txt
+    #   strawberry-graphql
 h11==0.16.0 \
     --hash=sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1 \
     --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
@@ -975,7 +985,9 @@ opentelemetry-api==1.45.2 \
 packaging==26.3 \
     --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79 \
     --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
-    # via ansible-runner
+    # via
+    #   ansible-runner
+    #   strawberry-graphql
 paramiko==5.1.0 \
     --hash=sha256:239b5f9b2a53006cd54f83cf8495ee742083708ead947882c8dd2786de79f39b \
     --hash=sha256:d9fe6d67a9d0bbf3eb85b051d26ab850b678c02d060f32915b944e5ca6d0d9e1
@@ -1161,7 +1173,9 @@ pygments==2.21.0 \
 pyjwt==2.15.1 \
     --hash=sha256:42d59d631f7768a1028a64c7ff581a9bf7519804daf91fc5b6c56e30eec5e193 \
     --hash=sha256:4f259e80cdfb6b3fc18a7de51fd1ef9ec79652f25019bae68975ca2468a34df8
-    # via mcp
+    # via
+    #   -r requirements.txt
+    #   mcp
 pynacl==1.6.2 \
     --hash=sha256:018494d6d696ae03c7e656e5e74cdfd8ea1326962cc401bcf018f1ed8436811c \
     --hash=sha256:04316d1fc625d860b6c162fff704eb8426b1a8bcd3abacea11142cbd99a6b574 \
@@ -1205,6 +1219,10 @@ python-daemon==3.1.2 \
     --hash=sha256:b906833cef63502994ad48e2eab213259ed9bb18d54fa8774dcba2ff7864cec6 \
     --hash=sha256:f7b04335adc473de877f5117e26d5f1142f4c9f7cd765408f0877757be5afbf4
     # via ansible-runner
+python-dateutil==4.0.0 \
+    --hash=sha256:a5e246f79eb80475e691bf93862cead98decd8a498cf53ba0516fcdc0f50dc1c \
+    --hash=sha256:d7295ff14fdc0f92f662100bfb6c551d160ca090f2939f1ec5b9794265c03f06
+    # via strawberry-graphql
 python-dotenv==1.2.4 \
     --hash=sha256:42269a8a5b3fd54ffa6f3d84b18abed50064717576b4ecf03dc4a55d8aa04fdc \
     --hash=sha256:f0d53e69935a851c0dcc78f3ab7aaccd8cabef0b92382b576b824212902873c0
@@ -1486,6 +1504,10 @@ starlette==1.10.0 \
     #   fastapi
     #   mcp
     #   sse-starlette
+strawberry-graphql==0.341.2 \
+    --hash=sha256:73e9c4cf5e2fddd522d2741491a6fbba70f940d945ab0a40152b2fadf26d9a89 \
+    --hash=sha256:8073fae26510fb25394a6ea9dd0f4e23da6bc303312fff684f6a884d59eedb72
+    # via -r requirements.txt
 tacacs-plus==2.6 \
     --hash=sha256:55aa4e733b0c4366cf5ab2d36deb03729466554319b239b9221b509b256128ff \
     --hash=sha256:f5e3a6e13760656aa69a4e98fc3da3e4728553375569fad757b1800c020dcb36
@@ -1507,12 +1529,14 @@ typing-extensions==4.16.0 \
     --hash=sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5
     # via
     #   anyio
+    #   cross-web
     #   fastapi
     #   mcp
     #   mcp-types
     #   opentelemetry-api
     #   pydantic
     #   pydantic-core
+    #   strawberry-graphql
     #   typing-inspection
 typing-inspection==0.4.4 \
     --hash=sha256:547274fa6b0a561ccf549cc9524b999a578e737d015d8709d021f9d0d13bea47 \
@@ -1521,6 +1545,10 @@ typing-inspection==0.4.4 \
     #   fastapi
     #   mcp
     #   pydantic
+tzdata==2026.6 \
+    --hash=sha256:0a10eec6e13ef16b627fabed9a5f2ba61a62b1c67f327305f4e7e412a70b4aec \
+    --hash=sha256:85d2cd9c09f81f0bb29db27759fc83af4f1e620efb814f8c5bf8b4cc4feece6d
+    # via python-dateutil
 urllib3==2.8.0 \
     --hash=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3 \
     --hash=sha256:63bf2ead4c879426ebf22ef2a781eeb4aa3b4ae798a0435506f8687fd5bb9b63

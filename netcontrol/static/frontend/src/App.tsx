@@ -38,6 +38,7 @@ const Jobs = lazy(() => pageLoaders.jobs().then(m => ({ default: m.Jobs })));
 const Lab = lazy(() => pageLoaders.lab().then(m => ({ default: m.Lab })));
 const Monitoring = lazy(() => pageLoaders.monitoring().then(m => ({ default: m.Monitoring })));
 const NetworkTools = lazy(() => pageLoaders.networkTools().then(m => ({ default: m.NetworkTools })));
+const PluginPage = lazy(() => pageLoaders.pluginPage().then(m => ({ default: m.PluginPage })));
 const Reports = lazy(() => pageLoaders.reports().then(m => ({ default: m.Reports })));
 const Settings = lazy(() => pageLoaders.settings().then(m => ({ default: m.Settings })));
 const Topology = lazy(() => pageLoaders.topology().then(m => ({ default: m.TopologyPage })));
@@ -227,6 +228,8 @@ export function App() {
           {/* Topology: the map (/topology), the reachability sweep (/topology/reachability) and address summaries (/topology/summarize). */}
           <Route path="/topology/:tab?" element={<Topology />} />
           <Route path="/settings/:tab?" element={<Settings />} />
+          {/* Declarative pages of plugins (docs/plugin-development.md). */}
+          <Route path="/plugins/:name/:pageId" element={<PluginPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         </Suspense>

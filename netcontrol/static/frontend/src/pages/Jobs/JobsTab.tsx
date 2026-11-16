@@ -241,7 +241,9 @@ function JobRow({
         <div className="text-muted" style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>
           Group: {job.group_name || 'Unknown'} • {timeLabel} •{' '}
           <StatusBadge status={job.status} size="sm" />
-          {job.dry_run && <> • <span style={{ color: 'var(--warning)' }}>DRY RUN</span></>}
+          {job.dry_run
+            ? <> • <span style={{ color: 'var(--warning)' }}>DRY RUN</span></>
+            : <> • <span style={{ color: 'var(--danger)' }}>COMMIT</span></>}
           {job.launched_by && <> • by {job.launched_by}</>}
         </div>
       </div>

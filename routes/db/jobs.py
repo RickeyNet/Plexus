@@ -21,6 +21,7 @@ from routes.database import (
     row_to_dict,
     rows_to_list,
 )
+from routes.db.change_events import tracks_changes
 
 __all__ = [
     "get_all_jobs",
@@ -83,6 +84,7 @@ async def get_job(job_id: int) -> dict | None:
         await db.close()
 
 
+@tracks_changes("job", "create")
 async def create_job(
     playbook_id: int,
     inventory_group_id: int | None,
@@ -131,6 +133,7 @@ async def create_job(
         await db.close()
 
 
+@tracks_changes("job", "update", id_arg="job_id")
 async def finish_job(job_id: int, status: str, hosts_ok: int = 0, hosts_failed: int = 0, hosts_skipped: int = 0):
     db = await _dbcore.get_db()
     try:
@@ -201,6 +204,7 @@ async def delete_expired_jobs(retention_days: int) -> int:
         await db.close()
 
 
+@tracks_changes("job", "update", id_arg="job_id")
 async def start_job(job_id: int) -> bool:
     """Transition a queued job to running with started_at timestamp.
 
@@ -219,6 +223,7 @@ async def start_job(job_id: int) -> bool:
         await db.close()
 
 
+@tracks_changes("job", "update", id_arg="job_id")
 async def cancel_job(job_id: int, cancelled_by: str = "") -> bool:
     """Cancel a queued or running job. Returns True if the job was updated."""
     db = await _dbcore.get_db()

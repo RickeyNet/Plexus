@@ -483,6 +483,9 @@ _FEATURE_CATALOG = [
     {"key": "federation", "label": "Federation", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "floor-plan", "label": "Floor Plans", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "lab", "label": "Lab / Digital Twin", "gateable": True, "writable": True, "visible_in_nav": True},
+    # Read-only GraphQL API (/api/graphql); each field also needs the feature
+    # its REST counterpart needs (docs/graphql-api.md). No nav page.
+    {"key": "graphql", "label": "GraphQL API", "gateable": True, "writable": False, "visible_in_nav": False},
 ]
 
 FEATURE_FLAGS = [e["key"] for e in _FEATURE_CATALOG if e["gateable"]] + [

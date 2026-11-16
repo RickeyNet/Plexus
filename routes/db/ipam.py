@@ -22,6 +22,7 @@ from routes.database import (
     row_to_dict,
     rows_to_list,
 )
+from routes.db.change_events import tracks_changes
 from routes.db.network_objects import ensure_vrfs
 
 __all__ = [
@@ -46,6 +47,8 @@ __all__ = [
     "create_local_ipam_allocation",
     "delete_ipam_allocation",
     "list_ipam_allocations_for_source",
+    "list_ipam_allocation_records",
+    "list_ipam_prefix_records",
     "allocate_next_ip",
     "get_pending_allocation",
     "list_pending_allocations",
@@ -1125,6 +1128,7 @@ async def get_or_create_builtin_ipam_source() -> dict:
     )
 
 
+@tracks_changes("prefix", "create")
 async def create_ipam_prefix(
     source_id: int,
     subnet: str,
@@ -1176,6 +1180,7 @@ async def get_ipam_prefix(prefix_id: int) -> dict | None:
         await db.close()
 
 
+@tracks_changes("prefix", "delete", id_arg="prefix_id")
 async def delete_ipam_prefix(prefix_id: int) -> bool:
     db = await _dbcore.get_db()
     try:
@@ -1186,6 +1191,7 @@ async def delete_ipam_prefix(prefix_id: int) -> bool:
         await db.close()
 
 
+@tracks_changes("ip_address", "create")
 async def create_local_ipam_allocation(
     source_id: int,
     subnet: str,
@@ -1257,6 +1263,7 @@ async def create_local_ipam_allocation(
     return result
 
 
+@tracks_changes("ip_address", "delete", id_arg="allocation_id")
 async def delete_ipam_allocation(allocation_id: int) -> bool:
     db = await _dbcore.get_db()
     try:
@@ -1286,6 +1293,64 @@ async def delete_ipam_allocation(allocation_id: int) -> bool:
                 exc,
             )
     return deleted
+
+
+_PREFIX_RECORD_SELECT = """
+    SELECT p.id, p.source_id, p.subnet, p.description, p.status, p.vrf, p.tenant, p.site, p.vlan,
+           p.discovered_at, p.updated_at, s.provider, s.name AS source_name
+    FROM ipam_prefixes p JOIN ipam_sources s ON s.id = p.source_id
+    WHERE p.subnet IS NOT NULL AND p.subnet <> ''
+"""
+_ALLOCATION_RECORD_SELECT = """
+    SELECT a.id, a.source_id, a.prefix_subnet, a.address, a.dns_name, a.status, a.description,
+           a.vrf_name, a.vlan_id, a.discovered_at, s.provider, s.name AS source_name
+    FROM ipam_allocations a JOIN ipam_sources s ON s.id = a.source_id
+"""
+_RECORD_IN_LIMIT = 1000
+
+
+async def list_ipam_prefix_records() -> list[dict]:
+    """Every IPAM prefix row (local and synced) with its source's
+    ``provider`` and ``source_name``; never ``metadata_json``."""
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute(_PREFIX_RECORD_SELECT + " ORDER BY p.subnet, p.id")
+        return rows_to_list(await cursor.fetchall())
+    finally:
+        await db.close()
+
+
+async def list_ipam_allocation_records(
+    *, prefix_subnets: list[str] | None = None, address: str | None = None
+) -> list[dict]:
+    """IPAM address allocations with their source's ``provider`` and
+    ``source_name`` (never ``metadata_json``): those of the given
+    ``prefix_subnets`` (``[]``: none), only ``address`` when it is given,
+    every one when neither is."""
+    if prefix_subnets is not None and not prefix_subnets:
+        return []
+    clauses: list[str] = []
+    params: list[str] = []
+    if address is not None:
+        clauses.append("a.address = ?")
+        params.append(address)
+    batches: list[list[str]] = [[]]
+    if prefix_subnets is not None:
+        wanted = sorted(set(prefix_subnets))
+        batches = [wanted[i : i + _RECORD_IN_LIMIT] for i in range(0, len(wanted), _RECORD_IN_LIMIT)]
+    out: list[dict] = []
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        for batch in batches:
+            where = list(clauses)
+            if batch:
+                where.append(f"a.prefix_subnet IN ({','.join('?' * len(batch))})")
+            sql = _ALLOCATION_RECORD_SELECT + (" WHERE " + " AND ".join(where) if where else "")
+            cursor = await db.execute(sql + " ORDER BY a.address, a.id", (*params, *batch))  # nosec B608 - placeholders only
+            out.extend(rows_to_list(await cursor.fetchall()))
+    finally:
+        await db.close()
+    return out
 
 
 async def list_ipam_allocations_for_source(source_id: int) -> list[dict]:

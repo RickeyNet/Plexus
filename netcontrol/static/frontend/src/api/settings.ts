@@ -296,10 +296,12 @@ export function useAdminUsers() {
   });
 }
 
-export function useAccessGroups() {
+/** `enabled` false skips the request (the list is admin only). */
+export function useAccessGroups(enabled = true) {
   return useQuery<AccessGroup[]>({
     queryKey: ['admin', 'access-groups'],
     queryFn: () => apiRequest('/admin/access-groups'),
+    enabled,
   });
 }
 

@@ -24,6 +24,7 @@ from routes.database import (
     row_to_dict,
     rows_to_list,
 )
+from routes.db.change_events import tracks_changes
 from routes.db.custom_fields import purge_object_data
 from routes.db.device_model import link_host_hardware
 from routes.db.ipam import record_ip_assignment, record_ip_release
@@ -374,6 +375,7 @@ async def get_group(group_id: int) -> dict | None:
     return group
 
 
+@tracks_changes("group", "create")
 async def create_group(name: str, description: str = "", parent_id: int | None = None) -> int:
     """Create a group, at the top level or under ``parent_id``.
 
@@ -397,6 +399,7 @@ async def create_group(name: str, description: str = "", parent_id: int | None =
 _UNCHANGED: Any = object()
 
 
+@tracks_changes("group", "update", id_arg="group_id")
 async def update_group(group_id: int, name: str, description: str = "", parent_id: int | None = _UNCHANGED):
     """Rename a group and, when ``parent_id`` is given, move it (``None``
     moves it to the top level). Raises ``ValueError`` when the parent does
@@ -490,6 +493,7 @@ async def find_top_level_group(name: str) -> dict | None:
         await db.close()
 
 
+@tracks_changes("group", "delete", id_arg="group_id")
 async def delete_group(group_id: int):
     """Delete a group, its hosts and the jobs that targeted it. Raises
     ``ValueError`` when the group has sub-groups (delete or move them first)."""
@@ -698,6 +702,7 @@ async def get_fdm_hosts() -> list[dict]:
         await db.close()
 
 
+@tracks_changes("host", "create")
 async def add_host(
     group_id: int,
     hostname: str,
@@ -756,6 +761,7 @@ async def add_host(
     return new_id
 
 
+@tracks_changes("host", "delete", id_arg="host_id")
 async def remove_host(host_id: int):
     db = await _dbcore.get_db()
     try:
@@ -783,6 +789,7 @@ async def remove_host(host_id: int):
             )
 
 
+@tracks_changes("host", "update", id_arg="host_id")
 async def update_host(
     host_id: int,
     hostname: str,
@@ -850,6 +857,7 @@ async def update_host(
         )
 
 
+@tracks_changes("host", "update", ids_arg="host_ids")
 async def move_hosts(host_ids: list[int], target_group_id: int) -> int:
     if not host_ids:
         return 0
@@ -899,6 +907,7 @@ async def clear_host_snmp_profile(profile_id: str) -> int:
         await db.close()
 
 
+@tracks_changes("host", "delete", ids_arg="host_ids")
 async def bulk_delete_hosts(host_ids: list[int]) -> int:
     if not host_ids:
         return 0

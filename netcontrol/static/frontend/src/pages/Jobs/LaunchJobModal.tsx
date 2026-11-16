@@ -1,19 +1,32 @@
 import { useId, useMemo, useState, type FormEvent } from 'react';
 
+import { BusyButton } from '@/components/BusyButton';
 import { Callout } from '@/components/Callout';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
+import { useAuthStatus } from '@/api/auth';
+import { CustomDataError } from '@/api/customData';
 import {
   useJobCredentials,
   useLaunchJob,
   usePlaybooks,
+  useSecretVariables,
   useTemplates,
-  type PlaybookParameter,
+  type JobInputField,
 } from '@/api/jobs';
 import { useInventoryGroupsFull } from '@/api/inventory';
 
 import { countTargetHosts, filterTargetGroups } from './helpers';
+import { JobInputsForm } from './JobInputsForm';
+import {
+  buildInputsPayload,
+  seedInputValues,
+  validateInputs,
+  validateInputValue,
+  type InputValue,
+  type InputValues,
+} from './jobInputs';
 
 interface Props {
   isOpen: boolean;
@@ -29,17 +42,20 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
   const credsQuery = useJobCredentials();
   const tplQuery = useTemplates();
   const launchMut = useLaunchJob();
+  const auth = useAuthStatus();
+  const isAdmin = auth.data?.role === 'admin';
 
   const [playbookId, setPlaybookId] = useState('');
   const [credentialId, setCredentialId] = useState('');
   const [templateId, setTemplateId] = useState('');
   const [priority, setPriority] = useState('2');
   const [dependsOn, setDependsOn] = useState('');
-  const [dryRun, setDryRun] = useState(true);
+  const [pendingCommit, setPendingCommit] = useState<boolean | null>(null);
   const [adHocIps, setAdHocIps] = useState('');
   const [hostIds, setHostIds] = useState<Set<number>>(new Set());
   const [targetQuery, setTargetQuery] = useState('');
-  const [paramValues, setParamValues] = useState<Record<string, string | boolean>>({});
+  const [inputValues, setInputValues] = useState<InputValues>({});
+  const [inputErrors, setInputErrors] = useState<Record<string, string>>({});
   const [playbookError, setPlaybookError] = useState<string | null>(null);
   const [targetsError, setTargetsError] = useState<string | null>(null);
   const [launchError, setLaunchError] = useState<string | null>(null);
@@ -49,7 +65,14 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
     [playbooksQuery.data, playbookId],
   );
   const isAnsible = selectedPb?.type === 'ansible';
-  const paramSchema: PlaybookParameter[] = selectedPb?.parameters_schema ?? [];
+  const inputSchema: JobInputField[] = selectedPb?.input_schema ?? selectedPb?.parameters_schema ?? [];
+  const supportsDryRun = selectedPb?.supports_dry_run !== false;
+  const canRun = selectedPb?.can_run !== false;
+  const canCommit = selectedPb?.can_commit !== false;
+  // Secret variables are listed for admins only; others type the name.
+  const wantsSecrets = isAdmin && inputSchema.some((f) => f.type === 'secret');
+  const secretsQuery = useSecretVariables(wantsSecrets);
+  const secretNames = wantsSecrets && secretsQuery.data ? secretsQuery.data.map((v) => v.name) : undefined;
 
   const groups = groupsQuery.data;
   const shownGroups = useMemo(() => filterTargetGroups(groups ?? [], targetQuery), [groups, targetQuery]);
@@ -60,26 +83,39 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
   const [prevPbId, setPrevPbId] = useState(selectedPb?.id);
   if (selectedPb?.id !== prevPbId) {
     setPrevPbId(selectedPb?.id);
-    if (!selectedPb) {
-      setParamValues({});
-    } else {
-      const seeded: Record<string, string | boolean> = {};
-      for (const f of paramSchema) {
-        if (f.type === 'bool') {
-          seeded[f.name] = typeof f.default === 'boolean' ? f.default : false;
-        } else {
-          seeded[f.name] = f.default == null ? '' : String(f.default);
-        }
-      }
-      setParamValues(seeded);
-    }
+    setInputValues(selectedPb ? seedInputValues(inputSchema) : {});
+    setInputErrors({});
   }
 
   function reset() {
     setPlaybookId(''); setCredentialId(''); setTemplateId('');
-    setPriority('2'); setDependsOn(''); setDryRun(true);
-    setAdHocIps(''); setHostIds(new Set()); setTargetQuery(''); setParamValues({});
+    setPriority('2'); setDependsOn('');
+    setAdHocIps(''); setHostIds(new Set()); setTargetQuery('');
+    setInputValues({}); setInputErrors({});
     setPlaybookError(null); setTargetsError(null); setLaunchError(null);
+  }
+
+  function changeInput(name: string, value: InputValue) {
+    setInputValues((prev) => ({ ...prev, [name]: value }));
+    // A message clears as soon as the field changes; blur checks it again.
+    setInputErrors((prev) => {
+      if (!(name in prev)) return prev;
+      const next = { ...prev };
+      delete next[name];
+      return next;
+    });
+  }
+
+  function blurInput(name: string) {
+    const field = inputSchema.find((f) => f.name === name);
+    if (!field) return;
+    const msg = validateInputValue(field, inputValues[name]);
+    setInputErrors((prev) => {
+      const next = { ...prev };
+      if (msg) next[name] = msg;
+      else delete next[name];
+      return next;
+    });
   }
 
   function toggleGroup(groupHostIds: number[], checked: boolean) {
@@ -100,8 +136,13 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
     });
   }
 
-  async function handleSubmit(e: FormEvent) {
+  function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    // Enter in the form is the safe action: a dry run when the task has one.
+    if (supportsDryRun) void handleRun(false);
+  }
+
+  async function handleRun(commit: boolean) {
     setLaunchError(null);
     const adHocList = adHocIps.trim()
       ? adHocIps.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean)
@@ -110,21 +151,16 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
     const tgtErr = hostIds.size === 0 && adHocList.length === 0
       ? 'Select at least one host or enter an IP address'
       : null;
+    const inErrs = validateInputs(inputSchema, inputValues);
     setPlaybookError(pbErr);
     setTargetsError(tgtErr);
-    if (pbErr || tgtErr) return;
+    setInputErrors(inErrs);
+    if (pbErr || tgtErr || Object.keys(inErrs).length > 0) return;
     const depsList = dependsOn.trim()
       ? dependsOn.split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n))
       : undefined;
 
-    const parameters: Record<string, unknown> = {};
-    for (const f of paramSchema) {
-      const v = paramValues[f.name];
-      if (v === '' || v === undefined) continue; // server fills in defaults
-      parameters[f.name] = v;
-    }
-
-    if (!dryRun) {
+    if (commit) {
       const groupNames = (groups ?? [])
         .filter((g) => (g.hosts ?? []).some((h) => hostIds.has(h.id)))
         .map((g) => g.name);
@@ -133,9 +169,13 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
         adHocList.length > 0 && `${adHocList.length} ad-hoc address${adHocList.length === 1 ? '' : 'es'}`,
       ].filter(Boolean).join(' and ');
       const ok = await confirm({
-        title: 'Launch live job',
-        message: `Run '${selectedPb?.name ?? 'the selected task'}' live against ${targets}? This is not a dry run: it makes changes on the devices.`,
-        confirmLabel: 'Launch live',
+        title: 'Run and commit job',
+        message:
+          `Run '${selectedPb?.name ?? 'the selected task'}' and commit changes on ${targets}? ` +
+          (supportsDryRun
+            ? 'This is not a dry run: it makes changes on the devices.'
+            : 'This task has no dry-run mode, so it always makes changes on the devices.'),
+        confirmLabel: 'Run and commit',
       });
       if (!ok) return;
     }
@@ -145,12 +185,12 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
         playbook_id: parseInt(playbookId, 10),
         credential_id: credentialId ? parseInt(credentialId, 10) : undefined,
         template_id: !isAnsible && templateId ? parseInt(templateId, 10) : undefined,
-        dry_run: dryRun,
+        commit,
         priority: parseInt(priority, 10) || 2,
         host_ids: hostIds.size > 0 ? Array.from(hostIds) : undefined,
         depends_on: depsList && depsList.length > 0 ? depsList : undefined,
         ad_hoc_ips: adHocList.length > 0 ? adHocList : undefined,
-        parameters: paramSchema.length > 0 ? parameters : undefined,
+        inputs: inputSchema.length > 0 ? buildInputsPayload(inputSchema, inputValues) : undefined,
       },
       {
         onSuccess: (r) => {
@@ -158,10 +198,25 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
           onClose();
           onLaunched?.(r.job_id);
         },
-        onError: (err) => { setLaunchError((err as Error).message); },
+        onError: (err) => {
+          // A 422 names the bad inputs; show each under its field.
+          if (err instanceof CustomDataError && Object.keys(err.fields).length > 0) {
+            const known = new Set(inputSchema.map((f) => f.name));
+            const fieldErrs = Object.fromEntries(Object.entries(err.fields).filter(([k]) => known.has(k)));
+            setInputErrors(fieldErrs);
+            const other = Object.entries(err.fields).filter(([k]) => !known.has(k)).map(([, m]) => m);
+            setLaunchError(other.length > 0 ? other.join(' ') : err.message);
+          } else {
+            setLaunchError((err as Error).message);
+          }
+        },
+        onSettled: () => setPendingCommit(null),
       },
     );
+    setPendingCommit(commit);
   }
+
+  const runBlocked = !selectedPb || !canRun;
 
   return (
     <Modal
@@ -171,14 +226,42 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
       footer={
         <>
           <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="submit" form={formId} className="btn btn-primary" disabled={launchMut.isPending}>
-            {launchMut.isPending ? 'Launching…' : 'Launch'}
-          </button>
+          {supportsDryRun && (
+            <BusyButton
+              type="submit"
+              form={formId}
+              className="btn btn-primary"
+              busy={launchMut.isPending && pendingCommit === false}
+              busyLabel="Starting…"
+              disabled={launchMut.isPending || runBlocked}
+            >
+              Run dry-run
+            </BusyButton>
+          )}
+          <BusyButton
+            type="button"
+            className="btn btn-danger"
+            busy={launchMut.isPending && pendingCommit === true}
+            busyLabel="Starting…"
+            disabled={launchMut.isPending || runBlocked || !canCommit}
+            onClick={() => void handleRun(true)}
+          >
+            Run and commit
+          </BusyButton>
         </>
       }
     >
-      <form id={formId} onSubmit={(e) => void handleSubmit(e)}>
+      <form id={formId} onSubmit={handleSubmit}>
         {launchError && <Callout tone="danger">{launchError}</Callout>}
+        {selectedPb && !canRun && (
+          <Callout tone="warning">You are not allowed to run this task. Ask an admin to add you to its run permissions.</Callout>
+        )}
+        {selectedPb && canRun && !canCommit && (
+          <Callout tone="info">You can run this task as a dry run only. Committing changes needs commit permission.</Callout>
+        )}
+        {selectedPb && !supportsDryRun && (
+          <Callout tone="warning">This task has no dry-run mode. Every run makes changes on the devices.</Callout>
+        )}
         <div className="form-group">
           <label className="form-label" htmlFor={`${formId}-playbook`}>Task</label>
           <select
@@ -321,47 +404,18 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
           </div>
         )}
 
-        {paramSchema.length > 0 && (
-          <div style={{ padding: '0.75rem', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 6, marginBottom: '1rem' }}>
-            <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>Task Parameters</div>
-            {paramSchema.map((f) => {
-              const val = paramValues[f.name];
-              const id = `pb-param-${f.name}`;
-              if (f.type === 'bool') {
-                return (
-                  <div className="form-group" key={f.name}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <input
-                        id={id}
-                        type="checkbox"
-                        checked={Boolean(val)}
-                        onChange={(e) => setParamValues((p) => ({ ...p, [f.name]: e.target.checked }))}
-                      />
-                      {f.label}
-                      {f.required && <span style={{ color: 'var(--danger)' }}>*</span>}
-                    </label>
-                    {f.help && <small className="text-muted">{f.help}</small>}
-                  </div>
-                );
-              }
-              return (
-                <div className="form-group" key={f.name}>
-                  <label className="form-label" htmlFor={id}>
-                    {f.label}
-                    {f.required && <span style={{ color: 'var(--danger)', marginLeft: '0.25rem' }}>*</span>}
-                  </label>
-                  <input
-                    id={id}
-                    className="form-input"
-                    type={f.type === 'int' ? 'number' : 'text'}
-                    value={typeof val === 'string' ? val : ''}
-                    required={f.required}
-                    onChange={(e) => setParamValues((p) => ({ ...p, [f.name]: e.target.value }))}
-                  />
-                  {f.help && <small className="text-muted">{f.help}</small>}
-                </div>
-              );
-            })}
+        {inputSchema.length > 0 && (
+          <div role="group" aria-labelledby={`${formId}-inputs`} style={{ padding: '0.75rem', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 6, marginBottom: '1rem' }}>
+            <div id={`${formId}-inputs`} style={{ fontWeight: 600, marginBottom: '0.5rem' }}>Task Inputs</div>
+            <JobInputsForm
+              schema={inputSchema}
+              values={inputValues}
+              errors={inputErrors}
+              onChange={changeInput}
+              onBlur={blurInput}
+              groups={groups}
+              secretNames={secretNames}
+            />
           </div>
         )}
 
@@ -386,13 +440,6 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
               placeholder="e.g. 12, 15"
             />
           </div>
-        </div>
-
-        <div className="form-group">
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} />
-            Dry Run (simulation)
-          </label>
         </div>
       </form>
     </Modal>

@@ -19,6 +19,7 @@ import {
 import { formatBackendTime } from '@/lib/datetime';
 
 import { priorityLabel, priorityTone } from './helpers';
+import { formatJobInputs } from './jobInputs';
 
 interface Props {
   jobId: number | null;
@@ -220,7 +221,7 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
         <>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
             <Badge tone={isDry ? 'warning' : 'danger'} solid>
-              {isDry ? 'Dry run' : 'Live'}
+              {isDry ? 'Dry run' : 'Commit'}
             </Badge>
             <StatusBadge status={effectiveStatus} />
             {job.priority != null && job.priority !== 2 && (
@@ -230,6 +231,11 @@ export function JobOutputModal({ jobId, onClose, onRetried }: Props) {
             {wsState === 'open' && <span style={{ color: 'var(--success)' }}>Streaming</span>}
             {wsState === 'error' && <span style={{ color: 'var(--danger)' }}>WebSocket error</span>}
           </div>
+          {formatJobInputs(job.parameters) && (
+            <div className="text-muted" style={{ fontSize: '0.85rem', marginBottom: '0.5rem', overflowWrap: 'anywhere' }}>
+              Inputs: {formatJobInputs(job.parameters)}
+            </div>
+          )}
 
           <div ref={outputRef} className="job-output">
             {shownEvents.map((e, i) => (

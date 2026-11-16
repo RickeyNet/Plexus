@@ -9,23 +9,56 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import type { Tone } from '@/lib/severity';
 
 import { apiRequest } from './client';
+import { detailRequest } from './customData';
+import type { GitOwnership } from './gitSources';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
 export type PlaybookType = 'python' | 'ansible';
 
-export type PlaybookParameterType = 'string' | 'int' | 'bool' | 'list';
+/** A typed run-dialog input (netcontrol/job_inputs.py). */
+export type JobInputType =
+  | 'string'
+  | 'text'
+  | 'integer'
+  | 'boolean'
+  | 'choice'
+  | 'multichoice'
+  | 'list'
+  | 'ip'
+  | 'cidr'
+  | 'host'
+  | 'group'
+  | 'secret';
 
-export interface PlaybookParameter {
+export interface JobInputField {
   name: string;
-  type: PlaybookParameterType;
+  type: JobInputType;
   label: string;
-  required?: boolean;
-  default?: string | number | boolean | null;
   help?: string;
+  required?: boolean;
+  default?: string | number | boolean | string[] | null;
+  choices?: string[];
+  /** Integer value, string/text length, or multichoice/list item count. */
+  min?: number;
+  max?: number;
+  /** String and text only; must match the whole value. */
+  regex?: string;
 }
 
-export interface Playbook {
+export interface JobPermissionRule {
+  roles: string[];
+  /** Access group ids. */
+  groups: number[];
+}
+
+/** Who may run the job, and who may commit (run it live). Empty rule = anyone with `jobs`. */
+export interface JobPermissions {
+  run: JobPermissionRule;
+  commit: JobPermissionRule;
+}
+
+export interface Playbook extends GitOwnership {
   id: number;
   name: string;
   filename: string;
@@ -33,7 +66,16 @@ export interface Playbook {
   tags?: string[] | string | null;
   content?: string;
   type?: PlaybookType;
-  parameters_schema?: PlaybookParameter[];
+  parameters_schema?: JobInputField[];
+  /** The effective typed input schema (stored on the task, else declared in code). */
+  input_schema?: JobInputField[];
+  input_schema_source?: 'stored' | 'code' | 'none';
+  /** False: the task cannot preview, so it only runs with commit. */
+  supports_dry_run?: boolean;
+  permissions?: JobPermissions;
+  /** Whether the signed-in user may run / commit this task. */
+  can_run?: boolean;
+  can_commit?: boolean;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -45,6 +87,9 @@ export interface PlaybookCreate {
   tags?: string[];
   content: string;
   type?: PlaybookType;
+  input_schema?: JobInputField[];
+  /** Admin only. */
+  permissions?: JobPermissions;
 }
 
 export interface PlaybookUpdate {
@@ -54,6 +99,9 @@ export interface PlaybookUpdate {
   tags?: string[];
   content?: string;
   type?: PlaybookType;
+  input_schema?: JobInputField[];
+  /** Admin only. */
+  permissions?: JobPermissions;
 }
 
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | string;
@@ -71,6 +119,8 @@ export interface Job {
   queued_at?: string | null;
   completed_at?: string | null;
   launched_by?: string | null;
+  /** The validated inputs as JSON text; secret inputs are `{{secret.NAME}}` references. */
+  parameters?: string | null;
 }
 
 export interface JobLaunchBody {
@@ -78,11 +128,17 @@ export interface JobLaunchBody {
   inventory_group_id?: number;
   credential_id?: number;
   template_id?: number;
-  dry_run: boolean;
+  /** True runs live; omitted or false is a dry run. */
+  commit?: boolean;
+  /** Legacy; `commit` wins when both are sent. */
+  dry_run?: boolean;
   host_ids?: number[];
   priority?: number;
   depends_on?: number[];
   ad_hoc_ips?: string[];
+  /** Values for the task's typed inputs. A bad value answers 422 with `detail.fields`. */
+  inputs?: Record<string, unknown>;
+  /** Legacy name for `inputs`. */
   parameters?: Record<string, unknown>;
 }
 
@@ -113,7 +169,7 @@ export interface JobQueueData {
   jobs: JobQueueChip[];
 }
 
-export interface ConfigTemplate {
+export interface ConfigTemplate extends GitOwnership {
   id: number;
   name: string;
   description?: string;
@@ -169,8 +225,9 @@ export function usePlaybook(id: number | null) {
 export function useCreatePlaybook() {
   const qc = useQueryClient();
   return useMutation({
+    // detailRequest: a bad input schema answers 422 with per-field messages.
     mutationFn: (body: PlaybookCreate) =>
-      apiRequest<Playbook>('/playbooks', { method: 'POST', body }),
+      detailRequest<Playbook>('/playbooks', { method: 'POST', body }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['playbooks'] }),
   });
 }
@@ -179,7 +236,7 @@ export function useUpdatePlaybook() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, data }: { id: number; data: PlaybookUpdate }) =>
-      apiRequest<Playbook>(`/playbooks/${id}`, { method: 'PUT', body: data }),
+      detailRequest<Playbook>(`/playbooks/${id}`, { method: 'PUT', body: data }),
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['playbooks'] });
       qc.invalidateQueries({ queryKey: ['playbook', vars.id] });
@@ -238,8 +295,9 @@ export function useJobQueue() {
 export function useLaunchJob() {
   const qc = useQueryClient();
   return useMutation({
+    // detailRequest: invalid inputs answer 422 with per-field messages.
     mutationFn: (body: JobLaunchBody) =>
-      apiRequest<JobLaunchResult>('/jobs/launch', { method: 'POST', body }),
+      detailRequest<JobLaunchResult>('/jobs/launch', { method: 'POST', body }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['jobs'] });
       qc.invalidateQueries({ queryKey: ['job-queue'] });
@@ -374,10 +432,12 @@ export function useDeleteCredential() {
 
 // ── Secret Variables ───────────────────────────────────────────────────────
 
-export function useSecretVariables() {
+/** `enabled` false skips the request (the list is admin only). */
+export function useSecretVariables(enabled = true) {
   return useQuery<SecretVariable[]>({
     queryKey: ['secret-variables'],
     queryFn: () => apiRequest<SecretVariable[]>('/secret-variables'),
+    enabled,
   });
 }
 

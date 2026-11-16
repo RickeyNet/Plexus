@@ -37,7 +37,9 @@ __all__ = [
     "ensure_vrfs",
     "find_interface_addresses",
     "find_interface_addresses_in_subnet",
+    "get_host_vlans_for_hosts",
     "get_interface_addresses_for_host",
+    "get_interface_addresses_for_hosts",
     "get_vlan",
     "get_vlan_detail",
     "get_vrf",
@@ -79,6 +81,7 @@ _ADDRESS_COLUMNS = (
     "svi_vid",
     "collected_at",
 )
+from routes.db.change_events import tracks_changes
 
 _ADDRESS_SELECT = """
     SELECT a.host_id, h.hostname, a.interface, a.address, a.prefix_length, a.network, a.vrf_name,
@@ -155,6 +158,7 @@ async def get_vrf(vrf_id: int) -> dict | None:
     return _vrf(rows[0]) if rows else None
 
 
+@tracks_changes("vrf", "create")
 async def create_vrf(*, name: str, rd: str = "", description: str = "", origin: str = "manual") -> dict:
     """Raises ``ValueError`` when a VRF has the name, ignoring case."""
     taken = ValueError(f"A VRF named '{name}' already exists.")
@@ -179,6 +183,7 @@ async def create_vrf(*, name: str, rd: str = "", description: str = "", origin: 
     return await _must(get_vrf(new_id))
 
 
+@tracks_changes("vrf", "update", id_arg="vrf_id")
 async def update_vrf(vrf_id: int, *, rd: str, description: str) -> dict | None:
     """Change the route distinguisher and description (the name never
     changes). ``None`` when the VRF does not exist."""
@@ -212,6 +217,7 @@ async def vrf_usage(name: str) -> dict[str, int]:
     return {str(r["kind"]): int(r["n"]) for r in rows}
 
 
+@tracks_changes("vrf", "delete", id_arg="vrf_id")
 async def delete_vrf(vrf_id: int) -> bool:
     """Delete the record (the caller checks ``vrf_usage`` first)."""
     db = await _dbcore.get_db()
@@ -417,6 +423,7 @@ def _vlan_taken(vid: int) -> ValueError:
     return ValueError(f"VLAN {vid} already exists at this site.")
 
 
+@tracks_changes("vlan", "create")
 async def create_vlan(
     *, vid: int, name: str = "", site_id: int | None = None, description: str = "", origin: str = "manual"
 ) -> dict:
@@ -441,6 +448,7 @@ async def create_vlan(
     return await _must(get_vlan(new_id))
 
 
+@tracks_changes("vlan", "update", id_arg="vlan_id")
 async def update_vlan(vlan_id: int, *, name: str, site_id: int | None, description: str) -> dict | None:
     """Change the name, site and description (the VLAN id never changes).
     ``None`` when it does not exist; ``ValueError`` when the new site has
@@ -464,6 +472,7 @@ async def update_vlan(vlan_id: int, *, name: str, site_id: int | None, descripti
     return await get_vlan(vlan_id) if found else None
 
 
+@tracks_changes("vlan", "delete", id_arg="vlan_id")
 async def delete_vlan(vlan_id: int) -> bool:
     db = await _dbcore.get_db()
     try:
@@ -637,35 +646,72 @@ async def replace_host_bindings(host_id: int, rows: list[dict], vrfs: dict[str, 
         await db.close()
 
 
+async def get_interface_addresses_for_hosts(host_ids: Iterable[int]) -> dict[int, list[dict]]:
+    """``host_id -> interface addresses`` (by interface) for many hosts, a
+    few queries whatever their number; each address carries the id of its
+    VRF record (``vrf_id``) and of the VLAN record its VLAN interface
+    resolves to (``vlan_id``), ``None`` when there is none. A host with no
+    address maps to ``[]``."""
+    found: dict[int, list[dict]] = {int(h): [] for h in host_ids}
+    for chunk in _chunks(sorted(found)):
+        rows = await _select(
+            f"""SELECT a.host_id, h.hostname, a.interface, a.address, a.prefix_length, a.network, a.vrf_name,
+                       a.role, a.protocol, a.svi_vid, a.collected_at, vr.id AS vrf_id,
+                       CASE WHEN a.svi_vid > 0 THEN {_RESOLVE_VLAN.format(vid="a.svi_vid")} END AS vlan_id
+                FROM interface_addresses a JOIN hosts h ON h.id = a.host_id
+                LEFT JOIN vrfs vr ON vr.name = a.vrf_name AND a.vrf_name <> ''
+                WHERE a.host_id IN ({_marks(chunk)})
+                ORDER BY a.host_id, a.interface, a.id""",  # nosec B608 - fixed clauses, placeholders only
+            tuple(chunk),
+        )
+        for r in rows:
+            found[int(r["host_id"])].append(
+                {
+                    **_address(r),
+                    "vrf_id": int(r["vrf_id"]) if r["vrf_id"] is not None else None,
+                    "vlan_id": int(r["vlan_id"]) if r["vlan_id"] is not None else None,
+                }
+            )
+    return found
+
+
+async def get_host_vlans_for_hosts(host_ids: Iterable[int]) -> dict[int, list[dict]]:
+    """``host_id -> the VLANs the device defines`` (``vid``, ``name``,
+    ``state`` and ``record_id``, the VLAN record it resolves to or ``None``),
+    by VLAN id. A host with none maps to ``[]``."""
+    found: dict[int, list[dict]] = {int(h): [] for h in host_ids}
+    for chunk in _chunks(sorted(found)):
+        rows = await _select(
+            f"SELECT r.* FROM ({_RESOLVED}) r WHERE r.host_id IN ({_marks(chunk)}) "  # nosec B608 - placeholders only
+            "ORDER BY r.host_id, r.vid",
+            tuple(chunk),
+        )
+        for r in rows:
+            found[int(r["host_id"])].append(
+                {
+                    "vid": int(r["vid"]),
+                    "name": r.get("name") or "",
+                    "state": r.get("state") or "",
+                    "record_id": int(r["record_id"]) if r["record_id"] is not None else None,
+                }
+            )
+    return found
+
+
 async def get_interface_addresses_for_host(host_id: int) -> dict:
     """``{"addresses": [...], "vrfs": [...]}``: the host's interface
     addresses with the id of their VRF record (``vrf_id``) and of the VLAN
     record their VLAN interface resolves to (``vlan_id``), ``None`` when
     there is none; and the host's VRFs with their record id and interface
     count."""
-    rows = await _select(
-        f"""SELECT a.host_id, h.hostname, a.interface, a.address, a.prefix_length, a.network, a.vrf_name,
-                   a.role, a.protocol, a.svi_vid, a.collected_at, vr.id AS vrf_id,
-                   CASE WHEN a.svi_vid > 0 THEN {_RESOLVE_VLAN.format(vid="a.svi_vid")} END AS vlan_id
-            FROM interface_addresses a JOIN hosts h ON h.id = a.host_id
-            LEFT JOIN vrfs vr ON vr.name = a.vrf_name AND a.vrf_name <> ''
-            WHERE a.host_id = ? ORDER BY a.interface, a.id""",  # nosec B608 - fixed clauses, placeholders only
-        (int(host_id),),
-    )
+    addresses = (await get_interface_addresses_for_hosts([int(host_id)]))[int(host_id)]
     vrfs = await _select(
         """SELECT hv.vrf_name AS name, vr.id AS vrf_id, hv.interface_count FROM host_vrfs hv
            LEFT JOIN vrfs vr ON vr.name = hv.vrf_name WHERE hv.host_id = ? ORDER BY lower(hv.vrf_name), hv.vrf_name""",
         (int(host_id),),
     )
     return {
-        "addresses": [
-            {
-                **_address(r),
-                "vrf_id": int(r["vrf_id"]) if r["vrf_id"] is not None else None,
-                "vlan_id": int(r["vlan_id"]) if r["vlan_id"] is not None else None,
-            }
-            for r in rows
-        ],
+        "addresses": addresses,
         "vrfs": [
             {
                 "name": v["name"],

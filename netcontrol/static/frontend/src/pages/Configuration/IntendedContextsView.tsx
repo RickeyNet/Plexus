@@ -1,10 +1,12 @@
 import { useState } from 'react';
 
+import { isGitOwned } from '@/api/gitSources';
 import { type ConfigContext, useDeleteIntendedContext, useIntendedContexts } from '@/api/intendedConfig';
 import { CardHeader, CatalogueBody, RowActions } from '@/components/CatalogueParts';
 import { DataTable } from '@/components/DataTable';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { EmptyState } from '@/components/EmptyState';
+import { GitOwnedBadge } from '@/components/GitOwnedBadge';
 import { clickableProps } from '@/lib/clickable';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 
@@ -82,11 +84,12 @@ export function IntendedContextsView({ isAdmin }: { isAdmin: boolean }) {
               <tr
                 key={c.id}
                 className="row-clickable"
-                title={isAdmin ? 'Edit the context' : 'Show the context'}
+                title={isAdmin && !isGitOwned(c) ? 'Edit the context' : 'Show the context'}
                 {...clickableProps(() => setEditing(c), { role: null })}
               >
                 <td>
                   <NameCell name={c.name} description={c.description} />
+                  <GitOwnedBadge record={c} />
                 </td>
                 <td style={RIGHT}>{c.weight.toLocaleString()}</td>
                 <td>{scopeSummary(c, names)}</td>
@@ -99,12 +102,15 @@ export function IntendedContextsView({ isAdmin }: { isAdmin: boolean }) {
                 {isAdmin && (
                   // The row opens the editor; the buttons do their own thing.
                   <td style={RIGHT} onClick={(e) => e.stopPropagation()}>
-                    <RowActions
-                      label={`context ${c.name}`}
-                      onEdit={() => setEditing(c)}
-                      onDelete={() => handleDelete(c)}
-                      deleting={deleting.isPending(c.id)}
-                    />
+                    {/* A Git source's context changes in its repository. */}
+                    {!isGitOwned(c) && (
+                      <RowActions
+                        label={`context ${c.name}`}
+                        onEdit={() => setEditing(c)}
+                        onDelete={() => handleDelete(c)}
+                        deleting={deleting.isPending(c.id)}
+                      />
+                    )}
                   </td>
                 )}
               </tr>
@@ -112,7 +118,7 @@ export function IntendedContextsView({ isAdmin }: { isAdmin: boolean }) {
           </tbody>
         </DataTable>
       </CatalogueBody>
-      {editing && <ContextModal context={editing === 'new' ? null : editing} readOnly={!isAdmin} onClose={() => setEditing(null)} />}
+      {editing && <ContextModal context={editing === 'new' ? null : editing} readOnly={!isAdmin || (editing !== 'new' && isGitOwned(editing))} onClose={() => setEditing(null)} />}
     </div>
   );
 }

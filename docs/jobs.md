@@ -43,9 +43,74 @@ On the **Tasks** tab, choose **+ New Task**.
 | Description | Free text. |
 | Tags (comma-separated) | Labels you can search on. |
 | Python Code / Ansible YAML | The script, in a code editor. A new task starts from an example. |
+| Run inputs | The typed fields the launch dialog asks for. See [Run inputs](#run-inputs). |
+| Who may run / Who may commit changes | Admins only. See [Run and commit permissions](#run-and-commit-permissions). |
 
 Choose **Create**. Use **Edit** to change a task and the delete button to
 remove it. The search box filters by name, description, filename and tag.
+
+### Run inputs
+
+A task can declare inputs: typed fields the launch dialog shows, checks and
+passes to the run. Choose **Add field** under **Run inputs** and fill in:
+
+| Setting | Meaning |
+|---|---|
+| Name | The variable name the task reads: letters, digits and `_`, starting with a letter or `_`. |
+| Label | The text shown next to the field. Defaults to the name. |
+| Type | One of the types below. |
+| Help text | A line shown under the field. |
+| Default | The value used when the field is left empty. Not available for host and group fields. |
+| Choices | Choice and multiple choice fields: the allowed values, comma-separated. |
+| Min / Max | Whole numbers: the value. One-line and multi-line text: the length. Multiple choice and lists: the number of items. |
+| Pattern | One-line and multi-line text: a regular expression the whole value must match. |
+| Required | The field must have a value (or a default). |
+
+| Type | Control | The task receives |
+|---|---|---|
+| Text (one line) | Text box, at most 1000 characters | The text, trimmed |
+| Text (multi-line) | Text area, at most 20000 characters | The text |
+| Whole number | Number box | A number |
+| Yes / no | Checkbox | `true` or `false` |
+| Choice | List | The chosen value |
+| Multiple choice | Checkboxes | A list of the ticked values |
+| List (comma-separated) | Text box | A list of the items |
+| IP address | Text box, for example `192.0.2.10` | The address |
+| Prefix (CIDR) | Text box, for example `192.0.2.0/24` | The prefix |
+| Inventory host | List of inventory hosts | `{id, hostname, ip_address, device_type}` |
+| Inventory group | List of inventory groups | `{id, name}` |
+| Secret variable | List of secret variables (admins), or the name typed | The secret's value, at run time only |
+
+Use **Move up**, **Move down** and **Remove field** to arrange the fields.
+A field is checked when you leave it, and again by the server when you
+launch; a bad value gives a message under the field and the job is not
+queued.
+
+A Python task can also declare its inputs in code (`parameters_schema`, see
+[Writing playbooks](writing-playbooks.md#run-inputs-and-dry-run)). The built-in
+**Enable NetFlow Export** task does. Its fields show under **Run inputs**
+with a note; a change you save there overrides the code, and removing every
+field goes back to the code version.
+
+A secret input stores only the reference (`{{secret.NAME}}`) on the job. The
+value is decrypted when the job starts and removed from the job log. A
+secret reference typed into any other field is refused.
+
+### Run and commit permissions
+
+By default everyone with the `jobs` feature can run a task and commit its
+changes. An admin can limit this on the task form:
+
+- **Who may run**: tick **Every user (role: user)** or one or more access
+  groups. Only those users can launch the task at all.
+- **Who may commit changes**: the same choices. Users who may run but not
+  commit can only launch a dry run. Nothing ticked means the same people who
+  may run.
+
+Admins and API token callers are always allowed. The launch dialog greys out
+**Run and commit** for a user who may not commit. **Retry** of a live job
+and **Run Live** count as a commit. The check is made by the server when the
+job is launched; a refused launch answers `403`.
 
 ## Managing instruction sets
 
@@ -90,22 +155,25 @@ encrypted and never shown again; **Edit** lets you replace it.
    the **Default Credential** from **Settings > Authentication**.
 6. **Instructions (optional):** pick an instruction set if the task needs
    one. This field is hidden for Ansible tasks.
-7. **Task Parameters:** if the task declares parameters, fill them in. A
-   red `*` marks a required one.
+7. **Task Inputs:** if the task declares [run inputs](#run-inputs), fill
+   them in. A `*` marks a required one. A field is checked when you leave it.
 8. **Priority:** **Low**, **Below Normal**, **Normal** (default), **High**
    or **Critical**.
 9. **Depends On (Job IDs):** optional job numbers, for example `12, 15`.
-10. **Dry Run (simulation):** ticked by default.
-11. Choose **Launch**.
+10. Choose **Run dry-run** to preview the changes, or **Run and commit** to
+    make them.
 
-If **Dry Run (simulation)** is not ticked, Plexus asks you to confirm with
-**Launch live**, because the job changes the devices. After launch the job
-output opens.
+**Run dry-run** is the default (Enter in the form does the same). It runs
+Python tasks with `dry_run` set and Ansible tasks with `--check --diff`.
+**Run and commit** asks you to confirm first, because the job changes the
+devices. A task whose code cannot preview (`supports_dry_run = False`) shows
+only **Run and commit**, with a warning. After launch the job output opens.
 
 ## Watching a job
 
 **View Output** on a job row opens the job window. It shows a **Dry run** or
-**Live** badge, the status, and the log. While the job is queued or running
+**Commit** badge, the status, the job's inputs (secret inputs by name only)
+and the log. While the job is queued or running
 the log streams in and the window shows **Streaming**. An early log line
 states the mode (`DRY-RUN` or `LIVE MODE`). When the job ends a `[Job Complete]` line appears. For the
 stream protocol see [WebSocket usage](websocket-usage.md).
@@ -116,7 +184,7 @@ The buttons at the bottom of the window:
 |---|---|---|
 | **Copy Output** | There is output | Copies the log as text. |
 | **Cancel Job** | Queued or running | Stops the job after you confirm. |
-| **Retry** | Failed or cancelled | Starts a new job with the same task, targets, credential, instructions, parameters, priority and mode. Dependencies are not copied. |
+| **Retry** | Failed or cancelled | Starts a new job with the same task, targets, credential, instructions, inputs, priority and mode. Dependencies are not copied. |
 | **Run Live** | A finished dry run | Starts the same new job as **Retry**, but live, after you confirm. |
 
 The job row has **Cancel** and **Retry** buttons too.
@@ -124,7 +192,7 @@ The job row has **Cancel** and **Retry** buttons too.
 ## Reading the job list
 
 Each row shows the task name, the inventory group, the start (or queue)
-time, the status, `DRY RUN` for a dry run, and who launched it. A priority
+time, the status, `DRY RUN` or `COMMIT` for the mode, and who launched it. A priority
 badge appears when the priority is not Normal, and a `deps:` badge lists
 the jobs it waits for.
 
@@ -157,11 +225,14 @@ days** or **Last 30 days**.
   credentials they created; admins too. The default credential works only
   for the user who owns it.
 - **Checks at launch.** Launch fails if no credential is available, if an
-  instruction set uses a `{{secret.NAME}}` that does not exist, or if an
+  instruction set uses a `{{secret.NAME}}` that does not exist, if an
   ad-hoc address is invalid or reserved (loopback, link-local, multicast,
-  broadcast, `0.0.0.0/8`).
-- **Secrets in logs.** Secret values are removed from Python task output
-  before it is stored.
+  broadcast, `0.0.0.0/8`), if a run input is not valid (or names a host,
+  group or secret that does not exist), or if the task's permissions refuse
+  you.
+- **Secrets in logs.** Secret values (from instruction sets and secret
+  inputs) are removed from Python and Ansible task output before it is
+  stored.
 - **After a live job.** When a live job succeeds, Plexus waits 15 seconds and
   re-polls the inventory hosts by SNMP if SNMP discovery is on for their
   group.
@@ -185,8 +256,10 @@ days** or **Last 30 days**.
 
 | Action | Needs |
 |---|---|
-| See the job list, launch a Python task | `jobs` feature, plus `playbooks` to load the task list |
+| See the job list, launch a Python task | `jobs` feature, plus `playbooks` to load the task list, and the task's run permission |
+| Commit changes (run live, Run Live, retry a live job) | The task's commit permission |
 | Launch an Ansible task | Admin |
+| Set a task's run and commit permissions | Admin |
 | Open output, cancel, retry, run live | The user who launched the job, or an admin |
 | Create, edit and delete tasks | `playbooks` feature |
 | Create, edit and delete instruction sets | `templates` feature |
@@ -208,13 +281,26 @@ GET    /api/jobs?limit=100            (limit 1 to 200)
 GET    /api/jobs/queue
 GET    /api/jobs/{id}
 GET    /api/jobs/{id}/events          (limit up to 100000)
-POST   /api/jobs/launch
+POST   /api/jobs/launch               (inputs, commit)
 POST   /api/jobs/{id}/cancel
 POST   /api/jobs/{id}/retry
 POST   /api/jobs/{id}/rerun           (same job, live)
 PATCH  /api/jobs/{id}/priority        (queued jobs only)
 WS     /ws/jobs/{id}
 ```
+
+Task inputs and permissions (under the `playbooks` feature):
+
+```
+GET    /api/playbooks/{id}/input-schema   (form: schema, supports_dry_run, can_run, can_commit)
+PUT    /api/playbooks/{id}/input-schema   {"schema": [...]}; [] goes back to the code schema
+PUT    /api/playbooks/{id}/permissions    {"run": {...}, "commit": {...}} (admin only)
+```
+
+`POST` and `PUT /api/playbooks[/{id}]` also take `input_schema` and
+(admins) `permissions`, and every playbook in `GET /api/playbooks` carries
+`input_schema`, `input_schema_source`, `supports_dry_run`, `permissions`,
+`can_run` and `can_commit`.
 
 Launch a dry run on two inventory hosts and one ad-hoc address:
 
@@ -226,10 +312,10 @@ POST /api/jobs/launch
   "ad_hoc_ips": ["192.0.2.50"],
   "credential_id": 5,
   "template_id": 2,
-  "dry_run": true,
+  "commit": false,
   "priority": 3,
   "depends_on": [118],
-  "parameters": { "vlan_id": 120 }
+  "inputs": { "vlan_id": 120, "uplink": "198.51.100.0/24", "snmp_key": "snmp_v3_auth" }
 }
 ```
 
@@ -238,5 +324,21 @@ POST /api/jobs/launch
 ```
 
 Give `host_ids`, `ad_hoc_ips` or `inventory_group_id` (a whole group).
-`dry_run` defaults to `true` and `priority` to `2`; priority is clamped to 0
-to 4. Unknown fields give `422`. A missing required parameter gives `400`.
+`commit` defaults to `false` (a dry run); the older `dry_run` flag still
+works and `commit` wins when both are sent. `parameters` is the older name
+for `inputs`. `priority` defaults to `2` and is clamped to 0 to 4. Unknown
+fields give `422`. Invalid inputs give `422` with one message per field:
+
+```json
+{
+  "ok": false,
+  "error": { "code": "http_error", "message": "Some inputs are not valid." },
+  "detail": {
+    "message": "Some inputs are not valid.",
+    "fields": { "vlan_id": "VLAN must be at most 4094.", "uplink": "Uplink must be a prefix in CIDR form, for example 192.0.2.0/24." }
+  }
+}
+```
+
+A dry run of a task without a dry-run mode gives `422` with a `commit`
+field. A caller the task's permissions refuse gets `403`.

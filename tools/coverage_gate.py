@@ -20,6 +20,10 @@ DEFAULT_RULES = {
     # Floor from tests/test_jobs.py (param coercion, queue ordering,
     # dependency gating, event writer). The runner itself is untested.
     "netcontrol/routes/jobs.py": 25.0,
+    # Typed job inputs and per-job run/commit permissions: the rules.
+    # Measured by tests/test_job_inputs.py (93%); do not lower it to land
+    # a change.
+    "netcontrol/job_inputs.py": 90.0,
     # AI access (MCP): the token check, the dispatcher every call goes
     # through and the secret masking. Floors sit a few points under what
     # tests/test_mcp_*.py measure; do not lower them to land a change.
@@ -55,6 +59,30 @@ DEFAULT_RULES = {
     # rule's helpers). Measured by tests/test_object_scope_*.py; do not
     # lower it to land a change.
     "netcontrol/object_scope.py": 95.0,
+    # Read-only GraphQL API: access checks and batched readers, query limits,
+    # schema and routes. Measured by tests/test_graphql_api.py; do not lower
+    # them to land a change.
+    "netcontrol/graphql_api/context.py": 90.0,
+    "netcontrol/graphql_api/limits.py": 95.0,
+    "netcontrol/graphql_api/schema.py": 82.0,
+    "netcontrol/routes/graphql.py": 90.0,
+    # Plugin framework: declaration validation, discovery / allow-list /
+    # failure isolation, and the manifest and router mounting. Measured by
+    # tests/test_plugins.py; do not lower them to land a change.
+    "netcontrol/plugins/base.py": 88.0,
+    "netcontrol/plugins/registry.py": 82.0,
+    "netcontrol/routes/plugins.py": 90.0,
+    # Event webhooks: matching, signing, delivery/retry, the API, and the
+    # object-change events behind them. Measured by tests/test_webhooks.py;
+    # do not lower them to land a change.
+    "netcontrol/routes/webhooks.py": 85.0,
+    "routes/db/change_events.py": 75.0,
+    # Git data sources: remote/branch rules, the git runner's credential
+    # handling, checkout parsing, sync/import and the API. Measured by
+    # tests/test_git_sources.py; do not lower them to land a change.
+    "netcontrol/git_sources.py": 90.0,
+    "netcontrol/routes/git_sources.py": 83.0,
+    "routes/db/git_sources.py": 92.0,
 }
 
 
