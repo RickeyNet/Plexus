@@ -158,6 +158,10 @@ export interface OpnsenseBuildOptions {
   include_routes: boolean;
   /** The firmware security audit of the installed packages. */
   include_firmware_audit: boolean;
+  /** ARP / NDP tables (into MAC tracking) and DHCP leases (into IPAM). */
+  include_clients: boolean;
+  /** The filter rule counters (unused rules in the rule views). */
+  include_rule_stats: boolean;
   /** Store config.xml as a config backup of the matching inventory host. */
   config_backup: boolean;
   inventory_enrich: boolean;

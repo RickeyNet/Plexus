@@ -184,6 +184,123 @@ def _route(destination: str, gateway: str, flags: str, netif: str, description: 
     }
 
 
+def _neighbour(ip: str, mac: str, intf: str, description: str, hostname: str = "", **extra: Any) -> dict[str, Any]:
+    """A row of ``diagnostics/interface/search_arp`` / ``search_ndp``."""
+    return {
+        "mac": mac,
+        "ip": ip,
+        "intf": intf,
+        "intf_description": description,
+        "manufacturer": "",
+        "hostname": hostname,
+        **extra,
+    }
+
+
+def _client_answers() -> dict[str, Any]:
+    """The ARP / NDP tables and the DHCP leases: ISC DHCPv4 on LAN, Kea
+    DHCPv4 on the DMZ, Kea DHCPv6 on LAN and Dnsmasq on Guest. ISC DHCPv6
+    is not there (404). One ARP entry is incomplete (no MAC)."""
+    arp = [
+        _neighbour("192.0.2.10", "02:00:5e:00:53:10", "igb1", "LAN", "nas.example.com", expired=False, expires=1180),
+        _neighbour("192.0.2.11", "02:00:5e:00:53:11", "igb1", "LAN", "printer.example.com", expires=900),
+        _neighbour("192.0.2.140", "02:00:5e:00:53:20", "vlan0.20", "DMZ", "web1.example.com", expires=1100),
+        _neighbour("192.0.2.2", "02:00:5e:00:53:02", "igb1", "LAN", "core.example.com", permanent=True),
+        _neighbour("192.0.2.12", "(incomplete)", "igb1", "LAN", expired=True),
+        _neighbour("203.0.113.1", "02:00:5e:00:53:01", "igb0", "WAN", expires=1200),
+    ]
+    ndp = [
+        {**_neighbour("2001:db8:10::10", "02:00:5e:00:53:10", "igb1", "LAN"), "type": "dynamic"},
+        {**_neighbour("fe80::ff:fe00:5310%igb1", "02:00:5e:00:53:10", "igb1", "LAN"), "type": "dynamic"},
+    ]
+    isc4 = [
+        {
+            "address": "192.0.2.10",
+            "starts": "2026/11/14 07:00:00",
+            "ends": "2026/11/14 09:00:00",
+            "binding": "active",
+            "uid": "01:02:00:5e:00:53:10",
+            "client-hostname": "nas",
+            "type": "dynamic",
+            "status": "online",
+            "descr": "",
+            "mac": "02:00:5e:00:53:10",
+            "hostname": "nas",
+            "if": "lan",
+            "if_descr": "LAN",
+            "man": "",
+        },
+        {
+            "address": "192.0.2.11",
+            "starts": "",
+            "ends": "",
+            "binding": "",
+            "type": "static",
+            "status": "offline",
+            "descr": "Printer reservation",
+            "mac": "02-00-5E-00-53-11",
+            "hostname": "printer",
+            "if": "lan",
+            "if_descr": "LAN",
+        },
+    ]
+    kea4 = [
+        {
+            "address": "192.0.2.140",
+            "hwaddr": "02:00:5e:00:53:20",
+            "client_id": "",
+            "valid_lifetime": "3600",
+            "expire": "1794646800",
+            "subnet_id": "2",
+            "hostname": "web1.example.com.",
+            "state": "0",
+            "if": "opt1",
+            "if_descr": "DMZ",
+            "is_reserved": "",
+        },
+        # Also an ISC lease: the ISC one is kept.
+        {"address": "192.0.2.10", "hwaddr": "02:00:5e:00:53:99", "expire": "1794646800", "state": "0"},
+        {"address": "192.0.2.141", "hwaddr": "02:00:5e:00:53:21", "expire": "1794636000", "state": "2"},
+    ]
+    kea6 = [
+        {
+            "address": "2001:db8:10::100",
+            "duid": "00:01:00:01:00:00:00:01:02:00:5e:00:53:10",
+            "iaid": "1",
+            "hwaddr": "02:00:5e:00:53:10",
+            "hostname": "nas.example.com",
+            "expire": "1794646800",
+            "valid_lifetime": "7200",
+            "state": "0",
+            "type": "IA_NA",
+            "if": "lan",
+            "if_descr": "LAN",
+        },
+        # A delegated prefix is no address.
+        {"address": "2001:db8:ff00::/56", "type": "IA_PD", "state": "0"},
+    ]
+    dnsmasq = [
+        {
+            "expire": "1794646000",
+            "hwaddr": "02:00:5e:00:53:30",
+            "address": "192.0.2.200",
+            "hostname": "guest-phone",
+            "client_id": "01:02:00:5e:00:53:30",
+            "if": "opt2",
+            "if_descr": "Guest",
+            "is_reserved": "0",
+        }
+    ]
+    return {
+        "diagnostics/interface/search_arp": _search(arp),
+        "diagnostics/interface/search_ndp": _search(ndp),
+        "dhcpv4/leases/search_lease": {**_search(isc4), "interfaces": {"lan": "LAN"}},
+        "kea/leases4/search": _search(kea4),
+        "kea/leases6/search": _search(kea6),
+        "dnsmasq/leases/search": _search(dnsmasq),
+    }
+
+
 def sample_api_answers() -> dict[str, Any]:
     """API path (as the collector names it, newest form) -> the answer."""
     interfaces = [
@@ -514,6 +631,27 @@ def sample_api_answers() -> dict[str, Any]:
             ),
             "carp": {"demotion": "0", "allow": "1", "maintenancemode": False, "status_msg": ""},
         },
+        **_client_answers(),
+        # The filter rule counters by rule uuid (``filter rule stats``).
+        "firewall/filter_util/rule_stats": {
+            "status": "ok",
+            "stats": {
+                "d0000000-0000-4000-8000-000000000001": {
+                    "pf_rules": 1,
+                    "evaluations": 18230,
+                    "packets": 9120,
+                    "bytes": 7340032,
+                    "states": 14,
+                },
+                "d0000000-0000-4000-8000-000000000002": {
+                    "pf_rules": 1,
+                    "evaluations": 18230,
+                    "packets": 0,
+                    "bytes": 0,
+                    "states": 0,
+                },
+            },
+        },
         "core/firmware/running": {"status": "ready"},
         "core/firmware/audit": {"status": "ok", "msg_uuid": "00000000-0000-4000-8000-0000000000aa"},
         "core/firmware/upgradestatus": {"status": "done", "log": AUDIT_LOG},
@@ -529,6 +667,7 @@ def build_sample_raw() -> dict[str, Any]:
     from netcontrol.integrations.opnsense.collector import (
         _UUID,
         DEFAULT_OPTIONS,
+        LEASE_BACKENDS,
         _rows,
         parse_audit_log,
         scrub_firmware,
@@ -554,6 +693,14 @@ def build_sample_raw() -> dict[str, Any]:
         "wireguard": _rows(answers["wireguard/service/show"]),
         "openvpn": _rows(answers["openvpn/service/search_sessions"]),
         "carp": {"rows": _rows(vips), "carp": vips["carp"]},
+        "clients": {
+            "arp": _rows(answers["diagnostics/interface/search_arp"]),
+            "ndp": _rows(answers["diagnostics/interface/search_ndp"]),
+            "leases": {
+                key: _rows(answers[paths[0]]) for key, _name, paths, _privilege in LEASE_BACKENDS if paths[0] in answers
+            },
+        },
+        "rule_stats": answers["firewall/filter_util/rule_stats"],
         "audit": {"ran_at": "2026-11-14T09:00:05+00:00", **parse_audit_log(AUDIT_LOG)},
         "config_xml": None,
         "errors": [],

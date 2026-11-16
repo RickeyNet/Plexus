@@ -1,7 +1,10 @@
 """dhcp.py -- DHCP scope/lease integration routes (Phase F).
 
 Provides CRUD for DHCP server configs, manual sync, normalized scope/lease
-listings, and correlation against discovered inventory.
+listings, and correlation against discovered inventory. Servers of a
+collection-fed provider (``opnsense``: created by an OPNsense firewall's
+topology collection) are listed, edited and deleted like the others but
+cannot be created or synced here.
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ from netcontrol.routes.dhcp_adapters import (
     DhcpAdapterError,
     collect_dhcp_snapshot,
     get_dhcp_provider_catalog,
+    is_collection_fed,
     normalize_dhcp_provider,
 )
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
@@ -172,6 +176,10 @@ async def update_dhcp_server_api(
         raise HTTPException(status_code=404, detail="not_found")
     session = _get_session(request)
     update_kwargs = body.model_dump(exclude_unset=True)
+    if is_collection_fed(existing.get("provider")) and "provider" in update_kwargs:
+        # Its provider is fixed: the collection that feeds it finds it by it.
+        if str(update_kwargs.pop("provider") or "").strip().lower() != existing.get("provider"):
+            raise HTTPException(status_code=400, detail="invalid_provider")
     if "provider" in update_kwargs:
         try:
             update_kwargs["provider"] = normalize_dhcp_provider(update_kwargs["provider"])
@@ -216,6 +224,11 @@ async def sync_dhcp_server(server_id: int, *, triggered_by: str = "manual") -> d
     server = await db.get_dhcp_server(server_id)
     if not server:
         raise HTTPException(status_code=404, detail="not_found")
+    if is_collection_fed(server.get("provider")):
+        raise HTTPException(
+            status_code=409,
+            detail="collection_fed: this server's leases are updated by its OPNsense topology source; build that source",
+        )
     auth_config = await db.get_dhcp_server_auth_config(server_id)
     try:
         snapshot = await collect_dhcp_snapshot(server, auth_config)

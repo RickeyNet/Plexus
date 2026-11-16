@@ -24,6 +24,7 @@ from netcontrol.object_scope import (
     scoped,
     ws_scope,
 )
+from netcontrol.routes import opnsense_masking
 from netcontrol.routes.device_config import get_device_config
 from netcontrol.routes.shared import (
     _audit,
@@ -150,6 +151,30 @@ def _group_ids(hosts: list[dict]) -> list[int | None]:
     return sorted({h.get("group_id") for h in hosts}, key=lambda g: (g is None, g or 0))
 
 
+async def _capture_for_drift(host: dict, credentials: dict) -> str:
+    """The configuration text a drift snapshot of ``host`` stores. An
+    OPNsense firewall is never read over SSH: its snapshot is its newest
+    config.xml backup, normalized and with secrets masked (raises
+    ``OpnsenseBackupMissing`` without one). Any other host is read from the
+    device the usual way."""
+    if opnsense_masking.is_opnsense_host(host):
+        return await opnsense_masking.drift_snapshot_text(host)
+    return (await get_device_config(host, credentials, capture_method="drift")).config_text
+
+
+def _drift_form(text: str) -> str:
+    """An OPNsense config.xml in the normalized, masked form drift stores
+    and compares; any other text unchanged."""
+    return opnsense_masking.drift_form(text) if opnsense_masking.is_opnsense_text(text) else text
+
+
+def _capture_failed(host: dict, exc: Exception) -> HTTPException:
+    if isinstance(exc, opnsense_masking.OpnsenseBackupMissing):
+        return HTTPException(status_code=409, detail=opnsense_masking.NO_BACKUP_MESSAGE)
+    LOGGER.error("config-drift: capture failed for host %s: %s", host["ip_address"], exc)
+    return HTTPException(status_code=502, detail="SSH capture failed; see server logs")
+
+
 _MAX_OUTPUT_LINES = 10_000
 _MAX_OUTPUT_SIZE = 10 * 1024 * 1024  # 10 MB cap on revert output string
 
@@ -259,7 +284,7 @@ async def _capture_job_body(
                 f"[{datetime.now(UTC).strftime('%H:%M:%S')}] ({idx}/{total}) Connecting to {hostname} ({ip})...\n",
             )
             try:
-                config_text = (await get_device_config(h, credentials, capture_method="drift")).config_text
+                config_text = await _capture_for_drift(h, credentials)
                 sid = await db.create_config_snapshot(
                     host_id=h["id"],
                     config_text=config_text,
@@ -338,9 +363,11 @@ async def _analyze_drift_for_host(host_id: int) -> dict:
     if not snapshot:
         return {"drifted": False, "event_id": None, "diff_summary": "No snapshot available"}
 
+    # An OPNsense baseline or snapshot stored before masking (or pasted by
+    # hand) is compared in drift form too, so the diff never holds a secret.
     diff_text, added, removed = _compute_config_diff(
-        baseline["config_text"],
-        snapshot["config_text"],
+        _drift_form(baseline["config_text"]),
+        _drift_form(snapshot["config_text"]),
         baseline_label="baseline",
         actual_label="running-config",
     )
@@ -617,6 +644,25 @@ async def _run_revert_job(job_id: str, event: dict, host: dict, baseline: dict, 
 # ── Background loops ─────────────────────────────────────────────────────────
 
 
+async def _refresh_opnsense_snapshot(host_id: int) -> int | None:
+    """Take a new drift snapshot of an OPNsense host from its newest config
+    backup when that differs from its latest snapshot (the collection, not
+    a drift capture, brings new backups in). Returns the new snapshot id,
+    or ``None`` when the host is no OPNsense firewall, has no backup, or
+    nothing changed."""
+    host = await db.get_host(host_id)
+    if not host or not opnsense_masking.is_opnsense_host(host):
+        return None
+    try:
+        text = await opnsense_masking.drift_snapshot_text(host)
+    except opnsense_masking.OpnsenseBackupMissing:
+        return None
+    latest = await db.get_latest_config_snapshot(host_id)
+    if latest and latest.get("config_text") == text:
+        return None
+    return await db.create_config_snapshot(host_id=host_id, config_text=text, capture_method="scheduled")
+
+
 async def _run_config_drift_check_once() -> dict:
     """Run drift analysis on all hosts that have baselines."""
     if not state.CONFIG_DRIFT_CHECK_CONFIG.get("enabled"):
@@ -634,6 +680,7 @@ async def _run_config_drift_check_once() -> dict:
 
     async def _check_one(host_id: int) -> dict:
         async with semaphore:
+            await _refresh_opnsense_snapshot(host_id)
             return await _analyze_drift_for_host(host_id)
 
     results = await asyncio.gather(
@@ -726,7 +773,8 @@ async def list_config_baselines(request: Request, host_id: int | None = Query(de
     """List config baselines, optionally filtered by host."""
     scope_filter = await group_filter(request)
     try:
-        return await db.get_config_baselines(host_id=host_id, **scope_filter)
+        rows = await db.get_config_baselines(host_id=host_id, **scope_filter)
+        return [opnsense_masking.mask_record(r, "config_text") for r in rows]
     except Exception as exc:
         LOGGER.error("config-drift: list baselines error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to list config baselines")
@@ -736,20 +784,23 @@ async def list_config_baselines(request: Request, host_id: int | None = Query(de
 @scoped("baseline")
 async def get_config_baseline(baseline_id: int, request: Request = None):
     """Get a single config baseline."""
-    return await _require_baseline(request, baseline_id)
+    return opnsense_masking.mask_record(await _require_baseline(request, baseline_id), "config_text")
 
 
 @router.post("/api/config-drift/baselines", status_code=201)
 @scoped("host")
 async def create_config_baseline(body: ConfigBaselineCreate, request: Request):
     """Create or replace a config baseline for a host."""
-    await require_host(request, body.host_id, write=True)
+    host = await require_host(request, body.host_id, write=True)
     session = _get_session(request)
     user = session["user"] if session else ""
+    config_text = body.config_text
+    if opnsense_masking.is_opnsense_host(host) or opnsense_masking.is_opnsense_text(config_text):
+        config_text = opnsense_masking.drift_form(config_text)
     baseline_id = await db.create_config_baseline(
         host_id=body.host_id,
         name=body.name,
-        config_text=body.config_text,
+        config_text=config_text,
         source=body.source,
         created_by=user,
     )
@@ -771,7 +822,7 @@ async def update_config_baseline_endpoint(baseline_id: int, body: ConfigBaseline
     await db.update_config_baseline(
         baseline_id,
         name=body.name,
-        config_text=body.config_text,
+        config_text=_drift_form(body.config_text) if body.config_text is not None else None,
         source=body.source,
     )
     session = _get_session(request)
@@ -824,7 +875,7 @@ async def list_config_snapshots(
 @scoped("snapshot")
 async def get_config_snapshot(snapshot_id: int, request: Request):
     """Get a single snapshot with full config text."""
-    return await _require_snapshot(request, snapshot_id)
+    return opnsense_masking.mask_record(await _require_snapshot(request, snapshot_id), "config_text")
 
 
 @router.post("/api/config-drift/snapshots/capture")
@@ -834,10 +885,9 @@ async def capture_config_snapshot(body: ConfigSnapshotCaptureRequest, request: R
     host = await require_host(request, body.host_id, write=True)
     cred = await require_credential_access(body.credential_id, session=_get_session(request))
     try:
-        config_text = (await get_device_config(host, cred, capture_method="drift")).config_text
+        config_text = await _capture_for_drift(host, cred)
     except Exception as exc:
-        LOGGER.error("config-drift: capture failed for host %s: %s", host["ip_address"], exc)
-        raise HTTPException(status_code=502, detail="SSH capture failed; see server logs")
+        raise _capture_failed(host, exc) from None
     snapshot_id = await db.create_config_snapshot(
         host_id=body.host_id,
         config_text=config_text,
@@ -877,7 +927,7 @@ async def capture_group_config_snapshots(body: ConfigGroupCaptureRequest, reques
     async def _capture_one(h):
         async with sem:
             try:
-                config_text = (await get_device_config(h, cred, capture_method="drift")).config_text
+                config_text = await _capture_for_drift(h, cred)
                 sid = await db.create_config_snapshot(
                     host_id=h["id"],
                     config_text=config_text,
@@ -1095,7 +1145,8 @@ async def list_config_drift_events(
     limit: int = Query(default=100, ge=1, le=10000),
 ):
     """List drift events with optional filters."""
-    return await db.get_config_drift_events(status=status, host_id=host_id, limit=limit, **await group_filter(request))
+    rows = await db.get_config_drift_events(status=status, host_id=host_id, limit=limit, **await group_filter(request))
+    return [opnsense_masking.mask_record(r, "diff_text") for r in rows]
 
 
 async def _bulk_close_drift_events(event_ids: list[int], to_status: str, request: Request) -> int:
@@ -1176,7 +1227,7 @@ async def bulk_resolve_drift_events(body: ConfigDriftBulkEventsRequest, request:
 @scoped("event")
 async def get_config_drift_event(event_id: int, request: Request):
     """Get a single drift event with diff text."""
-    return await _require_event(request, event_id)
+    return opnsense_masking.mask_record(await _require_event(request, event_id), "diff_text")
 
 
 @router.get("/api/config-drift/events/{event_id}/history")
@@ -1252,6 +1303,12 @@ async def revert_drift_event(body: ConfigDriftRevertRequest, request: Request):
         raise HTTPException(status_code=404, detail="Host not found")
 
     baseline = await db.get_config_baseline_for_host(event["host_id"])
+    # No write path to an OPNsense firewall: its drift is accepted or fixed
+    # on the firewall, never pushed back from Plexus.
+    if opnsense_masking.is_opnsense_host(host) or opnsense_masking.is_opnsense_text(
+        (baseline or {}).get("config_text")
+    ):
+        raise HTTPException(status_code=400, detail=opnsense_masking.REVERT_REFUSED_MESSAGE)
     if not baseline or not baseline.get("config_text"):
         raise HTTPException(status_code=400, detail="No baseline config found for this host")
 
@@ -1416,10 +1473,9 @@ async def full_config_drift_check(body: ConfigDriftCheckRequest, request: Reques
     host = await require_host(request, body.host_id, write=True)
     cred = await require_credential_access(body.credential_id, session=_get_session(request))
     try:
-        config_text = (await get_device_config(host, cred, capture_method="drift")).config_text
+        config_text = await _capture_for_drift(host, cred)
     except Exception as exc:
-        LOGGER.error("config-drift: capture failed for host %s: %s", host["ip_address"], exc)
-        raise HTTPException(status_code=502, detail="SSH capture failed; see server logs")
+        raise _capture_failed(host, exc) from None
     snapshot_id = await db.create_config_snapshot(
         host_id=body.host_id,
         config_text=config_text,

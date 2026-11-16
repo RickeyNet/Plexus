@@ -41,6 +41,25 @@ the API reference at docs.opnsense.org:
                                                  DISABLED) and the global
                                                  ``carp`` state (demotion,
                                                  allow, maintenance mode)
+  - ``diagnostics/interface/search_arp``         the ARP table (``get_arp``, a
+                                                 plain list, on older releases;
+                                                 never ``flush_arp``)
+  - ``diagnostics/interface/search_ndp``         the NDP table (``get_ndp``)
+  - ``dhcpv4/leases/search_lease``,              DHCP leases of whichever
+    ``dhcpv6/leases/search_lease`` (ISC),        backends the firewall has; a
+    ``kea/leases4/search``,                      backend that answers 404 is not
+    ``kea/leases6/search`` (Kea),                there and is skipped quietly.
+    ``dnsmasq/leases/search`` (Dnsmasq)          The search actions are read
+                                                 with GET (all rows); the Kea,
+                                                 Dnsmasq and DHCPv6 row shapes
+                                                 are not verified against a
+                                                 firewall (see
+                                                 docs/opnsense-topology.md)
+  - ``firewall/filter_util/rule_stats``          the filter rule counters
+                                                 (evaluations, packets, bytes,
+                                                 states) by rule uuid, for the
+                                                 rule views (24.1+; an older
+                                                 release answers 404, a warning)
   - ``core/firmware/running``, ``core/firmware/audit`` (POST),
     ``core/firmware/upgradestatus``              the security audit
                                                  (``pkg audit -F``), run in the
@@ -92,6 +111,11 @@ DEFAULT_OPTIONS: dict[str, Any] = {
     "include_routes": True,
     # The security audit of the installed packages (pkg audit).
     "include_firmware_audit": True,
+    # The ARP and NDP tables and the DHCP leases (ISC, Kea, Dnsmasq), fed
+    # into MAC tracking and the DHCP leases of IPAM.
+    "include_clients": True,
+    # The filter rule counters (unused rules in the rule views).
+    "include_rule_stats": True,
     # Store config.xml as a configuration backup of the matching inventory host.
     "config_backup": True,
     # Attach data Plexus already collected over SNMP/SSH for the inventory
@@ -110,6 +134,8 @@ PHASE_GATEWAYS = "opnsense gateways"
 PHASE_VPN = "opnsense vpn"
 PHASE_ROUTES = "opnsense routes"
 PHASE_HA = "opnsense ha"
+PHASE_CLIENTS = "opnsense clients"
+PHASE_RULES = "opnsense rules"
 PHASE_FIRMWARE = "opnsense firmware"
 PHASE_CONFIG = "opnsense config"
 
@@ -125,6 +151,31 @@ PATH_IPSEC_CHILDREN = ("ipsec/connections/search_child", "ipsec/connections/sear
 PATH_CARP = ("diagnostics/interface/get_vip_status", "diagnostics/interface/getVipStatus")
 PATH_WIREGUARD = ("wireguard/service/show",)
 PATH_OPENVPN = ("openvpn/service/search_sessions", "openvpn/service/searchSessions")
+# The ARP and NDP tables: the search form (22.1+) first, the plain list of
+# older releases last.
+PATH_ARP = (
+    "diagnostics/interface/search_arp",
+    "diagnostics/interface/searchArp",
+    "diagnostics/interface/get_arp",
+    "diagnostics/interface/getArp",
+)
+PATH_NDP = (
+    "diagnostics/interface/search_ndp",
+    "diagnostics/interface/searchNdp",
+    "diagnostics/interface/get_ndp",
+    "diagnostics/interface/getNdp",
+)
+# The DHCP lease backends: (key, name, paths, the privilege that grants them).
+# A firewall runs one or two of them; a backend the release or its plugins
+# lack answers 404 and is skipped without a warning.
+LEASE_BACKENDS: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
+    ("isc4", "ISC DHCPv4", ("dhcpv4/leases/search_lease", "dhcpv4/leases/searchLease"), "Status: DHCP leases"),
+    ("isc6", "ISC DHCPv6", ("dhcpv6/leases/search_lease", "dhcpv6/leases/searchLease"), "Status: DHCPv6 leases"),
+    ("kea4", "Kea DHCPv4", ("kea/leases4/search",), "Services: Kea DHCP: Leases (v4)"),
+    ("kea6", "Kea DHCPv6", ("kea/leases6/search",), "Services: Kea DHCP: Leases (v6)"),
+    ("dnsmasq", "Dnsmasq DHCP", ("dnsmasq/leases/search",), "Services: Dnsmasq DNS/DHCP: Leases"),
+)
+PATH_RULE_STATS = ("firewall/filter_util/rule_stats", "firewall/filter_util/ruleStats")
 PATH_FIRMWARE_RUNNING = "core/firmware/running"
 PATH_AUDIT = "core/firmware/audit"
 PATH_AUDIT_STATUS = "core/firmware/upgradestatus"
@@ -379,6 +430,8 @@ async def collect_opnsense(
     errors: list[dict[str, Any]] = []
     total = 3 + int(opts["include_gateways"]) + 3 * int(opts["include_vpn"]) + int(opts["include_routes"])
     total += int(opts["include_ha"]) + 3 * int(opts["include_firmware_audit"]) + int(want_config)
+    total += (2 + len(LEASE_BACKENDS)) * int(opts["include_clients"])
+    total += int(opts["include_rule_stats"])
     done = 0
     answered = 0
     first_error: OpnsenseApiError | None = None
@@ -458,6 +511,25 @@ async def collect_opnsense(
         found = await best_effort("routes", PATH_ROUTES)
         routes = scrub_secrets(_rows(found)) if found is not None else None
 
+    clients: dict[str, Any] | None = None
+    if opts["include_clients"]:
+        report(PHASE_CLIENTS)
+        clients, answered_clients = await _collect_clients(client, errors)
+        done += 2 + len(LEASE_BACKENDS)
+        answered += answered_clients
+        report(
+            PHASE_CLIENTS,
+            arp=len(clients["arp"] or []),
+            ndp=len(clients["ndp"] or []),
+            leases=sum(len(rows) for rows in (clients["leases"] or {}).values()),
+        )
+
+    rule_stats: dict[str, Any] | None = None
+    if opts["include_rule_stats"]:
+        report(PHASE_RULES)
+        found = await best_effort("rules", PATH_RULE_STATS)
+        rule_stats = scrub_secrets(found) if isinstance(found, dict) else None
+
     audit: dict[str, Any] | None = None
     if opts["include_firmware_audit"]:
         report(PHASE_FIRMWARE)
@@ -520,6 +592,8 @@ async def collect_opnsense(
         "wireguard": wireguard,
         "openvpn": openvpn,
         "carp": carp,
+        "clients": clients,
+        "rule_stats": rule_stats,
         "audit": audit,
         # Never part of the snapshot: the caller stores it as a config backup.
         "config_xml": config_xml,
@@ -559,6 +633,50 @@ async def _collect_ipsec_children(
                 configured = configured if configured is not None else {}
                 configured[ikeid] = scrub_secrets(_rows(found))
     return phase2, configured
+
+
+async def _collect_clients(client: OpnsenseClient, errors: list[dict[str, Any]]) -> tuple[dict[str, Any], int]:
+    """The ARP and NDP tables and the leases of every DHCP backend that
+    answers, and how many calls answered. ``arp`` / ``ndp`` are ``None``
+    when not read; ``leases`` maps each backend that answered to its rows
+    (``None`` when none did). A refused call is a warning that names the
+    privilege it needs; a lease backend that is not there (404: not on this
+    release, plugin not installed) is skipped quietly, with one ``info``
+    warning when no backend answered at all."""
+    answered = 0
+
+    async def read(paths: tuple[str, ...], privilege: str, *, quiet_404: bool = False) -> list[dict] | None:
+        nonlocal answered
+        try:
+            _path, found = await client.get_first(paths)
+        except OpnsenseApiError as exc:
+            if exc.transport or exc.status_code == 401:
+                raise
+            if not (quiet_404 and exc.status_code == 404):
+                warning = _error("clients", exc, paths=paths)
+                if exc.status_code == 403:
+                    warning["message"] += f"; privilege needed: {privilege}"
+                errors.append(warning)
+            return None
+        answered += 1
+        return scrub_secrets(_rows(found))
+
+    arp = await read(PATH_ARP, "Diagnostics: ARP Table")
+    ndp = await read(PATH_NDP, "Diagnostics: NDP Table")
+    leases: dict[str, list[dict]] = {}
+    for key, _name, paths, privilege in LEASE_BACKENDS:
+        rows = await read(paths, privilege, quiet_404=True)
+        if rows is not None:
+            leases[key] = rows
+    if not leases and not any(e.get("scope") == "clients" and e.get("status") == 403 for e in errors):
+        errors.append(
+            info_warning(
+                "clients",
+                "/" + LEASE_BACKENDS[0][2][0],
+                "No DHCP lease endpoint answered (ISC, Kea, Dnsmasq): no DHCP leases were read",
+            )
+        )
+    return {"arp": arp, "ndp": ndp, "leases": leases or None}, answered
 
 
 async def _run_audit(client: OpnsenseClient, errors: list[dict[str, Any]]) -> dict[str, Any] | None:

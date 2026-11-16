@@ -88,6 +88,19 @@ default) as described in [Scheduled collection](meraki-topology.md#scheduled-col
 | VPN: WireGuard: Status | WireGuard peers and their latest handshake |
 | Status: OpenVPN | OpenVPN instances and connected clients |
 | Diagnostics: Configuration History | the config.xml download (only with **Config backup** on) |
+| Firewall: Rules (the privilege that lists `api/firewall/filter_util/*`) | the filter rule counters (only with **Rule counters** on; 24.1+) |
+| Diagnostics: ARP Table | the ARP table (only with **ARP, NDP and DHCP leases** on) |
+| Diagnostics: NDP Table | the NDP (IPv6 neighbour) table (same option) |
+| Status: DHCP leases / Status: DHCPv6 leases | ISC DHCP leases (same option; only if the firewall runs ISC DHCP) |
+| the Kea DHCP leases page (v4 and v6) | Kea DHCP leases (same option; only if the firewall runs Kea) |
+| the Dnsmasq DNS/DHCP leases page | Dnsmasq DHCP leases (same option; 25.1+, only if the firewall runs Dnsmasq DHCP) |
+
+The ARP, NDP and lease privileges also allow flushing the ARP / NDP table
+or deleting a lease; Plexus never sends those calls. The exact names of the
+Kea and Dnsmasq lease privileges vary between releases and were not checked
+against a firewall: pick the ones whose description lists
+`api/kea/leases4/*`, `api/kea/leases6/*` or `api/dnsmasq/leases/*`. A
+refused lease call names the privilege Plexus expects.
 
 Two of these privileges allow more than reading, and a stolen key could use
 them:
@@ -176,6 +189,13 @@ Click the firewall for its sections:
   check
 - **Pending updates**: the packages of the pending update
 - **Security audit** and **Vulnerable packages**: the result of the audit
+- **ARP table**, **NDP table**: the firewall's neighbours (address, MAC,
+  interface, host name), 2000 rows each at most
+- **DHCP leases**: the leases of every DHCP server on the firewall (ISC,
+  Kea, Dnsmasq) with their state, end time, interface, subnet and server
+- **Clients**: the ARP, NDP and lease counts (per DHCP server) and what
+  the collection stored in MAC tracking and IPAM (see
+  [ARP, NDP and DHCP leases](#arp-ndp-and-dhcp-leases))
 - **Config backup**: what the collection did with config.xml
 - **Plexus inventory**: the inventory host the firewall matched
 
@@ -196,8 +216,10 @@ connection: one warning, and the tunnels keep their phase 1 state.
 
 The connected subnets and static routes join the subnet index, so they can
 be picked in **Path Mode** and appear on the **IPAM** page as subnets of
-source **topology**, owned by the firewall. The firewall carries no
-forwarding model yet, so a trace that reaches it stops there.
+source **topology**, owned by the firewall. Once the firewall is an
+inventory host with a config backup, Path Mode traces through it with its
+interfaces, filter rules, NAT and routes read from `config.xml` (see
+[Firewall rules and path trace](#firewall-rules-and-path-trace)).
 
 ## Availability tracking
 
@@ -234,6 +256,52 @@ gateway the firewall no longer reports. A CARP warning (a VIP in `INIT`, a
 demotion) and a failed call do: until a collection without them, a missing
 entity turns unknown instead of being removed.
 
+## ARP, NDP and DHCP leases
+
+With **ARP, NDP and DHCP leases** on (`include_clients`, the default),
+each collection reads the firewall's ARP and NDP tables and the leases of
+its DHCP servers, read-only (`GET`; Plexus never flushes a table or deletes
+a lease):
+
+- **MAC tracking**: the ARP and NDP entries are stored as the ARP table of
+  the inventory host that is this firewall (matched as for the [config
+  backup](#config-backup)), shown under **MAC tracking** for that host and
+  counted in its per-host rollup. Each entry also fills in the IP address of
+  MAC table rows of other hosts (switches) that saw the MAC without one.
+  Entries are upserted by address; an entry the firewall no longer reports
+  keeps its last-seen time. Until the firewall is an inventory host the
+  tables are read and shown in its details but not stored, with a warning
+  that says to import it. Incomplete entries (no MAC) are left out; MACs
+  are stored as `aa:bb:cc:dd:ee:ff`.
+- **IPAM**: the leases are stored as the leases of a DHCP server of
+  provider `opnsense`, named `<source name> (OPNsense)` and matched to the
+  firewall by its API address. Plexus creates it at the first collection; it
+  then shows under **IPAM > DHCP Servers**, in the lease listing and in the
+  lease-to-inventory correlation like any other DHCP server. Each
+  collection replaces that server's leases (a lease the firewall no longer
+  reports is gone), only when at least one lease call answered. The server
+  cannot be synced or added by hand (its leases come with the collection);
+  disable it to stop storing them, delete it to start over. An address with
+  leases on two DHCP servers of the firewall is stored once (ISC first,
+  then Kea, then Dnsmasq). A delegated IPv6 prefix is not a lease address
+  and is left out. The subnet of a lease is the network of the firewall
+  interface its address is in.
+
+| DHCP server | Call | Lease fields read |
+|---|---|---|
+| ISC DHCPv4 | `GET dhcpv4/leases/search_lease` (`searchLease`) | `address`, `mac`, `hostname`, `binding`, `type` (`static` for a reservation), `starts`, `ends`, `if_descr` |
+| ISC DHCPv6 | `GET dhcpv6/leases/search_lease` (`searchLease`) | `address`, `duid`, `mac`, `state`, `starts`, `ends`, `if_descr` |
+| Kea DHCPv4 / v6 | `GET kea/leases4/search`, `GET kea/leases6/search` | `address`, `hwaddr`, `hostname`, `client_id` / `duid`, `state` (0 active, 1 declined, 2 expired), `expire`, `valid_lifetime`, `if_descr` |
+| Dnsmasq | `GET dnsmasq/leases/search` | `address`, `hwaddr`, `hostname`, `client_id`, `expire`, `is_reserved`, `if_descr` |
+
+A DHCP server the firewall does not have answers 404 and is skipped without
+a warning; when none answers, one informational warning says no leases
+were read. A refused call (403) is a warning that names the privilege.
+The ISC DHCPv4 answer and the ARP / NDP answers follow the OPNsense core
+source; the Kea, Dnsmasq and ISC DHCPv6 row fields and the ISC time format
+(`YYYY/MM/DD HH:MM:SS`, read as UTC) were inferred and are not verified
+against a firewall. A field that is missing only leaves that column empty.
+
 ## Config backup
 
 With **Config backup** on (the default), each collection downloads the
@@ -260,6 +328,155 @@ An imported firewall gets the device type `opnsense`. Plexus has no SSH
 driver for OPNsense, so a backup policy does not read it over SSH: its
 backups come from the OPNsense collection only. SNMP polling works through
 the generic path once an SNMP profile is assigned to its group.
+
+## Config drift and masked secrets
+
+An OPNsense firewall works with **Configuration > Config Drift** like any
+other host, with three differences:
+
+- **No session to the firewall.** A drift capture (**Capture**, **Capture
+  group**, **Check**) of a host with device type `opnsense` takes the
+  host's newest config backup, the one the OPNsense collection stored. The
+  credential picked for the capture is not used. Without a backup the
+  capture answers 409 and says to collect the source first. The scheduled
+  drift check also takes a new snapshot from the newest backup when it
+  differs from the latest snapshot, so drift that a collection brings in
+  is found without a manual capture.
+- **A stable form.** Snapshots, baselines and drift diffs hold the
+  normalized `config.xml`: pretty-printed with two-space indents,
+  attributes in name order, comments dropped, and the top-level
+  `<revision>` block left out. OPNsense rewrites `<revision>` (who saved,
+  when, from which page) at every save, so a save that changes nothing
+  else is not drift.
+- **Secrets are masked.** Every secret value is replaced by a marker with a
+  fingerprint: `<pre-shared-key>[masked:1a2b3c4d]</pre-shared-key>`. The
+  fingerprint is the first 8 hex digits of an HMAC-SHA256 of the value,
+  keyed with a key derived from this install's encryption key
+  (`netcontrol.key`), so equal values give equal markers on this install
+  and a changed secret shows as a changed line, while the value never
+  appears and a guessed value cannot be confirmed by hashing it. Long
+  base64 or hex values (certificates, keys, encoded blobs) become
+  `[masked blob:...]`.
+- **No revert.** Revert answers 400: Plexus does not write to an OPNsense
+  firewall. Change the firewall in its web interface, or accept the drift
+  as the new baseline. Restoring a backup is refused the same way.
+
+The masking also applies to what Config Backups shows for an OPNsense
+backup: the backup view (`GET /api/config-backups/{id}`, with
+`secrets_masked: true` and the `<revision>` as `revision`), the compare
+with the previous backup (`GET /api/config-backups/{id}/diff`, on the
+normalized form, with `revision` and `previous_revision`), and search
+(matched lines are masked, and a hit only on a secret value is dropped so a
+search cannot confirm one). AI access (MCP) masks the same elements with a
+bare `[masked]`. The stored backups themselves are kept as collected, and
+**Download** returns the file as stored, so it can be restored on the
+firewall.
+
+Masked elements: any element named `password`, `passwd`, `pass`, `pw`,
+`pwd`, `authpass`, `privpass`, `smtppassword`, `bcrypt-hash`, `md5-hash`,
+`sha512-hash`, `nt-hash`, `lm-hash`, `otp_seed`, `key`, `secret`, `apikey`,
+`api_key`, `api_secret`, `token`, `auth_token`, `access_token`, `prv`,
+`privkey`, `privatekey`, `private-key`, `private_key`, `tls`, `tlsauth`,
+`shared_key`, `sharedkey`, `static_key`, `statickey`, `psk`,
+`pre-shared-key`, `presharedkey`, `rocommunity`, `rwcommunity`,
+`community`, `trapcommunity`, `authkey`, `enckey`, `radius_secret`,
+`radiussecret`, `ldap_bindpw`, `bindpw`, `ddnsdomainkey`, `tsig_secret`,
+`tsigkey`, `passphrase` or `wpa_passphrase` (any case); any other element
+whose name contains `password`, `passwd`, `passphrase`, `secret`, `token`,
+`privkey`, `privatekey`, `presharedkey`, `sharedkey`, `psk`, `community`,
+`bindpw`, `apikey`, `otp_seed` or `tsig`, or ends in `key`, `-hash`,
+`_hash`, `_pass`, `_pw` or `_pwd` (ACME DNS API tokens, monit and
+SNMPv3 passwords and keys), unless the name says it describes a secret
+rather than holding one (contains `pub`, or ends in `type`, `len`, `ref`,
+`id`, `name`, `mode`, `auth`, `policy` and similar: `pubkey`, `keytype`,
+`certref`, `passwordauth`); any long base64 or hex value; a bcrypt or
+crypt hash anywhere; and the password of a URL with credentials. The rules
+are in `netcontrol/integrations/opnsense/secrets.py`.
+
+## Firewall rules and path trace
+
+Once the firewall is an inventory host with a config backup (see
+[Config backup](#config-backup)), Plexus reads its filter rules, aliases,
+NAT and routes from the stored `config.xml`. Nothing is read from the
+firewall for this beyond the collection itself, and nothing is ever
+written to it.
+
+### The Rules tab
+
+On the **Topology** map, click the firewall (it must be an inventory host:
+a device with type `opnsense`) and open **Rules**. It needs the **Config
+Backups** feature. The tab shows how many rules the newest backup has, how
+many carry each flag, and the flagged rules. **Open rules and changes**
+opens the full view:
+
+- **Rules**: every rule in the order the firewall evaluates it, grouped by
+  interface (a floating rule on every interface is listed once, under
+  **Every interface**). The `#` column is the number a path trace names, so
+  a trace's "Rule 7" is row #7 here. Filter by interface, by flag (click a
+  flag chip) or by text (a port, an address, an alias name). Hover a source
+  or destination to see the addresses its aliases resolve to.
+- **Changes between backups**: pick two backups of the firewall; the view
+  lists the rules added, removed and changed (a rule is matched by its
+  uuid, a legacy rule without one by what it matches), the aliases added,
+  removed and changed, and the NAT changes (port forwards, outbound and
+  1:1 rules, and the outbound NAT mode).
+
+The flags:
+
+| Flag | Meaning |
+|---|---|
+| Any to any | An enabled pass rule from any source to any destination, any protocol and port |
+| Shadowed by #n | Rule #n takes every flow this rule matches first, on every interface and direction it applies to, so this rule never decides anything. "Opposite action" when #n does the opposite (a likely mistake), else the rule is redundant. Only provable cases are flagged: both rules fully resolved, neither negated, the other rule's protocol, addresses and ports holding all of this rule's |
+| Disabled | The rule is disabled in the configuration |
+| Missing alias | The rule names an alias the configuration does not define (deleted or renamed) |
+| Unused | The rule's counters say it matched no packet since they were last reset (a reboot or a filter reload resets them). Only with **Rule counters** on and OPNsense 24.1 or later |
+
+The order follows pf: per interface and direction the first matching rule
+with **Quick** set decides; a rule without Quick (a floating rule can be
+one) decides only when no quick rule matches, and then the last matching
+one wins. The rules of the automation / new rules model come first, then
+floating rules, then interface group rules, then each interface's rules. A
+flow no rule matches is blocked (OPNsense's default `block in`); what
+leaves an interface passes unless a floating `out` rule says otherwise.
+
+### Path trace through the firewall
+
+In **Path Mode** a trace that reaches the firewall (as an inventory host)
+now goes through it hop by hop:
+
+1. **NAT in**: a 1:1 NAT or a port forward translates the destination (a
+   port forward whose filter rule association is **Pass** lets the
+   translated flow in by itself, as OPNsense does).
+2. **Rules in**: the rules of the interface the flow arrives on, in the
+   order above, ending in the default block. The item names the deciding
+   rule by number and description.
+3. **Route**: the connected networks, the static routes (gateways resolved
+   to their address and interface; `Null4` / `Null6` routes drop the flow)
+   and the default gateway.
+4. **Rules out**: the floating `out` rules of the egress interface, if any.
+5. **NAT out**: 1:1 NAT, the source NAT and manual outbound rules (in
+   **Hybrid** and **Manual** mode) and, in **Automatic** and **Hybrid**
+   mode, the automatic rules: the networks of the other interfaces leave an
+   upstream interface (one with a gateway, or `wan`) as its address.
+
+Replies pass by state. A rule that names something Plexus cannot evaluate
+(an alias of host names, a URL table, GeoIP, a negated address, a
+schedule) makes a flow it may match **unknown** rather than allowed or
+blocked. Plexus has no SSH route capture of an OPNsense firewall, so a
+destination that only the default route covers is marked **unknown** at
+the route step (a learned route might be more specific); the rules and NAT
+are still evaluated.
+
+### What the trace does not read
+
+Listed under **Not checked** on the hop when the configuration uses them:
+IPsec, OpenVPN and WireGuard tunnels and the rules of their interfaces,
+policy-based routing (a rule with a gateway: the rule is evaluated, the
+gateway is not followed), the bogon table (**Block bogon networks**),
+NPTv6, interface addresses learned by DHCP, PPPoE or tracking, and port
+forwards or outbound rules that match on what is not read (source ports,
+negations, unresolved aliases). Traffic shaping, captive portal and the
+firewall's own services are not modelled.
 
 ## Firmware and security audit
 
@@ -321,10 +538,15 @@ firewalls when you edit the advisory.
 | CARP virtual IPs, demotion, maintenance mode | `GET diagnostics/interface/get_vip_status` (`getVipStatus`) | High availability |
 | Security audit | `GET core/firmware/running`, `POST core/firmware/audit`, `GET core/firmware/upgradestatus` | Firmware security audit |
 | config.xml | `GET core/backup/download/this` | Config backup |
+| Filter rule counters (evaluations, packets, bytes, states per rule uuid) | `GET firewall/filter_util/rule_stats` (`ruleStats`) | Rule counters |
+| ARP table | `GET diagnostics/interface/search_arp` (`searchArp`; `get_arp` / `getArp` on older releases) | ARP, NDP and DHCP leases |
+| NDP table | `GET diagnostics/interface/search_ndp` (`searchNdp`; `get_ndp` / `getNdp`) | ARP, NDP and DHCP leases |
+| DHCP leases | `GET dhcpv4/leases/search_lease`, `GET dhcpv6/leases/search_lease` (`searchLease`), `GET kea/leases4/search`, `GET kea/leases6/search`, `GET dnsmasq/leases/search` | ARP, NDP and DHCP leases |
 
 The options are `verify_tls`, `include_gateways`, `include_vpn`,
-`include_ha`, `include_routes`, `include_firmware_audit`, `config_backup`
-and `inventory_enrich`, all on by default.
+`include_ha`, `include_routes`, `include_firmware_audit`,
+`include_clients`, `include_rule_stats`, `config_backup` and
+`inventory_enrich`, all on by default.
 
 Calls are sent one at a time and spaced out. A rate-limit or server error
 answer is retried after a pause (honouring `Retry-After`); a refused call is
@@ -342,10 +564,10 @@ everywhere.
 
 ## Limits
 
-Not in phase 1:
+Not read:
 
-- firewall rules, aliases and NAT, and the hop by hop trace through the
-  firewall in Path Mode (the firewall has no forwarding model yet)
+- the parts of `config.xml` listed under
+  [What the trace does not read](#what-the-trace-does-not-read)
 - the CARP peer as a node: each firewall of a pair is a source of its own;
   the pair is not drawn as one HA cluster
 - child SA counts of legacy IPsec tunnels (only connections of the
@@ -367,3 +589,5 @@ An OPNsense firewall uses the source endpoints listed in
 | `POST` | `/api/sources/{id}/build` | Start a collection; returns `job_id` |
 | `POST` | `/api/sources/sample?provider=opnsense` | Add or refresh the demo firewall |
 | `GET` | `/api/topology` | OPNsense nodes carry a `meraki` reference whose `provider` is `opnsense` |
+| `GET` | `/api/opnsense/hosts/{host_id}/rules` | The rule view of the firewall's newest config backup (Config Backups feature); see [api-reference.md](api-reference.md#opnsense-firewall-rules) |
+| `GET` | `/api/opnsense/hosts/{host_id}/rules/diff` | Rule, alias and NAT changes between two backups (`?from_backup=&to_backup=`, default: the newest two) |

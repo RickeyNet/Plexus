@@ -69,6 +69,7 @@ SCOPE_ENFORCED_ROUTERS: tuple[str, ...] = (
     "netcontrol.routes.device_model:inventory_router",
     "netcontrol.routes.ansible_inventory:router",
     "netcontrol.routes.config_backups:router",
+    "netcontrol.routes.opnsense_rules:router",
     "netcontrol.routes.config_drift:router",
     "netcontrol.routes.config_drift:ws_router",
     "netcontrol.routes.intended_config:router",

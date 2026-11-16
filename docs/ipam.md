@@ -208,6 +208,13 @@ The table shows each server's **Provider**, **Name**, **Status**,
 **Scopes**, **Leases** and **Last Sync**. Enabled servers also sync every 30
 minutes.
 
+An OPNsense firewall added as a Map source appears here on its own, as a
+server of provider `opnsense` named `<source name> (OPNsense)`: every
+collection of the source replaces its leases (ISC, Kea and Dnsmasq) and it
+has no scopes. It has no **Sync** button and cannot be added by hand;
+disable it to stop storing its leases. See
+[OPNsense in the Topology Map](opnsense-topology.md#arp-ndp-and-dhcp-leases).
+
 **Scope Utilization Alerts** lists scopes that are 80% used or more. A scope
 at 90% or more is marked **EXHAUSTED** (red); 80% to 90% is marked **near**
 (yellow).

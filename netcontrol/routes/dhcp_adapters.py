@@ -5,6 +5,10 @@ Supports three providers:
   - windows   : Windows DHCP via a REST shim that returns Get-DhcpServerv4Scope/
                 Get-DhcpServerv4Lease as JSON (path: /scopes, /leases)
   - infoblox  : Infoblox WAPI (network + lease objects)
+
+A fourth kind of server, ``opnsense``, is never synced here: an OPNsense
+firewall's topology collection creates it and replaces its leases (see
+``COLLECTION_FED_PROVIDERS``).
 """
 
 from __future__ import annotations
@@ -19,6 +23,18 @@ from netcontrol.routes.net_guard import OutboundRequestError, validate_outbound_
 
 _HTTP_TIMEOUT_SECONDS = 30.0
 _VALID_PROVIDERS = {"kea", "windows", "infoblox"}
+# Lease sources that are not pulled by this module: their rows are created
+# and their leases replaced by another collection (an OPNsense firewall's
+# topology source, ``netcontrol.routes.opnsense_collection``). They cannot be
+# added or synced from the DHCP servers API.
+DHCP_PROVIDER_OPNSENSE = "opnsense"
+COLLECTION_FED_PROVIDERS = frozenset({DHCP_PROVIDER_OPNSENSE})
+
+
+def is_collection_fed(provider: str | None) -> bool:
+    """Whether a DHCP server's leases come from another collection, not a sync."""
+    return str(provider or "").strip().lower() in COLLECTION_FED_PROVIDERS
+
 
 _PROVIDER_INFO = {
     "kea": {

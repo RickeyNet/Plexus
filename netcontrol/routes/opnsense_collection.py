@@ -33,7 +33,20 @@ is stored:
     that follows every stored collection matches the advisories to the
     tracked firewall and raises ``software_alerts`` the normal way.
 
-Both are best-effort: a failure is logged and noted in the snapshot, and
+  - ``sync_clients``: the ARP and NDP tables go into MAC tracking as the
+    ``arp_table`` of the firewall's inventory host (matched as for the
+    config backup; skipped with a warning when there is none), which also
+    stamps the IP onto MAC table rows of other hosts that lack one. The
+    DHCP leases (ISC, Kea, Dnsmasq) replace the leases of the firewall's
+    ``dhcp_servers`` row (provider ``opnsense``, matched by the firewall's
+    API address and created on first use), so they show in IPAM's DHCP
+    servers, lease listing and inventory correlation. The firewall's
+    "Clients" section says what was stored.
+  - ``attach_rule_stats``: the filter rule counters (``rule_stats``) stay
+    in the snapshot with the inventory host they belong to, for the rule
+    views (``netcontrol.routes.opnsense_rules``).
+
+All are best-effort: a failure is logged and noted in the snapshot, and
 the collection is stored anyway.
 """
 
@@ -45,15 +58,21 @@ import routes.database as db
 
 from netcontrol.integrations.inventory_import import importable_devices
 from netcontrol.integrations.meraki.normalize import _add, kv_section
-from netcontrol.integrations.opnsense.collector import PATH_CONFIG, info_warning
+from netcontrol.integrations.opnsense.collector import PATH_ARP, PATH_CONFIG, info_warning
 from netcontrol.integrations.opnsense.normalize import (
     ADVISORY_SOURCE,
     DEVICE_NODE_PREFIX,
     PROVIDER,
+    arp_entries,
     audit_advisories,
+    client_counts,
+    dhcp_leases,
+    ndp_entries,
 )
+from netcontrol.integrations.opnsense.rules import parse_rule_stats
 from netcontrol.integrations.software.versions import canonical_version, snapshot_device_key, snapshot_devices
 from netcontrol.routes.device_config import store_device_config
+from netcontrol.routes.dhcp_adapters import DHCP_PROVIDER_OPNSENSE
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.opnsense")
@@ -63,6 +82,15 @@ SECTION_CONFIG_BACKUP = "Config backup"
 NOT_IMPORTED_MESSAGE = (
     "config.xml was read but not stored: this firewall is not an inventory host yet. "
     "Import it into the inventory (Map sources, Import devices) to keep its configuration backups."
+)
+SECTION_CLIENTS = "Clients"
+CLIENTS_NOT_IMPORTED_MESSAGE = (
+    "The ARP and NDP tables were read but not added to MAC tracking: this firewall is not an inventory host yet. "
+    "Import it into the inventory (Map sources, Import devices) to track them."
+)
+LEASE_SERVER_NOTES = (
+    "Leases collected by the OPNsense topology source of this firewall; replaced on every collection. "
+    "Disable this server to stop storing them."
 )
 
 
@@ -206,8 +234,113 @@ async def sync_audit_advisories(raw: dict, snapshot: dict, org_ref: int) -> dict
     return {"upserted": upserted, "withdrawn": withdrawn}
 
 
+def _lease_server_name(snapshot: dict, raw: dict) -> str:
+    name = str((snapshot.get("org") or {}).get("name") or (raw.get("firewall") or {}).get("name") or "").strip()
+    return f"{name or 'OPNsense firewall'} (OPNsense)"
+
+
+async def _lease_server(snapshot: dict, raw: dict) -> dict | None:
+    """The ``dhcp_servers`` row (provider ``opnsense``) that holds this
+    firewall's leases, matched by the firewall's API address and created on
+    first use; renamed when the source is. ``None`` when the firewall has
+    no address."""
+    base_url = str((raw.get("firewall") or {}).get("base_url") or "").strip()
+    if not base_url:
+        return None
+    name = _lease_server_name(snapshot, raw)
+    servers = await db.list_dhcp_servers()
+    server = next(
+        (s for s in servers if s.get("provider") == DHCP_PROVIDER_OPNSENSE and s.get("base_url") == base_url), None
+    )
+    if server is None:
+        return await db.create_dhcp_server(
+            provider=DHCP_PROVIDER_OPNSENSE,
+            name=name,
+            base_url=base_url,
+            auth_type="none",
+            notes=LEASE_SERVER_NOTES,
+            created_by="opnsense-collection",
+        )
+    if server.get("name") != name:
+        server = await db.update_dhcp_server(int(server["id"]), name=name) or server
+    return server
+
+
+async def _store_neighbours(entries: list[dict], snapshot: dict) -> tuple[str, dict | None]:
+    """ARP and NDP entries into MAC tracking's ``arp_table`` of the
+    firewall's inventory host. Answers the section text and the host."""
+    host = await matching_host(snapshot)
+    if host is None:
+        _warn(snapshot, info_warning("clients", "/" + PATH_ARP[0], CLIENTS_NOT_IMPORTED_MESSAGE))
+        return "Not stored: import the firewall into the inventory", None
+    stored = await db.upsert_arp_entries_batch(
+        int(host["id"]),
+        [
+            {"ip_address": e["ip_address"], "mac_address": e["mac_address"], "interface_name": e["interface_name"]}
+            for e in entries
+        ],
+    )
+    return f"{stored} entries stored for {host.get('hostname') or host.get('ip_address')}", host
+
+
+async def sync_clients(raw: dict, snapshot: dict) -> dict[str, Any] | None:
+    """Feed the collected ARP / NDP tables into MAC tracking (the
+    ``arp_table`` of the firewall's inventory host, enriching MAC table rows
+    with their IP) and the DHCP leases into the firewall's ``opnsense`` DHCP
+    server, whose leases are replaced by this collection's. ``None`` when
+    the clients part was not collected."""
+    clients = raw.get("clients")
+    if not isinstance(clients, dict):
+        return None
+    result: dict[str, Any] = {"arp_stored": None, "leases_stored": None}
+    rows: list[tuple[str, Any]] = []
+    counts = client_counts(clients)
+    rows += [("ARP entries", counts["arp"]), ("NDP entries", counts["ndp"])]
+    rows += [(f"Leases ({name})", n) for name, n in counts["lease_backends"].items()]
+
+    neighbours = arp_entries(clients) + ndp_entries(clients)
+    if clients.get("arp") is not None or clients.get("ndp") is not None:
+        try:
+            text, host = await _store_neighbours(neighbours, snapshot)
+            result["arp_stored"] = len(neighbours) if host else 0
+        except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
+            LOGGER.warning("opnsense: ARP/NDP entries not stored: %s", type(exc).__name__)
+            text = "Not stored: see the server log"
+        rows.append(("MAC tracking", text))
+
+    if clients.get("leases") is not None:
+        leases = dhcp_leases(clients, raw.get("interfaces"))
+        try:
+            server = await _lease_server(snapshot, raw)
+            if server is None:
+                text = "Not stored: the firewall has no address"
+            elif not server.get("enabled"):
+                text = f"Not stored: DHCP server '{server.get('name')}' is disabled in IPAM"
+            else:
+                stored = await db.replace_dhcp_server_snapshot(
+                    int(server["id"]),
+                    scopes=[],
+                    leases=leases,
+                    sync_status="success",
+                    sync_message=f"OPNsense collection: {len(leases)} leases",
+                )
+                result["leases_stored"] = stored["leases"]
+                result["dhcp_server_id"] = server["id"]
+                text = f"{stored['leases']} leases in DHCP server '{server.get('name')}'"
+        except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
+            LOGGER.warning("opnsense: DHCP leases not stored: %s", type(exc).__name__)
+            text = "Not stored: see the server log"
+        rows.append(("IPAM DHCP leases", text))
+
+    firewall = _firewall(snapshot)
+    if firewall is not None:
+        _add(firewall["sections"], kv_section(SECTION_CLIENTS, [*rows, ("Source", "OPNsense API")]))
+    return result
+
+
 async def after_collection(raw: dict, snapshot: dict, org_ref: int) -> None:
-    """Store the config backup and sync the audit advisories of one
+    """Store the config backup, sync the audit advisories and feed the ARP
+    / NDP tables and DHCP leases into MAC tracking and IPAM, for one
     collection of source ``org_ref``. Never raises."""
     try:
         if (raw.get("options") or {}).get("config_backup", True):
@@ -219,3 +352,28 @@ async def after_collection(raw: dict, snapshot: dict, org_ref: int) -> None:
         await sync_audit_advisories(raw, snapshot, org_ref)
     except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
         LOGGER.warning("opnsense: audit advisories not synced: %s", type(exc).__name__)
+    try:
+        await sync_clients(raw, snapshot)
+    except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
+        LOGGER.warning("opnsense: clients not synced: %s", type(exc).__name__)
+    try:
+        await attach_rule_stats(raw, snapshot)
+    except Exception as exc:  # noqa: BLE001 - the snapshot is stored anyway
+        LOGGER.warning("opnsense: rule counters not kept: %s", type(exc).__name__)
+
+
+async def attach_rule_stats(raw: dict, snapshot: dict) -> dict | None:
+    """Keep the filter rule counters of the collection in the snapshot
+    (``rule_stats``: the inventory host they belong to, when they were read
+    and the counters by rule uuid), where the rule views of that host read
+    them. ``None`` when the counters were not read."""
+    stats = parse_rule_stats(raw.get("rule_stats")) if isinstance(raw.get("rule_stats"), dict) else None
+    if stats is None:
+        return None
+    host = await matching_host(snapshot)
+    snapshot["rule_stats"] = {
+        "host_id": int(host["id"]) if host else None,
+        "collected_at": raw.get("timestamp"),
+        "rules": stats,
+    }
+    return snapshot["rule_stats"]

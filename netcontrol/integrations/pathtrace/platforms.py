@@ -26,6 +26,7 @@ from netcontrol.integrations.pathtrace import (  # noqa: F401  (the vendor reade
     fortios_config,
     ios_config,
     junos_config,
+    opnsense_config,
     route_tables,
 )
 from netcontrol.integrations.pathtrace.device_config import RunningConfig
@@ -58,9 +59,9 @@ IOS = Platform(
 # so the platforms whose words are part of another's come first.
 PLATFORMS: tuple[Platform, ...] = (
     # An OPNsense firewall imported from its collection: its config.xml
-    # backup is not read here (no parser yet), so the interface addresses
-    # Plexus holds for it are never replaced by an IOS reading of the XML.
-    Platform("opnsense", "OPNsense", ("opnsense",), stateful=True),
+    # backup (stored by the collection) gives the interfaces, filter rules,
+    # NAT and routes. Its routes are not captured over SSH.
+    Platform("opnsense", "OPNsense", ("opnsense",), stateful=True, config=opnsense_config.parse_config),
     Platform(
         "asa",
         "Cisco ASA / FTD",

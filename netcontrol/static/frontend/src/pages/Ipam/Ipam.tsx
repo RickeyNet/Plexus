@@ -1319,7 +1319,8 @@ function DhcpCard({
             style={{ fontSize: '0.85em', marginTop: '0.2rem' }}
           >
             Pull scope utilization and active leases from Kea, Windows DHCP, or
-            Infoblox.
+            Infoblox. OPNsense firewalls add their leases with every collection
+            of their Map source.
           </div>
         </div>
         <button type="button" className="btn btn-secondary btn-sm" onClick={onAdd}>
@@ -1375,13 +1376,19 @@ function DhcpCard({
                   <td>{s.lease_count ?? 0}</td>
                   <td>{formatBackendDateTime(s.last_sync_at, 'Never')}</td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    <BusyButton
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => void handleSync(s.id)}
-                      busy={syncing.isPending(s.id)}
-                    >
-                      Sync
-                    </BusyButton>
+                    {s.provider === 'opnsense' ? (
+                      <span className="text-muted" style={{ fontSize: '0.85em' }}>
+                        Updated by its Map source
+                      </span>
+                    ) : (
+                      <BusyButton
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => void handleSync(s.id)}
+                        busy={syncing.isPending(s.id)}
+                      >
+                        Sync
+                      </BusyButton>
+                    )}
                     <span style={{ marginLeft: '0.3rem' }}>
                       <KebabMenu label={`Actions for ${s.name}`}>
                         <MenuItem onSelect={() => onEdit(s)}>Edit</MenuItem>

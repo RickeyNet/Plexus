@@ -15,6 +15,7 @@ import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
+from routes.db.topology import _compile_config_backup_regex
 
 import netcontrol.routes.state as state
 from netcontrol.drivers import get_driver
@@ -25,6 +26,7 @@ from netcontrol.object_scope import (
     require_object_host,
     scoped,
 )
+from netcontrol.routes import opnsense_masking
 from netcontrol.routes.device_config import get_device_config
 from netcontrol.routes.shared import (
     _audit,
@@ -241,13 +243,14 @@ async def search_config_backup_records(
     request: Request = None,
 ):
     try:
-        return await db.search_config_backups(
+        found = await db.search_config_backups(
             q,
             mode=mode,
             limit=limit,
             context_lines=context_lines,
             **await group_filter(request),
         )
+        return _mask_search_results(found, q, mode)
     except ValueError as exc:
         code = (exc.args[0] if exc.args else "").strip().lower()
         if code == "invalid_regex":
@@ -266,6 +269,51 @@ async def search_config_backup_records(
         raise HTTPException(status_code=400, detail="Invalid search query") from exc
 
 
+_SEARCH_LINE_FIELDS = ("match_line", "context_before", "context_after", "match_context")
+_SEARCH_LIST_FIELDS = ("context_before_lines", "context_after_lines")
+
+
+def _still_matches(line: str, query: str, mode: str) -> bool:
+    """Whether a masked match line still matches the search: a hit only on
+    a secret value is dropped, so a search cannot confirm a guessed one."""
+    if mode == "regex":
+        try:
+            return _compile_config_backup_regex(query).search(line) is not None
+        except ValueError:
+            return False
+    lowered = line.lower()
+    terms = query.lower().split() if mode == "fulltext" else [query.lower()]
+    return all(term in lowered for term in terms)
+
+
+def _mask_search_results(found: dict, query: str, mode: str) -> dict:
+    """Mask the matched lines of OPNsense backups (config.xml holds password
+    hashes, keys and pre-shared keys) and drop a hit that only matched a
+    secret. Other backups are returned as they are."""
+    results = found.get("results") or []
+    kept = []
+    for row in results:
+        if not opnsense_masking.is_opnsense_text(
+            row.get("match_line"), device_type=row.get("device_type"), capture_method=row.get("capture_method")
+        ):
+            kept.append(row)
+            continue
+        masked_line = opnsense_masking.mask_text(str(row.get("match_line") or ""))
+        if masked_line != row.get("match_line") and not _still_matches(masked_line, query, mode):
+            continue
+        for field in _SEARCH_LINE_FIELDS:
+            if isinstance(row.get(field), str):
+                row[field] = opnsense_masking.mask_text(row[field])
+        for field in _SEARCH_LIST_FIELDS:
+            if isinstance(row.get(field), list):
+                row[field] = [opnsense_masking.mask_text(str(line)) for line in row[field]]
+        row["secrets_masked"] = True
+        kept.append(row)
+    if len(kept) != len(results):
+        found = {**found, "results": kept, "count": len(kept)}
+    return found
+
+
 @router.get("/api/config-backups/{backup_id}/diff")
 @scoped("backup")
 async def get_config_backup_diff(backup_id: int, request: Request = None):
@@ -277,13 +325,30 @@ async def get_config_backup_diff(backup_id: int, request: Request = None):
     if not previous or not previous.get("config_text"):
         raise HTTPException(status_code=404, detail="No previous successful backup available for diff")
 
+    previous_text, current_text = previous["config_text"], current["config_text"]
+    # An OPNsense config.xml is compared in its normalized form with secrets
+    # masked: a changed secret shows as a changed fingerprint, never its
+    # value, and the <revision> stamp of every save is shown apart.
+    opnsense = opnsense_masking.is_opnsense_text(
+        current_text, device_type=current.get("device_type"), capture_method=current.get("capture_method")
+    )
+    extra: dict = {}
+    if opnsense:
+        extra = {
+            "secrets_masked": True,
+            "revision": opnsense_masking.revision_of(current_text),
+            "previous_revision": opnsense_masking.revision_of(previous_text),
+        }
+        previous_text = opnsense_masking.drift_form(previous_text)
+        current_text = opnsense_masking.drift_form(current_text)
     diff_text, added, removed = _compute_config_diff(
-        previous["config_text"],
-        current["config_text"],
+        previous_text,
+        current_text,
         baseline_label=f"backup-{previous['id']}",
         actual_label=f"backup-{current['id']}",
     )
     return {
+        **extra,
         "backup_id": current["id"],
         "previous_backup_id": previous["id"],
         "host_id": current.get("host_id"),
@@ -415,7 +480,15 @@ async def download_config_backup(backup_id: int, request: Request):
 @router.get("/api/config-backups/{backup_id}")
 @scoped("backup")
 async def get_config_backup_detail(backup_id: int, request: Request):
-    return await _require_backup(request, backup_id)
+    """A backup with its text; an OPNsense config.xml with its secrets
+    masked (``secrets_masked``) and its ``<revision>`` given apart. The
+    stored backup and its download stay unmasked: a restore needs them."""
+    backup = await _require_backup(request, backup_id)
+    raw = str(backup.get("config_text") or "")
+    masked = opnsense_masking.mask_record(backup, "config_text", "config_text_full")
+    if masked and masked.get("secrets_masked"):
+        masked["revision"] = opnsense_masking.revision_of(raw)
+    return masked
 
 
 @router.delete("/api/config-backups/{backup_id}")
@@ -515,6 +588,10 @@ async def restore_config_from_backup(body: ConfigBackupRestoreRequest, request: 
     host = await db.get_host(backup["host_id"])
     if not host:
         raise HTTPException(status_code=404, detail="Host not found")
+    if opnsense_masking.is_opnsense_host(host) or opnsense_masking.is_opnsense_text(
+        backup["config_text"], capture_method=backup.get("capture_method")
+    ):
+        raise HTTPException(status_code=400, detail=opnsense_masking.RESTORE_REFUSED_MESSAGE)
     if not get_driver(host.get("device_type")).cli:
         raise HTTPException(status_code=400, detail="This device type has no command line: nothing can be pushed to it")
     cred = await require_credential_access(body.credential_id, session=_get_session(request))
