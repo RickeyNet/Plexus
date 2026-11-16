@@ -425,7 +425,12 @@ the trace walks the enabled **INTERNET** rules in order and shows:
   route that rule would take. The trace follows the bare-IP path
 - a rule ahead of it that may apply because it names something Plexus
   cannot resolve (a users group whose members were not read, a custom
-  application whose definition was not collected) is *unknown*
+  application whose definition was not collected) is *unknown*. When
+  several rules ahead are left undecided only by what the traced
+  destination is (a domain Cato's catalog does not tie to an application,
+  so no rule naming an application can be decided), they are one item:
+  how many rules may apply, the names they use, the reason once, and the
+  route each would take, rules of one route together
 
 An allocated IP's address is read from the account's allocated IP list
 (`popLocations.allocatedIpList`), else from the allocated IP's name

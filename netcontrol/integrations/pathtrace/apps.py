@@ -223,6 +223,30 @@ def _application(value: str, text: str, target: Target) -> tuple[int, str]:
     return _NONE, ""
 
 
+def criterion_text(item: dict) -> str:
+    """How a criterion is named in a reason: ``application YouTube``."""
+    return str(item.get("text") or item.get("value") or "")
+
+
+def unknown_target(item: dict, target: Target) -> str:
+    """What is not known about ``target`` itself that leaves ``item``
+    undecided (``which application shop.example.com is is not known``), or
+    ``""``. The same for every rule that names a criterion of that kind, so
+    a list of rules can say it once."""
+    kind = str(item.get("kind") or "")
+    name = target.name
+    if kind == APPLICATION and target.applications is None:
+        return f"which application {name} is is not known"
+    if kind == CATEGORY:
+        scheme = str(item.get("scheme") or "")
+        if target.categories is None or scheme != target.scheme:
+            whose = f"the {scheme} categories" if scheme and target.categories is not None else "the categories"
+            return f"{whose} of {name} are not collected"
+    if kind in (DOMAIN, FQDN, WILDCARD) and not target.domains_known:
+        return f"the domains {name} uses are not known"
+    return ""
+
+
 def match(item: dict, target: Target) -> tuple[int, str]:
     """Whether one criterion matches ``target``: ``(cover, reason)``. The
     cover is ``FULL``, ``PART`` or ``NONE`` (``model``); a ``reason``
@@ -230,21 +254,16 @@ def match(item: dict, target: Target) -> tuple[int, str]:
     what it may be)."""
     kind = str(item.get("kind") or "")
     value = str(item.get("value") or "")
-    text = str(item.get("text") or value)
+    text = criterion_text(item)
     name = target.name
+    unknown = unknown_target(item, target)
+    if unknown:
+        return _FULL, f"it names {text}, and {unknown}"
     if kind == APPLICATION:
-        if target.applications is None:
-            return _FULL, f"it names {text}, and which application {name} is is not known"
         return _application(value, text, target)
     if kind == CATEGORY:
-        scheme = str(item.get("scheme") or "")
-        if target.categories is None or scheme != target.scheme:
-            whose = f"the {scheme} categories" if scheme and target.categories is not None else "the categories"
-            return _FULL, f"it names {text}, and {whose} of {name} are not collected"
-        return (_FULL if key(value) in {key(c) for c in target.categories} else _NONE), ""
+        return (_FULL if key(value) in {key(c) for c in target.categories or ()} else _NONE), ""
     if kind in (DOMAIN, FQDN, WILDCARD):
-        if not target.domains_known:
-            return _FULL, f"it names {text}, and the domains {name} uses are not known"
         return _domain_match(kind, value, target), ""
     if kind == CUSTOM_APPLICATION:
         # An account's own application is the target only by its own name.
@@ -254,7 +273,7 @@ def match(item: dict, target: Target) -> tuple[int, str]:
         if domains is None or fqdns is None or not (domains or fqdns):
             return _FULL, f"it names {text}, whose definition is not collected or is not only domains"
         if not target.domains_known:
-            return _FULL, f"it names {text}, and the domains {name} uses are not known"
+            return _FULL, f"it names {text}, and {unknown_target({'kind': DOMAIN}, target)}"
         return max(
             [_domain_match(DOMAIN, d, target) for d in domains] + [_domain_match(FQDN, f, target) for f in fqdns]
         ), ""
