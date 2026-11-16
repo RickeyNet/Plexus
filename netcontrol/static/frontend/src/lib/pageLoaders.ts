@@ -24,6 +24,7 @@ export const pageLoaders = {
   lab: () => import('@/pages/Lab'),
   monitoring: () => import('@/pages/Monitoring/Monitoring'),
   networkTools: () => import('@/pages/NetworkTools/NetworkTools'),
+  pluginPage: () => import('@/pages/Plugins/PluginPage'),
   reports: () => import('@/pages/Reports/Reports'),
   settings: () => import('@/pages/Settings/Settings'),
   software: () => import('@/pages/Software/Software'),

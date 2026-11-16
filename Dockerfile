@@ -35,14 +35,15 @@ WORKDIR /app
 COPY deploy/build-ca/ /usr/local/share/ca-certificates/plexus-build/
 RUN update-ca-certificates
 
-# System dependencies for python-ldap and pysnmp.
+# System dependencies for python-ldap and pysnmp, and git + ssh for Git data
+# sources (docs/git-data-sources.md).
 # Use HTTPS mirrors: the build host blocks outbound plain HTTP (port 80),
 # so the default http:// deb.debian.org URIs time out.
 RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' \
         /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
     sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list \
     ; apt-get update && apt-get install -y --no-install-recommends \
-    libldap2-dev libsasl2-dev libssl-dev gcc gosu \
+    libldap2-dev libsasl2-dev libssl-dev gcc gosu git openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Install from the hashed lock so the image contains exactly what the SBOM

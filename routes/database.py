@@ -45,6 +45,7 @@ Tables:
     tag_assignments        - tags on hosts, groups and IPAM prefixes by (object_type, object_key)
     custom_fields          - admin-defined extra fields (key, type, choices, applicable object types)
     custom_field_values    - canonical text value per field and object
+    git_sources            - Git repositories templates, playbooks and config contexts sync from (migration 0093)
 """
 
 from __future__ import annotations
@@ -2963,6 +2964,7 @@ from routes.db.custom_fields import *  # noqa: E402,F403
 from routes.db.device_model import *  # noqa: E402,F403
 from routes.db.flows import *  # noqa: E402,F403
 from routes.db.geolocation import *  # noqa: E402,F403
+from routes.db.git_sources import *  # noqa: E402,F403
 from routes.db.graphs import *  # noqa: E402,F403
 from routes.db.intended_config import *  # noqa: E402,F403
 from routes.db.inventory import *  # noqa: E402,F403
@@ -2984,3 +2986,4 @@ from routes.db.software import *  # noqa: E402,F403
 from routes.db.topology import *  # noqa: E402,F403
 from routes.db.topology_availability import *  # noqa: E402,F403
 from routes.db.users import *  # noqa: E402,F403
+from routes.db.webhooks import *  # noqa: E402,F403

@@ -52,6 +52,8 @@ SCOPE_ENFORCED_FEATURES: frozenset[str] = frozenset(
         # device actions in the modules above need one.
         "credentials",
         "credentials.write",
+        # GraphQL resolvers filter hosts and groups by the caller's scope.
+        "graphql",
     }
 )
 
@@ -71,6 +73,7 @@ SCOPE_ENFORCED_ROUTERS: tuple[str, ...] = (
     "netcontrol.routes.config_drift:ws_router",
     "netcontrol.routes.intended_config:router",
     "netcontrol.routes.credentials:router",
+    "netcontrol.routes.graphql:router",
 )
 
 READ_ONLY_DETAIL = "Read-only access to this inventory group"

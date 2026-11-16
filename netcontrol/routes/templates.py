@@ -6,6 +6,7 @@ import routes.database as db
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from netcontrol.routes.git_sources import reject_git_owned
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 
 router = APIRouter()
@@ -58,6 +59,7 @@ async def get_template(template_id: int):
 
 @router.put("/api/templates/{template_id}")
 async def update_template(template_id: int, body: TemplateUpdate, request: Request = None):
+    reject_git_owned(await db.get_template(template_id), "template")
     await db.update_template(template_id, body.name, body.content, body.description, body.device_type)
     session = _get_session(request) if request else None
     await _audit(
@@ -72,6 +74,7 @@ async def update_template(template_id: int, body: TemplateUpdate, request: Reque
 
 @router.delete("/api/templates/{template_id}")
 async def delete_template(template_id: int, request: Request = None):
+    reject_git_owned(await db.get_template(template_id), "template")
     await db.delete_template(template_id)
     session = _get_session(request) if request else None
     await _audit(

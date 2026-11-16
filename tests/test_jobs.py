@@ -68,12 +68,12 @@ def test_coerce_empty_schema_returns_empty():
     assert _coerce_parameters([], {"anything": 1}) == {}
 
 
-def test_coerce_required_missing_raises_400():
+def test_coerce_required_missing_raises_422_per_field():
     schema = [{"name": "vlan", "type": "int", "required": True}]
     with pytest.raises(HTTPException) as exc:
         _coerce_parameters(schema, {})
-    assert exc.value.status_code == 400
-    assert "vlan" in exc.value.detail
+    assert exc.value.status_code == 422
+    assert "vlan" in exc.value.detail["fields"]
 
 
 def test_coerce_default_applies_when_missing():
@@ -90,7 +90,7 @@ def test_coerce_int_rejects_unparseable():
     schema = [{"name": "vlan", "type": "int"}]
     with pytest.raises(HTTPException) as exc:
         _coerce_parameters(schema, {"vlan": "ten"})
-    assert exc.value.status_code == 400
+    assert exc.value.status_code == 422
 
 
 @pytest.mark.parametrize(
@@ -103,12 +103,19 @@ def test_coerce_int_rejects_unparseable():
         ("on", True),
         ("false", False),
         ("0", False),
-        ("anything-else", False),
+        ("off", False),
     ],
 )
 def test_coerce_bool_variants(raw, expected):
     schema = [{"name": "enabled", "type": "bool"}]
     assert _coerce_parameters(schema, {"enabled": raw}) == {"enabled": expected}
+
+
+def test_coerce_bool_rejects_unknown_text():
+    schema = [{"name": "enabled", "type": "bool"}]
+    with pytest.raises(HTTPException) as exc:
+        _coerce_parameters(schema, {"enabled": "anything-else"})
+    assert exc.value.status_code == 422
 
 
 def test_coerce_list_from_csv_and_list():

@@ -8,6 +8,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { detailRequest, listOf } from './customData';
+import type { GitOwnership } from './gitSources';
 
 export type TemplateKind = 'device' | 'snippet';
 export type IntendedStatus = 'ok' | 'error';
@@ -45,7 +46,7 @@ export interface ConfigTemplateInput extends IntendedScope {
   enabled: boolean;
 }
 
-export interface ConfigContext extends IntendedScope {
+export interface ConfigContext extends IntendedScope, GitOwnership {
   id: number;
   name: string;
   weight: number;

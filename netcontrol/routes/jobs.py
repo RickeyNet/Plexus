@@ -25,7 +25,9 @@ from routes.secret_resolver import (
 )
 
 import netcontrol.routes.state as state
+from netcontrol import job_inputs
 from netcontrol.routes.host_identity import host_ip_problem
+from netcontrol.routes.playbooks import effective_input_schema, playbook_permissions, playbook_supports_dry_run
 from netcontrol.routes.shared import (
     _audit,
     _corr_id,
@@ -241,59 +243,64 @@ class JobLaunch(BaseModel):
     dry_run: bool = True
     priority: int = 2  # 0=low, 1=below-normal, 2=normal, 3=high, 4=critical
     depends_on: list[int] | None = None  # Job IDs that must complete before this runs
-    parameters: dict | None = None  # Values for the playbook's parameters_schema
+    parameters: dict | None = None  # Legacy name for ``inputs``
+    # Values for the playbook's typed input schema (netcontrol/job_inputs.py).
+    inputs: dict | None = None
+    # True runs live (Ansible without --check). Wins over ``dry_run`` when
+    # given; when neither says otherwise the job is a dry run.
+    commit: bool | None = None
 
     # Forbid unknown fields for strict payload validation.
     model_config = ConfigDict(extra="forbid")
 
 
-# ── Parameters schema coercion ──────────────────────────────────────────────
+# ── Typed inputs and per-job permissions ────────────────────────────────────
+
+
+def _input_error(exc: job_inputs.JobInputError) -> HTTPException:
+    """422 with one message per field (the custom-fields wire contract)."""
+    return HTTPException(status_code=422, detail={"message": exc.message, "fields": exc.fields})
 
 
 def _coerce_parameters(schema: list[dict], raw: dict) -> dict:
-    """Validate + coerce launch-time parameters against the playbook's schema.
+    """Validate + coerce launch-time inputs against the playbook's schema.
 
     Returns the coerced dict (only keys declared in schema, properly typed).
-    Raises HTTPException(400) on missing-required or unparseable values so
-    the operator sees the error before the job is queued.
+    Raises HTTPException(422) with per-field messages so the operator sees
+    every error before the job is queued.
     """
     if not schema:
         return {}
-    out: dict = {}
-    for field in schema:
-        name = field.get("name")
-        if not name:
-            continue
-        ftype = (field.get("type") or "string").lower()
-        required = bool(field.get("required"))
-        default = field.get("default")
-        raw_val = raw.get(name)
-        # Treat empty string as "not provided" so defaults kick in.
-        if raw_val is None or raw_val == "":
-            if required and (default is None or default == ""):
-                raise HTTPException(400, f"Parameter '{name}' is required")
-            if default is None or default == "":
-                continue
-            raw_val = default
+    try:
+        return job_inputs.validate_inputs(job_inputs.normalize_schema(schema), raw)
+    except job_inputs.JobInputError as exc:
+        raise _input_error(exc)
+
+
+async def _require_job_permission(request: Request, playbook: dict, *, commit: bool) -> None:
+    """Refuse (403) a caller the playbook's run - or, for a live run, commit -
+    rule does not allow. Admins and API token callers always pass."""
+    role, group_ids = await job_inputs.user_permissions(_get_session(request))
+    permissions = playbook_permissions(playbook)
+    if not job_inputs.is_allowed(permissions, "run", role=role, group_ids=group_ids):
+        raise HTTPException(403, f"You are not allowed to run '{playbook['name']}'")
+    if commit and not job_inputs.is_allowed(permissions, "commit", role=role, group_ids=group_ids):
+        raise HTTPException(
+            403, f"You may run '{playbook['name']}' as a dry run only; committing changes is not allowed"
+        )
+
+
+def _stored_params(raw: object) -> dict:
+    """A job row's ``parameters`` JSON as a dict (``{}`` if absent or bad)."""
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw:
         try:
-            if ftype == "int":
-                out[name] = int(raw_val)
-            elif ftype == "bool":
-                if isinstance(raw_val, bool):
-                    out[name] = raw_val
-                else:
-                    out[name] = str(raw_val).strip().lower() in ("1", "true", "yes", "on")
-            elif ftype == "list":
-                if isinstance(raw_val, list):
-                    items = [str(x).strip() for x in raw_val if str(x).strip()]
-                else:
-                    items = [s.strip() for s in str(raw_val).split(",") if s.strip()]
-                out[name] = items
-            else:
-                out[name] = str(raw_val)
-        except (TypeError, ValueError) as exc:
-            raise HTTPException(400, f"Parameter '{name}': {exc}")
-    return out
+            value = json.loads(raw)
+        except TypeError, ValueError:
+            return {}
+        return value if isinstance(value, dict) else {}
+    return {}
 
 
 # ── Post-job SNMP re-probe ──────────────────────────────────────────────────
@@ -604,6 +611,22 @@ async def _process_job_queue_inner():
 
     pb_type = playbook.get("type", "python")
 
+    # Typed inputs are stored with secret fields as {{secret.NAME}}
+    # references; decrypt them only now, and scrub the values from the log.
+    try:
+        job_parameters, input_redact = await job_inputs.resolve_secret_inputs(
+            _stored_params(next_job.get("parameters"))
+        )
+    except SecretResolutionError as exc:
+        await db.finish_job(job_id, status="failed")
+        await db.add_job_event(
+            job_id,
+            "error",
+            f"Job input references undefined secret variable(s): {', '.join(exc.missing)}.",
+        )
+        return
+    _secret_redact_values |= input_redact
+
     if pb_type == "ansible":
         # ── Ansible playbook path ──
         if not ANSIBLE_RUNNER_AVAILABLE:
@@ -622,7 +645,16 @@ async def _process_job_queue_inner():
             LOGGER.warning("Queue: job %d was no longer queued at start; skipping launch", job_id)
             return
         task = asyncio.create_task(
-            _run_ansible_job(job_id, playbook["content"], hosts, credentials, group_name, dry_run)
+            _run_ansible_job(
+                job_id,
+                playbook["content"],
+                hosts,
+                credentials,
+                group_name,
+                dry_run,
+                extra_vars=job_parameters,
+                secret_redact_values=_secret_redact_values,
+            )
         )
     else:
         # ── Python playbook path ──
@@ -634,17 +666,6 @@ async def _process_job_queue_inner():
         if not await db.start_job(job_id):
             LOGGER.warning("Queue: job %d was no longer queued at start; skipping launch", job_id)
             return
-        # Deserialize stored job parameters (JSON in DB) for the runner.
-        params_raw = next_job.get("parameters")
-        if isinstance(params_raw, str) and params_raw:
-            try:
-                job_parameters = json.loads(params_raw)
-            except TypeError, ValueError:
-                job_parameters = {}
-        elif isinstance(params_raw, dict):
-            job_parameters = params_raw
-        else:
-            job_parameters = {}
         task = asyncio.create_task(
             _run_job(
                 job_id,
@@ -682,11 +703,21 @@ async def _run_ansible_job(
     credentials: dict,
     group_name: str,
     dry_run: bool,
+    extra_vars: dict | None = None,
+    secret_redact_values: set[str] | None = None,
 ):
     """Background task: execute Ansible playbook, store events, broadcast via WebSocket."""
     event_writer = _JobEventWriter(job_id)
+    _redact = secret_redact_values or set()
 
     async def on_event(event: LogEvent):
+        if _redact:
+            event = LogEvent(
+                level=event.level,
+                message=redact_values(event.message, _redact),
+                host=event.host,
+                timestamp=event.timestamp,
+            )
         event_writer.enqueue(event)
         await _broadcast_to_job_sockets(job_id, event.to_dict())
 
@@ -698,6 +729,7 @@ async def _run_ansible_job(
             credentials=credentials,
             group_name=group_name,
             dry_run=dry_run,
+            extra_vars=extra_vars or None,
             event_callback=on_event,
         )
         await event_writer.close()
@@ -908,6 +940,18 @@ async def launch_job(body: JobLaunch, request: Request):
     if playbook.get("type") == "ansible" and _require_admin:
         await _require_admin(request)
 
+    # ``commit`` wins over the legacy ``dry_run`` flag; a dry run is the default.
+    dry_run = (not body.commit) if body.commit is not None else body.dry_run
+    if dry_run and not playbook_supports_dry_run(playbook):
+        raise HTTPException(
+            422,
+            detail={
+                "message": f"'{playbook['name']}' has no dry-run mode; run it with commit after confirming.",
+                "fields": {"commit": "This job cannot preview changes; it must be run with commit."},
+            },
+        )
+    await _require_job_permission(request, playbook, commit=not dry_run)
+
     # Get hosts - from selected host_ids, ad-hoc IPs, or inventory_group_id
     hosts = []
     ad_hoc_hosts = []
@@ -1003,13 +1047,17 @@ async def launch_job(body: JobLaunch, request: Request):
         if not pb_class:
             raise HTTPException(400, f"No runner registered for '{playbook['filename']}'")
 
-    # Coerce + validate parameters against the playbook's declared schema.
-    # Done at launch time so the user sees errors immediately rather than
-    # discovering them mid-run in the job log.
-    coerced_params = _coerce_parameters(
-        getattr(pb_class, "parameters_schema", []) if pb_class else [],
-        body.parameters or {},
-    )
+    # Validate the typed inputs against the playbook's schema (stored on the
+    # row, else declared on the Python class) at launch, so the user sees
+    # every error at once instead of mid-run in the job log. Host, group and
+    # secret inputs must exist; secrets are stored as references only.
+    schema, _source = effective_input_schema(playbook)
+    raw_inputs = body.inputs if body.inputs is not None else (body.parameters or {})
+    coerced_params = _coerce_parameters(schema, raw_inputs)
+    try:
+        coerced_params = await job_inputs.resolve_references(schema, coerced_params)
+    except job_inputs.JobInputError as exc:
+        raise _input_error(exc)
 
     launched_by = session["user"] if session else "admin"
     priority = max(0, min(4, body.priority))
@@ -1022,7 +1070,7 @@ async def launch_job(body: JobLaunch, request: Request):
         inventory_group_id,
         body.credential_id,
         body.template_id,
-        body.dry_run,
+        dry_run,
         launched_by=launched_by,
         priority=priority,
         depends_on=body.depends_on,
@@ -1038,7 +1086,11 @@ async def launch_job(body: JobLaunch, request: Request):
         "jobs",
         "job.launch",
         user=launched_by,
-        detail=f"queued job {job_id} playbook='{playbook['name']}' hosts={len(hosts)} dry_run={body.dry_run} priority={priority}",
+        detail=(
+            f"queued job {job_id} playbook='{playbook['name']}' hosts={len(hosts)} "
+            f"mode={'dry-run' if dry_run else 'commit'} dry_run={dry_run} priority={priority} "
+            f"inputs={sorted(coerced_params)}"
+        ),
         correlation_id=_corr_id(request),
     )
     return {"job_id": job_id, "status": "queued"}
@@ -1095,6 +1147,9 @@ async def retry_job_endpoint(job_id: int, request: Request):
         raise HTTPException(400, f"Can only retry failed or cancelled jobs, current status: '{job['status']}'")
 
     await require_owner_or_admin(request, job.get("launched_by"))
+    playbook = await db.get_playbook(job["playbook_id"])
+    if playbook:
+        await _require_job_permission(request, playbook, commit=not bool(job.get("dry_run", 1)))
     session = _get_session(request)
     user = session["user"] if session else "admin"
 
@@ -1157,6 +1212,9 @@ async def rerun_job_endpoint(job_id: int, request: Request):
         raise HTTPException(400, f"Job is still {job['status']} - wait for it to finish first")
 
     await require_owner_or_admin(request, job.get("launched_by"))
+    playbook = await db.get_playbook(job["playbook_id"])
+    if playbook:
+        await _require_job_permission(request, playbook, commit=True)
     session = _get_session(request)
     user = session["user"] if session else "admin"
 

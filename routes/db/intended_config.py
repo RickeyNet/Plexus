@@ -21,6 +21,7 @@ from collections.abc import Iterable
 import routes.database as _dbcore
 from routes.db.custom_fields import _chunks, _marks, _now
 from routes.db.device_model import _insert, _select, _update
+from routes.db.git_sources import git_source_name_sql
 from routes.db.inventory import group_ids_condition
 
 __all__ = [
@@ -68,9 +69,10 @@ def _template_select(group_ids: Iterable[int] | None) -> tuple[str, tuple]:
     return _TEMPLATE_SELECT.replace(_TEMPLATE_COUNTS, counted), scope_params
 
 
-_CONTEXT_SELECT = """
+_CONTEXT_SELECT = f"""
     SELECT id, name, weight, data, description, enabled, device_type, role_id, site_id, group_id, host_id,
-           created_at, updated_at, updated_by
+           created_at, updated_at, updated_by, git_source_id, git_path, git_commit,
+           {git_source_name_sql("config_contexts")}
     FROM config_contexts
 """
 _CONTEXT_ORDER = " ORDER BY weight, lower(name), id"
@@ -130,6 +132,11 @@ def _context(row: dict) -> dict:
         **_scope(row),
         "host_id": _id(row["host_id"]),
         **_stamps(row),
+        # Set when a Git source owns the context (read-only, see git-data-sources.md).
+        "git_source_id": _id(row["git_source_id"]),
+        "git_source_name": row["git_source_name"] or "",
+        "git_path": row["git_path"] or "",
+        "git_commit": row["git_commit"] or "",
     }
 
 

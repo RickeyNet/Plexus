@@ -49,5 +49,26 @@ def _read_git_sha() -> str:
         return ""
 
 
+def parse_semver(v: str) -> tuple[int, int, int] | None:
+    """Parse '1.2.3' or 'v1.2.3' into a tuple; return None if not semver.
+
+    Pre-release suffixes ('1.2.3-rc1') and build metadata ('+edge.abc') are
+    accepted but dropped for comparison purposes. This is intentionally
+    lenient: callers need a consistent ordering ("is there a newer version?",
+    "is this plugin compatible?"), not full SemVer 2.0 precedence rules.
+    """
+    s = v.strip()
+    if s.startswith("v") or s.startswith("V"):
+        s = s[1:]
+    s = s.split("-", 1)[0].split("+", 1)[0]
+    parts = s.split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        return (int(parts[0]), int(parts[1]), int(parts[2]))
+    except ValueError:
+        return None
+
+
 APP_VERSION = _read_version()
 APP_GIT_SHA = _read_git_sha()

@@ -37,6 +37,7 @@ def list_registered_playbooks() -> list[dict]:
             "tags": cls.tags,
             "requires_template": cls.requires_template,
             "parameters_schema": cls.parameters_schema,
+            "supports_dry_run": getattr(cls, "supports_dry_run", True),
         }
         for cls in _PLAYBOOK_REGISTRY.values()
     ]
@@ -105,11 +106,23 @@ class BasePlaybook:
     # job row and assigned to ``self.parameters`` before ``run()`` executes.
     # Shape: [{"name": "collector_ip", "type": "string", "label": "Collector IP",
     #          "required": True, "default": "", "help": "..."}].
-    # Supported types: "string", "int", "bool", "list" (comma-separated input).
+    # Supported types: see netcontrol/job_inputs.py (string, text, integer,
+    # boolean, choice, multichoice, list, ip, cidr, host, group, secret, plus
+    # min/max/regex/choices). A schema stored on the playbook row overrides it.
     parameters_schema: list[dict] = []
 
+    # Whether run() honours ``dry_run`` (previews without changing devices).
+    # A playbook that cannot preview sets this to False: the run dialog then
+    # offers only "Run and commit", behind a confirmation, and the launch
+    # endpoint refuses a dry run.
+    supports_dry_run: bool = True
+
     # Populated by the executor right before run() - never read directly here.
+    # ``inputs`` is the same dict as ``parameters`` (the validated typed
+    # inputs); ``dry_run`` mirrors the run() argument.
     parameters: dict | None = None
+    inputs: dict | None = None
+    dry_run: bool = True
 
     # Per-device_type resolved template command bodies, keyed by the
     # host's Netmiko device_type string.  Populated by the executor when
@@ -245,6 +258,8 @@ async def execute_playbook(
     """
     pb = playbook_cls()
     pb.parameters = parameters or {}
+    pb.inputs = pb.parameters
+    pb.dry_run = dry_run
     pb.template_by_device_type = template_by_device_type or {}
     hosts_ok = 0
     hosts_failed = 0

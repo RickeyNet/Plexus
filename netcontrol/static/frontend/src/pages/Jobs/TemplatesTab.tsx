@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 
+import { isGitOwned } from '@/api/gitSources';
 import { CopyButton } from '@/components/CopyButton';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -9,6 +10,7 @@ import {
   type ConfigTemplate,
 } from '@/api/jobs';
 import { EmptyState } from '@/components/EmptyState';
+import { GitOwnedBadge } from '@/components/GitOwnedBadge';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
 import { usePendingKeys } from '@/lib/usePendingKeys';
@@ -133,15 +135,20 @@ function TemplateRow({
               >
                 {template.device_type}
               </span>
-            ) : null}
+            ) : null}{' '}
+            <GitOwnedBadge record={template} />
           </div>
           {template.description && <div className="text-muted" style={{ fontSize: '0.85rem' }}>{template.description}</div>}
         </div>
         <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
           <CopyButton text={template.content} />
           {isLong && <button className="btn btn-sm btn-secondary" onClick={onToggle}>{expanded ? 'Collapse' : 'Expand'}</button>}
-          <button className="btn btn-sm btn-secondary" onClick={onEdit}>Edit</button>
-          <DeleteButton busy={isDeleting} onClick={onDelete} />
+          {!isGitOwned(template) && (
+            <>
+              <button className="btn btn-sm btn-secondary" onClick={onEdit}>Edit</button>
+              <DeleteButton busy={isDeleting} onClick={onDelete} />
+            </>
+          )}
         </div>
       </div>
       <pre

@@ -48,6 +48,7 @@ All API endpoints and their required authentication/authorization levels.
 | CRUD | `/api/baseline-alerting/*` | baseline_alerting |
 | GET | `/api/custom-fields` (`?object_type=`), `/api/tags` (with usage counts) | custom_fields |
 | GET | `/api/dcim/manufacturers`, `/api/dcim/device-types` (`?manufacturer_id=`), `/api/dcim/roles`, `/api/dcim/statuses` (with host counts) | device_model |
+| GET | `/api/plugins` (the plugin manifest: users see only active plugins whose `plugin:<name>` feature they hold; admins and the API token see every plugin with status, source and errors) | plugins |
 
 ### Feature-gated (auth + feature flag)
 
@@ -56,10 +57,10 @@ All API endpoints and their required authentication/authorization levels.
 | `inventory` | `/api/inventory/*` | inventory |
 | `topology` | `/api/topology/*` | topology |
 | `topology` | `/api/sources/*`, `/api/topology/search/deep`, `/api/topology/export.html` (collections/deletes need `topology.write`; source and credential management `POST/PUT/DELETE /api/sources*` is admin-only in the handlers) | meraki_topology |
-| `jobs` | `/api/jobs/*` | jobs |
+| `jobs` | `/api/jobs/*` (launch, retry and rerun also check the task's run permission and, for a live run, its commit permission: `403` when refused; admins and API token callers always pass. See `docs/jobs.md#run-and-commit-permissions`) | jobs |
 | `templates` | `/api/templates/*` | templates |
 | `credentials` | `/api/credentials/*` | credentials |
-| `playbooks` | `/api/playbooks/*` | playbooks |
+| `playbooks` | `/api/playbooks/*` (`PUT /api/playbooks/{id}/permissions`, and `permissions` in a playbook create or update, need admin in the handler; `GET/PUT /api/playbooks/{id}/input-schema` need only the feature) | playbooks |
 | `config-drift` | `/api/config-drift/*` | config_drift |
 | `config-drift` | `GET /api/intended-config/templates`, `GET /api/intended-config/templates/{id}`, `GET /api/intended-config/contexts`, `GET /api/intended-config/contexts/{id}`, `GET /api/intended-config/hosts`, `GET /api/intended-config/hosts/{host_id}`, `GET /api/intended-config/hosts/{host_id}/variables`, `POST /api/intended-config/generate` (renders and compares stored data only, no device session; audited as `config` / `intended_generate`) | intended_config (router) |
 | `config-backups` | `/api/config-backups/*` | config_backups |
@@ -77,6 +78,8 @@ All API endpoints and their required authentication/authorization levels.
 | `ipam` | `GET /api/ipam/prefix-custom-data?subnet=&vrf=`; `PUT` needs `ipam.write` and admin (an admin dependency on the route, like every IPAM write) | custom_fields (ipam_router) |
 | `ipam` | `GET /api/ipam/vrfs`, `GET /api/ipam/vrfs/{vrf_id}`, `GET /api/ipam/vlans`, `GET /api/ipam/vlans/{vlan_id}` (registered before the IPAM router) | network_objects (router) |
 | `reports` | `GET /api/hosts/{host_id}/interface-addresses` (gated like `GET /api/hosts/{host_id}/interface-inventory`) | network_objects (host_router) |
+| `graphql` | `POST /api/graphql` (read-only queries; CSRF applies to session callers), `GET /api/graphql` (GraphiQL, `404` unless the admin setting `graphiql` is on). Each field also needs the feature of its REST counterpart (`inventory`; `reports` for interfaces, interface addresses and device VLANs; `ipam` for prefixes, addresses, VLAN and VRF records; `config-backups` for backup metadata) and leaves out hosts and groups outside the caller's object scope. `graphql` is scope-enforced, so scoped users see only their groups' hosts. See `docs/graphql-api.md` | graphql (router) |
+| `plugin:<name>` | `/api/plugins/<name>/*`, every route of an enabled plugin (writes need `plugin:<name>.write`; CSRF applies; `503` while the plugin is not active). The keys exist only while the plugin is loaded. Members of access groups limited to selected inventory groups do not get plugin features (fail closed), since plugins do not enforce device scope. See `docs/plugin-development.md` | plugin router (mounted by `netcontrol/routes/plugins.py`) |
 
 ### Admin-only
 
@@ -85,10 +88,13 @@ All API endpoints and their required authentication/authorization levels.
 | `/api/admin/*` | admin |
 | `GET/PUT /api/admin/auth-config` (now with `oidc`; the client secret is write-only), `POST /api/admin/auth-config/oidc/test` | admin (OIDC single sign-on settings and connection test) |
 | `/api/admin/mcp/settings`, `/api/admin/mcp/tokens*` | mcp_tokens (AI access settings and MCP token create, list, revoke) |
+| `GET/PUT /api/admin/graphql/settings` (GraphiQL, introspection and query limits; writes audited as `graphql` / `settings_update`) | graphql (admin_router) |
+| `GET/POST /api/admin/webhooks`, `GET/PUT/DELETE /api/admin/webhooks/{id}`, `POST /api/admin/webhooks/{id}/test`, `GET /api/admin/webhooks/{id}/deliveries`, `POST /api/admin/webhooks/{id}/deliveries/{delivery_row_id}/redeliver` (writes, tests and redeliveries audited as `system` / `webhook.*`; the signing secret and header values are write-only) | webhooks (router, `require_admin` in `app.py`) |
 | `POST /api/custom-fields`, `PUT/DELETE /api/custom-fields/{field_id}`, `PUT/DELETE /api/tags/{tag_id}` | custom_fields (admin_router) |
 | `POST /api/dcim/{manufacturers,device-types,roles,statuses}`, `PUT/DELETE /api/dcim/{manufacturers,device-types,roles,statuses}/{id}` (`?confirm=true` to delete a record hosts use) | device_model (admin_router) |
 | `POST /api/ipam/vrfs`, `PUT/DELETE /api/ipam/vrfs/{vrf_id}`, `POST /api/ipam/vlans`, `PUT/DELETE /api/ipam/vlans/{vlan_id}`, `POST /api/ipam/interface-addresses/rebuild` (audited as `network_objects`) | network_objects (admin_router) |
 | `POST /api/intended-config/templates`, `PUT/DELETE /api/intended-config/templates/{id}`, `POST /api/intended-config/contexts`, `PUT/DELETE /api/intended-config/contexts/{id}`, `POST /api/intended-config/preview` (writes audited as `config`; the preview stores nothing) | intended_config (admin_router) |
+| `GET/POST /api/git-sources`, `GET/PUT/DELETE /api/git-sources/{id}`, `GET /api/git-sources/{id}/objects`, `POST /api/git-sources/{id}/sync` (writes and syncs audited as `config` / `git_source_*`; credentials are service credentials, never returned). Templates, playbooks and intended configuration contexts a Git source owns answer `409` to `PUT` and `DELETE` on their own routes | git_sources (router, `require_admin` in `app.py`) |
 | `/api/secret-variables/*` | (admin enforced in handlers; reads and writes both) |
 | `/api/inventory/admin/*` | inventory_admin |
 | `/api/topology/admin/*` | topology_admin |

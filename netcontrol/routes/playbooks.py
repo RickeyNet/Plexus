@@ -11,9 +11,11 @@ import sys
 
 import routes.database as db
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol import job_inputs
+from netcontrol.routes.git_sources import reject_git_owned
+from netcontrol.routes.shared import _audit, _corr_id, _get_session, require_owner_or_admin
 from netcontrol.telemetry import configure_logging
 
 router = APIRouter()
@@ -33,6 +35,11 @@ class PlaybookCreate(BaseModel):
     tags: list[str] = []
     content: str = ""
     type: str = "python"  # "python" or "ansible"
+    # Typed run-dialog inputs (netcontrol/job_inputs.py). Empty: use the
+    # schema the Python class declares in code, if any.
+    input_schema: list | None = None
+    # Who may run / commit the job; admin only to set.
+    permissions: dict | None = None
 
 
 class PlaybookUpdate(BaseModel):
@@ -42,6 +49,17 @@ class PlaybookUpdate(BaseModel):
     tags: list[str] | None = None
     content: str | None = None
     type: str | None = None
+    input_schema: list | None = None
+    permissions: dict | None = None
+
+
+class InputSchemaBody(BaseModel):
+    schema_: list = Field(default_factory=list, alias="schema")
+
+
+class PermissionsBody(BaseModel):
+    run: dict | None = None
+    commit: dict | None = None
 
 
 # ── Filename sanitizers ──────────────────────────────────────────────────────
@@ -129,28 +147,120 @@ async def sync_playbooks_from_registry():
                     LOGGER.warning("sync: error adding playbook '%s': %s", pb["name"], e)
 
 
-def _attach_parameters_schema(playbook: dict) -> dict:
-    """Decorate a playbook dict with parameters_schema from the registered class.
-
-    The schema lives on the Python class (BasePlaybook subclass), not in the
-    DB - it's a code-level contract, not user-editable data. Attach it on the
-    way out so the frontend can render a launch form without a second round-trip.
-    """
+def effective_input_schema(playbook: dict) -> tuple[list[dict], str]:
+    """The typed input schema a run of ``playbook`` validates against, and
+    where it comes from: ``stored`` (the playbook row), ``code`` (the Python
+    class's ``parameters_schema``) or ``none``."""
     from routes.runner import get_playbook_class
 
+    stored = playbook.get("input_schema") or []
+    if stored:
+        try:
+            return job_inputs.normalize_schema(stored), "stored"
+        except job_inputs.JobInputError as exc:
+            LOGGER.warning("playbook %s: stored input schema is not valid: %s", playbook.get("id"), exc.fields)
+            return [], "none"
+    if playbook.get("type", "python") == "python":
+        cls = get_playbook_class(playbook.get("filename", ""))
+        code = getattr(cls, "parameters_schema", None) if cls is not None else None
+        if code:
+            try:
+                return job_inputs.normalize_schema(code), "code"
+            except job_inputs.JobInputError as exc:
+                LOGGER.warning("playbook %s: code input schema is not valid: %s", playbook.get("filename"), exc.fields)
+    return [], "none"
+
+
+def playbook_supports_dry_run(playbook: dict) -> bool:
+    """Ansible always previews (``--check --diff``); a Python class opts out
+    with ``supports_dry_run = False``."""
+    from routes.runner import get_playbook_class
+
+    if playbook.get("type", "python") == "ansible":
+        return True
     cls = get_playbook_class(playbook.get("filename", ""))
-    if cls is not None:
-        playbook["parameters_schema"] = getattr(cls, "parameters_schema", []) or []
-    else:
-        playbook["parameters_schema"] = []
+    return bool(getattr(cls, "supports_dry_run", True)) if cls is not None else True
+
+
+def playbook_permissions(playbook: dict) -> dict:
+    """The playbook's run/commit rules; a stored value that no longer
+    validates is treated as unrestricted rather than breaking the list."""
+    try:
+        return job_inputs.normalize_permissions(playbook.get("permissions") or {})
+    except job_inputs.JobInputError:
+        LOGGER.warning("playbook %s: stored permissions are not valid", playbook.get("id"))
+        return job_inputs.normalize_permissions({})
+
+
+def _attach_parameters_schema(playbook: dict, caller: tuple[str, list[int]] | None = None) -> dict:
+    """Decorate a playbook dict with its effective typed input schema, the
+    dry-run capability and, given the caller's role and access groups,
+    whether they may run and commit it - so the run dialog needs no second
+    round-trip. ``parameters_schema`` is the same schema under its old key."""
+    schema, source = effective_input_schema(playbook)
+    permissions = playbook_permissions(playbook)
+    playbook["input_schema"] = schema
+    playbook["parameters_schema"] = schema
+    playbook["input_schema_source"] = source
+    playbook["supports_dry_run"] = playbook_supports_dry_run(playbook)
+    playbook["permissions"] = permissions
+    if caller is not None:
+        role, group_ids = caller
+        playbook["can_run"] = job_inputs.is_allowed(permissions, "run", role=role, group_ids=group_ids)
+        playbook["can_commit"] = job_inputs.is_allowed(permissions, "commit", role=role, group_ids=group_ids)
     return playbook
+
+
+def _unprocessable(exc: job_inputs.JobInputError) -> HTTPException:
+    return HTTPException(status_code=422, detail={"message": exc.message, "fields": exc.fields})
+
+
+def _clean_schema(raw: list | None) -> list[dict] | None:
+    if raw is None:
+        return None
+    try:
+        return job_inputs.normalize_schema(raw)
+    except job_inputs.JobInputError as exc:
+        raise _unprocessable(exc)
+
+
+async def _clean_permissions(raw: dict | None, request: Request | None) -> dict | None:
+    """Validate permissions and require an admin to set them (a user who
+    could edit them could grant themselves commit)."""
+    if raw is None:
+        return None
+    if request is not None:
+        await require_owner_or_admin(request, None)
+    try:
+        permissions = job_inputs.normalize_permissions(raw)
+    except job_inputs.JobInputError as exc:
+        raise _unprocessable(exc)
+    wanted = {g for rule in permissions.values() for g in rule["groups"]}
+    if wanted:
+        known = {int(g["id"]) for g in await db.get_all_access_groups()}
+        missing = sorted(wanted - known)
+        if missing:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "The permissions name access groups that do not exist.",
+                    "fields": {"groups": f"Unknown access group id(s): {', '.join(map(str, missing))}"},
+                },
+            )
+    return permissions
+
+
+async def _caller(request: Request | None) -> tuple[str, list[int]] | None:
+    if request is None:
+        return None
+    return await job_inputs.user_permissions(_get_session(request))
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 
 @router.get("/api/playbooks/{playbook_id}")
-async def get_playbook(playbook_id: int):
+async def get_playbook(playbook_id: int, request: Request = None):
     playbook = await db.get_playbook(playbook_id)
     if not playbook:
         raise HTTPException(404, "Playbook not found")
@@ -186,14 +296,73 @@ async def get_playbook(playbook_id: int):
     if "content" not in playbook:
         playbook["content"] = ""
 
-    return _attach_parameters_schema(playbook)
+    return _attach_parameters_schema(playbook, await _caller(request))
 
 
 @router.get("/api/playbooks")
-async def list_playbooks():
+async def list_playbooks(request: Request = None):
     await sync_playbooks_from_registry()
     playbooks = await db.get_all_playbooks()
-    return [_attach_parameters_schema(pb) for pb in playbooks]
+    caller = await _caller(request)
+    return [_attach_parameters_schema(pb, caller) for pb in playbooks]
+
+
+@router.get("/api/playbooks/{playbook_id}/input-schema")
+async def get_playbook_input_schema(playbook_id: int, request: Request = None):
+    """The run-dialog form: typed fields, dry-run support and whether the
+    caller may run and commit this playbook."""
+    playbook = await db.get_playbook(playbook_id)
+    if not playbook:
+        raise HTTPException(404, "Playbook not found")
+    pb = _attach_parameters_schema(playbook, await _caller(request))
+    return {
+        "playbook_id": playbook_id,
+        "schema": pb["input_schema"],
+        "source": pb["input_schema_source"],
+        "supports_dry_run": pb["supports_dry_run"],
+        "permissions": pb["permissions"],
+        "can_run": pb.get("can_run", True),
+        "can_commit": pb.get("can_commit", True),
+    }
+
+
+@router.put("/api/playbooks/{playbook_id}/input-schema")
+async def put_playbook_input_schema(playbook_id: int, body: InputSchemaBody, request: Request = None):
+    """Replace the stored input schema. ``[]`` falls back to the schema the
+    Python class declares in code."""
+    playbook = await db.get_playbook(playbook_id)
+    if not playbook:
+        raise HTTPException(404, "Playbook not found")
+    schema = _clean_schema(body.schema_) or []
+    await db.update_playbook(playbook_id, input_schema=schema)
+    session = _get_session(request) if request else None
+    await _audit(
+        "config",
+        "playbook.input_schema",
+        user=session["user"] if session else "",
+        detail=f"set {len(schema)} input field(s) on playbook {playbook_id}",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True, "schema": schema}
+
+
+@router.put("/api/playbooks/{playbook_id}/permissions")
+async def put_playbook_permissions(playbook_id: int, body: PermissionsBody, request: Request = None):
+    """Replace who may run and commit the playbook (admin only)."""
+    playbook = await db.get_playbook(playbook_id)
+    if not playbook:
+        raise HTTPException(404, "Playbook not found")
+    permissions = await _clean_permissions({"run": body.run, "commit": body.commit}, request) or {}
+    await db.update_playbook(playbook_id, permissions=permissions)
+    session = _get_session(request) if request else None
+    await _audit(
+        "config",
+        "playbook.permissions",
+        user=session["user"] if session else "",
+        detail=f"set run/commit permissions on playbook {playbook_id}",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True, "permissions": permissions}
 
 
 @router.post("/api/playbooks", status_code=201)
@@ -206,9 +375,20 @@ async def create_playbook(body: PlaybookCreate, request: Request = None):
             filename = _sanitize_playbook_filename(body.filename)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    input_schema = _clean_schema(body.input_schema)
+    permissions = await _clean_permissions(body.permissions, request)
     if pb_type == "python" and body.content:
         write_playbook_file(filename, body.content)
-    pid = await db.create_playbook(body.name, filename, body.description, body.tags, body.content, type=pb_type)
+    pid = await db.create_playbook(
+        body.name,
+        filename,
+        body.description,
+        body.tags,
+        body.content,
+        type=pb_type,
+        input_schema=input_schema,
+        permissions=permissions,
+    )
     session = _get_session(request) if request else None
     await _audit(
         "config",
@@ -225,6 +405,9 @@ async def update_playbook(playbook_id: int, body: PlaybookUpdate, request: Reque
     playbook = await db.get_playbook(playbook_id)
     if not playbook:
         raise HTTPException(404, "Playbook not found")
+    if any(v is not None for v in (body.name, body.filename, body.description, body.tags, body.content, body.type)):
+        # A Git source's playbook changes in its repository; inputs and permissions stay editable.
+        reject_git_owned(playbook, "playbook")
     pb_type = body.type if body.type in ("python", "ansible") else playbook.get("type", "python")
     update_filename = None
     if body.filename is not None:
@@ -235,6 +418,8 @@ async def update_playbook(playbook_id: int, body: PlaybookUpdate, request: Reque
                 update_filename = _sanitize_playbook_filename(body.filename)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+    input_schema = _clean_schema(body.input_schema)
+    permissions = await _clean_permissions(body.permissions, request)
     if pb_type == "python" and body.content is not None:
         target_filename = update_filename or playbook["filename"]
         write_playbook_file(target_filename, body.content)
@@ -246,6 +431,8 @@ async def update_playbook(playbook_id: int, body: PlaybookUpdate, request: Reque
         tags=body.tags,
         content=body.content,
         type=body.type,
+        input_schema=input_schema,
+        permissions=permissions,
     )
     session = _get_session(request) if request else None
     await _audit(
@@ -263,6 +450,7 @@ async def delete_playbook(playbook_id: int, request: Request = None):
     playbook = await db.get_playbook(playbook_id)
     if not playbook:
         raise HTTPException(404, "Playbook not found")
+    reject_git_owned(playbook, "playbook")
     await db.delete_playbook(playbook_id)
     session = _get_session(request) if request else None
     await _audit(

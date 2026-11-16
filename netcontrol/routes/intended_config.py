@@ -58,6 +58,7 @@ from netcontrol.object_scope import (
 )
 from netcontrol.routes.custom_fields import attach_custom_data
 from netcontrol.routes.device_model import check_device_values
+from netcontrol.routes.git_sources import reject_git_owned
 from netcontrol.routes.shared import _audit, _corr_id, _session_user
 
 LOGGER = logging.getLogger("plexus.intended_config")
@@ -549,7 +550,7 @@ async def create_context(body: ContextBody, request: Request) -> dict:
 
 @admin_router.put(f"{PREFIX}/contexts/{{context_id}}")
 async def update_context(context_id: int, body: ContextBody, request: Request) -> dict:
-    _found(await db.get_config_context(context_id), "Context")
+    reject_git_owned(_found(await db.get_config_context(context_id), "Context"), "context")
     values = await _context_values(body)
     try:
         record = await db.update_config_context(context_id, values, _session_user(request))
@@ -564,6 +565,7 @@ async def update_context(context_id: int, body: ContextBody, request: Request) -
 @admin_router.delete(f"{PREFIX}/contexts/{{context_id}}")
 async def delete_context(context_id: int, request: Request) -> dict:
     record = _found(await db.get_config_context(context_id), "Context")
+    reject_git_owned(record, "context")
     await db.delete_config_context(context_id)
     await _audit_write(request, "intended_context_delete", f"id={context_id} name={record['name']}")
     wake_generation()

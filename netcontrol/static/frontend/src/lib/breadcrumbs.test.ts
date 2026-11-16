@@ -55,5 +55,6 @@ describe('breadcrumbTrail', () => {
       { label: 'Dashboards', to: '/dashboards' },
       { label: 'Dashboard' },
     ]);
+    expect(breadcrumbTrail('/plugins/example/spares')).toEqual([{ label: 'Plugins' }]);
   });
 });

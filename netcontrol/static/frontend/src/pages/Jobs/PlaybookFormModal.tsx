@@ -11,14 +11,23 @@ import { FieldError } from '@/components/FieldError';
 import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { QueryError } from '@/components/QueryError';
+import { useAuthStatus } from '@/api/auth';
+import { CustomDataError } from '@/api/customData';
 import {
   useCreatePlaybook,
   usePlaybook,
   useUpdatePlaybook,
+  type JobPermissions,
   type PlaybookType,
+  type PlaybookUpdate,
 } from '@/api/jobs';
+import { useAccessGroups } from '@/api/settings';
 
 import { parseTags } from './helpers';
+import { fieldFromRow, rowFromField, validateSchemaRows, type SchemaRow } from './jobInputs';
+import { InputSchemaEditor, JobPermissionsEditor } from './PlaybookInputsEditor';
+
+const OPEN_PERMISSIONS: JobPermissions = { run: { roles: [], groups: [] }, commit: { roles: [], groups: [] } };
 
 interface Props {
   mode: 'create' | 'edit' | null;
@@ -83,6 +92,9 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
   const detailQuery = usePlaybook(mode === 'edit' ? playbookId : null);
   const createMut = useCreatePlaybook();
   const updateMut = useUpdatePlaybook();
+  const auth = useAuthStatus();
+  const isAdmin = auth.data?.role === 'admin';
+  const accessGroups = useAccessGroups(isAdmin);
 
   const [type, setType] = useState<PlaybookType>('python');
   const [name, setName] = useState('');
@@ -93,6 +105,11 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
   const [contentDirty, setContentDirty] = useState(false);
   const [errors, setErrors] = useState<{ name?: string; filename?: string; content?: string }>({});
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [schemaRows, setSchemaRows] = useState<SchemaRow[]>([]);
+  const [schemaDirty, setSchemaDirty] = useState(false);
+  const [schemaErrors, setSchemaErrors] = useState<Record<string, string>>({});
+  const [permissions, setPermissions] = useState<JobPermissions>(OPEN_PERMISSIONS);
+  const [permissionsDirty, setPermissionsDirty] = useState(false);
 
   const editorExtensions = useMemo(
     () => [
@@ -109,9 +126,13 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
     setPrevData(detailQuery.data);
     setErrors({});
     setSaveError(null);
+    setSchemaErrors({});
+    setSchemaDirty(false);
+    setPermissionsDirty(false);
     if (mode === 'create') {
       setType('python'); setName(''); setFilename(''); setDescription('');
       setTagsStr(''); setContent(PYTHON_DEFAULT); setContentDirty(false);
+      setSchemaRows([]); setPermissions(OPEN_PERMISSIONS);
     } else if (mode === 'edit' && detailQuery.data) {
       const pb = detailQuery.data;
       setType((pb.type as PlaybookType) ?? 'python');
@@ -121,6 +142,8 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
       setTagsStr(parseTags(pb.tags).join(', '));
       setContent(pb.content ?? '');
       setContentDirty(false);
+      setSchemaRows((pb.input_schema ?? []).map(rowFromField));
+      setPermissions(pb.permissions ?? OPEN_PERMISSIONS);
     }
   }
 
@@ -139,8 +162,11 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
       filename: filename.trim() ? undefined : 'Filename is required',
       content: content.trim() ? undefined : 'Content is required',
     };
+    const nextSchemaErrors = schemaDirty ? validateSchemaRows(schemaRows) : {};
     setErrors(nextErrors);
+    setSchemaErrors(nextSchemaErrors);
     if (nextErrors.name || nextErrors.filename || nextErrors.content) return;
+    if (Object.keys(nextSchemaErrors).length > 0) return;
     let fname = filename.trim();
     if (type === 'ansible') {
       if (!/\.(yml|yaml)$/i.test(fname)) fname += '.yml';
@@ -148,7 +174,7 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
       fname += '.py';
     }
     const tags = tagsStr.split(',').map((t) => t.trim()).filter(Boolean);
-    const data = {
+    const data: PlaybookUpdate & { name: string; filename: string; content: string } = {
       name: name.trim(),
       filename: fname,
       description: description.trim(),
@@ -156,7 +182,19 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
       content,
       type,
     };
-    const onError = (err: unknown) => { setSaveError((err as Error).message); };
+    // Send only what changed: an untouched code-declared schema stays in code.
+    if (schemaDirty) data.input_schema = schemaRows.map(fieldFromRow);
+    if (isAdmin && permissionsDirty) data.permissions = permissions;
+    const onError = (err: unknown) => {
+      if (err instanceof CustomDataError && Object.keys(err.fields).length > 0) {
+        const rowErrs = Object.fromEntries(Object.entries(err.fields).filter(([k]) => /^\d+(\.|$)/.test(k)));
+        setSchemaErrors(rowErrs);
+        const other = Object.entries(err.fields).filter(([k]) => !(k in rowErrs)).map(([, m]) => m);
+        setSaveError([err.message, ...other].join(' '));
+      } else {
+        setSaveError((err as Error).message);
+      }
+    };
     if (mode === 'edit' && playbookId != null) {
       updateMut.mutate({ id: playbookId, data }, { onSuccess: onClose, onError });
     } else {
@@ -264,6 +302,20 @@ export function PlaybookFormModal({ mode, playbookId, onClose }: Props) {
             />
             <FieldError>{errors.content}</FieldError>
           </div>
+          <InputSchemaEditor
+            rows={schemaRows}
+            onChange={(rows) => { setSchemaRows(rows); setSchemaDirty(true); setSchemaErrors({}); }}
+            errors={schemaErrors}
+            source={mode === 'edit' ? detailQuery.data?.input_schema_source : undefined}
+          />
+          {isAdmin && (
+            <JobPermissionsEditor
+              value={permissions}
+              onChange={(next) => { setPermissions(next); setPermissionsDirty(true); }}
+              accessGroups={accessGroups.data}
+              accessGroupsFailed={accessGroups.isError}
+            />
+          )}
         </form>
       )}
     </Modal>

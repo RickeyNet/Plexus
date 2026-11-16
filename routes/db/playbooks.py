@@ -22,6 +22,7 @@ from routes.database import (
     row_to_dict,
     rows_to_list,
 )
+from routes.db.git_sources import git_source_name_sql
 
 __all__ = [
     "get_all_playbooks",
@@ -49,29 +50,50 @@ __all__ = [
 async def get_all_playbooks() -> list[dict]:
     db = await _dbcore.get_db(read_only=True)
     try:
-        cursor = await db.execute("""
+        cursor = await db.execute(f"""
             SELECT p.*,
                    (SELECT j.status FROM jobs j WHERE j.playbook_id = p.id
                     ORDER BY j.id DESC LIMIT 1) AS last_status,
                    (SELECT j.started_at FROM jobs j WHERE j.playbook_id = p.id
-                    ORDER BY j.id DESC LIMIT 1) AS last_run
+                    ORDER BY j.id DESC LIMIT 1) AS last_run,
+                   {git_source_name_sql("p")}
             FROM playbooks p ORDER BY p.name
-        """)
+        """)  # nosec B608 - fixed alias
         rows = rows_to_list(await cursor.fetchall())
         for r in rows:
-            r["tags"] = json.loads(r.get("tags") or "[]")
+            _decode_playbook_json(r)
         return rows
     finally:
         await db.close()
 
 
+def _json_or(raw: object, fallback: list | dict) -> list | dict:
+    if not raw:
+        return fallback
+    try:
+        value = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        return fallback
+    return value if isinstance(value, type(fallback)) else fallback
+
+
+def _decode_playbook_json(row: dict) -> None:
+    """Decode the JSON text columns of a playbook row in place."""
+    row["tags"] = json.loads(row.get("tags") or "[]")
+    row["input_schema"] = _json_or(row.get("input_schema"), [])
+    row["permissions"] = _json_or(row.get("permissions"), {})
+
+
 async def get_playbook(playbook_id: int) -> dict | None:
     db = await _dbcore.get_db(read_only=True)
     try:
-        cursor = await db.execute("SELECT * FROM playbooks WHERE id = ?", (playbook_id,))
+        cursor = await db.execute(
+            f"SELECT playbooks.*, {git_source_name_sql('playbooks')} FROM playbooks WHERE id = ?",  # nosec B608 - fixed table
+            (playbook_id,),
+        )
         row = row_to_dict(await cursor.fetchone())
         if row:
-            row["tags"] = json.loads(row.get("tags") or "[]")
+            _decode_playbook_json(row)
         return row
     finally:
         await db.close()
@@ -84,12 +106,24 @@ async def create_playbook(
     tags: list[str] | None = None,
     content: str = "",
     type: str = "python",
+    input_schema: list[dict] | None = None,
+    permissions: dict | None = None,
 ) -> int:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "INSERT INTO playbooks (name, filename, description, tags, content, type) VALUES (?,?,?,?,?,?)",
-            (name, filename, description, json.dumps(tags or []), content, type),
+            "INSERT INTO playbooks (name, filename, description, tags, content, type, input_schema, permissions)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (
+                name,
+                filename,
+                description,
+                json.dumps(tags or []),
+                content,
+                type,
+                json.dumps(input_schema or []),
+                json.dumps(permissions or {}),
+            ),
         )
         await db.commit()
         return cursor.lastrowid
@@ -124,6 +158,8 @@ async def update_playbook(
     tags: list[str] | None = None,
     content: str = None,
     type: str = None,
+    input_schema: list[dict] | None = None,
+    permissions: dict | None = None,
 ):
     """Update playbook fields. None values are not updated."""
     db = await _dbcore.get_db()
@@ -149,6 +185,12 @@ async def update_playbook(
         if type is not None:
             updates.append("type = ?")
             params.append(type)
+        if input_schema is not None:
+            updates.append("input_schema = ?")
+            params.append(json.dumps(input_schema))
+        if permissions is not None:
+            updates.append("permissions = ?")
+            params.append(json.dumps(permissions))
 
         if updates:
             updates.append("updated_at = NOW()::text")
@@ -179,7 +221,9 @@ async def delete_playbook(playbook_id: int):
 async def get_all_templates() -> list[dict]:
     db = await _dbcore.get_db(read_only=True)
     try:
-        cursor = await db.execute("SELECT * FROM templates ORDER BY name")
+        cursor = await db.execute(
+            f"SELECT templates.*, {git_source_name_sql('templates')} FROM templates ORDER BY name"  # nosec B608 - fixed table
+        )
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
@@ -188,7 +232,10 @@ async def get_all_templates() -> list[dict]:
 async def get_template(template_id: int) -> dict | None:
     db = await _dbcore.get_db(read_only=True)
     try:
-        cursor = await db.execute("SELECT * FROM templates WHERE id = ?", (template_id,))
+        cursor = await db.execute(
+            f"SELECT templates.*, {git_source_name_sql('templates')} FROM templates WHERE id = ?",  # nosec B608 - fixed table
+            (template_id,),
+        )
         return row_to_dict(await cursor.fetchone())
     finally:
         await db.close()

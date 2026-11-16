@@ -77,9 +77,13 @@ Admin only (and the `topology` and `inventory` features). See [After adding a so
 ### Playbooks
 | Method | Endpoint              | Description                                      |
 |--------|-----------------------|--------------------------------------------------|
-| GET    | `/api/playbooks`      | List all (with last run status)                  |
-| POST   | `/api/playbooks`      | Register `{name, filename, description, tags}`   |
+| GET    | `/api/playbooks`      | List all (with last run status). Each carries `input_schema` (the effective typed run inputs), `input_schema_source` (`stored`, `code`, `none`), `supports_dry_run`, `permissions` and, for the caller, `can_run` and `can_commit` |
+| POST   | `/api/playbooks`      | Register `{name, filename, description, tags}`; optional `input_schema` and (admin only) `permissions`. A bad schema answers `422` with `detail.fields` keyed `<index>.<attr>` |
+| PUT    | `/api/playbooks/{id}` | Update; same optional `input_schema` and (admin only) `permissions` |
 | DELETE | `/api/playbooks/{id}` | Unregister                                       |
+| GET    | `/api/playbooks/{id}/input-schema` | The run form: `schema`, `source`, `supports_dry_run`, `permissions`, `can_run`, `can_commit` |
+| PUT    | `/api/playbooks/{id}/input-schema` | `{"schema": [...]}` replaces the stored schema (audited as `config` / `playbook.input_schema`); `[]` falls back to the code schema. Field types: `string`, `text`, `integer`, `boolean`, `choice`, `multichoice`, `list`, `ip`, `cidr`, `host`, `group`, `secret`; attributes `name`, `type`, `label`, `help`, `default`, `required`, `choices`, `min`, `max`, `regex`. See [jobs.md](jobs.md#run-inputs) |
+| PUT    | `/api/playbooks/{id}/permissions` | Admin only (`403` otherwise), audited as `config` / `playbook.permissions`. `{"run": {"roles": [], "groups": []}, "commit": {...}}`: roles from `admin`, `user`; groups are access group ids (`422` for an unknown one). An empty rule allows everyone with `jobs`; an empty commit rule follows the run rule; admins always pass |
 
 ### Templates
 | Method | Endpoint              | Description                             |
@@ -89,6 +93,19 @@ Admin only (and the `topology` and `inventory` features). See [After adding a so
 | GET    | `/api/templates/{id}` | Get one                                 |
 | PUT    | `/api/templates/{id}` | Update `{name, content, description}`   |
 | DELETE | `/api/templates/{id}` | Delete                                  |
+
+### Git data sources
+Admin only. Git repositories templates, Ansible playbooks and config contexts sync from (migration 0093). Writes and syncs are audited (category `config`, actions `git_source_create`, `git_source_update`, `git_source_delete`, `git_source_sync`). Templates, playbooks and intended configuration contexts now carry `git_source_id`, `git_source_name`, `git_path` and `git_commit`; one a source owns answers `409` to `PUT` and `DELETE` (a playbook's `input_schema` and `permissions` stay writable). See [git-data-sources.md](git-data-sources.md).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET    | `/api/git-sources` | `{"sources": [Source], "content_types": ["templates", "playbooks", "config_contexts"]}` by name. A Source: `id, name, remote_url, branch, credential_id, credential_name, provides, sync_interval_minutes, enabled, status` (`never`, `syncing`, `ok`, `warning`, `error`), `error, last_commit, last_attempt_at, last_synced_at, summary` (the newest successful sync's `{commit, counts, warnings}`), `object_counts, created_at, updated_at, updated_by` |
+| POST   | `/api/git-sources` | `{name, remote_url, branch?, credential_id?, provides?, sync_interval_minutes?, enabled?}`. `remote_url` is `https://`, `ssh://` or `user@host:path` without credentials; `credential_id` a service credential; `sync_interval_minutes` `0` or 5 to 10080. `201` with the Source; `400` for a bad field, `409` for a taken name |
+| GET    | `/api/git-sources/{id}` | The Source |
+| PUT    | `/api/git-sources/{id}` | Full replace, same body and checks. A new `remote_url` discards the working copy |
+| DELETE | `/api/git-sources/{id}` | Removes the records it owns, then the source: `{"ok": true, "removed": n, "detached": n}` (`detached`: kept because job history references them). `409` while it syncs |
+| GET    | `/api/git-sources/{id}/objects` | `{"objects": {"templates": [...], "playbooks": [...], "config_contexts": [...]}}`: id, name, `git_path`, `git_commit` of each record it owns |
+| POST   | `/api/git-sources/{id}/sync` | Sync now: `{ok, source, result}`. `result` is `{commit, counts: {<type>: {created, updated, unchanged, removed, detached}}, warnings: [{path, message}]}`, or `null` with `ok: false` when the fetch failed (the message is the Source's `error`; no record changed). `409` while a sync of it runs |
 
 ### Intended configuration
 Everything needs the `config-drift` feature; the rows marked *Admin* need an administrator. Template and context writes and `generate` are audited (category `config`). Errors use the usual `{ok: false, error: {code, message}}` envelope: `400` for bad input, `404` for an unknown id, `409` when the name is taken ignoring case. See [intended-config.md](intended-config.md).
@@ -127,6 +144,8 @@ A Template: `id`, `name`, `kind` (`device` or `snippet`), `device_type` (`""`: a
 | GET    | `/api/jobs/{id}`        | Job detail                 |
 | GET    | `/api/jobs/{id}/events` | All log events for a job   |
 | POST   | `/api/jobs/launch`      | Launch a job (see below)   |
+| POST   | `/api/jobs/{id}/retry`  | Same job again; a live job needs the task's commit permission |
+| POST   | `/api/jobs/{id}/rerun`  | Same job, live; needs the task's commit permission |
 | WS     | `/ws/jobs/{id}`         | Real-time event stream     |
 
 **Launch payload:**
@@ -136,9 +155,20 @@ A Template: `id`, `name`, `kind` (`device` or `snippet`), `device_type` (`""`: a
   "inventory_group_id": 1,
   "credential_id": 1,
   "template_id": 1,
-  "dry_run": true
+  "commit": false,
+  "inputs": { "vlan_id": 120, "peer": "192.0.2.10" }
 }
 ```
+
+`commit` defaults to `false` (dry run: Python `dry_run=True`, Ansible
+`--check --diff`); the legacy `dry_run` flag is still accepted and `commit`
+wins. `inputs` (legacy name `parameters`) is checked against the task's
+input schema: `422` with `detail.fields` (one message per field) for a bad
+value or a host, group or secret that does not exist. A dry run of a task
+with `supports_dry_run` false answers `422` (`fields.commit`). A caller the
+task's run, or for a live run commit, permission refuses gets `403`. The job
+record keeps the inputs in `parameters`, secret inputs as `{{secret.NAME}}`
+references only, and the mode in `dry_run`.
 
 ### Integration availability mutes
 Mutes of the entities the integrations collect (Meraki, Cato, FMC, Panorama, Appgate, OPNsense, AWS, Azure, GCP). A muted entity is left off the Dashboard and raises no alert. See [meraki-topology.md](meraki-topology.md#muting).
@@ -173,6 +203,31 @@ Near-real-time Meraki alerts from the assurance-alert poll and the webhook recei
 | POST   | `/api/monitoring/meraki-alerts/poll` | Admin, audited. Poll every enabled Meraki source now, ignoring back-off and the poll switch; returns per-source results |
 | POST   | `/api/webhooks/meraki` | Meraki's webhook receiver (no session, no CSRF). JSON only, at most 256 KiB; `sharedSecret` in the body must match. `200 {"ok": true}` when accepted (the alert work runs after the response), `401` on a wrong or missing secret, `404` while the receiver is off, `400` / `413` / `415` on a malformed, oversized or non-JSON body, `429` when the source IP passes its rate limit |
 
+### Event webhooks
+Outbound requests sent when a tracked object is created, updated or deleted. Admin only; every write is audited. Payload, headers and signature: see [webhooks.md](webhooks.md).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET    | `/api/admin/webhooks` | `webhooks` (each with `id`, `name`, `enabled`, `url`, `http_method`, `content_type`, `object_types`, `actions`, `filters`, `headers` (values masked), `has_secret`, `secret` (masked or empty), `body_template`, `verify_tls`, `ca_bundle`, `timeout_seconds`, `max_retries`, `concurrency`, `created_by`, `created_at`, `updated_at`), `stats` (per webhook: `queue_depth`, `delivered`, `failed`, `dropped_queue_full`, `last_error`, ...), `object_types` and `actions` (the accepted values) |
+| GET    | `/api/admin/webhooks/{id}` | One webhook, as in the list; `404` when it does not exist |
+| POST   | `/api/admin/webhooks` | `name` (unique), `url` (http/https, passes the SSRF guard), `object_types` (non-empty subset of `host`, `group`, `prefix`, `ip_address`, `vlan`, `vrf`, `credential`, `config_backup`, `job`), `actions` (non-empty subset of `create`, `update`, `delete`) and optional `enabled`, `http_method` (`POST`, `PUT`, `PATCH`), `content_type`, `filters` (field -> allowed values), `headers` (name -> value; `X-Plexus-*` and transport headers refused), `body_template` (Jinja2), `secret`, `verify_tls`, `ca_bundle` (PEM), `timeout_seconds` (1 to 60), `max_retries` (0 to 10), `concurrency` (1 to 10). `201` with the webhook; `400` with the reason on invalid input |
+| PUT    | `/api/admin/webhooks/{id}` | Same body as POST, replacing the webhook. A `secret` of `null` or the mask keeps the stored secret, `""` clears it; a header value equal to the mask keeps that header's stored value |
+| DELETE | `/api/admin/webhooks/{id}` | Deletes the webhook and its delivery log: `{"ok": true}` |
+| POST   | `/api/admin/webhooks/{id}/test` | Sends one `webhook.test` event now, without retries: `ok`, `status` (`success`, `failed`, `blocked`), `status_code`, `latency_ms`, `error`, `delivery_id` |
+| GET    | `/api/admin/webhooks/{id}/deliveries` | `deliveries`, newest attempt first; `limit` (1 to 1000, default 100). Each has `id`, `delivery_id`, `event`, `object_type`, `object_id`, `action`, `attempt`, `status` (`success`, `retrying`, `failed`, `blocked`), `status_code`, `latency_ms`, `response_body` (first 2000 characters), `error`, `created_at` |
+| POST   | `/api/admin/webhooks/{id}/deliveries/{delivery_row_id}/redeliver` | Sends the logged body again once with the same `X-Plexus-Delivery` id; same result as test. `404` for a delivery of another webhook, `400` when the body was too large to keep |
+
+### GraphQL API
+
+Read-only queries across inventory and IPAM with nested relations; see [GraphQL API](graphql-api.md) for the schema, the per-field features and the limits.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST   | `/api/graphql` | `graphql` feature. `{"query", "variables", "operationName"}`; answers `{"data", "errors"}`. Queries only. Each field also needs the feature of its REST counterpart (`inventory`, `reports`, `ipam`, `config-backups`) and hosts and groups outside the caller's object scope are left out. `400` when the query cannot run (syntax, unknown field, mutation, depth, aliases, estimated cost, introspection while it is off, more than 20,000 characters); field errors answer `200` with the other fields. Session callers send `X-CSRF-Token` |
+| GET    | `/api/graphql` | `graphql` feature. The GraphiQL page when the `graphiql` setting is on (own Content-Security-Policy, assets from unpkg.com with SRI), else `404`. Never runs a query |
+| GET    | `/api/admin/graphql/settings` | Admin. `graphiql`, `introspection`, `max_depth`, `max_aliases`, `max_complexity`, `max_limit` |
+| PUT    | `/api/admin/graphql/settings` | Admin, audited (`graphql` / `settings_update`). Any of `graphiql`, `introspection` (booleans), `max_depth` (2 to 20), `max_aliases` (0 to 200), `max_complexity` (100 to 1000000), `max_limit` (10 to 10000). Returns the merged settings; `422` on an unknown key or a value out of bounds |
+
 ### AI access (MCP)
 A read-only Model Context Protocol endpoint for AI clients, and the admin routes that manage it. See [ai-access.md](ai-access.md).
 
@@ -184,3 +239,11 @@ A read-only Model Context Protocol endpoint for AI clients, and the admin routes
 | GET    | `/api/admin/mcp/tokens` | Admin. `tokens` (each with `id`, `name`, `token_prefix`, `owner_user_id`, `owner_username`, `owner_role`, `categories`, `expires_at`, `created_at`, `created_by`, `last_used_at`, `call_count`, `revoked_at`; never the token or its hash) and `categories` (every category a token can be given) |
 | POST   | `/api/admin/mcp/tokens` | Admin, audited. `name` (1 to 80 characters, unique), `owner_user_id`, `categories` (non-empty subset of the known categories), `expires_at` (`""` or `YYYY-MM-DD`). Returns `{"token", "record"}`; `token` is the only time the plaintext is returned. `422` on invalid input (including the `audit` category with a non-admin owner), `409` when the name is taken |
 | DELETE | `/api/admin/mcp/tokens/{id}` | Admin, audited. Revokes the token: `{"revoked": true}`; `404` when it does not exist or is already revoked |
+
+### Plugins
+The plugin manifest and the routes of enabled plugins. See [plugin-development.md](plugin-development.md).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET    | `/api/plugins` | Any signed-in user. `{"admin", "plugins"}`; each plugin has `name`, `label`, `version`, `description`, `status` (`disabled`, `failed`, `loaded`, `active`), `feature` (`plugin:<name>`), `navigation` and `pages` (the declarative page definitions). Users get only active plugins whose feature they hold; admins and the API token get every plugin plus `source`, `min_plexus_version`, `max_plexus_version`, `errors`, `has_router`, `migrations`, `migrations_applied`, `background_tasks` |
+| any    | `/api/plugins/<name>/...` | The plugin's own routes. Needs `plugin:<name>` (`plugin:<name>.write` for POST, PUT, PATCH, DELETE); `401` without a session, `403` without the feature or the CSRF token, `503` while the plugin is not active, `404` when it is not installed |

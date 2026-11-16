@@ -64,7 +64,7 @@ class NetflowEnabler(BasePlaybook):
     parameters_schema = [
         {
             "name": "collector_ip",
-            "type": "string",
+            "type": "ip",
             "label": "Collector IP",
             "required": True,
             "default": "",
@@ -72,10 +72,12 @@ class NetflowEnabler(BasePlaybook):
         },
         {
             "name": "collector_port",
-            "type": "int",
+            "type": "integer",
             "label": "Collector Port",
             "required": False,
             "default": 2055,
+            "min": 1,
+            "max": 65535,
             "help": "UDP port the collector listens on. Defaults to 2055.",
         },
         {
@@ -88,10 +90,11 @@ class NetflowEnabler(BasePlaybook):
         },
         {
             "name": "sampling_rate",
-            "type": "int",
+            "type": "integer",
             "label": "Sampling Rate (1:N)",
             "required": False,
             "default": 1,
+            "min": 1,
             "help": "1 = sample every packet. Higher N reduces device CPU at the cost of resolution.",
         },
     ]

@@ -71,6 +71,7 @@ def test_enforced_features_keep_only_enrolled_keys():
         "config-drift.write",
         "credentials",
         "credentials.write",
+        "graphql",
     }
 
 

@@ -47,8 +47,8 @@ import httpx
 from netcontrol.routes.net_guard import (
     OutboundRequestError,
     validate_outbound_host,
-    validate_outbound_url,
 )
+from netcontrol.routes.outbound_http import guard_url, tls_verify
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.siem")
@@ -528,12 +528,8 @@ async def _deliver_https(sink: SinkConfig, message: str) -> None:
     else:
         headers["Content-Type"] = "application/json"
 
-    verify: Any = True
-    if not sink.tls_verify:
-        verify = False
-    elif sink.tls_ca_pem.strip():
-        verify = ssl.create_default_context(cadata=sink.tls_ca_pem)
-
+    # deliver() has already run the SSRF check on sink.url.
+    verify = tls_verify(sink.tls_verify, sink.tls_ca_pem)
     async with httpx.AsyncClient(timeout=DEFAULT_HTTPS_TIMEOUT, verify=verify) as client:
         resp = await client.post(sink.url, content=message.encode("utf-8"), headers=headers)
         if resp.status_code >= 400:
@@ -554,7 +550,7 @@ async def deliver(sink: SinkConfig, event: dict) -> None:
     # connect primitive otherwise).
     try:
         if sink.protocol == "https":
-            await asyncio.to_thread(validate_outbound_url, sink.url)
+            await guard_url(sink.url)
         else:
             await asyncio.to_thread(validate_outbound_host, sink.host)
     except OutboundRequestError as exc:

@@ -59,7 +59,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from netcontrol.routes.shared import _audit, _corr_id, _get_session, _session_user
 from netcontrol.telemetry import configure_logging
-from netcontrol.version import APP_GIT_SHA, APP_VERSION
+from netcontrol.version import APP_GIT_SHA, APP_VERSION, parse_semver as _parse_semver
 
 router = APIRouter()
 LOGGER = configure_logging("plexus.admin_updates")
@@ -148,27 +148,6 @@ def _sanitize_config(body: dict[str, Any]) -> dict[str, Any]:
 
 
 # ── Version helpers ───────────────────────────────────────────────────────
-
-
-def _parse_semver(v: str) -> tuple[int, int, int] | None:
-    """Parse '1.2.3' or 'v1.2.3' into a tuple; return None if not semver.
-
-    Pre-release suffixes ('1.2.3-rc1') are accepted but the suffix is dropped
-    for comparison purposes. This is intentionally lenient: we only need a
-    consistent ordering for "is there a newer version?", not full SemVer 2.0
-    precedence rules.
-    """
-    s = v.strip()
-    if s.startswith("v") or s.startswith("V"):
-        s = s[1:]
-    s = s.split("-", 1)[0].split("+", 1)[0]
-    parts = s.split(".")
-    if len(parts) != 3:
-        return None
-    try:
-        return (int(parts[0]), int(parts[1]), int(parts[2]))
-    except ValueError:
-        return None
 
 
 def _is_newer(remote: str, local: str) -> bool:

@@ -37,6 +37,7 @@ from netcontrol.routes.shared import (
     _read_device_configs,
     require_credential_access,
     require_owner_or_admin,
+    resolve_state_root,
     service_credential,
     verify_ws_session,
 )
@@ -109,21 +110,11 @@ async def _resolve_campaign_credential(
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def _resolve_state_root() -> str | None:
-    explicit = os.getenv("PLEXUS_STATE_DIR", "").strip()
-    if explicit:
-        return explicit
-    key_file = os.getenv("APP_SESSION_KEY_FILE", "").strip()
-    if key_file:
-        return os.path.dirname(key_file)
-    return None
-
-
 def _resolve_software_images_dir() -> str:
     override = os.getenv("PLEXUS_SOFTWARE_IMAGES_DIR", "").strip()
     if override:
         return override
-    state_root = _resolve_state_root()
+    state_root = resolve_state_root()
     if state_root:
         return os.path.join(state_root, "software_images")
     return os.path.join(_REPO_ROOT, "software_images")

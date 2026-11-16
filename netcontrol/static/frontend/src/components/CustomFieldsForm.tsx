@@ -12,6 +12,10 @@ export interface CustomFieldInputProps {
   onChange: (value: CustomValue | '') => void;
   error?: string;
   disabled?: boolean;
+  /** Called when the control loses focus (blur-first validation). */
+  onBlur?: () => void;
+  /** A format hint shown inside an empty text input ("192.0.2.10"). */
+  placeholder?: string;
 }
 
 /**
@@ -19,7 +23,7 @@ export interface CustomFieldInputProps {
  * date, URL, or a select with an empty option. A stored select value that is
  * no longer a choice stays listed, marked "(removed)".
  */
-export function CustomFieldInput({ field, value, onChange, error, disabled }: CustomFieldInputProps) {
+export function CustomFieldInput({ field, value, onChange, error, disabled, onBlur, placeholder }: CustomFieldInputProps) {
   const id = useId();
   const helpId = field.description ? `${id}-help` : '';
   const errorId = error ? `${id}-error` : '';
@@ -43,6 +47,7 @@ export function CustomFieldInput({ field, value, onChange, error, disabled }: Cu
             aria-invalid={!!error}
             aria-describedby={describedBy}
             onChange={(e) => onChange(e.target.checked)}
+            onBlur={onBlur}
           />
           <span>
             {field.label}
@@ -62,6 +67,7 @@ export function CustomFieldInput({ field, value, onChange, error, disabled }: Cu
   const common = {
     id,
     disabled,
+    onBlur,
     'aria-invalid': !!error,
     'aria-required': field.required || undefined,
     'aria-describedby': describedBy,
@@ -91,7 +97,7 @@ export function CustomFieldInput({ field, value, onChange, error, disabled }: Cu
         step={field.field_type === 'number' ? 'any' : undefined}
         inputMode={field.field_type === 'number' ? 'decimal' : undefined}
         maxLength={field.field_type === 'text' ? 1000 : undefined}
-        placeholder={field.field_type === 'url' ? 'https://example.com' : undefined}
+        placeholder={placeholder ?? (field.field_type === 'url' ? 'https://example.com' : undefined)}
         value={text}
         onChange={(e) => onChange(e.target.value)}
       />

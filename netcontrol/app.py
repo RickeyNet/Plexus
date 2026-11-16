@@ -42,7 +42,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from netcontrol.integrations.cisco_fdm.collector import fdm_poll_loop
 from netcontrol.mcp.server import build_mcp_app
-from netcontrol.routes import notification_channels, siem_forwarder
+from netcontrol.plugins import registry as plugin_registry
+from netcontrol.routes import notification_channels, siem_forwarder, webhooks
 from netcontrol.routes.admin import (
     AdminAccessGroupCreateRequest,
     AdminAccessGroupUpdateRequest,
@@ -185,8 +186,10 @@ from netcontrol.routes.flow_collector import (
     stop_flow_collector,
 )
 from netcontrol.routes.geolocation import router as geolocation_router
+from netcontrol.routes.git_sources import git_sources_loop, router as git_sources_router
 from netcontrol.routes.graph_export import router as graph_export_router
 from netcontrol.routes.graph_templates import router as graph_templates_router
+from netcontrol.routes.graphql import admin_router as graphql_admin_router, router as graphql_router
 from netcontrol.routes.intended_config import (
     admin_router as intended_config_admin_router,
     intended_config_loop,
@@ -286,6 +289,7 @@ from netcontrol.routes.playbooks import (
     sync_playbooks_from_registry,
     write_playbook_file,
 )
+from netcontrol.routes.plugins import mount_plugin_routers, router as plugins_router
 from netcontrol.routes.reporting import (
     _report_scheduler_loop,
     oid_profiles_router,
@@ -339,6 +343,7 @@ import importlib
 
 import routes.database as db
 from routes.crypto import decrypt, encrypt
+from routes.db.change_events import current_actor
 from routes.runner import LogEvent, execute_playbook, get_playbook_class
 
 try:
@@ -853,6 +858,7 @@ async def require_auth(request: Request, response: Response = None):
     if APP_API_TOKEN and api_token and secrets.compare_digest(api_token, APP_API_TOKEN):
         session = {"user": "api-token", "user_id": 0, "auth_mode": "token"}
         request.state.auth_session = session
+        current_actor.set("api-token")
         return session
 
     if _env_flag("APP_REQUIRE_API_TOKEN", False) and path.startswith("/api/"):
@@ -923,6 +929,8 @@ async def require_auth(request: Request, response: Response = None):
         )
 
     request.state.auth_session = session
+    # Names the user on the object-change events this request causes.
+    current_actor.set(str(session.get("user") or ""))
     return session
 
 
@@ -1654,6 +1662,7 @@ async def lifespan(app: FastAPI):
             lab_drift_scheduler_loop,
             _interface_addresses_backfill,
             intended_config_loop,
+            git_sources_loop,
         )
     ]
     for task in background_tasks:
@@ -1678,6 +1687,13 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         LOGGER.warning("notification_channels: startup failed: %s", type(exc).__name__)
 
+    # Event webhooks: load the subscriptions and register on the structured
+    # object-change hook (routes.db.change_events).
+    try:
+        await webhooks.start_dispatcher()
+    except Exception as exc:
+        LOGGER.warning("webhooks: startup failed: %s", type(exc).__name__)
+
     flow_collector_started = False
     # Persisted flow_collector config (loaded above) drives lifecycle now.
     # Env vars only matter on the very first boot, where _load_persisted_
@@ -1693,6 +1709,13 @@ async def lifespan(app: FastAPI):
         if flow_collector_started:
             _ensure_flow_aggregation_task()
 
+    # Plugins: migrations, startup hooks and background tasks. Each plugin is
+    # isolated - one that fails is marked failed and the rest carry on.
+    try:
+        await plugin_registry.start(db.get_db, shared.supervise_task)
+    except Exception as exc:
+        LOGGER.error("plugins: startup failed: %s", type(exc).__name__)
+
     try:
         # The MCP transport's task group lives for the life of the app (a
         # mounted app's own lifespan is never run by Starlette).
@@ -1707,6 +1730,10 @@ async def lifespan(app: FastAPI):
             await drain_running_jobs()
         except Exception as exc:
             LOGGER.warning("shutdown: job drain failed: %s", type(exc).__name__)
+        try:
+            await plugin_registry.stop()
+        except Exception as exc:
+            LOGGER.warning("plugins: shutdown failed: %s", type(exc).__name__)
         for task in background_tasks:
             task.cancel()
         # Cancelled loops unwind here; a loop that died with any other
@@ -1735,6 +1762,10 @@ async def lifespan(app: FastAPI):
             await notification_channels.stop_dispatcher()
         except Exception as exc:
             LOGGER.warning("notification_channels: shutdown failed: %s", type(exc).__name__)
+        try:
+            await webhooks.stop_dispatcher()
+        except Exception as exc:
+            LOGGER.warning("webhooks: shutdown failed: %s", type(exc).__name__)
         # Release DB connections last, after every consumer above has stopped.
         try:
             await db.close_db_pool()
@@ -2320,6 +2351,7 @@ app.include_router(
     dependencies=[Depends(require_auth), Depends(require_feature("ipam"))],
 )
 app.include_router(network_objects_admin_router, dependencies=[Depends(require_admin)])
+app.include_router(webhooks.router, dependencies=[Depends(require_admin)])
 app.include_router(
     network_objects_host_router,
     dependencies=[Depends(require_auth), Depends(require_feature("reports"))],
@@ -2378,6 +2410,8 @@ app.include_router(
     dependencies=[Depends(require_auth), Depends(require_feature("config-drift"))],
 )
 app.include_router(intended_config_admin_router, dependencies=[Depends(require_admin)])
+# Git data sources (templates, playbooks and config contexts synced from Git): admin only.
+app.include_router(git_sources_router, dependencies=[Depends(require_admin)])
 # Config Backups + admin
 app.include_router(
     config_backups_router,
@@ -2447,6 +2481,14 @@ app.include_router(
     mcp_tokens_router,
     dependencies=[Depends(require_admin)],
 )
+# Read-only GraphQL API: the query endpoint (and GraphiQL when enabled) for
+# holders of the graphql feature, each field also checking the feature and
+# object scope of its REST counterpart; its settings are admin-only.
+app.include_router(
+    graphql_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("graphql"))],
+)
+app.include_router(graphql_admin_router, dependencies=[Depends(require_admin)])
 # Admin self-update routes (check, channel config, apply/rollback via the
 # host updater handoff directory, progress).
 app.include_router(
@@ -2579,6 +2621,18 @@ app.include_router(
     lab_drift_router,
     dependencies=[Depends(require_auth), Depends(require_feature("lab"))],
 )
+
+# Plugins (docs/plugin-development.md): only the ones named in PLEXUS_PLUGINS
+# load. A plugin that fails to import, validate or pass its version check is
+# recorded as failed and skipped; Plexus starts regardless. Each router is
+# mounted at /api/plugins/<name> behind the plugin's feature key.
+app.include_router(plugins_router, dependencies=[Depends(require_auth)])
+plugin_registry.bind_feature_flags(state.FEATURE_FLAGS)
+try:
+    plugin_registry.discover()
+except Exception as _plugin_exc:  # defensive: discover() isolates each plugin itself
+    LOGGER.error("plugin discovery failed: %s", _plugin_exc)
+mount_plugin_routers(app, require_feature_method)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
