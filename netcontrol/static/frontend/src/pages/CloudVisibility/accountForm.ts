@@ -162,10 +162,10 @@ const AZURE: ProviderForm = {
   sections: [
     {
       title: 'Flow logs',
-      help: 'Needed only for the Flow Logs tab. NSG flow logs are read from a storage account.',
+      help: 'Needed only for the Flow Logs tab. VNet (or older NSG) flow logs are read from a storage account.',
       fields: [
         { key: 'storage_account_name', label: 'Storage account', placeholder: 'mystorageacct' },
-        { key: 'container_name', label: 'Container', placeholder: 'insights-logs-networksecuritygroupflowevent' },
+        { key: 'container_name', label: 'Container', placeholder: 'insights-logs-flowlogflowevent' },
         {
           key: 'storage_account_key',
           label: 'Storage account key',
@@ -179,7 +179,7 @@ const AZURE: ProviderForm = {
       help: 'Needed only for the Traffic Metrics tab. Azure Monitor metrics are read for the resources listed.',
       fields: [
         { key: 'resource_ids', label: 'Resource IDs', list: true, placeholder: '/subscriptions/.../networkInterfaces/nic-1' },
-        { key: 'metric_names', label: 'Metric names', list: true, placeholder: 'Default: BytesIn, BytesOut, PacketsIn, PacketsOut' },
+        { key: 'metric_names', label: 'Metric names', list: true, placeholder: 'Default: chosen per resource type (NIC, VM, VPN gateway)' },
       ],
     },
   ],

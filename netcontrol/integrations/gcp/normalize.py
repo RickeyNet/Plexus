@@ -25,6 +25,15 @@ How GCP maps onto the map:
     attachments and Interconnects share a "GCP VPN and Interconnect" box; a
     VPN tunnel is a tunnel from its gateway to the external VPN gateway (or
     the peer GCP gateway), red when it is not established
+  - load balancer frontends (forwarding rules), Private Service Connect
+    endpoints and service attachments, Cloud SQL instances and Memorystore
+    for Redis instances are no nodes: like the AWS services
+    with endpoints (``netcontrol.integrations.cloud_services``), their
+    network's details list them, a table per service and one "Service
+    endpoints" table with a row per internal address, which the subnet
+    index reads as hosts of the network. One whose network is not known (a
+    global external load balancer whose backends are not collected) is
+    left off the map; Cloud Visibility still lists it
 """
 
 from __future__ import annotations
@@ -32,6 +41,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from netcontrol.integrations.cloud_services import Service, service_counts, service_sections, service_states
 from netcontrol.integrations.meraki.normalize import (
     SCHEMA_VERSION,
     InventoryIndex,
@@ -83,6 +93,65 @@ IMPLIED_RULES = [
 
 # Detail tables are capped so one large network cannot bloat the snapshot.
 MAX_SITE_ROWS = 3000
+
+# Services with endpoints: listed in their network's details, not drawn.
+LOAD_BALANCER_TYPE = "load_balancer"
+PSC_ENDPOINT_TYPE = "psc_endpoint"
+SERVICE_ATTACHMENT_TYPE = "service_attachment"
+CLOUD_SQL_TYPE = "cloud_sql_instance"
+MEMORYSTORE_REDIS_TYPE = "memorystore_redis_instance"
+SERVICES: tuple[Service, ...] = (
+    Service(
+        LOAD_BALANCER_TYPE,
+        "Load balancer",
+        "Load balancers",
+        (
+            ("Scheme", "load_balancing_scheme"),
+            ("Protocol", "ip_protocol"),
+            ("Ports", "ports"),
+            ("Target", "target"),
+            ("Backend services", "backend_services"),
+            ("Backends", "backend_count"),
+            ("Backend health", "backend_health"),
+        ),
+    ),
+    Service(
+        PSC_ENDPOINT_TYPE,
+        "Private Service Connect endpoint",
+        "Private Service Connect",
+        (("Target", "psc_target"), ("Connection", "psc_connection_status")),
+    ),
+    Service(
+        SERVICE_ATTACHMENT_TYPE,
+        "Private Service Connect service attachment",
+        "Private Service Connect",
+        (
+            ("Target service", "target_service"),
+            ("Connection preference", "connection_preference"),
+            ("NAT subnets", "nat_subnets"),
+            ("Connected endpoints", "connected_endpoints"),
+            ("Pending endpoints", "pending_endpoints"),
+        ),
+    ),
+    Service(
+        CLOUD_SQL_TYPE,
+        "Cloud SQL instance",
+        "Cloud SQL",
+        (
+            ("Tier", "tier"),
+            ("Availability", "availability_type"),
+            ("Connection name", "connection_name"),
+            ("Private Service Connect", "psc_enabled"),
+        ),
+    ),
+    Service(
+        MEMORYSTORE_REDIS_TYPE,
+        "Memorystore for Redis",
+        "Memorystore",
+        (("Tier", "tier"), ("Connect mode", "connect_mode"), ("Memory (GB)", "memory_size_gb")),
+    ),
+)
+SERVICE_TYPES = tuple(s.resource_type for s in SERVICES)
 
 _UP_STATES = (
     "",
@@ -344,6 +413,7 @@ class _Builder:
             "internet_gateway",
             "ha_vpn_gateway",
             "target_vpn_gateway",
+            *SERVICE_TYPES,
         ):
             for resource in self._of_type(resource_type):
                 by_network.setdefault(self._network_of(resource), {}).setdefault(resource_type, []).append(resource)
@@ -439,6 +509,7 @@ class _Builder:
                         ("Subnets", len(subnets) or ""),
                         ("VM instances", len(instances) or ""),
                         ("Cloud Routers", len(routers) or ""),
+                        *service_counts(SERVICES, owned),
                     ],
                 ),
             )
@@ -531,6 +602,8 @@ class _Builder:
                     ],
                 ),
             )
+            for section in service_sections(SERVICES, owned, subnet_names, MAX_SITE_ROWS, short=_short):
+                _add(sections, section)
             rules = sorted(
                 owned.get("firewall_policy", []),
                 key=lambda r: (
@@ -1191,13 +1264,19 @@ class _Builder:
                 )
         for warning in self._of_type(WARNING_TYPE):
             meta = warning["meta"]
+            permissions = [_text(p) for p in meta.get("permissions") or [] if _text(p)]
+            fix = (
+                f"The role of the account may lack {', '.join(permissions)}"
+                if permissions
+                else "The role of the account may not allow this call"
+            )
             self.errors.append(
                 {
                     "scope": f"GCP account {self._account(warning)}",
                     "path": _text(meta.get("section")) or _text(warning.get("name")),
                     "status": None,
                     "message": f"Not collected: GCP answered {_text(meta.get('error')) or 'with an error'}. "
-                    "The role of the account may not allow this call, or the API is not enabled for the project.",
+                    f"{fix}, or the API is not enabled for the project.",
                 }
             )
 
@@ -1299,4 +1378,6 @@ def build_snapshot(
         "sites": sites,
         "nodes": nodes,
         "edges": builder.edges,
+        # The state of every service resource, for availability tracking.
+        "services": service_states(SERVICES, builder.resources.values(), _status, builder._network_of),
     }

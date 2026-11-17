@@ -529,7 +529,48 @@ def _normalize_aws_flow_records(records: list[dict]) -> list[dict]:
     return normalized
 
 
+# Flow states of a VNet flow log tuple (field 8); "D" is a denied flow.
+_AZURE_FLOW_STATES = {"B", "C", "E", "D"}
+# NSG flow logs write the protocol as a letter; VNet flow logs as a number.
+_AZURE_PROTOCOL_LETTERS = {"T": "tcp", "U": "udp"}
+
+
+def _azure_flow_tuple_fields(parts: list[str]) -> dict:
+    """Action, direction and counters of one Azure flow tuple.
+
+    Three layouts share the first seven fields (time, src, dst, sport, dport,
+    protocol, direction):
+
+    - NSG flow log v1: ``…,decision``                     (8 fields)
+    - NSG flow log v2: ``…,decision,state,p→,b→,p←,b←``  (13 fields)
+    - VNet flow log:   ``…,state,encryption,p→,b→,p←,b←`` (13 fields; epoch
+      in milliseconds, numeric protocol, state ``D`` for a denied flow)
+
+    Counters are summed over both directions, like the AWS and GCP records.
+    """
+    decision = parts[7].upper() if len(parts) > 7 else ""
+    vnet = decision in _AZURE_FLOW_STATES and len(parts) > 8 and parts[8].upper() not in _AZURE_FLOW_STATES
+    if vnet:
+        action = "deny" if decision == "D" else "allow"
+        state, encryption = decision, parts[8]
+    else:
+        action = {"A": "allow", "D": "deny"}.get(decision, decision.lower())
+        state, encryption = (parts[8] if len(parts) > 8 else ""), ""
+    direction = {"I": "inbound", "O": "outbound"}.get(parts[6].upper(), parts[6].lower()) if len(parts) > 6 else ""
+    counters = [_safe_int(parts[i]) if len(parts) > i else 0 for i in (9, 10, 11, 12)]
+    return {
+        "action": action,
+        "direction": direction,
+        "packets": counters[0] + counters[2],
+        "bytes": counters[1] + counters[3],
+        "state": state.upper(),
+        "encryption": encryption,
+        "format": "vnet" if vnet else ("nsg_v2" if len(parts) > 8 else "nsg_v1"),
+    }
+
+
 def _normalize_azure_flow_records(records: list[dict]) -> list[dict]:
+    """Azure NSG (v1 / v2) and VNet flow log tuples into flow records."""
     normalized: list[dict] = []
     for item in records:
         if not isinstance(item, dict):
@@ -540,32 +581,42 @@ def _normalize_azure_flow_records(records: list[dict]) -> list[dict]:
                 parts = [str(p).strip() for p in str(tuple_item or "").split(",")]
                 if len(parts) < 6:
                     continue
-                src_ip = parts[1] if len(parts) > 1 else ""
-                dst_ip = parts[2] if len(parts) > 2 else ""
+                src_ip, dst_ip = parts[1], parts[2]
                 if not src_ip or not dst_ip:
                     continue
+                fields = _azure_flow_tuple_fields(parts)
+                timestamp = _normalize_timestamp_iso(parts[0] or item.get("start_time"))
+                metadata = {
+                    "resource_id": str(item.get("resource_id") or item.get("resourceId") or "").strip(),
+                    "rule_name": str(item.get("rule_name") or item.get("ruleName") or "").strip(),
+                    "flow_log_format": fields["format"],
+                }
+                for key in ("acl_id", "target_resource_id"):
+                    if item.get(key):
+                        metadata[key] = str(item[key]).strip()
+                if fields["state"]:
+                    metadata["flow_state"] = fields["state"]
+                if fields["encryption"]:
+                    metadata["encryption"] = fields["encryption"]
                 normalized.append(
                     {
                         "src_ip": src_ip,
                         "dst_ip": dst_ip,
-                        "src_port": _safe_int(parts[3] if len(parts) > 3 else 0),
-                        "dst_port": _safe_int(parts[4] if len(parts) > 4 else 0),
-                        "protocol": _normalize_protocol(parts[5] if len(parts) > 5 else 0),
-                        "bytes": _safe_int(parts[9] if len(parts) > 9 else item.get("bytes")),
-                        "packets": _safe_int(parts[8] if len(parts) > 8 else item.get("packets")),
-                        "start_time": _normalize_timestamp_iso(parts[0] if len(parts) > 0 else item.get("start_time")),
-                        "end_time": _normalize_timestamp_iso(
-                            item.get("end_time") or parts[0] if len(parts) > 0 else None
-                        ),
-                        "action": str(parts[7] if len(parts) > 7 else item.get("action") or "").strip().lower(),
-                        "direction": str(parts[6] if len(parts) > 6 else item.get("direction") or "").strip().lower(),
+                        "src_port": _safe_int(parts[3]),
+                        "dst_port": _safe_int(parts[4]),
+                        "protocol": _normalize_protocol(_AZURE_PROTOCOL_LETTERS.get(parts[5].upper(), parts[5])),
+                        "bytes": fields["bytes"] or _safe_int(item.get("bytes")),
+                        "packets": fields["packets"] or _safe_int(item.get("packets")),
+                        "start_time": timestamp,
+                        "end_time": _normalize_timestamp_iso(item.get("end_time"))
+                        if item.get("end_time")
+                        else timestamp,
+                        "action": fields["action"] or str(item.get("action") or "").strip().lower(),
+                        "direction": fields["direction"] or str(item.get("direction") or "").strip().lower(),
                         "region": str(item.get("region") or item.get("location") or "").strip(),
                         "vpc_id": str(item.get("vnet_id") or item.get("vnetId") or "").strip(),
                         "subnet_id": str(item.get("subnet_id") or item.get("subnetId") or "").strip(),
-                        "metadata": {
-                            "resource_id": str(item.get("resource_id") or item.get("resourceId") or "").strip(),
-                            "rule_name": str(item.get("rule_name") or item.get("ruleName") or "").strip(),
-                        },
+                        "metadata": metadata,
                     }
                 )
             continue

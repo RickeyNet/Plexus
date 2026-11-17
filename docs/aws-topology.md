@@ -297,6 +297,15 @@ a row of the **Service endpoints** table with its DNS name, port and
 address; each private address is in the subnet picker like an instance's.
 A public address (an NLB's Elastic IP, a Redshift node's public IP) is
 listed in the service's table but is not made a host of the VPC. A
+service's private address is a path trace end (`docs/path-trace.md`,
+"Managed cloud services"): its security groups are checked like an
+instance's, and the hop names the service and, for a Classic Load Balancer
+or an endpoint with a port, the listener that takes the flow. A DNS name
+whose addresses were collected (a load balancer's, a VPC endpoint's, an EFS
+mount target's) can be typed instead of the address. A public address on a
+load balancer's network interface, or an NLB's one Elastic IP with one
+private address, is delivered to that private address, and the Cato egress
+check reads the load balancer's security groups for it. A
 resource that names only its subnets (MSK, Redshift Serverless,
 ElastiCache serverless) is placed in the VPC of those subnets. One whose
 VPC was not collected, or that has none (a public OpenSearch domain), is
@@ -535,8 +544,8 @@ check.
 Not collected: prefix lists, load balancer listeners and target groups,
 Client VPN endpoints, the addresses behind an RDS, ElastiCache or
 OpenSearch DNS name (AWS reports none; the DNS name is searchable), FSx
-volumes, the availability of FSx file systems and of the services above
-(their state is shown, not tracked), their software versions in the
+volumes, the availability of FSx file systems (their state is shown, not
+tracked; the services above are tracked), their software versions in the
 software tracker (the version is shown in the service's table), and the on-premises router behind a
 Direct Connect (a Direct Connect is the edge of the map). The subnets also
 appear in IPAM's cloud CIDR view, where each VPC's range is checked against
@@ -555,7 +564,7 @@ terminated offline. vCPUs and memory are not collected. See
 
 ## Availability tracking
 
-Each collection also records the state of what it reports, shown under **Monitoring > Availability > Integrations and cloud** with uptime, outages and alerts: the instances drawn on the map, the transit, VPN, NAT and Direct Connect gateways and the Direct Connect connections (devices), site-to-site VPN connections (up when a tunnel is UP), Direct Connect connections, virtual interfaces and gateway associations (circuits), VPC peerings, and transit gateway and VPN gateway attachments (links). VPCs and customer gateways are left out. The state mapping, alerting and retention are described in [Meraki in the Topology Map](meraki-topology.md#availability-tracking).
+Each collection also records the state of what it reports, shown under **Monitoring > Availability > Integrations and cloud** with uptime, outages and alerts: the instances drawn on the map, the transit, VPN, NAT and Direct Connect gateways and the Direct Connect connections (devices), site-to-site VPN connections (up when a tunnel is UP), Direct Connect connections, virtual interfaces and gateway associations (circuits), VPC peerings, transit gateway and VPN gateway attachments (links), and the services listed in the VPC details (RDS / Aurora instances, clusters and proxies, load balancers, VPC endpoints, EFS, ElastiCache, OpenSearch, MSK, Redshift and Redshift Serverless) as services, by their state: for example a load balancer `active` is up, `active_impaired` degraded, `provisioning` unknown and `failed` down; a database `available` or `backing-up` is up and `stopped` down (see [Cloud managed services](meraki-topology.md#cloud-managed-services)). VPCs, customer gateways and Classic Load Balancers (they report no state) are left out. The state mapping, alerting and retention are described in [Meraki in the Topology Map](meraki-topology.md#availability-tracking).
 
 ## API reference
 

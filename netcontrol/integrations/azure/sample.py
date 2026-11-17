@@ -6,14 +6,20 @@ a hub VNet with a VPN gateway, an ExpressRoute gateway and an Azure
 Firewall, a production VNet peered to it that uses the hub's gateways and
 sends its internet traffic through the firewall, a VNet in another region,
 a site-to-site VPN with one connection down, an ExpressRoute circuit, a NAT
-gateway, a virtual appliance that forwards traffic, and the network security
-groups that decide what the database subnet accepts.
+gateway, a virtual appliance that forwards traffic, the network security
+groups that decide what the database subnet accepts, and the services with
+endpoints: an internal load balancer, an application gateway with a web
+application firewall, a private endpoint to a storage account, and a DNAT
+rule of the firewall. The services are built by the collector's own
+functions from stand-ins for the Network API models.
 Addresses are from the documentation ranges.
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+from netcontrol.integrations.azure import collect
 
 SUBSCRIPTION = "sample"
 _EAST = "eastus"
@@ -118,6 +124,141 @@ def _vm(
     )
 
 
+def _arm(group: str, kind: str, name: str) -> str:
+    """The Azure resource ID of a Microsoft.Network resource of the sample subscription."""
+    return f"/subscriptions/{SUBSCRIPTION}/resourceGroups/{group}/providers/Microsoft.Network/{kind}/{name}"
+
+
+def _subnet_ref(vnet: str, subnet: str) -> dict:
+    _sub, group, name = vnet.split(":")
+    return {"id": f"{_arm(group, 'virtualNetworks', name)}/subnets/{subnet}"}
+
+
+def _services() -> list[dict]:
+    """An internal load balancer in front of the application subnet, an
+    application gateway in the hub and a private endpoint to a storage
+    account in the database subnet, as the Network API returns them."""
+    lb_id = _arm("rg-prod", "loadBalancers", "lb-app")
+    frontend = {"id": f"{lb_id}/frontendIPConfigurations/fe-app"}
+    lb = {
+        "id": lb_id,
+        "name": "lb-app",
+        "location": _EAST,
+        "provisioning_state": "Succeeded",
+        "sku": {"name": "Standard", "tier": "Regional"},
+        "frontend_ip_configurations": [
+            {**frontend, "name": "fe-app", "private_ip_address": "10.231.10.100", "subnet": _subnet_ref(PROD, "app")}
+        ],
+        "backend_address_pools": [{"id": f"{lb_id}/backendAddressPools/app-pool", "name": "app-pool"}],
+        "load_balancing_rules": [
+            {
+                "name": "https",
+                "protocol": "Tcp",
+                "frontend_port": 443,
+                "backend_port": 443,
+                "frontend_ip_configuration": frontend,
+            }
+        ],
+        "inbound_nat_rules": [
+            {
+                "name": "ssh-app",
+                "protocol": "Tcp",
+                "frontend_port_range_start": 50000,
+                "frontend_port_range_end": 50009,
+                "backend_port": 22,
+                "frontend_ip_configuration": frontend,
+            }
+        ],
+    }
+    agw_id = _arm("rg-hub", "applicationGateways", "agw-hub")
+    agw_pip = _arm("rg-hub", "publicIPAddresses", "agw-hub-pip")
+    agw = {
+        "id": agw_id,
+        "name": "agw-hub",
+        "location": _EAST,
+        "provisioning_state": "Succeeded",
+        "operational_state": "Running",
+        "sku": {"name": "WAF_v2", "tier": "WAF_v2", "capacity": 2},
+        "gateway_ip_configurations": [{"name": "agw-ipcfg", "subnet": _subnet_ref(HUB, "appgw")}],
+        "frontend_ip_configurations": [
+            {
+                "id": f"{agw_id}/frontendIPConfigurations/fe-private",
+                "name": "fe-private",
+                "private_ip_address": "10.230.4.10",
+                "subnet": _subnet_ref(HUB, "appgw"),
+            },
+            {
+                "id": f"{agw_id}/frontendIPConfigurations/fe-public",
+                "name": "fe-public",
+                "public_ip_address": {"id": agw_pip},
+            },
+        ],
+        "frontend_ports": [{"id": f"{agw_id}/frontendPorts/https", "port": 443}],
+        "http_listeners": [
+            {
+                "name": "app-https",
+                "protocol": "Https",
+                "host_names": ["app.example.com"],
+                "frontend_port": {"id": f"{agw_id}/frontendPorts/https"},
+                "frontend_ip_configuration": {"id": f"{agw_id}/frontendIPConfigurations/fe-public"},
+            }
+        ],
+        "web_application_firewall_configuration": {"enabled": True, "firewall_mode": "Prevention"},
+    }
+    storage = f"/subscriptions/{SUBSCRIPTION}/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts"
+    pe = {
+        "id": _arm("rg-prod", "privateEndpoints", "pe-sampledata-blob"),
+        "name": "pe-sampledata-blob",
+        "location": _EAST,
+        "provisioning_state": "Succeeded",
+        "subnet": _subnet_ref(PROD, "db"),
+        "private_link_service_connections": [
+            {
+                "name": "sampledata-blob",
+                "private_link_service_id": f"{storage}/stsampledata",
+                "group_ids": ["blob"],
+                "private_link_service_connection_state": {"status": "Approved"},
+            }
+        ],
+        "custom_dns_configs": [{"fqdn": "stsampledata.blob.example.com", "ip_addresses": ["10.231.20.40"]}],
+    }
+    found = [
+        collect.load_balancer_resource(lb, SUBSCRIPTION, {}),
+        collect.application_gateway_resource(agw, SUBSCRIPTION, {agw_pip.lower(): "203.0.113.75"}),
+        collect.private_endpoint_resource(pe, SUBSCRIPTION),
+    ]
+    return [r for r in found if r]
+
+
+def _policy_dnat(policy: str, collection: str, name: str, port: str, translated: str, translated_port: str) -> dict:
+    """One DNAT rule of a firewall policy, read the way the collector reads its rule collection groups."""
+    group = {
+        "name": "DefaultDnatRuleCollectionGroup",
+        "priority": 100,
+        "rule_collections": [
+            {
+                "rule_collection_type": "FirewallPolicyNatRuleCollection",
+                "name": collection,
+                "priority": 100,
+                "action": {"type": "DNAT"},
+                "rules": [
+                    {
+                        "rule_type": "NatRule",
+                        "name": name,
+                        "ip_protocols": ["TCP"],
+                        "source_addresses": ["198.51.100.0/24"],
+                        "destination_addresses": ["203.0.113.95"],
+                        "destination_ports": [port],
+                        "translated_address": translated,
+                        "translated_port": translated_port,
+                    }
+                ],
+            }
+        ],
+    }
+    return collect.firewall_policy_dnat_rules([group], policy)[0]
+
+
 def _rule(
     name: str, priority: int, direction: str, action: str, protocol: str, ports: str, source: str, destination: str
 ) -> dict:
@@ -201,7 +342,7 @@ def build_sample() -> tuple[list[dict], list[dict]]:
             resource_group="rg-hub",
             address_prefixes=["10.230.0.0/16"],
             dns_servers=[],
-            subnet_count=4,
+            subnet_count=5,
         ),
         _res(
             f"vnet:{PROD}",
@@ -223,14 +364,16 @@ def build_sample() -> tuple[list[dict], list[dict]]:
             resource_group="rg-west",
             address_prefixes=["10.232.0.0/16"],
             dns_servers=[],
-            subnet_count=1,
+            subnet_count=2,
         ),
         _subnet(HUB, "GatewaySubnet", "10.230.0.0/26", used=2),
         _subnet(HUB, "AzureFirewallSubnet", "10.230.1.0/26", used=1),
         _subnet(HUB, "hub-mgmt", "10.230.2.0/24", nsg=nsg_mgmt, used=1),
         _subnet(HUB, "hub-nva", "10.230.3.0/24", used=1),
+        _subnet(HUB, "appgw", "10.230.4.0/24", used=2),
         _subnet(PROD, "app", "10.231.10.0/24", route_table=rt_prod, nsg=nsg_app, nat=nat_prod, used=1),
         _subnet(PROD, "db", "10.231.20.0/24", route_table=rt_prod, nsg=nsg_db, used=1),
+        _subnet(WEST, "AzureFirewallSubnet", "10.232.0.0/26", _WEST, used=1),
         _subnet(WEST, "web", "10.232.1.0/24", _WEST, used=1),
         _res(
             f"virtual_network_gateway:{vgw}",
@@ -355,12 +498,54 @@ def build_sample() -> tuple[list[dict], list[dict]]:
             sku="AZFW_VNet",
             tier="Standard",
             threat_intel_mode="Alert",
-            firewall_policy="hub-policy",
+            # Classic rule collections, not a firewall policy: its DNAT rules are read.
+            firewall_policy="",
             private_ip="10.230.1.4",
             private_ips=["10.230.1.4"],
             public_ips=["203.0.113.70"],
             subnet_id=f"{HUB}/AzureFirewallSubnet",
             vnet_id=HUB,
+            dnat_rules=[
+                {
+                    "source": "classic",
+                    "collection": "inbound-dnat",
+                    "priority": 100,
+                    "action": "Dnat",
+                    "name": "https-to-app",
+                    "protocols": ["TCP"],
+                    "source_addresses": ["*"],
+                    "destination_addresses": ["203.0.113.70"],
+                    "destination_ports": ["443"],
+                    "translated_address": "10.231.10.100",
+                    "translated_port": "443",
+                }
+            ],
+        ),
+        _res(
+            f"firewall:{SUBSCRIPTION}:rg-west:azfw-west",
+            "azure_firewall",
+            "azfw-west",
+            _WEST,
+            resource_group="rg-west",
+            sku="AZFW_VNet",
+            tier="Premium",
+            threat_intel_mode="Deny",
+            # Managed by a firewall policy with a parent: the parent's DNAT rules come first.
+            firewall_policy="fwpol-west",
+            firewall_policy_id=(
+                f"/subscriptions/{SUBSCRIPTION}/resourceGroups/rg-west/providers"
+                "/Microsoft.Network/firewallPolicies/fwpol-west"
+            ),
+            policy_dnat_rules_read=True,
+            private_ip="10.232.0.4",
+            private_ips=["10.232.0.4"],
+            public_ips=["203.0.113.95"],
+            subnet_id=f"{WEST}/AzureFirewallSubnet",
+            vnet_id=WEST,
+            dnat_rules=[
+                _policy_dnat("fwpol-base", "base-dnat", "ssh-to-jump", "22", "10.232.1.11", "22"),
+                _policy_dnat("fwpol-west", "west-dnat", "https-to-web", "443", "10.232.1.11", "8443"),
+            ],
         ),
         _vm(f"{SUBSCRIPTION}:rg-hub:vmx-hub-1", HUB, [("hub-nva", "10.230.3.10", "203.0.113.61")], forwards=True),
         _vm(f"{SUBSCRIPTION}:rg-hub:mgmt-jump", HUB, [("hub-mgmt", "10.230.2.5", "")]),
@@ -392,6 +577,7 @@ def build_sample() -> tuple[list[dict], list[dict]]:
             [_rule("AllowSshFromCorp", 100, "inbound", "allow", "tcp", "22", "10.0.0.0/8", "*")],
             [f"{HUB}/hub-mgmt"],
         ),
+        *_services(),
     ]
     connections = [
         _peering(HUB, PROD, "hub-to-prod", "10.231.0.0/16", transit=True),

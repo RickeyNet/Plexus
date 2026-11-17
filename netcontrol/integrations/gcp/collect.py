@@ -17,7 +17,12 @@ Resource uids are ``gcp:<type>:<project>:[<region or zone>:]<name>``:
 ``gcp:subnet:<project>:<region>:<name>`` for a subnet,
 ``gcp:instance:<project>:<zone>:<name>`` for a VM instance. A route is
 ``gcp:route:<project>:<name>`` and a VPC firewall rule
-``gcp:firewall_policy:<project>:<name>``. What follows ``gcp:<type>:`` is
+``gcp:firewall_policy:<project>:<name>``. A load balancer frontend
+(forwarding rule) is ``gcp:load_balancer:<project>:[<region>:]<name>``, a
+Private Service Connect endpoint ``gcp:psc_endpoint:...`` and a service
+attachment ``gcp:service_attachment:<project>:<region>:<name>``; they are
+service records (``netcontrol.integrations.cloud_services``), listed in
+their network's details like the AWS services with endpoints. What follows ``gcp:<type>:`` is
 unique across projects, so several accounts share one map.
 """
 
@@ -26,7 +31,16 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from netcontrol.integrations.gcp.normalize import DEFAULT_INTERNET_GATEWAY, WARNING_TYPE
+from netcontrol.integrations.cloud_services import endpoint, service_record
+from netcontrol.integrations.gcp.normalize import (
+    CLOUD_SQL_TYPE,
+    DEFAULT_INTERNET_GATEWAY,
+    LOAD_BALANCER_TYPE,
+    MEMORYSTORE_REDIS_TYPE,
+    PSC_ENDPOINT_TYPE,
+    SERVICE_ATTACHMENT_TYPE,
+    WARNING_TYPE,
+)
 
 PROVIDER = "gcp"
 
@@ -193,16 +207,20 @@ def error_code(exc: BaseException) -> str:
     return type(exc).__name__
 
 
-def warning_resource(section: str, exc: BaseException) -> dict:
+def warning_resource(section: str, exc: BaseException, permissions: Any = ()) -> dict:
     """Record of a detail section that could not be read, stored with the
-    discovery so the map's report can say what is missing and why."""
+    discovery so the map's report can say what is missing and why;
+    ``permissions`` are the IAM permissions the section needs."""
+    metadata: dict[str, Any] = {"section": section, "error": error_code(exc)}
+    if _texts(permissions):
+        metadata["permissions"] = _texts(permissions)
     return _resource(
         f"gcp:{WARNING_TYPE}:{section}",
         WARNING_TYPE,
         name=section,
         region="",
         status="skipped",
-        metadata={"section": section, "error": error_code(exc)},
+        metadata=metadata,
     )
 
 
@@ -1022,6 +1040,454 @@ def instance_resource(instance: dict, project: str) -> dict | None:
     )
 
 
+# ── Load balancers and Private Service Connect ───────────────────────────────
+
+# The target of a forwarding rule that is a Private Service Connect endpoint
+# for Google APIs (a bundle name, not a link).
+_GOOGLE_API_BUNDLES = {"all-apis": "Google APIs (all-apis)", "vpc-sc": "Google APIs (vpc-sc)"}
+_EXTERNAL_SCHEMES = ("EXTERNAL", "EXTERNAL_MANAGED")
+# Target proxy collection -> the load balancer family it fronts.
+_PROXY_FAMILIES = {
+    "targetHttpProxies": "Application",
+    "targetHttpsProxies": "Application",
+    "targetGrpcProxies": "Application",
+    "targetTcpProxies": "proxy Network",
+    "targetSslProxies": "proxy Network",
+}
+
+
+def link_key(link: Any, project: str = "") -> str:
+    """What identifies the resource a self link names (project, region or
+    zone, collection, name), so the v1, beta and partial links of one
+    resource match; ``""`` for no name."""
+    parts = parse_link(link)
+    if not parts["name"]:
+        return ""
+    scope = parts["region"] or parts["zone"]
+    return "/".join((parts["project"] or project, scope, parts["collection"], parts["name"]))
+
+
+def _url_map_services(url_map: dict) -> list[str]:
+    """Every backend service (or bucket) link a URL map sends traffic to, once each."""
+    weighted = _list(_get(url_map, "defaultRouteAction", "weightedBackendServices"))
+    found = [url_map.get("defaultService"), *[_get(w, "backendService") for w in weighted]]
+    for matcher in _list(url_map.get("pathMatchers")):
+        if not isinstance(matcher, dict):
+            continue
+        found.append(matcher.get("defaultService"))
+        found += [r.get("service") for r in _list(matcher.get("pathRules")) if isinstance(r, dict)]
+        found += [r.get("service") for r in _list(matcher.get("routeRules")) if isinstance(r, dict)]
+    return _texts(found)
+
+
+# ``healthState`` of a backend (``backendServices.getHealth``) -> how it counts.
+_HEALTH_STATES = {"HEALTHY": "healthy", "UNHEALTHY": "unhealthy", "TIMEOUT": "unhealthy"}
+
+
+def _health_counts(statuses: Any) -> dict[str, int]:
+    """``{"healthy", "unhealthy", "unknown"}`` counts of ``healthStatus``
+    entries; DRAINING, UNKNOWN and a missing state count as unknown."""
+    counts = {"healthy": 0, "unhealthy": 0, "unknown": 0}
+    for status in _list(statuses):
+        if isinstance(status, dict):
+            counts[_HEALTH_STATES.get(_t(status.get("healthState")).upper(), "unknown")] += 1
+    return counts
+
+
+def backend_health_table(results: Any, project: str) -> dict[str, list[dict]]:
+    """The health of each backend group of each backend service, by the
+    ``link_key`` of the service. ``results`` holds what the collector read:
+    ``{"backendService": link, "group": link, "healthStatus": [...]}``, the
+    ``healthStatus`` of one ``getHealth`` call per backend group."""
+    table: dict[str, list[dict]] = {}
+    for result in _list(results):
+        if not isinstance(result, dict):
+            continue
+        key = link_key(result.get("backendService"), project)
+        if key:
+            table.setdefault(key, []).append(
+                {
+                    "backend_service": link_name(result.get("backendService")),
+                    "group": link_name(result.get("group")),
+                    **_health_counts(result.get("healthStatus")),
+                }
+            )
+    return table
+
+
+class Backends:
+    """What a forwarding rule leads to, by ``link_key``: target proxies, URL
+    maps, backend services, target pools, and the instance groups and
+    network endpoint groups behind them (their network places a load
+    balancer whose forwarding rule names none). Any of them may be missing
+    (its section was not read); the forwarding rule then records what it
+    names itself."""
+
+    def __init__(
+        self,
+        project: str,
+        *,
+        backend_services: Any = (),
+        url_maps: Any = (),
+        target_proxies: Any = (),
+        target_pools: Any = (),
+        instance_groups: Any = (),
+        network_endpoint_groups: Any = (),
+        subnetworks: Any = (),
+        backend_health: Any = (),
+    ) -> None:
+        self.project = project
+        self.health = backend_health_table(backend_health, project)
+
+        def by_key(items: Any) -> dict[str, dict]:
+            found: dict[str, dict] = {}
+            for item in items:
+                key = link_key(item.get("selfLink"), project) if isinstance(item, dict) else ""
+                if key:
+                    found[key] = item
+            return found
+
+        self.services = by_key(backend_services)
+        self.url_maps = by_key(url_maps)
+        self.proxies = by_key(target_proxies)
+        self.pools = by_key(target_pools)
+        self.groups = by_key([*instance_groups, *network_endpoint_groups])
+        self.subnet_networks: dict[str, str] = {}
+        for subnet in subnetworks:
+            record = subnet_resource(subnet, project) if isinstance(subnet, dict) else None
+            if record and record["metadata"]["network_id"]:
+                self.subnet_networks[rid_of(record["resource_uid"])] = record["metadata"]["network_id"]
+
+    def group_network(self, link: Any) -> str:
+        """The network of an instance group or network endpoint group."""
+        group = self.groups.get(link_key(link, self.project)) or {}
+        network = _rid_link(group.get("network"), self.project, "vpc")
+        subnet = _rid_link(group.get("subnetwork"), self.project, "subnet")
+        return network or self.subnet_networks.get(subnet, "")
+
+    def resolve(self, rule: dict) -> dict:
+        """The URL map, backend services, backends and networks a forwarding
+        rule leads to, as far as what was collected tells."""
+        target = _t(rule.get("target"))
+        collection = parse_link(target)["collection"]
+        url_map = ""
+        services: list[str] = _texts([rule.get("backendService")])
+        if not services and collection in _PROXY_FAMILIES:
+            proxy = self.proxies.get(link_key(target, self.project)) or {}
+            if _t(proxy.get("urlMap")):
+                url_map = _t(proxy.get("urlMap"))
+                services = _url_map_services(self.url_maps.get(link_key(url_map, self.project)) or {})
+            else:
+                services = _texts([proxy.get("service")])
+        backends: list[str] = []
+        networks: list[str] = []
+        protocols: list[str] = []
+        health: list[dict] = []
+        for link in services:
+            health += self.health.get(link_key(link, self.project), [])
+            service = self.services.get(link_key(link, self.project)) or {}
+            networks.append(_rid_link(service.get("network"), self.project, "vpc"))
+            protocols.append(_t(service.get("protocol")))
+            backends += [_t(b.get("group")) for b in _list(service.get("backends")) if isinstance(b, dict)]
+        if collection == "targetPools":
+            backends += _texts((self.pools.get(link_key(target, self.project)) or {}).get("instances"))
+        networks += [self.group_network(link) for link in backends]
+        resolved: dict[str, Any] = {
+            "url_map": link_name(url_map),
+            "backend_services": [link_name(s) for s in services if link_name(s)],
+            "backend_protocols": _texts(protocols),
+            "backend_count": len(dict.fromkeys(b for b in backends if b)),
+            "backend_network_ids": _texts(networks),
+        }
+        # Only when the health was read: no health is not "nothing healthy".
+        if health:
+            resolved["backend_health"] = {
+                state: sum(group[state] for group in health) for state in ("healthy", "unhealthy", "unknown")
+            }
+            resolved["backend_health_groups"] = health
+        return resolved
+
+
+def load_balancer_kind(rule: dict) -> str:
+    """The load balancer a forwarding rule is the frontend of, by the names
+    Google gives them ("Global external Application Load Balancer",
+    "Internal passthrough Network Load Balancer"), from its scheme, scope
+    and target."""
+    scheme = _t(rule.get("loadBalancingScheme")).upper()
+    collection = parse_link(rule.get("target"))["collection"]
+    regional = bool(link_scope(rule.get("region")) or link_scope(rule.get("selfLink")))
+    if collection == "targetInstances":
+        return "Protocol forwarding"
+    if scheme == "INTERNAL_SELF_MANAGED":
+        return "Cloud Service Mesh forwarding rule"
+    family = _PROXY_FAMILIES.get(collection)
+    if family is None:
+        if scheme == "INTERNAL":
+            return "Internal passthrough Network Load Balancer"
+        if collection == "targetPools":
+            return "External passthrough Network Load Balancer (target pool)"
+        return "External passthrough Network Load Balancer"
+    if scheme == "EXTERNAL":
+        return f"Classic {family} Load Balancer"
+    if scheme == "EXTERNAL_MANAGED":
+        where = "Regional external" if regional else "Global external"
+    else:
+        where = "Regional internal" if regional else "Cross-region internal"
+    return f"{where} {family} Load Balancer"
+
+
+def _ports(rule: dict) -> list[str]:
+    """``["80"]``, ``["8080-8090"]``, ``["53", "443"]`` or ``["all"]``."""
+    if rule.get("allPorts"):
+        return ["all"]
+    found = _texts(rule.get("ports"))
+    port_range = _t(rule.get("portRange"))
+    if port_range:
+        low, _sep, high = port_range.partition("-")
+        found.append(low if not high or high == low else port_range)
+    return list(dict.fromkeys(found))
+
+
+def _single_port(ports: list[str]) -> int | None:
+    return int(ports[0]) if len(ports) == 1 and ports[0].isdigit() else None
+
+
+def forwarding_rule_resource(rule: dict, project: str, backends: Backends | None = None) -> dict | None:
+    """A forwarding rule: the frontend of a load balancer (``load_balancer``)
+    or a Private Service Connect endpoint (``psc_endpoint``: its target is a
+    service attachment or the Google APIs bundle). The forwarding rules of a
+    Classic VPN gateway are left out; the gateway is collected itself.
+
+    An internal address is an endpoint (a host of the network); an external
+    one is listed in ``public_ips``. A rule that names no network (an
+    external load balancer) is placed by the network of its backends."""
+    target = _t(rule.get("target"))
+    collection = parse_link(target)["collection"]
+    if collection == "targetVpnGateways":
+        return None
+    psc = target in _GOOGLE_API_BUNDLES or collection == "serviceAttachments"
+    resource_type = PSC_ENDPOINT_TYPE if psc else LOAD_BALANCER_TYPE
+    region = link_scope(rule.get("region")) or link_scope(rule.get("selfLink"))
+    uid, owner, name = _own_uid(rule, resource_type, project, region)
+    if not name:
+        return None
+    backends = backends or Backends(project)
+    resolved = {} if psc else backends.resolve(rule)
+    subnet_id = _rid_link(rule.get("subnetwork"), project, "subnet")
+    network_id = (
+        _rid_link(rule.get("network"), project, "vpc")
+        or backends.subnet_networks.get(subnet_id, "")
+        or next(iter(resolved.get("backend_network_ids") or []), "")
+    )
+    address = _t(rule.get("IPAddress"))
+    scheme = _t(rule.get("loadBalancingScheme")).upper()
+    ports = _ports(rule)
+    common: dict[str, Any] = {
+        "project": owner,
+        "ip_address": address,
+        "ip_protocol": _t(rule.get("IPProtocol")),
+        "ip_version": _t(rule.get("ipVersion")),
+        "ports": ports,
+        "network_tier": _t(rule.get("networkTier")),
+        "description": _t(rule.get("description")),
+    }
+    if psc:
+        target_rid = "" if target in _GOOGLE_API_BUNDLES else _rid_link(target, project, SERVICE_ATTACHMENT_TYPE)
+        return service_record(
+            PROVIDER,
+            uid,
+            PSC_ENDPOINT_TYPE,
+            rid_of(uid),
+            name=name,
+            region=region or "global",
+            status=_t(rule.get("pscConnectionStatus")) or "active",
+            kind="Private Service Connect endpoint",
+            vpc_id=network_id,
+            subnet_ids=[subnet_id] if subnet_id else [],
+            endpoints=[endpoint("Private Service Connect", _t(rule.get("serviceName")), None, [address])],
+            psc_target=_GOOGLE_API_BUNDLES.get(target) or target_rid or target,
+            psc_target_id=target_rid,
+            psc_connection_status=_t(rule.get("pscConnectionStatus")),
+            psc_connection_id=_t(rule.get("pscConnectionId")),
+            **common,
+        )
+    external = scheme in _EXTERNAL_SCHEMES
+    return service_record(
+        PROVIDER,
+        uid,
+        LOAD_BALANCER_TYPE,
+        rid_of(uid),
+        name=name,
+        region=region or "global",
+        status="active",
+        kind=load_balancer_kind(rule),
+        vpc_id=network_id,
+        subnet_ids=[subnet_id] if subnet_id else [],
+        endpoints=[]
+        if external
+        else [endpoint("Frontend", _t(rule.get("serviceName")), _single_port(ports), [address])],
+        public_ips=[address] if external and address else [],
+        load_balancing_scheme=scheme,
+        target=link_name(target),
+        target_type=collection,
+        global_access=bool(rule.get("allowGlobalAccess")),
+        **resolved,
+        **common,
+    )
+
+
+def service_attachment_resource(
+    attachment: dict, project: str, rule_networks: dict[str, str] | None = None, backends: Backends | None = None
+) -> dict | None:
+    """The producer side of Private Service Connect: a service attachment
+    publishes a load balancer (its target forwarding rule) to consumers in
+    other networks through its NAT subnets. ``rule_networks`` maps the
+    ``link_key`` of a forwarding rule to its network, which places the
+    attachment; else its NAT subnets do."""
+    region = link_scope(attachment.get("region")) or link_scope(attachment.get("selfLink"))
+    uid, owner, name = _own_uid(attachment, SERVICE_ATTACHMENT_TYPE, project, region)
+    if not name:
+        return None
+    nat_subnets = [s for s in (_rid_link(link, project, "subnet") for link in _list(attachment.get("natSubnets"))) if s]
+    target = _t(attachment.get("targetService"))
+    subnet_networks = backends.subnet_networks if backends else {}
+    network_id = (rule_networks or {}).get(link_key(target, project), "") or next(
+        (subnet_networks[s] for s in nat_subnets if s in subnet_networks), ""
+    )
+    connected = [c for c in _list(attachment.get("connectedEndpoints")) if isinstance(c, dict)]
+    statuses = [_t(c.get("status")).upper() for c in connected]
+    return service_record(
+        PROVIDER,
+        uid,
+        SERVICE_ATTACHMENT_TYPE,
+        rid_of(uid),
+        name=name,
+        region=region,
+        status="active",
+        kind="Private Service Connect service attachment",
+        vpc_id=network_id,
+        subnet_ids=nat_subnets,
+        endpoints=[endpoint("Domain", domain) for domain in _texts(attachment.get("domainNames"))],
+        project=owner,
+        target_service=link_name(target),
+        target_service_id=_rid_link(target, project, LOAD_BALANCER_TYPE),
+        connection_preference=_t(attachment.get("connectionPreference")),
+        nat_subnets=[s.rsplit(":", 1)[-1] for s in nat_subnets],
+        connected_endpoints=statuses.count("ACCEPTED"),
+        pending_endpoints=statuses.count("PENDING"),
+        consumer_networks=_texts([_rid_link(c.get("consumerNetwork"), project, "vpc") for c in connected]),
+        enable_proxy_protocol=bool(attachment.get("enableProxyProtocol")),
+        description=_t(attachment.get("description")),
+    )
+
+
+# ── Cloud SQL and Memorystore for Redis ──────────────────────────────────────
+
+# Cloud SQL engine (the part of ``databaseVersion`` before the first "_") -> its port.
+_SQL_PORTS = {"MYSQL": 3306, "POSTGRES": 5432, "SQLSERVER": 1433}
+
+
+def _version(value: Any) -> tuple[str, str]:
+    """``POSTGRES_15`` -> ``("POSTGRES", "15")``, ``MYSQL_8_0`` -> ``("MYSQL", "8.0")``,
+    ``SQLSERVER_2019_STANDARD`` -> ``("SQLSERVER", "2019 STANDARD")``."""
+    engine, _sep, rest = _t(value).partition("_")
+    return engine, rest.replace("_", " " if engine == "SQLSERVER" else ".")
+
+
+def cloud_sql_resource(instance: dict, project: str) -> dict | None:
+    """A Cloud SQL instance (``sqladmin`` v1 ``instances.list``): placed in
+    the VPC network its private IP is on (``privateNetwork``); its PRIVATE
+    address is a host of that network, its PRIMARY (public) one is listed,
+    and its OUTGOING one is kept as detail. An instance reached over
+    Private Service Connect only has no network of its own: its consumers'
+    endpoints are collected as Private Service Connect endpoints."""
+    name = _t(instance.get("name"))
+    if not name:
+        return None
+    owner = _t(instance.get("project")) or project
+    region = _t(instance.get("region"))
+    uid = f"gcp:{CLOUD_SQL_TYPE}:{owner}:{region}:{name}" if region else f"gcp:{CLOUD_SQL_TYPE}:{owner}:{name}"
+    ip_config = _get(instance, "settings", "ipConfiguration") or {}
+    addresses: dict[str, list[str]] = {}
+    for item in _list(instance.get("ipAddresses")):
+        if isinstance(item, dict) and _t(item.get("ipAddress")):
+            addresses.setdefault(_t(item.get("type")).upper(), []).append(_t(item.get("ipAddress")))
+    engine, version = _version(instance.get("databaseVersion"))
+    port = _SQL_PORTS.get(engine)
+    return service_record(
+        PROVIDER,
+        uid,
+        CLOUD_SQL_TYPE,
+        rid_of(uid),
+        name=name,
+        region=region,
+        status=_t(instance.get("state")),
+        kind="Cloud SQL instance",
+        engine=engine.lower(),
+        engine_version=version,
+        vpc_id=_rid_link(_get(ip_config, "privateNetwork"), owner, "vpc"),
+        endpoints=[endpoint("Private IP", _t(instance.get("dnsName")), port, addresses.get("PRIVATE", []))],
+        public_ips=addresses.get("PRIMARY", []),
+        project=owner,
+        database_version=_t(instance.get("databaseVersion")),
+        tier=_t(_get(instance, "settings", "tier")),
+        availability_type=_t(_get(instance, "settings", "availabilityType")),
+        instance_type=_t(instance.get("instanceType")),
+        zone=_t(instance.get("gceZone")),
+        connection_name=_t(instance.get("connectionName")),
+        outgoing_ips=addresses.get("OUTGOING", []),
+        public_ip_enabled=bool(_get(ip_config, "ipv4Enabled")),
+        psc_enabled=bool(_get(ip_config, "pscConfig", "pscEnabled")),
+        psc_service_attachment=_t(instance.get("pscServiceAttachmentLink")),
+    )
+
+
+def _location_name(name: Any) -> tuple[str, str, str]:
+    """``projects/P/locations/L/instances/N`` -> ``("P", "L", "N")``."""
+    parts = _t(name).split("/")
+    found = {parts[i]: parts[i + 1] for i in range(0, len(parts) - 1, 2)}
+    return found.get("projects", ""), found.get("locations", ""), found.get("instances", "")
+
+
+def memorystore_redis_resource(instance: dict, project: str) -> dict | None:
+    """A Memorystore for Redis instance (``redis`` v1
+    ``projects.locations.instances.list``): placed in its authorized
+    network; its primary and read endpoints are hosts of that network."""
+    owner, region, name = _location_name(instance.get("name"))
+    if not name:
+        return None
+    owner = owner or project
+    kind = MEMORYSTORE_REDIS_TYPE
+    uid = f"gcp:{kind}:{owner}:{region}:{name}" if region else f"gcp:{kind}:{owner}:{name}"
+    _engine, version = _version(instance.get("redisVersion"))
+    return service_record(
+        PROVIDER,
+        uid,
+        MEMORYSTORE_REDIS_TYPE,
+        rid_of(uid),
+        name=name,
+        region=region,
+        status=_t(instance.get("state")),
+        kind="Memorystore for Redis",
+        engine="redis",
+        engine_version=version,
+        vpc_id=_rid_link(instance.get("authorizedNetwork"), owner, "vpc"),
+        endpoints=[
+            endpoint("Primary", "", instance.get("port"), [_t(instance.get("host"))]),
+            endpoint("Read endpoint", "", instance.get("readEndpointPort"), [_t(instance.get("readEndpoint"))]),
+        ],
+        project=owner,
+        display_name=_t(instance.get("displayName")),
+        tier=_t(instance.get("tier")),
+        connect_mode=_t(instance.get("connectMode")),
+        memory_size_gb=instance.get("memorySizeGb"),
+        reserved_ip_range=_t(instance.get("reservedIpRange")),
+        zone=_t(instance.get("currentLocationId")) or _t(instance.get("locationId")),
+        replica_count=instance.get("replicaCount"),
+        transit_encryption_mode=_t(instance.get("transitEncryptionMode")),
+    )
+
+
 # ── A whole discovery ────────────────────────────────────────────────────────
 
 
@@ -1041,10 +1507,26 @@ def assemble(
     interconnects: Any = (),
     instances: Any = (),
     network_firewall_policies: Any = (),
+    forwarding_rules: Any = (),
+    global_forwarding_rules: Any = (),
+    backend_services: Any = (),
+    url_maps: Any = (),
+    target_proxies: Any = (),
+    target_pools: Any = (),
+    instance_groups: Any = (),
+    network_endpoint_groups: Any = (),
+    service_attachments: Any = (),
+    backend_health: Any = (),
+    cloud_sql_instances: Any = (),
+    memorystore_redis_instances: Any = (),
 ) -> tuple[list[dict], list[dict]]:
     """``(resources, connections)`` of one project from the items each list
     call returned. ``routers`` holds ``(router, status)`` pairs, ``status``
-    being the ``result`` of ``routers.getRouterStatus`` or ``None``."""
+    being the ``result`` of ``routers.getRouterStatus`` or ``None``.
+    ``target_proxies`` holds the HTTP, HTTPS, TCP and SSL target proxies;
+    ``backend_health`` the ``getHealth`` answer of each backend group
+    (``backend_health_table``)."""
+    subnetworks = list(subnetworks)
     resources: list[dict] = []
     connections: list[dict] = []
 
@@ -1082,4 +1564,28 @@ def assemble(
         add(instance_resource(instance, project))
     for policy in network_firewall_policies:
         add(network_firewall_policy_resource(policy, project))
+    backends = Backends(
+        project,
+        backend_services=backend_services,
+        url_maps=url_maps,
+        target_proxies=target_proxies,
+        target_pools=target_pools,
+        instance_groups=instance_groups,
+        network_endpoint_groups=network_endpoint_groups,
+        subnetworks=subnetworks,
+        backend_health=backend_health,
+    )
+    # Forwarding rule -> its network, which places a service attachment.
+    rule_networks: dict[str, str] = {}
+    for rule in [*forwarding_rules, *global_forwarding_rules]:
+        record = forwarding_rule_resource(rule, project, backends)
+        add(record)
+        if record and record["metadata"]["vpc_id"]:
+            rule_networks[link_key(rule.get("selfLink"), project)] = record["metadata"]["vpc_id"]
+    for attachment in service_attachments:
+        add(service_attachment_resource(attachment, project, rule_networks, backends))
+    for instance in cloud_sql_instances:
+        add(cloud_sql_resource(instance, project))
+    for instance in memorystore_redis_instances:
+        add(memorystore_redis_resource(instance, project))
     return resources, connections

@@ -42,6 +42,7 @@ MODULES = (
     "netcontrol/integrations/azure/reachability.py",
     "netcontrol/integrations/cato/__init__.py",
     "netcontrol/integrations/cato/network_rules.py",
+    "netcontrol/integrations/cloud_services.py",
     "netcontrol/integrations/gcp/__init__.py",
     "netcontrol/integrations/gcp/normalize.py",
     "netcontrol/integrations/gcp/reachability.py",
@@ -56,6 +57,7 @@ MODULES = (
     "netcontrol/integrations/pathtrace/model.py",
     "netcontrol/integrations/pathtrace/offline.py",
     "netcontrol/integrations/pathtrace/ports.py",
+    "netcontrol/integrations/pathtrace/services.py",
 )
 
 # Cloud provider -> the routes and filtering rules engine Path Mode asks.

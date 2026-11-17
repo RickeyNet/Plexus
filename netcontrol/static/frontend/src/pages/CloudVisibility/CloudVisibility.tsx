@@ -45,7 +45,7 @@ function tabHelp(tab: Tab, provider: string): { title: string; text: string } {
       return {
         title: capitalize(terms.flowLogs),
         text: all
-          ? 'VPC Flow Logs from CloudWatch Logs (AWS) and Cloud Logging (GCP), NSG flow logs from a storage account (Azure): top talkers, top conversations, denied flows. Narrow them with the provider and account filters beside the tabs.'
+          ? 'VPC Flow Logs from CloudWatch Logs (AWS) and Cloud Logging (GCP), VNet or NSG flow logs from a storage account (Azure): top talkers, top conversations, denied flows. Narrow them with the provider and account filters beside the tabs.'
           : `${terms.flowLogs} read from ${terms.flowSource}: top talkers, top conversations, denied flows. Narrow them with the provider and ${terms.scope} filters beside the tabs.`,
       };
     case 'traffic':

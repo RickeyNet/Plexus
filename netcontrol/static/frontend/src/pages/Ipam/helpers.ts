@@ -1,5 +1,6 @@
 import type { IpamSubnet } from '@/api/ipam';
 import { type CustomDataFilterValue, isEmptyFilter, matchesCustomData } from '@/lib/customData';
+import { networksOverlap, parseIpNetwork } from '@/lib/ipNetwork';
 
 export function formatSubnetPreview(item: IpamSubnet): string {
   const parts: string[] = [];
@@ -120,4 +121,46 @@ export function validateConnectionForm(values: {
 export function filterSubnetsByCustomData(subnets: IpamSubnet[], filter: CustomDataFilterValue): IpamSubnet[] {
   if (isEmptyFilter(filter)) return subnets;
   return subnets.filter((subnet) => matchesCustomData(subnet, filter));
+}
+
+/** The text a subnet search matches against: the range, VRF, VLANs, groups, sources, names in the previews and tags. */
+function subnetSearchText(item: IpamSubnet): string {
+  const parts: Array<string | number | null | undefined> = [
+    item.subnet,
+    item.vrf_name,
+    ...(item.vlan_ids ?? []).map((v) => `vlan ${v}`),
+    ...(item.group_names ?? []),
+    ...(item.source_types ?? []),
+    ...(item.external_source_names_preview ?? []),
+    ...(item.hostnames_preview ?? []),
+    ...(item.cloud_resource_names_preview ?? []),
+    ...(item.topology_sites_preview ?? []),
+    ...(item.topology_providers ?? []).map(providerLabel),
+    ...(item.tags ?? []).map((t) => t.name),
+  ];
+  return parts.filter((p) => p != null && p !== '').join('\n').toLowerCase();
+}
+
+/**
+ * The subnets a search box query picks out. An address ("192.0.2.10") finds
+ * the subnets that contain it; a range ("192.0.2.0/23") the subnets inside
+ * or around it; anything else is matched as words, each of which must appear
+ * in the subnet, VRF, VLANs, groups, sources, previewed names or tags.
+ * Hostnames beyond a subnet's preview are not searched.
+ */
+export function searchSubnets(subnets: IpamSubnet[], query: string): IpamSubnet[] {
+  const text = query.trim();
+  if (!text) return subnets;
+  const wanted = parseIpNetwork(text);
+  if (wanted) {
+    return subnets.filter((item) => {
+      const net = parseIpNetwork(item.subnet);
+      return net !== null && networksOverlap(net, wanted);
+    });
+  }
+  const words = text.toLowerCase().split(/\s+/);
+  return subnets.filter((item) => {
+    const haystack = subnetSearchText(item);
+    return words.every((w) => haystack.includes(w));
+  });
 }

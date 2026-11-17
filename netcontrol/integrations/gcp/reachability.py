@@ -98,7 +98,7 @@ from netcontrol.integrations.aws.reachability import (
     is_public_net,
     peer_cidr_cover,
 )
-from netcontrol.integrations.gcp.normalize import DEFAULT_INTERNET_GATEWAY, _meta, _rid, _short, _text
+from netcontrol.integrations.gcp.normalize import DEFAULT_INTERNET_GATEWAY, SERVICE_TYPES, _meta, _rid, _short, _text
 from netcontrol.integrations.pathtrace import ports as port_sets
 
 _Network = ipaddress.IPv4Network | ipaddress.IPv6Network
@@ -1087,6 +1087,11 @@ class Reachability:
         index ``locate`` reads, for the external IPs of the instances
         (``pathtrace.cloud.public_addresses``)."""
         return self._address_owner
+
+    def services(self) -> list[dict]:
+        """The indexed rows of the managed services (``normalize.SERVICE_TYPES``),
+        for ``pathtrace.services``."""
+        return [row for kind in SERVICE_TYPES for row in self._by_type.get(kind, {}).values()]
 
     def firewall(
         self, place: dict, peer: dict, outbound: bool, protocol: str, ports: tuple[int, int] | None

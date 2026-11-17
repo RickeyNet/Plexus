@@ -9,7 +9,9 @@ one not), a Dedicated Interconnect with its VLAN attachment, a Cloud NAT
 that serves the management subnet, a Meraki vMX-style appliance that a
 static route hands branch traffic to, a production network peered to the
 hub whose database subnet is guarded by firewall rules, and a peering to a
-network of another project that is not collected.
+network of another project that is not collected. Load balancers and
+Private Service Connect (``_load_balancing``) are listed in the networks'
+details.
 Addresses are from the documentation ranges.
 """
 
@@ -202,6 +204,8 @@ def build_sample() -> tuple[list[dict], list[dict]]:
             secondary=[{"rangeName": "pods", "ipCidrRange": "10.241.128.0/20"}],
         ),
         _subnet("db", "prod-vpc", "10.241.20.0/24", google_access=True),
+        # The NAT range of the database service attachment.
+        {**_subnet("psc-nat", "prod-vpc", "10.241.30.0/24"), "purpose": "PRIVATE_SERVICE_CONNECT"},
     ]
     vmx = _link(f"zones/{_ZONE}/instances/vmx-hub-1")
     routes = [
@@ -396,6 +400,7 @@ def build_sample() -> tuple[list[dict], list[dict]]:
         ),
         _instance("db-1", "prod-vpc", "db", "10.241.20.31", tags=["db"]),
     ]
+    lb = _load_balancing()
     return assemble(
         PROJECT,
         networks=networks,
@@ -409,4 +414,192 @@ def build_sample() -> tuple[list[dict], list[dict]]:
         interconnect_attachments=interconnect_attachments,
         interconnects=interconnects,
         instances=instances,
+        **lb,
     )
+
+
+def _load_balancing() -> dict[str, list[dict]]:
+    """The load balancers and Private Service Connect of the demo, as the
+    ``assemble`` arguments: an internal passthrough Network Load Balancer in
+    front of the database, published to the hub over a service attachment
+    that a Private Service Connect endpoint in the hub connects to; a
+    global external Application Load Balancer in front of the web tier
+    (its network is known from its instance group only); and an endpoint
+    for Google APIs in the hub. The health of the database backends; a
+    Cloud SQL instance and a Memorystore for Redis instance on private
+    service access in the production network."""
+    prod = _network("prod-vpc")
+    ilb = _regional("forwardingRules", "ilb-db")
+    attachment = _regional("serviceAttachments", "sa-db")
+    return {
+        "forwarding_rules": [
+            {
+                "name": "ilb-db",
+                "selfLink": ilb,
+                "region": _link(f"regions/{_REGION}"),
+                "IPAddress": "10.241.20.100",
+                "IPProtocol": "TCP",
+                "ports": ["5432"],
+                "loadBalancingScheme": "INTERNAL",
+                "network": prod,
+                "subnetwork": _regional("subnetworks", "db"),
+                "backendService": _regional("backendServices", "bs-db"),
+                "serviceLabel": "db",
+                "serviceName": f"db.ilb-db.il4.{_REGION}.lb.{PROJECT}.internal",
+                "allowGlobalAccess": True,
+                "networkTier": "PREMIUM",
+            },
+            {
+                "name": "psc-db",
+                "selfLink": _regional("forwardingRules", "psc-db"),
+                "region": _link(f"regions/{_REGION}"),
+                "IPAddress": "10.240.1.50",
+                "network": _network("hub-vpc"),
+                "subnetwork": _regional("subnetworks", "hub-mgmt"),
+                "target": attachment,
+                "loadBalancingScheme": "",
+                "pscConnectionStatus": "ACCEPTED",
+                "pscConnectionId": "71234567890123457",
+            },
+        ],
+        "global_forwarding_rules": [
+            {
+                "name": "web-https",
+                "selfLink": _link("global/forwardingRules/web-https"),
+                "IPAddress": "203.0.113.80",
+                "IPProtocol": "TCP",
+                "portRange": "443-443",
+                "loadBalancingScheme": "EXTERNAL_MANAGED",
+                "target": _link("global/targetHttpsProxies/web-https-proxy"),
+                "networkTier": "PREMIUM",
+            },
+            {
+                "name": "pscgoogleapis",
+                "selfLink": _link("global/forwardingRules/pscgoogleapis"),
+                "IPAddress": "10.240.9.5",
+                "network": _network("hub-vpc"),
+                "target": "all-apis",
+                "loadBalancingScheme": "",
+                "pscConnectionStatus": "ACCEPTED",
+            },
+        ],
+        "target_proxies": [
+            {
+                "name": "web-https-proxy",
+                "selfLink": _link("global/targetHttpsProxies/web-https-proxy"),
+                "urlMap": _link("global/urlMaps/web-map"),
+            }
+        ],
+        "url_maps": [
+            {
+                "name": "web-map",
+                "selfLink": _link("global/urlMaps/web-map"),
+                "defaultService": _link("global/backendServices/bs-web"),
+            }
+        ],
+        "backend_services": [
+            {
+                "name": "bs-web",
+                "selfLink": _link("global/backendServices/bs-web"),
+                "protocol": "HTTPS",
+                "loadBalancingScheme": "EXTERNAL_MANAGED",
+                "backends": [{"group": _link(f"zones/{_ZONE}/instanceGroups/ig-web")}],
+            },
+            {
+                "name": "bs-db",
+                "selfLink": _regional("backendServices", "bs-db"),
+                "region": _link(f"regions/{_REGION}"),
+                "protocol": "TCP",
+                "loadBalancingScheme": "INTERNAL",
+                "network": prod,
+                "backends": [{"group": _link(f"zones/{_ZONE}/instanceGroups/ig-db")}],
+            },
+        ],
+        "instance_groups": [
+            {
+                "name": name,
+                "selfLink": _link(f"zones/{_ZONE}/instanceGroups/{name}"),
+                "network": prod,
+                "subnetwork": _regional("subnetworks", subnet),
+                "size": 1,
+            }
+            for name, subnet in (("ig-web", "app"), ("ig-db", "db"))
+        ],
+        "backend_health": [
+            {
+                "backendService": _regional("backendServices", "bs-db"),
+                "group": _link(f"zones/{_ZONE}/instanceGroups/ig-db"),
+                "healthStatus": [
+                    {
+                        "instance": _link(f"zones/{_ZONE}/instances/db-1"),
+                        "ipAddress": "10.241.20.31",
+                        "port": 5432,
+                        "healthState": "HEALTHY",
+                    }
+                ],
+            }
+        ],
+        "cloud_sql_instances": [
+            {
+                "name": "orders-sql",
+                "project": PROJECT,
+                "region": _REGION,
+                "gceZone": _ZONE,
+                "databaseVersion": "POSTGRES_16",
+                "state": "RUNNABLE",
+                "instanceType": "CLOUD_SQL_INSTANCE",
+                "connectionName": f"{PROJECT}:{_REGION}:orders-sql",
+                "ipAddresses": [
+                    {"type": "PRIVATE", "ipAddress": "10.241.200.3"},
+                    {"type": "OUTGOING", "ipAddress": "203.0.113.85"},
+                ],
+                "settings": {
+                    "tier": "db-custom-2-7680",
+                    "availabilityType": "REGIONAL",
+                    "ipConfiguration": {
+                        "ipv4Enabled": False,
+                        "privateNetwork": f"projects/{PROJECT}/global/networks/prod-vpc",
+                        "pscConfig": {"pscEnabled": False},
+                    },
+                },
+            }
+        ],
+        "memorystore_redis_instances": [
+            {
+                "name": f"projects/{PROJECT}/locations/{_REGION}/instances/sessions-redis",
+                "locationId": _ZONE,
+                "currentLocationId": _ZONE,
+                "redisVersion": "REDIS_7_2",
+                "host": "10.241.201.4",
+                "port": 6379,
+                "readEndpoint": "10.241.201.5",
+                "readEndpointPort": 6379,
+                "authorizedNetwork": f"projects/{PROJECT}/global/networks/prod-vpc",
+                "connectMode": "PRIVATE_SERVICE_ACCESS",
+                "reservedIpRange": "10.241.201.0/29",
+                "state": "READY",
+                "tier": "STANDARD_HA",
+                "memorySizeGb": 5,
+                "replicaCount": 1,
+            }
+        ],
+        "service_attachments": [
+            {
+                "name": "sa-db",
+                "selfLink": attachment,
+                "region": _link(f"regions/{_REGION}"),
+                "targetService": ilb,
+                "natSubnets": [_regional("subnetworks", "psc-nat")],
+                "connectionPreference": "ACCEPT_MANUAL",
+                "enableProxyProtocol": False,
+                "connectedEndpoints": [
+                    {
+                        "status": "ACCEPTED",
+                        "endpoint": _regional("forwardingRules", "psc-db"),
+                        "pscConnectionId": "71234567890123457",
+                        "consumerNetwork": _network("hub-vpc"),
+                    }
+                ],
+            }
+        ],
+    }

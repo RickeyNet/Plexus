@@ -225,6 +225,197 @@ def test_failed_cloud_connection_is_down():
     assert states == {"down"}
 
 
+# ── Cloud managed services ───────────────────────────────────────────────────
+
+_CLOUD_SAMPLES = {"aws": (build_aws, aws_sample), "azure": (build_azure, azure_sample), "gcp": (build_gcp, gcp_sample)}
+
+
+def _services_with(provider: str, change) -> dict[str, availability.EntityState]:
+    """The service entities of a cloud sample after ``change(resources)``."""
+    build, sample = _CLOUD_SAMPLES[provider]
+
+    def changed():
+        resources, connections = sample()
+        change(resources)
+        return resources, connections
+
+    snapshot = _cloud(build, changed)
+    return {
+        e.entity_id: e for e in availability.extract_entity_states(provider, -1, snapshot) if e.entity_type == "service"
+    }
+
+
+def _set(resource_type: str, *, name: str = "", status: str | None = None, **meta):
+    def change(resources):
+        found = [r for r in resources if r["resource_type"] == resource_type and (not name or r["name"] == name)]
+        assert found, (resource_type, name)
+        for r in found:
+            if status is not None:
+                r["status"] = status
+            r["metadata"].update(meta)
+
+    return change
+
+
+def _state_of(provider: str, change, resource_type: str, name: str = "") -> availability.EntityState:
+    services = _services_with(provider, change)
+    return next(e for e in services.values() if e.meta["type"] == resource_type and (not name or e.name == name))
+
+
+@pytest.mark.parametrize("provider", sorted(_CLOUD_SAMPLES))
+def test_cloud_services_are_tracked_with_their_network(provider):
+    services = _services_with(provider, lambda resources: None)
+    assert services
+    for entity in services.values():
+        assert entity.state == "up" and entity.site and entity.model and entity.raw_status
+        assert entity.entity_id.startswith(f"{provider}:")
+    # A clean collection (no error, every network collected) proves a missing service is gone.
+    assert "service" in availability.clean_entity_types(provider, {"sites": [], "collection": {"errors": []}})
+
+
+@pytest.mark.parametrize(
+    ("raw", "state"),
+    [
+        ("active", "up"),
+        ("active_impaired", "degraded"),
+        ("failed", "down"),
+        ("provisioning", "unknown"),
+    ],
+)
+def test_aws_load_balancer_state(raw, state):
+    assert (
+        _state_of("aws", _set("load_balancer", name="core-api", status=raw), "load_balancer", "core-api").state == state
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw", "state"),
+    [
+        ("available", "up"),
+        ("backing-up", "up"),
+        ("modifying", "up"),
+        ("storage-full", "degraded"),
+        ("rebooting", "degraded"),
+        ("starting", "unknown"),
+        ("stopped", "down"),
+        ("failed", "down"),
+        ("inaccessible-encryption-credentials", "down"),
+    ],
+)
+def test_aws_database_state(raw, state):
+    assert _state_of("aws", _set("rds_db_instance", status=raw), "rds_db_instance").state == state
+
+
+def test_aws_classic_load_balancer_without_state_is_not_tracked():
+    services = _services_with("aws", _set("load_balancer", name="core-api", status=""))
+    assert not any(e.name == "core-api" for e in services.values())
+
+
+@pytest.mark.parametrize(
+    ("raw", "state"),
+    [("running", "up"), ("stopped", "down"), ("starting", "unknown"), ("stopping", "unknown")],
+)
+def test_azure_application_gateway_operational_state(raw, state):
+    assert _state_of("azure", _set("application_gateway", status=raw), "application_gateway").state == state
+
+
+@pytest.mark.parametrize(
+    ("raw", "state"),
+    [("succeeded", "up"), ("updating", "up"), ("deleting", "unknown"), ("failed", "down")],
+)
+def test_azure_provisioning_state(raw, state):
+    assert _state_of("azure", _set("load_balancer", status=raw), "load_balancer").state == state
+
+
+@pytest.mark.parametrize(
+    ("connection", "state"),
+    [("Approved", "up"), ("Pending", "unknown"), ("Rejected", "down"), ("Disconnected", "down")],
+)
+def test_azure_private_endpoint_connection_state(connection, state):
+    entity = _state_of("azure", _set("private_endpoint", connection_state=connection), "private_endpoint")
+    assert entity.state == state
+    assert entity.raw_status == f"succeeded; connection {connection.lower()}"
+    # A failed provisioning is down whatever the connection says.
+    failed = _set("private_endpoint", status="failed", connection_state="Approved")
+    assert _state_of("azure", failed, "private_endpoint").state == "down"
+
+
+@pytest.mark.parametrize(
+    ("raw", "state"),
+    [
+        ("accepted", "up"),
+        ("pending", "unknown"),
+        ("needs_attention", "degraded"),
+        ("rejected", "down"),
+        ("closed", "down"),
+    ],
+)
+def test_gcp_psc_endpoint_state(raw, state):
+    change = _set("psc_endpoint", name="psc-db", status=raw, psc_connection_status=raw.upper())
+    assert _state_of("gcp", change, "psc_endpoint", "psc-db").state == state
+
+
+@pytest.mark.parametrize(
+    ("health", "state", "raw"),
+    [
+        ({"healthy": 3, "unhealthy": 0}, "up", "active; 3/3 backends healthy"),
+        ({"healthy": 2, "unhealthy": 1}, "degraded", "active; 2/3 backends healthy"),
+        ({"healthy": 0, "unhealthy": 2}, "down", "active; 0/2 backends healthy"),
+        ({"healthy": 0, "unhealthy": 0}, "up", "active"),
+    ],
+)
+def test_gcp_load_balancer_backend_health(health, state, raw):
+    entity = _state_of("gcp", _set("load_balancer", name="ilb-db", backend_health=health), "load_balancer", "ilb-db")
+    assert (entity.state, entity.raw_status) == (state, raw)
+
+
+@pytest.mark.parametrize(
+    ("raw", "state"),
+    [
+        ("RUNNABLE", "up"),
+        ("ONLINE_MAINTENANCE", "up"),
+        ("PENDING_CREATE", "unknown"),
+        ("SUSPENDED", "down"),
+        ("FAILED", "down"),
+        ("READY", "up"),
+        ("REPAIRING", "degraded"),
+    ],
+)
+def test_gcp_database_and_cache_states(raw, state):
+    from netcontrol.integrations.cloud_services import service_status
+    from netcontrol.integrations.gcp.normalize import _status as gcp_status
+
+    assert availability.node_state(service_status(raw, gcp_status)) == state
+
+
+def test_backend_health_alone_makes_a_stateless_service_tracked():
+    change = _set("load_balancer", name="core-api", status="", backend_health={"healthy": 0, "unhealthy": 4})
+    entity = _state_of("aws", change, "load_balancer", "core-api")
+    assert (entity.state, entity.raw_status) == ("down", "0/4 backends healthy")
+
+
+async def test_cloud_service_going_down_alerts_and_is_removed_when_gone(notifications):
+    base = _cloud(build_aws, aws_sample)
+    await tracking.record_snapshot_states("aws", 13, base, now=T0)
+    lb = next(s for s in base["services"] if s["name"] == "core-api")
+
+    down = copy.deepcopy(base)
+    next(s for s in down["services"] if s["id"] == lb["id"])["status"] = "offline"
+    result = await tracking.record_snapshot_states("aws", 13, down, now=T1)
+    assert [(t["entity_type"], t["new_state"]) for t in result["transitions"] if not t["baseline"]] == [
+        ("service", "down")
+    ]
+    assert len(notifications) == 1
+    assert notifications[0]["dedup_key"] == f"topo:aws:13:service:{lb['id']}"
+    assert notifications[0]["message"].startswith("Service core-api at prod-core-vpc")
+
+    gone = copy.deepcopy(base)
+    gone["services"] = [s for s in gone["services"] if s["id"] != lb["id"]]
+    await tracking.record_snapshot_states("aws", 13, gone, now=T2)
+    states = {s["entity_id"] for s in await db_module.list_topology_entity_states("aws", 13, "service")}
+    assert lb["id"] not in states and len(states) == len(gone["services"])
+
+
 # ── Uptime math ──────────────────────────────────────────────────────────────
 
 
@@ -693,6 +884,7 @@ def test_api_validates_parameters(api):
     client, _headers = api
     assert client.get("/api/availability/topology/summary?provider=bogus").status_code == 422
     assert client.get("/api/availability/topology/summary?entity_type=vpc").status_code == 422
+    assert client.get("/api/availability/topology/summary?entity_type=service").status_code == 200
     assert client.get("/api/availability/topology/summary?days=0").status_code == 422
     assert client.get("/api/availability/topology/outages?limit=0").status_code == 422
     assert client.get("/api/availability/topology/transitions?days=366").status_code == 422

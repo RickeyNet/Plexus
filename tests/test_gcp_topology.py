@@ -263,6 +263,11 @@ class _Collection:
     def getRouterStatus(self, project, region, router):
         return _Request({"result": self._status or {}}, False)
 
+    def getHealth(self, project, backendService, body, region=None):
+        # ``status`` maps a backend group link to its healthStatus entries.
+        self.health_asked = [*getattr(self, "health_asked", []), (region, backendService, body["group"])]
+        return _Request({"healthStatus": (self._status or {}).get(body["group"], [])}, self._deny)
+
 
 def _compute(**override):
     hub = _link("global/networks/hub")
@@ -331,6 +336,23 @@ def _compute(**override):
         "interconnects": _Collection(),
         "instances": _Collection(deny=True),
         "networkFirewallPolicies": _Collection(),
+        **{
+            name: _Collection()
+            for name in (
+                "forwardingRules",
+                "globalForwardingRules",
+                "backendServices",
+                "urlMaps",
+                "targetHttpProxies",
+                "targetHttpsProxies",
+                "targetTcpProxies",
+                "targetSslProxies",
+                "targetPools",
+                "instanceGroups",
+                "networkEndpointGroups",
+                "serviceAttachments",
+            )
+        },
     }
     collections.update(override)
     return NS(**{name: (lambda c=c: c) for name, c in collections.items()})
@@ -350,7 +372,11 @@ def test_live_collector_reads_the_network_and_skips_a_denied_section():
     [gateway] = by_type["ha_vpn_gateway"]
     assert gateway["metadata"]["public_ips"] == ["34.9.9.9"] and gateway["metadata"]["network_id"] == f"{PROJECT}:hub"
     [warning] = by_type["collection_warning"]
-    assert warning["metadata"] == {"section": "instances", "error": "forbidden (HTTP 403)"}
+    assert warning["metadata"] == {
+        "section": "instances",
+        "error": "forbidden (HTTP 403)",
+        "permissions": ["compute.instances.list"],
+    }
     kinds = {(c["connection_type"], c["target_resource_uid"]) for c in connections}
     assert ("vpc_peering", f"gcp:vpc:{PROJECT}:spoke") in kinds
     assert ("vpn_gateway_attachment", f"gcp:ha_vpn_gateway:{PROJECT}:us-central1:ha") in kinds
@@ -814,3 +840,448 @@ def test_api_gcp_sample_and_sources(api):
     prod = sources[f"gcp:{account['id']}"]
     assert (prod["status"], prod["can_collect"], prod["enabled"]) == ("never", True, True)
     assert "hunter2" not in api.get("/api/topology/sources").text
+
+
+# ── Load balancers and Private Service Connect ───────────────────────────────
+
+
+def _rule(name: str, scheme: str, target: str = "", region: str = "us-central1", **extra) -> dict:
+    scope = f"regions/{region}" if region else "global"
+    return {
+        "name": name,
+        "selfLink": _link(f"{scope}/forwardingRules/{name}"),
+        **({"region": _link(f"regions/{region}")} if region else {}),
+        "loadBalancingScheme": scheme,
+        **({"target": target} if target else {}),
+        **extra,
+    }
+
+
+def test_load_balancer_kind_follows_scheme_scope_and_target():
+    https = _link("global/targetHttpsProxies/p")
+    regional_http = _link("regions/us-central1/targetHttpProxies/p")
+    tcp = _link("global/targetTcpProxies/p")
+    cases = {
+        ("EXTERNAL_MANAGED", https, ""): "Global external Application Load Balancer",
+        ("EXTERNAL", https, ""): "Classic Application Load Balancer",
+        ("EXTERNAL_MANAGED", regional_http, "us-central1"): "Regional external Application Load Balancer",
+        ("INTERNAL_MANAGED", regional_http, "us-central1"): "Regional internal Application Load Balancer",
+        ("INTERNAL_MANAGED", https, ""): "Cross-region internal Application Load Balancer",
+        ("EXTERNAL", tcp, ""): "Classic proxy Network Load Balancer",
+        ("INTERNAL", "", "us-central1"): "Internal passthrough Network Load Balancer",
+        ("EXTERNAL", "", "us-central1"): "External passthrough Network Load Balancer",
+        (
+            "EXTERNAL",
+            _link("regions/us-central1/targetPools/tp"),
+            "us-central1",
+        ): "External passthrough Network Load Balancer (target pool)",
+        ("EXTERNAL", _link("zones/us-central1-a/targetInstances/ti"), "us-central1"): "Protocol forwarding",
+    }
+    for (scheme, target, region), kind in cases.items():
+        assert collect.load_balancer_kind(_rule("fr", scheme, target, region)) == kind, (scheme, target)
+
+
+def test_forwarding_rule_joins_its_proxy_url_map_backend_services_and_groups():
+    hub = _link("global/networks/hub")
+    backends = collect.Backends(
+        PROJECT,
+        target_proxies=[
+            {"selfLink": _link("global/targetHttpsProxies/web-proxy"), "urlMap": _link("global/urlMaps/web")}
+        ],
+        url_maps=[
+            {
+                "selfLink": _link("global/urlMaps/web"),
+                "defaultService": _link("global/backendServices/web"),
+                "pathMatchers": [{"pathRules": [{"service": _link("global/backendServices/api")}]}],
+            }
+        ],
+        backend_services=[
+            {
+                "selfLink": _link("global/backendServices/web"),
+                "protocol": "HTTPS",
+                "backends": [{"group": _link("zones/us-central1-a/instanceGroups/web")}],
+            },
+            {
+                "selfLink": _link("global/backendServices/api"),
+                "protocol": "HTTP",
+                "backends": [{"group": _link("zones/us-central1-b/networkEndpointGroups/api")}],
+            },
+        ],
+        instance_groups=[{"selfLink": _link("zones/us-central1-a/instanceGroups/web"), "network": hub}],
+        network_endpoint_groups=[{"selfLink": _link("zones/us-central1-b/networkEndpointGroups/api"), "network": hub}],
+    )
+    rule = _rule(
+        "web",
+        "EXTERNAL_MANAGED",
+        # A beta link names the same proxy as the v1 self link.
+        "https://compute.googleapis.com/compute/beta/projects/acme-net/global/targetHttpsProxies/web-proxy",
+        "",
+        IPAddress="203.0.113.10",
+        IPProtocol="TCP",
+        portRange="443-443",
+    )
+    record = collect.forwarding_rule_resource(rule, PROJECT, backends)
+    meta = record["metadata"]
+    assert record["resource_uid"] == f"gcp:load_balancer:{PROJECT}:web" and record["region"] == "global"
+    assert meta["kind"] == "Global external Application Load Balancer"
+    assert meta["url_map"] == "web" and meta["backend_services"] == ["web", "api"]
+    assert meta["backend_protocols"] == ["HTTPS", "HTTP"] and meta["backend_count"] == 2
+    # An external load balancer names no network: its backends place it.
+    assert meta["vpc_id"] == f"{PROJECT}:hub" and meta["subnet_ids"] == []
+    # Its address is public: listed, not a host of the network.
+    assert meta["public_ips"] == ["203.0.113.10"] and meta["endpoints"] == [] and meta["ports"] == ["443"]
+
+
+def test_internal_forwarding_rule_is_an_endpoint_of_its_subnet():
+    rule = _rule(
+        "ilb",
+        "INTERNAL",
+        IPAddress="10.0.0.50",
+        IPProtocol="TCP",
+        ports=["80", "443"],
+        network=_link("global/networks/hub"),
+        subnetwork=_link("regions/us-central1/subnetworks/mgmt"),
+        backendService=_link("regions/us-central1/backendServices/bs"),
+        serviceName="web.ilb.il4.us-central1.lb.acme-net.internal",
+    )
+    meta = collect.forwarding_rule_resource(rule, PROJECT)["metadata"]
+    assert meta["kind"] == "Internal passthrough Network Load Balancer"
+    assert meta["vpc_id"] == f"{PROJECT}:hub" and meta["subnet_ids"] == [f"{PROJECT}:us-central1:mgmt"]
+    # Two ports: no single port on the endpoint.
+    assert meta["endpoints"] == [
+        {"role": "Frontend", "dns_name": "web.ilb.il4.us-central1.lb.acme-net.internal", "ip_addresses": ["10.0.0.50"]}
+    ]
+    # The backend service was not collected: its name is still recorded.
+    assert meta["backend_services"] == ["bs"] and meta["backend_count"] == 0
+
+
+def test_psc_endpoints_service_attachments_and_vpn_forwarding_rules():
+    hub = _link("global/networks/hub")
+    google = collect.forwarding_rule_resource(
+        _rule("apis", "", "all-apis", "", IPAddress="10.0.9.5", network=hub, pscConnectionStatus="ACCEPTED"),
+        PROJECT,
+    )
+    assert google["resource_type"] == "psc_endpoint" and google["status"] == "accepted"
+    assert google["metadata"]["psc_target"] == "Google APIs (all-apis)" and google["metadata"]["psc_target_id"] == ""
+    producer = _link("regions/us-central1/serviceAttachments/sa", "producer-prj")
+    endpoint = collect.forwarding_rule_resource(
+        _rule("db", "", producer, IPAddress="10.0.0.60", network=hub, pscConnectionStatus="PENDING"), PROJECT
+    )
+    assert endpoint["metadata"]["kind"] == "Private Service Connect endpoint"
+    assert endpoint["metadata"]["psc_target_id"] == "producer-prj:us-central1:sa"
+    assert endpoint["metadata"]["endpoints"][0]["ip_addresses"] == ["10.0.0.60"]
+    # The ESP / IKE forwarding rules of a Classic VPN gateway are no load balancer.
+    vpn = _rule("vpn-esp", "EXTERNAL", _link("regions/us-central1/targetVpnGateways/classic"))
+    assert collect.forwarding_rule_resource(vpn, PROJECT) is None
+
+    resources, _ = collect.assemble(
+        PROJECT,
+        subnetworks=[
+            {
+                "name": "nat",
+                "selfLink": _link("regions/us-central1/subnetworks/nat"),
+                "region": _link("regions/us-central1"),
+                "network": hub,
+                "ipCidrRange": "10.0.30.0/24",
+                "purpose": "PRIVATE_SERVICE_CONNECT",
+            }
+        ],
+        service_attachments=[
+            {
+                "name": "sa",
+                "selfLink": _link("regions/us-central1/serviceAttachments/sa"),
+                "region": _link("regions/us-central1"),
+                # Not collected: the NAT subnet places the attachment.
+                "targetService": _link("regions/us-central1/forwardingRules/ilb"),
+                "natSubnets": [_link("regions/us-central1/subnetworks/nat")],
+                "connectionPreference": "ACCEPT_AUTOMATIC",
+                "connectedEndpoints": [
+                    {"status": "ACCEPTED", "consumerNetwork": _link("global/networks/c", "consumer-prj")},
+                    {"status": "PENDING", "consumerNetwork": _link("global/networks/d", "consumer-prj")},
+                ],
+            }
+        ],
+    )
+    [attachment] = [r for r in resources if r["resource_type"] == "service_attachment"]
+    meta = attachment["metadata"]
+    assert attachment["resource_uid"] == f"gcp:service_attachment:{PROJECT}:us-central1:sa"
+    assert meta["vpc_id"] == f"{PROJECT}:hub" and meta["nat_subnets"] == ["nat"]
+    assert meta["target_service_id"] == f"{PROJECT}:us-central1:ilb"
+    assert (meta["connected_endpoints"], meta["pending_endpoints"]) == (1, 1)
+    assert meta["consumer_networks"] == ["consumer-prj:c", "consumer-prj:d"]
+
+
+def test_live_collector_reads_load_balancers_and_names_the_permission_of_a_denied_section():
+    hub = _link("global/networks/hub")
+    group = _link("zones/us-central1-a/instanceGroups/ig")
+    health = _Collection(
+        status={
+            group: [
+                {"instance": "vm-1", "ipAddress": "10.0.0.11", "healthState": "HEALTHY"},
+                {"instance": "vm-2", "ipAddress": "10.0.0.12", "healthState": "UNHEALTHY"},
+                {"instance": "vm-3", "ipAddress": "10.0.0.13", "healthState": "DRAINING"},
+            ]
+        }
+    )
+    compute = _compute(
+        forwardingRules=_Collection(
+            aggregated={
+                "regions/us-central1": {
+                    "forwardingRules": [
+                        _rule(
+                            "ilb",
+                            "INTERNAL",
+                            IPAddress="10.0.0.50",
+                            network=hub,
+                            backendService=_link("regions/us-central1/backendServices/bs"),
+                        )
+                    ]
+                }
+            }
+        ),
+        backendServices=_Collection(
+            aggregated={
+                "regions/us-central1": {
+                    "backendServices": [
+                        {
+                            "selfLink": _link("regions/us-central1/backendServices/bs"),
+                            "protocol": "TCP",
+                            "backends": [{"group": _link("zones/us-central1-a/instanceGroups/ig")}],
+                        }
+                    ]
+                }
+            }
+        ),
+        targetSslProxies=_Collection(deny=True),
+        regionBackendServices=health,
+    )
+    resources, _ = collectors_module._collect_gcp_compute(compute, PROJECT)
+    [lb] = [r for r in resources if r["resource_type"] == "load_balancer"]
+    assert lb["metadata"]["backend_services"] == ["bs"] and lb["metadata"]["backend_count"] == 1
+    # One getHealth call per backend group, through the regional collection.
+    assert health.health_asked == [("us-central1", "bs", group)]
+    assert lb["metadata"]["backend_health"] == {"healthy": 1, "unhealthy": 1, "unknown": 1}
+    assert lb["metadata"]["backend_health_groups"] == [
+        {"backend_service": "bs", "group": "ig", "healthy": 1, "unhealthy": 1, "unknown": 1}
+    ]
+    warnings = {
+        r["metadata"]["section"]: r["metadata"] for r in resources if r["resource_type"] == "collection_warning"
+    }
+    assert set(warnings) == {"instances", "target_proxies"}
+    assert "compute.targetSslProxies.list" in warnings["target_proxies"]["permissions"]
+
+
+def test_backend_health_is_skipped_alone_when_denied_and_absent_without_it():
+    service = {
+        "selfLink": _link("global/backendServices/web"),
+        "backends": [{"group": _link("zones/us-central1-a/networkEndpointGroups/neg")}],
+    }
+    # Global backend services answer getHealth through backendServices, here denied.
+    compute = _compute(
+        backendServices=_DeniedHealth(service),
+        globalForwardingRules=_Collection(
+            [_rule("web", "INTERNAL_MANAGED", region="", backendService=service["selfLink"], IPAddress="10.0.0.9")]
+        ),
+    )
+    resources, _ = collectors_module._collect_gcp_compute(compute, PROJECT)
+    warnings = {r["name"]: r["metadata"] for r in resources if r["resource_type"] == "collection_warning"}
+    assert warnings["backend_health"]["permissions"] == [
+        "compute.backendServices.get",
+        "compute.regionBackendServices.get",
+    ]
+    [lb] = [r for r in resources if r["resource_type"] == "load_balancer"]
+    assert lb["metadata"]["backend_services"] == ["web"] and "backend_health" not in lb["metadata"]
+
+
+class _DeniedHealth(_Collection):
+    """Backend services that list but may not be asked for their health."""
+
+    def __init__(self, service):
+        super().__init__(aggregated={"global": {"backendServices": [service]}})
+
+    def getHealth(self, project, backendService, body, region=None):
+        return _Request({}, True)
+
+
+def test_backend_health_calls_are_capped(monkeypatch):
+    monkeypatch.setattr(collectors_module, "_GCP_HEALTH_CALLS_MAX", 2)
+    services = [
+        {
+            "name": f"bs{i}",
+            "selfLink": _link(f"global/backendServices/bs{i}"),
+            "backends": [{"group": "g1"}, {"group": "g2"}],
+        }
+        for i in range(2)
+    ]
+    collection = _Collection()
+    found = collectors_module._gcp_backend_health(NS(backendServices=lambda: collection), PROJECT, services)
+    assert [(r["backendService"].rsplit("/", 1)[-1], r["group"]) for r in found] == [("bs0", "g1"), ("bs0", "g2")]
+    assert collection.health_asked == [(None, "bs0", "g1"), (None, "bs0", "g2")]
+
+
+_SQL = {
+    "name": "orders-db",
+    "project": PROJECT,
+    "region": "us-central1",
+    "gceZone": "us-central1-b",
+    "databaseVersion": "POSTGRES_15",
+    "state": "RUNNABLE",
+    "connectionName": f"{PROJECT}:us-central1:orders-db",
+    "instanceType": "CLOUD_SQL_INSTANCE",
+    "ipAddresses": [
+        {"type": "PRIVATE", "ipAddress": "10.0.5.3"},
+        {"type": "PRIMARY", "ipAddress": "203.0.113.40"},
+        {"type": "OUTGOING", "ipAddress": "203.0.113.41"},
+    ],
+    "settings": {
+        "tier": "db-custom-2-7680",
+        "availabilityType": "REGIONAL",
+        "ipConfiguration": {
+            "ipv4Enabled": True,
+            "privateNetwork": f"projects/{PROJECT}/global/networks/hub",
+            "pscConfig": {"pscEnabled": False},
+        },
+    },
+}
+_REDIS = {
+    "name": f"projects/{PROJECT}/locations/us-central1/instances/sessions",
+    "locationId": "us-central1-a",
+    "currentLocationId": "us-central1-a",
+    "redisVersion": "REDIS_7_0",
+    "host": "10.0.6.4",
+    "port": 6379,
+    "readEndpoint": "10.0.6.5",
+    "readEndpointPort": 6379,
+    "authorizedNetwork": f"projects/{PROJECT}/global/networks/hub",
+    "connectMode": "PRIVATE_SERVICE_ACCESS",
+    "state": "READY",
+    "tier": "STANDARD_HA",
+    "memorySizeGb": 5,
+}
+
+
+def test_cloud_sql_instance_is_a_service_of_its_private_network():
+    record = collect.cloud_sql_resource(_SQL, PROJECT)
+    meta = record["metadata"]
+    assert record["resource_uid"] == f"gcp:cloud_sql_instance:{PROJECT}:us-central1:orders-db"
+    assert record["status"] == "runnable" and meta["kind"] == "Cloud SQL instance"
+    assert (meta["engine"], meta["engine_version"]) == ("postgres", "15")
+    assert meta["vpc_id"] == f"{PROJECT}:hub"
+    assert meta["endpoints"] == [{"role": "Private IP", "dns_name": "", "port": 5432, "ip_addresses": ["10.0.5.3"]}]
+    assert meta["public_ips"] == ["203.0.113.40"] and meta["outgoing_ips"] == ["203.0.113.41"]
+    assert meta["psc_enabled"] is False and meta["tier"] == "db-custom-2-7680"
+    assert collect.cloud_sql_resource({"databaseVersion": "MYSQL_8_0"}, PROJECT) is None
+    mysql = collect.cloud_sql_resource({"name": "m", "databaseVersion": "MYSQL_8_0"}, PROJECT)
+    assert mysql["metadata"]["engine_version"] == "8.0" and mysql["metadata"]["vpc_id"] == ""
+
+
+def test_memorystore_instance_is_a_service_of_its_authorized_network():
+    record = collect.memorystore_redis_resource(_REDIS, PROJECT)
+    meta = record["metadata"]
+    assert record["resource_uid"] == f"gcp:memorystore_redis_instance:{PROJECT}:us-central1:sessions"
+    assert record["name"] == "sessions" and record["status"] == "ready"
+    assert meta["vpc_id"] == f"{PROJECT}:hub" and meta["engine_version"] == "7.0"
+    assert [(e["role"], e["port"], e["ip_addresses"]) for e in meta["endpoints"]] == [
+        ("Primary", 6379, ["10.0.6.4"]),
+        ("Read endpoint", 6379, ["10.0.6.5"]),
+    ]
+    assert meta["connect_mode"] == "PRIVATE_SERVICE_ACCESS" and meta["tier"] == "STANDARD_HA"
+
+
+class _ApiList:
+    """A ``list`` collection of another discovery API (one page, ``key`` items)."""
+
+    def __init__(self, key, items, *, deny=False):
+        self._key, self._items, self._deny = key, items, deny
+        self.asked: list[dict] = []
+
+    def list(self, **kwargs):
+        self.asked.append(kwargs)
+        return _Request({self._key: list(self._items)}, self._deny)
+
+    def list_next(self, previous_request, previous_response):
+        return None
+
+
+def test_live_collector_reads_cloud_sql_and_memorystore_through_their_apis():
+    sql = _ApiList("items", [_SQL])
+    redis = _ApiList("instances", [_REDIS])
+    apis = {
+        ("sqladmin", "v1"): NS(instances=lambda: sql),
+        ("redis", "v1"): NS(projects=lambda: NS(locations=lambda: NS(instances=lambda: redis))),
+    }
+    resources, _ = collectors_module._collect_gcp_compute(_compute(), PROJECT, None, lambda *api: apis[api])
+    names = {(r["resource_type"], r["name"]) for r in resources}
+    assert ("cloud_sql_instance", "orders-db") in names and ("memorystore_redis_instance", "sessions") in names
+    assert sql.asked == [{"project": PROJECT}]
+    assert redis.asked == [{"parent": f"projects/{PROJECT}/locations/-"}]
+    # A denied API is skipped alone and names its permission.
+    apis[("redis", "v1")] = NS(
+        projects=lambda: NS(locations=lambda: NS(instances=lambda: _ApiList("instances", [], deny=True)))
+    )
+    resources, _ = collectors_module._collect_gcp_compute(_compute(), PROJECT, None, lambda *api: apis[api])
+    warnings = {r["name"]: r["metadata"] for r in resources if r["resource_type"] == "collection_warning"}
+    assert warnings["memorystore_redis_instances"]["permissions"] == ["redis.instances.list"]
+    assert "cloud_sql_instances" not in warnings
+    # Without the client factory (an older caller) neither is read nor reported.
+    resources, _ = collectors_module._collect_gcp_compute(_compute(), PROJECT)
+    assert not [r for r in resources if r["resource_type"] in ("cloud_sql_instance", "memorystore_redis_instance")]
+
+
+def test_gcp_permissions_are_documented():
+    import pathlib
+
+    text = (pathlib.Path(__file__).resolve().parents[1] / "docs" / "gcp-topology.md").read_text(encoding="utf-8")
+    start = text.index("### Permissions")
+    doc = text[start : text.index("\n## ", start)]
+    assert set(collectors_module.GCP_SECTION_PERMISSIONS) == {*collectors_module._GCP_SECTIONS, "router_status"}
+    for section, permissions in collectors_module.GCP_SECTION_PERMISSIONS.items():
+        for permission in permissions:
+            assert f"`{permission}`" in doc, (section, permission)
+
+
+def test_snapshot_lists_load_balancers_and_psc_in_their_network(snapshot):
+    prod = next(s for s in snapshot["sites"] if s["id"] == PROD)
+    hub = next(s for s in snapshot["sites"] if s["id"] == HUB)
+    lbs = {row[0]: row for row in _section(prod["sections"], "Load balancers")["rows"]}
+    assert lbs["ilb-db"][2] == "Internal passthrough Network Load Balancer"
+    # Cells are text: one address, one subnet.
+    assert lbs["ilb-db"][7] == "10.241.20.100" and lbs["ilb-db"][8] == "db (10.241.20.0/24)"
+    assert lbs["web-https"][2] == "Global external Application Load Balancer"
+    assert lbs["web-https"][7] == "203.0.113.80"
+    assert {row[0] for row in _section(prod["sections"], "Private Service Connect")["rows"]} == {"sa-db"}
+    assert {row[0] for row in _section(hub["sections"], "Private Service Connect")["rows"]} == {
+        "psc-db",
+        "pscgoogleapis",
+    }
+    overview = dict(_section(prod["sections"], "VPC network overview")["rows"])
+    assert overview["Load balancers"] == "2" and overview["Private Service Connect"] == "1"
+    # Internal addresses are hosts of the network; the public one is not.
+    index = {row["cidr"]: row for row in subnet_index(snapshot)}
+    assert index["10.241.20.100/32"]["node_id"] == f"vpc:{PROD}"
+    assert index["10.240.1.50/32"]["node_id"] == f"vpc:{HUB}"
+    assert "203.0.113.80/32" not in index
+    # No node is drawn for them.
+    assert not [n for n in snapshot["nodes"] if "ilb-db" in n["id"] or "sa-db" in n["id"]]
+
+
+def test_snapshot_lists_cloud_sql_memorystore_and_backend_health(snapshot):
+    prod = next(s for s in snapshot["sites"] if s["id"] == PROD)
+    sql = {row[0]: row for row in _section(prod["sections"], "Cloud SQL")["rows"]}
+    assert sql["orders-sql"][2] == "Cloud SQL instance" and sql["orders-sql"][5] == "runnable"
+    redis = {row[0]: row for row in _section(prod["sections"], "Memorystore")["rows"]}
+    assert redis["sessions-redis"][5] == "ready"
+    lbs = {row[0]: row for row in _section(prod["sections"], "Load balancers")["rows"]}
+    assert "healthy" in json.dumps(lbs["ilb-db"][10])
+    # Their private addresses are hosts of the production network.
+    index = {row["cidr"]: row for row in subnet_index(snapshot)}
+    for address in ("10.241.200.3", "10.241.201.4", "10.241.201.5"):
+        assert index[f"{address}/32"]["node_id"] == f"vpc:{PROD}"
+    resources, _ = build_sample()
+    [lb] = [r for r in resources if r["name"] == "ilb-db"]
+    assert lb["metadata"]["backend_health"] == {"healthy": 1, "unhealthy": 0, "unknown": 0}
+
+
+def test_search_finds_a_load_balancer_by_its_dns_name(snapshot):
+    hits = search_index(build_search_index(snapshot), ["db.ilb-db.il4.us-central1.lb.sample.internal"], 10)
+    assert f"vpc:{PROD}" in [h["node_id"] for h in hits]

@@ -393,16 +393,20 @@ def _parse_insights_timestamp(value) -> datetime | None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Azure puller - Blob Storage NSG Flow Logs
+# Azure puller - Blob Storage NSG / VNet Flow Logs
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 async def pull_azure_flow_logs(account: dict, *, lookback_minutes: int = _DEFAULT_LOOKBACK_MINUTES) -> dict:
-    """Pull NSG Flow Logs from Azure Blob Storage.
+    """Pull NSG or VNet flow logs from Azure Blob Storage.
+
+    Microsoft stopped new NSG flow logs on 30 June 2025 and retires them on
+    30 September 2027; VNet flow logs replace them. Both layouts are read.
 
     Required auth_config keys:
       - storage_account_name (str)
-      - container_name (str): blob container, e.g. ``insights-logs-networksecuritygroupflowevent``
+      - container_name (str): blob container, ``insights-logs-flowlogflowevent``
+        (VNet flow logs) or ``insights-logs-networksecuritygroupflowevent`` (NSG)
       - (optional) storage_account_key or use DefaultAzureCredential
       - subscription_id (str)
     """
@@ -489,9 +493,10 @@ def _build_azure_blob_client(auth: dict, storage_account: str):
 def _azure_day_partitions(start: datetime, end: datetime) -> list[str]:
     """Date-partition path segments (``/y=…/m=…/d=…/``) covered by the window.
 
-    NSG flow-log blob names embed the full NSG resource ID between
-    ``resourceId=`` and the date partition, so the partition can only be
-    matched as a substring, not as a name prefix.
+    Flow-log blob names embed the full resource ID between the name prefix
+    (``resourceId=`` for NSG, ``flowLogResourceID=`` for VNet flow logs) and
+    the date partition, so the partition can only be matched as a
+    substring, not as a name prefix.
     """
     segments: list[str] = []
     day = start.date()
@@ -501,16 +506,46 @@ def _azure_day_partitions(start: datetime, end: datetime) -> list[str]:
     return segments
 
 
+# Blob name prefixes: NSG flow logs, then VNet flow logs.
+_AZURE_FLOW_BLOB_PREFIXES = ("resourceId=", "flowLogResourceID=")
+
+
 def _azure_tuple_epoch(flow_tuple) -> int | None:
-    """Epoch seconds from an NSG flow tuple (first comma-separated field)."""
+    """Epoch seconds from a flow tuple (first comma-separated field).
+
+    NSG flow logs write seconds, VNet flow logs milliseconds.
+    """
     try:
-        return int(str(flow_tuple).split(",", 1)[0])
+        value = int(str(flow_tuple).split(",", 1)[0])
     except ValueError, IndexError:
         return None
+    return value // 1000 if value > 100_000_000_000 else value
+
+
+def _azure_flow_groups(log_record: dict) -> list[tuple[str, list, dict]]:
+    """``(rule, tuples, context)`` for each rule group of one flow-log record.
+
+    NSG:  ``properties.flows[].flows[].flowTuples`` (rule on the outer flow)
+    VNet: ``flowRecords.flows[].flowGroups[].flowTuples`` (rule on the group,
+    the evaluating NSG or security admin rule set in ``aclID``)
+    """
+    groups: list[tuple[str, list, dict]] = []
+    props = log_record.get("properties")
+    for flow_group in (props.get("flows") if isinstance(props, dict) else None) or []:
+        rule = str(flow_group.get("rule") or "")
+        for flow_set in flow_group.get("flows") or []:
+            groups.append((rule, flow_set.get("flowTuples") or [], {}))
+    flow_records = log_record.get("flowRecords")
+    target = str(log_record.get("targetResourceID") or "")
+    for acl in (flow_records.get("flows") if isinstance(flow_records, dict) else None) or []:
+        context = {"acl_id": str(acl.get("aclID") or ""), "target_resource_id": target}
+        for flow_group in acl.get("flowGroups") or []:
+            groups.append((str(flow_group.get("rule") or ""), flow_group.get("flowTuples") or [], context))
+    return groups
 
 
 def _read_azure_blobs(container_client, start: datetime, end: datetime) -> tuple[list[dict], bool]:
-    """Read and parse NSG flow log JSON blobs within the time window.
+    """Read and parse NSG and VNet flow log JSON blobs within the time window.
 
     Blobs are hourly and appended to in place, so selection is by the date
     partition in the blob name plus ``last_modified``; individual flow tuples
@@ -526,7 +561,9 @@ def _read_azure_blobs(container_client, start: datetime, end: datetime) -> tuple
     records: list[dict] = []
     truncated = False
 
-    blobs = container_client.list_blobs(name_starts_with="resourceId=")
+    blobs = (
+        blob for prefix in _AZURE_FLOW_BLOB_PREFIXES for blob in container_client.list_blobs(name_starts_with=prefix)
+    )
     for blob_props in blobs:
         if len(records) >= _MAX_RECORDS_PER_PULL:
             truncated = True
@@ -543,27 +580,27 @@ def _read_azure_blobs(container_client, start: datetime, end: datetime) -> tuple
         except json.JSONDecodeError, UnicodeDecodeError:
             continue
 
-        # NSG flow log JSON structure: { records: [ { properties: { flows: [...] } } ] }
         for log_record in parsed.get("records", []):
-            props = log_record.get("properties", {})
-            for flow_group in props.get("flows", []):
-                rule_name = str(flow_group.get("rule") or "")
-                for flow_set in flow_group.get("flows", []):
-                    for flow_tuple in flow_set.get("flowTuples", []):
-                        epoch = _azure_tuple_epoch(flow_tuple)
-                        if epoch is not None and not (start_epoch <= epoch < end_epoch):
-                            continue
-                        if len(records) >= _MAX_RECORDS_PER_PULL:
-                            truncated = True
-                            break
-                        records.append(
-                            {
-                                "flow_tuples": [flow_tuple],
-                                "rule_name": rule_name,
-                                "region": str(log_record.get("location") or ""),
-                                "resource_id": str(log_record.get("resourceId") or ""),
-                            }
-                        )
+            if not isinstance(log_record, dict):
+                continue
+            resource_id = str(log_record.get("resourceId") or log_record.get("flowLogResourceID") or "")
+            for rule_name, flow_tuples, context in _azure_flow_groups(log_record):
+                for flow_tuple in flow_tuples:
+                    epoch = _azure_tuple_epoch(flow_tuple)
+                    if epoch is not None and not (start_epoch <= epoch < end_epoch):
+                        continue
+                    if len(records) >= _MAX_RECORDS_PER_PULL:
+                        truncated = True
+                        break
+                    records.append(
+                        {
+                            "flow_tuples": [flow_tuple],
+                            "rule_name": rule_name,
+                            "region": str(log_record.get("location") or ""),
+                            "resource_id": resource_id,
+                            **{key: value for key, value in context.items() if value},
+                        }
+                    )
     return records, truncated
 
 

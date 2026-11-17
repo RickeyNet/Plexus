@@ -1,5 +1,6 @@
 import { FormEvent, type ReactNode, useMemo, useRef, useState } from 'react';
 import { type UseQueryResult, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router';
 
 import { groupLabel } from '@/api/inventory';
 import { StatusBadge } from '@/components/Badge';
@@ -10,6 +11,9 @@ import { ImportDialog } from '@/components/ImportDialog';
 import { LoadingState } from '@/components/LoadingState';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
+import { ProgressBar } from '@/components/ProgressBar';
+import { ShowMoreButton } from '@/components/ShowMoreButton';
+import { SortableTh } from '@/components/SortableTh';
 import { QueryError } from '@/components/QueryError';
 import { TabBar } from '@/components/TabBar';
 import { useDialogs } from '@/components/DialogProvider-context';
@@ -18,6 +22,10 @@ import { TagChips } from '@/components/TagChips';
 import { cloudProviderTerms } from '@/lib/cloudProviderTerms';
 import { type CustomDataFilterValue, EMPTY_CUSTOM_DATA_FILTER, isEmptyFilter } from '@/lib/customData';
 import { formatCount } from '@/lib/formatCount';
+import { compareIpText } from '@/lib/ipNetwork';
+import { utilizationTone } from '@/lib/severity';
+import { useShowMore } from '@/lib/useShowMore';
+import { type Comparator, compareNumber, compareText, useTableSort } from '@/lib/useTableSort';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 import { usePathTab } from '@/lib/usePathTab';
 
@@ -26,6 +34,7 @@ import {
   type IpamOverlap,
   type IpamOverlapSide,
   type IpamSource,
+  type IpamSubnet,
   type IpamSyncConfig,
   type ReconcileDiff,
   useDeleteDhcpServer,
@@ -60,6 +69,7 @@ import {
   filterSubnetsByCustomData,
   formatSubnetPreview,
   providerLabel,
+  searchSubnets,
 } from './helpers';
 
 type DiffResolution = 'accept_plexus' | 'accept_ipam' | 'ignored';
@@ -83,6 +93,16 @@ function loadError(query: UseQueryResult<unknown>, what: string): ReactNode {
     />
   );
 }
+
+type SubnetSortKey = 'subnet' | 'utilization' | 'groups';
+
+const SUBNET_COMPARATORS: Record<SubnetSortKey, Comparator<IpamSubnet>> = {
+  subnet: (a, b) => compareIpText(a.subnet, b.subnet),
+  utilization: (a, b) => compareNumber(a.utilization_pct, b.utilization_pct),
+  groups: (a, b) => compareText(a.group_names?.join(', '), b.group_names?.join(', ')),
+};
+const SUBNET_FIRST_DIR: Partial<Record<SubnetSortKey, 'asc' | 'desc'>> = { utilization: 'desc' };
+const subnetTieBreak: Comparator<IpamSubnet> = (a, b) => compareIpText(a.subnet, b.subnet);
 
 const TABS = [
   { key: 'subnets', label: 'Subnets' },
@@ -113,6 +133,9 @@ function SubnetsView({ tabBar }: { tabBar: ReactNode }) {
   const [includeTopology, setIncludeTopology] = useState(true);
   const [selectedSubnet, setSelectedSubnet] = useState<string>('');
   const [dataFilter, setDataFilter] = useState<CustomDataFilterValue>(EMPTY_CUSTOM_DATA_FILTER);
+  // ?q= opens the page already searched, e.g. from a device's IPAM context.
+  const [searchParams] = useSearchParams();
+  const [search, setSearch] = useState(() => searchParams.get('q') ?? '');
   const [modal, setModal] = useState<ModalState>({ kind: 'none' });
   const drilldownRef = useRef<HTMLDivElement>(null);
 
@@ -146,11 +169,28 @@ function SubnetsView({ tabBar }: { tabBar: ReactNode }) {
 
   const summary = overview.data?.summary ?? {};
   const allSubnets = overview.data?.subnets;
-  const subnets = useMemo(
-    () => filterSubnetsByCustomData(allSubnets ?? [], dataFilter),
-    [allSubnets, dataFilter],
+  const filteredSubnets = useMemo(
+    () => searchSubnets(filterSubnetsByCustomData(allSubnets ?? [], dataFilter), search),
+    [allSubnets, dataFilter, search],
   );
+  const {
+    rows: subnets,
+    sort: subnetSort,
+    toggle: toggleSubnetSort,
+  } = useTableSort<IpamSubnet, SubnetSortKey>(
+    filteredSubnets,
+    SUBNET_COMPARATORS,
+    { key: 'subnet', dir: 'asc' },
+    { firstDir: SUBNET_FIRST_DIR, tieBreak: subnetTieBreak },
+  );
+  const { visible: visibleSubnets, hiddenCount, showMore } = useShowMore(subnets);
   const hasDataFilter = !isEmptyFilter(dataFilter);
+  const hasSearch = search.trim() !== '';
+  const isFiltered = hasDataFilter || hasSearch;
+  const clearFilters = () => {
+    setDataFilter(EMPTY_CUSTOM_DATA_FILTER);
+    setSearch('');
+  };
   const selectedRow = allSubnets?.find((s) => s.subnet === selectedSubnet);
   const duplicates = overview.data?.duplicate_ips ?? [];
   const overlaps = overview.data?.overlaps ?? [];
@@ -303,13 +343,23 @@ function SubnetsView({ tabBar }: { tabBar: ReactNode }) {
                   className="text-muted"
                   style={{ fontSize: '0.88em', marginTop: '0.2rem' }}
                 >
-                  {hasDataFilter
-                    ? `${subnets.length} of ${allSubnets?.length ?? 0} subnets match the filter`
-                    : `${subnets.length} visible subnet${subnets.length === 1 ? '' : 's'}`}
+                  {isFiltered
+                    ? `${formatCount(subnets.length)} of ${formatCount(allSubnets?.length ?? 0)} subnets match`
+                    : `${formatCount(subnets.length)} subnet${subnets.length === 1 ? '' : 's'}`}
                 </div>
               )}
             </div>
             <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                type="search"
+                className="form-input form-input-sm"
+                aria-label="Search subnets"
+                placeholder="IP, CIDR, VRF, VLAN, host, site, tag"
+                title="An address finds the subnets that contain it, a CIDR the subnets inside or around it; other words match subnet, VRF, VLAN, group, source, previewed host and site names, and tags."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                style={{ width: 280, maxWidth: '100%' }}
+              />
               <button
                 type="button"
                 className="btn btn-primary"
@@ -331,34 +381,53 @@ function SubnetsView({ tabBar }: { tabBar: ReactNode }) {
             overviewError
           ) : overview.isPending ? (
             <LoadingState text="Loading subnet inventory…" />
-          ) : subnets.length === 0 && hasDataFilter ? (
+          ) : subnets.length === 0 && isFiltered ? (
             <EmptyState
               compact
-              message="No subnets match this filter."
+              message={hasSearch ? `No subnets match “${search.trim()}”.` : 'No subnets match this filter.'}
+              description={
+                hasSearch
+                  ? 'Hostnames are searched within each subnet’s preview only, and an address outside every known subnet has no match.'
+                  : undefined
+              }
               action={
-                <button type="button" className="btn btn-sm btn-secondary" onClick={() => setDataFilter(EMPTY_CUSTOM_DATA_FILTER)}>
-                  Clear filter
+                <button type="button" className="btn btn-sm btn-secondary" onClick={clearFilters}>
+                  {hasSearch && hasDataFilter ? 'Clear search and filter' : hasSearch ? 'Clear search' : 'Clear filter'}
                 </button>
               }
             />
           ) : subnets.length === 0 ? (
-            <div className="empty-state">
-              <p>No IPAM data found for the current filter.</p>
-            </div>
+            <EmptyState
+              compact
+              message="No subnets in this scope."
+              description="Add inventory hosts, collect a topology or cloud account, connect an IPAM source, or define a subnet."
+            />
           ) : (
+            <>
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Subnet</th>
-                  <th>Capacity</th>
-                  <th>Groups</th>
+                  <SortableTh sortKey="subnet" sort={subnetSort} onSort={toggleSubnetSort}>
+                    Subnet
+                  </SortableTh>
+                  <SortableTh
+                    sortKey="utilization"
+                    sort={subnetSort}
+                    onSort={toggleSubnetSort}
+                    title="Sort by utilization"
+                  >
+                    Capacity
+                  </SortableTh>
+                  <SortableTh sortKey="groups" sort={subnetSort} onSort={toggleSubnetSort}>
+                    Groups
+                  </SortableTh>
                   <th>Sources</th>
                   <th>Preview</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
-                {subnets.map((item) => {
+                {visibleSubnets.map((item) => {
                   const groupNames = item.group_names ?? [];
                   const sourceTypes = item.source_types ?? [];
                   const externals = item.external_source_names_preview ?? [];
@@ -428,7 +497,16 @@ function SubnetsView({ tabBar }: { tabBar: ReactNode }) {
                           {formatCount(item.allocated_address_count)} allocated ·{' '}
                           {formatCount(item.reserved_address_count)} reserved
                         </div>
-                        <div className="text-muted" style={{ fontSize: '0.85em' }}>
+                        <div
+                          className="text-muted"
+                          style={{ fontSize: '0.85em', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}
+                        >
+                          <ProgressBar
+                            value={item.utilization_pct ?? 0}
+                            tone={utilizationTone(item.utilization_pct)}
+                            size="sm"
+                            style={{ width: 64, flex: 'none' }}
+                          />
                           {item.utilization_pct ?? 0}% utilized
                         </div>
                       </td>
@@ -483,6 +561,8 @@ function SubnetsView({ tabBar }: { tabBar: ReactNode }) {
                 })}
               </tbody>
             </table>
+            <ShowMoreButton hiddenCount={hiddenCount} onClick={showMore} style={{ marginTop: 'var(--space-3)' }} />
+            </>
           )}
         </div>
 

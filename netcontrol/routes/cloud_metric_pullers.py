@@ -322,12 +322,55 @@ async def _aws_cloudwatch_fetch(
     return await asyncio.to_thread(_run)
 
 
+# Azure Monitor traffic metrics per resource type (the provider segment of
+# the resource ID, lowercased). Azure has no metric name shared by every
+# type, and a query naming a metric the type lacks fails for that resource.
+_AZURE_DEFAULT_METRICS: dict[str, list[str]] = {
+    "microsoft.network/networkinterfaces": [
+        "BytesReceivedRate",
+        "BytesSentRate",
+        "PacketsReceivedRate",
+        "PacketsSentRate",
+    ],
+    "microsoft.compute/virtualmachines": ["Network In Total", "Network Out Total"],
+    "microsoft.compute/virtualmachinescalesets": ["Network In Total", "Network Out Total"],
+    "microsoft.network/virtualnetworkgateways": [
+        "TunnelIngressBytes",
+        "TunnelEgressBytes",
+        "TunnelIngressPackets",
+        "TunnelEgressPackets",
+    ],
+}
+
+
+def _azure_resource_type(resource_id: str) -> str:
+    """``microsoft.network/networkinterfaces`` from an Azure resource ID."""
+    parts = [part for part in str(resource_id or "").split("/") if part]
+    lowered = [part.lower() for part in parts]
+    if "providers" not in lowered:
+        return ""
+    index = len(lowered) - 1 - lowered[::-1].index("providers")
+    if index + 2 >= len(parts):
+        return ""
+    return f"{lowered[index + 1]}/{lowered[index + 2]}"
+
+
+def _azure_metric_names(resource_id: str, configured: list[str]) -> list[str]:
+    """The configured metric names, else the defaults for the resource type."""
+    return configured or _AZURE_DEFAULT_METRICS.get(_azure_resource_type(resource_id), [])
+
+
 async def pull_azure_traffic_metrics(account: dict, *, lookback_minutes: int = _DEFAULT_LOOKBACK_MINUTES) -> dict:
-    """Pull network traffic metrics from Azure Monitor."""
+    """Pull network traffic metrics from Azure Monitor.
+
+    ``metric_names`` applies to every resource when set; otherwise each
+    resource gets the defaults for its type (_AZURE_DEFAULT_METRICS), and a
+    resource of another type is skipped with a warning.
+    """
     account_id = int(account["id"])
     auth = _parse_auth_config(account)
     resource_ids = _parse_list(auth.get("resource_ids"))
-    metric_names = _parse_list(auth.get("metric_names")) or ["BytesIn", "BytesOut", "PacketsIn", "PacketsOut"]
+    metric_names = _parse_list(auth.get("metric_names"))
 
     if not resource_ids:
         return {"ok": False, "error": "missing_resource_ids", "ingested": 0}
@@ -342,6 +385,12 @@ async def pull_azure_traffic_metrics(account: dict, *, lookback_minutes: int = _
 
     total_ingested = 0
     errors: list[str] = []
+    unsupported = [rid for rid in resource_ids if not _azure_metric_names(rid, metric_names)]
+    warnings = [
+        f"no default traffic metrics for {_azure_resource_type(rid) or 'unrecognised resource ID'}; "
+        "set metric_names to pull it"
+        for rid in unsupported
+    ]
 
     try:
         client = _build_azure_metrics_client(auth)
@@ -374,6 +423,7 @@ async def pull_azure_traffic_metrics(account: dict, *, lookback_minutes: int = _
         "ok": not errors,
         "ingested": total_ingested,
         "errors": errors,
+        "warnings": warnings,
     }
 
 
@@ -417,9 +467,12 @@ async def _azure_monitor_fetch(
         for resource_id in resource_ids:
             if len(records) >= _MAX_RECORDS_PER_PULL:
                 break
+            names = _azure_metric_names(resource_id, metric_names)
+            if not names:
+                continue
             result = client.query_resource(
                 resource_id,
-                metric_names=metric_names,
+                metric_names=names,
                 timespan=timespan,
             )
             metrics = getattr(result, "metrics", []) or []

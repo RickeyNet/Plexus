@@ -18,7 +18,19 @@ Cato source (each site range and connected remote user the Cato Cloud
 routes) to the public address on the rule's ports with
 ``network_rules.evaluate``. Whether an allocated IP gets in is decided by
 the engine's own filters (``inbound_filters``: network ACLs, security
-groups, network security groups, VPC firewall rules). Finding kinds:
+groups, network security groups, VPC firewall rules).
+
+Managed services are destinations the same way (``pathtrace.services``): a
+public frontend the provider delivers to a private address of the service
+(an AWS load balancer's public IP on its network interface, a one-to-one
+public and private frontend) is checked with the service's own filters (its
+security groups on AWS, its subnet's network security group on Azure). An
+Azure Firewall DNAT rule whose source addresses name an allocated IP is an
+allow-list of its own: the firewall's public address on the rule's ports is
+the target, and an allocated IP gets in when the rule's sources take it.
+A public frontend with no private address behind it (an Azure public load
+balancer, a GCP external forwarding rule) has no filter of its own to read
+and is left out. Finding kinds:
 
   - ``hostname_only`` (warning): the bare-IP flow falls to a rule that does
     not NAT to the allowed IPs while a rule ahead of it does, but matches
@@ -45,8 +57,9 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from netcontrol.integrations.cato import network_rules
+from netcontrol.integrations.pathtrace import services as managed
 from netcontrol.integrations.pathtrace.cloud import public_addresses
-from netcontrol.integrations.pathtrace.model import OK, Network, contains, net, show, worst
+from netcontrol.integrations.pathtrace.model import BLOCKED, OK, Network, _port_ranges, contains, net, show, worst
 
 # A source range shorter than this names far more than a Cato account's
 # allocated IPs: it says nothing about Cato.
@@ -172,13 +185,19 @@ def _traffic(protocol: str, low: int | None, high: int | None) -> tuple[str, tup
 
 
 def cloud_targets(provider: str, engine: Any, ips: list[str]) -> list[dict[str, Any]]:
-    """Every (instance public address, inbound allow rule naming one of
-    ``ips``, traffic) of one cloud's reachability engine."""
+    """Every (public address of an instance or managed service, inbound
+    allow rule naming one of ``ips``, traffic) of one cloud's reachability
+    engine, then every Azure Firewall DNAT rule whose sources name one."""
     targets: list[dict[str, Any]] = []
     owners = engine.address_owners() if callable(getattr(engine, "address_owners", None)) else {}
-    for public, (private, network, owner) in sorted(public_addresses(owners).items()):
+    index = managed.index(engine)
+    ends = [(public, private, network, owner) for public, (private, network, owner) in public_addresses(owners).items()]
+    # A managed service's public frontend delivered to a private address of
+    # it (``services.ServiceIndex.paired``) is checked the same way.
+    ends += [(public, private, s.network, managed.owner(s, public)) for public, private, s in index.paired()]
+    for public, private, network, owner in sorted(ends, key=lambda end: end[0]):
         try:
-            place = engine.locate(private, network)
+            place = managed.place(engine, index, provider, private, network)
         except ValueError:
             continue
         if place.get("subnet") is None:
@@ -197,7 +216,7 @@ def cloud_targets(provider: str, engine: Any, ips: list[str]) -> list[dict[str, 
                         "engine": engine,
                         "place": place,
                         "resource_id": str(owner.get("rid") or ""),
-                        "resource_name": str(owner.get("name") or owner.get("rid") or ""),
+                        "resource_name": str(owner.get("label") or owner.get("name") or owner.get("rid") or ""),
                         "public_ip": public,
                         "private_ip": private,
                         "protocol": name,
@@ -209,7 +228,57 @@ def cloud_targets(provider: str, engine: Any, ips: list[str]) -> list[dict[str, 
                         "allowed": allowed,
                     }
                 )
+    return targets + dnat_targets(provider, index, ips)
+
+
+def dnat_targets(provider: str, index: managed.ServiceIndex, ips: list[str]) -> list[dict[str, Any]]:
+    """Every (Azure Firewall public address, DNAT rule whose sources name one
+    of ``ips``, traffic): the rule is the allow-list, and an allocated IP
+    gets in when its sources take it (``services.dnat_covers``)."""
+    targets: list[dict[str, Any]] = []
+    for firewall in index.firewalls:
+        meta = firewall.get("meta") or {}
+        name = str(firewall.get("name") or firewall.get("rid") or "")
+        public_ips = [str(a) for a in meta.get("public_ips") or [] if str(a)]
+        for rule in meta.get("dnat_rules") or []:
+            if not isinstance(rule, dict):
+                continue
+            allowed = _covered(rule.get("source_addresses") or [], ips)
+            if not allowed:
+                continue
+            named = [str(d) for d in rule.get("destination_addresses") or [] if net(d) is not None]
+            translated = str(rule.get("translated_address") or "")
+            for public in named or public_ips:
+                for protocol in rule.get("protocols") or ["any"]:
+                    for port in rule.get("destination_ports") or ["*"]:
+                        low, high = _dnat_ports(port)
+                        name_, ports, text = _traffic(str(protocol), low, high)
+                        targets.append(
+                            {
+                                "provider": provider,
+                                "engine": None,
+                                "place": None,
+                                "dnat": rule,
+                                "resource_id": str(firewall.get("rid") or ""),
+                                "resource_name": f"Azure Firewall {name}",
+                                "public_ip": public,
+                                "private_ip": translated,
+                                "protocol": name_,
+                                "ports": ports,
+                                "traffic": text,
+                                "filter": f"Azure Firewall {name} DNAT collection {rule.get('collection') or ''}".strip(),
+                                "rule": f"rule {rule.get('name') or ''} to {translated}".strip(),
+                                "rule_id": f"{firewall.get('rid')}:dnat:{rule.get('collection')}:{rule.get('name')}",
+                                "allowed": allowed,
+                            }
+                        )
     return targets
+
+
+def _dnat_ports(raw: Any) -> tuple[int | None, int | None]:
+    """A DNAT rule's destination port (``443``, ``8000-8010``, ``*``) as ``(low, high)``."""
+    ranges = _port_ranges(str(raw or "").strip())
+    return ranges[0] if ranges and len(ranges) == 1 else (None, None)
 
 
 def _admits(target: dict, cache: dict[str, str]) -> Callable[[str], str]:
@@ -217,6 +286,9 @@ def _admits(target: dict, cache: dict[str, str]) -> Callable[[str], str]:
     the engine's inbound filter steps (``ok`` only if every one passes)."""
 
     def admits(ip: str) -> str:
+        if ip not in cache and target.get("dnat") is not None:
+            # An Azure Firewall DNAT rule: its own sources decide.
+            cache[ip] = OK if managed.dnat_covers(target["dnat"], ip) else BLOCKED
         if ip not in cache:
             engine = target["engine"]
             peer = engine.locate(ip)

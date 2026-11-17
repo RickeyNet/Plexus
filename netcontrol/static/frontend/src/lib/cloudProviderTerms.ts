@@ -62,7 +62,7 @@ const AZURE: CloudProviderTerms = {
   network: 'VNet',
   networks: 'VNets',
   wholeScope: 'Whole subscription',
-  flowLogs: 'NSG flow logs',
+  flowLogs: 'VNet flow logs',
   flowSource: 'a storage account',
   metricsSource: 'Azure Monitor',
   policy: 'network security groups',

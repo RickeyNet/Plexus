@@ -67,7 +67,7 @@ from netcontrol.integrations.aws.reachability import (
     is_public_net,
     peer_cidr_cover,
 )
-from netcontrol.integrations.azure.normalize import _meta, _rid, _short, _text, _value, next_hop_name
+from netcontrol.integrations.azure.normalize import SERVICE_TYPES, _meta, _rid, _short, _text, _value, next_hop_name
 from netcontrol.integrations.pathtrace import ports as port_sets
 
 _Network = ipaddress.IPv4Network | ipaddress.IPv6Network
@@ -243,6 +243,9 @@ class Reachability:
 
     @staticmethod
     def _owner_name(owner: dict) -> str:
+        # A managed service's address carries its own label (``pathtrace.services.owner``).
+        if _text(owner.get("label")):
+            return _text(owner.get("label"))
         kind = "Azure Firewall" if owner.get("resource_type") == "azure_firewall" else "virtual machine"
         return f"{kind} {_text(owner.get('name')) or _short(owner['rid'])}"
 
@@ -929,6 +932,11 @@ class Reachability:
         interface)``: the index ``locate`` reads, for the public addresses of
         the virtual machines (``pathtrace.cloud.public_addresses``)."""
         return self._address_owner
+
+    def services(self) -> list[dict]:
+        """The indexed rows of the managed services (``normalize.SERVICE_TYPES``),
+        for ``pathtrace.services``."""
+        return [row for kind in SERVICE_TYPES for row in self._by_type.get(kind, {}).values()]
 
     def nsg(self, place: dict, peer: dict, outbound: bool, protocol: str, ports: tuple[int, int] | None) -> list[dict]:
         """The network security group steps at ``place`` (subnet, then interface)."""

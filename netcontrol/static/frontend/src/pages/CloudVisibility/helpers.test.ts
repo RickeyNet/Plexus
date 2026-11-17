@@ -198,6 +198,12 @@ describe('topologyResourceTypeLabel of AWS services', () => {
     expect(topologyResourceTypeLabel('redshift_serverless_workgroup', 'aws')).toBe('Redshift Serverless workgroup');
     expect(topologyResourceTypeLabel('vpc_endpoint', 'aws')).toBe('VPC endpoint');
   });
+
+  it('names the GCP load balancer and Private Service Connect records', () => {
+    expect(topologyResourceTypeLabel('load_balancer', 'gcp')).toBe('Load balancer');
+    expect(topologyResourceTypeLabel('psc_endpoint', 'gcp')).toBe('Private Service Connect endpoint');
+    expect(topologyResourceTypeLabel('service_attachment', 'gcp')).toBe('Service attachment');
+  });
 });
 
 describe('isPublicRule', () => {

@@ -232,6 +232,8 @@ const RESOURCE_TYPE_LABELS: Record<string, string> = {
   msk_cluster: 'MSK cluster',
   redshift_cluster: 'Redshift cluster',
   redshift_serverless_workgroup: 'Redshift Serverless workgroup',
+  psc_endpoint: 'Private Service Connect endpoint',
+  service_attachment: 'Service attachment',
   collection_warning: 'Collection warning',
 };
 

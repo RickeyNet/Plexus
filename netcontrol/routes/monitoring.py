@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
 from netcontrol.drivers import supports_cli
+from netcontrol.integrations.availability import ENTITY_TYPES as TOPOLOGY_ENTITY_TYPES
 from netcontrol.routes import topology_availability as topology_tracking
 from netcontrol.routes.icmp import ICMP_AVAILABLE, ping_host
 from netcontrol.routes.maintenance_windows import _parse_iso
@@ -1926,7 +1927,7 @@ async def bulk_acknowledge_alerts_endpoint(body: dict, request: Request):
 
 # Topology source types and tracked entity types (query parameter patterns).
 _TOPOLOGY_PROVIDER_RE = r"^(meraki|cato|fmc|panorama|appgate|opnsense|aws|azure|gcp)$"
-_TOPOLOGY_ENTITY_RE = r"^(device|site|uplink|tunnel|vpn_connection|circuit|peering|link)$"
+_TOPOLOGY_ENTITY_RE = rf"^({'|'.join(TOPOLOGY_ENTITY_TYPES)})$"
 
 
 # ── SLA Dashboard Routes ─────────────────────────────────────────────────────

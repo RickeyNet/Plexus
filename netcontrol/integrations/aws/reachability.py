@@ -42,7 +42,7 @@ import ipaddress
 import re
 from typing import Any
 
-from netcontrol.integrations.aws.normalize import _meta, _rid, _text
+from netcontrol.integrations.aws.normalize import SERVICE_TYPES, _meta, _rid, _text
 from netcontrol.integrations.meraki.forwarding import is_public_address
 from netcontrol.integrations.pathtrace import ports as port_sets
 
@@ -276,6 +276,9 @@ class Reachability:
 
     @staticmethod
     def _instance_name(instance: dict) -> str:
+        # A managed service's address carries its own label (``pathtrace.services.owner``).
+        if _text(instance.get("label")):
+            return _text(instance.get("label"))
         return f"instance {_text(instance.get('name')) or instance['rid']}"
 
     # ── Where an address is ────────────────────────────────────────────────
@@ -829,6 +832,11 @@ class Reachability:
         ``locate`` reads, for the public addresses of the instances
         (``pathtrace.cloud.public_addresses``)."""
         return self._address_owner
+
+    def services(self) -> list[dict]:
+        """The indexed rows of the managed services (``normalize.SERVICE_TYPES``),
+        for ``pathtrace.services``."""
+        return [row for kind in SERVICE_TYPES for row in self._by_type.get(kind, {}).values()]
 
     def acl(
         self, place: dict, peer: dict, egress: bool, protocol: str, ports: tuple[int, int] | None, direction: str
