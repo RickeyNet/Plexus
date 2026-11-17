@@ -25,6 +25,7 @@ from netcontrol.bulk_import import host_csv_header, host_csv_row, host_export_re
 from netcontrol.data_validation import enforce as enforce_validation_rules, pick as rule_values
 from netcontrol.drivers import DriverCapabilityError, GenericDriver, get_driver
 from netcontrol.drivers.show_version import ShowVersionFacts, parse_show_version
+from netcontrol.integrations.meraki.enrich import load_inventory_index
 from netcontrol.integrations.software.versions import classify_host
 from netcontrol.object_scope import (
     READ_ONLY_DETAIL,
@@ -179,8 +180,18 @@ class HostCreate(HostDeviceValues):
     snmp_profile_id: str = ""
 
 
-# The most hosts one bulk add takes (the Topology page's "Add to inventory").
+# The most hosts one bulk add request takes. The Topology page's "Add to
+# inventory" sends a larger selection as several requests of this size.
 BULK_ADD_MAX_HOSTS = 500
+
+# Why a bulk add entry is skipped, by what matched it to an inventory host
+# (``InventoryIndex.match_key``).
+_BULK_SKIP_REASONS = {
+    "instance": "AWS instance is already in inventory",
+    "serial": "Serial number is already in inventory",
+    "ip": "IP address is already in inventory",
+    "name": "A host with this name is already in inventory",
+}
 
 
 class HostBulkCreate(BaseModel):
@@ -196,6 +207,9 @@ class HostBulkEntry(HostCreate):
     group_id: int | None = None
     group_name: str | None = None
     group_path: list[str] | None = None
+    # The device's serial, from the map: matched against inventory before
+    # adding and stored on the new host, so later collections link to it.
+    serial_number: str = Field(default="", max_length=128)
 
 
 class HostBulkCreateGrouped(BaseModel):
@@ -1559,8 +1573,11 @@ async def _bulk_add(entries: list[HostBulkEntry], default_group_id: int | None, 
     at most one of them, or none to use ``default_group_id``. A level of a
     path (or a named group) that does not exist is created once, and only
     when a host is about to go into it; ``groups_created`` lists every level
-    created. Each entry is validated like a single add. An entry whose IP is
-    already a host in any group is skipped, naming that host; the rest are
+    created. Each entry is validated like a single add. An entry that is
+    already a host in any group is skipped, naming that host: matched like
+    the Topology map matches its nodes to hosts (``InventoryIndex``), by AWS
+    instance ID, serial number, IP address (a host's own or one of its
+    interface addresses) or hostname, including the hosts this request
     added. One bad entry never fails the batch: it is listed under ``errors``.
     """
     if len(entries) > BULK_ADD_MAX_HOSTS:
@@ -1578,6 +1595,7 @@ async def _bulk_add(entries: list[HostBulkEntry], default_group_id: int | None, 
     errors: list[dict] = []
     groups_created: list[dict] = []
     id_by_path: dict[tuple[str, ...], int] = {}
+    index = await load_inventory_index()
 
     async def group_for(path: tuple[str, ...]) -> int:
         if path in id_by_path:
@@ -1621,13 +1639,19 @@ async def _bulk_add(entries: list[HostBulkEntry], default_group_id: int | None, 
         if group_id is not None and not scope.can_write_group(group_id):
             errors.append({**names, "error": READ_ONLY_DETAIL})
             continue
-        existing = await db.find_host_by_ip(entry.ip_address) if entry.ip_address else None
+        entry.serial_number = entry.serial_number.strip()
+        existing, matched_by = index.match_key(
+            serial=entry.serial_number,
+            ips=[entry.ip_address],
+            name=entry.hostname,
+            instance_id=entry.aws_instance_id or "",
+        )
         if existing:
             seen = scope.can_read_group(existing.get("group_id"))
             skipped.append(
                 {
                     **names,
-                    "reason": "IP address is already in inventory",
+                    "reason": _BULK_SKIP_REASONS[matched_by],
                     # A host the caller may not read is not named.
                     "host_id": existing.get("id") if seen else None,
                     "group_id": existing.get("group_id") if seen else None,
@@ -1648,6 +1672,8 @@ async def _bulk_add(entries: list[HostBulkEntry], default_group_id: int | None, 
                     errors.append({**names, "error": f"Could not create group {label!r}"})
                     continue
             hid = await _insert_host(group_id, entry)
+            if entry.serial_number:
+                await db.update_host_serial(hid, entry.serial_number)
         except HTTPException as exc:
             detail = exc.detail["message"] if isinstance(exc.detail, dict) else str(exc.detail)
             errors.append({**names, "error": detail})
@@ -1655,6 +1681,15 @@ async def _bulk_add(entries: list[HostBulkEntry], default_group_id: int | None, 
         except ValueError:
             errors.append({**names, "error": "A host with that IP address already exists in this group"})
             continue
+        index.add(
+            {
+                "id": hid,
+                **names,
+                "group_id": group_id,
+                "aws_instance_id": entry.aws_instance_id,
+                "serial_number": entry.serial_number,
+            }
+        )
         added.append(
             {
                 "id": hid,

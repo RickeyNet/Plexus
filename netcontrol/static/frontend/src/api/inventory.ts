@@ -420,6 +420,10 @@ export interface BulkHostInput {
   group_id?: number;
   group_path?: string[];
   group_name?: string;
+  /** The device's serial: matched against inventory, and stored on the new host. */
+  serial_number?: string;
+  /** The EC2 instance the device is: matched against inventory, and stored on the new host. */
+  aws_instance_id?: string;
 }
 
 /** Body of POST `/api/inventory/hosts/bulk`. */
@@ -441,7 +445,10 @@ export interface BulkAddHostsResult {
     /** The group's path from the top, joined with " / ". */
     group_path: string;
   }[];
-  /** IPs already in inventory: the host (and its group) that has the address. */
+  /**
+   * Devices already in inventory (matched by AWS instance, serial, IP or
+   * interface address, or hostname): the host (and its group) it already is.
+   */
   skipped: {
     hostname: string;
     ip_address: string;
@@ -454,19 +461,89 @@ export interface BulkAddHostsResult {
   groups_created: { id: number; name: string; parent_id: number | null; path: string }[];
 }
 
-/** The most hosts one bulk add takes (mirrors the backend's BULK_ADD_MAX_HOSTS). */
+/** The most hosts one bulk add request takes (mirrors the backend's BULK_ADD_MAX_HOSTS). */
 export const BULK_ADD_MAX_HOSTS = 500;
 
-/** Add many hosts, each to the group its entry (or the body) names. */
+/** A bulk add body split into requests of at most `size` hosts, each with the body's `group_id`. */
+export function chunkBulkAddBody(body: BulkAddHostsRequest, size = BULK_ADD_MAX_HOSTS): BulkAddHostsRequest[] {
+  const chunks: BulkAddHostsRequest[] = [];
+  for (let start = 0; start < body.hosts.length; start += size) {
+    chunks.push({ ...body, hosts: body.hosts.slice(start, start + size) });
+  }
+  return chunks;
+}
+
+/** The results of two bulk add requests as one. */
+export function mergeBulkAddResults(a: BulkAddHostsResult, b: BulkAddHostsResult): BulkAddHostsResult {
+  return {
+    added: [...a.added, ...b.added],
+    skipped: [...a.skipped, ...b.skipped],
+    errors: [...a.errors, ...b.errors],
+    groups_created: [...a.groups_created, ...b.groups_created],
+  };
+}
+
+/** What a chunked bulk add did. */
+export interface BulkAddRun {
+  /** The merged result of every request that completed. */
+  result: BulkAddHostsResult;
+  /** How many hosts of the body, from the start, were sent and answered. */
+  attempted: number;
+  total: number;
+  /** Stopped on request before every host was sent. */
+  stopped: boolean;
+  /** The message of the request that failed; the hosts from it on were not added. */
+  error: string | null;
+}
+
+export interface BulkAddOptions {
+  /** Called after each request with how many hosts have been answered. */
+  onProgress?: (done: number, total: number) => void;
+  /** Checked before each request; true stops before sending it. */
+  shouldStop?: () => boolean;
+}
+
+const EMPTY_BULK_RESULT: BulkAddHostsResult = { added: [], skipped: [], errors: [], groups_created: [] };
+
+/**
+ * Add any number of hosts: the body is sent as requests of at most
+ * BULK_ADD_MAX_HOSTS hosts, one after another (each sees the hosts the
+ * previous ones added, so a device in two requests is added once). A failed
+ * request ends the run with what the earlier ones did.
+ */
+export async function bulkAddHostsInChunks(
+  body: BulkAddHostsRequest,
+  { onProgress, shouldStop }: BulkAddOptions = {},
+  send: (chunk: BulkAddHostsRequest) => Promise<BulkAddHostsResult> = (chunk) =>
+    apiRequest<BulkAddHostsResult>('/inventory/hosts/bulk', { method: 'POST', body: chunk }),
+): Promise<BulkAddRun> {
+  const total = body.hosts.length;
+  let result = EMPTY_BULK_RESULT;
+  let attempted = 0;
+  for (const chunk of chunkBulkAddBody(body)) {
+    if (shouldStop?.()) return { result, attempted, total, stopped: true, error: null };
+    try {
+      result = mergeBulkAddResults(result, await send(chunk));
+    } catch (e) {
+      return { result, attempted, total, stopped: false, error: (e as Error).message };
+    }
+    attempted += chunk.hosts.length;
+    onProgress?.(attempted, total);
+  }
+  return { result, attempted, total, stopped: false, error: null };
+}
+
+/**
+ * Add many hosts, each to the group its entry (or the body) names, in
+ * requests of BULK_ADD_MAX_HOSTS (see `bulkAddHostsInChunks`). Inventory and
+ * the map are refreshed once, when the run ends.
+ */
 export function useBulkAddHosts() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: BulkAddHostsRequest) =>
-      apiRequest<BulkAddHostsResult>('/inventory/hosts/bulk', {
-        method: 'POST',
-        body,
-      }),
-    onSuccess: () => {
+    mutationFn: ({ body, ...options }: { body: BulkAddHostsRequest } & BulkAddOptions) =>
+      bulkAddHostsInChunks(body, options),
+    onSettled: () => {
       // Hosts and possibly new groups (both group lists).
       invalidateInventory(qc);
       // Added hosts become inventory nodes on the map.

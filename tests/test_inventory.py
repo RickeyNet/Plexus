@@ -99,6 +99,62 @@ def test_bulk_add_caps_the_batch(api):
     assert api.get(f"/api/inventory/{target}/hosts").json() == []
 
 
+def test_bulk_add_skips_hosts_inventory_already_has_by_any_identity(api):
+    """A device the map knows by an AWS instance, a serial, an interface
+    address or a name that an inventory host already has is skipped, not
+    added a second time."""
+    other = _group(api, "Known devices")
+    cloud = api.post(
+        f"/api/inventory/{other}/hosts",
+        json={
+            "hostname": "app-1",
+            "ip_address": "192.0.2.10",
+            "device_type": "icmp_only",
+            "aws_instance_id": "i-0abc1234",
+        },
+    )
+    assert cloud.status_code == 201, cloud.text
+    switch = api.post(
+        f"/api/inventory/{other}/hosts",
+        json={"hostname": "core-sw.example.com", "ip_address": "192.0.2.20", "device_type": "cisco_xe"},
+    )
+    assert switch.status_code == 201, switch.text
+    switch_id = switch.json()["id"]
+    asyncio.run(db_module.update_host_serial(switch_id, "Q2AB-CDEF-0001"))
+    asyncio.run(db_module.set_host_ip_aliases(switch_id, "192.0.2.20", ["198.51.100.20"]))
+
+    target = _group(api, "From the map")
+    resp = api.post(
+        "/api/inventory/hosts/bulk",
+        json={
+            "group_id": target,
+            "hosts": [
+                {"hostname": "app-1-new-ip", "ip_address": "192.0.2.11", "aws_instance_id": "i-0ABC1234"},
+                {"hostname": "renamed", "ip_address": "192.0.2.21", "serial_number": "q2ab-cdef-0001"},
+                {"hostname": "via-interface", "ip_address": "198.51.100.20"},
+                {"hostname": "CORE-SW", "ip_address": "192.0.2.22"},
+                {"hostname": "edge-1", "ip_address": "192.0.2.30", "serial_number": "Q2AB-CDEF-0002"},
+                {"hostname": "edge-1-dup", "ip_address": "192.0.2.31", "serial_number": "Q2AB-CDEF-0002"},
+            ],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert [h["hostname"] for h in body["added"]] == ["edge-1"]
+    reasons = {s["hostname"]: (s["reason"], s["host_id"]) for s in body["skipped"]}
+    edge_id = body["added"][0]["id"]
+    assert reasons == {
+        "app-1-new-ip": ("AWS instance is already in inventory", cloud.json()["id"]),
+        "renamed": ("Serial number is already in inventory", switch_id),
+        "via-interface": ("IP address is already in inventory", switch_id),
+        "CORE-SW": ("A host with this name is already in inventory", switch_id),
+        "edge-1-dup": ("Serial number is already in inventory", edge_id),
+    }
+    # The serial sent with an added host is stored on it.
+    hosts = {h["hostname"]: h for h in api.get(f"/api/inventory/{target}/hosts").json()}
+    assert hosts["edge-1"]["serial_number"] == "Q2AB-CDEF-0002"
+
+
 def test_bulk_add_unknown_group_is_404(api):
     resp = api.post("/api/inventory/999999/hosts/bulk", json={"hosts": []})
     assert resp.status_code == 404
