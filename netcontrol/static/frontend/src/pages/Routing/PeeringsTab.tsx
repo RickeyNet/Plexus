@@ -19,6 +19,7 @@ import { QueryError } from '@/components/QueryError';
 import { clickableProps } from '@/lib/clickable';
 import { PEERING_STATUSES, formatAsn, parseAsn, statusLabel } from '@/lib/routing';
 import { usePendingKeys } from '@/lib/usePendingKeys';
+import { DETAIL_STACK_STYLE } from '@/lib/wideDetail';
 import { SplitLayout } from '@/pages/Ipam/NetworkObjectParts';
 
 import { PeerGroupModal, PeeringModal } from './RoutingModals';
@@ -246,7 +247,7 @@ export function PeeringsTab() {
     selected?.kind === 'peering' ? (
       <PeeringDetailPanel id={selected.id} />
     ) : groupRecord ? (
-      <div style={{ display: 'grid', gap: '1rem' }}>
+      <div style={DETAIL_STACK_STYLE}>
         <div>
           <h3 style={{ margin: 0 }}>Peer group {groupRecord.name}</h3>
           <div className="text-muted" style={{ fontSize: '0.9em' }}>
@@ -286,7 +287,7 @@ function PeeringDetailPanel({ id }: { id: number }) {
     ['Export policy', p.export_policy || '-'],
   ];
   return (
-    <div style={{ display: 'grid', gap: '1rem' }}>
+    <div style={DETAIL_STACK_STYLE}>
       <div>
         <h3 style={{ margin: 0 }}>Peering with {p.remote_address}</h3>
         <div style={{ marginTop: '0.25rem' }}>

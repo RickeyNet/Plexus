@@ -12,6 +12,7 @@ import { clickableProps } from '@/lib/clickable';
 import { siteStatusLabel, siteStatusTone } from '@/lib/organization';
 import { canUseFeature } from '@/lib/tabGating';
 import { usePendingKeys } from '@/lib/usePendingKeys';
+import { DETAIL_STACK_STYLE } from '@/lib/wideDetail';
 import { SiteModal } from '@/pages/FloorPlan/modals';
 import { SplitLayout } from '@/pages/Ipam/NetworkObjectParts';
 
@@ -122,7 +123,7 @@ export function SitesTab() {
   );
 
   const detail = selected ? (
-    <div style={{ display: 'grid', gap: '0.75rem' }}>
+    <div style={{ ...DETAIL_STACK_STYLE, gap: '0.75rem' }}>
       <div>
         <h3 style={{ margin: 0 }}>{selected.name}</h3>
         <div className="text-muted" style={{ fontSize: '0.9em' }}>

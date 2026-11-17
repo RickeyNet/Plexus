@@ -11,6 +11,7 @@ import { QueryError } from '@/components/QueryError';
 import { clickableProps } from '@/lib/clickable';
 import { INSTANCE_STATUSES, formatAsn, parseAsn, statusLabel } from '@/lib/routing';
 import { usePendingKeys } from '@/lib/usePendingKeys';
+import { DETAIL_STACK_STYLE } from '@/lib/wideDetail';
 import { DetailSection, SplitLayout } from '@/pages/Ipam/NetworkObjectParts';
 
 import { RoutingInstanceModal } from './RoutingModals';
@@ -162,7 +163,7 @@ export function InstanceDetailPanel({ id }: { id: number | null }) {
   if (q.isPending) return <LoadingState text="Loading instance details…" />;
   const i = q.data;
   return (
-    <div style={{ display: 'grid', gap: '1rem' }}>
+    <div style={DETAIL_STACK_STYLE}>
       <div>
         <h3 style={{ margin: 0 }}>
           {i.hostname} · {i.name}

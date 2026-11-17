@@ -15,6 +15,7 @@ import { QueryError } from '@/components/QueryError';
 import { clickableProps } from '@/lib/clickable';
 import { siteFilterFromSelect, siteFilterToSelect, type VlanSiteFilter, vrfLabel } from '@/lib/networkObjects';
 import { usePendingKeys } from '@/lib/usePendingKeys';
+import { DETAIL_STACK_STYLE } from '@/lib/wideDetail';
 
 import { VlanModal } from './NetworkObjectModals';
 import { DetailSection, OriginBadge, SplitLayout } from './NetworkObjectParts';
@@ -220,7 +221,7 @@ export function VlanDetailPanel({ id }: { id: number | null }) {
   if (q.isPending) return <LoadingState text="Loading VLAN details…" />;
   const v = q.data;
   return (
-    <div style={{ display: 'grid', gap: '1rem' }}>
+    <div style={DETAIL_STACK_STYLE}>
       <div>
         <h3 style={{ margin: 0 }}>
           VLAN {v.vid}
@@ -236,7 +237,7 @@ export function VlanDetailPanel({ id }: { id: number | null }) {
           <thead>
             <tr>
               <th>Device</th>
-              <th>Its name for the VLAN</th>
+              <th>Name on device</th>
               <th>State</th>
             </tr>
           </thead>

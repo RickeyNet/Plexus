@@ -62,6 +62,7 @@ from netcontrol.routes.shared import (
     _corr_id,
     _get_session,
     _run_show_command,
+    _session_user_id,
     require_credential_access,
     service_credential,
     supervise_task,
@@ -1327,14 +1328,11 @@ class GroupReorderRequest(BaseModel):
 @router.post("/api/inventory/groups/reorder")
 @scoped("list")
 async def reorder_groups(payload: GroupReorderRequest, request: Request):
-    session = _get_session(request)
-    user_id = session.get("user_id") if session else None
-    if user_id is None:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = _session_user_id(request)
     # A scoped caller orders only the groups they may read.
     scope = await request_scope(request)
     ordered_ids = [gid for gid in payload.ordered_ids if scope.can_read_group(gid)]
-    await db.set_user_group_order(int(user_id), ordered_ids)
+    await db.set_user_group_order(user_id, ordered_ids)
     return {"ok": True}
 
 

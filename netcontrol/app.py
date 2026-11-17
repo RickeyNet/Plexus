@@ -344,6 +344,7 @@ from netcontrol.routes.software import _software_refresh_loop, init_software, ro
 from netcontrol.routes.source_import import router as source_import_router
 from netcontrol.routes.sync import admin_router as sync_admin_router, router as sync_router
 from netcontrol.routes.templates import TemplateCreate, TemplateUpdate, router as templates_router
+from netcontrol.routes.tool_history import router as tool_history_router
 from netcontrol.routes.topology import (
     _calc_interface_utilization,
     _record_topology_changes,
@@ -2502,6 +2503,12 @@ app.include_router(
 app.include_router(
     meraki_topology_router,
     dependencies=[Depends(require_auth), Depends(require_feature_method("topology"))],
+)
+# Path, reachability and summarize history: personal, so reading the map is enough to keep one
+# (topology, not topology.write, also for its POST and DELETE).
+app.include_router(
+    tool_history_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("topology"))],
 )
 # Importing a source's devices into the inventory: an administrator action
 # that writes to both features, so it is gated by both.

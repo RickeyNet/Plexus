@@ -12,6 +12,7 @@ import { QueryError } from '@/components/QueryError';
 import { clickableProps } from '@/lib/clickable';
 import { formatAsn } from '@/lib/routing';
 import { usePendingKeys } from '@/lib/usePendingKeys';
+import { DETAIL_STACK_STYLE } from '@/lib/wideDetail';
 import { DetailSection, SplitLayout } from '@/pages/Ipam/NetworkObjectParts';
 
 import { AutonomousSystemModal } from './RoutingModals';
@@ -148,7 +149,7 @@ export function AutonomousSystemDetailPanel({ id }: { id: number | null }) {
   if (q.isPending) return <LoadingState text="Loading AS details…" />;
   const a = q.data;
   return (
-    <div style={{ display: 'grid', gap: '1rem' }}>
+    <div style={DETAIL_STACK_STYLE}>
       <div>
         <h3 style={{ margin: 0 }}>{formatAsn(a.asn)}</h3>
         <div className="text-muted" style={{ fontSize: '0.9em' }}>

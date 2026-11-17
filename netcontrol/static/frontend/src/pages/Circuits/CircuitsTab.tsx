@@ -27,6 +27,7 @@ import {
 } from '@/lib/circuits';
 import { clickableProps } from '@/lib/clickable';
 import { usePendingKeys } from '@/lib/usePendingKeys';
+import { DETAIL_STACK_STYLE } from '@/lib/wideDetail';
 import { DetailSection, SplitLayout } from '@/pages/Ipam/NetworkObjectParts';
 
 import { CircuitModal } from './CircuitModal';
@@ -229,7 +230,7 @@ export function CircuitDetailPanel({ id }: { id: number | null }) {
   const c = q.data;
   const utilisation = c.utilisation ?? [];
   return (
-    <div style={{ display: 'grid', gap: '1rem' }}>
+    <div style={DETAIL_STACK_STYLE}>
       <div>
         <h3 style={{ margin: 0 }}>{c.cid}</h3>
         <div className="text-muted" style={{ fontSize: '0.9em' }}>

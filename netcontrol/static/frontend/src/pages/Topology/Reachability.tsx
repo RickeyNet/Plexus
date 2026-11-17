@@ -13,6 +13,7 @@ import {
   type ReachabilityQuery,
   type ReachabilityReport,
 } from '@/api/meraki';
+import { useRecordToolHistory } from '@/api/toolHistory';
 import { EmptyState } from '@/components/EmptyState';
 import { PageHelp } from '@/components/PageHelp';
 import { formatBackendDateTime } from '@/lib/datetime';
@@ -29,6 +30,8 @@ import {
   TEXT_CELL_STYLE,
 } from './helpers';
 import { PathTrace } from './PathTracePanel';
+import { reachabilityHistoryLabel, restoreReachabilityForm, type ReachabilityHistoryData } from './history';
+import { HistoryMenu } from './HistoryMenu';
 import { HostSuggestions } from './HostSuggestions';
 import { hostAddress, subnetOptionLabel, suggestHosts, type HostSuggestion } from './paths';
 import { portsText, reverseTraceQuery, verdictLabel } from './pathTrace';
@@ -103,6 +106,7 @@ export function Reachability() {
   const subnetsQuery = useMerakiSubnets(true);
   const sourcesQuery = useTopologySources();
   const sweep = useReachability(query);
+  const { mutate: recordHistory } = useRecordToolHistory<ReachabilityHistoryData>('reachability');
 
   const subnets = useMemo(() => subnetsQuery.data?.subnets ?? [], [subnetsQuery.data]);
   const sources = useMemo(() => sweepSources(sourcesQuery.data?.sources ?? [], subnets), [sourcesQuery.data, subnets]);
@@ -146,11 +150,23 @@ export function Reachability() {
     update(pickedOwnerPatch(side, form[side], owners[side].find((s) => subnetKey(s) === key)));
   }
 
-  function run() {
+  function run(current: ReachabilityForm = form, owned: Record<SweepEnd, string> = picked) {
     // A typed address one subnet holds is placed at that subnet's owner, as in Path Mode.
-    const placed = withSingleOwners(form, subnets);
+    const placed = withSingleOwners(current, subnets);
     const error = namedEndError(placed, subnets);
-    submit(error ? { error } : buildReachabilityQuery(placed));
+    const built = error ? { error } : buildReachabilityQuery(placed);
+    submit(built);
+    // The form as typed is kept, so it opens again as the user left it.
+    if (!('error' in built)) recordHistory({ data: { form: current, picked: owned } });
+  }
+
+  // A sweep from the history: its form as it was, run again.
+  function openHistory(data: ReachabilityHistoryData) {
+    const restored = restoreReachabilityForm(data);
+    const owned = { ...NO_OWNERS, ...(data.picked ?? {}) };
+    setForm(restored);
+    setPicked(owned);
+    run(restored, owned);
   }
 
   function listNetworks() {
@@ -216,7 +232,7 @@ export function Reachability() {
                 }
                 value={form[side]}
                 onChange={(value) => setEnd(side, value)}
-                onEnter={run}
+                onEnter={() => run()}
                 owners={owners[side]}
                 picked={picked[side]}
                 onPick={(key) => pickOwner(side, key)}
@@ -235,9 +251,15 @@ export function Reachability() {
                 title="Empty: any traffic, and each row lists the ports allowed end to end"
               />
             </label>
-            <button type="button" className="btn btn-sm btn-primary" onClick={run} disabled={sweep.isFetching}>
+            <button type="button" className="btn btn-sm btn-primary" onClick={() => run()} disabled={sweep.isFetching}>
               {sweep.isFetching ? 'Running…' : 'Run'}
             </button>
+            <HistoryMenu<ReachabilityHistoryData>
+              kind="reachability"
+              noun={{ one: 'sweep', many: 'sweeps' }}
+              label={reachabilityHistoryLabel}
+              onOpen={openHistory}
+            />
             <button
               type="button"
               className="btn btn-sm btn-secondary"

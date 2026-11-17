@@ -27,6 +27,7 @@ import {
 } from '@/api/topology';
 import { groupLabel } from '@/api/inventory';
 import { topologyExportUrl, useMerakiSubnets, usePathAppSuggestions, useTopologyDeepSearch, type MerakiSubnet, type TopologyExportPath } from '@/api/meraki';
+import { useRecordToolHistory } from '@/api/toolHistory';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { LoadingState } from '@/components/LoadingState';
 import { Menu, MenuCheckboxItem, MenuItem, MenuSeparator } from '@/components/Menu';
@@ -83,6 +84,8 @@ import { distanceToRoute, routeSourceLinks, traceRoute } from './routes';
 import { EdgeDetails } from './EdgeDetails';
 import { MAX_PATH_ENDPOINTS, appCandidate, appOptions, appPick, connectPicks, findNamedHosts, findSubnets, hostAddress, isAddressText, pickEnd, pickNodes, suggestHosts, parseTraffic, pathModeHint, pathSites, subnetOptionLabel, subnetPick, userPick, type PathPick } from './paths';
 import { PathTrace } from './PathTracePanel';
+import { HISTORY_SETTLE_MS, droppedNote, historyWorthy, pathHistoryKey, pathHistoryLabel, restorePicks, type PathHistoryData } from './history';
+import { HistoryMenu } from './HistoryMenu';
 import { legKey, mergeHighlights, pathTraceQuery, reverseTraceQuery, uncheckedTraceNote, type TraceHighlight } from './pathTrace';
 import { NodeDetails } from './NodeDetails';
 import { SourcesModal } from './SourcesModal';
@@ -202,6 +205,11 @@ export function Topology() {
     linkedProvider ? `provider:${linkedProvider}` : 'all',
   );
   useEffect(() => clearLinkedProvider(), [clearLinkedProvider]);
+  // `?host=<id>` (the Inventory host panel's Show on map) opens the map
+  // zoomed in on that inventory device with its details open, once drawn.
+  const [linkedHost, clearLinkedHost] = useLinkedParam('host');
+  const pendingFocusRef = useRef<number | null>(linkedHost && /^\d+$/.test(linkedHost) ? Number(linkedHost) : null);
+  useEffect(() => clearLinkedHost(), [clearLinkedHost]);
   // `?sources` (the Dashboard's source health chips) opens the Sources dialog.
   const [searchParams, setSearchParams] = useSearchParams();
   const [sourcesOpen, setSourcesOpen] = useState(() => searchParams.has('sources'));
@@ -1033,17 +1041,32 @@ export function Topology() {
         }
         if (nodeUpdates.length) nodes.update(nodeUpdates);
         network.setOptions({ layout: { hierarchical: { enabled: false } }, physics: { enabled: false } });
-        network.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
+        fitView(500);
       });
     } else if (usePhysics) {
-      networkRef.current.once('stabilizationIterationsDone', () => {
-        networkRef.current!.fit({ animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
-      });
+      networkRef.current.once('stabilizationIterationsDone', () => fitView(500));
     } else if (allPinned || isCircular || isTidy) {
-      setTimeout(() => {
-        networkRef.current?.fit({ animation: { duration: 300, easingFunction: 'easeInOutQuad' } });
-      }, 50);
+      setTimeout(() => fitView(300), 50);
+    } else if (pendingFocusRef.current != null) {
+      setTimeout(() => fitView(300), 50);
     }
+  }
+
+  // Fit the drawn map to the view, or zoom in on the device a `?host=` link
+  // asked for (once; a device the filters leave off the map is reported).
+  function fitView(duration: number) {
+    const network = networkRef.current;
+    if (!network) return;
+    const target = pendingFocusRef.current;
+    if (target != null) {
+      pendingFocusRef.current = null;
+      if (nodesDSRef.current?.get(target as never)) {
+        focusNode(target);
+        return;
+      }
+      flash('That device is not on the map with the current filters');
+    }
+    network.fit({ animation: { duration, easingFunction: 'easeInOutQuad' } });
   }
 
   // Frame each Meraki site (network) with a labelled box behind its devices.
@@ -1340,6 +1363,17 @@ export function Topology() {
     () => (pathMode && pickNodes(pathPicks).length > 0 ? { picks: pathPicks, traffic: trafficFilter ?? { protocol: '' } } : null),
     [pathMode, pathPicks, trafficFilter],
   );
+  // The user's last traces (kept by the server), recorded once the picks and
+  // the traffic have stayed put for a moment so each step of building a
+  // trace is not kept on its own.
+  const { mutate: recordPathHistory } = useRecordToolHistory<PathHistoryData>('path');
+  const historyTraffic = pathHasTraceLeg ? pathTraffic.trim() : '';
+  useEffect(() => {
+    if (!pathMode || !historyWorthy(pathPicks) || trafficFilter === null) return;
+    const data = { picks: pathPicks, traffic: historyTraffic };
+    const timer = setTimeout(() => recordPathHistory({ data, key: pathHistoryKey(data) }), HISTORY_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [pathMode, pathPicks, historyTraffic, trafficFilter, recordPathHistory]);
   const setLegHighlight = useCallback((key: string, highlight: TraceHighlight | null) => {
     setTraceHighlights((prev) => ((prev[key] ?? null) === highlight ? prev : { ...prev, [key]: highlight }));
   }, []);
@@ -1566,6 +1600,20 @@ export function Topology() {
     pathPicksRef.current = next;
     setPathPicks(next);
     setPathNote('');
+  }
+
+  // Open a trace from the history as it was picked, without the devices
+  // that have left the map since.
+  function openHistoryTrace(entry: PathHistoryData) {
+    const nodes = new Set<number | string>((data?.nodes ?? []).map((n) => n.id));
+    const { picks, dropped } = restorePicks(entry.picks ?? [], (node) => nodes.has(node));
+    pathPicksRef.current = picks;
+    setPathPicks(picks);
+    setPathTraffic(entry.traffic ?? '');
+    setPathSiteInput('');
+    setPathSubnetInput('');
+    setPathSubnetChoices([]);
+    setPathNote(droppedNote(dropped));
   }
 
   function addPathPick(pick: PathPick) {
@@ -2391,6 +2439,13 @@ export function Topology() {
                   style={{ width: 190, borderColor: trafficFilter === null ? 'var(--danger)' : undefined }}
                 />
               )}
+              <HistoryMenu<PathHistoryData>
+                kind="path"
+                noun={{ one: 'trace', many: 'traces' }}
+                label={pathHistoryLabel}
+                onOpen={openHistoryTrace}
+                enabled={pathMode}
+              />
               <button type="button" className="btn btn-sm btn-secondary" onClick={() => { setPathPicks([]); setPathNote(''); setPathSubnetChoices([]); }} disabled={!pathPicks.length}>Clear</button>
             </div>
             {pathNote && (

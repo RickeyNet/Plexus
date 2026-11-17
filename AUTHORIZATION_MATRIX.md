@@ -58,6 +58,7 @@ All API endpoints and their required authentication/authorization levels.
 |---------|-------|--------|
 | `inventory` | `/api/inventory/*` | inventory |
 | `topology` | `/api/topology/*` | topology |
+| `topology` | `GET/POST/DELETE /api/topology/history/{kind}`, `DELETE /api/topology/history/{kind}/{entry_id}` (the caller's own last 30 Path Mode traces, reachability sweeps or summaries; the writes need only `topology`, not `topology.write`, since each user changes only their own history) | tool_history |
 | `topology` | `/api/sources/*`, `/api/topology/search/deep`, `/api/topology/export.html` (collections/deletes need `topology.write`; source and credential management `POST/PUT/DELETE /api/sources*` is admin-only in the handlers) | meraki_topology |
 | `jobs` | `/api/jobs/*` (launch, retry and rerun also check the task's run permission and, for a live run, its commit permission: `403` when refused; admins and API token callers always pass. See `docs/jobs.md#run-and-commit-permissions`) | jobs |
 | `templates` | `/api/templates/*` | templates |

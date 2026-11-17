@@ -26,6 +26,7 @@ import { runSave } from '@/lib/recordSave';
 import { serverFieldErrors } from '@/lib/serverFieldErrors';
 import { useNameField } from '@/lib/useNameField';
 import { usePendingKeys } from '@/lib/usePendingKeys';
+import { DETAIL_STACK_STYLE } from '@/lib/wideDetail';
 import { DetailSection, SplitLayout } from '@/pages/Ipam/NetworkObjectParts';
 
 import { useCanWriteCircuits, useConfirmDelete } from './hooks';
@@ -143,7 +144,7 @@ function ProviderDetailPanel({ id, canWrite }: { id: number | null; canWrite: bo
   if (q.isPending) return <LoadingState text="Loading provider details…" />;
   const p = q.data;
   return (
-    <div style={{ display: 'grid', gap: '1rem' }}>
+    <div style={DETAIL_STACK_STYLE}>
       <h3 style={{ margin: 0 }}>{p.name}</h3>
       <div style={{ display: 'grid', gap: '0.3rem' }}>
         <DetailRow label="Account">{p.account || <Dash />}</DetailRow>
