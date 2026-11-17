@@ -103,7 +103,8 @@ Every change is written to the audit log under the `custom_fields` category.
 ## CSV export
 
 The inventory CSV export gains a `Tags` column (names joined with `; `) and
-one column per field that applies to hosts, in field order.
+one column per field that applies to hosts, in field order. The same columns
+set tags and values in a [bulk import](bulk-import.md).
 
 ## API
 

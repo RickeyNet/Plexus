@@ -9,11 +9,13 @@ import {
   useSaveObjectData,
 } from '@/api/customData';
 import { Callout } from '@/components/Callout';
+import { ChangelogPanel } from '@/components/ChangelogPanel';
 import { CustomDataSection } from '@/components/CustomDataSection';
 import { DeleteButton } from '@/components/DeleteButton';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { FieldError } from '@/components/FieldError';
 import {
+  type IpamPrefixRecord,
   type IpamSubnetDetail,
   useCreateIpamAllocation,
   useCreateIpamReservation,
@@ -21,13 +23,16 @@ import {
   useDeleteIpamReservation,
 } from '@/api/ipam';
 import type { InterfaceAddress } from '@/api/networkObjects';
+import { useSetIpamTenant } from '@/api/organization';
 import { EmptyState } from '@/components/EmptyState';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
 import { TagChips } from '@/components/TagChips';
+import { TenantSelect } from '@/components/TenantSelect';
 import { applicableFields, formatCustomValue } from '@/lib/customData';
 import { formatCount } from '@/lib/formatCount';
 import { addressRoleLabel, describeCarriers, formatInterfaceAddress, interfacesByAddress } from '@/lib/networkObjects';
+import { serverFieldErrors } from '@/lib/serverFieldErrors';
 import { saveCustomDataDraft, useCustomDataDraft } from '@/lib/useCustomDataDraft';
 import { StatGrid, StatTile } from '@/components/StatTile';
 
@@ -109,6 +114,8 @@ export function SubnetDrilldown({ subnet, vrf, detail, isLoading, loadError, onR
         onChanged={onRefresh}
       />
 
+      {(detail.prefixes ?? []).length > 0 && <PrefixTenantsSection prefixes={detail.prefixes ?? []} onChanged={onRefresh} />}
+
       <AllocationsSection
         subnet={subnet}
         allocations={allocations}
@@ -157,6 +164,9 @@ export function SubnetDrilldown({ subnet, vrf, detail, isLoading, loadError, onR
           )}
         </div>
       )}
+
+      {/* The changes of the Plexus-defined prefix of this subnet (by its CIDR). */}
+      <ChangelogPanel objectType="prefix" objectLabel={detail.subnet || subnet} pageSize={10} />
     </div>
   );
 }
@@ -492,6 +502,43 @@ function ReservationsSection({
   );
 }
 
+/** The prefix records of the subnet with their tenant; an admin can change it in place. */
+function PrefixTenantsSection({ prefixes, onChanged }: { prefixes: IpamPrefixRecord[]; onChanged: () => void }) {
+  const fid = useId();
+  const isAdmin = useAuthStatus().data?.role === 'admin';
+  const setTenant = useSetIpamTenant();
+  const { alert } = useDialogs();
+  const change = (id: number, tenantId: number | null) =>
+    setTenant.mutate(
+      { kind: 'prefixes', id, tenantId },
+      {
+        onSuccess: () => onChanged(),
+        onError: (e) => void alert({ message: `The tenant was not changed: ${(e as Error).message} Try again.`, variant: 'error' }),
+      },
+    );
+  return (
+    <div>
+      <div style={{ fontWeight: 600, marginBottom: '0.45rem' }}>Prefix records</div>
+      <div style={{ display: 'grid', gap: '0.5rem' }}>
+        {prefixes.map((p) => (
+          <div key={p.id}>
+            <div className="text-muted" style={{ fontSize: '0.9em' }}>
+              {p.source_name || p.provider || 'IPAM'}
+              {p.vrf ? ` · VRF ${p.vrf}` : ''}
+              {p.description ? ` · ${p.description}` : ''}
+            </div>
+            {isAdmin ? (
+              <TenantSelect id={`${fid}-${p.id}`} value={p.tenant_id} disabled={setTenant.isPending} onChange={(v) => change(p.id, v)} />
+            ) : (
+              <div>Tenant: {p.tenant_name || '-'}</div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 interface AllocationsSectionProps {
   subnet: string;
   allocations: NonNullable<IpamSubnetDetail['allocations']>;
@@ -517,7 +564,9 @@ function AllocationsSection({
   const [address, setAddress] = useState('');
   const [hostname, setHostname] = useState('');
   const [description, setDescription] = useState('');
+  const [tenantId, setTenantId] = useState<number | null>(null);
   const [addressError, setAddressError] = useState<string | null>(null);
+  const [serverErrors, setServerErrors] = useState<Record<string, string>>({});
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const submit = async (e: FormEvent) => {
@@ -534,6 +583,7 @@ function AllocationsSection({
           address: address.trim(),
           hostname: hostname.trim(),
           description: description.trim(),
+          tenant_id: tenantId,
         },
       });
       setAddress('');
@@ -541,6 +591,10 @@ function AllocationsSection({
       setDescription('');
       onChanged();
     } catch (err) {
+      // A value a data validation rule refuses is a 422 naming its field.
+      const fields = serverFieldErrors(err);
+      if (fields.address) setAddressError(fields.address);
+      setServerErrors(fields);
       setSaveError((err as Error).message);
     }
   };
@@ -599,6 +653,7 @@ function AllocationsSection({
                       'Allocation'}
                     {item.group_name ? ` · ${item.group_name}` : ''}
                     {item.description ? ` · ${item.description}` : ''}
+                    {item.tenant_name ? ` · Tenant ${item.tenant_name}` : ''}
                   </div>
                   {carriers.has(item.ip_address ?? '') && (
                     <div className="text-muted" style={{ fontSize: '0.85em', lineHeight: 1.45 }}>
@@ -696,10 +751,15 @@ function AllocationsSection({
               id={`${fid}-hostname-label`}
               className="form-input"
               value={hostname}
-              onChange={(e) => setHostname(e.target.value)}
+              onChange={(e) => {
+                setHostname(e.target.value);
+                setServerErrors((prev) => ({ ...prev, hostname: '' }));
+              }}
               maxLength={255}
               placeholder="e.g. printer-floor2"
+              aria-invalid={!!serverErrors.hostname}
             />
+            <FieldError>{serverErrors.hostname}</FieldError>
           </div>
           <div>
             <label className="form-label" htmlFor={`${fid}-description`}>
@@ -709,11 +769,25 @@ function AllocationsSection({
               id={`${fid}-description`}
               className="form-input"
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              onChange={(e) => {
+                setDescription(e.target.value);
+                setServerErrors((prev) => ({ ...prev, description: '' }));
+              }}
               maxLength={255}
               placeholder="e.g. Managed by IT"
+              aria-invalid={!!serverErrors.description}
             />
+            <FieldError>{serverErrors.description}</FieldError>
           </div>
+          <TenantSelect
+            id={`${fid}-tenant`}
+            value={tenantId}
+            error={serverErrors.tenant_id}
+            onChange={(v) => {
+              setTenantId(v);
+              setServerErrors((prev) => ({ ...prev, tenant_id: '' }));
+            }}
+          />
           <div style={FORM_ACTIONS_STYLE}>
             <button
               type="button"

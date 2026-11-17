@@ -44,6 +44,8 @@ __all__ = [
     "create_ipam_prefix",
     "get_ipam_prefix",
     "delete_ipam_prefix",
+    "update_ipam_prefix",
+    "update_ipam_allocation",
     "create_local_ipam_allocation",
     "delete_ipam_allocation",
     "list_ipam_allocations_for_source",
@@ -581,10 +583,12 @@ async def get_ipam_subnet_detail(
         ext_allocs: list[dict] = []
         if include_external:
             cursor = await db.execute(
-                """SELECT a.address, a.dns_name, a.description, a.metadata_json,
+                """SELECT a.id, a.address, a.dns_name, a.description, a.metadata_json,
+                          a.tenant_id, tn.name AS tenant_name,
                           s.provider, s.name AS source_name
                    FROM ipam_allocations a
                    JOIN ipam_sources s ON s.id = a.source_id
+                   LEFT JOIN tenants tn ON tn.id = a.tenant_id
                    WHERE a.prefix_subnet = ?""",
                 (net_str,),
             )
@@ -661,6 +665,8 @@ async def get_ipam_subnet_detail(
                     "description": ea.get("description") or "",
                     "is_reserved": ip_s in reserved_ips,
                     "allocation_id": ea.get("id"),
+                    "tenant_id": ea.get("tenant_id"),
+                    "tenant_name": ea.get("tenant_name"),
                 }
             )
 
@@ -716,9 +722,34 @@ async def get_ipam_subnet_detail(
             "available_address_count": available_count,
         }
 
+        # ── Prefix records of exactly this subnet (any source), with tenant ──
+        cursor = await db.execute(
+            """SELECT p.id, p.vrf, p.description, p.tenant_id, tn.name AS tenant_name,
+                      s.provider, s.name AS source_name
+               FROM ipam_prefixes p
+               JOIN ipam_sources s ON s.id = p.source_id
+               LEFT JOIN tenants tn ON tn.id = p.tenant_id
+               WHERE p.subnet = ?
+               ORDER BY s.name, p.vrf, p.id""",
+            (net_str,),
+        )
+        prefixes_out = [
+            {
+                "id": int(r["id"]),
+                "vrf": r["vrf"] or "",
+                "description": r["description"] or "",
+                "source_name": r["source_name"] or "",
+                "provider": r["provider"] or "",
+                "tenant_id": r["tenant_id"],
+                "tenant_name": r["tenant_name"],
+            }
+            for r in rows_to_list(await cursor.fetchall())
+        ]
+
         return {
             "subnet": net_str,
             "summary": summary_out,
+            "prefixes": prefixes_out,
             "allocations": allocations_out,
             "reservations": reservations_out,
             "available_preview": available_preview,
@@ -1135,8 +1166,10 @@ async def create_ipam_prefix(
     description: str = "",
     vrf: str = "",
     notes: str = "",
+    tenant_id: int | None = None,
 ) -> dict | None:
-    """Create a manually-defined subnet prefix under the given IPAM source."""
+    """Create a manually-defined subnet prefix under the given IPAM source
+    (owned by ``tenant_id`` when given)."""
     try:
         net = ipaddress.ip_network(subnet, strict=False)
         subnet_key = str(net)
@@ -1147,9 +1180,9 @@ async def create_ipam_prefix(
     try:
         cursor = await db.execute(
             """INSERT OR IGNORE INTO ipam_prefixes
-               (source_id, external_id, subnet, description, vrf, metadata_json)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (source_id, subnet_key, subnet_key, description, vrf, json.dumps({"notes": notes})),
+               (source_id, external_id, subnet, description, vrf, metadata_json, tenant_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (source_id, subnet_key, subnet_key, description, vrf, json.dumps({"notes": notes}), tenant_id),
         )
         await db.commit()
         if vrf:
@@ -1180,6 +1213,41 @@ async def get_ipam_prefix(prefix_id: int) -> dict | None:
         await db.close()
 
 
+async def _update_columns(table: str, row_id: int, columns: dict[str, str | None]) -> bool:
+    """Set the given text columns (``None`` values are left alone) of one
+    row of ``table`` (a fixed IPAM table name). ``False`` when the row does
+    not exist."""
+    changes = {k: v for k, v in columns.items() if v is not None}
+    db = await _dbcore.get_db()
+    try:
+        if not changes:
+            cursor = await db.execute(f"SELECT 1 FROM {table} WHERE id = ?", (int(row_id),))  # nosec B608 - fixed table names
+            return await cursor.fetchone() is not None
+        sql, params = _safe_dynamic_update(
+            table, [f"{k} = ?" for k in changes], list(changes.values()), "id = ?", int(row_id)
+        )
+        cursor = await db.execute(sql, params)
+        await db.commit()
+        return (cursor.rowcount or 0) > 0
+    finally:
+        await db.close()
+
+
+@tracks_changes("prefix", "update", id_arg="prefix_id")
+async def update_ipam_prefix(
+    prefix_id: int,
+    *,
+    description: str | None = None,
+    site: str | None = None,
+    vlan: str | None = None,
+) -> dict | None:
+    """Change a prefix's description, site name and VLAN text; ``None``
+    leaves a value as it is. Returns the row, ``None`` when it does not
+    exist. The subnet and VRF never change (they are the prefix's key)."""
+    found = await _update_columns("ipam_prefixes", prefix_id, {"description": description, "site": site, "vlan": vlan})
+    return await get_ipam_prefix(prefix_id) if found else None
+
+
 @tracks_changes("prefix", "delete", id_arg="prefix_id")
 async def delete_ipam_prefix(prefix_id: int) -> bool:
     db = await _dbcore.get_db()
@@ -1199,8 +1267,12 @@ async def create_local_ipam_allocation(
     hostname: str = "",
     description: str = "",
     created_by: str = "",
+    vrf_name: str = "",
+    tenant_id: int | None = None,
 ) -> dict | None:
-    """Manually record an IP address allocation within a subnet."""
+    """Manually record an IP address allocation within a subnet (in
+    ``vrf_name``, ``""`` for the global table; owned by ``tenant_id`` when
+    given)."""
     try:
         net = ipaddress.ip_network(subnet, strict=False)
         subnet_key = str(net)
@@ -1212,8 +1284,9 @@ async def create_local_ipam_allocation(
     try:
         cursor = await db.execute(
             """INSERT OR IGNORE INTO ipam_allocations
-               (source_id, prefix_subnet, address, dns_name, status, description, metadata_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+               (source_id, prefix_subnet, address, dns_name, status, description, metadata_json, vrf_name,
+                tenant_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 source_id,
                 subnet_key,
@@ -1222,6 +1295,8 @@ async def create_local_ipam_allocation(
                 "active",
                 description,
                 json.dumps({"created_by": created_by}),
+                vrf_name or "",
+                tenant_id,
             ),
         )
         await db.commit()
@@ -1261,6 +1336,33 @@ async def create_local_ipam_allocation(
                 exc,
             )
     return result
+
+
+@tracks_changes("ip_address", "update", id_arg="allocation_id")
+async def update_ipam_allocation(
+    allocation_id: int,
+    *,
+    dns_name: str | None = None,
+    description: str | None = None,
+    prefix_subnet: str | None = None,
+    vrf_name: str | None = None,
+) -> dict | None:
+    """Change an allocation's DNS name, description, prefix and VRF; ``None``
+    leaves a value as it is. Returns the row, ``None`` when it does not
+    exist. The address never changes (it is the allocation's key)."""
+    found = await _update_columns(
+        "ipam_allocations",
+        allocation_id,
+        {"dns_name": dns_name, "description": description, "prefix_subnet": prefix_subnet, "vrf_name": vrf_name},
+    )
+    if not found:
+        return None
+    db = await _dbcore.get_db(read_only=True)
+    try:
+        cursor = await db.execute("SELECT * FROM ipam_allocations WHERE id = ?", (int(allocation_id),))
+        return row_to_dict(await cursor.fetchone())
+    finally:
+        await db.close()
 
 
 @tracks_changes("ip_address", "delete", id_arg="allocation_id")

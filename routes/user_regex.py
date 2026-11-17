@@ -42,3 +42,11 @@ def compile_user_regex(pattern: str, *, ignore_case: bool = True, multiline: boo
         if isinstance(reason, bytes):
             reason = reason.decode("utf-8", errors="replace")
         raise ValueError(str(reason) or "invalid regular expression") from exc
+
+
+def compile_whole_value_regex(pattern: str) -> UserRegex:
+    """``pattern`` compiled with RE2 to match the whole value, case
+    sensitively (``re.fullmatch`` semantics: RE2's ``$`` matches only at the
+    very end). Used by job input fields and data validation rules. Raises
+    ``ValueError`` for an invalid or unsupported pattern."""
+    return compile_user_regex(f"^(?:{pattern})$", ignore_case=False)

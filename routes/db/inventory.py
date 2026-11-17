@@ -153,6 +153,7 @@ _GROUP_LISTING_HOST_COLUMNS = (
     "role_id",
     "lifecycle_status_id",
     "site_id",
+    "tenant_id",
     "location_detail",
 )
 # Host columns read back as '' when NULL.
@@ -874,6 +875,7 @@ async def move_hosts(host_ids: list[int], target_group_id: int) -> int:
         await db.close()
 
 
+@tracks_changes("host", "update", ids_arg="host_ids")
 async def set_hosts_snmp_profile(host_ids: list[int], profile_id: str) -> int:
     """Give the hosts their own SNMP profile (``""``: inherit the group's)."""
     if not host_ids:
@@ -955,6 +957,7 @@ async def update_host_status(host_id: int, status: str):
         await db.close()
 
 
+@tracks_changes("host", "update", id_arg="host_id")
 async def update_host_device_info(host_id: int, model: str, software_version: str, device_category: str = ""):
     """Update the model, software_version, and device_category fields for a
     host, then link it to the device model catalogues
@@ -977,6 +980,7 @@ async def update_host_device_info(host_id: int, model: str, software_version: st
     await link_host_hardware(host_id, "", model, device_category)
 
 
+@tracks_changes("host", "update", id_arg="host_id")
 async def update_host_serial(host_id: int, serial_number: str) -> None:
     """Update the serial_number field for a host."""
     db = await _dbcore.get_db()

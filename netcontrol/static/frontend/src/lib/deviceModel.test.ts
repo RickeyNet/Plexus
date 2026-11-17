@@ -64,6 +64,27 @@ describe('matchesDeviceFilter', () => {
   });
 });
 
+describe('matchesDeviceFilter on region and tenant', () => {
+  // Site 3 is in region 11 (Netherlands), under region 10 (Europe).
+  const placed = host({ site_id: 3, region_ids: [11, 10], tenant_id: 4 });
+
+  it('matches a region and every region above the host site region', () => {
+    expect(matchesDeviceFilter(placed, { region: [11] })).toBe(true);
+    expect(matchesDeviceFilter(placed, { region: [10] })).toBe(true);
+    expect(matchesDeviceFilter(placed, { region: [12] })).toBe(false);
+    expect(matchesDeviceFilter(placed, { region: [12, 10] })).toBe(true);
+  });
+
+  it('matches None to a host in no region or with no tenant', () => {
+    expect(matchesDeviceFilter(host(), { region: [NONE] })).toBe(true);
+    expect(matchesDeviceFilter(host({ region_ids: [] }), { region: [NONE] })).toBe(true);
+    expect(matchesDeviceFilter(placed, { region: [NONE] })).toBe(false);
+    expect(matchesDeviceFilter(placed, { tenant: [4] })).toBe(true);
+    expect(matchesDeviceFilter(placed, { tenant: [NONE] })).toBe(false);
+    expect(matchesDeviceFilter(host(), { tenant: [NONE] })).toBe(true);
+  });
+});
+
 describe('toggleFacetChoice and the filter count', () => {
   it('adds and removes a choice, dropping an emptied facet', () => {
     const one = toggleFacetChoice(undefined, 'role', 2);
@@ -129,7 +150,7 @@ describe('changedHostDeviceFields', () => {
 
   it('starts a new host on the default status and does not send it unchanged', () => {
     const initial = initialHostDeviceValues(null, 1);
-    expect(initial).toEqual({ device_type_id: null, role_id: null, lifecycle_status_id: 1, site_id: null, location_detail: '' });
+    expect(initial).toEqual({ device_type_id: null, role_id: null, lifecycle_status_id: 1, site_id: null, tenant_id: null, location_detail: '' });
     expect(changedHostDeviceFields(initial, initial)).toEqual({});
     expect(changedHostDeviceFields(initial, { ...initial, device_type_id: 7, lifecycle_status_id: 2 })).toEqual({
       device_type_id: 7,
@@ -143,6 +164,7 @@ describe('changedHostDeviceFields', () => {
       role_id: null,
       lifecycle_status_id: null,
       site_id: null,
+      tenant_id: null,
       location_detail: '',
     });
   });

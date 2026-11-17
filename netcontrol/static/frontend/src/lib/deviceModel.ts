@@ -15,7 +15,7 @@ export const LOCATION_DETAIL_MAX = 200;
 export const NONE = 'none';
 export type FacetChoice = number | typeof NONE;
 
-export type DeviceFacet = 'manufacturer' | 'device_type' | 'role' | 'lifecycle_status' | 'site';
+export type DeviceFacet = 'manufacturer' | 'device_type' | 'role' | 'lifecycle_status' | 'site' | 'region' | 'tenant';
 
 export const DEVICE_FACETS: readonly { key: DeviceFacet; label: string }[] = [
   { key: 'manufacturer', label: 'Manufacturer' },
@@ -23,6 +23,8 @@ export const DEVICE_FACETS: readonly { key: DeviceFacet; label: string }[] = [
   { key: 'role', label: 'Role' },
   { key: 'lifecycle_status', label: 'Lifecycle status' },
   { key: 'site', label: 'Site' },
+  { key: 'region', label: 'Region' },
+  { key: 'tenant', label: 'Tenant' },
 ];
 
 /** The chosen values per facet; a facet absent or empty does not filter. */
@@ -30,12 +32,27 @@ export type DeviceFilterValue = Partial<Record<DeviceFacet, FacetChoice[]>>;
 
 export type DeviceFilterRow = Pick<
   InventoryHost,
-  'device_type_id' | 'role_id' | 'lifecycle_status_id' | 'site_id' | 'hardware'
+  'device_type_id' | 'role_id' | 'lifecycle_status_id' | 'site_id' | 'tenant_id' | 'region_ids' | 'hardware'
 >;
 
-/** A host's value for a facet, null when it has none. */
+/**
+ * A host's values for a facet, empty when it has none. A host is in the
+ * region of its site and in every region above that one, so choosing a
+ * region matches the hosts of all the regions under it.
+ */
+export function hostFacetValues(host: DeviceFilterRow, facet: DeviceFacet): number[] {
+  if (facet === 'region') return host.region_ids ?? [];
+  const value = hostFacetValue(host, facet);
+  return value === null ? [] : [value];
+}
+
+/** A host's value for a facet, null when it has none (a region: its site's own region). */
 export function hostFacetValue(host: DeviceFilterRow, facet: DeviceFacet): number | null {
   switch (facet) {
+    case 'region':
+      return host.region_ids?.[0] ?? null;
+    case 'tenant':
+      return host.tenant_id ?? null;
     case 'manufacturer':
       return host.hardware?.manufacturer_id ?? null;
     case 'device_type':
@@ -66,8 +83,8 @@ export function matchesDeviceFilter(host: DeviceFilterRow, filter: DeviceFilterV
   return DEVICE_FACETS.every(({ key }) => {
     const choices = filter?.[key];
     if (!choices || choices.length === 0) return true;
-    const value = hostFacetValue(host, key);
-    return choices.includes(value === null ? NONE : value);
+    const values = hostFacetValues(host, key);
+    return values.length === 0 ? choices.includes(NONE) : values.some((v) => choices.includes(v));
   });
 }
 
@@ -126,11 +143,12 @@ export interface HostDeviceValues {
   role_id: number | null;
   lifecycle_status_id: number | null;
   site_id: number | null;
+  tenant_id: number | null;
   location_detail: string;
 }
 
 /** The id values a host stores, in form order. */
-export const DEVICE_ID_KEYS = ['device_type_id', 'role_id', 'lifecycle_status_id', 'site_id'] as const;
+export const DEVICE_ID_KEYS = ['device_type_id', 'role_id', 'lifecycle_status_id', 'site_id', 'tenant_id'] as const;
 export type DeviceIdKey = (typeof DEVICE_ID_KEYS)[number];
 
 /**
@@ -139,13 +157,21 @@ export type DeviceIdKey = (typeof DEVICE_ID_KEYS)[number];
  */
 export function initialHostDeviceValues(host: InventoryHost | null, defaultStatusId: number | null): HostDeviceValues {
   if (!host) {
-    return { device_type_id: null, role_id: null, lifecycle_status_id: defaultStatusId, site_id: null, location_detail: '' };
+    return {
+      device_type_id: null,
+      role_id: null,
+      lifecycle_status_id: defaultStatusId,
+      site_id: null,
+      tenant_id: null,
+      location_detail: '',
+    };
   }
   return {
     device_type_id: host.device_type_id ?? null,
     role_id: host.role_id ?? null,
     lifecycle_status_id: host.lifecycle_status_id ?? null,
     site_id: host.site_id ?? null,
+    tenant_id: host.tenant_id ?? null,
     location_detail: host.location_detail ?? '',
   };
 }
@@ -176,6 +202,7 @@ export interface BulkEditForm {
   role_id: BulkIdChoice;
   lifecycle_status_id: BulkIdChoice;
   site_id: BulkIdChoice;
+  tenant_id: BulkIdChoice;
   /** The new text ('' clears it); null leaves it unchanged. */
   location_detail: string | null;
 }
@@ -185,6 +212,7 @@ export const EMPTY_BULK_EDIT: BulkEditForm = {
   role_id: KEEP,
   lifecycle_status_id: KEEP,
   site_id: KEEP,
+  tenant_id: KEEP,
   location_detail: null,
 };
 

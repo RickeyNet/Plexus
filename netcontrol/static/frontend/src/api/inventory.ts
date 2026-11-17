@@ -39,6 +39,10 @@ export interface InventoryHost {
   role_id?: number | null;
   lifecycle_status_id?: number | null;
   site_id?: number | null;
+  /** The tenant that owns the host. */
+  tenant_id?: number | null;
+  /** The region of the host's site and the regions above it, nearest first (empty: none). */
+  region_ids?: number[];
   /** Rack, room or other place inside the site ('' when unset). */
   location_detail?: string | null;
   /** The linked hardware device type, for display. */
@@ -46,6 +50,7 @@ export interface InventoryHost {
   role?: HostColorRef | null;
   lifecycle_status?: HostColorRef | null;
   site?: { id: number; name: string } | null;
+  tenant?: { id: number; name: string } | null;
   /** The host's own SNMP profile ('' or absent: it uses its group's profile). */
   snmp_profile_id?: string;
 }
@@ -73,6 +78,7 @@ export interface HostDeviceFields {
   role_id?: number | null;
   lifecycle_status_id?: number | null;
   site_id?: number | null;
+  tenant_id?: number | null;
   location_detail?: string;
 }
 
@@ -865,4 +871,9 @@ export function useFetchGroupSerials() {
 
 export function inventoryCsvExportUrl(): string {
   return '/api/inventory/export/csv';
+}
+
+/** The hosts of the CSV export as YAML (bulk import reads either back). */
+export function inventoryYamlExportUrl(): string {
+  return '/api/inventory/export/yaml';
 }

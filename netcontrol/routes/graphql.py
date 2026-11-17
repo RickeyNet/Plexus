@@ -33,7 +33,7 @@ from netcontrol.graphql_api import limits, settings as graphql_settings
 from netcontrol.graphql_api.context import GraphQLContext
 from netcontrol.graphql_api.schema import schema
 from netcontrol.object_scope import request_scope, scoped
-from netcontrol.routes.shared import _audit, _corr_id, _session_user
+from netcontrol.routes.shared import _audit, _corr_id, _session_user, caller_features
 
 router = APIRouter()
 admin_router = APIRouter(prefix="/api/admin/graphql")
@@ -43,30 +43,6 @@ GRAPHQL_PATH = "/api/graphql"
 
 def _errors(errors: list[GraphQLError], status: int = 400) -> JSONResponse:
     return JSONResponse({"data": None, "errors": [e.formatted for e in errors]}, status_code=status)
-
-
-async def _caller_features(request: Request) -> frozenset[str] | None:
-    """The caller's feature keys, ``None`` for an admin or the API token
-    (every feature). Reads what the ``graphql`` feature gate resolved for
-    this request; resolves it the same way when it is not there."""
-    session = getattr(request.state, "auth_session", None)
-    if not isinstance(session, dict):
-        return frozenset()
-    if session.get("auth_mode") == "token":
-        return None
-    user = getattr(request.state, "auth_user", None)
-    if not isinstance(user, dict):
-        user = await db.get_user_by_id(int(session.get("user_id") or 0))
-    if not user:
-        return frozenset()
-    if user.get("role") == "admin":
-        return None
-    features = getattr(request.state, "auth_features", None)
-    if not isinstance(features, list):
-        from netcontrol.routes.auth import _get_user_features
-
-        features = await _get_user_features(user)
-    return frozenset(features)
 
 
 @router.post(GRAPHQL_PATH)
@@ -95,7 +71,7 @@ async def graphql_query(request: Request) -> JSONResponse:
 
     context = GraphQLContext(
         scope=await request_scope(request),
-        features=await _caller_features(request),
+        features=await caller_features(request),
         max_limit=int(config["max_limit"]),
     )
     result = await schema.execute(

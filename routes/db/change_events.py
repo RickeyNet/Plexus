@@ -13,6 +13,7 @@ call and hands every subscriber one event per changed object::
         "object_id": "12",
         "timestamp": "2026-01-01T00:00:00Z",
         "user": "alice",             # "system" outside a request
+        "correlation_id": "9f2c...", # the request's X-Correlation-ID, or ""
         "before": {...} | None,
         "after": {...} | None,
         "changes": {"hostname": {"before": "a", "after": "b"}},
@@ -20,8 +21,8 @@ call and hands every subscriber one event per changed object::
 
 Emitting from the facade (not the routes) covers every caller: the REST API,
 jobs, discovery, imports and the MCP tools alike. The acting user comes from
-``current_actor``, which the auth dependency sets for the request; a task
-started from a request inherits it.
+``current_actor``, which the auth dependency sets for the request (with
+``current_correlation_id``); a task started from a request inherits both.
 
 Subscribers register with ``add_object_change_hook``. A subscriber may pass a
 ``wants(object_type)`` predicate; when no subscriber wants a type, the
@@ -52,6 +53,7 @@ __all__ = [
     "CHANGE_OBJECT_TYPES",
     "add_object_change_hook",
     "current_actor",
+    "current_correlation_id",
     "emit_object_change",
     "fetch_object_snapshot",
     "remove_object_change_hook",
@@ -70,6 +72,38 @@ _OBJECT_TABLES: dict[str, str] = {
     "credential": "credentials",
     "config_backup": "config_backups",
     "job": "jobs",
+    # Physical DCIM (migration 0102).
+    "rack": "racks",
+    "rack_reservation": "rack_reservations",
+    "front_port": "front_ports",
+    "rear_port": "rear_ports",
+    "module": "modules",
+    "power_panel": "power_panels",
+    "power_feed": "power_feeds",
+    "power_port": "power_ports",
+    "power_outlet": "power_outlets",
+    "cable": "cables",
+    # Location hierarchy and tenancy (migration 0098).
+    "region": "regions",
+    "site": "geo_sites",
+    "tenant_group": "tenant_groups",
+    "tenant": "tenants",
+    # Virtualization (migration 0100).
+    "cluster_type": "cluster_types",
+    "cluster_group": "cluster_groups",
+    "cluster": "clusters",
+    "virtual_machine": "virtual_machines",
+    "vm_interface": "vm_interfaces",
+    # Circuits (migration 0099).
+    "circuit_provider": "circuit_providers",
+    "provider_network": "provider_networks",
+    "circuit_type": "circuit_types",
+    "circuit": "circuits",
+    "circuit_termination": "circuit_terminations",
+    "autonomous_system": "autonomous_systems",
+    "routing_instance": "routing_instances",
+    "bgp_peer_group": "bgp_peer_groups",
+    "bgp_peering": "bgp_peerings",
 }
 CHANGE_OBJECT_TYPES: tuple[str, ...] = tuple(_OBJECT_TABLES)
 CHANGE_ACTIONS: tuple[str, ...] = ("create", "update", "delete")
@@ -83,9 +117,10 @@ _DROP_COLUMNS: dict[str, frozenset[str]] = {
 }
 # JSON stored as text, decoded so subscribers (and the redaction walk) see
 # structure rather than a string.
-_JSON_COLUMNS = frozenset({"host_ids", "ad_hoc_ips", "depends_on", "metadata_json"})
+_JSON_COLUMNS = frozenset({"host_ids", "ad_hoc_ips", "depends_on", "metadata_json", "units"})
 
 current_actor: contextvars.ContextVar[str] = contextvars.ContextVar("plexus_change_actor", default="")
+current_correlation_id: contextvars.ContextVar[str] = contextvars.ContextVar("plexus_change_correlation", default="")
 
 ChangeHook = Callable[[dict], Awaitable[None]]
 _hooks: list[tuple[ChangeHook, Callable[[str], bool] | None]] = []
@@ -182,6 +217,7 @@ async def emit_object_change(
         "object_id": str(object_id),
         "timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "user": user if user is not None else (current_actor.get() or "system"),
+        "correlation_id": current_correlation_id.get(),
         "before": before,
         "after": after,
         "changes": _changes(before, after) if action == "update" else {},

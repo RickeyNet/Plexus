@@ -6,6 +6,7 @@ import { StatusBadge } from '@/components/Badge';
 import { BusyButton } from '@/components/BusyButton';
 import { CustomDataFilter } from '@/components/CustomDataFilter';
 import { EmptyState } from '@/components/EmptyState';
+import { ImportDialog } from '@/components/ImportDialog';
 import { LoadingState } from '@/components/LoadingState';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
@@ -68,6 +69,7 @@ const DIFF_RESOLUTIONS: DiffResolution[] = ['accept_plexus', 'accept_ipam', 'ign
 type ModalState =
   | { kind: 'none' }
   | { kind: 'define-subnet' }
+  | { kind: 'import' }
   | { kind: 'source'; source: IpamSource | null }
   | { kind: 'dhcp'; server: DhcpServer | null };
 
@@ -307,13 +309,23 @@ function SubnetsView({ tabBar }: { tabBar: ReactNode }) {
                 </div>
               )}
             </div>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => setModal({ kind: 'define-subnet' })}
-            >
-              + Define Subnet
-            </button>
+            <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => setModal({ kind: 'define-subnet' })}
+              >
+                + Define Subnet
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setModal({ kind: 'import' })}
+                title="Add or update prefixes, IP addresses, VLANs and VRFs from a CSV, YAML or JSON file (administrators)"
+              >
+                Import
+              </button>
+            </div>
           </div>
           {overviewError ? (
             overviewError
@@ -671,6 +683,9 @@ function SubnetsView({ tabBar }: { tabBar: ReactNode }) {
 
       {modal.kind === 'define-subnet' && (
         <DefineSubnetModal onClose={() => setModal({ kind: 'none' })} />
+      )}
+      {modal.kind === 'import' && (
+        <ImportDialog types={['prefixes', 'addresses', 'vlans', 'vrfs']} onClose={() => setModal({ kind: 'none' })} />
       )}
       {modal.kind === 'source' && (
         <IpamSourceModal

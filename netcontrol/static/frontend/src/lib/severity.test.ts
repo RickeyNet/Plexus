@@ -11,6 +11,7 @@ import {
   statusLabel,
   statusTone,
   toneColor,
+  utilizationTone,
 } from './severity';
 
 describe('severityTone', () => {
@@ -147,5 +148,15 @@ describe('statusLabel', () => {
   it('shows a dash when missing', () => {
     expect(statusLabel(null)).toBe('-');
     expect(statusLabel('')).toBe('-');
+  });
+});
+
+describe('utilizationTone', () => {
+  it('is success below 75%, warning from 75%, danger from 90%', () => {
+    expect(utilizationTone(null)).toBe('success');
+    expect(utilizationTone(74.9)).toBe('success');
+    expect(utilizationTone(75)).toBe('warning');
+    expect(utilizationTone(89.9)).toBe('warning');
+    expect(utilizationTone(90)).toBe('danger');
   });
 });

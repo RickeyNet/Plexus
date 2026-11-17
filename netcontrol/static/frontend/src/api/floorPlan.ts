@@ -33,6 +33,8 @@ export interface GeoSiteRow {
   id: number;
   name: string;
   address?: string | null;
+  region_id?: number | null;
+  tenant_id?: number | null;
   /** Hosts whose site is this one, when the server reports it. */
   host_count?: number | null;
 }
@@ -64,11 +66,19 @@ export interface InventoryHost {
   group_id?: number;
 }
 
+/** The body of POST / PUT /api/geo/sites; on an update a key left out keeps its value. */
 export interface SiteInput {
-  name: string;
+  name?: string;
+  description?: string;
   address?: string;
   lat?: number | null;
   lng?: number | null;
+  /** Location hierarchy and tenancy (null clears a region or tenant). */
+  region_id?: number | null;
+  status?: string;
+  facility?: string;
+  time_zone?: string;
+  tenant_id?: number | null;
 }
 
 export interface FloorInput {
@@ -140,15 +150,6 @@ export function useInventoryGroupsWithHosts(enabled: boolean) {
 
 function invalidateGeo(qc: ReturnType<typeof useQueryClient>) {
   qc.invalidateQueries({ queryKey: ['geo'] });
-}
-
-export function useCreateGeoSite() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: SiteInput) =>
-      apiRequest<GeoSite>('/geo/sites', { method: 'POST', body }),
-    onSuccess: () => invalidateGeo(qc),
-  });
 }
 
 export function useCreateGeoFloor(siteId: number) {

@@ -328,6 +328,8 @@ AUTH_CONFIG_DEFAULTS = {
     # from default_credential_id, which is the per-user job-launch default.
     "service_credential_id": None,
     "job_retention_days": 30,
+    # Per-object change log (object_changes) retention; see docs/change-log.md.
+    "change_log_retention_days": 90,
     "radius": {
         "enabled": False,
         "server": "",
@@ -448,6 +450,17 @@ _FEATURE_CATALOG = [
     {"key": "dashboard", "label": "Dashboard", "gateable": True, "writable": False, "visible_in_nav": False},
     {"key": "inventory", "label": "Inventory", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "ipam", "label": "IPAM", "gateable": True, "writable": True, "visible_in_nav": True},
+    # Racks, cables, patch panels and power: read with dcim, change with
+    # dcim.write (docs/dcim.md).
+    {"key": "dcim", "label": "DCIM", "gateable": True, "writable": True, "visible_in_nav": True},
+    # Circuits, providers, provider networks and circuit types (docs/circuits.md).
+    {"key": "circuits", "label": "Circuits", "gateable": True, "writable": True, "visible_in_nav": True},
+    # Routing objects (intended BGP state): read with routing, change with
+    # routing.write (docs/routing.md).
+    {"key": "routing", "label": "Routing", "gateable": True, "writable": True, "visible_in_nav": True},
+    # Clusters and virtual machines: read with virtualization, change with
+    # virtualization.write (docs/virtualization.md).
+    {"key": "virtualization", "label": "Virtualization", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "playbooks", "label": "Playbooks", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "jobs", "label": "Jobs", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "templates", "label": "Templates", "gateable": True, "writable": True, "visible_in_nav": True},
@@ -483,6 +496,9 @@ _FEATURE_CATALOG = [
     {"key": "federation", "label": "Federation", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "floor-plan", "label": "Floor Plans", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "lab", "label": "Lab / Digital Twin", "gateable": True, "writable": True, "visible_in_nav": True},
+    # Regions, sites and tenants (docs/locations-and-tenancy.md): read with
+    # the key, changed by admins like the other admin catalogues.
+    {"key": "organization", "label": "Organization", "gateable": True, "writable": False, "visible_in_nav": True},
     # Read-only GraphQL API (/api/graphql); each field also needs the feature
     # its REST counterpart needs (docs/graphql-api.md). No nav page.
     {"key": "graphql", "label": "GraphQL API", "gateable": True, "writable": False, "visible_in_nav": False},
@@ -517,6 +533,8 @@ RADIUS_DICTIONARY_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "ro
 RADIUS_DICTIONARY_FILE = os.path.normpath(RADIUS_DICTIONARY_FILE)
 
 JOB_RETENTION_MIN_DAYS = 30
+CHANGE_LOG_RETENTION_MIN_DAYS = 1
+CHANGE_LOG_RETENTION_MAX_DAYS = 3650
 JOB_RETENTION_CLEANUP_INTERVAL_SECONDS = 60 * 60 * 6
 
 
@@ -798,6 +816,8 @@ def _sanitize_auth_config(data: dict | None) -> dict:
             cfg["provider"] = data["provider"]
         if "job_retention_days" in data:
             cfg["job_retention_days"] = int(data.get("job_retention_days", cfg["job_retention_days"]))
+        if data.get("change_log_retention_days") is not None:
+            cfg["change_log_retention_days"] = int(data["change_log_retention_days"])
         if "default_credential_id" in data:
             val = data.get("default_credential_id")
             cfg["default_credential_id"] = int(val) if val is not None else None
@@ -824,6 +844,10 @@ def _sanitize_auth_config(data: dict | None) -> dict:
                 }
             )
     cfg["job_retention_days"] = max(JOB_RETENTION_MIN_DAYS, int(cfg.get("job_retention_days", JOB_RETENTION_MIN_DAYS)))
+    cfg["change_log_retention_days"] = max(
+        CHANGE_LOG_RETENTION_MIN_DAYS,
+        min(CHANGE_LOG_RETENTION_MAX_DAYS, int(cfg["change_log_retention_days"])),
+    )
     cfg["radius"]["port"] = max(1, min(65535, cfg["radius"]["port"]))
     cfg["radius"]["timeout"] = max(1, min(30, cfg["radius"]["timeout"]))
     cfg["radius"]["default_group_ids"] = _sanitize_positive_int_list(cfg["radius"].get("default_group_ids", []))
@@ -967,6 +991,11 @@ def _sanitize_oidc_config(data) -> dict:
 
 def _effective_job_retention_days() -> int:
     return max(JOB_RETENTION_MIN_DAYS, int(AUTH_CONFIG.get("job_retention_days", JOB_RETENTION_MIN_DAYS)))
+
+
+def _effective_change_log_retention_days() -> int:
+    days = int(AUTH_CONFIG.get("change_log_retention_days", AUTH_CONFIG_DEFAULTS["change_log_retention_days"]))
+    return max(CHANGE_LOG_RETENTION_MIN_DAYS, min(CHANGE_LOG_RETENTION_MAX_DAYS, days))
 
 
 def _sanitize_discovery_sync_config(data: dict | None) -> dict:

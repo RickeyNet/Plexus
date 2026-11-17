@@ -23,8 +23,10 @@ from datetime import UTC, datetime
 import routes.database as db
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
+from routes.db.organization import TENANT_UNCHANGED, TenantArg
 
 from netcontrol.custom_fields import CustomFieldError
+from netcontrol.data_validation import enforce as enforce_validation_rules, pick as rule_values
 from netcontrol.device_model import parse_device_filters
 from netcontrol.integrations.pathtrace.platforms import platform_of
 from netcontrol.network_objects import (
@@ -62,15 +64,18 @@ class VrfCreate(BaseModel):
     name: str = Field(max_length=_RAW_MAX)
     rd: str = Field(default="", max_length=_RAW_MAX)
     description: str = Field(default="", max_length=DESCRIPTION_MAX)
+    tenant_id: int | None = None
 
 
 class VrfUpdate(BaseModel):
-    """The name of a VRF never changes: a ``name`` key is refused."""
+    """The name of a VRF never changes: a ``name`` key is refused.
+    ``tenant_id`` left out keeps the tenant; ``null`` clears it."""
 
     model_config = ConfigDict(extra="forbid")
 
     rd: str | None = Field(default=None, max_length=_RAW_MAX)
     description: str | None = Field(default=None, max_length=DESCRIPTION_MAX)
+    tenant_id: int | None = None
 
 
 class VlanCreate(BaseModel):
@@ -78,6 +83,7 @@ class VlanCreate(BaseModel):
     name: str = Field(default="", max_length=_RAW_MAX)
     site_id: int | None = None
     description: str = Field(default="", max_length=DESCRIPTION_MAX)
+    tenant_id: int | None = None
 
 
 class VlanUpdate(BaseModel):
@@ -89,6 +95,7 @@ class VlanUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=_RAW_MAX)
     site_id: int | None = None
     description: str | None = Field(default=None, max_length=DESCRIPTION_MAX)
+    tenant_id: int | None = None
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -119,6 +126,21 @@ async def _check_site(site_id: int | None) -> None:
     contract)."""
     if site_id is not None:
         await check_device_values({"site_id": site_id})
+
+
+async def _new_tenant(tenant_id: int | None) -> int | None:
+    """``tenant_id`` checked: 400 naming it when it names no tenant."""
+    if tenant_id is not None:
+        await check_device_values({"tenant_id": tenant_id})
+    return tenant_id
+
+
+async def _changed_tenant(body: VrfUpdate | VlanUpdate, current: dict) -> TenantArg:
+    """The tenant an update sets: ``TENANT_UNCHANGED`` when it leaves it out
+    or keeps it."""
+    if "tenant_id" not in body.model_fields_set or body.tenant_id == current.get("tenant_id"):
+        return TENANT_UNCHANGED
+    return await _new_tenant(body.tenant_id)
 
 
 def _describe_usage(usage: dict[str, int]) -> str:
@@ -214,8 +236,10 @@ async def create_vrf(body: VrfCreate, request: Request) -> dict:
     name = _clean(clean_vrf_name, body.name)
     rd = _clean(clean_rd, body.rd)
     description = _clean(clean_description, body.description)
+    tenant_id = await _new_tenant(body.tenant_id)
+    await enforce_validation_rules("vrf", {"name": name, "rd": rd, "description": description})
     try:
-        record = await db.create_vrf(name=name, rd=rd, description=description)
+        record = await db.create_vrf(name=name, rd=rd, description=description, tenant_id=tenant_id)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     await _audit_write(request, "vrf_create", f"id={record['id']} name={name}")
@@ -229,7 +253,9 @@ async def update_vrf(vrf_id: int, body: VrfUpdate, request: Request) -> dict:
     description = (
         _clean(clean_description, body.description) if body.description is not None else current["description"]
     )
-    record = _found(await db.update_vrf(vrf_id, rd=rd, description=description), "VRF")
+    await enforce_validation_rules("vrf", {"rd": rd, "description": description}, existing=rule_values(current, "vrf"))
+    tenant_id = await _changed_tenant(body, current)
+    record = _found(await db.update_vrf(vrf_id, rd=rd, description=description, tenant_id=tenant_id), "VRF")
     await _audit_write(request, "vrf_update", f"id={vrf_id} name={record['name']}")
     return record
 
@@ -284,8 +310,12 @@ async def create_vlan(body: VlanCreate, request: Request) -> dict:
     name = _clean(clean_vlan_name, body.name)
     description = _clean(clean_description, body.description)
     await _check_site(body.site_id)
+    tenant_id = await _new_tenant(body.tenant_id)
+    await enforce_validation_rules("vlan", {"vid": vid, "name": name, "description": description})
     try:
-        record = await db.create_vlan(vid=vid, name=name, site_id=body.site_id, description=description)
+        record = await db.create_vlan(
+            vid=vid, name=name, site_id=body.site_id, description=description, tenant_id=tenant_id
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     await _audit_write(request, "vlan_create", f"id={record['id']} vid={vid} site_id={body.site_id or '-'}")
@@ -302,8 +332,14 @@ async def update_vlan(vlan_id: int, body: VlanUpdate, request: Request) -> dict:
     site_id = body.site_id if "site_id" in body.model_fields_set else current["site_id"]
     if site_id != current["site_id"]:
         await _check_site(site_id)
+    tenant_id = await _changed_tenant(body, current)
+    await enforce_validation_rules(
+        "vlan", {"name": name, "description": description}, existing=rule_values(current, "vlan")
+    )
     try:
-        record = await db.update_vlan(vlan_id, name=name, site_id=site_id, description=description)
+        record = await db.update_vlan(
+            vlan_id, name=name, site_id=site_id, description=description, tenant_id=tenant_id
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     record = _found(record, "VLAN")

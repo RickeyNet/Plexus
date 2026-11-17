@@ -22,6 +22,7 @@ from routes.database import (
     row_to_dict,
     rows_to_list,
 )
+from routes.db.change_events import tracks_changes
 
 __all__ = [
     "list_geo_sites",
@@ -46,15 +47,18 @@ __all__ = [
 
 
 async def list_geo_sites() -> list:
-    """Every site with its ``floor_count``, ``placed_device_count`` and
-    ``host_count`` (hosts whose ``site_id`` is the site)."""
+    """Every site with its ``floor_count``, ``placed_device_count``,
+    ``host_count`` (hosts whose ``site_id`` is the site), ``region_name``
+    and ``tenant_name``."""
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
             """SELECT s.*,
                       COUNT(DISTINCT f.id)                                AS floor_count,
                       COUNT(DISTINCT p.id)                                AS placed_device_count,
-                      (SELECT COUNT(*) FROM hosts h WHERE h.site_id = s.id) AS host_count
+                      (SELECT COUNT(*) FROM hosts h WHERE h.site_id = s.id) AS host_count,
+                      (SELECT r.name FROM regions r WHERE r.id = s.region_id) AS region_name,
+                      (SELECT t.name FROM tenants t WHERE t.id = s.tenant_id) AS tenant_name
                FROM geo_sites s
                LEFT JOIN geo_floors f ON f.site_id = s.id
                LEFT JOIN geo_placements p ON p.floor_id = f.id
@@ -75,6 +79,11 @@ async def get_geo_site(site_id: int) -> dict:
         await db.close()
 
 
+# The location and tenancy columns a site write may set (migration 0098).
+GEO_SITE_ORG_FIELDS: tuple[str, ...] = ("region_id", "status", "facility", "time_zone", "tenant_id")
+
+
+@tracks_changes("site", "create")
 async def create_geo_site(
     name: str,
     description: str = "",
@@ -82,13 +91,19 @@ async def create_geo_site(
     lat: float | None = None,
     lng: float | None = None,
     created_by: str = "",
+    region_id: int | None = None,
+    status: str = "active",
+    facility: str = "",
+    time_zone: str = "",
+    tenant_id: int | None = None,
 ) -> dict:
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            """INSERT INTO geo_sites (name, description, address, lat, lng, created_by)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (name, description, address, lat, lng, created_by),
+            """INSERT INTO geo_sites (name, description, address, lat, lng, created_by,
+                                      region_id, status, facility, time_zone, tenant_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (name, description, address, lat, lng, created_by, region_id, status, facility, time_zone, tenant_id),
         )
         await db.commit()
         site_id = cursor.lastrowid
@@ -103,8 +118,9 @@ async def create_geo_site(
         await db.close()
 
 
+@tracks_changes("site", "update", id_arg="site_id")
 async def update_geo_site(site_id: int, **kwargs) -> dict | None:
-    allowed = {"name", "description", "address", "lat", "lng"}
+    allowed = {"name", "description", "address", "lat", "lng", *GEO_SITE_ORG_FIELDS}
     updates = {k: v for k, v in kwargs.items() if k in allowed}
     if not updates:
         return await get_geo_site(site_id)
@@ -128,6 +144,7 @@ async def update_geo_site(site_id: int, **kwargs) -> dict | None:
         await db.close()
 
 
+@tracks_changes("site", "delete", id_arg="site_id")
 async def delete_geo_site(site_id: int) -> bool:
     db = await _dbcore.get_db()
     try:

@@ -157,15 +157,10 @@ export function validateInputValue(field: JobInputField, value: InputValue | und
       const limit = field.type === 'string' ? STRING_MAX : TEXT_MAX;
       if (text.length > limit) return `${label} must be at most ${limit} characters.`;
       const bounds = boundsError({ ...field, label }, text.length, ' character(s)');
-      if (bounds) return bounds;
-      if (field.regex) {
-        try {
-          if (!new RegExp(`^(?:${field.regex})$`).test(text)) return `${label} does not match the required format.`;
-        } catch {
-          // A pattern JavaScript cannot compile is left to the server.
-        }
-      }
-      return null;
+      // The `regex` pattern is checked by the server only: a pattern written by
+      // whoever edits the playbook must not be able to freeze the browser of
+      // the person launching it. A mismatch comes back as a 422 field error.
+      return bounds;
     }
     case 'choice':
       return (field.choices ?? []).includes(text) ? null : `${label} must be one of: ${(field.choices ?? []).join(', ')}.`;

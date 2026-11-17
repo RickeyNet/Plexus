@@ -85,6 +85,13 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
 
+      # The Docker image installs only requirements-lock.txt, so a package
+      # added to requirements.txt without regenerating the lock passes the
+      # tests here but is missing from the image (the in-app update's new
+      # container then fails to start).
+      - name: Requirements lock covers requirements.txt
+        run: python tools/check_requirements_lock.py
+
       - name: Lint (ruff)
         run: ruff check .
 

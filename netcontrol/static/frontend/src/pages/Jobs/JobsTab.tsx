@@ -59,6 +59,7 @@ export function JobsTab() {
         const text = !q ||
           (j.playbook_name ?? '').toLowerCase().includes(q) ||
           (j.group_name ?? '').toLowerCase().includes(q) ||
+          (j.dynamic_group_name ?? '').toLowerCase().includes(q) ||
           (j.status ?? '').toLowerCase().includes(q);
         const matchesStatus = status === 'all' || (j.status ?? '').toLowerCase() === status;
         const isDry = Boolean(j.dry_run);
@@ -239,7 +240,7 @@ function JobRow({
           {deps.length > 0 && <Badge title={`Depends on jobs: ${deps.join(', ')}`}>deps: {deps.join(', ')}</Badge>}
         </div>
         <div className="text-muted" style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>
-          Group: {job.group_name || 'Unknown'} • {timeLabel} •{' '}
+          {job.dynamic_group_name ? `Dynamic group: ${job.dynamic_group_name}` : `Group: ${job.group_name || 'Unknown'}`} • {timeLabel} •{' '}
           <StatusBadge status={job.status} size="sm" />
           {job.dry_run
             ? <> • <span style={{ color: 'var(--warning)' }}>DRY RUN</span></>

@@ -543,6 +543,16 @@ appear in IPAM's cloud CIDR view, where each VPC's range is checked against
 the ranges of every Meraki, Cato and Cisco FMC site under **Overlapping
 Ranges** (see the [Meraki guide](meraki-topology.md#ipam)).
 
+## Virtual machines
+
+Every EC2 instance of a discovered account (resource type `instance`) is
+also mirrored as a virtual machine under **Assets > Virtualization**, in a
+cluster of type *AWS EC2* per account and region, with one interface per
+network interface (named by its ENI id) and its private and public
+addresses. Running is active, pending staged, stopping, stopped and
+terminated offline. vCPUs and memory are not collected. See
+[Virtualization](virtualization.md#cloud-instances-as-virtual-machines).
+
 ## Availability tracking
 
 Each collection also records the state of what it reports, shown under **Monitoring > Availability > Integrations and cloud** with uptime, outages and alerts: the instances drawn on the map, the transit, VPN, NAT and Direct Connect gateways and the Direct Connect connections (devices), site-to-site VPN connections (up when a tunnel is UP), Direct Connect connections, virtual interfaces and gateway associations (circuits), VPC peerings, and transit gateway and VPN gateway attachments (links). VPCs and customer gateways are left out. The state mapping, alerting and retention are described in [Meraki in the Topology Map](meraki-topology.md#availability-tracking).

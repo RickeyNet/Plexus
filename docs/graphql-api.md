@@ -114,6 +114,7 @@ Root fields (filters combine with AND; every list takes `limit`, default
 | `ipAddresses` | `address`, `vrf` |
 | `vlans` | `vid`, `name` (part), `siteId` |
 | `vrfs` | `name` (part) |
+| `dynamicGroups` | `name` (part); each has `members(limit, offset)`, the hosts its saved filter matches now within your scope (see [Dynamic groups](dynamic-groups.md)) |
 
 Relations:
 

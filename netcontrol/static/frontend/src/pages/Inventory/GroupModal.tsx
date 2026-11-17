@@ -12,6 +12,7 @@ import {
   useUpdateInventoryGroup,
 } from '@/api/inventory';
 import { TOP_LEVEL_GROUP_REASON, useObjectScope } from '@/lib/objectScope';
+import { serverFieldErrors } from '@/lib/serverFieldErrors';
 import { saveCustomDataDraft, useCustomDataDraft } from '@/lib/useCustomDataDraft';
 
 import { descendantIds } from './helpers';
@@ -41,6 +42,7 @@ export function GroupModal({ group, isCreate, groups, defaultParentId = null, on
     group ? (group.parent_id ?? null) : defaultParentId,
   );
   const [nameError, setNameError] = useState<string | null>(null);
+  const [descriptionError, setDescriptionError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   // A group cannot be its own parent or move under one of its sub-groups.
@@ -87,6 +89,10 @@ export function GroupModal({ group, isCreate, groups, defaultParentId = null, on
         groupId = group.id;
       }
     } catch (err) {
+      // A value a data validation rule refuses is a 422 naming its field.
+      const fields = serverFieldErrors(err);
+      if (fields.name) setNameError(fields.name);
+      if (fields.description) setDescriptionError(fields.description);
       setSaveError((err as Error).message);
       return;
     }
@@ -169,8 +175,13 @@ export function GroupModal({ group, isCreate, groups, defaultParentId = null, on
               id={`${formId}-description`}
               className="form-textarea"
               value={description ?? ''}
-              onChange={(e) => setDescription(e.target.value)}
+              onChange={(e) => {
+                setDescription(e.target.value);
+                setDescriptionError(null);
+              }}
+              aria-invalid={!!descriptionError}
             />
+            <FieldError>{descriptionError}</FieldError>
           </div>
         </fieldset>
         <CustomDataSection objectType="group" draft={draft} canCreateTags />

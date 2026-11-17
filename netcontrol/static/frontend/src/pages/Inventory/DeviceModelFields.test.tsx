@@ -35,7 +35,7 @@ function render(allowKeep: boolean, location: string | null = ''): string {
     <QueryClientProvider client={qc}>
       <DeviceModelFields
         idPrefix="t"
-        ids={{ device_type_id: '2', role_id: '', lifecycle_status_id: '7', site_id: allowKeep ? 'keep' : '' }}
+        ids={{ device_type_id: '2', role_id: '', lifecycle_status_id: '7', site_id: allowKeep ? 'keep' : '', tenant_id: '' }}
         onIdChange={() => {}}
         location={location}
         onLocationChange={() => {}}

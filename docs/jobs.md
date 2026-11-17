@@ -63,7 +63,7 @@ passes to the run. Choose **Add field** under **Run inputs** and fill in:
 | Default | The value used when the field is left empty. Not available for host and group fields. |
 | Choices | Choice and multiple choice fields: the allowed values, comma-separated. |
 | Min / Max | Whole numbers: the value. One-line and multi-line text: the length. Multiple choice and lists: the number of items. |
-| Pattern | One-line and multi-line text: a regular expression the whole value must match. |
+| Pattern | One-line and multi-line text: a regular expression the whole value must match, checked by the server only. Patterns run on RE2, so they match in linear time; lookarounds and backreferences are refused. |
 | Required | The field must have a value (or a default). |
 
 | Type | Control | The task receives |

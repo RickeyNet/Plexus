@@ -51,20 +51,141 @@ Reads need the `ipam` feature, writes are admin only and audited (`network_objec
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET    | `/api/ipam/vrfs` | `{"vrfs": [Vrf]}` by name. A Vrf: `id`, `name`, `rd`, `description`, `origin` (`manual`, `discovered`), `created_at`, `host_count`, `device_count`, `prefix_count`, `address_count` |
-| POST   | `/api/ipam/vrfs` | `{name, rd?, description?}`. `201` with the Vrf; `409` when a VRF has the name ignoring case |
+| GET    | `/api/ipam/vrfs` | `{"vrfs": [Vrf]}` by name. A Vrf: `id`, `name`, `rd`, `description`, `origin` (`manual`, `discovered`), `created_at`, `tenant_id`, `tenant_name`, `host_count`, `device_count`, `prefix_count`, `address_count` |
+| POST   | `/api/ipam/vrfs` | `{name, rd?, description?, tenant_id?}`. `201` with the Vrf; `409` when a VRF has the name ignoring case |
 | GET    | `/api/ipam/vrfs/{id}` | The Vrf plus `devices` (`host_id`, `hostname`, `interface_count`), `interfaces` (at most 2000 interface addresses), `truncated`, `prefixes` (`subnet`, `source`: the IPAM source's provider or `interface`) |
-| PUT    | `/api/ipam/vrfs/{id}` | `{rd?, description?}`; a `name` key gives `422` |
+| PUT    | `/api/ipam/vrfs/{id}` | `{rd?, description?, tenant_id?}` (`tenant_id` null clears it); a `name` key gives `422` |
 | DELETE | `/api/ipam/vrfs/{id}` | `{"ok": true}`; `409` with `detail = {message, affected}` while hosts, IPAM prefixes or allocations, interface addresses or devices use the name (`message` names them, `affected` is the total) |
-| GET    | `/api/ipam/vlans` | `{"vlans": [Vlan]}` by site name then VLAN id; `site_id=<id>` or `site_id=none`, `vid=<n>`. A Vlan: `id`, `vid`, `name`, `site_id`, `site` (`{id, name}` or null), `description`, `origin`, `created_at`, `device_count`, `interface_count`, `prefix_count`, `name_mismatch` |
-| POST   | `/api/ipam/vlans` | `{vid, name?, site_id?, description?}`. `201` with the Vlan; `409` when the site (or no site) has the VLAN id; `400` with `detail.fields.site_id` for an unknown site |
+| GET    | `/api/ipam/vlans` | `{"vlans": [Vlan]}` by site name then VLAN id; `site_id=<id>` or `site_id=none`, `vid=<n>`. A Vlan: `id`, `vid`, `name`, `site_id`, `site` (`{id, name}` or null), `description`, `origin`, `created_at`, `tenant_id`, `tenant_name`, `device_count`, `interface_count`, `prefix_count`, `name_mismatch` |
+| POST   | `/api/ipam/vlans` | `{vid, name?, site_id?, description?, tenant_id?}`. `201` with the Vlan; `409` when the site (or no site) has the VLAN id; `400` with `detail.fields.site_id` for an unknown site |
 | GET    | `/api/ipam/vlans/{id}` | The Vlan plus `devices` (`host_id`, `hostname`, `name`, `state`, `name_matches`), `interfaces` (`host_id`, `hostname`, `interface`, `mode`: `access` or `trunk`; at most 2000), `truncated`, `prefixes` (`network`, `vrf_name`, `host_id`, `hostname`, `interface`, `address`) |
-| PUT    | `/api/ipam/vlans/{id}` | `{name?, site_id?, description?}` (`site_id` null: no site); `409` when the move collides; a `vid` key gives `422` |
+| PUT    | `/api/ipam/vlans/{id}` | `{name?, site_id?, description?, tenant_id?}` (`site_id` null: no site; `tenant_id` null: no tenant); `409` when the move collides; a `vid` key gives `422` |
 | DELETE | `/api/ipam/vlans/{id}` | `{"ok": true}` |
 | POST   | `/api/ipam/interface-addresses/rebuild` | Admin. Reads the newest stored configuration of every host again: `{"ok": true, "hosts": <read>, "addresses": <stored>}` |
 | GET    | `/api/hosts/{host_id}/interface-addresses` | `reports` feature, like `/api/hosts/{host_id}/interface-inventory`. `{host_id, addresses, vrfs}`: each address `host_id`, `hostname`, `interface`, `address`, `prefix_length`, `network`, `vrf_name`, `role` (`primary`, `secondary`, `virtual`), `protocol` (`HSRP`, `VRRP`, `GLBP` or `""`), `svi_vid`, `collected_at`, `vrf_id`, `vlan_id`; each VRF `name`, `vrf_id`, `interface_count` |
 
 `GET /api/ipam/address/{ip}` adds `interfaces`: the interface addresses equal to the address (only those of `vrf` when it is given). `GET /api/ipam/subnets/{subnet}` adds `interfaces`: the interface addresses inside the subnet, at most 1024; with `vrf` empty or absent they come from every VRF (each row carries its `vrf_name`), with `vrf` only from that VRF.
+
+### Routing (intended BGP state)
+Reads need the `routing` feature, writes `routing.write` (admins have both); writes are audited (`routing`) and tracked in the change log. A refused write is `422` with `detail = {message, fields}`; a duplicate is `409`. Not available to accounts limited to selected inventory groups. See [routing.md](routing.md).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET    | `/api/routing/autonomous-systems` | `{"autonomous_systems": [AS]}` by number; `tenant_id`, `search`. An AS: `id`, `asn`, `description`, `tenant_id`, `tenant_name`, `rir`, `comments`, the stamps, `instance_count`, `peering_count` |
+| POST   | `/api/routing/autonomous-systems` | `{asn, description?, tenant_id?, rir?, comments?}` (`asn` 1 to 4294967295, `65001`, `AS65001` or asdot `1.10`). `201`; `409` when the number exists |
+| GET    | `/api/routing/autonomous-systems/{id}` | The AS plus `routing_instances` (local AS) and `peerings` (local or remote AS) |
+| PUT    | `/api/routing/autonomous-systems/{id}` | `{description?, tenant_id?, rir?, comments?}`; an `asn` key gives `422` |
+| DELETE | `/api/routing/autonomous-systems/{id}` | `{"ok": true}`; `409` with `detail = {message, affected, usage: {routing_instances, bgp_peerings, bgp_peer_groups}}` while an instance or peering uses it |
+| GET    | `/api/routing/instances` | `{"routing_instances": [Instance]}`; `host_id`, `asn` (local), `status`, `tenant_id` (of the device or the AS), `search`. An Instance: `id`, `host_id`, `hostname`, `name`, `vrf_id`, `vrf_name`, `autonomous_system_id`, `asn`, `router_id`, `status` (`planned`, `active`, `decommissioned`), `description`, the stamps, `peering_count`, `peer_group_count` |
+| POST   | `/api/routing/instances` | `{host_id, name, autonomous_system_id, vrf_id?, router_id?, status?, description?}`. `201`; `409` when the device has the name ignoring case |
+| GET / PUT / DELETE | `/api/routing/instances/{id}` | GET adds `peer_groups` and `peerings`; PUT takes the create fields but `host_id` (`422`); DELETE takes its peer groups and peerings |
+| GET    | `/api/routing/peer-groups` | `{"peer_groups": [PeerGroup]}`; `routing_instance_id`, `host_id`, `search`. A PeerGroup: `id`, `routing_instance_id`, `routing_instance_name`, `host_id`, `hostname`, `name`, `remote_asn_id`, `remote_asn`, `import_policy`, `export_policy`, `description`, the stamps, `peering_count` |
+| POST   | `/api/routing/peer-groups` | `{routing_instance_id, name, remote_asn_id?, import_policy?, export_policy?, description?}`. `201`; `409` when the instance has the name |
+| GET / PUT / DELETE | `/api/routing/peer-groups/{id}` | DELETE keeps its peerings, without a group |
+| GET    | `/api/routing/peerings` | `{"peerings": [Peering]}`; `host_id`, `routing_instance_id`, `asn` (local or remote), `status`, `tenant_id`, `search`. A Peering: `id`, `routing_instance_id`, `routing_instance_name`, `host_id`, `hostname`, `local_asn`, `peer_group_id`, `peer_group_name`, `local_address`, `remote_address`, `remote_asn_id`, `remote_asn`, `remote_host_id`, `remote_hostname`, `status` (`planned`, `active`, `disabled`, `decommissioned`), `address_families` (list), `import_policy`, `export_policy`, `description`, the stamps |
+| POST   | `/api/routing/peerings` | `{routing_instance_id, remote_address, remote_asn_id, local_address?, peer_group_id?, remote_host_id?, status?, address_families?, import_policy?, export_policy?, description?}`. Addresses are IPs of one family; the peer group must belong to the instance. `201`; `409` when the instance has a peering with the remote address |
+| GET / PUT / DELETE | `/api/routing/peerings/{id}` | PUT takes the create fields but `routing_instance_id` (`422`) |
+| GET    | `/api/routing/compliance` | `host_id?`, `state?`. `{rows, summary, hosts}`: a row per active peering (and per observed one of another status) and per unexpected neighbor, `state` one of `matched`, `down`, `missing`, `unexpected`, `asn_mismatch`, `no_data`, with `host_id`, `hostname`, `peering_id`, `routing_instance_id`, `routing_instance`, `status`, `remote_address`, `intended_remote_asn`, `observed_remote_asn`, `observed_state`, `discovered_at`, `detail`; `summary` counts per state; `hosts` `{host_id, hostname, has_data, last_discovered_at, counts}` |
+| GET    | `/api/routing/suggestions` | `host_id`. `{host_id, hostname, has_data, routing_instances, proposed_instance, autonomous_systems: [{asn, autonomous_system_id}], peerings: [{remote_address, remote_asn, observed_state, established, status, remote_host_id, remote_hostname}]}`; creates nothing |
+| POST   | `/api/routing/suggestions/accept` | `{host_id, routing_instance_id? \| new_instance?: {name, asn, router_id?, status?}, peerings: [{remote_address, remote_asn?, status (planned, active), remote_host_id?}]}`. Each remote address must be an observed neighbor without a peering; all is checked first. `201` with `{autonomous_systems, routing_instance, peerings}` created |
+
+### Circuits
+Reads need the `circuits` feature, writes `circuits.write` (admins have both); writes are audited (`circuits`) and tracked in the change log. A refused write is `422` with `detail = {message, fields}` (termination fields as `terminations.<A|Z>.<field>`); a duplicate is `409`. See [circuits.md](circuits.md).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET    | `/api/circuits/providers` | `{"providers": [Provider]}` by name. A Provider: `id`, `name`, `account`, `portal_url`, `noc_contact`, `admin_contact`, `comments`, the stamps (`created_by`, `created_at`, `updated_at`, `updated_by`), `circuit_count`, `network_count` |
+| POST   | `/api/circuits/providers` | `{name, account?, portal_url?, noc_contact?, admin_contact?, comments?}`. `201`; `409` when the name is taken ignoring case |
+| GET    | `/api/circuits/providers/{id}` | The Provider plus `networks` ([ProviderNetwork]) |
+| PUT    | `/api/circuits/providers/{id}` | Any Provider field; left out keeps the value |
+| DELETE | `/api/circuits/providers/{id}` | `{"ok": true}` (its networks go too); `409` with `detail = {message, affected, usage: {circuits, terminations}}` while it has circuits or terminations in its networks |
+| GET    | `/api/circuits/provider-networks` | `{"provider_networks": [ProviderNetwork]}`; `provider_id=<id>`. A ProviderNetwork: `id`, `provider_id`, `provider_name`, `name`, `description`, the stamps, `termination_count` |
+| POST   | `/api/circuits/provider-networks` | `{provider_id, name, description?}`. `201`; `409` when the provider has the name |
+| GET / PUT / DELETE | `/api/circuits/provider-networks/{id}` | PUT `{name?, description?}` (another `provider_id` is `422`); DELETE `409` while terminations end in it |
+| GET    | `/api/circuits/circuit-types` | `{"circuit_types": [CircuitType]}`: `id`, `name`, `description`, the stamps, `circuit_count` |
+| POST   | `/api/circuits/circuit-types` | `{name, description?}`. `201`; `409` when the name is taken |
+| GET / PUT / DELETE | `/api/circuits/circuit-types/{id}` | DELETE `409` while circuits use it |
+| GET    | `/api/circuits/circuits` | `{"circuits": [Circuit]}` by provider then circuit ID; filters `provider_id`, `circuit_type_id`, `status`, `tenant_id`, `site_id`, `host_id` (a termination there), `q` (part of the circuit ID or description). A Circuit: `id`, `cid`, `provider_id`, `provider_name`, `circuit_type_id`, `circuit_type_name`, `status`, `tenant_id`, `tenant_name`, `install_date`, `termination_date`, `commit_rate_kbps`, `description`, `comments`, `billing_circuit_id`, `billing_circuit_name`, `billing_customer`, the stamps, `terminations` ([Termination], A first) |
+| POST   | `/api/circuits/circuits` | `{cid, provider_id, circuit_type_id, status?, tenant_id?, install_date?, termination_date?, commit_rate_kbps?, description?, comments?, billing_circuit_id?, terminations?}`. A Termination: `term_side` (`A`, `Z`), exactly one of `site_id` / `provider_network_id`, `host_id?`, `interface_name?` (needs `host_id`), `port_speed_kbps?`, `upstream_speed_kbps?`, `xconnect_id?`, `pp_info?`, `description?`; read back with `id`, `circuit_id`, `site_name`, `provider_network_name`, `hostname` and the stamps. `201`; `409` when the provider has the circuit ID |
+| GET    | `/api/circuits/circuits/{id}` | The Circuit plus `utilisation`: per termination on a device port with a commit rate, `term_side`, `host_id`, `interface_name`, `in_bps`, `out_bps`, `polled_at`, `commit_rate_kbps`, `in_pct_of_commit`, `out_pct_of_commit` (from the stored interface counters) |
+| PUT    | `/api/circuits/circuits/{id}` | Any circuit field; `terminations` left out keeps them, a list replaces them (a side not listed is deleted) |
+| DELETE | `/api/circuits/circuits/{id}` | `{"ok": true}`; its terminations go too |
+| PUT    | `/api/circuits/circuits/{id}/terminations/{A\|Z}` | Create or change that side's termination (fields left out keep their value) |
+| DELETE | `/api/circuits/circuits/{id}/terminations/{A\|Z}` | `{"ok": true}`; `404` when the side has none |
+| GET    | `/api/circuits/hosts/{host_id}/circuits` | `{host_id, circuits}`: the Circuits with a termination on the device, each with `utilisation` |
+| GET    | `/api/circuits/hosts/{host_id}/interfaces` | `{host_id, interfaces}`: the interface names Plexus knows for the device |
+| GET    | `/api/circuits/choices` | `{hosts: [{id, hostname, ip_address}], sites: [{id, name}], tenants: [{id, name}]}` for the dialog's pickers |
+
+### DCIM (racks, cables, patch panels, power)
+Reads need the `dcim` feature, writes `dcim.write` (admins have both); writes are audited (`dcim`) and tracked in the change log. A refused value or broken rule is `422` with `detail = {message, fields}`; a duplicate name, an endpoint that already has a cable, or a delete of a record in use is `409`. See [dcim.md](dcim.md).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET    | `/api/dcim/{kind}` | A list of records; `kind` is `rack-roles`, `racks`, `rack-reservations`, `rear-ports`, `front-ports`, `modules`, `power-panels`, `power-feeds`, `power-ports` or `power-outlets`. Filters per kind (`site_id`, `floor_id`, `role_id`, `tenant_id`, `status`, `rack_id`, `host_id`, `type`, `rear_port_id`, `power_panel_id`, `power_port_id`) and `q` (name search). Rows carry display fields (`site_name`, `host_name`, `cable_id`, `cable_label`, counts) |
+| POST   | `/api/dcim/{kind}` | Create; `201`. Racks: `{site_id, name, floor_id?, status?, role_id?, tenant_id?, u_height? (1-100, 42), desc_units?, width? (19/23), facility_id?, serial?, asset_tag?, description?, comments?}`; reservations `{rack_id, units: [int], user?, description?, tenant_id?}`; rear ports `{host_id, name, type?, positions?}`; front ports `{host_id, name, type?, rear_port_id, rear_port_position?}`; modules `{host_id, bay, module_type?, part_number?, serial?, asset_tag?, status?}`; panels `{site_id, name, floor_id?}`; feeds `{power_panel_id, name, rack_id?, status?, type?, supply?, phase?, voltage?, amperage?, max_utilization?}`; power ports `{host_id, name, maximum_draw?, allocated_draw?}`; outlets `{host_id, name, power_port_id?, feed_leg?}` |
+| GET / PUT / DELETE | `/api/dcim/{kind}/{id}` | PUT changes the keys sent (the parent device, rack or panel is fixed); DELETE `409` while in use |
+| GET    | `/api/dcim/racks/{id}/elevation` | `{rack, u_height, desc_units, units, faces: {front, rear}: [Block], unmounted, used_units, free_units, reservations}`; a Block is `{kind: device\|reservation\|empty, units, height, host_id?, name?, face?, mounted_here?}`, top first |
+| GET    | `/api/dcim/racks/{id}/power` | `{feeds: [{id, name, type, status, available_power, allocated_draw, utilization}], capacity, allocated_draw, unfed_draw, utilization, port_count, ports}` (watts) |
+| GET    | `/api/dcim/cables` | `[Cable]`; filters `host_id` (either end), `type`, `status`, `tenant_id`, `endpoint_type`, `q`. A Cable: `id`, `a_*`/`b_*` columns, `a` and `b` (endpoint with `type`, `id`, `host_id`, `name`, `host_name`, `label`), `status`, `type`, `label`, `color`, `length`, `length_unit`, `tenant_id`, `tenant_name`, `description`, the stamps |
+| POST   | `/api/dcim/cables` | `{a: Endpoint, b: Endpoint, status?, type?, label?, color?, length?, length_unit?, tenant_id?, description?}`; an Endpoint is `{type, id}` or `{type: "interface", host_id, name}`. `201`; `409` when an end already has a cable; `422` for a bad pairing or an unknown end |
+| GET / PUT / DELETE | `/api/dcim/cables/{id}` | PUT may change either end |
+| GET    | `/api/dcim/trace` | `type` with `id`, or `type=interface&host_id=&name=`. `{start, steps: [{kind: cable\|internal, near, far, cable?, position?}], status: complete\|dead_end\|unconnected\|missing\|ambiguous\|loop, is_loop, destination, power_panel?}`; `404` for an unknown endpoint |
+| GET    | `/api/dcim/hosts/{host_id}` | `{placement: {rack_id, rack_position, rack_face, height, rack_name, site_id, ...}, cables, counts}` |
+| GET    | `/api/dcim/hosts/{host_id}/interfaces` | `{interfaces: [name]}` the interface names Plexus knows for the device |
+| PUT    | `/api/dcim/hosts/{host_id}/placement` | `{rack_id?, rack_position?, rack_face?}`: mount, move or (`rack_id: null`) unrack; `422` when it does not fit, overlaps a device or reservation, or the rack is at another site. `PUT /api/hosts/{id}` accepts the same three keys |
+| GET    | `/api/dcim/choices` | Every fixed choice set (statuses, port, cable and endpoint types, feed options) |
+
+### Virtualization
+Reads need the `virtualization` feature, writes `virtualization.write` (admins have both); the cloud sync is admin only. Writes are audited (`virtualization`) and tracked in the change log. A refused value is `422` with `detail = {message, fields}`; a duplicate name is `409`. See [virtualization.md](virtualization.md).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET    | `/api/virtualization/cluster-types` | `{"cluster_types": [ClusterType]}` by name: `id`, `name`, `description`, the stamps (`created_by`, `created_at`, `updated_at`, `updated_by`), `cluster_count` |
+| POST   | `/api/virtualization/cluster-types` | `{name, description?}`. `201`; `409` when the name is taken ignoring case |
+| GET / PUT / DELETE | `/api/virtualization/cluster-types/{id}` | PUT `{name?, description?}`; DELETE `409` while clusters have the type |
+| GET / POST | `/api/virtualization/cluster-groups` | As cluster types (`{"cluster_groups": [...]}`) |
+| GET / PUT / DELETE | `/api/virtualization/cluster-groups/{id}` | DELETE `409` while clusters are in the group |
+| GET    | `/api/virtualization/clusters` | `{"clusters": [Cluster]}` by name; filters `cluster_type_id`, `cluster_group_id`, `site_id`, `tenant_id`, `search` (name or description). A Cluster: `id`, `name`, `cluster_type_id`, `cluster_type_name`, `cluster_group_id`, `cluster_group_name`, `site_id`, `site_name`, `tenant_id`, `tenant_name`, `description`, `comments`, `origin`, `cloud_key`, the stamps, `host_count`, `vm_count` |
+| POST   | `/api/virtualization/clusters` | `{name, cluster_type_id, cluster_group_id?, site_id?, tenant_id?, description?, comments?}`. `201`; `422` naming an id that does not exist; `409` when the name is taken |
+| GET    | `/api/virtualization/clusters/{id}` | The Cluster plus `hosts` (`id`, `hostname`, `ip_address`, `device_type`, `status`, `added_at`, `added_by`) and `virtual_machines` ([VM]) |
+| PUT    | `/api/virtualization/clusters/{id}` | Any Cluster field; left out keeps the value, `null` clears a group, site or tenant |
+| DELETE | `/api/virtualization/clusters/{id}` | `{"ok": true}`; `409` while it holds VMs |
+| POST   | `/api/virtualization/clusters/{id}/hosts` | `{host_id}`: add a hypervisor host. `201` with `hosts`; `409` when a member already |
+| DELETE | `/api/virtualization/clusters/{id}/hosts/{host_id}` | `{"ok": true}`; `404` when not a member |
+| GET    | `/api/virtualization/hosts/{host_id}/clusters` | `{host_id, clusters}`: the clusters the host is a hypervisor of |
+| GET    | `/api/virtualization/virtual-machines` | `{"virtual_machines": [VM]}` by name; filters `cluster_id`, `cluster_type_id`, `cluster_group_id`, `site_id` (the cluster's), `tenant_id`, `role_id`, `status`, `origin`, `search` (name, description, platform, primary IPs). A VM: `id`, `name`, `cluster_id`, `cluster_name`, `cluster_type_id`, `cluster_type_name`, `cluster_group_id`, `cluster_group_name`, `site_id`, `site_name`, `status`, `role_id`, `role_name`, `role_color`, `tenant_id`, `tenant_name`, `platform`, `vcpus`, `memory_mb`, `disk_gb`, `primary_ip4`, `primary_ip6`, `cloud_resource_id`, `cloud_account_id`, `cloud_resource_uid`, `cloud_provider`, `cloud_resource_type`, `cloud_resource_name`, `cloud_account_name`, `origin`, `description`, `comments`, the stamps, `interface_count` |
+| POST   | `/api/virtualization/virtual-machines` | `{name, cluster_id, status?, role_id?, tenant_id?, platform?, vcpus?, memory_mb?, disk_gb?, primary_ip4?, primary_ip6?, cloud_resource_id?, description?, comments?}`. `cloud_resource_id` must be a compute instance (`422` otherwise) not mirrored by another VM (`409`). `201`; `409` when the cluster has the name |
+| GET    | `/api/virtualization/virtual-machines/{id}` | The VM plus `interfaces` ([Interface]) |
+| PUT    | `/api/virtualization/virtual-machines/{id}` | Any VM field; makes the VM `manual` (the cloud sync keeps its values) |
+| DELETE | `/api/virtualization/virtual-machines/{id}` | `{"ok": true}`; its interfaces go too |
+| GET    | `/api/virtualization/virtual-machines/{id}/interfaces` | `{"interfaces": [Interface]}`. An Interface: `id`, `vm_id`, `name`, `enabled`, `mac_address`, `mtu`, `mode`, `untagged_vlan_id`, `untagged_vlan_vid`, `untagged_vlan_name`, `vrf_id`, `vrf_name`, `description`, `addresses` (CIDR text), the stamps |
+| POST   | `/api/virtualization/virtual-machines/{id}/interfaces` | `{name, enabled?, mac_address?, mtu?, mode?, untagged_vlan_id?, vrf_id?, description?, addresses?}`. `201`; `409` when the VM has the name |
+| PUT / DELETE | `/api/virtualization/virtual-machines/{id}/interfaces/{interface_id}` | PUT any field; `addresses` given replace the set. Both make the VM `manual` |
+| GET    | `/api/virtualization/tenants` | `{"tenants": [{id, name}]}` for the dialogs' tenant pickers |
+| POST   | `/api/virtualization/sync-cloud` | Admin. `{account_id?}`: mirror the AWS, Azure and GCP compute instances as VMs now (one account, or all). `{ok, accounts, created, updated, unchanged, kept_manual, offline, skipped, failed}`; `404` for an unknown account |
+
+### Locations and tenancy
+Reads need the `organization` feature; region, tenant group and tenant writes are admin only. Writes are audited (`organization`) and tracked in the change log (`region`, `site`, `tenant_group`, `tenant`). A refused value is `422` with `detail = {message, fields}`; a duplicate name is `409`. See [locations-and-tenancy.md](locations-and-tenancy.md).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET    | `/api/organization/regions` | `{"regions": [Region]}` in tree order (siblings by name). A Region: `id`, `parent_id`, `name`, `description`, the stamps (`created_by`, `created_at`, `updated_by`, `updated_at`), `path` (names from the top joined with ` / `), `depth`, `child_count`, `site_count` (its own sites), `total_site_count` (with its descendants') |
+| POST   | `/api/organization/regions` | `{name, parent_id?, description?}`. `201`; `409` when the parent has a region of the name ignoring case; `422` for an unknown parent |
+| GET / PUT / DELETE | `/api/organization/regions/{id}` | PUT `{name?, parent_id?, description?}` (`parent_id` null: top level; itself or a descendant: `422`); DELETE `409` with `detail = {message, usage: {regions, sites}}` while it holds regions or sites |
+| GET    | `/api/organization/locations` | `{regions, unassigned_sites}`: the top-level regions, each a Region plus `host_count` (hosts of its and its descendants' sites), `sites` and `children` (regions); a site `id`, `name`, `region_id`, `status`, `facility`, `time_zone`, `tenant_id`, `tenant_name`, `host_count`, `floors` (`id`, `name`, `floor_number`, `placed_device_count`) |
+| GET    | `/api/organization/sites` | `{"sites": [...]}`: every site (the `/api/geo/sites` rows) with `region_name` and `tenant_name` |
+| GET    | `/api/organization/tenant-groups` | `{"tenant_groups": [TenantGroup]}` in tree order: the Region fields with `tenant_count` and `total_tenant_count` instead of the site counts |
+| POST   | `/api/organization/tenant-groups` | `{name, parent_id?, description?}`. `201`; `409` when the name is taken ignoring case |
+| GET / PUT / DELETE | `/api/organization/tenant-groups/{id}` | PUT as regions; DELETE `409` while it has child groups, else `{"ok": true, "tenants": <left in no group>}` |
+| GET    | `/api/organization/tenants` | `{"tenants": [Tenant]}` by name; `group_id=<id>` keeps the tenants of the group and its sub-groups. A Tenant: `id`, `name`, `group_id`, `group_name`, `description`, `comments`, the stamps |
+| POST   | `/api/organization/tenants` | `{name, group_id?, description?, comments?}`. `201`; `409` when the name is taken ignoring case; `422` for an unknown group |
+| GET    | `/api/organization/tenants/{id}` | The Tenant plus `counts`: rows it owns per kind (`hosts`, `prefixes`, `ip_addresses`, `vlans`, `vrfs`, `sites`, and every other table with a `tenant_id` column by table name) |
+| PUT / DELETE | `/api/organization/tenants/{id}` | PUT `{name?, group_id?, description?, comments?}`; DELETE `{"ok": true, "released": counts}` (what it owned keeps existing with no tenant) |
+| POST / PUT | `/api/geo/sites`, `/api/geo/sites/{id}` | `floor-plan` feature. Also take `region_id`, `status` (`active`, `planned`, `staging`, `decommissioning`, `retired`), `facility`, `time_zone` (IANA name or empty) and `tenant_id`; on PUT a key left out keeps its value and `null` clears a region or tenant. `422` naming each bad field |
+| PATCH  | `/api/ipam/prefixes/{id}` | Admin. `{tenant_id}` (`null` clears); `{"ok": true, "prefix": ...}`; `400` naming `tenant_id` for an unknown tenant, `404` for an unknown prefix |
+| PATCH  | `/api/ipam/allocations/{id}` | Admin. As prefixes, for an IP allocation |
+
+Hosts: the create, update and bulk edit bodies take `tenant_id` (an unknown id is `400` naming it); host rows carry `tenant_id`, `tenant` (`{id, name}` or null) and `region_ids` (the site's region and the regions above it, nearest first). The inventory list and dynamic groups filter by `tenant_id=<id|none>` and `region_id=<id|none>` (a region includes the regions under it). `POST /api/ipam/prefixes` and `POST /api/ipam/subnets/{subnet}/allocations` take `tenant_id`; `GET /api/ipam/subnets/{subnet}` lists `prefixes` (`id`, `vrf`, `description`, `source_name`, `provider`, `tenant_id`, `tenant_name`) and each allocation's `tenant_id` and `tenant_name`.
 
 ### Source device import
 Admin only (and the `topology` and `inventory` features). See [After adding a source](meraki-topology.md#after-adding-a-source).
@@ -224,6 +345,14 @@ Outbound requests sent when a tracked object is created, updated or deleted. Adm
 | POST   | `/api/admin/webhooks/{id}/test` | Sends one `webhook.test` event now, without retries: `ok`, `status` (`success`, `failed`, `blocked`), `status_code`, `latency_ms`, `error`, `delivery_id` |
 | GET    | `/api/admin/webhooks/{id}/deliveries` | `deliveries`, newest attempt first; `limit` (1 to 1000, default 100). Each has `id`, `delivery_id`, `event`, `object_type`, `object_id`, `action`, `attempt`, `status` (`success`, `retrying`, `failed`, `blocked`), `status_code`, `latency_ms`, `response_body` (first 2000 characters), `error`, `created_at` |
 | POST   | `/api/admin/webhooks/{id}/deliveries/{delivery_row_id}/redeliver` | Sends the logged body again once with the same `X-Plexus-Delivery` id; same result as test. `404` for a delivery of another webhook, `400` when the body was too large to keep |
+
+### Change log
+The recorded creates, updates and deletes of tracked objects, field by field; see [change-log.md](change-log.md). Any signed-in user; each object type needs the feature of its REST routes (hosts and groups `inventory`, prefixes, addresses, VLANs and VRFs `ipam`, config backups `config-backups`, jobs `jobs`, credentials admin), and accounts limited to selected inventory groups see only their groups' hosts, groups and config backups.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET    | `/api/changes` | `changes` (newest first; each with `id`, `object_type`, `object_id`, `object_label`, `action`, `user`, `correlation_id`, `changed_at`, `changes`, `before`, `after`), `total`, `limit`, `offset`, `object_types` (the readable types). Filters: `object_type`, `object_id`, `object_label`, `user`, `action`, `since`, `until` (ISO 8601, inclusive); `limit` (1 to 500, default 50), `offset`. `403` for a type the caller may not read, `400` for an unknown type, action or date |
+| GET    | `/api/changes/{object_type}/{object_id}` | The history of one object, as above; takes `user`, `action`, `since`, `until`, `limit`, `offset` |
 
 ### GraphQL API
 

@@ -167,6 +167,15 @@ own.
 Limits: only IPv4 can be typed in Path Mode. Azure Virtual WAN hubs, private
 endpoints, load balancers and application gateways are not collected.
 
+## Virtual machines
+
+Every VM of a discovered subscription (resource type `vm`) is also mirrored
+as a virtual machine under **Assets > Virtualization**, in a cluster of type
+*Azure* per subscription and region, with one interface per NIC and its
+private and public addresses. The network API reports no power state, so a
+VM found by the discovery is active. vCPUs and memory are not collected.
+See [Virtualization](virtualization.md#cloud-instances-as-virtual-machines).
+
 ## Availability tracking
 
 Each collection also records the state of what it reports, shown under **Monitoring > Availability > Integrations and cloud** with uptime, outages and alerts: the virtual machines drawn on the map, virtual network gateways, firewalls, NAT gateways and ExpressRoute circuits (devices), gateway connections (VPN connections: Connected is up, NotConnected is down), ExpressRoute connections (circuits), VNet peerings and gateway attachments (links). VNets and local network gateways are left out. The state mapping, alerting and retention are described in [Meraki in the Topology Map](meraki-topology.md#availability-tracking).

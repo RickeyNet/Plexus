@@ -21,7 +21,7 @@ import { DeviceModelTab } from './DeviceModelTab';
 import { DiscoveryTab } from './DiscoveryTab';
 import { FeaturesTab } from './FeaturesTab';
 import { GitSourcesTab } from './GitSourcesTab';
-import { JobRetentionSection } from './JobRetentionSection';
+import { ChangeLogRetentionSection, JobRetentionSection } from './JobRetentionSection';
 import { LoggingTab } from './LoggingTab';
 import { MonitoringTab } from './MonitoringTab';
 import { NetFlowTab } from './NetFlowTab';
@@ -31,6 +31,7 @@ import { SiemTab } from './SiemTab';
 import { SystemTab } from './SystemTab';
 import { UnsavedContext, useUnsavedRegistry } from './unsaved-context';
 import { UsersTab } from './UsersTab';
+import { ValidationRulesTab } from './ValidationRulesTab';
 import { WebhooksTab } from './WebhooksTab';
 
 type Tab =
@@ -49,6 +50,7 @@ type Tab =
   | 'custom-data'
   | 'device-model'
   | 'git-sources'
+  | 'validation-rules'
   | 'ai-access'
   | 'plugins'
   | 'system';
@@ -111,6 +113,10 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
     title: 'Device Model',
     text: 'Curate the manufacturers, device types, roles and lifecycle statuses that hosts link to. Discovery adds manufacturers and device types it finds; a value set by hand on a host is never overwritten. Sites are managed on the Geolocation page.',
   },
+  'validation-rules': {
+    title: 'Data Validation Rules',
+    text: 'Require values to follow your conventions: a pattern, a length, a number range or a value at all. Rules are checked on the server whenever a host, group, IPAM prefix or address, VLAN, VRF or custom field value is saved in Plexus; discovery and syncs are not checked. Check existing data lists the stored objects that break a rule.',
+  },
   'git-sources': {
     title: 'Git Sources',
     text: 'Keep templates, Ansible playbooks and config contexts in Git repositories. Each sync imports the branch head by folder (templates/, playbooks/, config_contexts/); imported records are read-only in Plexus, show their file and commit, and are removed when their file leaves the repository.',
@@ -144,6 +150,7 @@ const ADMIN_TABS: { key: Tab; label: string }[] = [
   { key: 'features', label: 'Features' },
   { key: 'custom-data', label: 'Custom Fields & Tags' },
   { key: 'device-model', label: 'Device Model' },
+  { key: 'validation-rules', label: 'Validation Rules' },
   { key: 'git-sources', label: 'Git Sources' },
   { key: 'ai-access', label: 'AI Access' },
   { key: 'plugins', label: 'Plugins' },
@@ -273,6 +280,7 @@ export function Settings() {
           {tab === 'features' && <FeaturesTab capabilities={caps} />}
           {tab === 'custom-data' && <CustomDataTab />}
           {tab === 'device-model' && <DeviceModelTab />}
+          {tab === 'validation-rules' && <ValidationRulesTab />}
           {tab === 'git-sources' && <GitSourcesTab />}
           {tab === 'ai-access' && <AiAccessTab />}
           {tab === 'plugins' && <PluginsTab />}
@@ -283,6 +291,10 @@ export function Settings() {
               <section>
                 <h4 style={{ margin: '0 0 0.5rem 0' }}>Job history</h4>
                 <JobRetentionSection />
+              </section>
+              <section>
+                <h4 style={{ margin: '0 0 0.5rem 0' }}>Change log</h4>
+                <ChangeLogRetentionSection />
               </section>
             </div>
           )}

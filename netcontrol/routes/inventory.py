@@ -14,12 +14,15 @@ import socket
 import uuid
 
 import routes.database as db
+import yaml
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from routes.db.inventory import _tree_ordered
 
 import netcontrol.routes.state as state
+from netcontrol.bulk_import import host_csv_header, host_csv_row, host_export_records
+from netcontrol.data_validation import enforce as enforce_validation_rules, pick as rule_values
 from netcontrol.drivers import DriverCapabilityError, GenericDriver, get_driver
 from netcontrol.drivers.show_version import ShowVersionFacts, parse_show_version
 from netcontrol.integrations.software.versions import classify_host
@@ -35,6 +38,12 @@ from netcontrol.object_scope import (
 )
 from netcontrol.routes import background_jobs
 from netcontrol.routes.custom_fields import attach_custom_data, matching_keys
+from netcontrol.routes.dcim import (
+    HostPlacementValues,
+    apply_host_placement,
+    check_host_placement,
+    sent_placement_values,
+)
 from netcontrol.routes.device_model import (
     HostDeviceValues,
     attach_device_data,
@@ -199,8 +208,10 @@ class HostBulkCreateGrouped(BaseModel):
 BULK_ADD_GROUP_DESCRIPTION = "Added from the Topology map"
 
 
-class HostUpdate(HostDeviceValues):
-    """A host edit. A device value that is left out keeps its stored value."""
+class HostUpdate(HostDeviceValues, HostPlacementValues):
+    """A host edit. A device value that is left out keeps its stored value;
+    so does a rack placement value (``rack_id``, ``rack_position``,
+    ``rack_face``, checked like ``PUT /api/dcim/hosts/{id}/placement``)."""
 
     hostname: str
     ip_address: str
@@ -1234,18 +1245,6 @@ def _id_key(row: dict) -> str:
     return str(row["id"])
 
 
-def _csv_field_cell(field: dict, value: object) -> str:
-    """A custom field value as CSV text: numbers and booleans as written,
-    text-like values guarded against formulas."""
-    if value is None:
-        return ""
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if field["field_type"] == "number":
-        return str(value)
-    return _csv_text_cell(value)
-
-
 def _visible_tree(scope: ObjectScope, groups: list[dict]) -> list[dict]:
     """The groups a scoped caller may read, as a tree of their own: a group
     whose parent is hidden becomes a top-level group (``parent_id`` None) and
@@ -1325,67 +1324,42 @@ async def reorder_groups(payload: GroupReorderRequest, request: Request):
     return {"ok": True}
 
 
-# A cell starting with one of these is read as a formula by spreadsheet apps.
-_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
-
-
-def _csv_text_cell(value: object) -> str:
-    """A user-entered text cell made safe to open in a spreadsheet: a leading
-    apostrophe stops a value such as ``=cmd`` or ``@SUM(A1)`` running as a
-    formula."""
-    text = "" if value is None else str(value)
-    return f"'{text}" if text.startswith(_CSV_FORMULA_PREFIXES) else text
-
-
 @router.get("/api/inventory/export/csv")
 @scoped("list")
 async def export_inventory_csv(request: Request):
     """Export all inventory hosts (that the caller may read) as a CSV file:
-    the host columns (the driver key as ``Platform``), the device model
-    columns, then ``Tags`` (names joined with ``; ``) and one column per
-    custom field that applies to hosts, in display order."""
-    rows = (await request_scope(request)).filter_hosts(await db.get_all_hosts_for_export())
-    fields = await db.list_custom_fields("host")
-    await attach_custom_data("host", rows, _id_key)
-    await attach_device_data(rows)
+    the host columns (the driver key as ``Platform``, the group's path as
+    ``Group``), the device model columns, then ``Tags`` (names joined with
+    ``; ``) and one column per custom field that applies to hosts, in
+    display order. Bulk import reads this file back as it is."""
+    fields, records = await host_export_records(
+        (await request_scope(request)).filter_hosts(await db.get_all_hosts_for_export())
+    )
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(
-        ["Hostname", "IP Address", "Model", "Software Version", "Platform", "Status", "Group"]
-        + ["Manufacturer", "Device Type", "Role", "Lifecycle Status", "Site", "Location Detail", "Tags"]
-        + [f["label"] for f in fields]
-    )
-    for r in rows:
-        values = r["custom_fields"]
-        hardware = r["hardware"] or {}
-        writer.writerow(
-            [
-                r.get("hostname", ""),
-                r.get("ip_address", ""),
-                r.get("model", ""),
-                r.get("software_version", ""),
-                r.get("device_type", ""),
-                r.get("status", ""),
-                r.get("group_name", ""),
-            ]
-            + [
-                _csv_text_cell(text)
-                for text in (
-                    hardware.get("manufacturer"),
-                    hardware.get("model"),
-                    (r["role"] or {}).get("name"),
-                    (r["lifecycle_status"] or {}).get("name"),
-                    (r["site"] or {}).get("name"),
-                    r["location_detail"],
-                    "; ".join(t["name"] for t in r["tags"]),
-                )
-            ]
-            + [_csv_field_cell(f, values.get(f["key"])) for f in fields]
-        )
+    writer.writerow(host_csv_header(fields))
+    for record in records:
+        writer.writerow(host_csv_row(record, fields))
     return StreamingResponse(
         io.StringIO(output.getvalue()),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=inventory_export.csv"},
+    )
+
+
+@router.get("/api/inventory/export/yaml")
+@scoped("list")
+async def export_inventory_yaml(request: Request):
+    """The hosts of the CSV export as YAML: a list of objects with the
+    columns as snake_case keys, ``tags`` a list and ``custom_fields`` the
+    values by field key. Bulk import reads this file back as it is."""
+    _fields, records = await host_export_records(
+        (await request_scope(request)).filter_hosts(await db.get_all_hosts_for_export())
+    )
+    return Response(
+        content=yaml.safe_dump(records, sort_keys=False, allow_unicode=True),
+        media_type="application/yaml",
+        headers={"Content-Disposition": "attachment; filename=inventory_export.yaml"},
     )
 
 
@@ -1409,6 +1383,7 @@ async def _check_group_parent(request: Request, scope: ObjectScope, parent_id: i
 @scoped("create")
 async def create_group(body: GroupCreate, request: Request):
     await _check_group_parent(request, await request_scope(request), body.parent_id)
+    await enforce_validation_rules("group", {"name": body.name, "description": body.description})
     try:
         gid = await db.create_group(body.name, body.description, parent_id=body.parent_id)
     except ValueError as exc:
@@ -1430,6 +1405,9 @@ async def update_group(group_id: int, body: GroupUpdate, request: Request):
         # Moving needs write on where the group is and where it goes.
         await _check_group_parent(request, scope, group.get("parent_id"))
         await _check_group_parent(request, scope, body.parent_id)
+    await enforce_validation_rules(
+        "group", {"name": body.name, "description": body.description}, existing=rule_values(group, "group")
+    )
     try:
         await db.update_group(group_id, body.name, body.description, **move)
     except ValueError as exc:
@@ -1506,6 +1484,17 @@ async def _insert_host(group_id: int, body: HostCreate) -> int:
     snmp_profile_id = _check_snmp_profile_id(body.snmp_profile_id) or ""
     device_values = sent_device_values(body)
     await check_device_values(device_values)
+    await enforce_validation_rules(
+        "host",
+        {
+            "hostname": body.hostname,
+            "ip_address": body.ip_address,
+            "device_type": body.device_type,
+            "vrf_name": body.vrf_name or "",
+            "vlan_id": str(body.vlan_id or ""),
+            "aws_instance_id": aws_instance_id,
+        },
+    )
     hid = await db.add_host(
         group_id,
         body.hostname,
@@ -1518,18 +1507,30 @@ async def _insert_host(group_id: int, body: HostCreate) -> int:
     )
     if device_values:
         await db.set_host_device_fields(hid, device_values, lock=True)
-    # Auto-apply graph templates to manually added host
-    try:
-        await db.apply_graph_templates_to_host(hid)
-    except Exception as exc:
-        LOGGER.warning("inventory: failed to apply graph templates to host %s: %s", hid, exc)
-    await push_inventory_host_allocation(
-        hostname=body.hostname,
-        ip_address=body.ip_address,
-        source_hint="inventory-add",
-    )
-    await _notify_flow_collector_host_changed(new_ip=body.ip_address, host_id=hid)
+    await after_host_write(hid, body.hostname, body.ip_address, created=True)
     return hid
+
+
+async def after_host_write(host_id: int, hostname: str, ip_address: str, *, created: bool, prior_ip: str = "") -> None:
+    """The follow-ups of a host write once it is stored: graph templates for
+    a new host, the IPAM push and the flow collector's host cache. Shared by
+    the host routes and bulk import (``netcontrol.bulk_import``)."""
+    if created:
+        # Auto-apply graph templates to manually added host
+        try:
+            await db.apply_graph_templates_to_host(host_id)
+        except Exception as exc:
+            LOGGER.warning("inventory: failed to apply graph templates to host %s: %s", host_id, exc)
+    await push_inventory_host_allocation(
+        hostname=hostname,
+        ip_address=ip_address,
+        source_hint="inventory-add" if created else "inventory-update",
+    )
+    await _notify_flow_collector_host_changed(
+        old_ip=None if created else (prior_ip or None),
+        new_ip=ip_address or None,
+        host_id=host_id,
+    )
 
 
 @router.post("/api/inventory/{group_id}/hosts", status_code=201)
@@ -1713,6 +1714,25 @@ async def update_host(host_id: int, body: HostUpdate, request: Request):
     await check_device_values(device_values)
     prior = await db.get_host(host_id)
     prior_ip = (prior.get("ip_address") if prior else "") or ""
+    await enforce_validation_rules(
+        "host",
+        {
+            "hostname": body.hostname,
+            "ip_address": body.ip_address,
+            "device_type": body.device_type,
+            "vrf_name": body.vrf_name,
+            "vlan_id": body.vlan_id,
+            "aws_instance_id": aws_instance_id,
+        },
+        existing=rule_values(prior, "host") if prior else None,
+    )
+    # Rack placement (DCIM): checked before anything is written, against the
+    # site this edit leaves the host at.
+    placement_values = sent_placement_values(body)
+    if prior and (placement_values or "site_id" in device_values):
+        await check_host_placement(
+            host_id, placement_values, device_values.get("site_id"), site_sent="site_id" in device_values
+        )
     await db.update_host(
         host_id,
         body.hostname,
@@ -1725,6 +1745,8 @@ async def update_host(host_id: int, body: HostUpdate, request: Request):
     )
     if device_values and await db.set_host_device_fields(host_id, device_values, lock=True):
         await audit_device_write(request, "host_update", f"host={host_id} {describe_values(device_values)}")
+    if prior and placement_values and await apply_host_placement(host_id, placement_values):
+        await audit_device_write(request, "host_place", f"host={host_id} {describe_values(placement_values)}")
     _invalidate_topology_cache()
     # Optional re-group as part of the same edit. The (group_id, ip_address)
     # unique key means moving to a group that already has this IP will fail
@@ -1737,16 +1759,7 @@ async def update_host(host_id: int, body: HostUpdate, request: Request):
             if "unique" in msg or "duplicate key" in msg:
                 raise HTTPException(409, "Target group already has a host with this IP address")
             raise
-    await push_inventory_host_allocation(
-        hostname=body.hostname,
-        ip_address=body.ip_address,
-        source_hint="inventory-update",
-    )
-    await _notify_flow_collector_host_changed(
-        old_ip=prior_ip or None,
-        new_ip=body.ip_address or None,
-        host_id=host_id,
-    )
+    await after_host_write(host_id, body.hostname, body.ip_address, created=False, prior_ip=prior_ip)
     return {"ok": True}
 
 

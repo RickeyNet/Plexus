@@ -19,6 +19,10 @@ of these ways:
 | AI access | The `search_audit_log` tool ([ai-access.md](ai-access.md)) | A token owned by an admin, with the `audit` category |
 | Deployment view | **Deployment Correlation** lists events whose detail names that deployment, inside its time window | The `deployments` feature |
 
+**Field-by-field history.** The audit log says what was done, in text. For
+the changed fields of a host, group, prefix, VLAN or other object, with
+their values before and after, see the [change log](change-log.md).
+
 **Not the CIS audit.** The `/audit` address opens **Compliance > CIS
 Audit**. That tab is a different feature: it grades the inventory against
 CIS-style checks (configuration drift, port hygiene, VLAN consistency and
@@ -47,7 +51,7 @@ The category names the area that wrote the event. Common categories:
 |---|---|
 | `auth` | Sign-in success and failure (with `source=`), password change, idle-timeout sign-out, users, access groups, feature visibility |
 | `credential` | Each allow or deny decision when a stored credential is used |
-| `inventory`, `device_model`, `custom_fields`, `network_objects`, `ipam`, `dhcp`, `geolocation` | Inventory and IPAM records |
+| `inventory`, `device_model`, `custom_fields`, `network_objects`, `ipam`, `dhcp`, `geolocation`, `circuits` | Inventory and IPAM records |
 | `config`, `config-backups`, `config-drift`, `compliance` | Configuration templates, backups, drift and compliance |
 | `jobs`, `deployments`, `upgrades`, `maintenance-windows`, `risk-analysis` | Jobs and change work |
 | `monitoring`, `sla`, `topology`, `meraki_topology`, `cloud_visibility` | Monitoring and integrations |

@@ -154,8 +154,8 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
   const credentials = useCredentialsList();
   const serviceCredentials = useServiceCredentialsList();
   const fid = useId();
-  // Job retention rides on the same payload but is edited by
-  // JobRetentionSection; each form re-seeds only while it is clean, so a
+  // Job and change log retention ride on the same payload but are edited by
+  // the retention sections; each form re-seeds only while it is clean, so a
   // save in one never discards unsaved edits in the other.
   const { draft, setDraft, dirty, discard, markSaved } = useSavedDraft(query.data);
   const [status, setStatus] = useState<FormStatus | null>(null);
@@ -183,6 +183,7 @@ function AuthConfigForm({ groups }: { groups: AccessGroup[] }) {
         const payload: AuthConfig = {
           ...draft,
           job_retention_days: query.data?.job_retention_days ?? draft.job_retention_days,
+          change_log_retention_days: query.data?.change_log_retention_days ?? draft.change_log_retention_days,
         };
         update.mutate(payload, {
           onSuccess: (saved) => {

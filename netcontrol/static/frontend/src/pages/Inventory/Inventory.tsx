@@ -1,19 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
+import { ChangelogPanel } from '@/components/ChangelogPanel';
 import { CustomDataFilter } from '@/components/CustomDataFilter';
 import { DeleteButton } from '@/components/DeleteButton';
 import { EmptyState } from '@/components/EmptyState';
+import { ImportDialog } from '@/components/ImportDialog';
 import { LoadingState } from '@/components/LoadingState';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { QueryError } from '@/components/QueryError';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
+import { Modal } from '@/components/Modal';
 import { TagChip, TagChips } from '@/components/TagChips';
 import { clickableProps } from '@/lib/clickable';
 import { type CustomDataFilterValue, EMPTY_CUSTOM_DATA_FILTER, isEmptyFilter } from '@/lib/customData';
 import { hostModelText } from '@/lib/deviceModel';
+import { type FilterDraft, inventoryFilterToDraft } from '@/lib/dynamicGroupFilter';
 import { READ_ONLY_GROUP_REASON, TOP_LEVEL_GROUP_REASON, useObjectScope } from '@/lib/objectScope';
 import { useLinkedParam } from '@/lib/useLinkedParam';
 
@@ -22,6 +26,7 @@ import {
   type InventoryGroupFull,
   type InventoryHost,
   inventoryCsvExportUrl,
+  inventoryYamlExportUrl,
   useAssignSnmpProfile,
   useBulkDeleteHosts,
   useDeleteHost,
@@ -37,6 +42,7 @@ import { BulkMoveModal } from './BulkMoveModal';
 import { BulkSnmpProfileModal } from './BulkSnmpProfileModal';
 import { BulkTagModal } from './BulkTagModal';
 import { DiscoveryModal, type DiscoveryMode } from './DiscoveryModal';
+import { DynamicGroupsModal } from './DynamicGroupsModal';
 import { GroupModal } from './GroupModal';
 import { HostModal } from './HostModal';
 import { SerialModal, type SerialTarget } from './SerialModal';
@@ -72,6 +78,8 @@ type ModalState =
   | { kind: 'bulk-snmp'; hostIds: number[] }
   | { kind: 'serial'; target: SerialTarget }
   | { kind: 'snmp-profiles' }
+  | { kind: 'import' }
+  | { kind: 'dynamic-groups'; seed: FilterDraft | null }
   | {
       kind: 'discovery';
       mode: DiscoveryMode;
@@ -291,6 +299,13 @@ export function Inventory() {
         <button
           type="button"
           className="btn btn-sm btn-secondary"
+          onClick={() => setModal({ kind: 'dynamic-groups', seed: null })}
+        >
+          Dynamic Groups
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm btn-secondary"
           onClick={() =>
             setModal({ kind: 'discovery', mode: 'global', group: null })
           }
@@ -303,6 +318,17 @@ export function Inventory() {
           onClick={exportCsv}
         >
           Export CSV
+        </button>
+        <a className="btn btn-sm btn-secondary" href={inventoryYamlExportUrl()} download>
+          Export YAML
+        </a>
+        <button
+          type="button"
+          className="btn btn-sm btn-secondary"
+          onClick={() => setModal({ kind: 'import' })}
+          title="Add or update hosts and groups from a CSV, YAML or JSON file"
+        >
+          Import
         </button>
         <button
           type="button"
@@ -331,6 +357,16 @@ export function Inventory() {
           style={{ maxWidth: 280, flex: '1 1 200px' }}
         />
         <CustomDataFilter objectType="host" value={dataFilter} onChange={changeDataFilter} deviceFacets />
+        {(hasDataFilter || query.trim() !== '') && !objectScope.restricted && (
+          <button
+            type="button"
+            className="btn btn-sm btn-secondary"
+            onClick={() => setModal({ kind: 'dynamic-groups', seed: inventoryFilterToDraft(dataFilter, query) })}
+            title="Save the search and filter as a dynamic group (hostname or IP for the search)"
+          >
+            Save as dynamic group
+          </button>
+        )}
         <select
           className="form-select form-select-sm"
           value={sort}
@@ -535,6 +571,10 @@ export function Inventory() {
       {modal.kind === 'snmp-profiles' && (
         <SnmpProfilesModal onClose={closeModal} />
       )}
+      {modal.kind === 'import' && <ImportDialog types={['hosts', 'groups']} onClose={closeModal} />}
+      {modal.kind === 'dynamic-groups' && (
+        <DynamicGroupsModal groups={groups} seed={modal.seed} onClose={closeModal} />
+      )}
       {modal.kind === 'discovery' && (
         <DiscoveryModal
           mode={modal.mode}
@@ -623,6 +663,7 @@ export function GroupCard({
   // Write controls of a group the account may only read: disabled, with why.
   const readOnly = !canWrite;
   const readOnlyTitle = readOnly ? READ_ONLY_GROUP_REASON : undefined;
+  const [showChanges, setShowChanges] = useState(false);
 
   // Virtualize the host rows so only the rows in view are mounted. Each group
   // scrolls inside its own max-height container, so a group with thousands of
@@ -775,6 +816,7 @@ export function GroupCard({
             <MenuItem onSelect={onAddSubGroup} disabled={readOnly} title={readOnlyTitle}>
               New Sub-group
             </MenuItem>
+            <MenuItem onSelect={() => setShowChanges(true)}>Changelog</MenuItem>
             <MenuSeparator />
             <MenuItem danger onSelect={onDeleteGroup} disabled={readOnly} title={readOnlyTitle}>
               Delete
@@ -1029,6 +1071,11 @@ export function GroupCard({
             </div>
           )}
         </div>
+      )}
+      {showChanges && (
+        <Modal isOpen onClose={() => setShowChanges(false)} title={`Changelog: ${groupLabel(group)}`} size="large">
+          <ChangelogPanel objectType="group" objectId={group.id} title={null} />
+        </Modal>
       )}
     </div>
   );

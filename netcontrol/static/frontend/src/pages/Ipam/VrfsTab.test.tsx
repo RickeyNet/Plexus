@@ -31,6 +31,9 @@ vi.mock('@/api/networkObjects', () => ({
   useUpdateVrf: () => mutation,
 }));
 vi.mock('@/api/auth', () => ({ useAuthStatus: () => ({ data: { role: state.role } }) }));
+vi.mock('@/api/objectChanges', () => ({
+  useObjectChanges: () => query({ data: { changes: [], total: 0, limit: 10, offset: 0, object_types: [] } }),
+}));
 vi.mock('@/components/DialogProvider-context', () => ({
   useDialogs: () => ({ confirm: async () => true, alert: async () => {} }),
 }));

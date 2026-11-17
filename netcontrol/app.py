@@ -43,7 +43,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from netcontrol.integrations.cisco_fdm.collector import fdm_poll_loop
 from netcontrol.mcp.server import build_mcp_app
 from netcontrol.plugins import registry as plugin_registry
-from netcontrol.routes import notification_channels, siem_forwarder, webhooks
+from netcontrol.routes import notification_channels, object_changes, siem_forwarder, webhooks
 from netcontrol.routes.admin import (
     AdminAccessGroupCreateRequest,
     AdminAccessGroupUpdateRequest,
@@ -98,8 +98,14 @@ from netcontrol.routes.baseline_alerting import router as baseline_alerting_rout
 from netcontrol.routes.billing import (
     router as billing_router,
 )
+from netcontrol.routes.bulk_import import (
+    init_bulk_import,
+    ipam_router as bulk_import_ipam_router,
+    router as bulk_import_router,
+)
 from netcontrol.routes.cato_egress_check import router as cato_egress_check_router
 from netcontrol.routes.cdef_engine import router as cdef_router
+from netcontrol.routes.circuits import router as circuits_router
 from netcontrol.routes.cloud_flow_pullers import pull_flow_logs_all_accounts
 from netcontrol.routes.cloud_metric_pullers import pull_traffic_metrics_all_accounts
 from netcontrol.routes.cloud_visibility import (
@@ -149,6 +155,7 @@ from netcontrol.routes.custom_fields import (
     router as custom_fields_router,
 )
 from netcontrol.routes.dashboards import router as dashboards_router
+from netcontrol.routes.dcim import router as dcim_router
 from netcontrol.routes.deployments import (
     DeploymentCreate,
     DeploymentExecute,
@@ -171,6 +178,7 @@ from netcontrol.routes.device_model import (
 )
 from netcontrol.routes.dhcp import init_dhcp, router as dhcp_router, sync_dhcp_server
 from netcontrol.routes.dhcp_adapters import DhcpAdapterError, collect_dhcp_snapshot, is_collection_fed
+from netcontrol.routes.dynamic_groups import router as dynamic_groups_router
 from netcontrol.routes.federation import (
     federation_sync_loop,
     init_federation,
@@ -281,6 +289,10 @@ from netcontrol.routes.network_objects import (
     router as network_objects_router,
 )
 from netcontrol.routes.opnsense_rules import router as opnsense_rules_router
+from netcontrol.routes.organization import (
+    admin_router as organization_admin_router,
+    router as organization_router,
+)
 from netcontrol.routes.playbooks import (
     PlaybookCreate,
     PlaybookUpdate,
@@ -305,6 +317,7 @@ from netcontrol.routes.risk_analysis import (
     _simulate_config_change,
     router as risk_analysis_router,
 )
+from netcontrol.routes.routing import router as routing_router
 from netcontrol.routes.secret_variables import router as secret_variables_router
 from netcontrol.routes.snmp import (
     PYSMNP_AVAILABLE,
@@ -335,6 +348,11 @@ from netcontrol.routes.upgrades import (
     router as upgrades_router,
     ws_router as upgrades_ws_router,
 )
+from netcontrol.routes.validation_rules import router as validation_rules_router
+from netcontrol.routes.virtualization import (
+    admin_router as virtualization_admin_router,
+    router as virtualization_router,
+)
 
 # Ensure project root is on path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -344,7 +362,7 @@ import importlib
 
 import routes.database as db
 from routes.crypto import decrypt, encrypt
-from routes.db.change_events import current_actor
+from routes.db.change_events import current_actor, current_correlation_id
 from routes.runner import LogEvent, execute_playbook, get_playbook_class
 
 try:
@@ -860,6 +878,7 @@ async def require_auth(request: Request, response: Response = None):
         session = {"user": "api-token", "user_id": 0, "auth_mode": "token"}
         request.state.auth_session = session
         current_actor.set("api-token")
+        current_correlation_id.set(getattr(request.state, "correlation_id", ""))
         return session
 
     if _env_flag("APP_REQUIRE_API_TOKEN", False) and path.startswith("/api/"):
@@ -932,6 +951,7 @@ async def require_auth(request: Request, response: Response = None):
     request.state.auth_session = session
     # Names the user on the object-change events this request causes.
     current_actor.set(str(session.get("user") or ""))
+    current_correlation_id.set(getattr(request.state, "correlation_id", ""))
     return session
 
 
@@ -1696,6 +1716,12 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         LOGGER.warning("webhooks: startup failed: %s", type(exc).__name__)
 
+    # Per-object change log: record every tracked change (the same hook).
+    try:
+        await object_changes.start_recorder()
+    except Exception as exc:
+        LOGGER.warning("change log: startup failed: %s", type(exc).__name__)
+
     flow_collector_started = False
     # Persisted flow_collector config (loaded above) drives lifecycle now.
     # Env vars only matter on the very first boot, where _load_persisted_
@@ -1768,6 +1794,10 @@ async def lifespan(app: FastAPI):
             await webhooks.stop_dispatcher()
         except Exception as exc:
             LOGGER.warning("webhooks: shutdown failed: %s", type(exc).__name__)
+        try:
+            await object_changes.stop_recorder()
+        except Exception as exc:
+            LOGGER.warning("change log: shutdown failed: %s", type(exc).__name__)
         # Release DB connections last, after every consumer above has stopped.
         try:
             await db.close_db_pool()
@@ -2303,6 +2333,7 @@ init_cloud_visibility(require_admin)
 init_meraki_topology(require_admin)
 init_ipam(require_admin)
 init_custom_fields(require_admin)
+init_bulk_import(require_admin)
 init_software(require_admin)
 init_dhcp(require_admin)
 init_federation(require_admin)
@@ -2344,6 +2375,24 @@ app.include_router(
     device_model_inventory_router,
     dependencies=[Depends(require_auth), Depends(require_feature("inventory"))],
 )
+# Circuits, providers, provider networks and circuit types: read with the
+# circuits feature, changed with circuits.write (docs/circuits.md).
+app.include_router(
+    circuits_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("circuits"))],
+)
+# Physical DCIM (racks, cables, patch panels, power): read with dcim,
+# changed with dcim.write (docs/dcim.md).
+app.include_router(
+    dcim_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("dcim"))],
+)
+# Dynamic groups (saved host filters): read with inventory access, changed
+# with inventory.write; members are resolved within the caller's scope.
+app.include_router(
+    dynamic_groups_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("inventory"))],
+)
 # VRF and VLAN records: read with IPAM access, managed by admins. Registered
 # before the IPAM router so its greedy ``/api/ipam/subnets/{subnet:path}``
 # can never shadow these paths. A host's interface addresses sit with its
@@ -2353,10 +2402,47 @@ app.include_router(
     dependencies=[Depends(require_auth), Depends(require_feature("ipam"))],
 )
 app.include_router(network_objects_admin_router, dependencies=[Depends(require_admin)])
+# Regions, the location tree, tenant groups and tenants: read with the
+# organization feature, managed by admins.
+app.include_router(
+    organization_router,
+    dependencies=[Depends(require_auth), Depends(require_feature("organization"))],
+)
+app.include_router(organization_admin_router, dependencies=[Depends(require_admin)])
+# Bulk import (CSV/YAML/JSON): hosts and groups with inventory access and
+# inventory.write, within the caller's object scope; prefixes, addresses,
+# VLANs and VRFs with IPAM access, and admin to preview or commit like
+# every IPAM write.
+app.include_router(
+    bulk_import_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("inventory"))],
+)
+app.include_router(
+    bulk_import_ipam_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("ipam"))],
+)
 app.include_router(webhooks.router, dependencies=[Depends(require_admin)])
+# Virtualization (clusters, virtual machines): read with virtualization,
+# changed with virtualization.write; the cloud sync is for admins.
+app.include_router(
+    virtualization_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("virtualization"))],
+)
+app.include_router(virtualization_admin_router, dependencies=[Depends(require_admin)])
+# Per-object change log: each object type is readable with the feature of
+# its REST routes (checked per type in the router), scoped callers see only
+# the hosts, groups and backups of their inventory groups.
+app.include_router(object_changes.router, dependencies=[Depends(require_auth)])
 app.include_router(
     network_objects_host_router,
     dependencies=[Depends(require_auth), Depends(require_feature("reports"))],
+)
+# Routing objects (intended BGP state) and their compliance with the observed
+# BGP neighbors: read with routing, changed with routing.write. Not scope
+# enforced, so a user limited to selected inventory groups gets 403.
+app.include_router(
+    routing_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("routing"))],
 )
 # Ansible dynamic inventory provider
 app.include_router(
@@ -2414,6 +2500,8 @@ app.include_router(
 app.include_router(intended_config_admin_router, dependencies=[Depends(require_admin)])
 # Git data sources (templates, playbooks and config contexts synced from Git): admin only.
 app.include_router(git_sources_router, dependencies=[Depends(require_admin)])
+# Data validation rules (enforced on inventory and IPAM writes): admin only.
+app.include_router(validation_rules_router, dependencies=[Depends(require_admin)])
 # Config Backups + admin
 app.include_router(
     config_backups_router,

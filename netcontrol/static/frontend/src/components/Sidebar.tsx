@@ -4,6 +4,7 @@ import { NavLink, useLocation } from 'react-router';
 import { useAuthStatus } from '@/api/auth';
 import { pluginNavEntries, usePluginManifest } from '@/api/plugins';
 import { safeGet, safeSet } from '@/lib/appearance';
+import { CHANGE_LOG_FEATURES } from '@/lib/objectChanges';
 import { prefetchRoute } from '@/lib/pageLoaders';
 import {
   parseCollapsedPref,
@@ -131,6 +132,15 @@ const ic = {
       <path d="M7 18h10" />
     </svg>
   ),
+  virtualization: (
+    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="3" width="20" height="14" rx="2" />
+      <rect x="6" y="7" width="5" height="6" rx="1" />
+      <rect x="13" y="7" width="5" height="6" rx="1" />
+      <path d="M8 21h8" />
+      <path d="M12 17v4" />
+    </svg>
+  ),
   cloud: (
     <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M17.5 19H9a4 4 0 1 1 .8-7.92A5 5 0 0 1 19 13a3 3 0 0 1-1.5 6z" />
@@ -252,6 +262,12 @@ const NAV: TopItem[] = [
     children: [
       { label: 'Inventory', icon: ic.inventory, to: '/inventory', feature: 'inventory' },
       { label: 'IPAM', icon: ic.ipam, to: '/ipam', feature: 'ipam' },
+      { label: 'Virtualization', icon: ic.virtualization, to: '/virtualization', feature: 'virtualization' },
+      // Regions, sites, tenant groups and tenants.
+      { label: 'Organization', icon: ic.floorPlan, to: '/organization', feature: 'organization' },
+      { label: 'Routing', icon: ic.network, to: '/routing', feature: 'routing' },
+      { label: 'Circuits', icon: ic.network, to: '/circuits', feature: 'circuits' },
+      { label: 'DCIM', icon: ic.inventory, to: '/dcim', feature: 'dcim' },
       // Software - Versions tab (`software`) and Upgrades tab (`upgrades`).
       { label: 'Software', icon: ic.software, to: '/software', feature: ['software', 'upgrades'] },
       { label: 'Federation', icon: ic.federation, to: '/federation', feature: 'federation' },
@@ -289,7 +305,7 @@ const NAV: TopItem[] = [
       // Compliance - profile tabs (`compliance`) and the CIS Audit tab, whose
       // audit API is gated on `reports`; the page gates each tab itself.
       { label: 'Compliance', icon: ic.compliance, to: '/compliance', feature: ['compliance', 'reports'] },
-      { label: 'Changes', icon: ic.changes, to: '/change-management', feature: 'risk-analysis', altFeature: 'deployments', visKey: 'change-management' },
+      { label: 'Changes', icon: ic.changes, to: '/change-management', feature: ['risk-analysis', 'deployments', ...CHANGE_LOG_FEATURES], visKey: 'change-management' },
       { label: 'Lab / Digital Twin', icon: ic.lab, to: '/lab', feature: 'lab' },
     ],
   },

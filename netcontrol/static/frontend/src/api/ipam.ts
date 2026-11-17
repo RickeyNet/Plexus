@@ -120,6 +120,20 @@ export interface IpamAllocation {
   status?: string;
   is_duplicate?: boolean;
   is_reserved?: boolean;
+  /** The tenant that owns the allocation (IPAM source allocations only). */
+  tenant_id?: number | null;
+  tenant_name?: string | null;
+}
+
+/** A prefix record of exactly the drilled-down subnet, from any IPAM source. */
+export interface IpamPrefixRecord {
+  id: number;
+  vrf: string;
+  description: string;
+  source_name: string;
+  provider: string;
+  tenant_id: number | null;
+  tenant_name: string | null;
 }
 
 export interface IpamSubnetDetailSummary {
@@ -135,6 +149,8 @@ export interface IpamSubnetDetail {
   subnet?: string;
   summary?: IpamSubnetDetailSummary;
   reservations?: IpamReservation[];
+  /** Prefix records of the subnet with their tenant (absent on older servers). */
+  prefixes?: IpamPrefixRecord[];
   allocations?: IpamAllocation[];
   cloud_resources?: Array<{
     provider?: string;
@@ -495,7 +511,7 @@ export function useUpdateIpamSyncConfig() {
 export function useCreateIpamPrefix() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: { subnet: string; description?: string; vrf?: string }) =>
+    mutationFn: (payload: { subnet: string; description?: string; vrf?: string; tenant_id?: number | null }) =>
       apiRequest('/ipam/prefixes', { method: 'POST', body: payload }),
     onSuccess: () => invalidateOverview(qc),
   });
@@ -536,7 +552,7 @@ export function useCreateIpamAllocation() {
       payload,
     }: {
       subnet: string;
-      payload: { address: string; hostname?: string; description?: string };
+      payload: { address: string; hostname?: string; description?: string; tenant_id?: number | null };
     }) =>
       apiRequest(
         `/ipam/subnets/${encodeURIComponent(subnet)}/allocations`,

@@ -172,6 +172,8 @@ export interface AuthConfig {
   default_credential_id: number | null;
   service_credential_id: number | null;
   job_retention_days: number;
+  /** Days the per-object change log keeps a change (1-3650). */
+  change_log_retention_days: number;
   radius: RadiusConfig;
   tacacs: TacacsConfig;
   ldap: LdapConfig;

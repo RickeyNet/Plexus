@@ -15,6 +15,7 @@ import {
   useTemplates,
   type JobInputField,
 } from '@/api/jobs';
+import { useDynamicGroups } from '@/api/dynamicGroups';
 import { useInventoryGroupsFull } from '@/api/inventory';
 
 import { countTargetHosts, filterTargetGroups } from './helpers';
@@ -42,6 +43,7 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
   const credsQuery = useJobCredentials();
   const tplQuery = useTemplates();
   const launchMut = useLaunchJob();
+  const dynamicGroupsQ = useDynamicGroups(isOpen);
   const auth = useAuthStatus();
   const isAdmin = auth.data?.role === 'admin';
 
@@ -53,6 +55,8 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
   const [pendingCommit, setPendingCommit] = useState<boolean | null>(null);
   const [adHocIps, setAdHocIps] = useState('');
   const [hostIds, setHostIds] = useState<Set<number>>(new Set());
+  // A dynamic group replaces the host selection; '' is none.
+  const [dynamicGroupId, setDynamicGroupId] = useState('');
   const [targetQuery, setTargetQuery] = useState('');
   const [inputValues, setInputValues] = useState<InputValues>({});
   const [inputErrors, setInputErrors] = useState<Record<string, string>>({});
@@ -75,6 +79,7 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
   const secretNames = wantsSecrets && secretsQuery.data ? secretsQuery.data.map((v) => v.name) : undefined;
 
   const groups = groupsQuery.data;
+  const dynamicGroup = (dynamicGroupsQ.data ?? []).find((g) => String(g.id) === dynamicGroupId) ?? null;
   const shownGroups = useMemo(() => filterTargetGroups(groups ?? [], targetQuery), [groups, targetQuery]);
   const totalHosts = useMemo(() => countTargetHosts(groups ?? []), [groups]);
 
@@ -90,7 +95,7 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
   function reset() {
     setPlaybookId(''); setCredentialId(''); setTemplateId('');
     setPriority('2'); setDependsOn('');
-    setAdHocIps(''); setHostIds(new Set()); setTargetQuery('');
+    setAdHocIps(''); setHostIds(new Set()); setTargetQuery(''); setDynamicGroupId('');
     setInputValues({}); setInputErrors({});
     setPlaybookError(null); setTargetsError(null); setLaunchError(null);
   }
@@ -148,8 +153,8 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
       ? adHocIps.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean)
       : [];
     const pbErr = playbookId ? null : 'Select a task';
-    const tgtErr = hostIds.size === 0 && adHocList.length === 0
-      ? 'Select at least one host or enter an IP address'
+    const tgtErr = hostIds.size === 0 && adHocList.length === 0 && !dynamicGroup
+      ? 'Select at least one host or a dynamic group, or enter an IP address'
       : null;
     const inErrs = validateInputs(inputSchema, inputValues);
     setPlaybookError(pbErr);
@@ -165,7 +170,8 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
         .filter((g) => (g.hosts ?? []).some((h) => hostIds.has(h.id)))
         .map((g) => g.name);
       const targets = [
-        hostIds.size > 0 && `${hostIds.size} inventory host${hostIds.size === 1 ? '' : 's'} (${groupNames.join(', ')})`,
+        dynamicGroup && `the hosts of dynamic group '${dynamicGroup.name}' (${dynamicGroup.member_count ?? 0} now; resolved when the job starts)`,
+        !dynamicGroup && hostIds.size > 0 && `${hostIds.size} inventory host${hostIds.size === 1 ? '' : 's'} (${groupNames.join(', ')})`,
         adHocList.length > 0 && `${adHocList.length} ad-hoc address${adHocList.length === 1 ? '' : 'es'}`,
       ].filter(Boolean).join(' and ');
       const ok = await confirm({
@@ -187,7 +193,8 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
         template_id: !isAnsible && templateId ? parseInt(templateId, 10) : undefined,
         commit,
         priority: parseInt(priority, 10) || 2,
-        host_ids: hostIds.size > 0 ? Array.from(hostIds) : undefined,
+        host_ids: !dynamicGroup && hostIds.size > 0 ? Array.from(hostIds) : undefined,
+        dynamic_group_id: dynamicGroup?.id,
         depends_on: depsList && depsList.length > 0 ? depsList : undefined,
         ad_hoc_ips: adHocList.length > 0 ? adHocList : undefined,
         inputs: inputSchema.length > 0 ? buildInputsPayload(inputSchema, inputValues) : undefined,
@@ -288,7 +295,32 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
 
         <div className="form-group">
           <span className="form-label" id={`${formId}-targets`}>Select Targets</span>
-          {(groups ?? []).length > 0 && (
+          {(dynamicGroupsQ.data ?? []).length > 0 && (
+            <div style={{ marginBottom: '0.5rem' }}>
+              <label className="form-label" htmlFor={`${formId}-dynamic-group`} style={{ fontWeight: 400 }}>
+                Dynamic group
+              </label>
+              <select
+                id={`${formId}-dynamic-group`}
+                className="form-select"
+                value={dynamicGroupId}
+                onChange={(e) => { setDynamicGroupId(e.target.value); setTargetsError(null); }}
+              >
+                <option value="">None: pick hosts below</option>
+                {(dynamicGroupsQ.data ?? []).map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name} ({g.member_count ?? 0} host{g.member_count === 1 ? '' : 's'} now)
+                  </option>
+                ))}
+              </select>
+              {dynamicGroup && (
+                <small className="text-muted">
+                  The job runs on the hosts that match this dynamic group when it starts, not on a fixed list.
+                </small>
+              )}
+            </div>
+          )}
+          {!dynamicGroup && (groups ?? []).length > 0 && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
               <input
                 type="search"
@@ -314,7 +346,7 @@ export function LaunchJobModal({ isOpen, onClose, onLaunched }: Props) {
               </button>
             </div>
           )}
-          <div role="group" aria-labelledby={`${formId}-targets`} style={{ background: 'var(--bg-secondary)', padding: '1rem', borderRadius: 6, maxHeight: 320, overflowY: 'auto', border: '1px solid var(--border)' }}>
+          <div role="group" hidden={!!dynamicGroup} aria-labelledby={`${formId}-targets`} style={{ background: 'var(--bg-secondary)', padding: '1rem', borderRadius: 6, maxHeight: 320, overflowY: 'auto', border: '1px solid var(--border)' }}>
             {(groups ?? []).length === 0 ? (
               <div className="empty-state">
                 {groupsQuery.isError ? 'Inventory could not be loaded. Enter ad-hoc IPs below.' : 'No inventory groups available'}

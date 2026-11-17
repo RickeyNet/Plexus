@@ -31,6 +31,9 @@ export interface Vrf {
   prefix_count: number;
   /** Interface addresses in the VRF. */
   address_count: number;
+  /** The tenant that owns it (absent on older servers). */
+  tenant_id?: number | null;
+  tenant_name?: string | null;
 }
 
 export interface SiteRef {
@@ -55,6 +58,9 @@ export interface Vlan {
   prefix_count: number;
   /** A device that resolves to the record names the VLAN differently. */
   name_mismatch: boolean;
+  /** The tenant that owns it (absent on older servers). */
+  tenant_id?: number | null;
+  tenant_name?: string | null;
 }
 
 /** `primary`, `secondary`, or `virtual` (an HSRP / VRRP / GLBP address). */
@@ -137,12 +143,14 @@ export interface VrfCreate {
   name: string;
   rd?: string;
   description?: string;
+  tenant_id?: number | null;
 }
 
 /** The name of a VRF cannot change. */
 export interface VrfUpdate {
   rd?: string;
   description?: string;
+  tenant_id?: number | null;
 }
 
 export interface VlanCreate {
@@ -150,6 +158,7 @@ export interface VlanCreate {
   name?: string;
   site_id?: number | null;
   description?: string;
+  tenant_id?: number | null;
 }
 
 /** The VLAN id cannot change. */
@@ -157,6 +166,7 @@ export interface VlanUpdate {
   name?: string;
   site_id?: number | null;
   description?: string;
+  tenant_id?: number | null;
 }
 
 export interface RebuildResult {

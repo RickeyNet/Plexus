@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { type ObjectType, useCustomFields, useTags } from '@/api/customData';
 import { useDeviceRoles, useDeviceTypes, useHostStatuses, useManufacturers } from '@/api/deviceModel';
 import { useGeoSites } from '@/api/floorPlan';
+import { useRegions, useTenants } from '@/api/organization';
 import {
   applicableFields,
   type CustomDataFilterValue,
@@ -21,7 +22,7 @@ export interface CustomDataFilterProps {
   objectType: ObjectType;
   value: CustomDataFilterValue;
   onChange: (value: CustomDataFilterValue) => void;
-  /** Also offer the device model facets (manufacturer, device type, role, lifecycle status, site). */
+  /** Also offer the device model facets (manufacturer, device type, role, lifecycle status, site, region, tenant). */
   deviceFacets?: boolean;
 }
 
@@ -145,6 +146,8 @@ function DeviceFacetGroups({
   const rolesQ = useDeviceRoles();
   const statusesQ = useHostStatuses();
   const sitesQ = useGeoSites();
+  const regionsQ = useRegions();
+  const tenantsQ = useTenants();
 
   const records: Record<DeviceFacet, FacetChoiceItem[]> = {
     manufacturer: (manufacturersQ.data ?? []).map((m) => ({ choice: m.id, label: m.name })),
@@ -155,6 +158,9 @@ function DeviceFacetGroups({
       label: <TagChip color={s.color}>{s.name}</TagChip>,
     })),
     site: (sitesQ.data ?? []).map((s) => ({ choice: s.id, label: s.name })),
+    // A region also matches the hosts of the regions under it.
+    region: (regionsQ.data ?? []).map((r) => ({ choice: r.id, label: r.path })),
+    tenant: (tenantsQ.data ?? []).map((t) => ({ choice: t.id, label: t.name })),
   };
 
   return (

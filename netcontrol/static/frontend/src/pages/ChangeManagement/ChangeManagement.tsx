@@ -2,19 +2,24 @@ import { useAuthStatus } from '@/api/auth';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { TabBar } from '@/components/TabBar';
+import { CHANGE_LOG_FEATURES } from '@/lib/objectChanges';
 import { visibleTabs } from '@/lib/tabGating';
 import { usePathTab } from '@/lib/usePathTab';
 import { Deployments } from '@/pages/Deployments/Deployments';
 import { MaintenanceWindows } from '@/pages/MaintenanceWindows/MaintenanceWindows';
 import { RiskAnalysis } from '@/pages/RiskAnalysis/RiskAnalysis';
 
-type Tab = 'risk' | 'deployments' | 'maintenance';
+import { ChangeLogTab } from './ChangeLogTab';
 
-// Maintenance windows ride on the deployments feature key.
-const TABS: { key: Tab; label: string; feature: string }[] = [
+type Tab = 'risk' | 'deployments' | 'maintenance' | 'changelog';
+
+// Maintenance windows ride on the deployments feature key. The change log
+// shows the object types of every feature the user holds (the API filters).
+const TABS: { key: Tab; label: string; feature: string | string[] }[] = [
   { key: 'risk', label: 'Risk Analysis', feature: 'risk-analysis' },
   { key: 'deployments', label: 'Deployments', feature: 'deployments' },
   { key: 'maintenance', label: 'Maintenance', feature: 'deployments' },
+  { key: 'changelog', label: 'Change Log', feature: CHANGE_LOG_FEATURES },
 ];
 const TAB_KEYS = TABS.map((t) => t.key);
 
@@ -56,6 +61,16 @@ export function ChangeManagement() {
         </>
       )}
       {tab === 'maintenance' && <MaintenanceWindows />}
+      {tab === 'changelog' && (
+        <>
+          <PageHelp
+            pageKey="change-management.changelog"
+            title="Per-Object Change Log"
+            text="Every create, update and delete of hosts, inventory groups, prefixes, IP addresses, VLANs, VRFs, config backups and jobs, with who made it and the field-by-field before and after values."
+          />
+          <ChangeLogTab />
+        </>
+      )}
     </div>
   );
 }

@@ -20,6 +20,9 @@ export const pageLoaders = {
   cloudVisibility: () => import('@/pages/CloudVisibility/CloudVisibility'),
   inventory: () => import('@/pages/Inventory/Inventory'),
   ipam: () => import('@/pages/Ipam/Ipam'),
+  routing: () => import('@/pages/Routing/Routing'),
+  circuits: () => import('@/pages/Circuits/Circuits'),
+  dcim: () => import('@/pages/Dcim/Dcim'),
   jobs: () => import('@/pages/Jobs/Jobs'),
   lab: () => import('@/pages/Lab'),
   monitoring: () => import('@/pages/Monitoring/Monitoring'),
@@ -29,6 +32,8 @@ export const pageLoaders = {
   settings: () => import('@/pages/Settings/Settings'),
   software: () => import('@/pages/Software/Software'),
   topology: () => import('@/pages/Topology/TopologyPage'),
+  virtualization: () => import('@/pages/Virtualization/Virtualization'),
+  organization: () => import('@/pages/Organization/Organization'),
 } satisfies Record<string, Loader>;
 
 type PageKey = keyof typeof pageLoaders;
@@ -46,6 +51,9 @@ const ROUTE_TO_PAGE: Record<string, PageKey> = {
   '/credentials': 'jobs',
   '/topology': 'topology',
   '/ipam': 'ipam',
+  '/routing': 'routing',
+  '/circuits': 'circuits',
+  '/dcim': 'dcim',
   '/software': 'software',
   '/software/upgrades': 'software',
   '/cloud-visibility': 'cloudVisibility',
@@ -60,6 +68,8 @@ const ROUTE_TO_PAGE: Record<string, PageKey> = {
   '/floor-plan': 'floorPlan',
   '/lab': 'lab',
   '/settings': 'settings',
+  '/virtualization': 'virtualization',
+  '/organization': 'organization',
 };
 
 // Fire-and-forget warm of a route's chunk. Safe to call repeatedly: the

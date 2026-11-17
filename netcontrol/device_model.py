@@ -74,11 +74,12 @@ MANUFACTURER_PREFIXES: tuple[tuple[str, str], ...] = (
 )
 
 # The stored host values of the model; a host write may send any of them.
-HOST_DEVICE_ID_FIELDS: tuple[str, ...] = ("device_type_id", "role_id", "lifecycle_status_id", "site_id")
+HOST_DEVICE_ID_FIELDS: tuple[str, ...] = ("device_type_id", "role_id", "lifecycle_status_id", "site_id", "tenant_id")
 HOST_DEVICE_FIELDS: tuple[str, ...] = (*HOST_DEVICE_ID_FIELDS, "location_detail")
 
-# List filters: the host fields plus the manufacturer of the device type.
-DEVICE_FILTER_KEYS: tuple[str, ...] = ("manufacturer_id", *HOST_DEVICE_ID_FIELDS)
+# List filters: the host fields plus the manufacturer of the device type and
+# the region of the host's site (that region or any region under it).
+DEVICE_FILTER_KEYS: tuple[str, ...] = ("manufacturer_id", *HOST_DEVICE_ID_FIELDS, "region_id")
 NONE_FILTER = "none"
 
 _NOT_ALNUM = re.compile(r"[^a-z0-9]+")

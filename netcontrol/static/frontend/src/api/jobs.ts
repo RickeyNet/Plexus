@@ -111,6 +111,9 @@ export interface Job {
   playbook_id?: number;
   playbook_name?: string;
   group_name?: string;
+  /** The dynamic group the job targets (its hosts are resolved when it starts). */
+  dynamic_group_id?: number | null;
+  dynamic_group_name?: string | null;
   status: JobStatus;
   dry_run?: boolean;
   priority?: number;
@@ -133,6 +136,8 @@ export interface JobLaunchBody {
   /** Legacy; `commit` wins when both are sent. */
   dry_run?: boolean;
   host_ids?: number[];
+  /** A dynamic group: its hosts are resolved when the job starts (instead of `host_ids`). */
+  dynamic_group_id?: number;
   priority?: number;
   depends_on?: number[];
   ad_hoc_ips?: string[];

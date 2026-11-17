@@ -23,6 +23,7 @@ Used by the API (``netcontrol.routes.custom_fields``) and by tests directly.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Literal, get_args
@@ -140,6 +141,43 @@ def canonical_value(field: dict, raw: object) -> str:
             raise CustomFieldError(f"{label} must be one of: {', '.join(choices)}.")
         return text
     raise CustomFieldError(f"{label} has an unknown type '{field_type}'.")
+
+
+def check_object_values(
+    all_fields: list[dict], object_type: str, raw_fields: Mapping[str, object]
+) -> tuple[dict[int, str], dict[str, str]]:
+    """Check an object's custom field values against the definitions.
+
+    ``all_fields`` is every field definition (``list_custom_fields()``),
+    ``raw_fields`` the values by field key. Returns ``(values, errors)``:
+    the canonical text by field id of each field that applies to
+    ``object_type``, and a message by field key for a key that names no
+    field or one that does not apply, a value the field rejects, or a
+    required field (with no default) left empty. Shared by the custom data
+    API and bulk import.
+    """
+    applicable = {f["key"]: f for f in all_fields if object_type in f["object_types"]}
+    known = {f["key"] for f in all_fields}
+    errors: dict[str, str] = {}
+    values: dict[int, str] = {}
+    for field_key, raw in raw_fields.items():
+        field = applicable.get(field_key)
+        if field is None:
+            errors[field_key] = (
+                f"{field_key} does not apply to {object_type}s."
+                if field_key in known
+                else f"{field_key} is not a custom field (it may have been deleted)."
+            )
+            continue
+        try:
+            values[int(field["id"])] = canonical_value(field, raw)
+        except CustomFieldError as exc:
+            errors[field_key] = str(exc)
+    for field in applicable.values():
+        if field["required"] and not field["default_value"] and field["key"] not in errors:
+            if not values.get(int(field["id"])):
+                errors[field["key"]] = f"{field['label']} is required."
+    return values, errors
 
 
 def typed_value(field_type: str, stored: str) -> str | int | float | bool:
