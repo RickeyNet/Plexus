@@ -24,3 +24,17 @@ d490454e3d77ce7337967c619d81ddd9b2f607a5:netcontrol/integrations/meraki/sample.p
 22c913676b4da770a511697ebf9d485851107be4:tests/test_mcp_tools_configs.py:private-key:138
 22c913676b4da770a511697ebf9d485851107be4:tests/test_mcp_redact.py:private-key:500
 22c913676b4da770a511697ebf9d485851107be4:tests/test_mcp_redact.py:private-key:539
+# - tests/test_opnsense_drift.py: the invented secret values (API key and
+#   secret, base64 key blobs, passwords) of the sample config.xml the
+#   OPNsense masking tests prove never reach any output.
+4e6aa522d3f5ab30525860b47eb272938c466e1f:tests/test_opnsense_drift.py:generic-api-key:35
+4e6aa522d3f5ab30525860b47eb272938c466e1f:tests/test_opnsense_drift.py:generic-api-key:38
+4e6aa522d3f5ab30525860b47eb272938c466e1f:tests/test_opnsense_drift.py:generic-api-key:39
+4e6aa522d3f5ab30525860b47eb272938c466e1f:tests/test_opnsense_drift.py:generic-api-key:43
+4e6aa522d3f5ab30525860b47eb272938c466e1f:tests/test_opnsense_drift.py:generic-api-key:46
+4e6aa522d3f5ab30525860b47eb272938c466e1f:tests/test_opnsense_drift.py:generic-api-key:48
+4e6aa522d3f5ab30525860b47eb272938c466e1f:tests/test_opnsense_drift.py:generic-api-key:49
+4e6aa522d3f5ab30525860b47eb272938c466e1f:tests/test_opnsense_drift.py:generic-api-key:50
+4e6aa522d3f5ab30525860b47eb272938c466e1f:tests/test_opnsense_drift.py:generic-api-key:59
+4e6aa522d3f5ab30525860b47eb272938c466e1f:tests/test_opnsense_drift.py:generic-api-key:60
+4e6aa522d3f5ab30525860b47eb272938c466e1f:tests/test_opnsense_drift.py:private-key:36
