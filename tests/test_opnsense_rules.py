@@ -271,6 +271,8 @@ def test_parse_xml_refuses_what_is_not_an_opnsense_config():
     assert parse_xml("<opnsense><broken></opnsense>") is None
     doctype = '<?xml version="1.0"?><!DOCTYPE x [<!ENTITY e "boom">]><opnsense><system/></opnsense>'
     assert parse_xml(doctype) is None
+    hidden = '<!-- <opnsense> --><!DOCTYPE x [<!ENTITY e "boom">]><opnsense><system/></opnsense>'
+    assert parse_xml(hidden) is None
     assert parse_document("not xml") is None
     assert parse_config("not xml").notes
 

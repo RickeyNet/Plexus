@@ -880,7 +880,8 @@ def test_snapshot_lists_each_service_in_its_vpc(snapshot):
     databases = {r[0]: r for r in _section(core, "RDS and Aurora databases")["rows"]}
     assert _section(core, "RDS and Aurora databases")["columns"] == aws_normalize.SERVICE_COLUMNS
     assert databases["core-orders"][2:5] == ["Aurora PostgreSQL cluster", "aurora-postgresql", "16.4"]
-    assert "core-orders.cluster-ro-c0re0example.us-east-1.rds.amazonaws.com:5432" in databases["core-orders"][6]
+    endpoints = [e.strip() for e in databases["core-orders"][6].split(",")]
+    assert "core-orders.cluster-ro-c0re0example.us-east-1.rds.amazonaws.com:5432" in endpoints
     for title in (
         "Load balancers",
         "VPC endpoints",

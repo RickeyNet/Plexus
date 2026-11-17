@@ -313,9 +313,9 @@ is stored: IKE pre-shared keys, BGP and OSPF authentication keys, password
 hashes, SNMP communities, secrets and passwords are dropped. The API key
 (given or generated) is never stored and never logged.
 
-**XML.** Panorama is the operator-configured management server, so its
-answers are parsed with the standard library's XML parser; an answer that
-declares a document type (and so could declare entities) is refused.
+**XML.** Answers are parsed with `defusedxml` (`netcontrol/integrations/safe_xml.py`,
+shared with the OPNsense config parsers); an answer that declares a document
+type (and so could declare entities) is refused by the parser.
 
 ## Availability tracking
 

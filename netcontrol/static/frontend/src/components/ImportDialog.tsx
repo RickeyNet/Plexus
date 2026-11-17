@@ -181,7 +181,11 @@ export function ImportDialog({ types, onClose }: Props) {
               id={`${id}-type`}
               className="form-select"
               value={type}
-              onChange={(e) => chooseType(e.target.value as ImportType)}
+              onChange={(e) => {
+                // Only a type this dialog offers; the value never reaches a URL as typed text.
+                const next = types.find((t) => t === e.target.value);
+                if (next) chooseType(next);
+              }}
             >
               {types.map((t) => (
                 <option key={t} value={t}>
