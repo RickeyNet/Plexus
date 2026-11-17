@@ -16,6 +16,7 @@ import { AccessGroupsTab } from './AccessGroupsTab';
 import { AiAccessTab } from './AiAccessTab';
 import { AppearanceTab } from './AppearanceTab';
 import { AuthTab } from './AuthTab';
+import { ChatOpsTab } from './ChatOpsTab';
 import { CustomDataTab } from './CustomDataTab';
 import { DeviceModelTab } from './DeviceModelTab';
 import { DiscoveryTab } from './DiscoveryTab';
@@ -27,6 +28,7 @@ import { MonitoringTab } from './MonitoringTab';
 import { NetFlowTab } from './NetFlowTab';
 import { NotificationsTab } from './NotificationsTab';
 import { PluginsTab } from './PluginsTab';
+import { SecretsProvidersTab } from './SecretsProvidersTab';
 import { SiemTab } from './SiemTab';
 import { SystemTab } from './SystemTab';
 import { UnsavedContext, useUnsavedRegistry } from './unsaved-context';
@@ -50,8 +52,10 @@ type Tab =
   | 'custom-data'
   | 'device-model'
   | 'git-sources'
+  | 'secrets-providers'
   | 'validation-rules'
   | 'ai-access'
+  | 'chatops'
   | 'plugins'
   | 'system';
 
@@ -95,7 +99,7 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   },
   notifications: {
     title: 'Alert Notification Channels',
-    text: 'Send monitoring alerts to email, PagerDuty, a JSON webhook or Microsoft Teams. Alert rules pick their own channels; alerts without a rule go to the channels marked Default.',
+    text: 'Send monitoring alerts to email, PagerDuty, a JSON webhook, Microsoft Teams, or the Slack and Webex ChatOps bots. Alert rules pick their own channels; alerts without a rule go to the channels marked Default.',
   },
   webhooks: {
     title: 'Event Webhooks',
@@ -120,6 +124,14 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   'git-sources': {
     title: 'Git Sources',
     text: 'Keep templates, Ansible playbooks and config contexts in Git repositories. Each sync imports the branch head by folder (templates/, playbooks/, config_contexts/); imported records are read-only in Plexus, show their file and commit, and are removed when their file leaves the repository.',
+  },
+  'secrets-providers': {
+    title: 'Secrets Providers',
+    text: 'Connect HashiCorp Vault, AWS Secrets Manager or Azure Key Vault. Credentials and secret variables can then hold a reference (provider, path, key) instead of a stored value; Plexus reads the value when it is used and never shows it. Test checks one reference.',
+  },
+  chatops: {
+    title: 'ChatOps',
+    text: 'Run Plexus commands from Slack, Webex and Microsoft Teams: look up devices, interfaces, alerts, IP addresses and jobs, trace a path, acknowledge alerts and launch approved job presets. Set up each bot, map chat users to the Plexus users whose permissions their commands use, and review every command received.',
   },
   'ai-access': {
     title: 'AI Access',
@@ -152,7 +164,9 @@ const ADMIN_TABS: { key: Tab; label: string }[] = [
   { key: 'device-model', label: 'Device Model' },
   { key: 'validation-rules', label: 'Validation Rules' },
   { key: 'git-sources', label: 'Git Sources' },
+  { key: 'secrets-providers', label: 'Secrets Providers' },
   { key: 'ai-access', label: 'AI Access' },
+  { key: 'chatops', label: 'ChatOps' },
   { key: 'plugins', label: 'Plugins' },
   { key: 'system', label: 'System' },
 ];
@@ -282,7 +296,9 @@ export function Settings() {
           {tab === 'device-model' && <DeviceModelTab />}
           {tab === 'validation-rules' && <ValidationRulesTab />}
           {tab === 'git-sources' && <GitSourcesTab />}
+          {tab === 'secrets-providers' && <SecretsProvidersTab />}
           {tab === 'ai-access' && <AiAccessTab />}
+          {tab === 'chatops' && <ChatOpsTab />}
           {tab === 'plugins' && <PluginsTab />}
           {tab === 'system' && (
             <div className="stack">

@@ -34,6 +34,7 @@ has its own guide, this page gives a short summary and the link.
 | **Custom Fields & Tags** | Extra fields and tags for hosts, groups and IPAM prefixes |
 | **Device Model** | Manufacturers, device types, roles and lifecycle statuses |
 | **AI Access** | The read-only MCP endpoint and its tokens |
+| **ChatOps** | Slack, Webex and Teams bots, chat user mappings, job presets and the command log ([chatops.md](chatops.md)) |
 | **System** | Version, updates and job history retention |
 
 ## Users, roles and access groups

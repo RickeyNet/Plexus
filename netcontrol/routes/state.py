@@ -453,6 +453,9 @@ _FEATURE_CATALOG = [
     # Racks, cables, patch panels and power: read with dcim, change with
     # dcim.write (docs/dcim.md).
     {"key": "dcim", "label": "DCIM", "gateable": True, "writable": True, "visible_in_nav": True},
+    # Sync with NetBox, Nautobot and ServiceNow: read with sync, jobs changed
+    # and run with sync.write (docs/sync-framework.md).
+    {"key": "sync", "label": "Sync", "gateable": True, "writable": True, "visible_in_nav": True},
     # Circuits, providers, provider networks and circuit types (docs/circuits.md).
     {"key": "circuits", "label": "Circuits", "gateable": True, "writable": True, "visible_in_nav": True},
     # Routing objects (intended BGP state): read with routing, change with
@@ -484,6 +487,9 @@ _FEATURE_CATALOG = [
     {"key": "graph-templates", "label": "Graph Templates", "gateable": True, "writable": True, "visible_in_nav": True},
     {"key": "mac-tracking", "label": "MAC Tracking", "gateable": True, "writable": False, "visible_in_nav": True},
     {"key": "software", "label": "Software Versions", "gateable": True, "writable": True, "visible_in_nav": True},
+    # End-of-life notices and support contracts (Software > Lifecycle): read
+    # with lifecycle, change with lifecycle.write (docs/hardware-lifecycle.md).
+    {"key": "lifecycle", "label": "Hardware Lifecycle", "gateable": True, "writable": True, "visible_in_nav": True},
     {
         "key": "traffic-analysis",
         "label": "Traffic Analysis",
@@ -502,6 +508,18 @@ _FEATURE_CATALOG = [
     # Read-only GraphQL API (/api/graphql); each field also needs the feature
     # its REST counterpart needs (docs/graphql-api.md). No nav page.
     {"key": "graphql", "label": "GraphQL API", "gateable": True, "writable": False, "visible_in_nav": False},
+    # Run Plexus commands from Slack, Webex and Teams as the mapped user; each
+    # command also needs its own feature (docs/chatops.md). No nav page.
+    {"key": "chatops", "label": "ChatOps", "gateable": True, "writable": False, "visible_in_nav": False},
+    # External secrets providers (docs/secrets-providers.md): read with the
+    # key, add, change and test with secrets-providers.write. Settings tab.
+    {
+        "key": "secrets-providers",
+        "label": "Secrets Providers",
+        "gateable": True,
+        "writable": True,
+        "visible_in_nav": False,
+    },
 ]
 
 FEATURE_FLAGS = [e["key"] for e in _FEATURE_CATALOG if e["gateable"]] + [

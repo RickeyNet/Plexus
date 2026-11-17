@@ -275,8 +275,11 @@ const NAV: TopItem[] = [
       { label: 'Routing', icon: ic.network, to: '/routing', feature: 'routing' },
       { label: 'Circuits', icon: ic.network, to: '/circuits', feature: 'circuits' },
       { label: 'DCIM', icon: ic.inventory, to: '/dcim', feature: 'dcim' },
-      // Software - Versions tab (`software`) and Upgrades tab (`upgrades`).
-      { label: 'Software', icon: ic.software, to: '/software', feature: ['software', 'upgrades'] },
+      // Sync jobs with NetBox, Nautobot and ServiceNow.
+      { label: 'Sync', icon: ic.federation, to: '/sync', feature: 'sync' },
+      // Software - Versions tab (`software`), Upgrades tab (`upgrades`) and
+      // Lifecycle tab (`lifecycle`).
+      { label: 'Software', icon: ic.software, to: '/software', feature: ['software', 'upgrades', 'lifecycle'] },
       { label: 'Federation', icon: ic.federation, to: '/federation', feature: 'federation' },
     ],
   },

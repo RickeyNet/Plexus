@@ -2,8 +2,10 @@
 secret_variables.py - CRUD routes for encrypted secret variables.
 
 Secret variables are referenced in config templates via {{secret.NAME}}
-and resolved at job execution time.  Values are AES-256-GCM encrypted at rest.
-Only admins can create/update/delete secret variables.
+and resolved at job execution time.  Values are AES-256-GCM encrypted at rest,
+or live in an external secrets provider (``external``: provider, path, key;
+docs/secrets-providers.md).  Only admins can create/update/delete secret
+variables; values are never returned.
 """
 
 from __future__ import annotations
@@ -17,6 +19,8 @@ from routes.crypto import encrypt
 from routes.secret_resolver import normalize_secret_name
 
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol.secrets_providers.base import check_reference
+from netcontrol.secrets_providers.service import reference_provider
 from netcontrol.telemetry import configure_logging
 
 
@@ -59,15 +63,39 @@ def _validate_name(name: str) -> str:
 # ── Pydantic models ──────────────────────────────────────────────────────────
 
 
+class ExternalSecretReference(BaseModel):
+    provider_id: int
+    path: str
+    key: str = ""
+
+
 class SecretVariableCreate(BaseModel):
     name: str
-    value: str
+    value: str = ""
     description: str = ""
+    external: ExternalSecretReference | None = None
 
 
 class SecretVariableUpdate(BaseModel):
+    """A new ``value`` replaces an external reference; ``external``
+    replaces the stored value."""
+
     value: str | None = None
     description: str | None = None
+    external: ExternalSecretReference | None = None
+
+
+async def _checked_reference(ref: ExternalSecretReference) -> dict:
+    """The reference as stored; 400 for a bad path or key, 404 for an
+    unknown provider."""
+    try:
+        check_reference(ref.path, ref.key)
+        await reference_provider(ref.provider_id, personal=False)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"provider_id": ref.provider_id, "path": ref.path.strip(), "key": ref.key.strip()}
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -114,7 +142,8 @@ async def create_secret_variable(body: SecretVariableCreate, request: Request):
     """Create a new secret variable. Requires admin role."""
     session = await _require_admin_session(request)
     name = _validate_name(body.name)
-    if not body.value:
+    external = await _checked_reference(body.external) if body.external is not None else None
+    if not body.value and external is None:
         raise HTTPException(400, "Value must not be empty")
 
     # Check for duplicate name
@@ -122,18 +151,20 @@ async def create_secret_variable(body: SecretVariableCreate, request: Request):
     if existing:
         raise HTTPException(409, f"Secret variable '{name}' already exists")
 
-    enc_value = encrypt(body.value)
+    enc_value = "" if external else encrypt(body.value)
     var_id = await db.create_secret_variable(
         name=name,
         enc_value=enc_value,
         description=body.description,
         created_by=session["user"],
+        external=external,
     )
     await _audit(
         "config",
         "secret_variable.create",
         user=session["user"],
-        detail=f"created secret variable '{name}'",
+        detail=f"created secret variable '{name}'"
+        + (f" (external reference: provider {external['provider_id']})" if external else ""),
         correlation_id=_corr_id(request),
     )
     # Log neither the name nor the id: CodeQL treats anything returned by
@@ -151,17 +182,21 @@ async def update_secret_variable(var_id: int, body: SecretVariableUpdate, reques
     if not sv:
         raise HTTPException(404, "Secret variable not found")
 
-    enc_value = encrypt(body.value) if body.value else None
+    external = await _checked_reference(body.external) if body.external is not None else None
+    enc_value = encrypt(body.value) if body.value and external is None else None
     updated = await db.update_secret_variable(
         var_id,
         enc_value=enc_value,
         description=body.description,
+        external=external,
     )
     if not updated:
         raise HTTPException(404, "Secret variable not found")
 
     what = []
-    if body.value is not None:
+    if external is not None:
+        what.append(f"external reference: provider {external['provider_id']}")
+    elif body.value:
         what.append("value")
     if body.description is not None:
         what.append("description")

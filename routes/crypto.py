@@ -158,6 +158,19 @@ except ValueError, TypeError, binascii.Error:
 _aesgcm = AESGCM(_key_raw)
 
 
+# A stand-in stored where a ciphertext is expected when the plaintext could
+# not be obtained (an external secret that failed to resolve, see
+# netcontrol/secrets_providers). ":" is outside the url-safe base64 alphabet,
+# so no ciphertext starts with it; decrypt() raises RuntimeError(reason) at
+# the point of use, as it does for a ciphertext it cannot read.
+_UNAVAILABLE_PREFIX = "unavailable:"
+
+
+def unavailable(reason: str) -> str:
+    """A ciphertext stand-in whose ``decrypt`` raises ``RuntimeError(reason)``."""
+    return _UNAVAILABLE_PREFIX + (reason or "Secret unavailable")
+
+
 def encrypt(plaintext: str) -> str:
     """Encrypt a string with AES-256-GCM, return base64-encoded ciphertext.
 
@@ -182,6 +195,8 @@ def decrypt(ciphertext: str) -> str:
     """
     if not ciphertext:
         return ""
+    if ciphertext.startswith(_UNAVAILABLE_PREFIX):
+        raise RuntimeError(ciphertext[len(_UNAVAILABLE_PREFIX) :])
 
     try:
         raw = base64.urlsafe_b64decode(ciphertext.encode())

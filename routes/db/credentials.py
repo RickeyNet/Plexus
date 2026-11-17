@@ -44,12 +44,21 @@ __all__ = [
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+# The external reference of a credential or secret variable (migration
+# 0106) with the provider's name; never a value.
+_SECRET_VARIABLE_COLUMNS = (
+    "v.id, v.name, v.description, v.created_by, v.created_at, v.updated_at, "
+    "v.ext_provider_id, v.ext_path, v.ext_key, p.name AS ext_provider_name"
+)
+_SECRET_VARIABLE_FROM = "secret_variables v LEFT JOIN secrets_providers p ON p.id = v.ext_provider_id"
+
+
 async def get_all_secret_variables() -> list[dict]:
     """Return all secret variables (without decrypted values)."""
     conn = await _dbcore.get_db()
     try:
         cursor = await conn.execute(
-            "SELECT id, name, description, created_by, created_at, updated_at FROM secret_variables ORDER BY name"
+            f"SELECT {_SECRET_VARIABLE_COLUMNS} FROM {_SECRET_VARIABLE_FROM} ORDER BY v.name"  # nosec B608 - fixed column lists
         )
         return rows_to_list(await cursor.fetchall())
     finally:
@@ -61,7 +70,7 @@ async def get_secret_variable(var_id: int) -> dict | None:
     conn = await _dbcore.get_db()
     try:
         cursor = await conn.execute(
-            "SELECT id, name, description, created_by, created_at, updated_at FROM secret_variables WHERE id = ?",
+            f"SELECT {_SECRET_VARIABLE_COLUMNS} FROM {_SECRET_VARIABLE_FROM} WHERE v.id = ?",  # nosec B608 - fixed column lists
             (var_id,),
         )
         return row_to_dict(await cursor.fetchone())
@@ -70,11 +79,14 @@ async def get_secret_variable(var_id: int) -> dict | None:
 
 
 async def get_secret_variable_by_name(name: str) -> dict | None:
-    """Return a secret variable including its encrypted value, looked up by name."""
+    """Return a secret variable including its encrypted value (or external
+    reference), looked up by name. Read its value with
+    ``netcontrol.secrets_providers.service.secret_variable_plaintext``."""
     conn = await _dbcore.get_db()
     try:
         cursor = await conn.execute(
-            "SELECT id, name, enc_value, description, created_by FROM secret_variables WHERE name = ?",
+            "SELECT id, name, enc_value, description, created_by, ext_provider_id, ext_path, ext_key "
+            "FROM secret_variables WHERE name = ?",
             (name,),
         )
         return row_to_dict(await cursor.fetchone())
@@ -82,12 +94,23 @@ async def get_secret_variable_by_name(name: str) -> dict | None:
         await conn.close()
 
 
-async def create_secret_variable(name: str, enc_value: str, description: str = "", created_by: str = "") -> int:
+async def create_secret_variable(
+    name: str,
+    enc_value: str,
+    description: str = "",
+    created_by: str = "",
+    *,
+    external: dict | None = None,
+) -> int:
+    """Insert a secret variable. ``external`` (``provider_id``, ``path``,
+    ``key``) stores a reference instead of ``enc_value`` (then ``''``)."""
+    ext = _external_columns(external)
     conn = await _dbcore.get_db()
     try:
         cursor = await conn.execute(
-            "INSERT INTO secret_variables (name, enc_value, description, created_by) VALUES (?,?,?,?)",
-            (name, enc_value, description, created_by),
+            "INSERT INTO secret_variables (name, enc_value, description, created_by, ext_provider_id, ext_path, "
+            "ext_key) VALUES (?,?,?,?,?,?,?)",
+            (name, "" if external else enc_value, description, created_by, *ext[:3]),
         )
         await conn.commit()
         return cursor.lastrowid
@@ -100,12 +123,18 @@ async def update_secret_variable(
     *,
     enc_value: str | None = None,
     description: str | None = None,
+    external: dict | None = None,
 ) -> bool:
+    """Update a secret variable. ``external`` sets a reference (and clears
+    the stored value); a new ``enc_value`` clears the reference."""
     updates = []
-    args = []
-    if enc_value is not None:
-        updates.append("enc_value = ?")
-        args.append(enc_value)
+    args: list = []
+    if external is not None:
+        updates += ["enc_value = ?", "ext_provider_id = ?", "ext_path = ?", "ext_key = ?"]
+        args += ["", *_external_columns(external)[:3]]
+    elif enc_value is not None:
+        updates += ["enc_value = ?", "ext_provider_id = ?", "ext_path = ?", "ext_key = ?"]
+        args += [enc_value, None, "", ""]
     if description is not None:
         updates.append("description = ?")
         args.append(description)
@@ -140,6 +169,26 @@ async def delete_secret_variable(var_id: int) -> bool:
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+_CREDENTIAL_COLUMNS = (
+    "c.id, c.name, c.username, c.owner_id, c.is_service, c.created_at, "
+    "c.ext_provider_id, c.ext_path, c.ext_key, c.ext_secret_key, p.name AS ext_provider_name"
+)
+_CREDENTIAL_FROM = "credentials c LEFT JOIN secrets_providers p ON p.id = c.ext_provider_id"
+
+
+def _external_columns(external: dict | None) -> tuple:
+    """``(ext_provider_id, ext_path, ext_key, ext_secret_key)`` for a
+    reference, or the empty columns for none."""
+    if not external:
+        return (None, "", "", "")
+    return (
+        int(external["provider_id"]),
+        str(external.get("path") or ""),
+        str(external.get("key") or ""),
+        str(external.get("secret_key") or ""),
+    )
+
+
 async def get_all_credentials(owner_id: int | None = None) -> list[dict]:
     """Return user credentials with passwords masked, excluding service creds.
 
@@ -151,15 +200,13 @@ async def get_all_credentials(owner_id: int | None = None) -> list[dict]:
     try:
         if owner_id is not None:
             cursor = await db.execute(
-                "SELECT id, name, username, owner_id, is_service, created_at "
-                "FROM credentials WHERE owner_id = ? AND is_service = 0 "
-                "ORDER BY name",
+                f"SELECT {_CREDENTIAL_COLUMNS} FROM {_CREDENTIAL_FROM} "  # nosec B608 - fixed column lists
+                "WHERE c.owner_id = ? AND c.is_service = 0 ORDER BY c.name",
                 (owner_id,),
             )
         else:
             cursor = await db.execute(
-                "SELECT id, name, username, owner_id, is_service, created_at "
-                "FROM credentials WHERE is_service = 0 ORDER BY name"
+                f"SELECT {_CREDENTIAL_COLUMNS} FROM {_CREDENTIAL_FROM} WHERE c.is_service = 0 ORDER BY c.name"  # nosec B608 - fixed column lists
             )
         return rows_to_list(await cursor.fetchall())
     finally:
@@ -176,22 +223,33 @@ async def get_service_credentials() -> list[dict]:
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute(
-            "SELECT id, name, username, owner_id, is_service, created_at "
-            "FROM credentials WHERE is_service = 1 ORDER BY name"
+            f"SELECT {_CREDENTIAL_COLUMNS} FROM {_CREDENTIAL_FROM} WHERE c.is_service = 1 ORDER BY c.name"  # nosec B608 - fixed column lists
         )
         return rows_to_list(await cursor.fetchall())
     finally:
         await db.close()
 
 
-async def get_credential_raw(cred_id: int) -> dict | None:
-    """Return full credential including encrypted password/secret."""
+async def get_credential_raw(cred_id: int, *, resolve_external: bool = True) -> dict | None:
+    """Return full credential including encrypted password/secret.
+
+    A credential with an external reference (migration 0106) comes back
+    with ``password``/``secret`` encrypted from the provider's values, so
+    every consumer that decrypts them gets the external secret
+    (``netcontrol.secrets_providers.service.materialize_credential``).
+    ``resolve_external=False`` returns the stored row untouched, for
+    callers that only check ownership or edit the record."""
     db = await _dbcore.get_db(read_only=True)
     try:
         cursor = await db.execute("SELECT * FROM credentials WHERE id = ?", (cred_id,))
-        return row_to_dict(await cursor.fetchone())
+        row = row_to_dict(await cursor.fetchone())
     finally:
         await db.close()
+    if row and resolve_external and row.get("ext_provider_id"):
+        from netcontrol.secrets_providers.service import materialize_credential
+
+        row = await materialize_credential(row)
+    return row
 
 
 @tracks_changes("credential", "create")
@@ -202,15 +260,29 @@ async def create_credential(
     enc_secret: str = "",
     owner_id: int | None = None,
     is_service: bool = False,
+    external: dict | None = None,
 ) -> int:
-    """Insert a credential. Service credentials always have owner_id NULL."""
+    """Insert a credential. Service credentials always have owner_id NULL.
+    ``external`` (``provider_id``, ``path``, ``key``, ``secret_key``) stores
+    a reference instead of the password and secret (then ``''``)."""
     if is_service:
         owner_id = None
+    if external:
+        enc_password = enc_secret = ""
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            "INSERT INTO credentials (name, username, password, secret, owner_id, is_service) VALUES (?,?,?,?,?,?)",
-            (name, username, enc_password, enc_secret, owner_id, 1 if is_service else 0),
+            "INSERT INTO credentials (name, username, password, secret, owner_id, is_service, ext_provider_id, "
+            "ext_path, ext_key, ext_secret_key) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                name,
+                username,
+                enc_password,
+                enc_secret,
+                owner_id,
+                1 if is_service else 0,
+                *_external_columns(external),
+            ),
         )
         await db.commit()
         return cursor.lastrowid
@@ -236,10 +308,23 @@ async def update_credential(
     username: str | None = None,
     enc_password: str | None = None,
     enc_secret: str | None = None,
+    external: dict | None = None,
+    clear_external: bool = False,
 ):
-    """Update credential fields. Omit or None means leave unchanged."""
+    """Update credential fields. Omit or None means leave unchanged.
+
+    ``external`` sets a reference and empties the stored password and
+    secret; ``clear_external`` drops the reference (the caller then passes
+    the new stored values)."""
     updates = []
-    args = []
+    args: list = []
+    if external is not None:
+        enc_password = enc_secret = ""
+        updates += ["ext_provider_id = ?", "ext_path = ?", "ext_key = ?", "ext_secret_key = ?"]
+        args += list(_external_columns(external))
+    elif clear_external:
+        updates += ["ext_provider_id = ?", "ext_path = ?", "ext_key = ?", "ext_secret_key = ?"]
+        args += list(_external_columns(None))
     if name is not None:
         updates.append("name = ?")
         args.append(name)

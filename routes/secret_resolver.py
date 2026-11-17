@@ -1,15 +1,16 @@
 """
 secret_resolver.py - Resolve {{secret.NAME}} placeholders in template commands.
 
-Fetches encrypted values from the secret_variables table, decrypts them,
-and substitutes into command strings at job execution time.  Plaintext
-values are never stored in templates, job events, or logs.
+Fetches encrypted values from the secret_variables table, decrypts them
+(or resolves their external reference through a secrets provider, see
+netcontrol/secrets_providers), and substitutes into command strings at job
+execution time.  Plaintext values are never stored in templates, job
+events, or logs.
 """
 
 import re
 
 import routes.database as db
-from routes.crypto import decrypt
 
 # Matches {{secret.variable_name}} - name allows alphanumeric, underscore, hyphen
 _SECRET_RE = re.compile(r"\{\{\s*secret\.([A-Za-z_][A-Za-z0-9_-]*)\s*\}\}")
@@ -28,6 +29,18 @@ class SecretResolutionError(Exception):
     def __init__(self, missing: list[str]):
         self.missing = missing
         super().__init__(f"Unresolved secret variable(s): {', '.join(missing)}")
+
+
+async def _plaintext(row: dict) -> str | None:
+    """The value of a secret variable row, or None when its external
+    reference cannot be resolved (the failure is audited by the provider
+    service)."""
+    from netcontrol.secrets_providers.service import SecretsProviderError, secret_variable_plaintext
+
+    try:
+        return await secret_variable_plaintext(row)
+    except SecretsProviderError:
+        return None
 
 
 def normalize_secret_name(name: str) -> str:
@@ -95,8 +108,14 @@ async def resolve_secrets(
     secrets_map: dict[str, str] = {}
     for name in names:
         row = await db.get_secret_variable_by_name(name)
-        if row is not None:
-            secrets_map[name] = "********" if redact else decrypt(row["enc_value"])
+        if row is None:
+            continue
+        if redact:
+            secrets_map[name] = "********"
+            continue
+        value = await _plaintext(row)
+        if value is not None:
+            secrets_map[name] = value
 
     # Check for missing references
     missing = sorted(names - set(secrets_map.keys()))
@@ -123,18 +142,25 @@ async def build_redaction_set(template_commands: list[str]) -> set[str]:
     """Return the set of decrypted secret values referenced in *template_commands*.
 
     Used to scrub job output logs so plaintext secrets never reach the DB
-    or WebSocket subscribers.
+    or WebSocket subscribers. Raises ``SecretResolutionError`` for an
+    external secret that cannot be resolved: a value missing here would
+    not be scrubbed if a later resolution succeeded.
     """
     names = extract_secret_names(template_commands)
     if not names:
         return set()
     values: set[str] = set()
+    failed: list[str] = []
     for name in names:
         row = await db.get_secret_variable_by_name(name)
         if row:
-            val = decrypt(row["enc_value"])
-            if val:  # don't add empty strings to the redaction set
+            val = await _plaintext(row)
+            if val is None:
+                failed.append(name)
+            elif val:  # don't add empty strings to the redaction set
                 values.add(val)
+    if failed:
+        raise SecretResolutionError(sorted(failed))
     return values
 
 

@@ -67,11 +67,13 @@ def clean_date(raw: object, label: str) -> str:
     return text
 
 
-def clean_url(raw: object) -> str:
-    """An ``http`` or ``https`` URL, or ``''``."""
-    text = clean_text(raw, "Portal URL", URL_MAX)
+def clean_url(raw: object, label: str = "Portal URL") -> str:
+    """An ``http`` or ``https`` URL, or ``''``. ``label`` starts the error
+    message (hardware lifecycle notices reuse it for their documentation
+    link)."""
+    text = clean_text(raw, label, URL_MAX)
     if text and not _URL.match(text):
-        raise CustomFieldError("Portal URL must start with http:// or https://.")
+        raise CustomFieldError(f"{label} must start with http:// or https://.")
     return text
 
 

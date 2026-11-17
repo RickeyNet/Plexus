@@ -108,4 +108,4 @@ export function barWidth(count: number, max: number): number {
   return Math.max(4, Math.round((count / max) * 100));
 }
 
-export type SoftwareTab = 'versions' | 'upgrades';
+export type SoftwareTab = 'versions' | 'upgrades' | 'lifecycle';

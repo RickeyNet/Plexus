@@ -132,6 +132,15 @@ On the **Credentials** tab there are two sub-tabs.
 **Username**, **Password** and **Secret (Enable Password)**. If **Secret**
 is empty, the password is also used as the enable secret. When you edit a
 credential, leave **Password** or **Secret** blank to keep the stored value.
+Each field has a **Show** button to check what you typed.
+
+**External reference:** when a secrets provider is set up (HashiCorp Vault,
+AWS Secrets Manager or Azure Key Vault), a credential or secret variable can
+choose **External reference** instead of **Stored in Plexus** and name the
+provider, the path and the key; Plexus reads the value from the store each
+time it is used and keeps only the reference. Non-admin users see only the
+providers an admin opened to personal credentials. See
+[Secrets providers](secrets-providers.md).
 
 **Secret Variables:** choose **+ New Secret** and enter **Name**, **Value**
 and **Description (optional)**. An instruction set uses the value with

@@ -10,6 +10,7 @@ import { InterfaceAddressesTable } from '@/components/InterfaceAddressesTable';
 import { DeviceCircuits } from '@/pages/Circuits/DeviceCircuits';
 import { DeviceDcim } from '@/pages/Dcim/DeviceDcim';
 import { useCanReadRouting } from '@/pages/Routing/routingHooks';
+import { DeviceLifecycle } from '@/pages/Software/DeviceLifecycle';
 import { HostClusters } from '@/pages/Virtualization/HostClusters';
 import { LoadingState } from '@/components/LoadingState';
 import { PageHelp } from '@/components/PageHelp';
@@ -162,6 +163,7 @@ export function DeviceDetail() {
         {ipamCtx.data && <IpamContext ctx={ipamCtx.data} vrf={vrf} />}
         <HostClusters hostId={hostId} />
         <DeviceDcim hostId={hostId} />
+        <DeviceLifecycle hostId={hostId} />
       </div>
 
       {/* One help banner only: the per-tab one inside the card below. */}

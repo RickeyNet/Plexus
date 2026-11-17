@@ -34,12 +34,14 @@ import { AutoSaveNote } from './SaveBar';
 import type { FormStatus } from './StatusLine';
 import { isDirty } from './unsaved-context';
 
-const TYPES: NotificationChannelType[] = ['email', 'pagerduty', 'webhook', 'teams'];
+const TYPES: NotificationChannelType[] = ['email', 'pagerduty', 'webhook', 'teams', 'slack', 'webex'];
 const TYPE_LABELS: Record<string, string> = {
   email: 'Email (SMTP)',
   pagerduty: 'PagerDuty',
   webhook: 'Webhook (JSON)',
   teams: 'Microsoft Teams',
+  slack: 'Slack (ChatOps bot)',
+  webex: 'Webex (ChatOps bot)',
 };
 const SEVERITIES = ['info', 'warning', 'critical'];
 
@@ -67,6 +69,7 @@ const EMPTY_CHANNEL: NotificationChannel = {
   webhook_auth_value: '',
   verify_tls: true,
   teams_webhook_url: '',
+  chat_channel: '',
 };
 
 const SETUP_GUIDE: Record<NotificationChannelType, React.ReactNode> = {
@@ -159,6 +162,36 @@ const SETUP_GUIDE: Record<NotificationChannelType, React.ReactNode> = {
       </li>
     </ol>
   ),
+  slack: (
+    <ol style={{ margin: 0, paddingLeft: '1.2rem', lineHeight: 1.6 }}>
+      <li>
+        Set up the Slack bot with a bot token under <strong>Settings → ChatOps</strong> and invite it to the
+        channel.
+      </li>
+      <li>
+        Copy the channel ID (channel details, at the bottom) and paste it into <strong>Channel ID</strong>.
+      </li>
+      <li>
+        Alerts carry an <strong>Acknowledge</strong> button when <code>ack</code> is an allowed command of the
+        bot; the person who presses it must be mapped to a Plexus user who may acknowledge alerts.
+      </li>
+    </ol>
+  ),
+  webex: (
+    <ol style={{ margin: 0, paddingLeft: '1.2rem', lineHeight: 1.6 }}>
+      <li>
+        Set up the Webex bot with its access token under <strong>Settings → ChatOps</strong> and add it to the
+        space.
+      </li>
+      <li>
+        Paste the space&apos;s room ID into <strong>Room ID</strong>.
+      </li>
+      <li>
+        Alerts carry an <strong>Acknowledge</strong> card button when <code>ack</code> is an allowed command of
+        the bot.
+      </li>
+    </ol>
+  ),
 };
 
 function SetupInstructions() {
@@ -203,6 +236,10 @@ function channelTarget(c: NotificationChannel): string {
       return c.webhook_url;
     case 'teams':
       return c.teams_webhook_url;
+    case 'slack':
+      return `Slack channel ${c.chat_channel ?? ''}`;
+    case 'webex':
+      return `Webex room ${c.chat_channel ?? ''}`;
     default:
       return '';
   }
@@ -612,6 +649,21 @@ function ChannelEditor({ channel, dirty, existing, onChange, onClose, onSave, sa
             <>
               Create an &quot;Incoming Webhook&quot; connector on the target Teams channel and paste
               its URL here. Posts a MessageCard.
+            </>
+          }
+        />
+      )}
+
+      {(channel.type === 'slack' || channel.type === 'webex') && (
+        <TextField
+          label={channel.type === 'slack' ? 'Channel ID' : 'Room ID'}
+          value={channel.chat_channel ?? ''}
+          onChange={(v) => set('chat_channel', v)}
+          placeholder={channel.type === 'slack' ? 'C0123ABCD' : 'Y2lzY29zcGFyazovL3VzL1JPT00v…'}
+          help={
+            <>
+              Posted by the {channel.type === 'slack' ? 'Slack' : 'Webex'} ChatOps bot (Settings → ChatOps), with
+              an Acknowledge button when the bot allows <code>ack</code>.
             </>
           }
         />

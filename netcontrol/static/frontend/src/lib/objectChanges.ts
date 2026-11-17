@@ -51,6 +51,8 @@ const TYPE_LABELS: Record<string, string> = {
   routing_instance: 'Routing instance',
   bgp_peer_group: 'BGP peer group',
   bgp_peering: 'BGP peering',
+  hardware_notice: 'End-of-life notice',
+  support_contract: 'Support contract',
 };
 
 /** Display name of a change log object type; unknown types pass through. */
@@ -62,7 +64,7 @@ export function objectTypeLabel(type: string): string {
  * Features whose objects a non-admin may read the changes of (the API checks
  * each type against its feature; credentials are for admins only).
  */
-export const CHANGE_LOG_FEATURES = ['inventory', 'ipam', 'config-backups', 'jobs', 'circuits', 'routing', 'virtualization', 'dcim', 'organization'];
+export const CHANGE_LOG_FEATURES = ['inventory', 'ipam', 'config-backups', 'jobs', 'circuits', 'routing', 'virtualization', 'dcim', 'organization', 'lifecycle'];
 
 /** The object types the change log tracks, for filter menus. */
 export const OBJECT_TYPES = Object.keys(TYPE_LABELS);

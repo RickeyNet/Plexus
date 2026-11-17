@@ -50,11 +50,16 @@ async def send_request(
     headers: dict[str, str] | None = None,
     verify: Any = True,
     timeout_s: float = 10.0,
+    transport: httpx.AsyncBaseTransport | None = None,
 ) -> httpx.Response:
     """Guard ``url`` and send one request; redirects are never followed.
 
     Raises ``OutboundRequestError`` when the target is rejected and the
-    ``httpx`` error on a transport failure. The caller judges the status."""
+    ``httpx`` error on a transport failure. The caller judges the status.
+    ``transport`` replaces the network layer (tests pass an
+    ``httpx.MockTransport``)."""
     await guard_url(url)
-    async with httpx.AsyncClient(timeout=timeout_s, verify=verify, follow_redirects=False) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout_s, verify=verify, follow_redirects=False, transport=transport
+    ) as client:
         return await client.request(method.upper(), url, content=content, json=json, headers=headers)

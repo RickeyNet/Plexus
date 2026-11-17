@@ -1,5 +1,13 @@
 """
 credentials.py -- Credential CRUD routes.
+
+A credential holds its password and enable secret encrypted, or an external
+reference (``external``: secrets provider, path, key, optional key of the
+enable secret) resolved when the credential is used
+(netcontrol/secrets_providers, docs/secrets-providers.md). Admins may point
+a credential at any provider; other users only at providers that allow
+personal credentials. Neither the stored nor the resolved values are ever
+returned.
 """
 
 from __future__ import annotations
@@ -11,6 +19,8 @@ from routes.crypto import encrypt
 
 from netcontrol.object_scope import scope_exempt
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
+from netcontrol.secrets_providers.base import check_reference
+from netcontrol.secrets_providers.service import reference_provider
 
 router = APIRouter()
 
@@ -51,18 +61,105 @@ async def _require_admin_session(session: dict | None) -> dict:
     return session
 
 
+class ExternalReference(BaseModel):
+    """Where the password (``key``) and enable secret (``secret_key``,
+    empty: the password) live in a secrets provider."""
+
+    provider_id: int
+    path: str
+    key: str = ""
+    secret_key: str = ""
+
+
 class CredentialCreate(BaseModel):
     name: str
     username: str
-    password: str
+    password: str = ""
     secret: str = ""
+    external: ExternalReference | None = None
 
 
 class CredentialUpdate(BaseModel):
+    """A new ``password`` replaces an external reference with a stored
+    value; ``external`` replaces stored values with a reference."""
+
     name: str | None = None
     username: str | None = None
     password: str | None = None
     secret: str | None = None
+    external: ExternalReference | None = None
+
+
+async def _is_admin(session: dict) -> bool:
+    if session.get("auth_mode") == "token":
+        return True
+    user = await db.get_user_by_id(session["user_id"])
+    return bool(user and user.get("role") == "admin")
+
+
+async def _checked_reference(ref: ExternalReference, session: dict) -> dict:
+    """The reference as stored. 400 for a bad path or key, 404 for an
+    unknown provider, 403 when a non-admin names a provider that does not
+    allow personal credentials."""
+    try:
+        check_reference(ref.path, ref.key)
+        check_reference(ref.path, ref.secret_key)
+        await reference_provider(ref.provider_id, personal=not await _is_admin(session))
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {
+        "provider_id": ref.provider_id,
+        "path": ref.path.strip(),
+        "key": ref.key.strip(),
+        "secret_key": ref.secret_key.strip(),
+    }
+
+
+async def _create_fields(body: CredentialCreate, session: dict) -> dict:
+    """The keyword arguments of ``db.create_credential`` for ``body``."""
+    if body.external is not None:
+        return {"enc_password": "", "enc_secret": "", "external": await _checked_reference(body.external, session)}
+    if not body.password:
+        raise HTTPException(400, "Enter a password or an external reference")
+    return {
+        "enc_password": encrypt(body.password),
+        "enc_secret": encrypt(body.secret) if body.secret else encrypt(body.password),
+    }
+
+
+async def _update_fields(cred: dict, body: CredentialUpdate, session: dict) -> dict:
+    """The keyword arguments of ``db.update_credential`` for ``body``."""
+    updates: dict = {}
+    if body.name is not None:
+        updates["name"] = body.name
+    if body.username is not None:
+        updates["username"] = body.username
+    if body.external is not None:
+        updates["external"] = await _checked_reference(body.external, session)
+        return updates
+    if body.password is not None and body.password != "":
+        updates["enc_password"] = encrypt(body.password)
+        if cred.get("ext_provider_id"):
+            # Switching to a stored value: the secret follows the password
+            # unless one is given.
+            updates["clear_external"] = True
+            updates["enc_secret"] = encrypt(body.secret or body.password)
+    if body.secret is not None and body.secret != "" and not cred.get("ext_provider_id"):
+        updates["enc_secret"] = encrypt(body.secret)
+    return updates
+
+
+def _what_changed(updates: dict) -> str:
+    if "external" in updates:
+        ref = updates["external"]
+        return f" (external reference: provider {ref['provider_id']}, path '{ref['path']}')"
+    if updates.get("clear_external"):
+        return " (external reference replaced by a stored value)"
+    return ""
 
 
 # ── Service credentials ─────────────────────────────────────────────────────
@@ -90,19 +187,13 @@ async def list_service_credentials(request: Request):
 @scope_exempt("service credentials: admin only, no host or inventory group data")
 async def create_service_credential(body: CredentialCreate, request: Request):
     session = await _require_admin_session(_get_session(request))
-    cid = await db.create_credential(
-        body.name,
-        body.username,
-        encrypt(body.password),
-        encrypt(body.secret) if body.secret else encrypt(body.password),
-        owner_id=None,
-        is_service=True,
-    )
+    fields = await _create_fields(body, session)
+    cid = await db.create_credential(body.name, body.username, owner_id=None, is_service=True, **fields)
     await _audit(
         "config",
         "service_credential.create",
         user=session["user"],
-        detail=f"created service credential '{body.name}'",
+        detail=f"created service credential '{body.name}'" + _what_changed(fields),
         correlation_id=_corr_id(request),
     )
     return {"id": cid}
@@ -112,32 +203,18 @@ async def create_service_credential(body: CredentialCreate, request: Request):
 @scope_exempt("service credentials: admin only, no host or inventory group data")
 async def update_service_credential(cred_id: int, body: CredentialUpdate, request: Request):
     session = await _require_admin_session(_get_session(request))
-    cred = await db.get_credential_raw(cred_id)
+    cred = await db.get_credential_raw(cred_id, resolve_external=False)
     if not cred or not cred.get("is_service"):
         raise HTTPException(404, "Service credential not found")
-    updates = {}
-    if body.name is not None:
-        updates["name"] = body.name
-    if body.username is not None:
-        updates["username"] = body.username
-    if body.password is not None and body.password != "":
-        updates["enc_password"] = encrypt(body.password)
-    if body.secret is not None and body.secret != "":
-        updates["enc_secret"] = encrypt(body.secret)
+    updates = await _update_fields(cred, body, session)
     if not updates:
         return {"ok": True}
-    await db.update_credential(
-        cred_id,
-        name=updates.get("name"),
-        username=updates.get("username"),
-        enc_password=updates.get("enc_password"),
-        enc_secret=updates.get("enc_secret"),
-    )
+    await db.update_credential(cred_id, **updates)
     await _audit(
         "config",
         "service_credential.update",
         user=session["user"],
-        detail=f"updated service credential {cred_id}",
+        detail=f"updated service credential {cred_id}" + _what_changed(updates),
         correlation_id=_corr_id(request),
     )
     return {"ok": True}
@@ -147,7 +224,7 @@ async def update_service_credential(cred_id: int, body: CredentialUpdate, reques
 @scope_exempt("service credentials: admin only, no host or inventory group data")
 async def delete_service_credential(cred_id: int, request: Request):
     session = await _require_admin_session(_get_session(request))
-    cred = await db.get_credential_raw(cred_id)
+    cred = await db.get_credential_raw(cred_id, resolve_external=False)
     if not cred or not cred.get("is_service"):
         raise HTTPException(404, "Service credential not found")
     await db.delete_credential(cred_id)
@@ -159,6 +236,26 @@ async def delete_service_credential(cred_id: int, request: Request):
         correlation_id=_corr_id(request),
     )
     return {"ok": True}
+
+
+# ── Secrets providers a credential may reference ────────────────────────────
+
+
+@router.get("/api/credentials/secrets-providers")
+@scope_exempt("secrets providers: names and types only, no host or inventory group data")
+async def list_reference_providers(request: Request):
+    """The enabled providers the caller may point a credential at (admins:
+    all; others: those allowing personal credentials). Names and types
+    only; settings are managed under /api/secrets-providers."""
+    session = _get_session(request)
+    if not session:
+        raise HTTPException(401, "Not authenticated")
+    admin = await _is_admin(session)
+    return [
+        {"id": p["id"], "name": p["name"], "provider_type": p["provider_type"]}
+        for p in await db.list_secrets_providers()
+        if p.get("enabled") and (admin or p.get("allow_user_credentials"))
+    ]
 
 
 # ── User credentials ────────────────────────────────────────────────────────
@@ -184,18 +281,13 @@ async def create_credential(body: CredentialCreate, request: Request):
     if not session:
         raise HTTPException(401, "Not authenticated")
     owner_id = session["user_id"]
-    cid = await db.create_credential(
-        body.name,
-        body.username,
-        encrypt(body.password),
-        encrypt(body.secret) if body.secret else encrypt(body.password),
-        owner_id=owner_id,
-    )
+    fields = await _create_fields(body, session)
+    cid = await db.create_credential(body.name, body.username, owner_id=owner_id, **fields)
     await _audit(
         "config",
         "credential.create",
         user=session["user"],
-        detail=f"created credential '{body.name}'",
+        detail=f"created credential '{body.name}'" + _what_changed(fields),
         correlation_id=_corr_id(request),
     )
     return {"id": cid}
@@ -207,7 +299,7 @@ async def delete_credential(cred_id: int, request: Request):
     session = _get_session(request)
     if not session:
         raise HTTPException(401, "Not authenticated")
-    cred = await db.get_credential_raw(cred_id)
+    cred = await db.get_credential_raw(cred_id, resolve_external=False)
     if not cred:
         raise HTTPException(404, "Credential not found")
     if not _can_modify(cred, session):
@@ -229,34 +321,20 @@ async def update_credential(cred_id: int, body: CredentialUpdate, request: Reque
     session = _get_session(request)
     if not session:
         raise HTTPException(401, "Not authenticated")
-    cred = await db.get_credential_raw(cred_id)
+    cred = await db.get_credential_raw(cred_id, resolve_external=False)
     if not cred:
         raise HTTPException(404, "Credential not found")
     if not _can_modify(cred, session):
         raise HTTPException(403, "You can only edit your own credentials")
-    updates = {}
-    if body.name is not None:
-        updates["name"] = body.name
-    if body.username is not None:
-        updates["username"] = body.username
-    if body.password is not None and body.password != "":
-        updates["enc_password"] = encrypt(body.password)
-    if body.secret is not None and body.secret != "":
-        updates["enc_secret"] = encrypt(body.secret)
+    updates = await _update_fields(cred, body, session)
     if not updates:
         return {"ok": True}
-    await db.update_credential(
-        cred_id,
-        name=updates.get("name"),
-        username=updates.get("username"),
-        enc_password=updates.get("enc_password"),
-        enc_secret=updates.get("enc_secret"),
-    )
+    await db.update_credential(cred_id, **updates)
     await _audit(
         "config",
         "credential.update",
         user=session["user"],
-        detail=f"updated credential {cred_id}",
+        detail=f"updated credential {cred_id}" + _what_changed(updates),
         correlation_id=_corr_id(request),
     )
     return {"ok": True}

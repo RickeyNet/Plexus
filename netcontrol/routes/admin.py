@@ -258,7 +258,7 @@ class NotificationChannelRequest(BaseModel):
     id: str = ""  # generated if blank on create
     name: str = ""
     enabled: bool = True
-    type: str = "webhook"  # email | pagerduty | webhook | teams
+    type: str = "webhook"  # email | pagerduty | webhook | teams | slack | webex
     severity_floor: str = "warning"
     queue_size: int = Field(default=1000, ge=10, le=100_000)
     max_retries: int = Field(default=4, ge=0, le=20)
@@ -282,6 +282,8 @@ class NotificationChannelRequest(BaseModel):
     verify_tls: bool = True
     # teams
     teams_webhook_url: str = ""
+    # slack / webex: channel or room id the ChatOps bot posts to
+    chat_channel: str = Field(default="", max_length=200)
 
 
 class NotificationDefaultsRequest(BaseModel):

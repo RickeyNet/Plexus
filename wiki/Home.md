@@ -101,6 +101,8 @@ step, what the results mean, who may do what, and its API.
 - [API Reference](API-Reference) and [WebSocket Usage](WebSocket-Usage).
 - [AI Access (MCP)](AI-Access-MCP): a read-only endpoint so an AI client
   can query Plexus data.
+- [ChatOps](ChatOps): Plexus commands from Slack, Webex and Microsoft
+  Teams, run as the mapped Plexus user.
 
 ## Operating it
 

@@ -37,6 +37,7 @@ const Routing = lazy(() => pageLoaders.routing().then(m => ({ default: m.Routing
 const Circuits = lazy(() => pageLoaders.circuits().then(m => ({ default: m.Circuits })));
 const Help = lazy(() => pageLoaders.help().then(m => ({ default: m.Help })));
 const Dcim = lazy(() => pageLoaders.dcim().then(m => ({ default: m.Dcim })));
+const Sync = lazy(() => pageLoaders.sync().then(m => ({ default: m.Sync })));
 const Software = lazy(() => pageLoaders.software().then(m => ({ default: m.Software })));
 const Jobs = lazy(() => pageLoaders.jobs().then(m => ({ default: m.Jobs })));
 const Lab = lazy(() => pageLoaders.lab().then(m => ({ default: m.Lab })));
@@ -199,6 +200,7 @@ export function App() {
           <Route path="/routing/:tab?" element={<Routing />} />
           <Route path="/circuits/:tab?" element={<Circuits />} />
           <Route path="/dcim/:tab?" element={<Dcim />} />
+          <Route path="/sync/:tab?" element={<Sync />} />
           {/* Software: one page renders the Versions and Upgrades tabs.
               /upgrades is the upgrade tool's old path (it was a Delegator
               tab); bookmarks to it are sent to the Upgrades tab. */}

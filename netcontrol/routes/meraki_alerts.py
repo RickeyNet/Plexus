@@ -56,7 +56,7 @@ from netcontrol.integrations.meraki.enrich import load_inventory_index
 from netcontrol.integrations.meraki.normalize import InventoryIndex
 from netcontrol.routes import notification_channels
 from netcontrol.routes.meraki_topology import PROVIDER_MERAKI, _is_demo, _require_admin_dep
-from netcontrol.routes.shared import _audit, _corr_id, _session_user
+from netcontrol.routes.shared import _audit, _corr_id, _session_user, read_bounded_body
 from netcontrol.routes.topology_availability import _mute_index, finish_removal
 from netcontrol.telemetry import configure_logging
 
@@ -553,22 +553,6 @@ def _not_found() -> JSONResponse:
     return JSONResponse(status_code=404, content={"detail": "Not Found"})
 
 
-async def _read_bounded(request: Request) -> bytes | None:
-    """The body, or ``None`` once it passes ``MAX_WEBHOOK_BODY_BYTES``."""
-    try:
-        declared = int(request.headers.get("content-length") or 0)
-    except ValueError:
-        return None
-    if declared > MAX_WEBHOOK_BODY_BYTES:
-        return None
-    body = bytearray()
-    async for chunk in request.stream():
-        body.extend(chunk)
-        if len(body) > MAX_WEBHOOK_BODY_BYTES:
-            return None
-    return bytes(body)
-
-
 async def process_webhook(payload: dict) -> dict[str, Any]:
     """Turn one accepted webhook into an alert event. Never raises."""
     try:
@@ -606,7 +590,7 @@ async def meraki_webhook(request: Request, background: BackgroundTasks):
     the body authenticates it. Responds before the alert work runs."""
     if not webhook_active():
         return _not_found()
-    body = await _read_bounded(request)
+    body = await read_bounded_body(request, MAX_WEBHOOK_BODY_BYTES)
     if body is None:
         return JSONResponse(status_code=413, content={"detail": "Payload Too Large"})
     content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()

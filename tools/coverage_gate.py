@@ -52,6 +52,20 @@ DEFAULT_RULES = {
     "netcontrol/routing.py": 95.0,
     "routes/db/routing.py": 88.0,
     "netcontrol/routes/routing.py": 80.0,
+    # Sync framework: the diff engine and models, the adapters against fake
+    # APIs, the runner, storage and API. Measured by
+    # tests/test_sync_framework.py (99%, 89%, 74-92%, 75%, 88%, 82%); do not
+    # lower them to land a change.
+    "netcontrol/sync/engine.py": 95.0,
+    "netcontrol/sync/models.py": 85.0,
+    "netcontrol/sync/transport.py": 70.0,
+    "netcontrol/sync/adapters/base.py": 85.0,
+    "netcontrol/sync/adapters/netbox.py": 88.0,
+    "netcontrol/sync/adapters/servicenow.py": 85.0,
+    "netcontrol/sync/adapters/plexus.py": 70.0,
+    "netcontrol/sync/runner.py": 70.0,
+    "netcontrol/routes/sync.py": 78.0,
+    "routes/db/sync.py": 85.0,
     # Circuits: the rules, storage and API. Measured by
     # tests/test_circuits.py; do not lower them to land a change.
     "netcontrol/circuits.py": 95.0,
@@ -64,6 +78,27 @@ DEFAULT_RULES = {
     "netcontrol/routes/dcim.py": 90.0,
     "routes/db/dcim.py": 88.0,
     "routes/db/dcim_cables.py": 88.0,
+    # ChatOps: signatures, dispatcher, commands, formatters, storage and the
+    # inbound and admin API. Measured by tests/test_chatops.py; do not lower
+    # them to land a change.
+    "netcontrol/chatops/signatures.py": 95.0,
+    "netcontrol/chatops/replies.py": 90.0,
+    "netcontrol/chatops/dispatcher.py": 88.0,
+    "netcontrol/chatops/commands.py": 85.0,
+    "netcontrol/chatops/notify.py": 95.0,
+    "netcontrol/chatops/adapters.py": 70.0,
+    "netcontrol/routes/chatops.py": 85.0,
+    "routes/db/chatops.py": 90.0,
+    # External secrets providers: the providers, the resolution choke
+    # point, storage and API. Measured by tests/test_secrets_providers.py
+    # (94%+ each); do not lower them to land a change.
+    "netcontrol/secrets_providers/base.py": 95.0,
+    "netcontrol/secrets_providers/service.py": 95.0,
+    "netcontrol/secrets_providers/vault.py": 95.0,
+    "netcontrol/secrets_providers/aws.py": 88.0,
+    "netcontrol/secrets_providers/azure.py": 90.0,
+    "netcontrol/routes/secrets_providers.py": 95.0,
+    "routes/db/secrets_providers.py": 90.0,
     # Locations and tenancy: the rules, storage and API. Measured by
     # tests/test_organization.py; do not lower them to land a change.
     "netcontrol/organization.py": 95.0,
@@ -116,6 +151,12 @@ DEFAULT_RULES = {
     # not lower them to land a change.
     "netcontrol/routes/object_changes.py": 85.0,
     "routes/db/object_changes.py": 92.0,
+    # Hardware lifecycle: the stage / coverage / alert rules, storage and the
+    # API with the alert check. Measured by tests/test_hardware_lifecycle.py
+    # (100%, 96%, 98%); do not lower them to land a change.
+    "netcontrol/hardware_lifecycle.py": 95.0,
+    "routes/db/hardware_lifecycle.py": 90.0,
+    "netcontrol/routes/hardware_lifecycle.py": 90.0,
     # Git data sources: remote/branch rules, the git runner's credential
     # handling, checkout parsing, sync/import and the API. Measured by
     # tests/test_git_sources.py; do not lower them to land a change.

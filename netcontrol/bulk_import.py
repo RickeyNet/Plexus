@@ -1627,8 +1627,12 @@ async def commit_import(
     scope: ObjectScope,
     user: str,
     atomic: bool = True,
+    stop_at_error: bool = True,
 ) -> ImportReport:
-    """Plan the import again and write it (see the module docstring)."""
+    """Plan the import again and write it (see the module docstring). With
+    ``atomic=False`` and ``stop_at_error=False`` every row is tried: rows
+    with errors and failed writes are reported and the rest are written
+    (the sync framework's per-object outcomes)."""
     report, adapter, ctx = await plan_import(
         object_type, text, fmt, mode=mode, match_key=match_key, scope=scope, user=user
     )
@@ -1656,6 +1660,8 @@ async def commit_import(
     else:
         for res in report.rows:
             if res.action == "error":
+                if not stop_at_error:
+                    continue
                 report.message = (
                     f"Stopped at row {res.row}: it has errors. {report.applied} row(s) before it were imported."
                 )
@@ -1667,6 +1673,8 @@ async def commit_import(
             except Exception as exc:
                 res.action = "error"
                 res.error("", f"The write failed: {type(exc).__name__}: {exc}")
+                if not stop_at_error:
+                    continue
                 report.message = (
                     f"Stopped at row {res.row}: the write failed. {report.applied} row(s) before it were imported."
                 )

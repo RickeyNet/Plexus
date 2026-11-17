@@ -95,6 +95,23 @@ platform.
 | Netgear managed switches | SNMP sysDescr; SSH `show version` at inventory discovery / sync (platform `netgear-managed`) | Manual / import | Manual | Gap: Netgear publishes security advisories as web pages, with no version-matched vulnerability API. |
 | Netgear smart switches and access points | SNMP sysDescr (platforms `netgear-smart`, `netgear-ap`) | Manual / import | Manual | Same gap. No SSH, so the version comes from SNMP only; an access point's sysDescr seldom carries it (gap: the version is then not tracked). |
 
+### Hardware lifecycle (end of life and support contracts)
+
+The hardware lifecycle (`netcontrol/hardware_lifecycle.py`,
+`netcontrol/routes/hardware_lifecycle.py`, [hardware-lifecycle.md](hardware-lifecycle.md))
+matches end-of-life notices to inventory hosts by device type, by part
+number (device type part number or model) and by DCIM module part number,
+and evaluates contract coverage. A scheduled server-side check raises
+`monitoring_alerts` (type `hardware_lifecycle`) for a host past or near its
+last date of support and for expiring or expired coverage, once per
+condition, resolved when it clears, through the notification channels.
+
+| Vendor / platform | Hardware source | Notice source | Status | Notes |
+|---|---|---|---|---|
+| Every vendor with inventory hosts (Cisco, Juniper, Arista, Fortinet, Palo Alto, HPE Aruba, Netgear...) | Device type from the device model catalogue (discovery links the model), DCIM modules | Manual / API | Manual | Gap for every vendor: no notice import or sync. Candidate: Cisco's Support EoX API (needs a Cisco support API account), matched by product ID. |
+| Cisco Meraki, Cato Sockets, Appgate, OPNsense, Panorama devices (API-collected) | None | None | No | Not inventory hosts, so no device type and no lifecycle status. Gap: a lifecycle status for topology nodes by model. |
+| AWS, Azure, GCP | Not applicable | Not applicable | Not applicable | Cloud services have no hardware lifecycle; retirements of instance types and engine versions are not tracked (gap). |
+
 ## Internet egress and cloud ingress (path trace)
 
 How a flow that leaves one vendor to the internet is checked where it lands

@@ -308,6 +308,56 @@ def _stored_params(raw: object) -> dict:
     return {}
 
 
+def _stored_list(job: dict, column: str) -> list | None:
+    """A job row's JSON list column (``host_ids``, ``ad_hoc_ips``) or ``None``."""
+    raw = job.get(column)
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw) if isinstance(raw, str) else raw
+    except (json.JSONDecodeError, TypeError) as exc:
+        LOGGER.warning("job %s: failed to parse %s: %s", job.get("id"), column, exc)
+        return None
+    return value if isinstance(value, list) else None
+
+
+def job_clone_spec(job: dict) -> dict:
+    """What a new job needs to run ``job`` again: playbook, targets,
+    credential, template, priority and inputs (no mode, no launcher).
+    Used by retry, rerun and the ChatOps job presets."""
+    return {
+        "playbook_id": job["playbook_id"],
+        "inventory_group_id": job.get("inventory_group_id"),
+        "credential_id": job.get("credential_id"),
+        "template_id": job.get("template_id"),
+        "priority": job.get("priority", 2),
+        "host_ids": _stored_list(job, "host_ids"),
+        "ad_hoc_ips": _stored_list(job, "ad_hoc_ips"),
+        "parameters": _stored_params(job.get("parameters")) or None,
+        "dynamic_group_id": job.get("dynamic_group_id"),
+    }
+
+
+async def queue_job_from_spec(spec: dict, *, dry_run: bool, launched_by: str) -> int:
+    """Queue a job from a ``job_clone_spec`` and kick the queue. The caller
+    has already checked the launcher may run it."""
+    new_job_id = await db.create_job(
+        spec["playbook_id"],
+        spec.get("inventory_group_id"),
+        spec.get("credential_id"),
+        spec.get("template_id"),
+        dry_run,
+        launched_by=launched_by,
+        priority=spec.get("priority", 2),
+        host_ids=spec.get("host_ids"),
+        ad_hoc_ips=spec.get("ad_hoc_ips"),
+        parameters=spec.get("parameters"),
+        dynamic_group_id=spec.get("dynamic_group_id"),
+    )
+    asyncio.ensure_future(_process_job_queue())
+    return new_job_id
+
+
 # ── Post-job SNMP re-probe ──────────────────────────────────────────────────
 
 
@@ -1181,41 +1231,7 @@ async def retry_job_endpoint(job_id: int, request: Request):
     session = _get_session(request)
     user = session["user"] if session else "admin"
 
-    # Carry forward host_ids and ad_hoc_ips from the original job
-    retry_host_ids = None
-    if job.get("host_ids"):
-        try:
-            retry_host_ids = json.loads(job["host_ids"])
-        except (json.JSONDecodeError, TypeError) as exc:
-            LOGGER.warning("job %s: failed to parse host_ids for retry: %s", job_id, exc)
-    retry_ad_hoc = None
-    if job.get("ad_hoc_ips"):
-        try:
-            retry_ad_hoc = json.loads(job["ad_hoc_ips"])
-        except (json.JSONDecodeError, TypeError) as exc:
-            LOGGER.warning("job %s: failed to parse ad_hoc_ips for retry: %s", job_id, exc)
-    retry_params = None
-    if job.get("parameters"):
-        try:
-            retry_params = json.loads(job["parameters"])
-        except (json.JSONDecodeError, TypeError) as exc:
-            LOGGER.warning("job %s: failed to parse parameters for retry: %s", job_id, exc)
-
-    new_job_id = await db.create_job(
-        job["playbook_id"],
-        job.get("inventory_group_id"),
-        job.get("credential_id"),
-        job.get("template_id"),
-        bool(job.get("dry_run", 1)),
-        launched_by=user,
-        priority=job.get("priority", 2),
-        host_ids=retry_host_ids,
-        ad_hoc_ips=retry_ad_hoc,
-        parameters=retry_params,
-        dynamic_group_id=job.get("dynamic_group_id"),
-    )
-
-    asyncio.ensure_future(_process_job_queue())
+    new_job_id = await queue_job_from_spec(job_clone_spec(job), dry_run=bool(job.get("dry_run", 1)), launched_by=user)
 
     await _audit(
         "jobs",
@@ -1247,40 +1263,7 @@ async def rerun_job_endpoint(job_id: int, request: Request):
     session = _get_session(request)
     user = session["user"] if session else "admin"
 
-    rerun_host_ids = None
-    if job.get("host_ids"):
-        try:
-            rerun_host_ids = json.loads(job["host_ids"])
-        except (json.JSONDecodeError, TypeError) as exc:
-            LOGGER.warning("job %s: failed to parse host_ids for rerun: %s", job_id, exc)
-    rerun_ad_hoc = None
-    if job.get("ad_hoc_ips"):
-        try:
-            rerun_ad_hoc = json.loads(job["ad_hoc_ips"])
-        except (json.JSONDecodeError, TypeError) as exc:
-            LOGGER.warning("job %s: failed to parse ad_hoc_ips for rerun: %s", job_id, exc)
-    rerun_params = None
-    if job.get("parameters"):
-        try:
-            rerun_params = json.loads(job["parameters"])
-        except (json.JSONDecodeError, TypeError) as exc:
-            LOGGER.warning("job %s: failed to parse parameters for rerun: %s", job_id, exc)
-
-    new_job_id = await db.create_job(
-        job["playbook_id"],
-        job.get("inventory_group_id"),
-        job.get("credential_id"),
-        job.get("template_id"),
-        False,  # dry_run = False (live mode)
-        launched_by=user,
-        priority=job.get("priority", 2),
-        host_ids=rerun_host_ids,
-        ad_hoc_ips=rerun_ad_hoc,
-        parameters=rerun_params,
-        dynamic_group_id=job.get("dynamic_group_id"),
-    )
-
-    asyncio.ensure_future(_process_job_queue())
+    new_job_id = await queue_job_from_spec(job_clone_spec(job), dry_run=False, launched_by=user)
 
     await _audit(
         "jobs",
