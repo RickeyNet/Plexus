@@ -17,6 +17,7 @@ import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
 import { clickableProps } from '@/lib/clickable';
 import { usePendingKeys } from '@/lib/usePendingKeys';
+import { DETAIL_STACK_STYLE } from '@/lib/wideDetail';
 import { DetailSection, OriginBadge, SplitLayout } from '@/pages/Ipam/NetworkObjectParts';
 
 import { AddClusterHostModal, ClusterModal, VmModal } from './VirtualizationModals';
@@ -175,7 +176,7 @@ function ClusterDetailPanel({ id }: { id: number | null }) {
   if (q.isPending) return <LoadingState text="Loading cluster…" />;
   const c = q.data;
   return (
-    <div style={{ display: 'grid', gap: '1rem' }}>
+    <div style={DETAIL_STACK_STYLE}>
       <div>
         <h3 style={{ margin: 0 }}>{c.name}</h3>
         <div className="text-muted" style={{ fontSize: '0.9em' }}>

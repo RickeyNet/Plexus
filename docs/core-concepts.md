@@ -33,6 +33,28 @@ HTTP 400).
 - **Deleting.** A group that has sub-groups cannot be deleted (HTTP 409):
   delete its sub-groups or move them to another parent first.
 
+#### Host details panel
+Click a host's row on the Inventory page (not its checkbox or buttons) to
+open its details beside the groups. The panel stays in view while the
+groups scroll, and holds:
+
+- **Open device page**, **Show on map** and **Edit**. **Show on map** opens
+  the Topology map zoomed in on the device with its details pane open
+  (`/topology?host=<id>`); a device the map's filters leave out is reported.
+- The device's newest poll (liveness, CPU, memory, interfaces, uptime).
+- Its inventory record: platform, model, serial, software, site, tenant,
+  VRF, VLAN, role, lifecycle status, tags and custom fields.
+- What other features know about it: its virtualization clusters, rack and
+  cables, hardware lifecycle and circuits.
+- Tabs with its collected data, the same as the map's device pane: **Config**
+  (the newest successful backup), **Rules** (OPNsense), **Interfaces**,
+  **VLANs**, **MAC/ARP**, **Errors**, **Audit** and **Changelog**.
+
+Each part shows only for a user with the feature it reads. The corner button
+widens the panel to the page's full width, above the groups, so its tables
+need no sideways scrolling; the choice is shared with the other list pages'
+detail panels.
+
 ### Playbooks
 Python scripts that subclass `BasePlaybook` and register themselves with
 the `@register_playbook` decorator. Each playbook is an async generator

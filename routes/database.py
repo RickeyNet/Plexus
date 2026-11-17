@@ -2993,6 +2993,7 @@ from routes.db.reporting import *  # noqa: E402,F403
 from routes.db.routing import *  # noqa: E402,F403
 from routes.db.secrets_providers import *  # noqa: E402,F403
 from routes.db.software import *  # noqa: E402,F403
+from routes.db.tool_history import *  # noqa: E402,F403
 from routes.db.topology import *  # noqa: E402,F403
 from routes.db.topology_availability import *  # noqa: E402,F403
 from routes.db.users import *  # noqa: E402,F403

@@ -26,6 +26,7 @@ import { clickableProps } from '@/lib/clickable';
 import { idToSelect, selectToId } from '@/lib/deviceModel';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 import { cloudResourceLabel, formatMemory, VM_STATUSES, vmStatusLabel } from '@/lib/virtualization';
+import { DETAIL_STACK_STYLE } from '@/lib/wideDetail';
 import { DetailSection, OriginBadge, SplitLayout } from '@/pages/Ipam/NetworkObjectParts';
 
 import { VmInterfaceModal, VmModal } from './VirtualizationModals';
@@ -243,7 +244,7 @@ export function VmDetailPanel({ id }: { id: number | null }) {
   const vm = q.data;
   const cloud = cloudResourceLabel(vm);
   return (
-    <div style={{ display: 'grid', gap: '1rem' }}>
+    <div style={DETAIL_STACK_STYLE}>
       <div>
         <h3 style={{ margin: 0 }}>{vm.name}</h3>
         <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.3rem' }}>

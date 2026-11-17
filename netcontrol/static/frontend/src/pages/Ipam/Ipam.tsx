@@ -19,6 +19,7 @@ import { TabBar } from '@/components/TabBar';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { KebabMenu, MenuItem, MenuSeparator } from '@/components/Menu';
 import { TagChips } from '@/components/TagChips';
+import { WidenToggle } from '@/components/WidenToggle';
 import { cloudProviderTerms } from '@/lib/cloudProviderTerms';
 import { type CustomDataFilterValue, EMPTY_CUSTOM_DATA_FILTER, isEmptyFilter } from '@/lib/customData';
 import { formatCount } from '@/lib/formatCount';
@@ -28,6 +29,7 @@ import { useShowMore } from '@/lib/useShowMore';
 import { type Comparator, compareNumber, compareText, useTableSort } from '@/lib/useTableSort';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 import { usePathTab } from '@/lib/usePathTab';
+import { bringIntoView, splitGridStyle, useWideDetail } from '@/lib/wideDetail';
 
 import {
   type DhcpServer,
@@ -138,17 +140,14 @@ function SubnetsView({ tabBar }: { tabBar: ReactNode }) {
   const [search, setSearch] = useState(() => searchParams.get('q') ?? '');
   const [modal, setModal] = useState<ModalState>({ kind: 'none' });
   const drilldownRef = useRef<HTMLDivElement>(null);
+  // Widened, the side cards go full width under the subnet list.
+  const [wide, toggleWide] = useWideDetail();
 
   const openDrilldown = (subnet: string) => {
     setSelectedSubnet(subnet);
-    // The panel heads the right column; from far down a long subnet list it
-    // is off screen, so bring it back unless its top is already in view.
-    const card = drilldownRef.current;
-    if (!card) return;
-    const top = card.getBoundingClientRect().top;
-    if (top < 0 || top > window.innerHeight / 2) {
-      card.scrollIntoView?.({ block: 'start' });
-    }
+    // The panel heads the right column (or sits under the list when widened);
+    // from far down a long subnet list it is off screen, so bring it back.
+    bringIntoView(drilldownRef.current);
   };
 
   const groups = useInventoryGroups();
@@ -317,14 +316,7 @@ function SubnetsView({ tabBar }: { tabBar: ReactNode }) {
         </div>
       )}
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'minmax(0, 2.1fr) minmax(320px, 1fr)',
-          gap: '1rem',
-          alignItems: 'start',
-        }}
-      >
+      <div style={splitGridStyle(wide)}>
         <div className="card" style={{ overflow: 'auto' }}>
           <div
             style={{
@@ -566,13 +558,16 @@ function SubnetsView({ tabBar }: { tabBar: ReactNode }) {
           )}
         </div>
 
-        <div style={{ display: 'grid', gap: '1rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: '1rem', minWidth: 0 }}>
           <div
             className="card"
             ref={drilldownRef}
             style={{ scrollMarginTop: 'var(--space-4)' }}
           >
-            <h3 style={{ margin: '0 0 0.75rem' }}>Subnet Drilldown</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+              <h3 style={{ margin: 0 }}>Subnet Drilldown</h3>
+              <WidenToggle wide={wide} onToggle={toggleWide} />
+            </div>
             {selectedSubnet ? (
               <SubnetDrilldown
                 subnet={selectedSubnet}

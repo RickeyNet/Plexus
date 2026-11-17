@@ -15,6 +15,7 @@ import { QueryError } from '@/components/QueryError';
 import { clickableProps } from '@/lib/clickable';
 import { addressRoleLabel, formatInterfaceAddress } from '@/lib/networkObjects';
 import { usePendingKeys } from '@/lib/usePendingKeys';
+import { DETAIL_STACK_STYLE } from '@/lib/wideDetail';
 
 import { VrfModal } from './NetworkObjectModals';
 import { DetailSection, OriginBadge, SplitLayout } from './NetworkObjectParts';
@@ -194,7 +195,7 @@ export function VrfDetailPanel({ id }: { id: number | null }) {
   if (q.isPending) return <LoadingState text="Loading VRF details…" />;
   const v = q.data;
   return (
-    <div style={{ display: 'grid', gap: '1rem' }}>
+    <div style={DETAIL_STACK_STYLE}>
       <div>
         <h3 style={{ margin: 0 }}>VRF {v.name}</h3>
         <div className="text-muted" style={{ fontSize: '0.9em' }}>

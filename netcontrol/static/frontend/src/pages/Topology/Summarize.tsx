@@ -1,10 +1,13 @@
 import { useMemo, useState } from 'react';
 
 import { useMerakiSubnets, useSummarize, useTopologySources, type SummarizeReport } from '@/api/meraki';
+import { useRecordToolHistory } from '@/api/toolHistory';
 import { CopyButton } from '@/components/CopyButton';
 import { PageHelp } from '@/components/PageHelp';
 
 import { DETAIL_CELL_STYLE, FIELD_STYLE, HEAD_STYLE, NOTE_STYLE, SCROLL_X_STYLE, TEXT_CELL_STYLE } from './helpers';
+import { restoreSummarizeForm, summarizeHistoryLabel } from './history';
+import { HistoryMenu } from './HistoryMenu';
 import {
   addressCount,
   buildSummarizeRequest,
@@ -31,6 +34,7 @@ export function Summarize() {
   const subnetsQuery = useMerakiSubnets(true);
   const sourcesQuery = useTopologySources();
   const summarize = useSummarize();
+  const { mutate: recordHistory } = useRecordToolHistory<SummarizeForm>('summarize');
 
   const subnets = useMemo(() => subnetsQuery.data?.subnets ?? [], [subnetsQuery.data]);
   const sources = useMemo(() => sweepSources(sourcesQuery.data?.sources ?? [], subnets), [sourcesQuery.data, subnets]);
@@ -40,14 +44,23 @@ export function Summarize() {
     setForm((f) => ({ ...f, ...patch }));
   }
 
-  function run() {
-    const built = buildSummarizeRequest(form);
+  function run(current: SummarizeForm = form) {
+    const built = buildSummarizeRequest(current);
     if ('error' in built) {
       setFormError(built.error);
       return;
     }
     setFormError(null);
     summarize.mutate(built.request);
+    // A very long address list is over what the history keeps; it is just not kept.
+    recordHistory({ data: current });
+  }
+
+  // A summary from the history: its form as it was, run again.
+  function openHistory(data: SummarizeForm) {
+    const restored = restoreSummarizeForm(data);
+    setForm(restored);
+    run(restored);
   }
 
   return (
@@ -98,9 +111,15 @@ export function Summarize() {
                 title="Merge neighbouring routes until no more than this many of each IP version are left; empty: no limit"
               />
             </label>
-            <button type="button" className="btn btn-sm btn-primary" onClick={run} disabled={summarize.isPending}>
+            <button type="button" className="btn btn-sm btn-primary" onClick={() => run()} disabled={summarize.isPending}>
               {summarize.isPending ? 'Summarizing…' : 'Summarize'}
             </button>
+            <HistoryMenu<SummarizeForm>
+              kind="summarize"
+              noun={{ one: 'summary', many: 'summaries' }}
+              label={summarizeHistoryLabel}
+              onOpen={openHistory}
+            />
             <button
               type="button"
               className="btn btn-sm btn-secondary"

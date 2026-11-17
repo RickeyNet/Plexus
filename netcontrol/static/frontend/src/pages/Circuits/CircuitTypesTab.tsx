@@ -15,6 +15,7 @@ import { runSave } from '@/lib/recordSave';
 import { serverFieldErrors } from '@/lib/serverFieldErrors';
 import { useNameField } from '@/lib/useNameField';
 import { usePendingKeys } from '@/lib/usePendingKeys';
+import { DETAIL_STACK_STYLE } from '@/lib/wideDetail';
 import { SplitLayout } from '@/pages/Ipam/NetworkObjectParts';
 
 import { useCanWriteCircuits, useConfirmDelete } from './hooks';
@@ -105,7 +106,7 @@ export function CircuitTypesTab() {
   );
 
   const detail = selected ? (
-    <div style={{ display: 'grid', gap: '1rem' }}>
+    <div style={DETAIL_STACK_STYLE}>
       <div>
         <h3 style={{ margin: 0 }}>{selected.name}</h3>
         <div className="text-muted" style={{ fontSize: '0.9em' }}>

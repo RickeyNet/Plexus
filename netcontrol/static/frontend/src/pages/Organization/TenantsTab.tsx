@@ -19,6 +19,7 @@ import { useConfirmDelete } from '@/components/useConfirmDelete';
 import { clickableProps } from '@/lib/clickable';
 import { tenantCountRows } from '@/lib/organization';
 import { usePendingKeys } from '@/lib/usePendingKeys';
+import { DETAIL_STACK_STYLE } from '@/lib/wideDetail';
 import { SplitLayout } from '@/pages/Ipam/NetworkObjectParts';
 
 import { TenantModal, TreeNodeModal } from './OrganizationModals';
@@ -202,7 +203,7 @@ export function TenantDetailPanel({ id }: { id: number | null }) {
   const t = q.data;
   const counts = tenantCountRows(t.counts);
   return (
-    <div style={{ display: 'grid', gap: '0.75rem' }}>
+    <div style={{ ...DETAIL_STACK_STYLE, gap: '0.75rem' }}>
       <div>
         <h3 style={{ margin: 0 }}>{t.name}</h3>
         <div className="text-muted" style={{ fontSize: '0.9em' }}>

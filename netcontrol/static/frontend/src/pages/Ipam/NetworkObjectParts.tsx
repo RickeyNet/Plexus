@@ -1,25 +1,40 @@
-import type { ReactNode } from 'react';
+import { type MouseEvent, type ReactNode, useRef } from 'react';
 
 import { Badge } from '@/components/Badge';
 import { EmptyState } from '@/components/EmptyState';
+import { WidenToggle } from '@/components/WidenToggle';
+import { bringIntoView, splitGridStyle, useWideDetail } from '@/lib/wideDetail';
 
 /** Pieces the VRFs and VLANs tabs share. */
 
-/** The record list on the left, the selected record's detail on the right (like the subnet drilldown). */
+/**
+ * The record list on the left, the selected record's detail on the right
+ * (like the subnet drilldown). The detail's corner button widens it to the
+ * full width above the list, so its tables need no sideways scrolling;
+ * picking another row then brings the detail back into view.
+ */
 export function SplitLayout({ list, detail }: { list: ReactNode; detail: ReactNode }) {
+  const [wide, toggleWide] = useWideDetail();
+  const detailRef = useRef<HTMLDivElement>(null);
+
+  // A row click (not one of its buttons or links) opens a record.
+  const onListClick = (e: MouseEvent) => {
+    if (!wide || !(e.target instanceof Element)) return;
+    if (!e.target.closest('tr') || e.target.closest('button, a, input, select, textarea, label')) return;
+    requestAnimationFrame(() => bringIntoView(detailRef.current));
+  };
+
   return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'minmax(0, 2.1fr) minmax(320px, 1fr)',
-        gap: '1rem',
-        alignItems: 'start',
-      }}
-    >
-      <div className="card" style={{ minWidth: 0 }}>
+    <div style={splitGridStyle(wide)}>
+      <div className="card" style={{ minWidth: 0, order: wide ? 1 : 0 }} onClickCapture={onListClick}>
         {list}
       </div>
-      <div className="card" style={{ minWidth: 0 }}>
+      <div
+        className="card"
+        ref={detailRef}
+        style={{ minWidth: 0, position: 'relative', paddingRight: '2.75rem', scrollMarginTop: 'var(--space-4)' }}
+      >
+        <WidenToggle wide={wide} onToggle={toggleWide} style={{ position: 'absolute', top: 'var(--space-3)', right: 'var(--space-3)' }} />
         {detail}
       </div>
     </div>

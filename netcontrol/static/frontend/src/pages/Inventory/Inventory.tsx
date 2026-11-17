@@ -20,6 +20,7 @@ import { hostModelText } from '@/lib/deviceModel';
 import { type FilterDraft, inventoryFilterToDraft } from '@/lib/dynamicGroupFilter';
 import { READ_ONLY_GROUP_REASON, TOP_LEVEL_GROUP_REASON, useObjectScope } from '@/lib/objectScope';
 import { useLinkedParam } from '@/lib/useLinkedParam';
+import { bringIntoView, splitGridStyle, useWideDetail } from '@/lib/wideDetail';
 
 import {
   groupLabel,
@@ -45,6 +46,7 @@ import { DiscoveryModal, type DiscoveryMode } from './DiscoveryModal';
 import { DynamicGroupsModal } from './DynamicGroupsModal';
 import { GroupModal } from './GroupModal';
 import { HostModal } from './HostModal';
+import { HostPanel } from './HostPanel';
 import { SerialModal, type SerialTarget } from './SerialModal';
 import { SnmpProfilesModal } from './SnmpProfilesModal';
 import {
@@ -117,6 +119,18 @@ export function Inventory() {
     new Map(),
   );
   const [orderOverride, setOrderOverride] = useState<number[] | null>(null);
+  // The host whose details panel is open (by group, as a host can be listed in several).
+  const [openHost, setOpenHost] = useState<{ groupId: number; hostId: number } | null>(null);
+  const [wide, toggleWide] = useWideDetail();
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  const openGroup = openHost ? groups.find((g) => g.id === openHost.groupId) : undefined;
+  const openHostRow = openHost ? openGroup?.hosts?.find((h) => h.id === openHost.hostId) : undefined;
+  const openHostDetails = (groupId: number, hostId: number) => {
+    setOpenHost({ groupId, hostId });
+    // Widened, the panel sits above the groups: bring it into view.
+    if (wide) requestAnimationFrame(() => bringIntoView(panelRef.current));
+  };
 
   const reorder = useReorderInventoryGroups();
   const deleteGroup = useDeleteInventoryGroup();
@@ -410,7 +424,32 @@ export function Inventory() {
       {assignmentsQ.isError && !assignmentsQ.data && (
         <QueryError what="SNMP profile assignments" query={assignmentsQ} />
       )}
-      <div className="stack stack-sm">
+      <div style={openGroup && openHostRow ? splitGridStyle(wide) : undefined}>
+      {openGroup && openHostRow && (
+        <div
+          ref={panelRef}
+          className="card"
+          style={{
+            minWidth: 0,
+            order: wide ? 0 : 1,
+            scrollMarginTop: 'var(--space-4)',
+            // Beside the groups it stays in view while they scroll.
+            ...(wide ? {} : { position: 'sticky', top: 'var(--space-4)', maxHeight: 'calc(100vh - 2 * var(--space-4))', overflowY: 'auto' }),
+          }}
+        >
+          <HostPanel
+            key={`${openGroup.id}-${openHostRow.id}`}
+            host={openHostRow}
+            groupName={groupLabel(openGroup)}
+            canWrite={objectScope.canWriteGroup(openGroup.id)}
+            wide={wide}
+            onToggleWide={toggleWide}
+            onEdit={() => setModal({ kind: 'edit-host', host: { ...openHostRow, group_id: openGroup.id } })}
+            onClose={() => setOpenHost(null)}
+          />
+        </div>
+      )}
+      <div className="stack stack-sm" style={{ minWidth: 0, order: 1 }}>
         {groupsQ.data && filtered.length === 0 && hasDataFilter && (
           <div className="card">
             <EmptyState
@@ -516,8 +555,11 @@ export function Inventory() {
               const ids = Array.from(selectedHosts.get(group.id) ?? []);
               if (ids.length) setModal({ kind: 'bulk-snmp', hostIds: ids });
             }}
+            openHostId={openHost?.groupId === group.id ? openHost.hostId : null}
+            onOpenHost={(host) => openHostDetails(group.id, host.id)}
           />
         ))}
+      </div>
       </div>
 
       {modal.kind === 'create-group' && (
@@ -622,6 +664,10 @@ interface GroupCardProps {
   onBulkTag: () => void;
   onBulkEdit: () => void;
   onBulkSnmpProfile: () => void;
+  /** The host whose details panel is open, marked on its row. */
+  openHostId?: number | null;
+  /** A row click opens the host's details; without it rows are not clickable. */
+  onOpenHost?: (host: InventoryHost) => void;
 }
 
 /** How far each level of sub-groups is indented. */
@@ -658,6 +704,8 @@ export function GroupCard({
   onBulkTag,
   onBulkEdit,
   onBulkSnmpProfile,
+  openHostId = null,
+  onOpenHost,
 }: GroupCardProps) {
   const hosts = group.hosts ?? [];
   const sortedHosts = sortHostsForQuery(hosts, query);
@@ -973,13 +1021,22 @@ export function GroupCard({
                               key={host.id}
                               data-index={vi.index}
                               ref={rowVirtualizer.measureElement}
+                              className={
+                                onOpenHost
+                                  ? `row-clickable${openHostId === host.id ? ' row-selected' : ''}`
+                                  : undefined
+                              }
+                              aria-current={openHostId === host.id ? 'true' : undefined}
+                              title={onOpenHost ? "Show the host's details" : undefined}
+                              {...(onOpenHost ? clickableProps(() => onOpenHost(host), { role: null }) : {})}
                               style={{
                                 background: isMatch
                                   ? 'var(--primary-soft)'
                                   : undefined,
                               }}
                             >
-                              <td>
+                              {/* The checkbox and buttons do their own thing, not open the panel. */}
+                              <td onClick={(e) => e.stopPropagation()}>
                                 <input
                                   type="checkbox"
                                   checked={selectedSet.has(host.id)}
@@ -1038,7 +1095,7 @@ export function GroupCard({
                                 )}
                               </td>
                               <td>{host.software_version || '-'}</td>
-                              <td>
+                              <td onClick={(e) => e.stopPropagation()}>
                                 <div style={{ display: 'flex', gap: '0.25rem' }}>
                                   <button
                                     type="button"
