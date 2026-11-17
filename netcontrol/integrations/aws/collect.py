@@ -40,6 +40,7 @@ from netcontrol.integrations.aws.normalize import (
     VPC_ENDPOINT_TYPE,
     WARNING_TYPE,
 )
+from netcontrol.integrations.cloud_services import endpoint, service_metadata, unique_addresses as _addresses
 
 # Instance states that are gone; they are not part of the network any more.
 _GONE_STATES = ("terminated", "shutting-down")
@@ -393,32 +394,6 @@ def vpn_connection_metadata(vpn: dict) -> dict:
 _FSX_GONE_STATES = ("deleting",)
 
 
-def _addresses(*values: Any) -> list[str]:
-    """The non-empty addresses among ``values`` (strings or lists of them), once each."""
-    found: list[str] = []
-    for value in values:
-        for item in value if isinstance(value, list) else [value]:
-            text = _t(item)
-            if text and text not in found:
-                found.append(text)
-    return found
-
-
-def endpoint(role: str, dns_name: Any = "", port: Any = None, addresses: Any = ()) -> dict | None:
-    """One endpoint of a resource as ``{role, dns_name, port, ip_addresses}``
-    (``port`` only when AWS gives one), or ``None`` when it has neither a
-    name nor an address. ``addresses`` is a list of strings or of lists."""
-    name = _t(dns_name)
-    found = _addresses(*addresses) if isinstance(addresses, (list, tuple)) else _addresses(addresses)
-    if not name and not found:
-        return None
-    record: dict[str, Any] = {"role": role, "dns_name": name}
-    if isinstance(port, int) and not isinstance(port, bool) and port > 0:
-        record["port"] = port
-    record["ip_addresses"] = found
-    return record
-
-
 def _fsx_endpoint(role: str, value: Any) -> dict | None:
     """An ONTAP file system or SVM endpoint (``DNSName``, ``IpAddresses``,
     ``Ipv6Addresses``)."""
@@ -595,52 +570,20 @@ def dns_suffix(region: str) -> str:
 
 
 def service_resource(
-    resource_type: str,
-    resource_id: str,
-    *,
-    name: str,
-    region: str,
-    status: str,
-    kind: str = "",
-    engine: str = "",
-    engine_version: str = "",
-    vpc_id: str = "",
-    subnet_ids: list[str] | None = None,
-    security_group_ids: list[str] | None = None,
-    endpoints: list[dict | None] | None = None,
-    network_interface_ids: list[str] | None = None,
-    interfaces: list[dict] | None = None,
-    public_ips: list[str] | None = None,
-    **details: Any,
+    resource_type: str, resource_id: str, *, name: str, region: str, status: str, **fields: Any
 ) -> dict:
-    """The record of a service resource the map lists in its VPC's details.
+    """The record of a service resource the map lists in its VPC's details;
+    ``fields`` are those of ``cloud_services.service_metadata``.
 
-    ``kind`` names what it is ("Aurora PostgreSQL cluster", "Application load
-    balancer"); ``engine_version`` is the software version AWS reports. A
-    resource that names no VPC (an MSK cluster, a Redshift Serverless
-    workgroup, an ElastiCache serverless cache) is placed by its subnets.
-    ``public_ips`` are listed, not indexed as hosts of the VPC.
-    ``details`` are the service's own named fields."""
+    A resource that names no VPC (an MSK cluster, a Redshift Serverless
+    workgroup, an ElastiCache serverless cache) is placed by its subnets."""
     return _resource(
         f"aws:{resource_type}:{resource_id}",
         resource_type,
         name=name or resource_id,
         region=region,
         status=_t(status).lower(),
-        metadata={
-            "resource_id": resource_id,
-            "kind": kind,
-            "engine": engine,
-            "engine_version": engine_version,
-            "vpc_id": vpc_id,
-            "subnet_ids": subnet_ids or [],
-            "security_group_ids": security_group_ids or [],
-            "endpoints": [e for e in endpoints or [] if e],
-            "network_interface_ids": network_interface_ids or [],
-            "interfaces": interfaces or [],
-            "public_ips": public_ips or [],
-            **details,
-        },
+        metadata=service_metadata(resource_id, **fields),
     )
 
 

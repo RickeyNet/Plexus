@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { Link, useNavigate, useParams } from 'react-router';
 
 import { useAuthStatus } from '@/api/auth';
 import { SeverityBadge } from '@/components/Badge';
@@ -13,8 +13,10 @@ import { useCanReadRouting } from '@/pages/Routing/routingHooks';
 import { HostClusters } from '@/pages/Virtualization/HostClusters';
 import { LoadingState } from '@/components/LoadingState';
 import { PageHelp } from '@/components/PageHelp';
+import { ProgressBar } from '@/components/ProgressBar';
 import { TabBar } from '@/components/TabBar';
 import { formatBackendDateTime } from '@/lib/datetime';
+import { utilizationTone } from '@/lib/severity';
 import { TimeSeriesChart, TimeSeries } from '@/lib/echart';
 import { useTimeRange } from '@/lib/timeRange-context';
 import {
@@ -340,14 +342,6 @@ function IpamContext({
     );
   }
   const pct = s.utilization_pct != null ? Math.round(s.utilization_pct) : null;
-  const barColor =
-    pct != null
-      ? pct >= 90
-        ? 'var(--danger)'
-        : pct >= 75
-          ? 'var(--warning)'
-          : 'var(--success)'
-      : 'var(--success)';
   return (
     <div className="card card-sm">
       <div
@@ -361,7 +355,9 @@ function IpamContext({
       >
         <span style={{ fontSize: '0.82rem' }}>
           <strong>Subnet:</strong>{' '}
-          <code style={{ fontFamily: 'monospace' }}>{s.subnet}</code>
+          <Link to={`/ipam?q=${encodeURIComponent(s.subnet)}`} title="Open this subnet in IPAM">
+            <code style={{ fontFamily: 'monospace' }}>{s.subnet}</code>
+          </Link>
         </span>
         {(s.vrf_name || vrf) && (
           <span
@@ -372,32 +368,11 @@ function IpamContext({
           </span>
         )}
         {pct != null && (
-          <span style={{ fontSize: '0.82rem' }}>
-            <strong>Utilization:</strong>{' '}
-            <span
-              style={{
-                display: 'inline-block',
-                verticalAlign: 'middle',
-                width: 80,
-                height: 8,
-                background: 'var(--border)',
-                borderRadius: 4,
-                overflow: 'hidden',
-                margin: '0 4px',
-              }}
-            >
-              <span
-                style={{
-                  display: 'block',
-                  height: '100%',
-                  width: `${pct}%`,
-                  background: barColor,
-                  borderRadius: 4,
-                }}
-              />
-            </span>
+          <div style={{ fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }}>
+            <strong>Utilization:</strong>
+            <ProgressBar value={pct} tone={utilizationTone(pct)} style={{ width: 80, flex: 'none' }} />
             {pct}% ({s.used_count ?? '?'}/{s.total_count ?? '?'})
-          </span>
+          </div>
         )}
         {ctx.is_conflict && (
           <span

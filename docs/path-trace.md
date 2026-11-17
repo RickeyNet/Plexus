@@ -332,6 +332,52 @@ never a private address from before a NAT. The replies leave from the
 public address again. The address of an instance that is a device the
 trace follows itself (a vMX, an FTDv) is left to that device's own data.
 
+#### Managed cloud services
+
+The managed services discovery lists in a VPC's, VNet's or network's
+details (load balancers, application gateways, private and VPC endpoints,
+Private Service Connect endpoints, databases and caches with an address;
+`netcontrol/integrations/pathtrace/services.py`) are ends like an instance:
+
+- a service's private address places in its subnet. The hop is labelled
+  with the service (**Application load balancer core-api (10.200.10.80)**),
+  its own security groups are checked on AWS (none attached: an info item
+  says so), its subnet's network security group on Azure, and the VPC
+  firewall rules for all instances on GCP (rules for given tags or service
+  accounts aim at the backends and are listed as not checked)
+- a **policy** item at the destination names the service, what it connects
+  to (a private endpoint's resource, a VPC endpoint's service, a Private
+  Service Connect endpoint's attachment) and the listener or rule that
+  takes the protocol and port asked about: an Azure load-balancing or
+  inbound NAT rule, an application gateway listener on that frontend, a
+  GCP forwarding rule's protocol and ports, a Classic Load Balancer's
+  ports, an endpoint's port. None that does blocks the flow; a service
+  whose listeners are not collected (AWS Application and Network Load
+  Balancers, private endpoints) is named without a verdict on the port
+- a DNS name discovery reported with addresses (an endpoint's own, or for
+  a service whose endpoints carry none, its network interfaces': an AWS
+  load balancer, a VPC endpoint) can be typed as the source or destination
+  instead of an address. The trace uses the first address and a note says
+  which name it stood for and its other addresses. Nothing is looked up in
+  DNS for it
+- a public frontend delivered to a private address of the service (a
+  public address on an AWS load balancer's network interface, a service
+  with exactly one public and one private frontend such as an NLB with one
+  Elastic IP or an application gateway) goes on to that private address
+  like an instance's public address. One with no private address behind it
+  (an Azure public load balancer, a GCP external forwarding rule) ends at
+  the service in its network: the hop says the service answers on it,
+  which rule takes the port, and that its backends are not collected by
+  address; the replies leave from the frontend to the internet
+- a flow to an Azure Firewall's public address meets its DNAT rules
+  (classic or firewall policy, as collected): the first rule whose
+  destination, protocol, port and source addresses take it translates the
+  address (and a single port), and the flow goes on from the firewall's
+  private address to the translated address, whose network security group
+  sees the firewall's address as the source. No rule that takes it blocks
+  the flow; a firewall whose policy's DNAT rules were not collected is
+  unknown
+
 ### Internet applications and domains
 
 The destination can be an internet application or a domain instead of an
@@ -478,6 +524,16 @@ snapshot of every Cato account it:
 3. checks every allocated IP a matching NAT rule leaves with against the
    instance's filters (network ACL and security groups, NSGs, or firewall
    rules), the same way a trace does.
+
+Managed services are checked the same way: a public frontend delivered to a
+private address of the service (see "Managed cloud services") with the
+service's security groups (AWS) or its subnet's network security group
+(Azure), and an Azure Firewall DNAT rule whose source addresses name an
+allocated IP, which is an allow-list of its own: its public address on the
+rule's protocol and ports is evaluated, and an allocated IP gets in when
+the rule's sources take it. A public frontend with no private address
+behind it (an Azure public load balancer, a GCP external forwarding rule)
+has no filter of its own and is not checked.
 
 One finding is kept per (Cato account, instance, public address, ports, cloud
 rule), with the worst result over the sources and the sources of each result

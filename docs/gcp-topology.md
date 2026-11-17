@@ -8,7 +8,10 @@ Interconnect attachments and Interconnects, and the VM instances that
 forward traffic appear on the same map as the devices Plexus discovers
 itself and any Meraki organizations, Cato accounts, Cisco FMCs, AWS
 accounts and Azure subscriptions. They are covered by the same search box
-and Path Mode, and are included in the HTML export.
+and Path Mode, and are included in the HTML export. Load balancers (with
+the health of their backends), Private Service Connect endpoints and
+service attachments, Cloud SQL instances and Memorystore for Redis
+instances are listed in their network's details.
 
 GCP works the way AWS does on the map; [aws-topology.md](aws-topology.md)
 describes the shared behavior. This guide covers what is different.
@@ -54,19 +57,54 @@ An existing GCP account that was discovered before this release needs
 ### Permissions
 
 Discovery is read-only. The predefined **Compute Viewer** role
-(`roles/compute.viewer`) on the project is enough; **Compute Network
-Viewer** (`roles/compute.networkViewer`) covers everything but the VM
-instances.
+(`roles/compute.viewer`) on the project grants every permission below;
+**Compute Network Viewer** (`roles/compute.networkViewer`) lacks some of
+them (VM instances among them), so check a custom role against the table.
+Cloud SQL and Memorystore are read through their own APIs: add **Cloud SQL
+Viewer** (`roles/cloudsql.viewer`) and **Cloud Memorystore Redis Viewer**
+(`roles/redis.viewer`), and enable the Cloud SQL Admin API
+(`sqladmin.googleapis.com`) and the Memorystore for Redis API
+(`redis.googleapis.com`) on the project; without them those sections are
+skipped. The client library ships both APIs' discovery documents, so no
+other Python package is needed.
 
-| Needed | Compute Engine API methods |
-|---|---|
-| Always (discovery fails without them) | `networks.list`, `subnetworks.aggregatedList`, `routes.list`, `firewalls.list` |
-| For the map (skipped when denied) | `routers.aggregatedList`, `routers.getRouterStatus`, `vpnGateways.aggregatedList`, `targetVpnGateways.aggregatedList`, `vpnTunnels.aggregatedList`, `externalVpnGateways.list`, `interconnectAttachments.aggregatedList`, `interconnects.list`, `instances.aggregatedList`, `networkFirewallPolicies.list` |
+| Section | Compute Engine API methods | IAM permissions |
+|---|---|---|
+| **Always** (discovery fails without them) | | |
+| Networks | `networks.list` | `compute.networks.list` |
+| Subnets | `subnetworks.aggregatedList` | `compute.subnetworks.list` |
+| Routes | `routes.list` | `compute.routes.list` |
+| Firewall rules | `firewalls.list` | `compute.firewalls.list` |
+| **For the map** (skipped when denied) | | |
+| Cloud Routers | `routers.aggregatedList` | `compute.routers.list` |
+| BGP state and learned routes (`router_status`) | `routers.getRouterStatus` | `compute.routers.get` |
+| HA VPN gateways | `vpnGateways.aggregatedList` | `compute.vpnGateways.list` |
+| Classic VPN gateways | `targetVpnGateways.aggregatedList` | `compute.targetVpnGateways.list` |
+| VPN tunnels | `vpnTunnels.aggregatedList` | `compute.vpnTunnels.list` |
+| External VPN gateways | `externalVpnGateways.list` | `compute.externalVpnGateways.list` |
+| Interconnect attachments | `interconnectAttachments.aggregatedList` | `compute.interconnectAttachments.list` |
+| Interconnects | `interconnects.list` | `compute.interconnects.list` |
+| VM instances | `instances.aggregatedList` | `compute.instances.list` |
+| Network firewall policies | `networkFirewallPolicies.list` | `compute.networkFirewallPolicies.list` |
+| **Load balancers and Private Service Connect** (skipped when denied) | | |
+| Forwarding rules (regional) | `forwardingRules.aggregatedList` | `compute.forwardingRules.list` |
+| Forwarding rules (global) | `globalForwardingRules.list` | `compute.globalForwardingRules.list` |
+| Backend services | `backendServices.aggregatedList` | `compute.backendServices.list` |
+| URL maps | `urlMaps.aggregatedList` | `compute.urlMaps.list` |
+| Target proxies | `targetHttpProxies.aggregatedList`, `targetHttpsProxies.aggregatedList`, `targetTcpProxies.aggregatedList`, `targetSslProxies.list` | `compute.targetHttpProxies.list`, `compute.targetHttpsProxies.list`, `compute.targetTcpProxies.list`, `compute.targetSslProxies.list` |
+| Target pools | `targetPools.aggregatedList` | `compute.targetPools.list` |
+| Instance groups | `instanceGroups.aggregatedList` | `compute.instanceGroups.list` |
+| Network endpoint groups | `networkEndpointGroups.aggregatedList` | `compute.networkEndpointGroups.list` |
+| Service attachments | `serviceAttachments.aggregatedList` | `compute.serviceAttachments.list` |
+| Backend health (`backend_health`) | `backendServices.getHealth`, `regionBackendServices.getHealth` (one call per backend group, at most 200 per discovery) | `compute.backendServices.get`, `compute.regionBackendServices.get` |
+| **Managed services** (skipped when denied or when the API is not enabled) | | |
+| Cloud SQL instances | Cloud SQL Admin API `instances.list` | `cloudsql.instances.list` |
+| Memorystore for Redis instances | Memorystore for Redis API `projects.locations.instances.list` (every location) | `redis.instances.list` |
 
 A section that is denied is skipped, not fatal. It is listed with the HTTP
-status and error reason GCP answered (`forbidden (HTTP 403)`) under
-**Report** in the HTML map and as a `collection_warning` row among the
-account's resources. `routers.getRouterStatus` gives the state of each BGP
+status and error reason GCP answered (`forbidden (HTTP 403)`) and the IAM
+permissions it needs under **Report** in the HTML map and as a
+`collection_warning` row among the account's resources. `routers.getRouterStatus` gives the state of each BGP
 session, the addresses of each Cloud NAT and the routes the Cloud Routers
 learned; without it the routers are drawn but what they learn is not known.
 
@@ -94,6 +132,34 @@ addresses is a Plexus inventory host. Every other instance is listed in its
 network's details and found by the search box, and its internal address is
 in the subnet picker of Path Mode: typing the address picks the network.
 
+### Load balancers, Private Service Connect, Cloud SQL and Memorystore
+
+Load balancers, Private Service Connect, Cloud SQL and Memorystore are not drawn: like the AWS
+services with endpoints ([aws-topology.md](aws-topology.md)), the network's
+details list them with the same columns (kind, state, DNS names, addresses,
+subnets, details), and a **Service endpoints** table has a row per internal
+address, so the search box finds the network by a load balancer's name,
+address or internal DNS name, and the subnet index (IPAM) lists each
+internal address as a host of the network.
+
+| Table | What it lists |
+|---|---|
+| Load balancers | One row per forwarding rule (the frontend of a load balancer), named by the load balancer type Google gives it: global or regional external Application Load Balancer, Classic Application Load Balancer, regional or cross-region internal Application Load Balancer, proxy Network Load Balancers, internal or external passthrough Network Load Balancer (also on a target pool), protocol forwarding, Cloud Service Mesh. Details: scheme, protocol, ports, target proxy, the backend services (through the target proxy and URL map: its default service and those of its path matchers), how many backends (instance groups, network endpoint groups, target pool instances) they have, and the backend health: how many backends of its backend services' groups are healthy, unhealthy (UNHEALTHY, TIMEOUT) or unknown (DRAINING, UNKNOWN), stored as `backend_health` with a row per backend group in `backend_health_groups`. The health of target pool instances is not read |
+| Private Service Connect | Endpoints (a forwarding rule whose target is a service attachment, or the Google APIs bundle `all-apis` / `vpc-sc`) with their target and connection status; service attachments (the producer side) with their target forwarding rule, connection preference, NAT subnets and how many consumer endpoints are accepted or pending |
+| Cloud SQL | Each instance with a private IP, in the network of its private services access (`privateNetwork`): engine and version, state (RUNNABLE, SUSPENDED, MAINTENANCE...), tier, availability type, connection name. Its PRIVATE address (with the engine's port) is a host of the network; its public (PRIMARY) address is listed, and its OUTGOING address kept. An instance reached only over Private Service Connect has no network of its own: the consumers' PSC endpoints are listed instead |
+| Memorystore | Each Memorystore for Redis instance, in its authorized network: Redis version, state (READY, CREATING...), tier, connect mode (direct peering or private services access), memory size. Its primary and read endpoints are hosts of the network |
+
+An internal forwarding rule is in the network and subnet it names. An
+external one names no network: it is placed in the network of its backends
+(the instance groups or network endpoint groups of its backend services);
+one whose backends were not collected, or that has none in a VPC network
+(a serverless or internet NEG, a backend bucket), is listed under Cloud
+Visibility only. Its external address is listed, not a host of the
+network. A service attachment is placed by its target forwarding rule, else
+by its NAT subnets. The forwarding rules of a Classic VPN gateway are not
+listed (the gateway is). Firewall rules apply to a load balancer's
+backends, not its frontend, so the Security groups column stays empty.
+
 GCP joins the rest of the map the way AWS does: an external VPN gateway
 interface becomes the device that answers on its public address, an
 instance on the WAN address of a Meraki or Cato appliance is that appliance
@@ -105,7 +171,9 @@ address of an HA VPN gateway interface is joined to that gateway.
 Click a VPC network for its tabs:
 
 - **Device**: the network overview (routing mode, subnet mode, MTU,
-  regions, network firewall policies) and the list of VM instances
+  regions, network firewall policies), the list of VM instances, the load
+  balancers and Private Service Connect endpoints and service attachments,
+  and their service endpoints
 - **VLANs**: the subnets (primary range, region, secondary ranges, where the
   default route goes, Cloud NAT, Private Google Access, addresses in use)
 - **Routing**: every route of the network with its priority, next hop and
@@ -183,7 +251,17 @@ see [path-trace.md](path-trace.md). The **Traffic** box works as for AWS.
 Limits: only IPv4 can be typed in Path Mode. Hierarchical firewall policies
 (set on the organization or a folder) and regional network firewall policies
 are not collected, and the rules of global network firewall policies are not
-evaluated. Private Service Connect, load balancers, Network Connectivity
+evaluated. Load balancers and Private Service Connect endpoints are path
+trace ends: an internal forwarding rule's or endpoint's address (or its
+collected DNS name) places in its subnet, the VPC firewall rules for all
+instances are checked, and the hop names the service, the forwarding rule's
+protocol and ports that take the flow (none: blocked) and, for an endpoint,
+the service attachment it connects to. An external forwarding rule's
+address ends the trace at the load balancer, in the network of its
+backends, naming its backend services: a path is not followed to the
+backends, which are not collected by address. The Cato egress check does
+not cover GCP load balancers: their firewall rules apply at the backends.
+Network Connectivity
 Center hubs and the custom routes a peering exchanges are not collected.
 Cloud SQL and Memorystore for Redis are collected and listed (see above),
 but neither is a path trace destination; Memorystore for Redis Cluster,
@@ -202,7 +280,7 @@ offline. vCPUs and memory are not collected. See
 
 ## Availability tracking
 
-Each collection also records the state of what it reports, shown under **Monitoring > Availability > Integrations and cloud** with uptime, outages and alerts: the instances drawn on the map, Cloud Routers, HA VPN gateways, Cloud NAT, Interconnects and Interconnect attachments (devices), HA VPN tunnels (VPN connections), Interconnect attachments and Interconnects (circuits) and VPC peerings. VPC networks and external VPN gateways are left out. The state mapping, alerting and retention are described in [Meraki in the Topology Map](meraki-topology.md#availability-tracking).
+Each collection also records the state of what it reports, shown under **Monitoring > Availability > Integrations and cloud** with uptime, outages and alerts: the instances drawn on the map, Cloud Routers, HA VPN gateways, Cloud NAT, Interconnects and Interconnect attachments (devices), HA VPN tunnels (VPN connections), Interconnect attachments and Interconnects (circuits), VPC peerings, and the services listed in the network details (load balancers, Private Service Connect endpoints and service attachments) as services: a PSC endpoint by its connection status (ACCEPTED up, PENDING unknown, NEEDS_ATTENTION degraded, REJECTED or CLOSED down); a load balancer or service attachment, which has no state of its own, is up unless the health of its backends, when collected, says otherwise (none healthy down, some unhealthy degraded; see [Cloud managed services](meraki-topology.md#cloud-managed-services)). VPC networks and external VPN gateways are left out. The state mapping, alerting and retention are described in [Meraki in the Topology Map](meraki-topology.md#availability-tracking).
 
 ## API reference
 

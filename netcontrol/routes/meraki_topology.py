@@ -2168,8 +2168,8 @@ async def _app_address(domain: str, version: int) -> str:
 
 @router.get("/api/topology/path")
 async def topology_path_api(
-    source: str = Query(min_length=1, max_length=64),
-    destination: str | None = Query(default=None, min_length=1, max_length=64),
+    source: str = Query(min_length=1, max_length=253),
+    destination: str | None = Query(default=None, min_length=1, max_length=253),
     source_node: str | None = Query(default=None, max_length=300),
     destination_node: str | None = Query(default=None, max_length=300),
     protocol: str = Query(default="", max_length=8),
@@ -2177,7 +2177,8 @@ async def topology_path_api(
     destination_app: str | None = Query(default=None, min_length=1, max_length=trace_apps.MAX_LENGTH),
 ):
     """Trace a flow from ``source`` to ``destination`` (IP addresses or
-    networks) hop by hop across every device on the map, and its replies:
+    networks, or the DNS name a cloud collector reported for a managed
+    service with its addresses) hop by hop across every device on the map, and its replies:
     at each device the NAT rules, rule sets, route lookup and link it meets,
     in the order the device applies them, and whether routing is asymmetric.
     ``source_node`` / ``destination_node`` name the graph nodes that own the

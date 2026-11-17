@@ -59,6 +59,7 @@ TYPE_LABELS = {
     "circuit": "Circuit",
     "peering": "Peering",
     "link": "Link",
+    "service": "Service",
 }
 
 

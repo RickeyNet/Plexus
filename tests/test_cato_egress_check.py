@@ -245,6 +245,75 @@ def test_broad_and_every_address_sources_say_nothing_about_cato():
     assert finding["detail"]["allowed_ips"] == ["192.0.2.101", "192.0.2.102"]
 
 
+# ── Managed services ────────────────────────────────────────────────────────
+
+_ALB_PUBLIC = "203.0.113.85"
+
+
+def _aws_public_alb():
+    """The AWS sample with core-api's first network interface given the
+    public address 203.0.113.85 and its security group core-app letting
+    tcp 443 in from the Ashburn allocated IP."""
+    resources, connections = aws_sample()
+    alb = next(r for r in resources if r["resource_type"] == "load_balancer" and r["name"] == "core-api")
+    alb["metadata"]["interfaces"][0]["public_ips"] = [_ALB_PUBLIC]
+    group = next(r for r in resources if r["resource_uid"].endswith(":sg-0c0re0a1"))
+    group["metadata"]["policy_rules"].append(
+        {
+            "rule_uid": "aws:sg:sg-0c0re0a1:inbound:cato",
+            "rule_name": "inbound-cato",
+            "direction": "inbound",
+            "action": "allow",
+            "protocol": "tcp",
+            "source_selector": "192.0.2.101/32",
+            "destination_selector": "self",
+            "port_expression": "443",
+            "priority": None,
+        }
+    )
+    return AwsReachability(resources, connections)
+
+
+def _azure_dnat(sources: list[str]):
+    """The Azure sample with azfw-hub's DNAT rule (tcp 443 on 203.0.113.70
+    to lb-app) taking ``sources`` only."""
+    resources, connections = azure_sample.build_sample()
+    firewall = next(r for r in resources if r["resource_type"] == "azure_firewall" and r["name"] == "azfw-hub")
+    firewall["metadata"]["dnat_rules"][0]["source_addresses"] = sources
+    return AzureReachability(resources, connections)
+
+
+def test_a_load_balancer_public_frontend_is_checked_with_its_security_groups():
+    [finding] = _for(_check(clouds=[("aws", _aws_public_alb())]), _ALB_PUBLIC)
+    assert finding["kind"] == "hostname_only"
+    assert (finding["resource_name"], finding["private_ip"]) == ("Application load balancer core-api", "10.200.10.80")
+    assert finding["filter"].startswith("security group core-app")
+    assert finding["detail"]["allowed_ips"] == ["192.0.2.101"]
+    # An address rule for the frontend that NATs to the allowed IP clears it.
+    rule = network_rule(
+        2, "API by address", "NAT", destination=_endpoint(ip=[_ALB_PUBLIC]), allocation=[dict(NAT_ASHBURN)]
+    )
+    assert _for(_check(_raw(rule), clouds=[("aws", _aws_public_alb())]), _ALB_PUBLIC) == []
+
+
+def test_an_azure_firewall_dnat_rule_is_an_allow_list_of_its_own():
+    findings = _for(_check(clouds=[("azure", _azure_dnat(["192.0.2.101/32"]))]), "203.0.113.70")
+    [finding] = findings
+    assert finding["kind"] == "hostname_only"
+    assert (finding["resource_name"], finding["private_ip"]) == ("Azure Firewall azfw-hub", "10.231.10.100")
+    assert (finding["protocol"], finding["ports"]) == ("tcp", "443")
+    assert finding["filter"] == "Azure Firewall azfw-hub DNAT collection inbound-dnat"
+    # A rule that NATs to an address the DNAT rule's sources leave out is a mismatch.
+    rule = network_rule(
+        2, "App by address", "NAT", destination=_endpoint(ip=["203.0.113.70"]), allocation=[dict(NAT_NEW_YORK)]
+    )
+    clouds = [("azure", _azure_dnat(["192.0.2.101/32"]))]
+    [mismatch] = _for(_check(_raw(rule), clouds), "203.0.113.70")
+    assert mismatch["kind"] == "allocated_ip_mismatch" and mismatch["detail"]["refused_ips"] == ["192.0.2.102"]
+    # Every source says nothing about Cato.
+    assert _for(_check(clouds=[("azure", _azure_dnat(["*"]))]), "203.0.113.70") == []
+
+
 # ── Account notes ───────────────────────────────────────────────────────────
 
 

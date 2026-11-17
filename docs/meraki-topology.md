@@ -535,6 +535,7 @@ Each entity is `up`, `degraded`, `down` or `unknown`:
 | Tunnel `unreachable` | down |
 | Cloud connection `active` | up |
 | Cloud connection `failed` | down |
+| Cloud managed service: see [Cloud managed services](#cloud-managed-services) | up, degraded, down or unknown |
 | No status, or anything else | unknown |
 
 What is tracked, per source:
@@ -547,9 +548,9 @@ What is tracked, per source:
 | Palo Alto Panorama | firewalls | uplinks, site-to-site tunnels, HA links |
 | Appgate SDP | Controllers, Gateways and other appliances | sites, appliance peer links |
 | OPNsense | the firewall, OpenVPN server instances | gateways (as uplinks), IPsec connections, WireGuard peers and OpenVPN client instances (as tunnels) |
-| AWS | instances drawn on the map, transit, VPN, NAT and Direct Connect gateways, Direct Connect connections | site-to-site VPN connections, Direct Connect (circuits), VPC peerings, transit gateway and VPN gateway attachments (links) |
-| Azure | virtual machines drawn on the map, virtual network gateways, firewalls, NAT gateways, ExpressRoute circuits | gateway connections (VPN), ExpressRoute connections (circuits), VNet peerings, gateway attachments (links) |
-| GCP | instances drawn on the map, Cloud Routers, HA VPN gateways, Cloud NAT, Interconnects and Interconnect attachments | HA VPN tunnels, Interconnect attachments and Interconnects (circuits), VPC peerings |
+| AWS | instances drawn on the map, transit, VPN, NAT and Direct Connect gateways, Direct Connect connections | site-to-site VPN connections, Direct Connect (circuits), VPC peerings, transit gateway and VPN gateway attachments (links), managed services (RDS / Aurora, load balancers, VPC endpoints, EFS, ElastiCache, OpenSearch, MSK, Redshift) |
+| Azure | virtual machines drawn on the map, virtual network gateways, firewalls, NAT gateways, ExpressRoute circuits | gateway connections (VPN), ExpressRoute connections (circuits), VNet peerings, gateway attachments (links), managed services (load balancers, application gateways, private endpoints) |
+| GCP | instances drawn on the map, Cloud Routers, HA VPN gateways, Cloud NAT, Interconnects and Interconnect attachments | HA VPN tunnels, Interconnect attachments and Interconnects (circuits), VPC peerings, managed services (load balancers, Private Service Connect endpoints and service attachments) |
 
 Left out, because their state means nothing on its own: WAN address nodes
 (the uplink is tracked), CDP/LLDP neighbors, third-party VPN peers (their
@@ -558,6 +559,43 @@ VNets, the FMC, Panorama, Appgate collective and Cato PoP and backbone nodes
 (drawn online whenever the collection worked), structural links (LAN, stack,
 managed by) and Meraki networks (their status is only the worst of their
 devices').
+
+### Cloud managed services
+
+The managed services AWS, Azure and GCP discovery lists in a network's
+details (not drawn on the map) are tracked as entities of type **Service**,
+named by the resource, at the site of their VPC or VNet, with the service
+kind as their model (`netcontrol/integrations/cloud_services.py`,
+`service_states`). Every service resource type of a provider is covered,
+including ones added later, as long as its record has a state. Its state is
+the worst of up to three readings:
+
+- the resource's own state (the `status` of its record), read through the
+  table below, else through the provider's node state map (AWS `available`,
+  `active`; Azure `Succeeded`; GCP `ACTIVE`, `RUNNING`, `READY` are up; a
+  pending or provisioning state is unknown; anything else is down);
+- the state of its private link connection (an Azure private endpoint's
+  `connection_state`, a GCP Private Service Connect endpoint's
+  `psc_connection_status`);
+- the health of its backends when the record has a `backend_health`
+  (`{"healthy": n, "unhealthy": m}`): down when none is healthy and some
+  are not, degraded when some are not, up when all are.
+
+| Service state (any provider, case-insensitive) | State |
+|---|---|
+| `running` (Azure application gateway), `RUNNABLE`, `ONLINE_MAINTENANCE` (GCP Cloud SQL), `IMPORTING` (Memorystore), `approved` (Azure private endpoint connection), `accepted` (GCP PSC) | up |
+| A service at work that still serves: `backing-up`, `snapshotting`, `maintenance`, `modifying`, `updating`, `upgrading`, `UpgradingEngineVersion`, `UpdatingServiceSoftware`, `processing`, `resizing`, `renaming`, `rotating-keys`, `storage-optimization`, `configuring-*`, `resetting-master-credentials` | up |
+| `active_impaired` (AWS load balancer), `impaired`, `degraded`, `healing` (MSK), `REPAIRING` (Memorystore), `partial` (VPC endpoint), `storage-full`, `failing-over`, `rebooting`, `REBOOTING_BROKER`, `rebooting cache cluster nodes`, `NEEDS_ATTENTION` (GCP PSC) | degraded |
+| `creating`, `starting`, `stopping`, `deleting`, `pending` (Azure private endpoint connection, GCP PSC), `provisioning` (AWS load balancer), `pendingAcceptance` (VPC endpoint), `STATUS_UNSPECIFIED` | unknown |
+| `failed`, `stopped` (Azure application gateway, RDS), `rejected`, `disconnected` (Azure private endpoint connection), `REJECTED`, `CLOSED` (GCP PSC), `create-failed`, `error`, `inaccessible-*`, `incompatible-*`, `paused`, `suspended`, `isolated` and any other state | down |
+
+The **Status** column shows what was read, for example `succeeded;
+connection rejected` or `active; 0/3 backends healthy`. A resource that
+reports no state and no backend health (an AWS Classic Load Balancer) is not
+tracked. GCP load balancers and service attachments carry no state of their
+own (`active` while they exist): they are up unless their backend health says
+otherwise. A service deleted at the provider is removed with the next clean
+discovery, like any other entity.
 
 How it behaves:
 

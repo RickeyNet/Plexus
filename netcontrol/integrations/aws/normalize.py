@@ -37,10 +37,19 @@ How AWS maps onto the map:
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from typing import Any
 
 from netcontrol.integrations.aws.failures import FAILED, PERMISSION, UNAVAILABLE, failure_category
+from netcontrol.integrations.cloud_services import (
+    SERVICE_COLUMNS as SERVICE_COLUMNS,
+    SERVICE_ENDPOINT_COLUMNS as SERVICE_ENDPOINT_COLUMNS,
+    SERVICE_ENDPOINT_SECTION_TITLE as SERVICE_ENDPOINT_SECTION_TITLE,
+    Service,
+    endpoint_rows as _endpoint_rows,
+    service_counts,
+    service_sections,
+    service_states,
+)
 from netcontrol.integrations.meraki.normalize import (
     SCHEMA_VERSION,
     InventoryIndex,
@@ -107,19 +116,6 @@ REDSHIFT_TYPE = "redshift_cluster"
 REDSHIFT_WORKGROUP_TYPE = "redshift_serverless_workgroup"
 
 
-@dataclass(frozen=True)
-class Service:
-    """How the VPC details list one resource type: in the table ``section``
-    (shared by the types of one service), named ``label`` when the resource
-    gives no kind of its own, with ``details`` (caption, metadata key) in
-    its Details cell."""
-
-    resource_type: str
-    label: str
-    section: str
-    details: tuple[tuple[str, str], ...] = ()
-
-
 _RDS_DETAILS = (("Class", "instance_class"), ("Multi-AZ", "multi_az"), ("Public", "publicly_accessible"))
 _CACHE_DETAILS = (("Node type", "node_type"), ("Subnet group", "subnet_group"))
 SERVICES: tuple[Service, ...] = (
@@ -148,24 +144,6 @@ SERVICES: tuple[Service, ...] = (
     Service(REDSHIFT_WORKGROUP_TYPE, "Redshift", "Redshift", (("Namespace", "namespace"),)),
 )
 SERVICE_TYPES = tuple(s.resource_type for s in SERVICES)
-SERVICE_COLUMNS = [
-    "Name",
-    "Resource ID",
-    "Kind",
-    "Engine",
-    "Version",
-    "State",
-    "Endpoints",
-    "IP addresses",
-    "Subnets",
-    "Security groups",
-    "Details",
-]
-# One row per address of every service resource of a VPC (an endpoint with
-# none has one row with no address). ``netcontrol.integrations.meraki.subnets``
-# reads it by these column names; the Service column names the host.
-SERVICE_ENDPOINT_SECTION_TITLE = "Service endpoints"
-SERVICE_ENDPOINT_COLUMNS = ["Service", "Name", "Resource ID", "Endpoint", "DNS name", "Port", "IP address"]
 
 # Detail tables are capped so one large VPC cannot bloat the snapshot.
 MAX_SITE_ROWS = 3000
@@ -264,40 +242,6 @@ def _default_route_via(target: str) -> str:
         if target.startswith(prefix):
             return name
     return target
-
-
-def _endpoint_rows(meta: dict) -> tuple[list[tuple[str, str, Any, str]], list[str]]:
-    """The ``(role, DNS name, port, address)`` rows of a resource's
-    ``endpoints`` (one per address; an endpoint with none has one row with
-    no address), then one per private address of its ``interfaces`` that no
-    endpoint names; and every address listed, once each."""
-    rows: list[tuple[str, str, Any, str]] = []
-    listed: list[str] = []
-    for endpoint in meta.get("endpoints") or []:
-        if not isinstance(endpoint, dict):
-            continue
-        addresses = [_text(a) for a in endpoint.get("ip_addresses") or [] if _text(a)]
-        listed += addresses
-        for address in addresses or [""]:
-            rows.append((_text(endpoint.get("role")), _text(endpoint.get("dns_name")), endpoint.get("port"), address))
-    for interface in meta.get("interfaces") or []:
-        if not isinstance(interface, dict):
-            continue
-        for address in interface.get("private_ips") or []:
-            if _text(address) and _text(address) not in listed:
-                listed.append(_text(address))
-                rows.append((f"Network interface {_text(interface.get('id'))}", "", None, _text(address)))
-    return rows, list(dict.fromkeys(listed))
-
-
-def _dns_names(meta: dict) -> list[str]:
-    """``host:port`` (or ``host``) of every endpoint with a DNS name, once each."""
-    names = []
-    for endpoint in meta.get("endpoints") or []:
-        if isinstance(endpoint, dict) and _text(endpoint.get("dns_name")):
-            port = endpoint.get("port")
-            names.append(f"{_text(endpoint.get('dns_name'))}:{port}" if port else _text(endpoint.get("dns_name")))
-    return list(dict.fromkeys(names))
 
 
 def _warning_message(titles: list[str], regions: list[str], category: str, code: str, actions: list[str]) -> str:
@@ -613,7 +557,7 @@ class _Builder:
                         ("Subnets", len(subnets) or ""),
                         ("Instances", len(instances) or ""),
                         ("FSx file systems", len(owned.get(FSX_TYPE, [])) or ""),
-                        *self._service_counts(owned),
+                        *service_counts(SERVICES, owned),
                     ],
                 ),
             )
@@ -668,7 +612,7 @@ class _Builder:
             )
             for section in self._fsx_sections(owned.get(FSX_TYPE, []), owned.get(FSX_SVM_TYPE, []), subnet_names):
                 _add(sections, section)
-            for section in self._service_sections(owned, subnet_names):
+            for section in service_sections(SERVICES, owned, subnet_names, MAX_SITE_ROWS):
                 _add(sections, section)
             _add(
                 sections,
@@ -837,52 +781,6 @@ class _Builder:
                 svm_rows[:MAX_SITE_ROWS],
             ),
             table_section(FSX_ENDPOINT_SECTION_TITLE, FSX_ENDPOINT_COLUMNS, endpoint_rows[:MAX_SITE_ROWS]),
-        ]
-
-    @staticmethod
-    def _service_counts(owned: dict[str, list[dict]]) -> list[tuple[str, Any]]:
-        """VPC overview rows: how many resources each service table lists."""
-        counts: dict[str, int] = {}
-        for service in SERVICES:
-            if owned.get(service.resource_type):
-                counts[service.section] = counts.get(service.section, 0) + len(owned[service.resource_type])
-        return list(counts.items())
-
-    def _service_sections(self, owned: dict[str, list[dict]], subnet_names: dict[str, str]) -> list[dict | None]:
-        """A table per service (``SERVICES``) of a VPC, then the "Service
-        endpoints" table with a row per address of all of them, which the
-        subnet index reads as hosts of the VPC. Like FSx, they are no nodes."""
-        tables: dict[str, list[list[Any]]] = {}
-        endpoint_rows: list[list[Any]] = []
-        for service in SERVICES:
-            rows = tables.setdefault(service.section, [])
-            for resource in owned.get(service.resource_type, []):
-                meta = resource["meta"]
-                name = _text(resource.get("name")) or resource["rid"]
-                kind = _text(meta.get("kind")) or service.label
-                endpoints, listed = _endpoint_rows(meta)
-                endpoint_rows += [
-                    [kind, name, resource["rid"], role, dns_name, port, address]
-                    for role, dns_name, port, address in endpoints
-                ]
-                rows.append(
-                    [
-                        name,
-                        resource["rid"],
-                        kind,
-                        meta.get("engine"),
-                        meta.get("engine_version"),
-                        resource.get("status"),
-                        _dns_names(meta),
-                        list(dict.fromkeys([*listed, *[_text(a) for a in meta.get("public_ips") or []]])),
-                        [subnet_names.get(_text(s)) or s for s in meta.get("subnet_ids") or []],
-                        meta.get("security_group_ids"),
-                        {caption: meta.get(key) for caption, key in service.details},
-                    ]
-                )
-        return [
-            *[table_section(title, SERVICE_COLUMNS, rows[:MAX_SITE_ROWS]) for title, rows in tables.items()],
-            table_section(SERVICE_ENDPOINT_SECTION_TITLE, SERVICE_ENDPOINT_COLUMNS, endpoint_rows[:MAX_SITE_ROWS]),
         ]
 
     def _instance_nodes(
@@ -1593,6 +1491,8 @@ def build_snapshot(
         "sites": sites,
         "nodes": nodes,
         "edges": builder.edges,
+        # The state of every service resource, for availability tracking.
+        "services": service_states(SERVICES, builder.resources.values(), _status, lambda r: _rid(builder._vpc_uid(r))),
         # Instances that are not nodes (see ``_Builder.latent_nodes``); not
         # counted in the summary nor searched: the VPC lists them.
         "latent": {"nodes": builder.latent_nodes, "edges": builder.latent_edges},

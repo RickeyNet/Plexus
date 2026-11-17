@@ -18,7 +18,13 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from netcontrol.integrations.azure.normalize import WARNING_TYPE
+from netcontrol.integrations.azure.normalize import (
+    APPLICATION_GATEWAY_TYPE,
+    LOAD_BALANCER_TYPE,
+    PRIVATE_ENDPOINT_TYPE,
+    WARNING_TYPE,
+)
+from netcontrol.integrations.cloud_services import endpoint, service_record, unique_addresses
 
 PROVIDER = "azure"
 
@@ -34,6 +40,9 @@ _UID_KINDS = {
     "virtualmachines": "vm",
     "azurefirewalls": "firewall",
     "publicipaddresses": "public_ip",
+    "loadbalancers": LOAD_BALANCER_TYPE,
+    "applicationgateways": APPLICATION_GATEWAY_TYPE,
+    "privateendpoints": PRIVATE_ENDPOINT_TYPE,
 }
 
 
@@ -148,16 +157,24 @@ def error_code(exc: BaseException) -> str:
     return type(exc).__name__
 
 
-def warning_resource(section: str, exc: BaseException) -> dict:
+def warning_resource(
+    section: str, exc: BaseException, *, title: str = "", actions: tuple[str, ...] | list[str] = ()
+) -> dict:
     """Record of a detail section that could not be read, stored with the
-    discovery so the map's report can say what is missing and why."""
+    discovery so the map's report can say what is missing and why, and,
+    when given, the section's ``title`` and the Azure RBAC ``actions`` it needs."""
+    metadata: dict[str, Any] = {"section": section, "error": error_code(exc)}
+    if title:
+        metadata["title"] = title
+    if actions:
+        metadata["actions"] = list(actions)
     return _resource(
         f"azure:{WARNING_TYPE}:{section}",
         WARNING_TYPE,
         name=section,
         region="",
         status="skipped",
-        metadata={"section": section, "error": error_code(exc)},
+        metadata=metadata,
     )
 
 
@@ -694,10 +711,339 @@ def firewall_resource(firewall: Any, subscription_id: str, public_ips: dict[str,
             "tier": _t(_get(firewall, "sku", "tier")),
             "threat_intel_mode": _t(_get(firewall, "threat_intel_mode")),
             "firewall_policy": resource_name(_t(_get(firewall, "firewall_policy", "id"))),
+            # The policy's Azure resource ID: the collector reads its DNAT rules by it.
+            "firewall_policy_id": _t(_get(firewall, "firewall_policy", "id")),
             "private_ip": private[0] if private else "",
             "private_ips": private,
             "public_ips": _public_ips_of(configs, public_ips),
             "subnet_id": rid_of(subnet_uid) if subnet_uid else "",
             "vnet_id": _vnet_of_subnet(subnet_uid),
+            "dnat_rules": firewall_dnat_rules(firewall),
         },
+    )
+
+
+def _texts(values: Any) -> list[str]:
+    return [_t(v) for v in _list(values) if _t(v)]
+
+
+def _priority(model: Any) -> int:
+    return p if isinstance(p := _get(model, "priority"), int) else 0
+
+
+def _dnat_row(rule: Any, *, collection: Any, protocols: Any, sources: list[str], source: str, **extra: Any) -> dict:
+    """One DNAT rule, the same row for a classic rule and a firewall policy one."""
+    return {
+        "source": source,
+        **extra,
+        "collection": _t(_get(collection, "name")),
+        "priority": _get(collection, "priority"),
+        "action": _t(_get(collection, "action", "type")) or "Dnat",
+        "name": _t(_get(rule, "name")),
+        "protocols": _texts(protocols),
+        "source_addresses": sources,
+        "destination_addresses": _texts(_get(rule, "destination_addresses")),
+        "destination_ports": _texts(_get(rule, "destination_ports")),
+        "translated_address": _t(_get(rule, "translated_address")) or _t(_get(rule, "translated_fqdn")),
+        "translated_port": _t(_get(rule, "translated_port")),
+    }
+
+
+def firewall_dnat_rules(firewall: Any) -> list[dict]:
+    """The DNAT rules of an Azure Firewall's classic NAT rule collections,
+    in priority order (``source`` "classic"). A firewall managed by a
+    firewall policy keeps its rules in the policy's rule collection groups:
+    ``firewall_policy_dnat_rules`` reads those."""
+    rules: list[dict] = []
+    for collection in sorted(_list(_get(firewall, "nat_rule_collections")), key=_priority):
+        for rule in _list(_get(collection, "rules")):
+            rules.append(
+                _dnat_row(
+                    rule,
+                    collection=collection,
+                    protocols=_get(rule, "protocols"),
+                    sources=_texts(_get(rule, "source_addresses")),
+                    source="classic",
+                )
+            )
+    return rules
+
+
+def firewall_policy_dnat_rules(groups: Any, policy_name: str) -> list[dict]:
+    """The DNAT rules of one Azure Firewall Policy, from its rule collection
+    groups (``firewall_policy_rule_collection_groups.list``), in the order
+    the firewall applies them: group priority, then collection priority.
+    Only NAT rule collections (``FirewallPolicyNatRuleCollection``) and
+    their NAT rules are read; network and application rules are not. A rule
+    that names IP groups lists them by name among its sources."""
+    rules: list[dict] = []
+    for group in sorted(_list(groups), key=_priority):
+        collections = [
+            c
+            for c in _list(_get(group, "rule_collections"))
+            if _t(_get(c, "rule_collection_type")) == "FirewallPolicyNatRuleCollection"
+        ]
+        for collection in sorted(collections, key=_priority):
+            for rule in _list(_get(collection, "rules")):
+                if _t(_get(rule, "rule_type")) not in ("", "NatRule"):
+                    continue
+                ip_groups = [resource_name(g) for g in _texts(_get(rule, "source_ip_groups"))]
+                rules.append(
+                    _dnat_row(
+                        rule,
+                        collection=collection,
+                        protocols=_get(rule, "ip_protocols"),
+                        sources=[*_texts(_get(rule, "source_addresses")), *[g for g in ip_groups if g]],
+                        source="policy",
+                        policy=policy_name,
+                        collection_group=_t(_get(group, "name")),
+                        group_priority=_get(group, "priority"),
+                    )
+                )
+    return rules
+
+
+# ── Services with endpoints: load balancers, application gateways, private endpoints ──
+
+
+def interface_table(nics: Any, public_ips: dict[str, str]) -> dict[str, dict]:
+    """Network interface resource ID (lower case) -> its ``_interface``
+    record, for the services that name their interfaces by ID."""
+    return {_id(nic).lower(): _interface(nic, public_ips) for nic in _list(nics) if _id(nic)}
+
+
+def _nic_of(ip_configuration_id: str) -> str:
+    """``…/networkInterfaces/N/ipConfigurations/C`` -> ``…/networkInterfaces/N`` (lower case)."""
+    head, sep, _tail = _t(ip_configuration_id).lower().partition("/ipconfigurations/")
+    return head if sep else ""
+
+
+def _frontends(configs: Any, public_ips: dict[str, str]) -> tuple[list[dict | None], list[str]]:
+    """``(endpoints, subnet uids)`` of frontend IP configurations: an
+    endpoint per private address (a public one is in ``_public_ips_of``)."""
+    endpoints: list[dict | None] = []
+    subnets: list[str] = []
+    for config in _list(configs):
+        name = _t(_get(config, "name")) or resource_name(_id(config))
+        endpoints.append(endpoint(f"Frontend {name}".strip(), "", None, [_t(_get(config, "private_ip_address"))]))
+        subnet = _ref(config, "subnet")
+        if subnet and subnet not in subnets:
+            subnets.append(subnet)
+    return endpoints, subnets
+
+
+def _ports(start: Any, end: Any = None) -> str:
+    """``443``, ``50000-50099``, or ``all`` for port 0 (the HA ports rule)."""
+    if isinstance(end, int) and isinstance(start, int) and end != start:
+        return f"{start}-{end}"
+    return "all" if start in (0, None, "") else _t(start)
+
+
+def _forwarding(rule: Any, frontend_port: str, label: str = "") -> dict:
+    return {
+        "name": _t(_get(rule, "name")),
+        "protocol": _t(_get(rule, "protocol")),
+        "frontend": resource_name(_t(_get(rule, "frontend_ip_configuration", "id"))),
+        "frontend_port": frontend_port,
+        "backend_port": _ports(_get(rule, "backend_port")),
+        "label": label,
+    }
+
+
+def _forwarding_summary(rule: dict) -> str:
+    """``TCP 443 -> 8443``, ``NAT TCP 50000-50099 -> 22``."""
+    text = f"{rule['protocol']} {rule['frontend_port']} -> {rule['backend_port']}".strip()
+    return f"{rule['label']} {text}".strip()
+
+
+def load_balancer_resource(
+    lb: Any, subscription_id: str, public_ips: dict[str, str], interfaces: dict[str, dict] | None = None
+) -> dict | None:
+    """An Azure Load Balancer: its frontends (private address and subnet,
+    or public IP), backend pools, load-balancing and inbound NAT rules.
+
+    A public load balancer sits in no subnet; it is placed in the VNet of
+    its backends, through ``interfaces`` (``interface_table``) or the VNet
+    an IP-based backend pool names."""
+    uid, group, name = _own_uid(lb, LOAD_BALANCER_TYPE, subscription_id)
+    if not name:
+        return None
+    configs = _list(_get(lb, "frontend_ip_configurations"))
+    endpoints, subnet_uids = _frontends(configs, public_ips)
+    public = _public_ips_of(configs, public_ips)
+    pools = _list(_get(lb, "backend_address_pools"))
+    backend_vnets: list[str] = []
+    for pool in pools:
+        refs = [_ref(pool, "virtual_network")]
+        refs += [_ref(a, "virtual_network") for a in _list(_get(pool, "load_balancer_backend_addresses"))]
+        for config in _list(_get(pool, "backend_ip_configurations")):
+            interface = (interfaces or {}).get(_nic_of(_id(config))) or {}
+            refs.append(f"azure:vnet:{interface['vnet_id']}" if interface.get("vnet_id") else "")
+        backend_vnets += [rid_of(r) for r in refs if r]
+    vnets = [_vnet_of_subnet(s) for s in subnet_uids] + backend_vnets
+    rules = [_forwarding(r, _ports(_get(r, "frontend_port"))) for r in _list(_get(lb, "load_balancing_rules"))] + [
+        _forwarding(
+            r,
+            _ports(_get(r, "frontend_port_range_start"), _get(r, "frontend_port_range_end"))
+            if _get(r, "frontend_port_range_start")
+            else _ports(_get(r, "frontend_port")),
+            "NAT",
+        )
+        for r in [*_list(_get(lb, "inbound_nat_rules")), *_list(_get(lb, "inbound_nat_pools"))]
+    ]
+    sku = _t(_get(lb, "sku", "name"))
+    scheme = "Public" if public or any(_get(c, "public_ip_address") for c in configs) else "Internal"
+    vnet_id = vnets[0] if vnets else ""
+    return service_record(
+        PROVIDER,
+        uid,
+        LOAD_BALANCER_TYPE,
+        rid_of(uid),
+        name=name,
+        region=_t(_get(lb, "location")),
+        status=_state(lb),
+        kind="Gateway load balancer" if sku.lower() == "gateway" else f"{scheme} load balancer",
+        vpc_id=vnet_id,
+        subnet_ids=[rid_of(s) for s in subnet_uids],
+        endpoints=endpoints,
+        public_ips=public,
+        resource_group=group,
+        vnet_id=vnet_id,
+        scheme=scheme,
+        sku=sku,
+        tier=_t(_get(lb, "sku", "tier")),
+        frontend_count=len(configs),
+        backend_pool_count=len(pools),
+        forwarding_rules=rules,
+        rules=[_forwarding_summary(r) for r in rules],
+    )
+
+
+def application_gateway_resource(gateway: Any, subscription_id: str, public_ips: dict[str, str]) -> dict | None:
+    """An Application Gateway: its frontends, the subnet its instances run
+    in, its listeners (protocol, port, host names) and whether a web
+    application firewall inspects its traffic. Certificates are not read."""
+    uid, group, name = _own_uid(gateway, APPLICATION_GATEWAY_TYPE, subscription_id)
+    if not name:
+        return None
+    configs = _list(_get(gateway, "frontend_ip_configurations"))
+    endpoints, subnet_uids = _frontends(configs, public_ips)
+    for config in _list(_get(gateway, "gateway_ip_configurations")):
+        subnet = _ref(config, "subnet")
+        if subnet and subnet not in subnet_uids:
+            subnet_uids.append(subnet)
+    ports = {_id(p).lower(): _get(p, "port") for p in _list(_get(gateway, "frontend_ports"))}
+    public_frontends = {_id(c).lower() for c in configs if _get(c, "public_ip_address")}
+    listeners: list[dict] = []
+    for listener in [*_list(_get(gateway, "http_listeners")), *_list(_get(gateway, "listeners"))]:
+        hosts = _texts(_get(listener, "host_names")) or _texts([_get(listener, "host_name")])
+        frontend = _t(_get(listener, "frontend_ip_configuration", "id")).lower()
+        listeners.append(
+            {
+                "name": _t(_get(listener, "name")),
+                "protocol": _t(_get(listener, "protocol")),
+                "port": ports.get(_t(_get(listener, "frontend_port", "id")).lower()),
+                "host_names": hosts,
+                "frontend": "public" if frontend in public_frontends else "private",
+            }
+        )
+        endpoints += [
+            endpoint(f"{listeners[-1]['protocol']} listener".strip(), host, listeners[-1]["port"]) for host in hosts
+        ]
+    waf = _get(gateway, "web_application_firewall_configuration")
+    tier = _t(_get(gateway, "sku", "tier"))
+    vnet_id = next((_vnet_of_subnet(s) for s in subnet_uids), "")
+    return service_record(
+        PROVIDER,
+        uid,
+        APPLICATION_GATEWAY_TYPE,
+        rid_of(uid),
+        name=name,
+        region=_t(_get(gateway, "location")),
+        # Running / Stopped, else how its last change went.
+        status=_t(_get(gateway, "operational_state")) or _state(gateway),
+        kind="Application gateway",
+        vpc_id=vnet_id,
+        subnet_ids=[rid_of(s) for s in subnet_uids],
+        endpoints=endpoints,
+        public_ips=_public_ips_of(configs, public_ips),
+        resource_group=group,
+        vnet_id=vnet_id,
+        sku=_t(_get(gateway, "sku", "name")),
+        tier=tier,
+        capacity=_get(gateway, "sku", "capacity"),
+        provisioning_state=_state(gateway),
+        waf_enabled=bool(_get(waf, "enabled")) or bool(_t(_get(gateway, "firewall_policy", "id"))),
+        waf_mode=_t(_get(waf, "firewall_mode")),
+        firewall_policy=resource_name(_t(_get(gateway, "firewall_policy", "id"))),
+        listener_details=listeners,
+        listeners=[
+            " ".join(p for p in (item["protocol"], _t(item["port"]), ", ".join(item["host_names"])) if p)
+            for item in listeners
+        ],
+    )
+
+
+def _target_type(resource_id: str) -> str:
+    """``…/providers/Microsoft.Storage/storageAccounts/x`` -> ``Microsoft.Storage/storageAccounts``."""
+    parts = [p for p in _t(resource_id).split("/") if p]
+    lowered = [p.lower() for p in parts]
+    if "providers" not in lowered:
+        return ""
+    index = len(lowered) - 1 - lowered[::-1].index("providers")
+    return "/".join(parts[index + 1 : index + 3])
+
+
+def private_endpoint_resource(pe: Any, subscription_id: str, interfaces: dict[str, dict] | None = None) -> dict | None:
+    """A private endpoint: the address it gives a PaaS resource (a storage
+    account, a database, another subscription's Private Link service) in a
+    subnet, with that resource's ID, the sub-resources (group IDs) it
+    reaches and the state of its connection. ``interfaces``
+    (``interface_table``) give its network interface."""
+    uid, group, name = _own_uid(pe, PRIVATE_ENDPOINT_TYPE, subscription_id)
+    if not name:
+        return None
+    subnet_uid = _ref(pe, "subnet")
+    automatic = _list(_get(pe, "private_link_service_connections"))
+    manual = _list(_get(pe, "manual_private_link_service_connections"))
+    connection = next(iter(automatic or manual), None)
+    target = _t(_get(connection, "private_link_service_id"))
+    endpoints: list[dict | None] = [
+        endpoint("Private endpoint", _get(c, "fqdn"), None, _texts(_get(c, "ip_addresses")))
+        for c in _list(_get(pe, "custom_dns_configs"))
+    ]
+    listed = unique_addresses(*[e["ip_addresses"] for e in endpoints if e])
+    for config in _list(_get(pe, "ip_configurations")):
+        address = _t(_get(config, "private_ip_address"))
+        if address and address not in listed:
+            endpoints.append(endpoint(f"Private endpoint {_t(_get(config, 'group_id'))}".strip(), "", None, [address]))
+    known = interfaces or {}
+    nic_ids = [_id(n) for n in _list(_get(pe, "network_interfaces")) if _id(n)]
+    found = [known[n.lower()] for n in nic_ids if n.lower() in known]
+    vnet_id = _vnet_of_subnet(subnet_uid)
+    return service_record(
+        PROVIDER,
+        uid,
+        PRIVATE_ENDPOINT_TYPE,
+        rid_of(uid),
+        name=name,
+        region=_t(_get(pe, "location")),
+        status=_state(pe),
+        kind="Private endpoint",
+        vpc_id=vnet_id,
+        subnet_ids=[rid_of(subnet_uid)] if subnet_uid else [],
+        security_group_ids=list(
+            dict.fromkeys(i["network_security_group"] for i in found if i["network_security_group"])
+        ),
+        endpoints=endpoints,
+        network_interface_ids=[rid_of(resource_uid(n)) for n in nic_ids if resource_uid(n)],
+        interfaces=found,
+        resource_group=group,
+        vnet_id=vnet_id,
+        target_id=target,
+        target_name=resource_name(target),
+        target_type=_target_type(target),
+        group_ids=unique_addresses(*[_texts(_get(c, "group_ids")) for c in automatic + manual]),
+        connection_state=_t(_get(connection, "private_link_service_connection_state", "status")),
+        manual_approval=bool(manual) and not automatic,
     )

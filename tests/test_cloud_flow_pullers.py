@@ -390,6 +390,91 @@ def test_read_azure_blobs_skips_stale_blobs():
     assert truncated is False
 
 
+def _vnet_blob_json(tuples: list[str]) -> bytes:
+    import json as _json
+
+    return _json.dumps(
+        {
+            "records": [
+                {
+                    "time": "2026-07-16T03:00:00Z",
+                    "flowLogVersion": 4,
+                    "flowLogResourceID": "/SUBSCRIPTIONS/S/RESOURCEGROUPS/RG/PROVIDERS/MICROSOFT.NETWORK/NETWORKWATCHERS/NW/FLOWLOGS/FL1",
+                    "targetResourceID": "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/vnet1",
+                    "category": "FlowLogFlowEvent",
+                    "flowRecords": {
+                        "flows": [
+                            {
+                                "aclID": "00000000-0000-0000-0000-000000000001",
+                                "flowGroups": [{"rule": "DefaultRule_AllowInternetOutBound", "flowTuples": tuples}],
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+    ).encode()
+
+
+def test_read_azure_blobs_reads_vnet_flow_logs():
+    """VNet flow logs: another blob prefix, the flowRecords layout, epoch in ms."""
+    now = datetime.now(UTC)
+    start = now - timedelta(minutes=15)
+    in_window_ms = (int(now.timestamp()) - 300) * 1000
+    out_of_window_ms = int((now - timedelta(hours=3)).timestamp()) * 1000
+    blob_name = (
+        "flowLogResourceID=/SUBSCRIPTIONS/S/RESOURCEGROUPS/RG/PROVIDERS/MICROSOFT.NETWORK"
+        f"/NETWORKWATCHERS/NW/FLOWLOGS/FL1/y={now.year}/m={now.month:02d}/d={now.day:02d}"
+        "/h=03/m=00/macAddress=AABBCC/PT1H.json"
+    )
+    tuples = [
+        f"{in_window_ms},192.0.2.4,198.51.100.10,44931,443,6,O,B,NX,0,0,0,0",
+        f"{out_of_window_ms},192.0.2.4,198.51.100.10,44932,443,6,O,B,NX,0,0,0,0",
+    ]
+    container = _FakeContainerClient({blob_name: (_FakeBlobProps(blob_name, now), _vnet_blob_json(tuples))})
+
+    records, truncated = pullers_mod._read_azure_blobs(container, start, now)
+    assert truncated is False
+    assert len(records) == 1
+    assert records[0]["flow_tuples"] == [tuples[0]]
+    assert records[0]["rule_name"] == "DefaultRule_AllowInternetOutBound"
+    assert records[0]["acl_id"] == "00000000-0000-0000-0000-000000000001"
+    assert records[0]["target_resource_id"].endswith("/virtualNetworks/vnet1")
+    assert "FLOWLOGS/FL1" in records[0]["resource_id"]
+
+
+def test_normalize_azure_flow_tuples_all_layouts():
+    from netcontrol.routes.cloud_visibility import _normalize_azure_flow_records
+
+    records = [
+        # NSG v1: decision only, protocol letter, epoch seconds
+        {"flow_tuples": ["1784170800,192.0.2.1,192.0.2.2,4444,443,T,I,A"], "rule_name": "AllowHTTPS"},
+        # NSG v2: decision, state, then packets / bytes each way
+        {"flow_tuples": ["1784170800,192.0.2.1,192.0.2.2,4444,53,U,O,D,B,3,180,0,0"]},
+        # VNet: state, encryption, then packets / bytes each way; epoch in ms
+        {"flow_tuples": ["1784170800000,192.0.2.1,198.51.100.7,4444,443,6,O,E,NX,10,1500,8,9000"]},
+        {"flow_tuples": ["1784170800000,203.0.113.9,192.0.2.1,5555,22,6,I,D,NX,1,60,0,0"], "acl_id": "acl-1"},
+    ]
+    v1, v2, vnet, denied = _normalize_azure_flow_records(records)
+
+    assert (v1["protocol"], v1["action"], v1["direction"]) == (6, "allow", "inbound")
+    assert (v1["bytes"], v1["packets"]) == (0, 0)
+    assert v1["metadata"]["flow_log_format"] == "nsg_v1"
+
+    assert (v2["protocol"], v2["action"], v2["direction"]) == (17, "deny", "outbound")
+    assert (v2["packets"], v2["bytes"]) == (3, 180)
+    assert v2["metadata"]["flow_state"] == "B"
+
+    assert (vnet["protocol"], vnet["action"], vnet["direction"]) == (6, "allow", "outbound")
+    assert (vnet["packets"], vnet["bytes"]) == (18, 10500)
+    assert vnet["metadata"]["flow_log_format"] == "vnet"
+    assert vnet["metadata"]["encryption"] == "NX"
+    assert vnet["start_time"] == v1["start_time"]
+
+    assert (denied["action"], denied["direction"]) == ("deny", "inbound")
+    assert denied["metadata"]["acl_id"] == "acl-1"
+
+
 def test_azure_day_partitions_cross_midnight():
     start = datetime(2026, 7, 16, 23, 50, tzinfo=UTC)
     end = datetime(2026, 7, 17, 0, 10, tzinfo=UTC)

@@ -16,7 +16,7 @@ describe('cloudProviderTerms', () => {
     expect(azure.scopeTitle).toBe('Azure subscription');
     expect(azure.identifierLabel).toBe('Subscription ID');
     expect(azure.network).toBe('VNet');
-    expect(azure.flowLogs).toBe('NSG flow logs');
+    expect(azure.flowLogs).toBe('VNet flow logs');
     expect(azure.onTopologyMap).toBe(true);
 
     const gcp = cloudProviderTerms('gcp');

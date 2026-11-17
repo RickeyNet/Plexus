@@ -868,6 +868,22 @@ class Tracer:
             self._app_catalog = trace_apps.catalog_of(self.snapshots.values())
         return trace_apps.target(text, self._app_catalog)
 
+    def _service_name(self, text: Any) -> tuple[str, str]:
+        """``text`` as an address: a DNS name a cloud collector reported for
+        a managed service (``services.ServiceIndex.named``) becomes the
+        first address it stands for, with a note saying so. Anything else
+        is returned as it is, with no note."""
+        raw = str(text or "").strip()
+        if not raw or net(raw) is not None:
+            return raw, ""
+        found = [hit for adapter in self.clouds.values() for hit in adapter.services.named(raw)]
+        if not found:
+            return raw, ""
+        service, address = found[0]
+        others = sorted({a for _s, a in found[1:] if a != address})
+        also = f" It also stands for {', '.join(others)}." if others else ""
+        return address, f"{raw} is the DNS name of {service.label}: traced to {address}, as collected.{also}"
+
     def trace(
         self,
         source: str,
@@ -897,6 +913,8 @@ class Tracer:
             raise ValueError(f"protocol must be one of {', '.join(PROTOCOLS)}")
         app = self.app_target(destination_app) if destination_app is not None else None
         unknown = ""
+        source, named_source = self._service_name(source)
+        destination, named_destination = self._service_name(destination)
         src, dst = net(source), net(destination)
         if app is not None and not str(destination or "").strip() and src is not None:
             dst = ipaddress.ip_network("::/0" if src.version == 6 else "0.0.0.0/0")
@@ -931,7 +949,7 @@ class Tracer:
             "request": {"verdict": UNKNOWN, "summary": "Not traced.", "hops": [], "ports": None},
             "reply": {"verdict": UNKNOWN, "summary": "Not traced.", "hops": [], "ports": None},
             "ports": None,
-            "notes": [],
+            "notes": [n for n in (named_source, named_destination) if n],
         }
         if app is not None:
             result["destination_app"] = app.summary(None if unknown else show(dst))
@@ -985,7 +1003,7 @@ class Tracer:
                 "text": "The request does not reach the destination, so the replies were not traced.",
             }
 
-        result["notes"] = list(dict.fromkeys(request.notes + (reply.notes if reply else [])))
+        result["notes"] = list(dict.fromkeys(result["notes"] + request.notes + (reply.notes if reply else [])))
         forward, backward = result["request"], result["reply"]
         if forward["ports"] is not None and request.asked is not None:
             # Read back over the request's ports: a destination NAT may have
@@ -2288,6 +2306,10 @@ class Tracer:
                 }
             )
             walk.flow = replace(walk.flow, dst=translated)
+            moved = result.get("translated_ports")
+            if moved:
+                # An Azure Firewall DNAT rule that translates the port too.
+                walk.flow = replace(walk.flow, dst_ports=(int(moved[0]), int(moved[1])))
         if result["kind"] == "delivered":
             # The address of an instance that is a device the trace follows
             # itself (a vMX, an FTDv) is not the end of the way unless that

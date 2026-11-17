@@ -4,7 +4,7 @@
  */
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { apiRequest } from './client';
+import { apiRequest, queryString } from './client';
 import type { CollectionProgress } from './meraki';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -215,15 +215,7 @@ export interface CloudPullResult {
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-function qs(params: object): string {
-  const cleaned: Record<string, string> = {};
-  for (const [k, v] of Object.entries(params)) {
-    if (v === undefined || v === null || v === '') continue;
-    cleaned[k] = String(v);
-  }
-  const search = new URLSearchParams(cleaned).toString();
-  return search ? `?${search}` : '';
-}
+const qs = queryString;
 
 export interface CloudFilter {
   provider?: string;

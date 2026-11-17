@@ -18,6 +18,10 @@ How Azure maps onto the map:
   - a virtual machine is a node only when it forwards traffic (IP forwarding
     on: firewalls, routers, SD-WAN and VPN appliances) or is a Plexus
     inventory host. Every virtual machine is listed in its VNet's details
+  - load balancers, application gateways and private endpoints are no
+    nodes: their VNet's details list them, a table per service and the
+    "Service endpoints" table with a row per private address, which the
+    subnet index reads as hosts of the VNet (``cloud_services``, as for AWS)
   - ExpressRoute circuits and local network gateways (the far end of a
     site-to-site VPN) share an "Azure VPN and ExpressRoute" box; a gateway
     connection is a tunnel from the VPN gateway to the local network gateway
@@ -29,6 +33,7 @@ import json
 import re
 from typing import Any
 
+from netcontrol.integrations.cloud_services import Service, service_counts, service_sections, service_states
 from netcontrol.integrations.meraki.normalize import (
     SCHEMA_VERSION,
     InventoryIndex,
@@ -58,6 +63,32 @@ SUBNET_COLUMNS = [
     "Delegated to",
     "Addresses in use",
 ]
+
+# Services with endpoints: listed in their VNet's details, not drawn.
+LOAD_BALANCER_TYPE = "load_balancer"
+APPLICATION_GATEWAY_TYPE = "application_gateway"
+PRIVATE_ENDPOINT_TYPE = "private_endpoint"
+SERVICES: tuple[Service, ...] = (
+    Service(
+        LOAD_BALANCER_TYPE,
+        "Load balancer",
+        "Load balancers",
+        (("SKU", "sku"), ("Backend pools", "backend_pool_count"), ("Rules", "rules")),
+    ),
+    Service(
+        APPLICATION_GATEWAY_TYPE,
+        "Application gateway",
+        "Application gateways",
+        (("SKU", "sku"), ("Tier", "tier"), ("WAF", "waf_enabled"), ("Listeners", "listeners")),
+    ),
+    Service(
+        PRIVATE_ENDPOINT_TYPE,
+        "Private endpoint",
+        "Private endpoints",
+        (("Target", "target_name"), ("Sub-resources", "group_ids"), ("Connection", "connection_state")),
+    ),
+)
+SERVICE_TYPES = tuple(s.resource_type for s in SERVICES)
 
 # Detail tables are capped so one large VNet cannot bloat the snapshot.
 MAX_SITE_ROWS = 3000
@@ -170,6 +201,14 @@ def next_hop_name(route: dict) -> str:
     name = _NEXT_HOP_NAMES.get(kind, _value(route.get("next_hop_type")))
     ip = _text(route.get("next_hop_ip"))
     return f"{name} {ip}".strip() if ip else name
+
+
+def _dnat_source(rule: dict) -> str:
+    """Where a DNAT rule of an Azure Firewall comes from: "Classic", or
+    "Policy <policy> / <rule collection group>"."""
+    if _text(rule.get("source")) != "policy":
+        return "Classic"
+    return " / ".join(t for t in (f"Policy {_text(rule.get('policy'))}", _text(rule.get("collection_group"))) if t)
 
 
 class _Builder:
@@ -285,7 +324,7 @@ class _Builder:
     def build_vnets(self) -> None:
         many_accounts = len({self._account(v) for v in self.vnets}) > 1
         by_vnet: dict[str, dict[str, list[dict]]] = {}
-        for resource_type in ("subnet", "vm", "route_table", "network_security_group", "nat_gateway"):
+        for resource_type in ("subnet", "vm", "route_table", "network_security_group", "nat_gateway", *SERVICE_TYPES):
             for resource in self._of_type(resource_type):
                 owners = [self._vnet_uid(resource)]
                 if resource_type in ("route_table", "network_security_group"):
@@ -380,6 +419,7 @@ class _Builder:
                         ("DNS servers", meta.get("dns_servers")),
                         ("Subnets", len(subnets) or ""),
                         ("Virtual machines", len(vms) or ""),
+                        *service_counts(SERVICES, owned),
                     ],
                 ),
             )
@@ -436,6 +476,8 @@ class _Builder:
                     ],
                 ),
             )
+            for section in service_sections(SERVICES, owned, subnet_names, MAX_SITE_ROWS, short=_short):
+                _add(sections, section)
             _add(
                 sections,
                 table_section(
@@ -695,8 +737,51 @@ class _Builder:
                             subnet_names.get(_text(meta.get("subnet_id"))) or _short(_text(meta.get("subnet_id"))),
                         ),
                         ("Virtual network", vnet_node["label"]),
-                        ("Source", "Its rules are decided by its firewall policy, which is not collected"),
+                        (
+                            "Source",
+                            (
+                                "Its firewall policy and its parent policies; only the DNAT rules are collected"
+                                if meta.get("policy_dnat_rules_read")
+                                else "The rules of its firewall policy are not collected"
+                            )
+                            if _text(meta.get("firewall_policy"))
+                            else "Its classic rule collections; only the DNAT rules are collected",
+                        ),
                     ],
+                ),
+            )
+            _add(
+                node["sections"],
+                table_section(
+                    "DNAT rules",
+                    [
+                        "Rules from",
+                        "Collection",
+                        "Priority",
+                        "Rule",
+                        "Protocols",
+                        "Source",
+                        "Destination",
+                        "Ports",
+                        "Translated address",
+                        "Translated port",
+                    ],
+                    [
+                        [
+                            _dnat_source(rule),
+                            rule.get("collection"),
+                            rule.get("priority"),
+                            rule.get("name"),
+                            rule.get("protocols"),
+                            rule.get("source_addresses"),
+                            rule.get("destination_addresses"),
+                            rule.get("destination_ports"),
+                            rule.get("translated_address"),
+                            rule.get("translated_port"),
+                        ]
+                        for rule in meta.get("dnat_rules") or []
+                        if isinstance(rule, dict)
+                    ][:MAX_SITE_ROWS],
                 ),
             )
             self._edge(
@@ -993,13 +1078,19 @@ class _Builder:
                 )
         for warning in self._of_type(WARNING_TYPE):
             meta = warning["meta"]
+            actions = [_text(a) for a in meta.get("actions") or [] if _text(a)]
+            fix = (
+                f"Add {' and '.join(actions)} to the role of the account"
+                if actions
+                else "The role of the account may not allow this call"
+            )
+            what = f"{_text(meta.get('title'))}: not collected" if _text(meta.get("title")) else "Not collected"
             self.errors.append(
                 {
                     "scope": f"Azure account {self._account(warning)}",
                     "path": _text(meta.get("section")) or _text(warning.get("name")),
                     "status": None,
-                    "message": f"Not collected: Azure answered {_text(meta.get('error')) or 'with an error'}. "
-                    "The role of the account may not allow this call.",
+                    "message": f"{what}: Azure answered {_text(meta.get('error')) or 'with an error'}. {fix}.",
                 }
             )
 
@@ -1101,4 +1192,6 @@ def build_snapshot(
         "sites": sites,
         "nodes": nodes,
         "edges": builder.edges,
+        # The state of every service resource, for availability tracking.
+        "services": service_states(SERVICES, builder.resources.values(), _status, lambda r: _rid(builder._vnet_uid(r))),
     }

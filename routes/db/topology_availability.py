@@ -4,8 +4,8 @@ Star re-exported by routes/database.py so the ``routes.database`` facade
 keeps its full public surface.
 
 Tables (migration 0075): ``topology_entity_state`` (the current state of
-every device, site, uplink, tunnel, VPN connection, circuit, peering and HA
-link an integration's collection reported) and
+every device, site, uplink, tunnel, VPN connection, circuit, peering, HA
+link and cloud managed service an integration's collection reported) and
 ``topology_availability_transitions`` (every state change). Migration 0084:
 ``topology_mutes`` (an entity or a whole site an operator muted; matched to
 the state rows by ``TopologyMuteIndex``).

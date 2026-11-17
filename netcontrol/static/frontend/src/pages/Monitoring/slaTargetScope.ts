@@ -21,6 +21,7 @@ export const ENTITY_TYPE_LABELS: Record<string, string> = {
   circuit: 'Circuits',
   peering: 'Peerings',
   link: 'Links',
+  service: 'Cloud services',
 };
 
 /** What an SLA target covers, for the list of targets. */

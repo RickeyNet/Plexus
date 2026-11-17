@@ -9,8 +9,10 @@ VPN address pools of an FTD, the "Connected subnets" and node-level
 "Static routes" tables of an appliance such as a Cisco FMC's FTDs, the
 address of every user connected with a remote access client, the
 private address of every virtual machine of an AWS VPC, an Azure VNet or a
-GCP network, and every address of an Amazon FSx file system or of an AWS
-service endpoint such as an RDS database or a load balancer), so it works
+GCP network, and every address of an Amazon FSx file system or of a cloud
+service endpoint such as an RDS database, an AWS, Azure or GCP load
+balancer, an Azure private endpoint or a GCP Private Service Connect
+endpoint), so it works
 on snapshots collected before the index existed and on the merged snapshot
 of the HTML export alike.
 
@@ -29,7 +31,7 @@ _GATEWAY_ORDER = ("vpc", "appliance", "switch", "wireless")
 _NOT_A_GATEWAY = ("wan", "external", "vpn_peer", "cloud", "users", "user")
 # The hosts a cloud network lists: (table title, entry label, address column).
 # The AWS FSx endpoints table has a row per address of a file system or SVM;
-# the AWS service endpoints table one per address of any service resource,
+# the AWS, Azure and GCP service endpoints table one per address of any service resource,
 # labelled by its own Service column (an empty label).
 _HOST_TABLES = (
     ("Virtual machines", "Virtual machine", "Private IP"),

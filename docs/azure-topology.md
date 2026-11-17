@@ -6,8 +6,10 @@ peerings, VPN and ExpressRoute gateways, local network gateways,
 site-to-site VPN connections, ExpressRoute circuits, NAT gateways, Azure
 Firewalls and the virtual machines that forward traffic appear on the same
 map as the devices Plexus discovers itself and any Meraki organizations,
-Cato accounts, Cisco FMCs and AWS accounts. They are covered by the same
-search box and Path Mode, and are included in the HTML export.
+Cato accounts, Cisco FMCs and AWS accounts. Load balancers, application
+gateways and private endpoints are listed in their VNet's details. They are
+covered by the same search box and Path Mode, and are included in the HTML
+export.
 
 Azure works the way AWS does on the map; [aws-topology.md](aws-topology.md)
 describes the shared behavior. This guide covers what is different. GCP
@@ -50,11 +52,26 @@ enough; so is **Network Reader**-style access to `Microsoft.Network/*/read`.
 | Needed | Azure resources read |
 |---|---|
 | Always (discovery fails without them) | Virtual networks with their subnets and peerings, ExpressRoute circuits, virtual network gateways, local network gateways, route tables, network security groups, gateway connections |
-| For the map (skipped when denied) | Public IP addresses, NAT gateways, network interfaces, Azure Firewalls, resource groups |
+| For the map (skipped when denied) | Public IP addresses, NAT gateways, network interfaces, Azure Firewalls, firewall policy DNAT rules, resource groups, load balancers, application gateways, private endpoints |
+
+With a custom role instead of **Reader**, each section of the map needs one
+action; a section whose action is missing is skipped and the report names
+the action to add:
+
+| Section | Azure RBAC action |
+|---|---|
+| Public IP addresses | `Microsoft.Network/publicIPAddresses/read` |
+| NAT gateways | `Microsoft.Network/natGateways/read` |
+| Virtual machines (network interfaces) | `Microsoft.Network/networkInterfaces/read` |
+| Azure Firewalls and their DNAT rules | `Microsoft.Network/azureFirewalls/read` |
+| DNAT rules of firewall policies | `Microsoft.Network/firewallPolicies/read`, `Microsoft.Network/firewallPolicies/ruleCollectionGroups/read` |
+| Load balancers | `Microsoft.Network/loadBalancers/read` |
+| Application gateways | `Microsoft.Network/applicationGateways/read` |
+| Private endpoints | `Microsoft.Network/privateEndpoints/read` |
 
 A section that is denied is skipped, not fatal. It is listed with the Azure
-error code under **Report** in the HTML map and as a `collection_warning`
-row among the account's resources.
+error code and the action it needs under **Report** in the HTML map and as
+a `collection_warning` row among the account's resources.
 
 Azure lists virtual network gateways, local network gateways and gateway
 connections per resource group only. Plexus reads them in every resource
@@ -98,7 +115,9 @@ of an Azure VPN gateway is joined to that gateway.
 
 Click a VNet for its tabs:
 
-- **Device**: the VNet overview and the list of virtual machines
+- **Device**: the VNet overview, the list of virtual machines, and the
+  load balancers, application gateways and private endpoints with their
+  Service endpoints table
 - **VLANs**: the subnets (prefix, route table, where the default route
   goes, network security group, NAT gateway, delegation, addresses in use)
 - **Routing**: every route of the route tables applied to the VNet's
@@ -108,7 +127,50 @@ Click a VNet for its tabs:
 
 A VPN gateway and a local network gateway list their connections (status,
 BGP or static, bytes in and out, remote address space). An ExpressRoute
-circuit lists its provider, bandwidth and peerings.
+circuit lists its provider, bandwidth and peerings. An Azure Firewall lists
+its DNAT rules (where they come from, collection, priority, protocols,
+source, destination address and ports, translated address and port): those
+of its classic NAT rule collections, or, for a firewall run by a firewall
+policy, those of the NAT rule collections in the policy's rule collection
+groups, after those of its parent (base) policies, which Azure applies
+first, each marked with its policy and rule collection group. The network
+and application rules of a policy are not collected.
+
+### Load balancers, application gateways and private endpoints
+
+These services are not drawn. As for the AWS services (see
+[aws-topology.md](aws-topology.md)), their VNet's details list them, a table
+per service with the same columns (name, resource ID, kind, state,
+endpoints, IP addresses, subnets, network security groups, details), and
+one **Service endpoints** table with a row per private address. Those
+addresses are hosts of the VNet: the search box finds the VNet by a
+service's name, DNS name or address, and typing the address in Path Mode
+picks the VNet. Public addresses are listed, not made hosts of the VNet.
+
+| Service | What is collected |
+|---|---|
+| Load balancers | SKU, internal or public, every frontend (private address and subnet, or public IP), the number of backend pools, and the load-balancing and inbound NAT rules (protocol, frontend port or range, backend port). A public load balancer sits in no subnet; it is listed in the VNet of its backends (their network interfaces, or the VNet an IP-based pool names) |
+| Application gateways | SKU and tier, operational state (Running, Stopped), the private and public frontends, the subnet its instances run in, every listener (protocol, port, host names; the host names are its DNS names) and whether a web application firewall (configuration or policy) inspects its traffic. Certificates are not read |
+| Private endpoints | Its subnet and address (the DNS configurations Azure reports, else its IP configurations), its network interface, the resource it reaches (ID, name and type: a storage account, a database, a Private Link service), the sub-resources (group IDs) and the state of the connection |
+
+Their state is shown, and tracked by the availability tracker as services
+(see the end of this page).
+
+They are path trace ends (`docs/path-trace.md`, "Managed cloud services"):
+a service's private address places in its subnet, the subnet's network
+security group is checked, and the hop names the service and the
+load-balancing or inbound NAT rule, or the application gateway listener,
+that takes the protocol and port asked about (none: blocked). A private
+endpoint's DNS name, as collected, can be typed instead of its address. A
+public frontend with exactly one private frontend (an application gateway)
+is delivered to it; a public load balancer's public address ends the trace
+at the load balancer, as its backends are not collected by address. A flow
+to an Azure Firewall's public address meets its DNAT rules: the first that
+takes it translates the address (and the port) and the flow goes on from
+the firewall to the translated address; none blocks it. The Cato egress
+check covers the public frontends delivered to a private address, with the
+subnet's network security group, and the DNAT rules whose source addresses
+name a Cato allocated IP.
 
 ## The Azure check of a path
 
@@ -156,16 +218,19 @@ own.
 
 *Check incomplete* means one of:
 
-- the route hands the traffic to an Azure Firewall, whose firewall policy is
-  not collected, or to a virtual appliance that is not a Meraki appliance on
+- the route hands the traffic to an Azure Firewall, whose network and
+  application rules are not collected, or to a virtual appliance that is not a Meraki appliance on
   the map
 - the address is reached over BGP or ExpressRoute, whose learned routes are
   not collected
 - a rule names a service tag other than `VirtualNetwork`, `Internet` and
   `AzureLoadBalancer`, or an application security group
 
-Limits: only IPv4 can be typed in Path Mode. Azure Virtual WAN hubs, private
-endpoints, load balancers and application gateways are not collected.
+Limits: only IPv4 can be typed in Path Mode. Azure Virtual WAN hubs are not
+collected. Load balancers, application gateways, private endpoints and the
+DNAT rules of an Azure Firewall are collected and listed but do not take
+part in the check: a flow to one of their addresses is not traced through
+them.
 
 ## Virtual machines
 
@@ -178,7 +243,7 @@ See [Virtualization](virtualization.md#cloud-instances-as-virtual-machines).
 
 ## Availability tracking
 
-Each collection also records the state of what it reports, shown under **Monitoring > Availability > Integrations and cloud** with uptime, outages and alerts: the virtual machines drawn on the map, virtual network gateways, firewalls, NAT gateways and ExpressRoute circuits (devices), gateway connections (VPN connections: Connected is up, NotConnected is down), ExpressRoute connections (circuits), VNet peerings and gateway attachments (links). VNets and local network gateways are left out. The state mapping, alerting and retention are described in [Meraki in the Topology Map](meraki-topology.md#availability-tracking).
+Each collection also records the state of what it reports, shown under **Monitoring > Availability > Integrations and cloud** with uptime, outages and alerts: the virtual machines drawn on the map, virtual network gateways, firewalls, NAT gateways and ExpressRoute circuits (devices), gateway connections (VPN connections: Connected is up, NotConnected is down), ExpressRoute connections (circuits), VNet peerings and gateway attachments (links), and the load balancers, application gateways and private endpoints listed in the VNet details as services: an application gateway by its operational state (Running up, Stopped down), a private endpoint by the worst of its provisioning state and its connection (Approved up, Pending unknown, Rejected or Disconnected down), a load balancer by its provisioning state (Succeeded up, Failed down; see [Cloud managed services](meraki-topology.md#cloud-managed-services)). VNets and local network gateways are left out. The state mapping, alerting and retention are described in [Meraki in the Topology Map](meraki-topology.md#availability-tracking).
 
 ## API reference
 

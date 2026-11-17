@@ -13,6 +13,17 @@ reachability engine (``netcontrol.integrations.aws.reachability``,
     public or Elastic IP, an Azure VM's public IP, a GCP external IP, as
     collected on the instance's interfaces) is delivered to the private
     address it stands for (``public_addresses``), and the hop says so
+  - a managed service (``pathtrace.services``: a load balancer, an
+    application gateway, a private endpoint, a database) is an end like an
+    instance: its private address places in its subnet, its security
+    groups are checked (AWS; Azure checks its subnet's network security
+    group), and the hop names the service and the listener or rule that
+    takes the flow. A public frontend delivered to a private address of the
+    service continues there; one that is not (an Azure public load
+    balancer, a GCP external forwarding rule) ends at the service in its
+    network, whose backends are not collected by address. A flow to the
+    public address of an Azure Firewall meets its DNAT rules and continues
+    from the firewall to the translated address
 
 The source a flow from outside carries is the address it left its own
 network with. Where that network reported several candidates (a Cato
@@ -43,6 +54,7 @@ from typing import Any
 
 from netcontrol.integrations.aws.reachability import FORWARD, RETURN
 from netcontrol.integrations.azure.normalize import _rid as azure_rid
+from netcontrol.integrations.pathtrace import services as managed
 from netcontrol.integrations.pathtrace.model import (
     ACL,
     BLOCKED,
@@ -75,8 +87,8 @@ class _HandOff:
 
 _TERMS = {"aws": "AWS", "azure": "Azure", "gcp": "GCP"}
 # Owners whose public addresses are not an instance's own: an Azure Firewall
-# answers on its public IPs with DNAT rules, which are not collected.
-_NOT_INSTANCES = ("azure_firewall",)
+# answers on its public IPs with its DNAT rules (``CloudAdapter._dnat``).
+_NOT_INSTANCES = (managed.AZURE_FIREWALL,)
 
 
 def public_addresses(owners: dict, skip: set[str] | None = None) -> dict[str, tuple[str, str, dict]]:
@@ -136,19 +148,40 @@ class CloudAdapter:
         # The public addresses of the instances, but those of a device the
         # trace follows itself (its own block says what it does with them).
         self.public = public_addresses(owners() if callable(owners) else {}, set(self.carriers))
+        # The managed services, and the public frontends delivered to one of their private addresses.
+        self.services = managed.index(engine)
+        for public, private, service in self.services.paired():
+            self.public.setdefault(public, (private, service.network, managed.owner(service, public)))
+
+    def _node_of(self, network: str) -> str:
+        return f"vnet:{network}" if self.azure else f"vpc:{network}"
 
     def public_networks(self) -> dict[str, tuple[str, str]]:
         """``public address -> (snapshot node of its VPC or VNet, instance
-        name)``, for the tracer to know who answers on it."""
-        return {
-            public: (f"vnet:{network}" if self.azure else f"vpc:{network}", str(owner.get("name") or owner.get("rid")))
+        or service name)``, for the tracer to know who answers on it: the
+        public addresses of the instances, of the managed services and of
+        the Azure Firewalls."""
+        found = {
+            public: (self._node_of(network), str(owner.get("label") or owner.get("name") or owner.get("rid")))
             for public, (_private, network, owner) in self.public.items()
         }
+        for public, service in self.services.frontends.items():
+            if service.network and public not in found:
+                found[public] = (self._node_of(service.network), service.label)
+        for public, firewall in self.services.dnat.items():
+            network = str((firewall.get("meta") or {}).get("vnet_id") or "")
+            if network and public not in found:
+                name = firewall.get("name") or firewall.get("rid")
+                found[public] = (self._node_of(network), f"Azure Firewall {name}")
+        return found
 
     # ── Places ─────────────────────────────────────────────────────────────
 
     def locate(self, network: Any, network_id: str = "") -> dict:
-        return self.engine.locate(network if isinstance(network, str) else show(network), network_id)
+        """The engine's place of an address or network, marked when it is a
+        managed service's address (``services.annotate``)."""
+        place = self.engine.locate(network if isinstance(network, str) else show(network), network_id)
+        return managed.annotate(place, self.services, self.provider)
 
     def holds(self, network: Any, network_id: str = "") -> bool:
         """Whether the address or network is in a collected subnet of this cloud."""
@@ -252,6 +285,14 @@ class CloudAdapter:
             segments.append([node_id, []])
             return segments[-1][1]
 
+        if reply and first and src["subnet"] is None and _host(flow.src):
+            # The replies of a public frontend the request ended at.
+            service = self.services.frontends.get(show(flow.src))
+            if service is not None and service.network and self._node_of(service.network) in self._nodes:
+                text = f"Replies leave {service.label} from its public frontend {show(flow.src)}, to the internet."
+                segment(self._node_of(service.network)).append(item(ROUTE, INFO, service.label, text))
+                return {"segments": segments, "kind": "exit", "next": {"internet": True}, "address": ""}
+
         origin = None
         if first and src["subnet"] is not None:
             origin = src
@@ -273,6 +314,13 @@ class CloudAdapter:
             public = self._public_place(flow.dst) if dst["subnet"] is None and not reply else None
             if public is not None:
                 dst = public
+            elif dst["subnet"] is None and not reply and _host(flow.dst):
+                firewall = self.services.dnat.get(show(flow.dst))
+                if firewall is not None:
+                    return self._dnat(flow, firewall, src, segment, segments)
+                service = self.services.frontends.get(show(flow.dst))
+                if service is not None and service.network and self._node_of(service.network) in self._nodes:
+                    return self._frontend(flow, service, segment, segments)
             if dst["subnet"] is None:
                 text = (
                     f"{show(flow.dst)} is not in a collected subnet of {self.term}, "
@@ -295,16 +343,79 @@ class CloudAdapter:
 
         result: dict[str, Any] = {"segments": segments, "kind": left["kind"]}
         if left["kind"] == "delivered":
-            arrived = segment(self.network_node(dst))
-            checked: list[dict] = []
-            if src["subnet"] is not dst["subnet"]:
-                checked.extend(self._acl(dst, src, False, flow, direction))
-            checked.extend(self._groups(dst, src, False, flow, reply))
-            arrived.extend(_for_unknown_source(checked, unknown) if src.get("public_unknown") else checked)
-            if dst.get("instance") is not None:
-                result["instance"] = self.instance_node(str(dst["instance"]["rid"]))
-            if dst["address"] != show(flow.dst):
-                result["translated_dst"] = dst["address"]
+            self._arrive(result, dst, src, flow, reply, direction, unknown, segment)
+        elif left["kind"] == "exit":
+            result.update(self._exit(left["exit"], segment))
+        return result
+
+    def _arrive(
+        self, result: dict, dst: dict, src: dict, flow: Any, reply: bool, direction: str, unknown: str, segment: Any
+    ) -> None:
+        """The filters a delivered flow meets at ``dst`` and, at a managed
+        service, the listener or rule that takes it."""
+        arrived = segment(self.network_node(dst))
+        checked: list[dict] = []
+        if src["subnet"] is not dst["subnet"]:
+            checked.extend(self._acl(dst, src, False, flow, direction))
+        checked.extend(self._groups(dst, src, False, flow, reply))
+        arrived.extend(_for_unknown_source(checked, unknown) if src.get("public_unknown") else checked)
+        if dst.get("service") is not None and not reply:
+            public = dst["address"] != show(flow.dst)
+            arrived.append(managed.listener_item(dst["service"], flow.protocol, flow.dst_ports, public=public))
+        if dst.get("instance") is not None:
+            result["instance"] = self.instance_node(str(dst["instance"]["rid"]))
+        if dst["address"] != show(flow.dst):
+            result["translated_dst"] = dst["address"]
+
+    def _frontend(self, flow: Any, service: managed.Managed, segment: Any, segments: list) -> dict[str, Any]:
+        """A flow from outside to a public frontend of a service that no
+        private address of it stands for: it ends at the service, in its network."""
+        home = segment(self._node_of(service.network))
+        text = f"{show(flow.dst)} is the public frontend of {service.label}: {self.term} answers on it."
+        home.append(item(ROUTE, OK, f"{self.term} {service.kind or 'service'}", text))
+        taken = managed.listener_item(service, flow.protocol, flow.dst_ports, public=True)
+        home.append(taken)
+        home.append(item(ROUTE, INFO, service.label, managed.backends_text(service).strip()))
+        return {"segments": segments, "kind": "stop" if taken["status"] == BLOCKED else "delivered"}
+
+    def _dnat(self, flow: Any, firewall: dict, src: dict, segment: Any, segments: list) -> dict[str, Any]:
+        """A flow from outside to a public address of an Azure Firewall: its
+        DNAT rules translate it, and it goes on from the firewall to the
+        translated address. The firewall also translates the source to its
+        own private address, which the filters at the destination see."""
+        meta = firewall.get("meta") or {}
+        vnet = str(meta.get("vnet_id") or "")
+        home = segment(self._node_of(vnet) if self._node_of(vnet) in self._nodes else next(iter(self._nodes), ""))
+        source = "" if src.get("public_unknown") else show(flow.src)
+        rule, status, text = managed.dnat_match(meta, show(flow.dst), source, flow.protocol, flow.dst_ports)
+        if rule is None:
+            home.append(managed.dnat_item(firewall, status, text))
+            return {"segments": segments, "kind": "stop"}
+        translated = str(rule.get("translated_address") or "")
+        private = str(meta.get("private_ip") or next(iter(meta.get("private_ips") or []), ""))
+        try:
+            dst = self.locate(translated)
+            origin = self.locate(private, vnet)
+        except ValueError:
+            dst = origin = {"subnet": None}
+        if dst["subnet"] is None or origin["subnet"] is None:
+            home.append(managed.dnat_item(firewall, status, text))
+            what = translated if dst["subnet"] is None else f"The firewall's own address {private}"
+            text = f"{what or 'The translated address'} is not in a collected subnet of {self.term}."
+            home.append(item(ROUTE, UNKNOWN, f"{self.term} routing", text))
+            return {"segments": segments, "kind": "stop"}
+        snat = f" The firewall also translates the source to its own address {private}."
+        home.append(managed.dnat_item(firewall, status, text + snat))
+        moved = replace(flow, dst=dst["net"], dst_ports=managed.translated_ports(rule, flow.dst_ports))
+        steps: list[dict] = []
+        left = self.engine.walk(origin, dst, FORWARD, steps, self.carriers)
+        self._place(steps, home, segment)
+        result: dict[str, Any] = {"segments": segments, "kind": left["kind"]}
+        if left["kind"] == "delivered":
+            self._arrive(result, dst, origin, moved, False, FORWARD, "", segment)
+            result["translated_dst"] = dst["address"]
+            if moved.dst_ports is not None and moved.dst_ports != flow.dst_ports:
+                result["translated_ports"] = list(moved.dst_ports)
         elif left["kind"] == "exit":
             result.update(self._exit(left["exit"], segment))
         return result
@@ -329,6 +440,10 @@ class CloudAdapter:
     def _groups(self, place: dict, peer: dict, outbound: bool, flow: Any, reply: bool) -> list[dict]:
         if place["subnet"] is None:
             return []
+        service = place.get("service")
+        if service is not None and not self.azure and not self.gcp and not managed.has_own_groups(service):
+            text = "No security group is attached to it, as AWS reports it: none filters the flow here."
+            return [item(SECURITY_GROUP, INFO, f"Security groups of {service.label}", text)]
         if reply:
             what = "Network security groups" if self.azure else "Firewall rules" if self.gcp else "Security groups"
             return [
@@ -425,6 +540,10 @@ class CloudAdapter:
             item(ROUTE, UNKNOWN, where, f"The far end of this {self.term} gateway is not on the map.")
         )
         return {"kind": "stop"}
+
+
+def _host(network: Any) -> bool:
+    return network.prefixlen == network.max_prefixlen
 
 
 def _for_unknown_source(found: list[dict], unknown: str) -> list[dict]:

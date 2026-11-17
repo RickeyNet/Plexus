@@ -163,6 +163,7 @@ describe('availability links', () => {
     expect(parseAvailabilityEntityType('router')).toBeNull();
     expect(parseAvailabilityEntityType(undefined)).toBeNull();
     expect(parseAvailabilityEntityType('vpn_connection')).toBe('vpn_connection');
+    expect(parseAvailabilityEntityType('service')).toBe('service');
   });
 
   it('matches down or degraded for the problem filter', () => {

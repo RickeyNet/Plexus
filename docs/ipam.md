@@ -52,6 +52,26 @@ The controls at the top of the page:
   [Custom fields and tags](custom-fields-and-tags.md).
 - **Refresh** reloads every panel on the page.
 
+The search box above the subnet list narrows it as you type:
+
+- An address, such as `192.0.2.10` or `2001:db8::10`, finds every subnet
+  that contains it.
+- A range, such as `192.0.2.0/23`, finds the subnets inside it and the ones
+  around it.
+- Other text is split into words, and each word must appear in the subnet,
+  its VRF, VLANs (`vlan 10`), inventory groups, sources, previewed host,
+  cloud resource and site names, or tags. A partial address such as `198.51.`
+  matches as text.
+
+Host names are searched only within each subnet's preview, so a host beyond
+the preview is not found. The device page links its subnet here, already
+searched (`/ipam?q=<subnet>`).
+
+Select a **Subnet**, **Capacity** or **Groups** header to sort the list.
+Subnets sort by address (IPv4 first); **Capacity** sorts by percent used,
+fullest first. The list shows 200 rows at a time; **Show more** adds the
+next 200.
+
 ## Define a subnet
 
 1. Select **+ Define Subnet**.
@@ -107,7 +127,7 @@ and the address is added to the address history.
 | Column | Meaning |
 |---|---|
 | **Subnet** | The CIDR, IP version, prefix length and address count. Badges show tags, the VRF, VLAN ids and the number of overlaps. |
-| **Capacity** | Available, allocated and reserved addresses, and the percent used. |
+| **Capacity** | Available, allocated and reserved addresses, and the percent used with a bar: amber from 75%, red from 90%. |
 | **Groups** | Inventory groups with hosts in the subnet. |
 | **Sources** | Where the subnet comes from (see above). |
 | **Preview** | A few host names, cloud resources, sites, external sources and free addresses. |

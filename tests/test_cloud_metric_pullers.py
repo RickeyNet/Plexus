@@ -38,6 +38,14 @@ class _DummyRequest:
         # Azure Monitor names
         ("BytesIn", "in"),
         ("BytesOut", "out"),
+        ("BytesReceivedRate", "in"),
+        ("BytesSentRate", "out"),
+        ("PacketsReceivedRate", "in"),
+        ("PacketsSentRate", "out"),
+        ("Network In Total", "in"),
+        ("Network Out Total", "out"),
+        ("TunnelIngressBytes", "in"),
+        ("TunnelEgressPackets", "out"),
         ("IfEgressBytes", "out"),
         ("IfIngressBytes", "in"),
         ("CPUUtilization", ""),
@@ -273,3 +281,54 @@ def test_sanitize_cloud_traffic_sync_config():
     cfg = state._sanitize_cloud_traffic_metric_sync_config({"interval_seconds": 10, "lookback_minutes": 1})
     assert cfg["interval_seconds"] == 60
     assert cfg["lookback_minutes"] == 5
+
+
+_AZ_RG = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg/providers"
+_NIC_ID = f"{_AZ_RG}/Microsoft.Network/networkInterfaces/nic-1"
+_VM_ID = f"{_AZ_RG}/Microsoft.Compute/virtualMachines/vm-1"
+_DISK_ID = f"{_AZ_RG}/Microsoft.Compute/disks/disk-1"
+_NIC_METRICS = ["BytesReceivedRate", "BytesSentRate", "PacketsReceivedRate", "PacketsSentRate"]
+
+
+def test_azure_resource_type():
+    assert pullers_mod._azure_resource_type(_NIC_ID) == "microsoft.network/networkinterfaces"
+    assert pullers_mod._azure_resource_type(_VM_ID) == "microsoft.compute/virtualmachines"
+    assert pullers_mod._azure_resource_type("not-a-resource-id") == ""
+
+
+def test_azure_metric_names_default_per_resource_type():
+    assert pullers_mod._azure_metric_names(_NIC_ID, []) == _NIC_METRICS
+    assert pullers_mod._azure_metric_names(_VM_ID, []) == ["Network In Total", "Network Out Total"]
+    assert pullers_mod._azure_metric_names(_DISK_ID, []) == []
+    # Configured names apply to every resource type.
+    assert pullers_mod._azure_metric_names(_DISK_ID, ["Custom"]) == ["Custom"]
+
+
+@pytest.mark.asyncio
+async def test_azure_monitor_fetch_queries_each_resource_with_its_defaults():
+    from types import SimpleNamespace
+
+    calls: list[tuple[str, list[str]]] = []
+
+    class _Client:
+        def query_resource(self, resource_id, metric_names, timespan):
+            calls.append((resource_id, list(metric_names)))
+            point = SimpleNamespace(total=1024.0, average=None, maximum=None, timestamp=datetime.now(UTC))
+            metric = SimpleNamespace(
+                name=SimpleNamespace(value=metric_names[0], namespace="azure.monitor"),
+                timeseries=[SimpleNamespace(data=[point])],
+                unit="Bytes",
+            )
+            return SimpleNamespace(metrics=[metric])
+
+    now = datetime.now(UTC)
+    records = await pullers_mod._azure_monitor_fetch(
+        _Client(),
+        resource_ids=[_NIC_ID, _DISK_ID, _VM_ID],
+        metric_names=[],
+        start=now - timedelta(minutes=5),
+        end=now,
+    )
+    # The disk has no default traffic metrics and is not queried.
+    assert calls == [(_NIC_ID, _NIC_METRICS), (_VM_ID, ["Network In Total", "Network Out Total"])]
+    assert [r["direction"] for r in records] == ["in", "in"]

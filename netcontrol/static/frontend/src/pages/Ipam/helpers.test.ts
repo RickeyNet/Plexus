@@ -6,6 +6,7 @@ import {
   filterSubnetsByCustomData,
   formatSubnetPreview,
   providerLabel,
+  searchSubnets,
   validateConnectionForm,
 } from './helpers';
 
@@ -127,5 +128,52 @@ describe('filterSubnetsByCustomData', () => {
 
   it('returns the input unchanged for an empty filter', () => {
     expect(filterSubnetsByCustomData(subnets, { tagIds: [], fields: {} })).toBe(subnets);
+  });
+});
+
+describe('searchSubnets', () => {
+  const subnets = [
+    {
+      subnet: '192.0.2.0/24',
+      vrf_name: 'blue',
+      vlan_ids: [10],
+      group_names: ['Branch North'],
+      hostnames_preview: ['edge-rtr1'],
+      tags: [{ id: 1, name: 'core', color: 'blue' }],
+    },
+    { subnet: '192.0.2.128/25', topology_sites_preview: ['Lab (VLAN 20 Data)'], topology_providers: ['meraki'] },
+    { subnet: '198.51.100.0/24', cloud_resource_names_preview: ['prod-vnet'] },
+    { subnet: '2001:db8::/48' },
+  ];
+  const names = (rows: { subnet: string }[]) => rows.map((r) => r.subnet);
+
+  it('returns the input unchanged for a blank query', () => {
+    expect(searchSubnets(subnets, '  ')).toBe(subnets);
+  });
+
+  it('finds every subnet containing an address', () => {
+    expect(names(searchSubnets(subnets, '192.0.2.200'))).toEqual(['192.0.2.0/24', '192.0.2.128/25']);
+    expect(names(searchSubnets(subnets, '192.0.2.5'))).toEqual(['192.0.2.0/24']);
+    expect(names(searchSubnets(subnets, '2001:db8::10'))).toEqual(['2001:db8::/48']);
+    expect(searchSubnets(subnets, '203.0.113.1')).toEqual([]);
+  });
+
+  it('finds subnets inside or around a CIDR', () => {
+    expect(names(searchSubnets(subnets, '192.0.2.0/23'))).toEqual(['192.0.2.0/24', '192.0.2.128/25']);
+    expect(names(searchSubnets(subnets, '192.0.2.192/26'))).toEqual(['192.0.2.0/24', '192.0.2.128/25']);
+  });
+
+  it('matches every word against names, VRF, VLAN, groups, tags and providers', () => {
+    expect(names(searchSubnets(subnets, 'EDGE-RTR'))).toEqual(['192.0.2.0/24']);
+    expect(names(searchSubnets(subnets, 'vlan 10'))).toEqual(['192.0.2.0/24']);
+    expect(names(searchSubnets(subnets, 'blue north'))).toEqual(['192.0.2.0/24']);
+    expect(names(searchSubnets(subnets, 'core'))).toEqual(['192.0.2.0/24']);
+    expect(names(searchSubnets(subnets, 'meraki lab'))).toEqual(['192.0.2.128/25']);
+    expect(names(searchSubnets(subnets, 'prod'))).toEqual(['198.51.100.0/24']);
+    expect(searchSubnets(subnets, 'blue south')).toEqual([]);
+  });
+
+  it('matches a partial address as text', () => {
+    expect(names(searchSubnets(subnets, '198.51.'))).toEqual(['198.51.100.0/24']);
   });
 });

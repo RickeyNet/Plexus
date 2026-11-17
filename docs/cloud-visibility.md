@@ -58,6 +58,18 @@ subscription or a GCP project.
    | Azure | **Storage account**, **Container**, optional **Storage account key** | **Resource IDs**, optionally **Metric names** |
    | GCP | Read from Cloud Logging for the project | Optionally **Metric types** |
 
+   Azure flow logs are VNet flow logs (container
+   `insights-logs-flowlogflowevent`) or, for older setups, NSG flow logs
+   (`insights-logs-networksecuritygroupflowevent`, versions 1 and 2).
+   Microsoft stopped new NSG flow logs on 30 June 2025 and retires them on
+   30 September 2027. Without **Metric names**, each Azure resource gets
+   the metrics of its type: network interfaces `BytesReceivedRate`,
+   `BytesSentRate`, `PacketsReceivedRate`, `PacketsSentRate`; virtual
+   machines and scale sets `Network In Total`, `Network Out Total`; VPN
+   gateways `TunnelIngressBytes`, `TunnelEgressBytes`,
+   `TunnelIngressPackets`, `TunnelEgressPackets`. A resource of another
+   type is skipped with a warning until **Metric names** is set.
+
 7. **Additional settings (JSON, rarely needed)** takes keys that have no
    field, for example `{"role_session_name": "plexus"}` for AWS.
 8. Add **Notes** if you want, keep **Enabled** ticked and click **Create**.

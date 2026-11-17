@@ -12,7 +12,10 @@ and ``unknown`` when it is not monitored), ``reachable`` / ``ready`` /
 
 ``extract_entity_states`` reads one snapshot and returns what availability
 tracking keeps of it: one ``EntityState`` per device, site, uplink, tunnel,
-VPN connection, circuit, peering or HA / peer link, with that status mapped
+VPN connection, circuit, peering, HA / peer link or cloud managed service
+(the snapshot's ``services``, see ``cloud_services.service_states``: an
+AWS, Azure or GCP database, load balancer, private endpoint... with its
+state already in the node vocabulary), with that status mapped
 to ``up`` / ``degraded`` / ``down`` / ``unknown``, and the latency / jitter /
 loss the vendor reported for it (``metrics``, see ``METRIC_KEYS``). Pure: no
 database, no network.
@@ -38,7 +41,7 @@ from netcontrol.integrations.gcp.normalize import _LINK_LABELS as _GCP_LINK_LABE
 from netcontrol.integrations.meraki.normalize import _STATUS_RANK, _UPLINK_STATUS
 
 STATES = ("up", "degraded", "down", "unknown")
-ENTITY_TYPES = ("device", "site", "uplink", "tunnel", "vpn_connection", "circuit", "peering", "link")
+ENTITY_TYPES = ("device", "site", "uplink", "tunnel", "vpn_connection", "circuit", "peering", "link", "service")
 CLOUD_PROVIDERS = ("aws", "azure", "gcp")
 # Sites carry a status of their own (not one derived from their devices).
 _SITE_PROVIDERS = ("cato", "appgate")
@@ -344,4 +347,24 @@ def extract_entity_states(provider: str, org_ref: int, snapshot: dict | None) ->
                 metrics=entity_metrics(edge),
             )
         )
+
+    if provider in CLOUD_PROVIDERS:
+        for service in snapshot.get("services") or []:
+            if not isinstance(service, dict) or not _text(service.get("id")):
+                continue
+            raw = _text(service.get("status")).lower()
+            add(
+                EntityState(
+                    provider=provider,
+                    org_ref=org_ref,
+                    entity_type="service",
+                    entity_id=_text(service.get("id")),
+                    name=_text(service.get("name")) or _text(service.get("id")),
+                    state=node_state(raw),
+                    raw_status=_text(service.get("raw_status")) or raw,
+                    site=site_name(_text(service.get("site"))) if _text(service.get("site")) else "",
+                    model=_text(service.get("kind")),
+                    meta={k: _text(service.get(k)) for k in ("type", "kind", "region") if _text(service.get(k))},
+                )
+            )
     return found

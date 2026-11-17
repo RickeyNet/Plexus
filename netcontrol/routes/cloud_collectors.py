@@ -1539,7 +1539,30 @@ _AZURE_SECTIONS = (
     "NAT gateways",
     "network interfaces",
     "Azure Firewalls",
+    "firewall policy DNAT rules",
+    "load balancers",
+    "application gateways",
+    "private endpoints",
 )
+# The best-effort sections of an Azure discovery: (title, Azure RBAC actions
+# it needs). A section that cannot be read is recorded as a
+# ``collection_warning`` with both, for the map's report.
+AZURE_OPTIONAL_SECTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "public_ip_addresses": ("Public IP addresses", ("Microsoft.Network/publicIPAddresses/read",)),
+    "nat_gateways": ("NAT gateways", ("Microsoft.Network/natGateways/read",)),
+    "network_interfaces": ("Virtual machines (network interfaces)", ("Microsoft.Network/networkInterfaces/read",)),
+    "azure_firewalls": ("Azure Firewalls and their DNAT rules", ("Microsoft.Network/azureFirewalls/read",)),
+    "firewall_policy_rule_collection_groups": (
+        "DNAT rules of firewall policies",
+        ("Microsoft.Network/firewallPolicies/read", "Microsoft.Network/firewallPolicies/ruleCollectionGroups/read"),
+    ),
+    "load_balancers": ("Load balancers", ("Microsoft.Network/loadBalancers/read",)),
+    "application_gateways": ("Application gateways", ("Microsoft.Network/applicationGateways/read",)),
+    "private_endpoints": ("Private endpoints", ("Microsoft.Network/privateEndpoints/read",)),
+}
+
+# How many parent (base) policies of a firewall policy are read, at most.
+_AZURE_POLICY_DEPTH_MAX = 5
 
 
 def _collect_azure(account: dict, progress: ProgressCallback | None = None) -> tuple[list[dict], list[dict]]:
@@ -1549,9 +1572,12 @@ def _collect_azure(account: dict, progress: ProgressCallback | None = None) -> t
     ExpressRoute circuits, virtual and local network gateways, route tables,
     network security groups, gateway connections) fail the discovery when
     they cannot be read. The map detail (public IP addresses, NAT gateways,
-    network interfaces, Azure Firewalls) is best-effort: a section that
-    cannot be read is skipped and recorded as a ``collection_warning``
-    resource.
+    network interfaces, Azure Firewalls and the DNAT rules of their firewall
+    policies, and the services with endpoints: load balancers, application
+    gateways, private endpoints) is best-effort:
+    a section that cannot be read is skipped and recorded as a
+    ``collection_warning`` resource with the RBAC actions it needs
+    (``AZURE_OPTIONAL_SECTIONS``).
     """
     try:
         from azure.identity import ClientSecretCredential, DefaultAzureCredential
@@ -1647,6 +1673,9 @@ def _collect_azure_network(
     connections: list[dict] = []
     section_errors: list[tuple[str, str]] = []
     public_ips: dict[str, str] = {}
+    # Network interface ID (lower case) -> its record: the backends of a load
+    # balancer and the interface of a private endpoint.
+    interfaces: dict[str, dict] = {}
     step = _Steps(progress, "azure section", len(_AZURE_SECTIONS))
 
     def optional(section: str, read) -> None:
@@ -1654,7 +1683,8 @@ def _collect_azure_network(
             read()
         except Exception as exc:  # noqa: BLE001 - best-effort detail; discovery goes on
             LOGGER.warning("azure collector: skipped %s: %s", section, azure_detail.error_code(exc), exc_info=True)
-            resources.append(azure_detail.warning_resource(section, exc))
+            title, actions = AZURE_OPTIONAL_SECTIONS.get(section, ("", ()))
+            resources.append(azure_detail.warning_resource(section, exc, title=title, actions=actions))
 
     def public_ip_addresses() -> None:
         public_ips.update(azure_detail.public_ip_table(network_client.public_ip_addresses.list_all()))
@@ -1773,10 +1803,62 @@ def _collect_azure_network(
     def virtual_machines() -> None:
         nics = list(network_client.network_interfaces.list_all())
         resources.extend(azure_detail.vm_resources(nics, subscription_id, public_ips))
+        interfaces.update(azure_detail.interface_table(nics, public_ips))
 
     def firewalls() -> None:
         for firewall in network_client.azure_firewalls.list_all():
             resource = azure_detail.firewall_resource(firewall, subscription_id, public_ips)
+            if resource:
+                resources.append(resource)
+
+    def firewall_policy_dnat_rules() -> None:
+        """The DNAT rules of the firewall policy of each firewall, after those
+        of its parent policies (applied first), appended to its classic ones."""
+        # Policy resource ID (lower case) -> its own DNAT rules, and its parent's ID.
+        rules_of: dict[str, list[dict]] = {}
+        parent_of: dict[str, str] = {}
+
+        def policy_rules(policy_id: str) -> list[dict]:
+            chain: list[str] = []
+            while policy_id and policy_id.lower() not in chain and len(chain) < _AZURE_POLICY_DEPTH_MAX:
+                key = policy_id.lower()
+                chain.append(key)
+                if key not in rules_of:
+                    group = azure_detail.resource_parts(policy_id).get("resourcegroups", "")
+                    name = azure_detail.resource_name(policy_id)
+                    groups = network_client.firewall_policy_rule_collection_groups.list(group, name)
+                    rules_of[key] = azure_detail.firewall_policy_dnat_rules(groups, name)
+                    policy = network_client.firewall_policies.get(group, name)
+                    parent_of[key] = str(getattr(getattr(policy, "base_policy", None), "id", None) or "")
+                policy_id = parent_of[key]
+            return [rule for key in reversed(chain) for rule in rules_of[key]]
+
+        # Every policy is read before any firewall changes: a denied read leaves them all as they were.
+        found = [
+            (resource["metadata"], policy_rules(resource["metadata"]["firewall_policy_id"]))
+            for resource in resources
+            if resource["resource_type"] == "azure_firewall" and resource["metadata"].get("firewall_policy_id")
+        ]
+        for meta, rules in found:
+            meta["dnat_rules"] = [*meta.get("dnat_rules", []), *rules]
+            meta["policy_dnat_rules_read"] = True
+
+    # Services with endpoints, listed in their VNet's details like the AWS ones.
+    def load_balancers() -> None:
+        for lb in network_client.load_balancers.list_all():
+            resource = azure_detail.load_balancer_resource(lb, subscription_id, public_ips, interfaces)
+            if resource:
+                resources.append(resource)
+
+    def application_gateways() -> None:
+        for gateway in network_client.application_gateways.list_all():
+            resource = azure_detail.application_gateway_resource(gateway, subscription_id, public_ips)
+            if resource:
+                resources.append(resource)
+
+    def private_endpoints() -> None:
+        for pe in network_client.private_endpoints.list_all():
+            resource = azure_detail.private_endpoint_resource(pe, subscription_id, interfaces)
             if resource:
                 resources.append(resource)
 
@@ -1786,6 +1868,14 @@ def _collect_azure_network(
     optional("network_interfaces", virtual_machines)
     step("Azure Firewalls")
     optional("azure_firewalls", firewalls)
+    step("firewall policy DNAT rules")
+    optional("firewall_policy_rule_collection_groups", firewall_policy_dnat_rules)
+    step("load balancers")
+    optional("load_balancers", load_balancers)
+    step("application gateways")
+    optional("application_gateways", application_gateways)
+    step("private endpoints")
+    optional("private_endpoints", private_endpoints)
 
     # A partial snapshot must not silently replace the last known-good one; the
     # discover endpoint keeps the previous snapshot and surfaces this message on failure.
@@ -1811,7 +1901,58 @@ _GCP_SECTIONS = {
     "interconnects": "Interconnects",
     "instances": "VM instances",
     "network_firewall_policies": "network firewall policies",
+    "forwarding_rules": "forwarding rules",
+    "global_forwarding_rules": "global forwarding rules",
+    "backend_services": "backend services",
+    "url_maps": "URL maps",
+    "target_proxies": "target proxies",
+    "target_pools": "target pools",
+    "instance_groups": "instance groups",
+    "network_endpoint_groups": "network endpoint groups",
+    "service_attachments": "service attachments",
+    "backend_health": "backend health",
+    "cloud_sql_instances": "Cloud SQL instances",
+    "memorystore_redis_instances": "Memorystore for Redis instances",
 }
+# The IAM permissions each section needs (``router_status`` is the BGP state
+# the routers section reads per router). A skipped section's warning names
+# them; ``docs/gcp-topology.md`` lists the same ones (a test keeps them in step).
+GCP_SECTION_PERMISSIONS: dict[str, tuple[str, ...]] = {
+    "networks": ("compute.networks.list",),
+    "subnetworks": ("compute.subnetworks.list",),
+    "routes": ("compute.routes.list",),
+    "firewalls": ("compute.firewalls.list",),
+    "routers": ("compute.routers.list",),
+    "router_status": ("compute.routers.get",),
+    "vpn_gateways": ("compute.vpnGateways.list",),
+    "target_vpn_gateways": ("compute.targetVpnGateways.list",),
+    "vpn_tunnels": ("compute.vpnTunnels.list",),
+    "external_vpn_gateways": ("compute.externalVpnGateways.list",),
+    "interconnect_attachments": ("compute.interconnectAttachments.list",),
+    "interconnects": ("compute.interconnects.list",),
+    "instances": ("compute.instances.list",),
+    "network_firewall_policies": ("compute.networkFirewallPolicies.list",),
+    "forwarding_rules": ("compute.forwardingRules.list",),
+    "global_forwarding_rules": ("compute.globalForwardingRules.list",),
+    "backend_services": ("compute.backendServices.list",),
+    "url_maps": ("compute.urlMaps.list",),
+    "target_proxies": (
+        "compute.targetHttpProxies.list",
+        "compute.targetHttpsProxies.list",
+        "compute.targetTcpProxies.list",
+        "compute.targetSslProxies.list",
+    ),
+    "target_pools": ("compute.targetPools.list",),
+    "instance_groups": ("compute.instanceGroups.list",),
+    "network_endpoint_groups": ("compute.networkEndpointGroups.list",),
+    "service_attachments": ("compute.serviceAttachments.list",),
+    "backend_health": ("compute.backendServices.get", "compute.regionBackendServices.get"),
+    "cloud_sql_instances": ("cloudsql.instances.list",),
+    "memorystore_redis_instances": ("redis.instances.list",),
+}
+# At most this many backendServices.getHealth calls (one per backend group of
+# a backend service) per discovery; the groups past it have no health.
+_GCP_HEALTH_CALLS_MAX = 200
 
 
 def _collect_gcp(account: dict, progress: ProgressCallback | None = None) -> tuple[list[dict], list[dict]]:
@@ -1877,7 +2018,12 @@ def _collect_gcp(account: dict, progress: ProgressCallback | None = None) -> tup
             user_message=f"Could not set up the GCP compute client: {provider_error_detail(exc)}",
         ) from exc
 
-    return _collect_gcp_compute(compute, project_id, progress)
+    def client(api: str, version: str):
+        # Cloud SQL Admin (sqladmin) and Memorystore (redis) through the same
+        # discovery client; their documents ship with google-api-python-client.
+        return build(api, version, credentials=credentials, cache_discovery=False)
+
+    return _collect_gcp_compute(compute, project_id, progress, client)
 
 
 def _gcp_pages(collection, method: str, **kwargs):
@@ -1889,10 +2035,14 @@ def _gcp_pages(collection, method: str, **kwargs):
         request = getattr(collection, f"{method}_next")(previous_request=request, previous_response=response)
 
 
+def _gcp_items(collection, key: str, **kwargs) -> list[dict]:
+    """The ``key`` items of every page of a ``list`` call of any discovery API."""
+    return [item for page in _gcp_pages(collection, "list", **kwargs) for item in page.get(key) or []]
+
+
 def _gcp_list(compute, resource: str, project_id: str) -> list[dict]:
     """The items of a global (project-wide) list call, every page."""
-    collection = getattr(compute, resource)()
-    return [item for page in _gcp_pages(collection, "list", project=project_id) for item in page.get("items") or []]
+    return _gcp_items(getattr(compute, resource)(), "items", project=project_id)
 
 
 def _gcp_aggregated(compute, resource: str, project_id: str) -> list[dict]:
@@ -1906,23 +2056,60 @@ def _gcp_aggregated(compute, resource: str, project_id: str) -> list[dict]:
     return found
 
 
+def _gcp_backend_health(compute, project_id: str, backend_services: list[dict]) -> list[dict]:
+    """The ``getHealth`` answer of each backend group of each backend
+    service (regional ones through ``regionBackendServices``), at most
+    ``_GCP_HEALTH_CALLS_MAX`` calls."""
+    found: list[dict] = []
+    for service in backend_services:
+        link = service.get("selfLink") or ""
+        name = str(service.get("name") or gcp_detail.link_name(link))
+        region = gcp_detail.link_scope(service.get("region")) or gcp_detail.link_scope(link)
+        for backend in service.get("backends") or []:
+            group = backend.get("group") if isinstance(backend, dict) else None
+            if not group or not name:
+                continue
+            if len(found) >= _GCP_HEALTH_CALLS_MAX:
+                LOGGER.info("gcp collector: backend health read for the first %d backend groups", len(found))
+                return found
+            body = {"group": group}
+            if region:
+                request = compute.regionBackendServices().getHealth(
+                    project=project_id, region=region, backendService=name, body=body
+                )
+            else:
+                request = compute.backendServices().getHealth(project=project_id, backendService=name, body=body)
+            answer = request.execute() or {}
+            found.append({"backendService": link or name, "group": group, "healthStatus": answer.get("healthStatus")})
+    return found
+
+
 def _collect_gcp_compute(
-    compute, project_id: str, progress: ProgressCallback | None = None
+    compute, project_id: str, progress: ProgressCallback | None = None, client=None
 ) -> tuple[list[dict], list[dict]]:
-    """The discovery itself, on a built Compute Engine ``compute`` client.
+    """The discovery itself, on a built Compute Engine ``compute`` client;
+    ``client(api, version)`` builds the client of another discovery API
+    (Cloud SQL Admin, Memorystore), and without it those are not read.
 
     The base sections (networks with their peerings, subnetworks, routes and
     firewall rules) fail the discovery when they cannot be read. The map
     detail (Cloud Routers and their status, HA and Classic VPN gateways, VPN
     tunnels, external VPN gateways, Interconnect attachments, Interconnects,
-    VM instances and network firewall policies) is best-effort: a section
-    that cannot be read is skipped and recorded as a ``collection_warning``
-    resource.
+    VM instances, network firewall policies, and the load balancers and
+    Private Service Connect: forwarding rules, backend services, URL maps,
+    target proxies and pools, instance and network endpoint groups, service
+    attachments, the health of the backends; Cloud SQL and Memorystore for
+    Redis instances) is best-effort: a section that cannot be read is skipped
+    and recorded as a ``collection_warning`` resource with the IAM
+    permissions it needs (``GCP_SECTION_PERMISSIONS``).
     """
     sections: dict[str, Any] = {}
     warnings: list[dict] = []
     section_errors: list[tuple[str, str]] = []
     step = _Steps(progress, "gcp section", len(_GCP_SECTIONS))
+
+    def skipped(section: str, exc: BaseException) -> None:
+        warnings.append(gcp_detail.warning_resource(section, exc, GCP_SECTION_PERMISSIONS.get(section, ())))
 
     def optional(section: str, read) -> None:
         step(_GCP_SECTIONS[section])
@@ -1930,7 +2117,7 @@ def _collect_gcp_compute(
             sections[section] = read()
         except Exception as exc:  # noqa: BLE001 - best-effort detail; discovery goes on
             LOGGER.warning("gcp collector: skipped %s: %s", section, gcp_detail.error_code(exc), exc_info=True)
-            warnings.append(gcp_detail.warning_resource(section, exc))
+            skipped(section, exc)
 
     step(_GCP_SECTIONS["networks"])
     try:
@@ -1973,7 +2160,7 @@ def _collect_gcp_compute(
             statuses.append((router, status))
         if failed is not None:
             LOGGER.warning("gcp collector: skipped router_status: %s", gcp_detail.error_code(failed))
-            warnings.append(gcp_detail.warning_resource("router_status", failed))
+            skipped("router_status", failed)
         return statuses
 
     def network_firewall_policies() -> list[dict]:
@@ -1988,6 +2175,40 @@ def _collect_gcp_compute(
     optional("interconnects", lambda: _gcp_list(compute, "interconnects", project_id))
     optional("instances", lambda: _gcp_aggregated(compute, "instances", project_id))
     optional("network_firewall_policies", network_firewall_policies)
+
+    def target_proxies() -> list[dict]:
+        return [
+            *_gcp_aggregated(compute, "targetHttpProxies", project_id),
+            *_gcp_aggregated(compute, "targetHttpsProxies", project_id),
+            *_gcp_aggregated(compute, "targetTcpProxies", project_id),
+            *_gcp_list(compute, "targetSslProxies", project_id),
+        ]
+
+    optional("forwarding_rules", lambda: _gcp_aggregated(compute, "forwardingRules", project_id))
+    optional("global_forwarding_rules", lambda: _gcp_list(compute, "globalForwardingRules", project_id))
+    optional("backend_services", lambda: _gcp_aggregated(compute, "backendServices", project_id))
+    optional("url_maps", lambda: _gcp_aggregated(compute, "urlMaps", project_id))
+    optional("target_proxies", target_proxies)
+    optional("target_pools", lambda: _gcp_aggregated(compute, "targetPools", project_id))
+    optional("instance_groups", lambda: _gcp_aggregated(compute, "instanceGroups", project_id))
+    optional("network_endpoint_groups", lambda: _gcp_aggregated(compute, "networkEndpointGroups", project_id))
+    optional("service_attachments", lambda: _gcp_aggregated(compute, "serviceAttachments", project_id))
+    optional("backend_health", lambda: _gcp_backend_health(compute, project_id, sections.get("backend_services") or []))
+
+    def cloud_sql_instances() -> list[dict]:
+        if client is None:
+            return []
+        return _gcp_items(client("sqladmin", "v1").instances(), "items", project=project_id)
+
+    def memorystore_redis_instances() -> list[dict]:
+        if client is None:
+            return []
+        instances = client("redis", "v1").projects().locations().instances()
+        # Location "-" lists the instances of every region.
+        return _gcp_items(instances, "instances", parent=f"projects/{project_id}/locations/-")
+
+    optional("cloud_sql_instances", cloud_sql_instances)
+    optional("memorystore_redis_instances", memorystore_redis_instances)
 
     # A partial snapshot must not silently replace the last known-good one; the
     # discover endpoint keeps the previous snapshot and surfaces this message on failure.

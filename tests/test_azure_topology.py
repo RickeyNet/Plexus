@@ -249,6 +249,374 @@ def test_error_code_never_quotes_the_message():
     assert "corp" not in json.dumps(warning)
 
 
+# ── Services with endpoints ──────────────────────────────────────────────────
+
+_HUB_ID = _rid("rg-a", "virtualNetworks", "hub")
+# The keys every service record shares with the AWS ones (cloud_services.service_metadata).
+_SERVICE_KEYS = {
+    "resource_id",
+    "kind",
+    "engine",
+    "engine_version",
+    "vpc_id",
+    "subnet_ids",
+    "security_group_ids",
+    "endpoints",
+    "network_interface_ids",
+    "interfaces",
+    "public_ips",
+}
+
+
+def _web_nic():
+    return NS(
+        id=_rid("rg-a", "networkInterfaces", "web1-nic"),
+        name="web1-nic",
+        network_security_group=NS(id=_rid("rg-a", "networkSecurityGroups", "nsg-web")),
+        ip_configurations=[
+            NS(
+                private_ip_address="10.0.1.4",
+                subnet=NS(id=_HUB_ID + "/subnets/web"),
+                primary=True,
+                public_ip_address=None,
+            )
+        ],
+    )
+
+
+def test_internal_load_balancer_lists_its_frontend_and_rules():
+    lb_id = _rid("rg-a", "loadBalancers", "lb-app")
+    frontend = NS(id=f"{lb_id}/frontendIPConfigurations/fe")
+    lb = NS(
+        id=lb_id,
+        name="lb-app",
+        location="eastus",
+        provisioning_state="Succeeded",
+        sku=NS(name="Standard", tier="Regional"),
+        frontend_ip_configurations=[
+            NS(id=frontend.id, name="fe", private_ip_address="10.0.1.100", subnet=NS(id=_HUB_ID + "/subnets/web"))
+        ],
+        backend_address_pools=[NS(name="pool-a"), NS(name="pool-b")],
+        load_balancing_rules=[
+            NS(name="https", protocol="Tcp", frontend_port=443, backend_port=8443, frontend_ip_configuration=frontend),
+            # Port 0 on both sides is the HA ports rule of an internal Standard load balancer.
+            NS(name="ha", protocol="All", frontend_port=0, backend_port=0, frontend_ip_configuration=frontend),
+        ],
+        inbound_nat_rules=[
+            NS(
+                name="ssh",
+                protocol="Tcp",
+                frontend_port=None,
+                frontend_port_range_start=50000,
+                frontend_port_range_end=50009,
+                backend_port=22,
+                frontend_ip_configuration=frontend,
+            )
+        ],
+        inbound_nat_pools=[],
+    )
+    record = collect.load_balancer_resource(lb, SUB, {})
+    meta = record["metadata"]
+    assert record["resource_uid"] == f"azure:load_balancer:{SUB}:rg-a:lb-app" and record["status"] == "succeeded"
+    assert _SERVICE_KEYS <= set(meta)
+    assert meta["kind"] == "Internal load balancer" and meta["vpc_id"] == meta["vnet_id"] == f"{SUB}:rg-a:hub"
+    assert meta["subnet_ids"] == [f"{SUB}:rg-a:hub/web"] and meta["public_ips"] == []
+    assert meta["endpoints"] == [{"role": "Frontend fe", "dns_name": "", "ip_addresses": ["10.0.1.100"]}]
+    assert meta["backend_pool_count"] == 2 and meta["sku"] == "Standard"
+    assert meta["rules"] == ["Tcp 443 -> 8443", "All all -> all", "NAT Tcp 50000-50009 -> 22"]
+    assert collect.resource_uid(lb_id) == record["resource_uid"]
+
+
+def test_public_load_balancer_is_placed_in_the_vnet_of_its_backends():
+    lb_id = _rid("rg-a", "loadBalancers", "lb-web")
+    pip = _rid("rg-a", "publicIPAddresses", "lb-web-pip")
+    nic = _web_nic()
+    lb = NS(
+        id=lb_id,
+        name="lb-web",
+        sku=NS(name="Standard"),
+        frontend_ip_configurations=[
+            NS(id=f"{lb_id}/frontendIPConfigurations/fe", name="fe", public_ip_address=NS(id=pip), subnet=None)
+        ],
+        backend_address_pools=[NS(backend_ip_configurations=[NS(id=f"{nic.id}/ipConfigurations/ipconfig1")])],
+    )
+    interfaces = collect.interface_table([nic], {})
+    meta = collect.load_balancer_resource(lb, SUB, {pip.lower(): "203.0.113.10"}, interfaces)["metadata"]
+    # A public address is listed, never made a host of the VNet.
+    assert meta["kind"] == "Public load balancer" and meta["public_ips"] == ["203.0.113.10"]
+    assert meta["endpoints"] == [] and meta["subnet_ids"] == []
+    assert meta["vnet_id"] == f"{SUB}:rg-a:hub"
+    # Without the network interfaces it still has a record, in no VNet.
+    assert collect.load_balancer_resource(lb, SUB, {})["metadata"]["vnet_id"] == ""
+
+
+def test_application_gateway_lists_listeners_frontends_and_waf():
+    gw_id = _rid("rg-a", "applicationGateways", "agw")
+    pip = _rid("rg-a", "publicIPAddresses", "agw-pip")
+    gateway = NS(
+        id=gw_id,
+        name="agw",
+        location="eastus",
+        provisioning_state="Succeeded",
+        operational_state="Running",
+        sku=NS(name="WAF_v2", tier="WAF_v2", capacity=2),
+        gateway_ip_configurations=[NS(subnet=NS(id=_HUB_ID + "/subnets/appgw"))],
+        frontend_ip_configurations=[
+            NS(id=f"{gw_id}/frontendIPConfigurations/private", name="private", private_ip_address="10.0.4.10"),
+            NS(id=f"{gw_id}/frontendIPConfigurations/public", name="public", public_ip_address=NS(id=pip)),
+        ],
+        frontend_ports=[NS(id=f"{gw_id}/frontendPorts/p443", port=443), NS(id=f"{gw_id}/frontendPorts/p80", port=80)],
+        http_listeners=[
+            NS(
+                name="app",
+                protocol="Https",
+                host_names=["app.example.com", "www.example.com"],
+                frontend_port=NS(id=f"{gw_id}/frontendPorts/p443"),
+                frontend_ip_configuration=NS(id=f"{gw_id}/frontendIPConfigurations/public"),
+            ),
+            NS(
+                name="internal",
+                protocol="Http",
+                host_names=None,
+                host_name="",
+                frontend_port=NS(id=f"{gw_id}/frontendPorts/p80"),
+                frontend_ip_configuration=NS(id=f"{gw_id}/frontendIPConfigurations/private"),
+            ),
+        ],
+        ssl_certificates=[NS(name="cert", data="SECRET-PFX", password="SECRET-PASSWORD")],
+        web_application_firewall_configuration=NS(enabled=True, firewall_mode="Prevention"),
+    )
+    record = collect.application_gateway_resource(gateway, SUB, {pip.lower(): "203.0.113.20"})
+    meta = record["metadata"]
+    assert record["resource_uid"] == f"azure:application_gateway:{SUB}:rg-a:agw" and record["status"] == "running"
+    assert _SERVICE_KEYS <= set(meta)
+    assert meta["vnet_id"] == f"{SUB}:rg-a:hub" and meta["subnet_ids"] == [f"{SUB}:rg-a:hub/appgw"]
+    assert meta["public_ips"] == ["203.0.113.20"]
+    assert meta["waf_enabled"] is True and meta["waf_mode"] == "Prevention" and meta["tier"] == "WAF_v2"
+    assert meta["listeners"] == ["Https 443 app.example.com, www.example.com", "Http 80"]
+    assert [item["frontend"] for item in meta["listener_details"]] == ["public", "private"]
+    by_role = {(e["role"], e["dns_name"]): e for e in meta["endpoints"]}
+    assert by_role[("Frontend private", "")]["ip_addresses"] == ["10.0.4.10"]
+    assert by_role[("Https listener", "www.example.com")]["port"] == 443
+    # Certificates are never read.
+    assert "SECRET" not in json.dumps(record)
+
+
+def test_private_endpoint_names_its_target_address_and_interface():
+    nic = NS(
+        id=_rid("rg-a", "networkInterfaces", "pe-sql.nic"),
+        name="pe-sql.nic",
+        network_security_group=None,
+        ip_configurations=[
+            NS(
+                private_ip_address="10.0.2.5",
+                subnet=NS(id=_HUB_ID + "/subnets/data"),
+                primary=True,
+                public_ip_address=None,
+            )
+        ],
+    )
+    target = f"/subscriptions/{SUB}/resourceGroups/rg-data/providers/Microsoft.Sql/servers/sql-a"
+    pe = NS(
+        id=_rid("rg-a", "privateEndpoints", "pe-sql"),
+        name="pe-sql",
+        location="eastus",
+        provisioning_state="Succeeded",
+        subnet=NS(id=_HUB_ID + "/subnets/data"),
+        network_interfaces=[NS(id=nic.id)],
+        private_link_service_connections=[],
+        manual_private_link_service_connections=[
+            NS(
+                private_link_service_id=target,
+                group_ids=["sqlServer"],
+                private_link_service_connection_state=NS(status="Pending"),
+            )
+        ],
+        custom_dns_configs=[NS(fqdn="sql-a.database.example.com", ip_addresses=["10.0.2.5"])],
+        ip_configurations=[],
+    )
+    record = collect.private_endpoint_resource(pe, SUB, collect.interface_table([nic], {}))
+    meta = record["metadata"]
+    assert record["resource_uid"] == f"azure:private_endpoint:{SUB}:rg-a:pe-sql"
+    assert _SERVICE_KEYS <= set(meta)
+    assert meta["vnet_id"] == f"{SUB}:rg-a:hub" and meta["subnet_ids"] == [f"{SUB}:rg-a:hub/data"]
+    assert meta["target_name"] == "sql-a" and meta["target_type"] == "Microsoft.Sql/servers"
+    assert meta["group_ids"] == ["sqlServer"] and meta["connection_state"] == "Pending"
+    assert meta["manual_approval"] is True
+    assert meta["endpoints"] == [
+        {"role": "Private endpoint", "dns_name": "sql-a.database.example.com", "ip_addresses": ["10.0.2.5"]}
+    ]
+    assert meta["network_interface_ids"] == [f"{SUB}:rg-a:pe-sql.nic"]
+    assert [i["private_ips"] for i in meta["interfaces"]] == [["10.0.2.5"]]
+
+
+def test_private_endpoint_without_dns_configs_uses_its_ip_configurations():
+    pe = NS(
+        id=_rid("rg-a", "privateEndpoints", "pe-kv"),
+        name="pe-kv",
+        subnet=NS(id=_HUB_ID + "/subnets/data"),
+        private_link_service_connections=[
+            NS(
+                private_link_service_id="/subscriptions/x/resourceGroups/y/providers/Microsoft.KeyVault/vaults/kv",
+                group_ids=["vault"],
+                private_link_service_connection_state=NS(status="Approved"),
+            )
+        ],
+        ip_configurations=[NS(group_id="vault", member_name="default", private_ip_address="10.0.2.9")],
+    )
+    meta = collect.private_endpoint_resource(pe, SUB)["metadata"]
+    assert meta["endpoints"] == [{"role": "Private endpoint vault", "dns_name": "", "ip_addresses": ["10.0.2.9"]}]
+    assert meta["manual_approval"] is False and meta["interfaces"] == []
+
+
+def test_firewall_keeps_the_dnat_rules_of_its_classic_collections():
+    firewall = NS(
+        id=_rid("rg-a", "azureFirewalls", "azfw"),
+        name="azfw",
+        ip_configurations=[],
+        nat_rule_collections=[
+            NS(
+                name="later",
+                priority=200,
+                action=NS(type="Dnat"),
+                rules=[NS(name="ssh", protocols=["TCP"], destination_ports=["22"], translated_address="10.0.2.4")],
+            ),
+            NS(
+                name="first",
+                priority=100,
+                action=NS(type="Dnat"),
+                rules=[
+                    NS(
+                        name="https",
+                        protocols=["TCP"],
+                        source_addresses=["*"],
+                        destination_addresses=["203.0.113.30"],
+                        destination_ports=["443"],
+                        translated_address="10.0.1.100",
+                        translated_port="443",
+                    )
+                ],
+            ),
+        ],
+    )
+    rules = collect.firewall_resource(firewall, SUB, {})["metadata"]["dnat_rules"]
+    assert [(r["collection"], r["name"]) for r in rules] == [("first", "https"), ("later", "ssh")]
+    assert rules[0]["destination_addresses"] == ["203.0.113.30"] and rules[0]["translated_port"] == "443"
+    assert {r["source"] for r in rules} == {"classic"}
+    # A firewall run by a firewall policy has no classic collections.
+    assert collect.firewall_resource(NS(name="p", id=firewall.id), SUB, {})["metadata"]["dnat_rules"] == []
+
+
+def _nat_group(name, priority, collections):
+    return NS(name=name, priority=priority, rule_collections=collections)
+
+
+def _nat_collection(name, priority, rules, kind="FirewallPolicyNatRuleCollection"):
+    return NS(name=name, priority=priority, rule_collection_type=kind, action=NS(type="DNAT"), rules=rules)
+
+
+def _nat_rule(name, port, translated, **extra):
+    return NS(
+        name=name,
+        rule_type="NatRule",
+        ip_protocols=["TCP"],
+        destination_addresses=["203.0.113.30"],
+        destination_ports=[port],
+        translated_address=translated,
+        translated_port=port,
+        **extra,
+    )
+
+
+def test_firewall_policy_dnat_rules_follow_group_then_collection_priority():
+    ip_group = f"/subscriptions/{SUB}/resourceGroups/rg-a/providers/Microsoft.Network/ipGroups/partners"
+    groups = [
+        _nat_group("late-group", 300, [_nat_collection("c", 100, [_nat_rule("rdp", "3389", "10.0.1.7")])]),
+        _nat_group(
+            "early-group",
+            100,
+            [
+                _nat_collection("second", 200, [_nat_rule("ssh", "22", "10.0.1.5")]),
+                _nat_collection(
+                    "first",
+                    100,
+                    [_nat_rule("https", "443", "10.0.1.4", source_addresses=["*"], source_ip_groups=[ip_group])],
+                ),
+                # Network and application rule collections are not read.
+                _nat_collection(
+                    "net", 50, [NS(name="allow-dns", rule_type="NetworkRule")], "FirewallPolicyFilterRuleCollection"
+                ),
+            ],
+        ),
+    ]
+    rules = collect.firewall_policy_dnat_rules(groups, "fwpol")
+    assert [(r["collection_group"], r["collection"], r["name"]) for r in rules] == [
+        ("early-group", "first", "https"),
+        ("early-group", "second", "ssh"),
+        ("late-group", "c", "rdp"),
+    ]
+    first = rules[0]
+    assert first["source"] == "policy" and first["policy"] == "fwpol" and first["action"] == "DNAT"
+    assert first["protocols"] == ["TCP"] and first["source_addresses"] == ["*", "partners"]
+    assert first["translated_address"] == "10.0.1.4" and first["destination_ports"] == ["443"]
+
+
+class _Policies:
+    """``firewall_policies.get(group, name)``: a policy with its parent's ID."""
+
+    def __init__(self, parents, *, deny=False):
+        self._parents, self._deny = parents, deny
+
+    def get(self, _group, name):
+        if self._deny:
+            raise _Denied()
+        parent = self._parents.get(name)
+        return NS(base_policy=NS(id=_rid("rg-a", "firewallPolicies", parent)) if parent else None)
+
+
+def _policy_firewall(name, policy):
+    return NS(
+        id=_rid("rg-a", "azureFirewalls", name),
+        name=name,
+        ip_configurations=[],
+        firewall_policy=NS(id=_rid("rg-a", "firewallPolicies", policy)),
+    )
+
+
+def test_live_collector_merges_the_dnat_rules_of_firewall_policies_and_their_parents():
+    client = _client()
+    client.azure_firewalls = _Ops([_policy_firewall("fw-1", "child"), _policy_firewall("fw-2", "child")])
+    groups = {
+        "child": [_nat_group("g", 100, [_nat_collection("own", 100, [_nat_rule("https", "443", "10.0.1.4")])])],
+        "base": [_nat_group("g", 100, [_nat_collection("shared", 100, [_nat_rule("ssh", "22", "10.0.1.5")])])],
+    }
+    client.firewall_policy_rule_collection_groups = _Ops(by_vnet=groups)
+    # A parent loop is read once.
+    client.firewall_policies = _Policies({"child": "base", "base": "child"})
+    resources, _ = collectors_module._collect_azure_network(client, SUB)
+    firewalls = [r for r in resources if r["resource_type"] == "azure_firewall"]
+    assert len(firewalls) == 2
+    for firewall in firewalls:
+        meta = firewall["metadata"]
+        assert meta["policy_dnat_rules_read"] is True
+        assert [(r["policy"], r["name"]) for r in meta["dnat_rules"]] == [("base", "ssh"), ("child", "https")]
+    skipped = [r["name"] for r in resources if r["resource_type"] == "collection_warning"]
+    assert skipped == ["network_interfaces"]
+
+
+def test_live_collector_skips_policy_dnat_rules_it_may_not_read():
+    client = _client()
+    client.azure_firewalls = _Ops([_policy_firewall("fw-1", "child")])
+    client.firewall_policy_rule_collection_groups = _Ops(by_vnet={"child": []})
+    client.firewall_policies = _Policies({}, deny=True)
+    resources, _ = collectors_module._collect_azure_network(client, SUB)
+    [firewall] = [r for r in resources if r["resource_type"] == "azure_firewall"]
+    assert firewall["metadata"]["dnat_rules"] == [] and "policy_dnat_rules_read" not in firewall["metadata"]
+    [warning] = [r for r in resources if r["name"] == "firewall_policy_rule_collection_groups"]
+    assert warning["resource_type"] == "collection_warning" and warning["metadata"]["error"] == "AuthorizationFailed"
+    assert "Microsoft.Network/firewallPolicies/ruleCollectionGroups/read" in warning["metadata"]["actions"]
+
+
 # ── The live collector, against a stand-in for the SDK ───────────────────────
 
 
@@ -322,6 +690,9 @@ def _client():
         nat_gateways=_Ops(),
         network_interfaces=_Ops(deny=True),
         azure_firewalls=_Ops(),
+        load_balancers=_Ops(),
+        application_gateways=_Ops(),
+        private_endpoints=_Ops(),
     )
 
 
@@ -336,7 +707,12 @@ def test_live_collector_reads_the_network_and_skips_a_denied_section():
     [gateway] = by_type["virtual_network_gateway"]
     assert gateway["metadata"]["public_ips"] == ["52.9.9.9"] and gateway["metadata"]["vnet_id"] == f"{SUB}:rg-a:hub"
     [warning] = by_type["collection_warning"]
-    assert warning["metadata"] == {"section": "network_interfaces", "error": "AuthorizationFailed"}
+    assert warning["metadata"] == {
+        "section": "network_interfaces",
+        "error": "AuthorizationFailed",
+        "title": "Virtual machines (network interfaces)",
+        "actions": ["Microsoft.Network/networkInterfaces/read"],
+    }
     kinds = {(c["connection_type"], c["target_resource_uid"]) for c in connections}
     assert ("vnet_peering", f"azure:vnet:{SUB}:rg-b:spoke") in kinds
     assert ("virtual_network_gateway_attachment", f"azure:virtual_network_gateway:{SUB}:rg-a:vgw") in kinds
@@ -345,6 +721,40 @@ def test_live_collector_reads_the_network_and_skips_a_denied_section():
     assert client.virtual_network_gateways.groups_asked == ["rg-a"]
     assert client.local_network_gateways.groups_asked == ["rg-a"]
     assert client.virtual_network_gateway_connections.groups_asked == ["rg-a"]
+
+
+def test_live_collector_reads_services_and_skips_only_a_denied_one():
+    client = _client()
+    nic = _web_nic()
+    client.network_interfaces = _Ops([nic])
+    lb_id = _rid("rg-a", "loadBalancers", "lb-web")
+    client.load_balancers = _Ops(
+        [
+            NS(
+                id=lb_id,
+                name="lb-web",
+                frontend_ip_configurations=[],
+                backend_address_pools=[NS(backend_ip_configurations=[NS(id=f"{nic.id}/ipConfigurations/c1")])],
+            )
+        ]
+    )
+    client.application_gateways = _Ops(deny=True)
+    client.private_endpoints = _Ops(
+        [NS(id=_rid("rg-a", "privateEndpoints", "pe"), name="pe", subnet=NS(id=_HUB_ID + "/subnets/web"))]
+    )
+    resources, _ = collectors_module._collect_azure_network(client, SUB)
+    by_type = {}
+    for r in resources:
+        by_type.setdefault(r["resource_type"], []).append(r)
+    # The load balancer's backend is placed through the interfaces read before it.
+    [lb] = by_type["load_balancer"]
+    assert lb["metadata"]["vnet_id"] == f"{SUB}:rg-a:hub"
+    assert [r["name"] for r in by_type["private_endpoint"]] == ["pe"]
+    [warning] = by_type["collection_warning"]
+    assert warning["metadata"]["section"] == "application_gateways"
+    assert warning["metadata"]["actions"] == ["Microsoft.Network/applicationGateways/read"]
+    # Every best-effort section names the RBAC action it needs.
+    assert all(actions for _title, actions in collectors_module.AZURE_OPTIONAL_SECTIONS.values())
 
 
 def test_live_collector_reads_gateways_in_every_resource_group_the_subscription_lists():
@@ -508,14 +918,73 @@ def test_search_finds_a_vm_that_is_not_a_node(snapshot):
     assert [h["node_id"] for h in hits] == [f"vnet:{PROD}"]
 
 
+def _site_section(snapshot: dict, site_id: str, title: str) -> dict:
+    site = next(s for s in snapshot["sites"] if s["id"] == site_id)
+    return next(sec for sec in site["sections"] if sec["title"] == title)
+
+
+def test_snapshot_lists_services_in_their_vnet_like_aws(snapshot):
+    from netcontrol.integrations.cloud_services import SERVICE_COLUMNS, SERVICE_ENDPOINT_COLUMNS
+
+    lbs = _site_section(snapshot, PROD, "Load balancers")
+    assert lbs["columns"] == SERVICE_COLUMNS
+    [lb] = lbs["rows"]
+    assert lb[0] == "lb-app" and lb[2] == "Internal load balancer" and lb[8] == "app (10.231.10.0/24)"
+    [pe] = _site_section(snapshot, PROD, "Private endpoints")["rows"]
+    assert pe[6] == "stsampledata.blob.example.com" and pe[7] == "10.231.20.40"
+    [agw] = _site_section(snapshot, HUB, "Application gateways")["rows"]
+    # The public address is listed with the private one.
+    assert agw[5] == "running" and agw[7] == "10.230.4.10, 203.0.113.75"
+    endpoints = _site_section(snapshot, PROD, "Service endpoints")
+    assert endpoints["columns"] == SERVICE_ENDPOINT_COLUMNS
+    assert {row[6] for row in endpoints["rows"]} == {"10.231.10.100", "10.231.20.40"}
+    overview = dict(_site_section(snapshot, PROD, "VNet overview")["rows"])
+    assert overview["Load balancers"] == "1" and overview["Private endpoints"] == "1"
+    # Services are no nodes.
+    assert not [n for n in snapshot["nodes"] if "lb-app" in n["id"] or "agw-hub" in n["id"]]
+
+
+def test_service_addresses_are_hosts_of_their_vnet_and_searchable(snapshot):
+    index = {row["cidr"]: row for row in subnet_index(snapshot)}
+    pe = index["10.231.20.40/32"]
+    assert pe["node_id"] == f"vnet:{PROD}" and pe["name"] == "Private endpoint pe-sampledata-blob"
+    assert index["10.230.4.10/32"]["node_id"] == f"vnet:{HUB}"
+    assert "203.0.113.75/32" not in index
+    hits = search_index(build_search_index(snapshot), ["app.example.com"], 10)
+    assert [h["node_id"] for h in hits] == [f"vnet:{HUB}"]
+
+
+def test_firewall_lists_its_dnat_rules(snapshot):
+    firewall = _node(snapshot, "fw:sample:rg-hub:azfw-hub")
+    dnat = next(sec for sec in firewall["sections"] if sec["title"] == "DNAT rules")
+    assert dnat["rows"] == [
+        ["Classic", "inbound-dnat", "100", "https-to-app", "TCP", "*", "203.0.113.70", "443", "10.231.10.100", "443"]
+    ]
+    # A firewall run by a firewall policy lists the parent policy's rules first.
+    west = _node(snapshot, "fw:sample:rg-west:azfw-west")
+    dnat = next(sec for sec in west["sections"] if sec["title"] == "DNAT rules")
+    assert [(row[0], row[3]) for row in dnat["rows"]] == [
+        ("Policy fwpol-base / DefaultDnatRuleCollectionGroup", "ssh-to-jump"),
+        ("Policy fwpol-west / DefaultDnatRuleCollectionGroup", "https-to-web"),
+    ]
+    overview = next(sec for sec in west["sections"] if sec["title"] == "Azure Firewall")
+    assert "only the DNAT rules are collected" in json.dumps(overview)
+
+
 def test_snapshot_reports_what_discovery_could_not_read():
     resources, connections = build_sample()
     resources.append(collect.warning_resource("azure_firewalls", _Denied()))
+    title, actions = collectors_module.AZURE_OPTIONAL_SECTIONS["load_balancers"]
+    resources.append(collect.warning_resource("load_balancers", _Denied(), title=title, actions=actions))
     snap = build_snapshot(
         [{**ACCOUNT, "last_sync_status": "error", "last_sync_message": "boom"}], resources, connections
     )
     messages = [e["message"] for e in snap["collection"]["errors"]]
     assert any("boom" in m for m in messages) and any("AuthorizationFailed" in m for m in messages)
+    assert any(
+        m.startswith("Load balancers: not collected") and "Add Microsoft.Network/loadBalancers/read to the role" in m
+        for m in messages
+    )
 
 
 def test_snapshot_of_nothing_is_empty():

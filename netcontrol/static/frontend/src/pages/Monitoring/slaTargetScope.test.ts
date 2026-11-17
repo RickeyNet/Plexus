@@ -50,6 +50,7 @@ describe('integration scope lists', () => {
       'circuit',
       'peering',
       'link',
+      'service',
     ]);
   });
 });
