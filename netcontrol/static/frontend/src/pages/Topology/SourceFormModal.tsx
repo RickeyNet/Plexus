@@ -39,6 +39,15 @@ export function SourceFormModal({ provider, existing, defaultOptions, onClose }:
   const isEdit = saved !== null;
   const [values, setValues] = useState<SourceFormValues>(() => config.fromRecord(existing, defaultOptions));
   const [errMsg, setErrMsg] = useState<string | null>(null);
+  // Secret fields whose typed value is shown, so a pasted key can be checked.
+  const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleReveal = (name: string) =>
+    setRevealed((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
 
   const create = useCreateMerakiOrg();
   const update = useUpdateMerakiOrg();
@@ -108,22 +117,44 @@ export function SourceFormModal({ provider, existing, defaultOptions, onClose }:
         <label className="form-label" htmlFor={id}>
           {field.label} {isRequired && <span style={{ color: 'var(--danger)' }}>*</span>}
         </label>
-        <input
-          id={id}
-          className="form-input"
-          type={field.type === 'url' ? 'text' : (field.type ?? 'text')}
-          value={typeof value === 'boolean' ? '' : (value ?? '')}
-          min={field.min}
-          max={field.max}
-          onChange={(e) =>
-            setValue(
-              field.name,
-              field.type === 'number' ? Number(e.target.value) || (field.min ?? 0) : e.target.value,
-            )
-          }
-          placeholder={placeholder}
-          autoComplete={isSecret ? 'new-password' : field.autoComplete}
-        />
+        <div style={isSecret ? { display: 'flex', gap: '0.5rem', alignItems: 'center' } : undefined}>
+          <input
+            id={id}
+            className="form-input"
+            type={
+              isSecret && revealed.has(field.name)
+                ? 'text'
+                : field.type === 'url'
+                  ? 'text'
+                  : (field.type ?? 'text')
+            }
+            value={typeof value === 'boolean' ? '' : (value ?? '')}
+            min={field.min}
+            max={field.max}
+            onChange={(e) =>
+              setValue(
+                field.name,
+                field.type === 'number' ? Number(e.target.value) || (field.min ?? 0) : e.target.value,
+              )
+            }
+            placeholder={placeholder}
+            autoComplete={isSecret ? 'new-password' : field.autoComplete}
+            spellCheck={isSecret ? false : undefined}
+            style={isSecret ? { flex: 1, minWidth: 0 } : undefined}
+          />
+          {isSecret && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => toggleReveal(field.name)}
+              aria-controls={id}
+              aria-pressed={revealed.has(field.name)}
+              aria-label={`${revealed.has(field.name) ? 'Hide' : 'Show'} ${field.label}`}
+            >
+              {revealed.has(field.name) ? 'Hide' : 'Show'}
+            </button>
+          )}
+        </div>
         {field.help && (
           <div className="text-muted" style={HELP_STYLE}>
             {field.help}

@@ -50,13 +50,23 @@ default) as described in [Scheduled collection](meraki-topology.md#scheduled-col
   query or user name, and redirects are never followed, so the key cannot
   be sent elsewhere. Turn off **Verify TLS** for a firewall with a
   self-signed certificate.
-- **API key and secret**: entered as one value, `<API key>:<API secret>`.
-  Plexus splits it on the first colon; a value without a key or without a
-  secret is refused. OPNsense checks them with HTTP Basic authentication
-  (the key is the user name, the secret the password). The value is stored
-  encrypted, is never returned by the API or shown in the UI again, and is
-  sent only in the `Authorization` header. When you edit the source, leave
-  the field empty to keep the stored key.
+- **API key** and **API secret**: two fields. The `apikey.txt` file
+  OPNsense downloads holds them as `key=...` and `secret=...` lines; enter
+  only the values, without the `key=` / `secret=` labels; **Show** beside
+  each field displays what you typed so you can check it. Both are required
+  when adding the source. OPNsense checks them with HTTP Basic
+  authentication (the key is the user name, the secret the password).
+  Plexus stores them together, encrypted, never returns them through the
+  API or shows them again, and sends them only in the `Authorization`
+  header. When you edit the source, leave both fields empty to keep the
+  stored key. Through the API (`POST /api/sources`), the
+  credential is one value, `<API key>:<API secret>`, split on the first
+  colon.
+- **"OPNsense rejected the API key and secret (HTTP 401)"** means the
+  firewall does not recognise the pair: a `key=` / `secret=` label pasted
+  in, key and secret swapped, a value cut short, or the key deleted, or its
+  user disabled or expired, on the firewall. A missing privilege answers 403
+  instead and is reported per call.
 - The organization field is not used; it is stored as `local`.
 
 ### Creating the API key
@@ -73,7 +83,7 @@ default) as described in [Scheduled collection](meraki-topology.md#scheduled-col
    from the request body).
 3. In the user's **API keys** section, click **+** to create a key. The
    browser downloads a file with the key and the secret. Enter them in
-   Plexus as `key:secret`.
+   Plexus's **API key** and **API secret** fields.
 
 | Privilege (OPNsense name) | What Plexus reads with it |
 |---|---|
