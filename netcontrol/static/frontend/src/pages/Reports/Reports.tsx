@@ -41,6 +41,7 @@ export function Reports() {
       <PageHeader title="Reports" />
 
       <PageHelp
+        guide="Reports"
         pageKey="reports"
         title="Reports"
         text="Generate and export availability, compliance, utilization, and network documentation reports, browse past runs, and produce 95th-percentile bandwidth billing."

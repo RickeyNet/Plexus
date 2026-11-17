@@ -95,6 +95,7 @@ export function Jobs() {
       <PageHeader title="Delegator" />
 
       <PageHelp
+        guide="Running-Jobs"
         pageKey="delegator"
         title="Delegate Work to the Fleet"
         text="Assign automated tasks against your devices - audits, config pushes, remediations - and track them through to completion. Build the inventory of reusable tasks, instructions, and credentials that operators draw from at run time."

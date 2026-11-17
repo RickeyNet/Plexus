@@ -65,6 +65,7 @@ export function Configuration() {
       <PageHeader title="Configuration" />
 
       <PageHelp
+        guide="Config-Backups-and-Drift"
         pageKey="configuration"
         title="Configuration Management"
         text="Manage device configurations in one place. Detect drift against baselines, schedule automatic backups, browse backup history, and restore previous configurations."

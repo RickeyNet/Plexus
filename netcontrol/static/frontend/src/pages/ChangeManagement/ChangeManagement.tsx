@@ -43,6 +43,7 @@ export function ChangeManagement() {
       {tab === 'risk' && (
         <>
           <PageHelp
+            guide="Risk-Analysis"
             pageKey="change-management.risk"
             title="Pre-Change Risk Analysis"
             text="Score a proposed change before it ships. Compare candidate configs against the running baseline, flag impactful changes, and review which devices and interfaces would be affected."
@@ -53,6 +54,7 @@ export function ChangeManagement() {
       {tab === 'deployments' && (
         <>
           <PageHelp
+            guide="Deployments"
             pageKey="change-management.deployments"
             title="Staged Change Deployments"
             text="Push changes to devices in phases with built-in pause points. Track per-device outcome, roll back affected hosts on failure, and keep an audit trail of every step."
@@ -64,6 +66,7 @@ export function ChangeManagement() {
       {tab === 'changelog' && (
         <>
           <PageHelp
+            guide="Change-Log"
             pageKey="change-management.changelog"
             title="Per-Object Change Log"
             text="Every create, update and delete of hosts, inventory groups, prefixes, IP addresses, VLANs, VRFs, config backups and jobs, with who made it and the field-by-field before and after values."

@@ -24,6 +24,7 @@ export function Routing() {
     <div>
       <PageHeader title="Routing" />
       <PageHelp
+        guide="Routing-and-BGP-Intent"
         pageKey="routing"
         title="Intended BGP state"
         text="Record the autonomous systems, routing instances and BGP peerings each device should have, then compare them with the BGP neighbors neighbor discovery finds."

@@ -198,6 +198,7 @@ from netcontrol.routes.git_sources import git_sources_loop, router as git_source
 from netcontrol.routes.graph_export import router as graph_export_router
 from netcontrol.routes.graph_templates import router as graph_templates_router
 from netcontrol.routes.graphql import admin_router as graphql_admin_router, router as graphql_router
+from netcontrol.routes.help_docs import router as help_docs_router
 from netcontrol.routes.intended_config import (
     admin_router as intended_config_admin_router,
     intended_config_loop,
@@ -2367,6 +2368,9 @@ app.include_router(
     custom_fields_ipam_router,
     dependencies=[Depends(require_auth), Depends(require_feature_method("ipam"))],
 )
+# Help: the user guides (docs/ and the other pages of
+# netcontrol/docs_catalog.py), readable by any signed-in user.
+app.include_router(help_docs_router, dependencies=[Depends(require_auth)])
 # Device model: the catalogues are readable by any signed-in user and
 # managed by admins; bulk edit of hosts sits with inventory access.
 app.include_router(device_model_router, dependencies=[Depends(require_auth)])

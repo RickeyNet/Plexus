@@ -186,6 +186,7 @@ export function Reachability() {
   return (
     <div>
       <PageHelp
+        guide="Path-Trace#reachability-sweep"
         pageKey="topology.reachability"
         title="Reachability sweep"
         text="Check which networks can reach a destination with the same traffic, for example which user VLANs cannot reach a file server on tcp/445. Every source network the filters keep is traced hop by hop, as in Path Mode. Leave Destination empty to trace every source network to every destination network. Click a verdict to filter the results; open a row for its full trace."

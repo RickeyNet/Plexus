@@ -52,6 +52,7 @@ export function Monitoring() {
       <PageHeader title="Monitoring" />
 
       <PageHelp
+        guide="Monitoring"
         pageKey="monitoring"
         title="Real-Time Device Monitoring"
         text="Track CPU, memory, response time, packet loss, and interface status. Includes alerts, the syslog and SNMP trap event log, SLA tracking, availability history and capacity planning trends. The Configure tab holds the setup behind them: alert rules, suppressions, SLA targets, custom OID profiles, and graph / host templates and graph trees."

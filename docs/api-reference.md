@@ -1,5 +1,14 @@
 # API Reference
 
+### Help
+The user guides shown under **Help**: the pages of `netcontrol/docs_catalog.py` and the front page `wiki/Home.md`. Any signed-in user.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET    | `/api/help` | `{home, sections: [{title, pages: [{name, title}]}]}`; a page whose file this install does not ship is left out |
+| GET    | `/api/help/search?q=` | `{query, results: [{name, title, section, snippet}]}`: up to 25 pages holding every word of `q` (case-insensitive), pages whose title holds them first |
+| GET    | `/api/help/pages/{name}` | `{name, title, section, source, source_url, headings: [{id, text, level}], html}`. The HTML escapes any HTML in the source; links between guides are `/help/<name>#<heading>`, links to other repository files go to GitHub. `404` for an unknown name |
+
 ### Authentication and single sign-on
 OpenID Connect single sign-on next to the password login. See [sso-oidc.md](sso-oidc.md).
 

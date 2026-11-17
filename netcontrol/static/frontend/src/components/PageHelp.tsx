@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router';
 
 import { isHelpDismissed, setHelpDismissed } from '@/lib/helpDismissed';
 
@@ -6,9 +7,11 @@ interface Props {
   pageKey: string;
   title: string;
   text: string;
+  /** The Help guide that covers this page, as `Page-Name` or `Page-Name#heading`. */
+  guide?: string;
 }
 
-export function PageHelp({ pageKey, title, text }: Props) {
+export function PageHelp({ pageKey, title, text, guide }: Props) {
   const [collapsed, setCollapsed] = useState<boolean>(() => isHelpDismissed(pageKey));
 
   const [prevPageKey, setPrevPageKey] = useState(pageKey);
@@ -37,6 +40,14 @@ export function PageHelp({ pageKey, title, text }: Props) {
         <div>
           <strong>{title}</strong>
           <span className="page-help-text"> &mdash; {text}</span>
+          {guide && (
+            <>
+              {' '}
+              <Link className="page-help-guide" to={`/help/${guide}`}>
+                Read the guide
+              </Link>
+            </>
+          )}
         </div>
       </div>
       <button

@@ -84,6 +84,7 @@ export function Software() {
       {shownTab === 'upgrades' && (
         <>
           <PageHelp
+            guide="IOS-XE-Upgrade-Tool"
             pageKey="software.upgrades"
             title="Firmware Upgrade Campaigns"
             text="Plan and execute IOS-XE upgrades across the fleet. Stage images, schedule maintenance windows, and run multi-phase campaigns with backups and rollback support."
@@ -280,6 +281,7 @@ function VersionsTab() {
       </div>
 
       <PageHelp
+        guide="Software-Versions-and-Vulnerabilities"
         pageKey="software"
         title="Software Versions & Vulnerability Alerts"
         text="Every software version Plexus knows - inventory hosts polled by SNMP/SSH, and the Meraki, Cato and Cisco FMC devices of the latest topology collections - in one list, with the version spread per platform, a history of upgrades and downgrades, and alerts when a device runs a version an advisory names. Add advisories by hand, import them, or let Plexus ask Cisco PSIRT about every Cisco version it tracks."

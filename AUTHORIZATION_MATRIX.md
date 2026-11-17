@@ -34,6 +34,7 @@ All API endpoints and their required authentication/authorization levels.
 
 | Method | Path | Router |
 |--------|------|--------|
+| GET | `/api/help`, `/api/help/search?q=`, `/api/help/pages/{name}` (the user guides, rendered) | help_docs |
 | POST | `/api/auth/logout` | auth |
 | PUT | `/api/auth/change-password` | auth |
 | GET/PUT | `/api/auth/profile` | auth |

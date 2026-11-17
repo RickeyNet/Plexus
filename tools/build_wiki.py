@@ -23,213 +23,53 @@ a file that does not exist, or when a document leaves a code fence open.
 from __future__ import annotations
 
 import argparse
-import posixpath
-import re
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-WIKI_SOURCE_DIR = "wiki"
-REPO_URL = "https://github.com/RickeyNet/Plexus"
-DEFAULT_BRANCH = "main"
+# The page list and link rewriting are shared with the in-app Help pages.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-# (sidebar section, [(wiki page name, source document), ...]) in sidebar
-# order. A page name is the wiki file name without ".md"; GitHub shows the
-# hyphens as spaces.
-PAGES: list[tuple[str, list[tuple[str, str]]]] = [
-    (
-        "Install and operate",
-        [
-            ("Deployment-Guide", "deploy/DEPLOYMENT.md"),
-            ("Firewall-Rules", "deploy/FIREWALL.md"),
-            ("Air-Gapped-Deployment", "deploy/airgap/README.md"),
-            ("Air-Gapped-VM-Setup", "deploy/airgap/VM_SETUP.md"),
-            ("Database-Backends", "docs/database-backends.md"),
-            ("Data-Retention", "DATA_RETENTION.md"),
-            ("Administration", "docs/administration.md"),
-            ("Federation", "docs/federation.md"),
-        ],
-    ),
-    (
-        "Sign-in and access",
-        [
-            ("Single-Sign-On-OIDC", "docs/sso-oidc.md"),
-            ("RADIUS-Login", "RADIUS_CONFIGURATION_GUIDE.md"),
-            ("TACACS-Login", "TACACS_CONFIGURATION_GUIDE.md"),
-            ("Object-Permissions", "docs/object-permissions.md"),
-            ("Authorization-Matrix", "AUTHORIZATION_MATRIX.md"),
-            ("Audit-Log", "docs/audit-log.md"),
-            ("Change-Log", "docs/change-log.md"),
-        ],
-    ),
-    (
-        "Inventory and addressing",
-        [
-            ("Core-Concepts", "docs/core-concepts.md"),
-            ("Discovery", "docs/discovery.md"),
-            ("Device-Model", "docs/device-model.md"),
-            ("Locations-and-Tenancy", "docs/locations-and-tenancy.md"),
-            ("HPE-Aruba-and-HP-Switches", "docs/aruba-switches.md"),
-            ("Netgear-Switches-and-Access-Points", "docs/netgear.md"),
-            ("Custom-Fields-and-Tags", "docs/custom-fields-and-tags.md"),
-            ("Dynamic-Groups", "docs/dynamic-groups.md"),
-            ("Data-Validation-Rules", "docs/validation-rules.md"),
-            ("VRFs-and-VLANs", "docs/vrfs-and-vlans.md"),
-            ("Routing-and-BGP-Intent", "docs/routing.md"),
-            ("Circuits", "docs/circuits.md"),
-            ("DCIM-Racks-Cables-and-Power", "docs/dcim.md"),
-            ("Virtualization", "docs/virtualization.md"),
-            ("Bulk-Import", "docs/bulk-import.md"),
-            ("IPAM", "docs/ipam.md"),
-            ("Floor-Plan", "docs/floor-plan.md"),
-            ("Network-Tools", "docs/network-tools.md"),
-        ],
-    ),
-    (
-        "Configuration and change",
-        [
-            ("Running-Jobs", "docs/jobs.md"),
-            ("Writing-Playbooks", "docs/writing-playbooks.md"),
-            ("Config-Backups-and-Drift", "docs/config-backups-and-drift.md"),
-            ("Intended-Configuration", "docs/intended-config.md"),
-            ("Git-Data-Sources", "docs/git-data-sources.md"),
-            ("Compliance", "docs/compliance.md"),
-            ("Change-Management", "docs/change-management.md"),
-            ("Risk-Analysis", "docs/risk-analysis.md"),
-            ("Deployments", "docs/deployments.md"),
-            ("Maintenance-Windows", "docs/maintenance-windows.md"),
-            ("Lab-Mode", "docs/lab-mode.md"),
-            ("IOS-XE-Upgrade-Tool", "docs/upgrade-tool-guide.md"),
-        ],
-    ),
-    (
-        "Topology",
-        [
-            ("Path-Trace", "docs/path-trace.md"),
-            ("AWS-Topology", "docs/aws-topology.md"),
-            ("Azure-Topology", "docs/azure-topology.md"),
-            ("GCP-Topology", "docs/gcp-topology.md"),
-            ("Meraki-Topology", "docs/meraki-topology.md"),
-            ("Cato-Topology", "docs/cato-topology.md"),
-            ("Cisco-FMC-Topology", "docs/fmc-topology.md"),
-            ("Panorama-Topology", "docs/panorama-topology.md"),
-            ("Appgate-SDP-Topology", "docs/appgate-topology.md"),
-            ("OPNsense-Topology", "docs/opnsense-topology.md"),
-            ("Cloud-Visibility", "docs/cloud-visibility.md"),
-        ],
-    ),
-    (
-        "Monitoring and reports",
-        [
-            ("Dashboard", "docs/dashboard.md"),
-            ("Monitoring", "docs/monitoring.md"),
-            ("Graph-Templates", "docs/graph-templates.md"),
-            ("SLA-Monitoring", "docs/sla-monitoring.md"),
-            ("Software-Versions-and-Vulnerabilities", "docs/software-versions.md"),
-            ("Alert-Notification-Channels", "docs/alert-notification-channels.md"),
-            ("Meraki-Alerts", "docs/meraki-alerts.md"),
-            ("Meraki-Compliance", "docs/meraki-compliance.md"),
-            ("Flow-Collector", "docs/flow-collector.md"),
-            ("Vendor-Monitoring-Coverage", "docs/vendor-monitoring-coverage.md"),
-            ("Reports", "docs/reports.md"),
-            ("Network-Documentation-Reports", "docs/network-documentation-usage.md"),
-        ],
-    ),
-    (
-        "API and AI access",
-        [
-            ("API-Reference", "docs/api-reference.md"),
-            ("GraphQL-API", "docs/graphql-api.md"),
-            ("WebSocket-Usage", "docs/websocket-usage.md"),
-            ("Event-Webhooks", "docs/webhooks.md"),
-            ("AI-Access-MCP", "docs/ai-access.md"),
-        ],
-    ),
-    (
-        "Developers",
-        [
-            ("Developer-Setup", "DEVSETUP.md"),
-            ("Architecture-and-Conventions", "AGENTS.md"),
-            ("Frontend-Style-Guide", "FRONTEND_STYLE.md"),
-            ("Plugin-Development", "docs/plugin-development.md"),
-            ("Versioning-and-Release", "docs/versioning-and-release.md"),
-            ("Changelog", "CHANGELOG.md"),
-        ],
-    ),
+from netcontrol.docs_catalog import (  # noqa: E402
+    DEFAULT_BRANCH,
+    EXTERNAL,
+    FENCE,
+    LINK,
+    NOT_PUBLISHED,
+    PAGES,
+    REPO_ROOT,
+    REPO_URL,
+    WIKI_SOURCE_DIR,
+    page_index,
+    rewrite_links,
+)
+
+__all__ = [
+    "DEFAULT_BRANCH",
+    "NOT_PUBLISHED",
+    "PAGES",
+    "REPO_ROOT",
+    "REPO_URL",
+    "build",
+    "build_sidebar",
+    "check_wiki_links",
+    "main",
+    "page_index",
+    "rewrite_links",
+    "write",
 ]
-
-# Documents under docs/ that are deliberately not wiki pages. Every other
-# file in docs/ must be in PAGES, so a new document cannot be forgotten.
-NOT_PUBLISHED = {
-    "docs/FRONTEND_MIGRATION.md",  # archived migration plan
-}
-
-# Inline markdown link or image: "](target)" or "](target "title")".
-_LINK = re.compile(r"\]\(\s*<?([^)\s>]+)>?(\s+\"[^\"]*\")?\s*\)")
-_FENCE = re.compile(r"^\s*(```|~~~)")
-_EXTERNAL = re.compile(r"^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|//)")
-
-
-def page_index() -> dict[str, str]:
-    """Map each source document to its wiki page name."""
-    return {source: name for _, pages in PAGES for name, source in pages}
-
-
-def _resolve(target: str, source: str) -> str:
-    """Repo-relative path a link in ``source`` points at ("" if outside)."""
-    if target.startswith("/"):
-        path = posixpath.normpath(target.lstrip("/"))
-    else:
-        path = posixpath.normpath(posixpath.join(posixpath.dirname(source), target))
-    return "" if path.startswith("..") else path
-
-
-def rewrite_links(text: str, source: str, pages: dict[str, str], root: Path, errors: list[str]) -> str:
-    """Rewrite the relative links of one repository document for the wiki.
-
-    Links to another published document become wiki page links, links to any
-    other repository file become GitHub links, and links that were already
-    absolute or in-page are kept. Code fences are left alone.
-    """
-
-    def swap(match: re.Match[str]) -> str:
-        target, title = match.group(1), match.group(2) or ""
-        if _EXTERNAL.match(target) or target.startswith("#"):
-            return match.group(0)
-        path_part, _, anchor = target.partition("#")
-        path = _resolve(path_part, source)
-        suffix = f"#{anchor}" if anchor else ""
-        if path in pages:
-            return f"]({pages[path]}{suffix}{title})"
-        on_disk = root / path if path else None
-        if on_disk is None or not on_disk.exists():
-            errors.append(f"{source}: link to missing file {target!r}")
-            return match.group(0)
-        kind = "tree" if on_disk.is_dir() else "blob"
-        return f"]({REPO_URL}/{kind}/{DEFAULT_BRANCH}/{path}{suffix}{title})"
-
-    out: list[str] = []
-    in_fence = False
-    for line in text.splitlines(keepends=True):
-        if _FENCE.match(line):
-            in_fence = not in_fence
-        out.append(line if in_fence else _LINK.sub(swap, line))
-    if in_fence:
-        errors.append(f"{source}: a code fence is opened and never closed")
-    return "".join(out)
 
 
 def check_wiki_links(text: str, source: str, names: set[str], errors: list[str]) -> None:
     """Report links in a hand-written wiki page that name no wiki page."""
     in_fence = False
     for line in text.splitlines():
-        if _FENCE.match(line):
+        if FENCE.match(line):
             in_fence = not in_fence
         if in_fence:
             continue
-        for match in _LINK.finditer(line):
+        for match in LINK.finditer(line):
             target = match.group(1)
-            if _EXTERNAL.match(target) or target.startswith("#"):
+            if EXTERNAL.match(target) or target.startswith("#"):
                 continue
             page = target.partition("#")[0]
             if page not in names:
@@ -262,7 +102,7 @@ def build(root: Path = REPO_ROOT) -> tuple[dict[str, str], list[str]]:
         for doc in sorted(docs_dir.glob("*.md")):
             rel = f"docs/{doc.name}"
             if rel not in pages and rel not in NOT_PUBLISHED:
-                errors.append(f"{rel}: add it to PAGES or NOT_PUBLISHED in tools/build_wiki.py")
+                errors.append(f"{rel}: add it to PAGES or NOT_PUBLISHED in netcontrol/docs_catalog.py")
 
     for source, name in pages.items():
         path = root / source

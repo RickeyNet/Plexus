@@ -156,6 +156,7 @@ export function Lab() {
       </PageHeader>
 
       <PageHelp
+        guide="Lab-Mode"
         pageKey="lab"
         title="Pre-Production Change Sandbox"
         text="Clone a production device, apply proposed commands or templates against the simulated snapshot, and review the diff and risk score before making the change on the real device."

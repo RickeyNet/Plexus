@@ -44,6 +44,7 @@ export function Federation() {
       <UntestedBanner feature="Federation" />
 
       <PageHelp
+        guide="Federation"
         pageKey="federation"
         title="Multi-Instance Federation"
         text="Manage and monitor multiple Plexus instances from a single pane of glass. Register remote peers, sync device counts, alert summaries, and compliance scores across sites or customers."

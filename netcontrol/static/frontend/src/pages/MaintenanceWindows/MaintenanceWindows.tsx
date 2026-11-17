@@ -75,6 +75,7 @@ export function MaintenanceWindows() {
   return (
     <div>
       <PageHelp
+        guide="Maintenance-Windows"
         pageKey="change-management.maintenance"
         title="Maintenance Windows"
         text="Define when production changes are allowed. Windows scoped to inventory groups gate deployments targeting those groups; global windows apply everywhere. Policy controls whether changes outside the window are blocked or just warned."

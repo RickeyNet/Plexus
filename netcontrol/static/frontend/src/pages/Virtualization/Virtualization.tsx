@@ -24,6 +24,7 @@ export function Virtualization() {
     <div>
       <PageHeader title="Virtualization" />
       <PageHelp
+        guide="Virtualization"
         pageKey="virtualization"
         title="Clusters and virtual machines"
         text="Model the clusters that run your virtual machines, the hypervisor hosts in each, and every VM with its interfaces and addresses. AWS, Azure and GCP instances found by Cloud Visibility are added and kept current automatically; a VM you edit keeps your values."

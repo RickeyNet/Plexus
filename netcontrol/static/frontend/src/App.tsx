@@ -35,6 +35,7 @@ const Inventory = lazy(() => pageLoaders.inventory().then(m => ({ default: m.Inv
 const Ipam = lazy(() => pageLoaders.ipam().then(m => ({ default: m.Ipam })));
 const Routing = lazy(() => pageLoaders.routing().then(m => ({ default: m.Routing })));
 const Circuits = lazy(() => pageLoaders.circuits().then(m => ({ default: m.Circuits })));
+const Help = lazy(() => pageLoaders.help().then(m => ({ default: m.Help })));
 const Dcim = lazy(() => pageLoaders.dcim().then(m => ({ default: m.Dcim })));
 const Software = lazy(() => pageLoaders.software().then(m => ({ default: m.Software })));
 const Jobs = lazy(() => pageLoaders.jobs().then(m => ({ default: m.Jobs })));
@@ -238,6 +239,8 @@ export function App() {
           {/* Topology: the map (/topology), the reachability sweep (/topology/reachability) and address summaries (/topology/summarize). */}
           <Route path="/topology/:tab?" element={<Topology />} />
           <Route path="/settings/:tab?" element={<Settings />} />
+          {/* Help: the user guides; /help is the front page, /help/<page> a guide. */}
+          <Route path="/help/:page?" element={<Help />} />
           {/* Declarative pages of plugins (docs/plugin-development.md). */}
           <Route path="/plugins/:name/:pageId" element={<PluginPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />

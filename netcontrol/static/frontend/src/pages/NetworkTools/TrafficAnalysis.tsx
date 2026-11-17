@@ -111,6 +111,7 @@ export function TrafficAnalysis() {
       </div>
 
       <PageHelp
+        guide="Network-Tools"
         pageKey="traffic-analysis"
         title="Traffic Analysis"
         text="Analyze NetFlow/sFlow/IPFIX traffic patterns by talker, application, conversation, or over time. Filter by host to scope to a single exporter, or view all collected flows."

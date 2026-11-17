@@ -92,10 +92,12 @@ groups, playbooks, templates and a default credential.
 
 ## Guides
 
-The same guides are published as the [GitHub wiki](https://github.com/RickeyNet/Plexus/wiki).
+The same guides are published as the [GitHub wiki](https://github.com/RickeyNet/Plexus/wiki)
+and shown inside Plexus under **Help** in the sidebar.
 The wiki is generated from this repository by `tools/build_wiki.py`
 (`wiki/Home.md` is its front page), so edit the files here, not the wiki.
-A new file under `docs/` must be added to `PAGES` in that tool.
+A new file under `docs/` must be added to `PAGES` in
+`netcontrol/docs_catalog.py`, the page list both use.
 
 **Operators**
 

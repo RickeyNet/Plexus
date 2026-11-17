@@ -79,6 +79,7 @@ export function MacTracking() {
       </div>
 
       <PageHelp
+        guide="Network-Tools"
         pageKey="mac-tracking"
         title="MAC & ARP Table Tracking"
         text="Search and browse MAC address and ARP tables collected from network devices, including the clients of Meraki devices (refreshed by each Meraki collection on the Topology page). Track where hosts are connected and trace MAC-to-IP mappings across the network. The Moves tab records every time a MAC relocates (switch, port, VLAN or IP binding change) so you can review and acknowledge them like config drift."
