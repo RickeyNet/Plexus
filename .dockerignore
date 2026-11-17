@@ -55,6 +55,17 @@ netcontrol/static/frontend/dist/
 .github/
 *.md
 LICENSE
+# ...except the user guides, which the app shows under Help: the root-level
+# pages of netcontrol/docs_catalog.py (docs/ and wiki/ are not excluded).
+# tests/test_help_docs.py fails when a page source is left out here.
+!AGENTS.md
+!AUTHORIZATION_MATRIX.md
+!CHANGELOG.md
+!DATA_RETENTION.md
+!DEVSETUP.md
+!FRONTEND_STYLE.md
+!RADIUS_CONFIGURATION_GUIDE.md
+!TACACS_CONFIGURATION_GUIDE.md
 
 # Dev tooling
 .pre-commit-config.yaml
@@ -70,5 +81,10 @@ Thumbs.db
 # Deploy scripts (not needed inside container; entrypoint is copied at build time)
 deploy/*
 !deploy/docker-entrypoint.sh
+# The deploy guides shown under Help.
+!deploy/DEPLOYMENT.md
+!deploy/FIREWALL.md
+!deploy/airgap/README.md
+!deploy/airgap/VM_SETUP.md
 # Extra CA certificates the build trusts (see deploy/build-ca/README.txt).
 !deploy/build-ca/

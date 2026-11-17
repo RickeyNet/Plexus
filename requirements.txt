@@ -12,6 +12,8 @@ cryptography==50.0.2
 # (netcontrol/integrations/safe_xml.py).
 defusedxml==0.7.1
 pyyaml==6.0.3
+# Renders the user guides under Help (netcontrol/routes/help_docs.py).
+markdown-it-py==4.2.0
 itsdangerous==2.2.0
 python-multipart==0.0.32
 requests==2.34.2

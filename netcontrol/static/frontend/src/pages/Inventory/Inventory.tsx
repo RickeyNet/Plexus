@@ -342,6 +342,7 @@ export function Inventory() {
       </PageHeader>
 
       <PageHelp
+        guide="Core-Concepts"
         pageKey="inventory"
         title="Manage Your Devices"
         text="Add, edit, and organize network devices into groups. Devices added here are used across monitoring, backups, compliance, and automation features."

@@ -227,6 +227,13 @@ const ic = {
       <path d="M8 12h8" />
     </svg>
   ),
+  help: (
+    <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+      <line x1="12" y1="17" x2="12.01" y2="17" />
+    </svg>
+  ),
   settings: (
     <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="3" />
@@ -309,6 +316,7 @@ const NAV: TopItem[] = [
       { label: 'Lab / Digital Twin', icon: ic.lab, to: '/lab', feature: 'lab' },
     ],
   },
+  { label: 'Help', icon: ic.help, to: '/help' },
   { label: 'Settings', icon: ic.settings, to: '/settings' },
 ];
 

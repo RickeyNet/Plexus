@@ -6,6 +6,9 @@ the network across on-premises and cloud, and watches availability and
 software versions. It is a FastAPI backend with a React frontend, on
 PostgreSQL, shipped as a Docker compose stack.
 
+The same guides are inside Plexus: **Help** in the sidebar, and the
+**Read the guide** link on a page's help banner.
+
 ## Start here
 
 | I want to | Read |

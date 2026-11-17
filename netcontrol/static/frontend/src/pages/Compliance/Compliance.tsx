@@ -189,6 +189,7 @@ export function Compliance() {
       </PageHeader>
 
       <PageHelp
+        guide="Compliance"
         pageKey="compliance"
         title="Policy Compliance Auditing"
         text="Define compliance rules and run audits against your devices. Check configurations against security policies, best practices, and industry standards."

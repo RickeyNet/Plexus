@@ -107,6 +107,7 @@ export function FloorPlan() {
       </PageHeader>
 
       <PageHelp
+        guide="Floor-Plan"
         pageKey="floor-plan"
         title="Place Devices on Floor Plans"
         text="Upload floor plan images per site, then drag inventory devices onto them. Devices show live status colors so you can locate problems geographically - handy for closet-based switch ops and physical site reviews."

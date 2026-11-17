@@ -94,7 +94,7 @@ def test_sidebar_lists_every_page_once() -> None:
 def test_build_reports_unlisted_doc_and_missing_home(repo: Path) -> None:
     (repo / "docs" / "new-feature.md").write_text("# New\n", encoding="utf-8")
     _, errors = build_wiki.build(repo)
-    assert "docs/new-feature.md: add it to PAGES or NOT_PUBLISHED in tools/build_wiki.py" in errors
+    assert "docs/new-feature.md: add it to PAGES or NOT_PUBLISHED in netcontrol/docs_catalog.py" in errors
     assert "wiki/Home.md is missing" in errors
 
 

@@ -24,6 +24,7 @@ export function Organization() {
     <div>
       <PageHeader title="Organization" />
       <PageHelp
+        guide="Locations-and-Tenancy"
         pageKey="organization"
         title="Locations and tenants"
         text="Regions nest inside each other and hold sites; sites hold floors. Tenants say who a host, site, prefix, IP address, VLAN or VRF belongs to, and tenant groups file them. Filter inventory by region (including the regions under it) or by tenant."

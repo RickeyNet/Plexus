@@ -61,6 +61,7 @@ const LABELS: Record<string, string> = {
   '/topology/reachability': 'Topology · Reachability',
   '/topology/summarize': 'Topology · Summarize',
   '/settings': 'Settings',
+  '/help': 'Help',
   '/network-tools': 'Network Tools · MAC Tracking',
   '/network-tools/traffic': 'Network Tools · Traffic Analysis',
 };
@@ -78,6 +79,9 @@ export function breadcrumbTrail(pathname: string): Crumb[] {
   let label = LABELS[pathname];
   if (!label && pathname.startsWith('/devices/')) {
     return [{ label: 'Inventory', to: '/inventory' }, { label: 'Device Detail' }];
+  }
+  if (!label && pathname.startsWith('/help/')) {
+    return [{ label: 'Help', to: '/help' }, { label: decodeURIComponent(pathname.slice('/help/'.length)).replace(/-/g, ' ') }];
   }
   if (!label && pathname.startsWith('/plugins/')) {
     return [{ label: 'Plugins' }];

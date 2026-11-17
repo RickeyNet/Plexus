@@ -57,4 +57,9 @@ describe('breadcrumbTrail', () => {
     ]);
     expect(breadcrumbTrail('/plugins/example/spares')).toEqual([{ label: 'Plugins' }]);
   });
+
+  it('names a help guide under Help', () => {
+    expect(breadcrumbTrail('/help')).toEqual([{ label: 'Help' }]);
+    expect(breadcrumbTrail('/help/Path-Trace')).toEqual([{ label: 'Help', to: '/help' }, { label: 'Path Trace' }]);
+  });
 });
