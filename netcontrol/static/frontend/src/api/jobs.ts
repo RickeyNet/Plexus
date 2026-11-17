@@ -6,6 +6,7 @@
  */
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
+import type { ExternalReferenceBody, ReferencedRow } from '@/lib/secretsProviders';
 import type { Tone } from '@/lib/severity';
 
 import { apiRequest } from './client';
@@ -195,19 +196,36 @@ export interface TemplatePayload {
   device_type?: string;
 }
 
-export interface Credential {
+/** `ext_*`: the external secrets provider reference, when the value is not
+ *  stored in Plexus (docs/secrets-providers.md). */
+export interface Credential extends ReferencedRow {
   id: number;
   name: string;
   username: string;
   created_at?: string | null;
 }
 
-export interface SecretVariable {
+export interface SecretVariable extends ReferencedRow {
   id: number;
   name: string;
   description?: string | null;
   created_by?: string | null;
   created_at?: string | null;
+}
+
+export interface CredentialPayload {
+  name: string;
+  username: string;
+  password?: string;
+  secret?: string;
+  external?: ExternalReferenceBody;
+}
+
+export interface SecretVariablePayload {
+  name: string;
+  value?: string;
+  description?: string;
+  external?: ExternalReferenceBody;
 }
 
 // ── Playbooks ──────────────────────────────────────────────────────────────
@@ -411,8 +429,7 @@ export function useJobCredentials() {
 export function useCreateCredential() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { name: string; username: string; password: string; secret?: string }) =>
-      apiRequest<Credential>('/credentials', { method: 'POST', body }),
+    mutationFn: (body: CredentialPayload) => apiRequest<Credential>('/credentials', { method: 'POST', body }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['credentials'] }),
   });
 }
@@ -420,7 +437,7 @@ export function useCreateCredential() {
 export function useUpdateCredential() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, data }: { id: number; data: Partial<{ name: string; username: string; password: string; secret: string }> }) =>
+    mutationFn: ({ id, data }: { id: number; data: Partial<CredentialPayload> }) =>
       apiRequest<Credential>(`/credentials/${id}`, { method: 'PUT', body: data }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['credentials'] }),
   });
@@ -449,7 +466,7 @@ export function useSecretVariables(enabled = true) {
 export function useCreateSecretVariable() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { name: string; value: string; description?: string }) =>
+    mutationFn: (body: SecretVariablePayload) =>
       apiRequest<SecretVariable>('/secret-variables', { method: 'POST', body }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['secret-variables'] }),
   });
@@ -458,7 +475,7 @@ export function useCreateSecretVariable() {
 export function useUpdateSecretVariable() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, data }: { id: number; data: { value?: string; description?: string } }) =>
+    mutationFn: ({ id, data }: { id: number; data: Omit<Partial<SecretVariablePayload>, 'name'> }) =>
       apiRequest<SecretVariable>(`/secret-variables/${id}`, { method: 'PUT', body: data }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['secret-variables'] }),
   });

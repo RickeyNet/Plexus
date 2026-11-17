@@ -167,4 +167,6 @@ export const OBJECT_TYPE_LABELS: Record<string, string> = {
   cluster: 'Clusters',
   virtual_machine: 'Virtual machines',
   vm_interface: 'VM interfaces',
+  hardware_notice: 'End-of-life notices',
+  support_contract: 'Support contracts',
 };

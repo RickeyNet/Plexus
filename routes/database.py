@@ -2958,6 +2958,7 @@ from routes.db.audit import *  # noqa: E402,F403
 from routes.db.baselines import *  # noqa: E402,F403
 from routes.db.billing import *  # noqa: E402,F403
 from routes.db.cato_egress import *  # noqa: E402,F403
+from routes.db.chatops import *  # noqa: E402,F403
 from routes.db.circuits import *  # noqa: E402,F403
 from routes.db.cloud import *  # noqa: E402,F403
 from routes.db.credentials import *  # noqa: E402,F403
@@ -2970,6 +2971,7 @@ from routes.db.flows import *  # noqa: E402,F403
 from routes.db.geolocation import *  # noqa: E402,F403
 from routes.db.git_sources import *  # noqa: E402,F403
 from routes.db.graphs import *  # noqa: E402,F403
+from routes.db.hardware_lifecycle import *  # noqa: E402,F403
 from routes.db.intended_config import *  # noqa: E402,F403
 from routes.db.inventory import *  # noqa: E402,F403
 from routes.db.ipam import *  # noqa: E402,F403
@@ -2989,6 +2991,7 @@ from routes.db.organization import *  # noqa: E402,F403
 from routes.db.playbooks import *  # noqa: E402,F403
 from routes.db.reporting import *  # noqa: E402,F403
 from routes.db.routing import *  # noqa: E402,F403
+from routes.db.secrets_providers import *  # noqa: E402,F403
 from routes.db.software import *  # noqa: E402,F403
 from routes.db.topology import *  # noqa: E402,F403
 from routes.db.topology_availability import *  # noqa: E402,F403

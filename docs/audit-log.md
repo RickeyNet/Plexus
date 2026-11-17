@@ -51,6 +51,7 @@ The category names the area that wrote the event. Common categories:
 |---|---|
 | `auth` | Sign-in success and failure (with `source=`), password change, idle-timeout sign-out, users, access groups, feature visibility |
 | `credential` | Each allow or deny decision when a stored credential is used |
+| `secrets_providers` | Secrets provider changes and tests, and every external secret that could not be resolved ([secrets-providers.md](secrets-providers.md#audit)) |
 | `inventory`, `device_model`, `custom_fields`, `network_objects`, `ipam`, `dhcp`, `geolocation`, `circuits` | Inventory and IPAM records |
 | `config`, `config-backups`, `config-drift`, `compliance` | Configuration templates, backups, drift and compliance |
 | `jobs`, `deployments`, `upgrades`, `maintenance-windows`, `risk-analysis` | Jobs and change work |
@@ -58,6 +59,7 @@ The category names the area that wrote the event. Common categories:
 | `software`, `billing`, `federation`, `lab`, `mac-tracking` | The feature of the same name |
 | `system`, `admin_updates` | Server settings such as syslog and SIEM forwarding, and in-app updates |
 | `mcp` | AI access: every tool call, token changes and failed sign-ins ([ai-access.md](ai-access.md#audit-trail)) |
+| `chatops` | ChatOps: every command received from Slack, Webex or Teams, and bot, user mapping and job preset changes ([chatops.md](chatops.md#command-log-and-audit)) |
 
 The list is not closed. A feature may add its own category; feature guides
 name theirs, for example [device-model.md](device-model.md) (`device_model`)

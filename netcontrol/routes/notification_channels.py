@@ -5,8 +5,9 @@ Monitoring alerts are persisted to `monitoring_alerts` and surfaced in the SPA,
 but a toast in a browser tab nobody is watching does not wake the on-call
 engineer at 3 AM. This module owns the engine that turns each NEWLY created
 monitoring alert into one or more outbound notifications: email (SMTP),
-PagerDuty Events API v2, a generic JSON webhook, and Microsoft Teams incoming
-webhooks.
+PagerDuty Events API v2, a generic JSON webhook, Microsoft Teams incoming
+webhooks, and the Slack and Webex ChatOps bots (``netcontrol.chatops.notify``:
+a message with an Acknowledge button, posted with the bot's token).
 
 Architecture (mirrors ``siem_forwarder``)
 -----------------------------------------
@@ -63,7 +64,9 @@ LOGGER = configure_logging("plexus.notify")
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-SUPPORTED_TYPES = ("email", "pagerduty", "webhook", "teams")
+SUPPORTED_TYPES = ("email", "pagerduty", "webhook", "teams", "slack", "webex")
+# Delivered through the ChatOps bot of the same platform (docs/chatops.md).
+CHAT_TYPES = ("slack", "webex")
 # Alerts only ever carry these three severities (see monitoring evaluator),
 # but we accept "info" as a floor so a channel can opt in to everything.
 SUPPORTED_SEVERITIES = ("info", "warning", "critical")
@@ -96,7 +99,7 @@ class ChannelConfig:
     id: str
     name: str
     enabled: bool
-    type: str  # email | pagerduty | webhook | teams
+    type: str  # email | pagerduty | webhook | teams | slack | webex
     severity_floor: str  # info | warning | critical
     queue_size: int
     max_retries: int
@@ -124,6 +127,10 @@ class ChannelConfig:
 
     # teams
     teams_webhook_url: str = ""
+
+    # slack / webex: the channel id (Slack) or room id (Webex) the ChatOps
+    # bot posts to; the bot's token is stored with the bot, not here.
+    chat_channel: str = ""
 
 
 @dataclass
@@ -213,6 +220,7 @@ def sanitize_channel(raw: dict | None) -> ChannelConfig | None:
         webhook_auth_value=str(raw.get("webhook_auth_value") or ""),
         verify_tls=_coerce_bool(raw.get("verify_tls"), True),
         teams_webhook_url=str(raw.get("teams_webhook_url") or "").strip(),
+        chat_channel=str(raw.get("chat_channel") or "").strip(),
     )
 
     # Type-specific required fields. A channel that can't possibly deliver is
@@ -228,6 +236,9 @@ def sanitize_channel(raw: dict | None) -> ChannelConfig | None:
             return None
     elif ctype == "teams":
         if not cfg.teams_webhook_url.lower().startswith(("http://", "https://")):
+            return None
+    elif ctype in CHAT_TYPES:
+        if not cfg.chat_channel or len(cfg.chat_channel) > 200:
             return None
     return cfg
 
@@ -279,6 +290,7 @@ def channel_config_to_dict(cfg: ChannelConfig, *, redact_secrets: bool = True) -
         "webhook_auth_value": secret(cfg.webhook_auth_value),
         "verify_tls": cfg.verify_tls,
         "teams_webhook_url": cfg.teams_webhook_url,
+        "chat_channel": cfg.chat_channel,
     }
 
 
@@ -343,7 +355,7 @@ def _severity_label(severity: str) -> str:
     return s if s in SUPPORTED_SEVERITIES else "warning"
 
 
-def _alert_summary(alert: dict) -> str:
+def alert_summary(alert: dict) -> str:
     """One-line human summary used as the notification title."""
     host = alert.get("hostname") or f"host {alert.get('host_id', '?')}"
     sev = _severity_label(alert.get("severity", "warning")).upper()
@@ -377,7 +389,7 @@ def format_pagerduty(alert: dict, cfg: ChannelConfig) -> dict:
         "routing_key": cfg.routing_key,
         "event_action": "trigger",
         "payload": {
-            "summary": (alert.get("message") or _alert_summary(alert))[:1024],
+            "summary": (alert.get("message") or alert_summary(alert))[:1024],
             "source": host,
             "severity": sev,
             "component": alert.get("metric", ""),
@@ -413,6 +425,20 @@ def format_webhook(alert: dict) -> dict:
     }
 
 
+def alert_facts(alert: dict) -> list[tuple[str, str]]:
+    """The label / value facts of an alert card (Teams, Slack, Webex)."""
+    sev = _severity_label(alert.get("severity", "warning"))
+    host = alert.get("hostname") or f"host {alert.get('host_id', '?')}"
+    facts = [("Host", str(host)), ("Severity", sev.upper()), ("Metric", str(alert.get("metric", "")))]
+    if alert.get("value") is not None:
+        facts.append(("Value", str(alert.get("value"))))
+    if alert.get("threshold") is not None:
+        facts.append(("Threshold", str(alert.get("threshold"))))
+    if alert.get("timestamp"):
+        facts.append(("Time", str(alert.get("timestamp"))))
+    return facts
+
+
 def format_teams(alert: dict) -> dict:
     """Microsoft Teams legacy MessageCard (Office 365 connector) payload.
 
@@ -420,24 +446,13 @@ def format_teams(alert: dict) -> dict:
     Card flow requires Workflows/Power Automate and is out of scope for v1.
     """
     sev = _severity_label(alert.get("severity", "warning"))
-    host = alert.get("hostname") or f"host {alert.get('host_id', '?')}"
-    facts = [
-        {"name": "Host", "value": str(host)},
-        {"name": "Severity", "value": sev.upper()},
-        {"name": "Metric", "value": str(alert.get("metric", ""))},
-    ]
-    if alert.get("value") is not None:
-        facts.append({"name": "Value", "value": str(alert.get("value"))})
-    if alert.get("threshold") is not None:
-        facts.append({"name": "Threshold", "value": str(alert.get("threshold"))})
-    if alert.get("timestamp"):
-        facts.append({"name": "Time", "value": str(alert.get("timestamp"))})
+    facts = [{"name": name, "value": value} for name, value in alert_facts(alert)]
     return {
         "@type": "MessageCard",
         "@context": "http://schema.org/extensions",
         "themeColor": _TEAMS_COLOR.get(sev, "F7A700"),
-        "summary": _alert_summary(alert),
-        "title": _alert_summary(alert),
+        "summary": alert_summary(alert),
+        "title": alert_summary(alert),
         "sections": [
             {
                 "activityTitle": "Plexus Network Monitoring Alert",
@@ -451,7 +466,7 @@ def format_teams(alert: dict) -> dict:
 def build_email(alert: dict, cfg: ChannelConfig) -> EmailMessage:
     """Build the MIME message for an email channel."""
     msg = EmailMessage()
-    msg["Subject"] = _alert_summary(alert)
+    msg["Subject"] = alert_summary(alert)
     msg["From"] = cfg.mail_from
     msg["To"] = ", ".join(_parse_recipients(cfg.mail_to))
     msg["Date"] = formatdate(localtime=True)
@@ -555,7 +570,12 @@ async def _deliver_email(cfg: ChannelConfig, alert: dict) -> None:
 
 async def deliver(cfg: ChannelConfig, alert: dict) -> None:
     """Format and send one alert through one channel. Raises on failure."""
-    if cfg.type == "email":
+    if cfg.type in CHAT_TYPES:
+        # Imported here: the ChatOps package imports the MCP tools.
+        from netcontrol.chatops.notify import deliver_chat_alert
+
+        await deliver_chat_alert(cfg.type, cfg.chat_channel, alert)
+    elif cfg.type == "email":
         await _deliver_email(cfg, alert)
     elif cfg.type == "pagerduty":
         await _deliver_pagerduty(cfg, alert)
@@ -702,6 +722,7 @@ def _config_changed(old: ChannelConfig, new: ChannelConfig) -> bool:
         "webhook_auth_value",
         "verify_tls",
         "teams_webhook_url",
+        "chat_channel",
     ):
         if getattr(old, fname) != getattr(new, fname):
             return True

@@ -98,6 +98,8 @@ TYPE_FEATURES: dict[str, str] = {
     "routing_instance": "routing",
     "bgp_peer_group": "routing",
     "bgp_peering": "routing",
+    "hardware_notice": "lifecycle",
+    "support_contract": "lifecycle",
 }
 # Types whose rows carry the inventory group they belong to; the only ones a
 # caller limited to selected groups may see.
@@ -117,6 +119,8 @@ _LABEL_FIELDS: dict[str, tuple[str, ...]] = {
     "circuit": ("cid",),
     "circuit_termination": ("term_side",),
     "bgp_peering": ("remote_address",),
+    "hardware_notice": ("part_number", "id"),
+    "support_contract": ("contract_id",),
 }
 
 _prune_task: asyncio.Task | None = None

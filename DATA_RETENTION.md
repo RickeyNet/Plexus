@@ -29,6 +29,7 @@ or the corresponding API endpoint without a restart.
 | **Cloud traffic metrics**        | **7 days (168h)** | `PUT /api/cloud/traffic-sync/config` `retention_hours`; pruned by the cloud traffic sync loop |
 | Webhook delivery log (`webhook_deliveries`) | 30 days | `APP_WEBHOOK_DELIVERY_RETENTION_DAYS` (env, minimum 1); pruned hourly by the webhook dispatcher. Deleting a webhook deletes its log. See `docs/webhooks.md` |
 | Per-object change log (`object_changes`) | 90 days | `Settings > System > Change log` / `change_log_retention_days` (1 to 3650); pruned hourly. See `docs/change-log.md` |
+| ChatOps command log (`chatops_command_log`) | 90 days | Fixed; rows older than that are deleted as new commands are logged. See `docs/chatops.md` |
 
 Minimums are enforced at the API layer (e.g. job history can't go below
 30 days). Increase a value freely; the next cleanup pass will simply

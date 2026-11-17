@@ -48,7 +48,7 @@ def cred_env(monkeypatch):
     users_by_id = {u["id"]: u for u in (ALICE, BOB, ROOT)}
     users_by_name = {u["username"]: u for u in (ALICE, BOB, ROOT)}
 
-    async def fake_get_credential_raw(cid):
+    async def fake_get_credential_raw(cid, **_kwargs):
         return CREDS.get(int(cid)) if cid is not None else None
 
     async def fake_get_user_by_id(uid):

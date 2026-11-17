@@ -15,6 +15,20 @@ import {
   useUpdateSecretVariable,
   type SecretVariable,
 } from '@/api/jobs';
+import { useReferenceProviders } from '@/api/secretsProviders';
+import { ExternalReferenceFields, ValueSourceToggle, type ValueSource } from '@/components/ExternalReferenceFields';
+import { SecretInput } from '@/components/SecretInput';
+import {
+  hasReference,
+  referenceDraft,
+  referenceLabel,
+  referencePayload,
+  sameReference,
+  validateReference,
+  type ExternalReferenceBody,
+  type ReferenceDraft,
+  type ReferenceErrors,
+} from '@/lib/secretsProviders';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 
 export function SecretVariablesList() {
@@ -65,6 +79,11 @@ export function SecretVariablesList() {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div><code style={{ fontWeight: 600 }}>{`{{secret.${v.name}}}`}</code></div>
                 {v.description && <div className="text-muted" style={{ fontSize: '0.85rem', marginTop: '0.15rem' }}>{v.description}</div>}
+                {hasReference(v) && (
+                  <div className="text-muted" style={{ fontSize: '0.85rem', marginTop: '0.15rem' }}>
+                    External: {referenceLabel(v)}
+                  </div>
+                )}
                 <div className="text-muted" style={{ fontSize: '0.75rem', marginTop: '0.15rem' }}>
                   Created by {v.created_by || 'system'}
                   {v.created_at && ` • ${v.created_at.replace('T', ' ').substring(0, 16)}`}
@@ -98,12 +117,17 @@ function normalizeSecretName(raw: string): string {
 
 function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const createMut = useCreateSecretVariable();
+  const providers = useReferenceProviders(isOpen);
   const formId = useId();
   const [name, setName] = useState('');
   const [value, setValue] = useState('');
   const [description, setDescription] = useState('');
+  const [source, setSource] = useState<ValueSource>('stored');
+  const [reference, setReference] = useState<ReferenceDraft>(() => referenceDraft(null));
   const [errors, setErrors] = useState<{ name?: string; value?: string }>({});
+  const [refErrors, setRefErrors] = useState<ReferenceErrors>({});
   const [saveError, setSaveError] = useState<string | null>(null);
+  const external = source === 'external';
 
   const normalized = normalizeSecretName(name);
   const nameValid = SECRET_NAME_RE.test(normalized);
@@ -118,14 +142,25 @@ function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =
           ? `"${normalized}" is not a valid secret name. Use only letters, digits, underscore or hyphen, ` +
             'starting with a letter or underscore (e.g. snmp_v3_auth_key).'
           : undefined,
-      value: value ? undefined : 'Value is required',
+      value: value || external ? undefined : 'Value is required',
     };
     setErrors(nextErrors);
-    if (nextErrors.name || nextErrors.value) return;
+    const nextRef = external ? validateReference(reference) : {};
+    setRefErrors(nextRef);
+    if (nextErrors.name || nextErrors.value || Object.keys(nextRef).length > 0) return;
     createMut.mutate(
-      { name: normalized, value, description: description.trim() },
+      external
+        ? { name: normalized, description: description.trim(), external: referencePayload(reference) }
+        : { name: normalized, value, description: description.trim() },
       {
-        onSuccess: () => { setName(''); setValue(''); setDescription(''); onClose(); },
+        onSuccess: () => {
+          setName('');
+          setValue('');
+          setDescription('');
+          setSource('stored');
+          setReference(referenceDraft(null));
+          onClose();
+        },
         onError: (e) => { setSaveError((e as Error).message); },
       },
     );
@@ -181,21 +216,30 @@ function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =
           </small>
           <FieldError>{errors.name}</FieldError>
         </div>
-        <div className="form-group">
-          <label className="form-label" htmlFor={`${formId}-value`}>Value</label>
-          <input
-            id={`${formId}-value`}
-            className="form-input"
-            type="password"
-            value={value}
-            onChange={(e) => { setValue(e.target.value); setErrors((p) => ({ ...p, value: undefined })); }}
-            aria-invalid={!!errors.value}
-            autoComplete="new-password"
-            required
+        {(providers.data?.length ?? 0) > 0 && <ValueSourceToggle value={source} onChange={setSource} />}
+        {external ? (
+          <ExternalReferenceFields
+            idPrefix={`${formId}-ref`}
+            value={reference}
+            onChange={(next) => { setReference(next); setRefErrors({}); }}
+            providers={providers.data ?? []}
+            errors={refErrors}
           />
-          <small className="text-muted">The secret itself (any characters). Encrypted at rest and never shown again.</small>
-          <FieldError>{errors.value}</FieldError>
-        </div>
+        ) : (
+          <div className="form-group">
+            <label className="form-label" htmlFor={`${formId}-value`}>Value</label>
+            <SecretInput
+              id={`${formId}-value`}
+              label="value"
+              value={value}
+              onChange={(v) => { setValue(v); setErrors((p) => ({ ...p, value: undefined })); }}
+              invalid={!!errors.value}
+              required
+            />
+            <small className="text-muted">The secret itself (any characters). Encrypted at rest and never shown again.</small>
+            <FieldError>{errors.value}</FieldError>
+          </div>
+        )}
         <div className="form-group">
           <label className="form-label" htmlFor={`${formId}-description`}>Description (optional)</label>
           <input id={`${formId}-description`} className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} />
@@ -207,10 +251,16 @@ function CreateSecretModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =
 
 function EditSecretModal({ secret, onClose }: { secret: SecretVariable | null; onClose: () => void }) {
   const updateMut = useUpdateSecretVariable();
+  const providers = useReferenceProviders(secret != null);
   const formId = useId();
   const [value, setValue] = useState('');
   const [description, setDescription] = useState('');
+  const [source, setSource] = useState<ValueSource>('stored');
+  const [reference, setReference] = useState<ReferenceDraft>(() => referenceDraft(null));
+  const [refErrors, setRefErrors] = useState<ReferenceErrors>({});
   const [saveError, setSaveError] = useState<string | null>(null);
+  const wasExternal = hasReference(secret);
+  const external = source === 'external';
 
   const [prevSecret, setPrevSecret] = useState(secret);
   if (secret !== prevSecret) {
@@ -218,6 +268,9 @@ function EditSecretModal({ secret, onClose }: { secret: SecretVariable | null; o
     if (secret) {
       setValue('');
       setDescription(secret.description ?? '');
+      setSource(hasReference(secret) ? 'external' : 'stored');
+      setReference(referenceDraft(secret));
+      setRefErrors({});
       setSaveError(null);
     }
   }
@@ -226,8 +279,20 @@ function EditSecretModal({ secret, onClose }: { secret: SecretVariable | null; o
     e.preventDefault();
     if (!secret) return;
     setSaveError(null);
-    const data: { value?: string; description?: string } = { description: description.trim() };
-    if (value) data.value = value;
+    const data: { value?: string; description?: string; external?: ExternalReferenceBody } = {
+      description: description.trim(),
+    };
+    if (external) {
+      const nextRef = validateReference(reference);
+      setRefErrors(nextRef);
+      if (Object.keys(nextRef).length > 0) return;
+      if (!wasExternal || !sameReference(reference, referenceDraft(secret))) data.external = referencePayload(reference);
+    } else if (value) {
+      data.value = value;
+    } else if (wasExternal) {
+      setSaveError('Enter a value to replace the external reference.');
+      return;
+    }
     updateMut.mutate({ id: secret.id, data }, {
       onSuccess: () => { setValue(''); setDescription(''); onClose(); },
       onError: (e) => { setSaveError((e as Error).message); },
@@ -254,10 +319,23 @@ function EditSecretModal({ secret, onClose }: { secret: SecretVariable | null; o
           <label className="form-label" htmlFor={`${formId}-name`}>Name</label>
           <input id={`${formId}-name`} className="form-input" value={secret?.name ?? ''} disabled />
         </div>
-        <div className="form-group">
-          <label className="form-label" htmlFor={`${formId}-value`}>New Value (leave blank to keep current)</label>
-          <input id={`${formId}-value`} className="form-input" type="password" value={value} onChange={(e) => setValue(e.target.value)} />
-        </div>
+        {(wasExternal || (providers.data?.length ?? 0) > 0) && <ValueSourceToggle value={source} onChange={setSource} />}
+        {external ? (
+          <ExternalReferenceFields
+            idPrefix={`${formId}-ref`}
+            value={reference}
+            onChange={(next) => { setReference(next); setRefErrors({}); }}
+            providers={providers.data ?? []}
+            errors={refErrors}
+          />
+        ) : (
+          <div className="form-group">
+            <label className="form-label" htmlFor={`${formId}-value`}>
+              {wasExternal ? 'Value (replaces the external reference)' : 'New Value (leave blank to keep current)'}
+            </label>
+            <SecretInput id={`${formId}-value`} label="value" value={value} onChange={setValue} />
+          </div>
+        )}
         <div className="form-group">
           <label className="form-label" htmlFor={`${formId}-description`}>Description</label>
           <input id={`${formId}-description`} className="form-input" value={description} onChange={(e) => setDescription(e.target.value)} />

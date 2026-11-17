@@ -144,6 +144,46 @@ Reads need the `dcim` feature, writes `dcim.write` (admins have both); writes ar
 | PUT    | `/api/dcim/hosts/{host_id}/placement` | `{rack_id?, rack_position?, rack_face?}`: mount, move or (`rack_id: null`) unrack; `422` when it does not fit, overlaps a device or reservation, or the rack is at another site. `PUT /api/hosts/{id}` accepts the same three keys |
 | GET    | `/api/dcim/choices` | Every fixed choice set (statuses, port, cable and endpoint types, feed options) |
 
+### Sync (NetBox, Nautobot, ServiceNow)
+Reads need the `sync` feature; adding, editing, deleting and running jobs need `sync.write`; connections are admin only. A job that writes into Plexus (`import`, `bidirectional`) also needs admin, or only `inventory.write` when devices are its only object type, when it is saved and run for real (`403` otherwise). Every write and run is audited (`sync`). A refused value is `422` with `detail = {message, fields}`; a taken name, a connection used by jobs or a job already running is `409`. See [sync-framework.md](sync-framework.md).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET    | `/api/sync/catalog` | `{kinds: [{id, label, auth_types, notes}], object_types: [{id, label, key, fields, optional}], directions, conflict_policies, default_mappings: {kind: {object_type: {endpoint, paths, read_only, optional}}}, interval_min, interval_max}` |
+| GET    | `/api/sync/connections` | `{"connections": [Connection]}`. A Connection: `id`, `name`, `kind` (`netbox`, `nautobot`, `servicenow`), `base_url`, `auth_type` (`token`, `basic`, `oauth`), `credential_id`, `credential_name`, `verify_tls`, `has_ca_pem`, `timeout_seconds`, `description`, `last_test_at`, `last_test_ok`, `last_test_message`, `job_count`, the stamps. Never a secret |
+| GET    | `/api/sync/connections/{id}` | One Connection |
+| POST   | `/api/sync/connections` | Admin. `{name, kind, base_url (https), auth_type, credential_id (a service credential), verify_tls?, ca_pem?, timeout_seconds? (5-300), description?}`. `201`; `409` for a taken name |
+| PUT / DELETE | `/api/sync/connections/{id}` | Admin. PUT takes the POST body (`ca_pem: null` keeps the stored bundle, `""` removes it; the kind cannot change while jobs use it); DELETE `409` while jobs use it |
+| POST   | `/api/sync/connections/{id}/test` | Admin. Signs in and reads one record: `{ok, message}` (also stored on the connection) |
+| GET    | `/api/sync/jobs` | `{"jobs": [Job]}` (`?connection_id=`). A Job: `id`, `name`, `connection_id`, `connection_name`, `connection_kind`, `object_types`, `direction` (`import`, `export`, `bidirectional`), `conflict_policy` (`source_wins`, `plexus_wins`, `skip_conflicts`), `delete_missing`, `mappings`, `options` (`host_group`), `interval_minutes`, `enabled`, `description`, `last_run_id`, `last_run_status`, `last_run_at`, `last_attempt_at`, `running`, the stamps |
+| GET    | `/api/sync/jobs/{id}` | One Job |
+| POST   | `/api/sync/jobs` | `{name, connection_id, object_types: [sites\|manufacturers\|device_types\|vrfs\|vlans\|prefixes\|ip_addresses\|devices], direction?, conflict_policy?, delete_missing?, mappings?, host_group?, interval_minutes? (0 or 5-10080), enabled?, description?}`. `201`; `422` for a mapping that does not resolve against the connection's system |
+| PUT / DELETE | `/api/sync/jobs/{id}` | PUT takes the POST body; DELETE removes the job with its runs (`409` while it runs) |
+| POST   | `/api/sync/jobs/{id}/run` | `{dry_run: true}` (default) or `false`. `202` with the `running` Run; the run continues after the answer. `409` when the job is running |
+| GET    | `/api/sync/runs` | `{"runs": [Run]}` newest first (`?job_id=`, `limit` up to 500). A Run: `id`, `job_id`, `job_name`, `dry_run`, `trigger` (`manual`, `schedule`), `status` (`running`, `success`, `partial`, `failed`), `started_by`, `started_at`, `finished_at`, `summary` (per object type: `remote_records`, `plexus_records`, `unchanged`, `create`, `update`, `delete`, `conflict`, `planned`, `applied`, `failed`, `skipped`, `fields`, `warnings?`, or `error`), `message` |
+| GET    | `/api/sync/runs/{id}` | One Run |
+| GET    | `/api/sync/runs/{id}/entries` | `{entries, total, limit, offset}` (`?object_type=&outcome=&limit=` up to 1000 `&offset=`). An entry: `id`, `object_type`, `key`, `action` (`create`, `update`, `delete`, `conflict`), `target` (`plexus`, `remote`), `changes` (`{field: {before, after}}`, a conflict `{field: {plexus, remote}}`), `outcome` (`planned`, `applied`, `failed`, `skipped`), `message` |
+
+### Hardware lifecycle
+Reads need the `lifecycle` feature, writes `lifecycle.write` (admins have both); writes are audited (`lifecycle`) and notices and contracts are tracked in the change log. A refused write is `422` with `detail = {message, fields}`; a duplicate device type, part number or contract ID is `409`. Dates are `YYYY-MM-DD` (`""` when unset). See [hardware-lifecycle.md](hardware-lifecycle.md).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET    | `/api/lifecycle/notices` | `{"notices": [Notice]}`; filters `device_type_id`, `q` (part of the model, part number or comments). A Notice: `id`, `device_type_id`, `device_type_model`, `device_type_part_number`, `manufacturer_name`, `part_number`, `end_of_sale`, `end_of_sw_maintenance`, `end_of_security_fixes`, `end_of_support`, `documentation_url`, `comments`, the stamps, `host_count` (devices it applies to), `stage` and `next` (`{milestone, label, date, days}` or null) as of today |
+| POST   | `/api/lifecycle/notices` | `{device_type_id? \| part_number?, end_of_sale?, end_of_sw_maintenance?, end_of_security_fixes?, end_of_support?, documentation_url?, comments?}`: exactly one of `device_type_id` / `part_number`; a milestone may not be before an earlier one. `201`; `409` when the device type has a notice or the part number is taken ignoring case |
+| GET    | `/api/lifecycle/notices/{id}` | The Notice plus `hosts`: `[{id, hostname, ip_address, via}]`, `via` listing `device_type`, `part_number` and/or `module` |
+| PUT / DELETE | `/api/lifecycle/notices/{id}` | PUT takes any Notice field (left out keeps the value; send `device_type_id: null` with a `part_number` to switch); DELETE `{"ok": true}` |
+| GET    | `/api/lifecycle/contracts` | `{"contracts": [Contract]}` by provider then contract ID; filters `host_id`, `state` (`covered`, `expiring`, `expired`, `not_started`), `q` (part of the provider, contract ID or support level). A Contract: `id`, `provider`, `contract_id`, `start_date`, `end_date`, `cost` (text with two decimals, or null), `currency`, `support_level`, `description`, `comments`, the stamps, `host_count`, `hosts` (`[{id, hostname, ip_address}]`), `state` |
+| POST   | `/api/lifecycle/contracts` | `{provider, contract_id, start_date?, end_date?, cost?, currency?, support_level?, description?, comments?, host_ids?}`. `201`; `409` when the provider has the contract ID ignoring case; `422` with `fields.host_ids` for an unknown device |
+| GET / PUT / DELETE | `/api/lifecycle/contracts/{id}` | PUT takes any Contract field; `host_ids` left out keeps the covered devices, a list replaces them |
+| GET    | `/api/lifecycle/status` | `stage?`, `coverage?`, `q?`. `{summary: {devices, with_notice, past_end_of_support, by_stage, by_coverage}, devices: [Status], settings, stages, coverage_states}`; a Status: `host_id`, `hostname`, `ip_address`, `serial_number`, `model`, `device_type_id`, `device_type_model`, `manufacturer_name`, `lifecycle_status_name`, `notice_ids`, `stage` (`none`, `supported`, `end_of_sale`, `end_of_sw_maintenance`, `end_of_security_fixes`, `end_of_support`), `next`, `end_of_sale`, `days_to_end_of_sale`, `end_of_support`, `days_to_end_of_support`, `coverage` (`covered`, `expiring`, `expired`, `not_started`, `none`), `coverage_end`, `coverage_days`, `contracts` (`[{id, provider, contract_id, end_date, state}]`). The summary counts every device |
+| GET    | `/api/lifecycle/status/export` | The filtered statuses as CSV (`hardware_lifecycle.csv`), user text guarded against formulas |
+| GET    | `/api/lifecycle/hosts/{host_id}` | `{host_id, status: Status, notices: [Notice with via], contracts: [Contract]}`; `404` for an unknown device |
+| GET    | `/api/lifecycle/choices` | `{hosts: [{id, hostname, ip_address}], device_types: [{id, manufacturer, model, part_number}], milestones: [{key, label}]}` for the dialogs' pickers |
+| GET    | `/api/lifecycle/settings` | `{alerts_enabled, contract_warn_days, support_warn_days, last_check_at, last_check_alerts}` |
+| PUT    | `/api/lifecycle/settings` | `{alerts_enabled?, contract_warn_days?, support_warn_days?}` (days 1 to 3650) |
+| POST   | `/api/lifecycle/check` | Run the alert check now: `{ok, conditions, raised, cleared, resolved}`; `500` when it failed (details in the server log) |
+
 ### Virtualization
 Reads need the `virtualization` feature, writes `virtualization.write` (admins have both); the cloud sync is admin only. Writes are audited (`virtualization`) and tracked in the change log. A refused value is `422` with `detail = {message, fields}`; a duplicate name is `409`. See [virtualization.md](virtualization.md).
 
@@ -271,9 +311,32 @@ A Template: `id`, `name`, `kind` (`device` or `snippet`), `device_type` (`""`: a
 ### Credentials
 | Method | Endpoint                | Description                                   |
 |--------|-------------------------|-----------------------------------------------|
-| GET    | `/api/credentials`      | List all (passwords masked)                   |
-| POST   | `/api/credentials`      | Create `{name, username, password, secret}`   |
+| GET    | `/api/credentials`      | List all (passwords masked); an external reference shows as `ext_provider_id`, `ext_provider_name`, `ext_path`, `ext_key`, `ext_secret_key` |
+| POST   | `/api/credentials`      | Create `{name, username, password, secret}`, or `{name, username, external: {provider_id, path, key?, secret_key?}}` to read the password from a secrets provider |
+| PUT    | `/api/credentials/{id}` | Update; `external` replaces a stored password, a new `password` replaces a reference |
 | DELETE | `/api/credentials/{id}` | Delete                                        |
+| GET    | `/api/credentials/secrets-providers` | The enabled providers the caller may reference (`id`, `name`, `provider_type`): admins all, others those allowing personal credentials |
+
+Service credentials (`/api/credentials/service`) and secret variables
+(`/api/secret-variables`, `external: {provider_id, path, key?}` instead of
+`value`) take the same reference. See
+[secrets-providers.md](secrets-providers.md).
+
+### Secrets providers
+Reads need the `secrets-providers` feature, writes and tests
+`secrets-providers.write` (admins have both). A provider's own secrets are
+write-only (`secrets_set` lists which are stored); no route returns a
+resolved value. Audited as `secrets_providers`. See
+[secrets-providers.md](secrets-providers.md).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET    | `/api/secrets-providers` | `{providers: [{id, name, provider_type, description, enabled, allow_user_credentials, cache_ttl, config, secrets_set, credential_count, secret_variable_count, sdk: {status, missing}}], types: [...]}` |
+| GET    | `/api/secrets-providers/{id}` | One provider |
+| POST   | `/api/secrets-providers` | `{name, provider_type (vault, aws, azure), description?, enabled?, allow_user_credentials?, cache_ttl? (0-3600, 300), config, secrets}`; `201 {id}`, `409` taken name, `400` bad settings |
+| PUT    | `/api/secrets-providers/{id}` | Any field but `provider_type`; a blank or missing secret keeps the stored one |
+| DELETE | `/api/secrets-providers/{id}` | `409` while a credential or secret variable references it |
+| POST   | `/api/secrets-providers/{id}/test` | `{path, key?}`: resolves without the cache; `{ok: true}` or `{ok: false, code, message}`, never the value |
 
 ### Jobs
 | Method | Endpoint                | Description                |
@@ -385,6 +448,27 @@ A read-only Model Context Protocol endpoint for AI clients, and the admin routes
 | GET    | `/api/admin/mcp/tokens` | Admin. `tokens` (each with `id`, `name`, `token_prefix`, `owner_user_id`, `owner_username`, `owner_role`, `categories`, `expires_at`, `created_at`, `created_by`, `last_used_at`, `call_count`, `revoked_at`; never the token or its hash) and `categories` (every category a token can be given) |
 | POST   | `/api/admin/mcp/tokens` | Admin, audited. `name` (1 to 80 characters, unique), `owner_user_id`, `categories` (non-empty subset of the known categories), `expires_at` (`""` or `YYYY-MM-DD`). Returns `{"token", "record"}`; `token` is the only time the plaintext is returned. `422` on invalid input (including the `audit` category with a non-admin owner), `409` when the name is taken |
 | DELETE | `/api/admin/mcp/tokens/{id}` | Admin, audited. Revokes the token: `{"revoked": true}`; `404` when it does not exist or is already revoked |
+
+### ChatOps
+Slack, Webex and Microsoft Teams bots. The inbound endpoints take no session or CSRF token and check the platform's signature; the admin routes are admin only and every write is audited (`chatops`). See [chatops.md](chatops.md).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST   | `/api/chatops/slack/commands` | Slack slash command (form body). `X-Slack-Signature` / `X-Slack-Request-Timestamp` checked (five-minute window, a repeated signature refused). Answers the Block Kit reply, or `Working on it...` and the reply later through `response_url` |
+| POST   | `/api/chatops/slack/interactivity` | Slack button presses (`payload` form field, `block_actions`); same signature check. `200` at once, the result posted to `response_url` |
+| POST   | `/api/chatops/webex` | Webex webhook for `messages` / `attachmentActions` `created`. `X-Spark-Signature` checked; `{"ok": true}` at once, the message fetched and answered in its room with the bot token. Messages from bots and repeated ids are ignored |
+| POST   | `/api/chatops/teams` | Teams outgoing webhook. `Authorization: HMAC` checked; answers a message with an Adaptive Card |
+| GET    | `/api/admin/chatops` | `platforms` (each with `label`, `secret_label`, `has_bot_token`, `paths` and `bot`: `name`, `enabled`, `allowed_commands`, `signing_secret_configured`, `bot_token_configured`, or `null`), `commands` (name, usage, summary, features, write) and `default_commands` |
+| PUT    | `/api/admin/chatops/bots/{platform}` | `slack`, `webex` or `teams`. `name`, `enabled`, `allowed_commands`, `signing_secret` and `bot_token` (write-only, 8 to 512 characters; omitted or `null` keeps the stored value; the Teams token must be base64; required on first save), `clear_bot_token`. Returns the bot as in GET |
+| DELETE | `/api/admin/chatops/bots/{platform}` | Removes the bot and its secrets; `404` when none |
+| GET    | `/api/admin/chatops/mappings` | Mappings: `id`, `platform`, `chat_user_id`, `chat_label`, `user_id`, `username`, `role`, `created_by`, `created_at` |
+| POST   | `/api/admin/chatops/mappings` | `platform`, `chat_user_id` (no spaces, compared ignoring case), `chat_label`, `user_id`. `201`; `409` when the chat identity is mapped; `422` for an unknown user |
+| DELETE | `/api/admin/chatops/mappings/{id}` | Removes a mapping |
+| GET    | `/api/admin/chatops/presets` | Job presets: `id`, `name`, `description`, `playbook_name`, `source_job_id`, `targets`, `commit`, `enabled`, `updated_at`, `updated_by` |
+| POST   | `/api/admin/chatops/presets` | `name` (1 to 80 letters, digits, spaces, `.`, `-`, `_`, unique ignoring case), `job_id` (the job whose playbook, targets, credential, template and inputs are copied), `description`, `commit`, `enabled`. `201`; `409` on a taken name |
+| PUT    | `/api/admin/chatops/presets/{id}` | `description`, `commit`, `enabled` |
+| DELETE | `/api/admin/chatops/presets/{id}` | Deletes a preset |
+| GET    | `/api/admin/chatops/log` | Newest commands first: `created_at`, `platform`, `chat_user_id`, `chat_user_name`, `username`, `command`, `arguments`, `outcome` (`ok`, `denied`, `unmapped`, `error`, `unknown`, `rate_limited`), `detail`, `duration_ms`. `limit` (1 to 1000, default 200), `platform`, `outcome` |
 
 ### Plugins
 The plugin manifest and the routes of enabled plugins. See [plugin-development.md](plugin-development.md).

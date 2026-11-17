@@ -14,6 +14,11 @@ Supported channel types:
   severity, host, metric, value/threshold, message, dedup key), with an
   optional auth header.
 - **Microsoft Teams** — posts a MessageCard to an incoming-webhook connector.
+- **Slack** and **Webex** — posted by the [ChatOps](chatops.md) bot of that
+  platform (its bot token) to a channel ID (Slack) or room ID (Webex), with
+  the alert's facts and, when `ack` is an allowed command of the bot, an
+  **Acknowledge** button that acknowledges the alert as the mapped Plexus
+  user who presses it. Set up the bot first under **Settings → ChatOps**.
 
 ### Configuration
 
@@ -31,6 +36,8 @@ or via the admin API:
 
 Secrets (SMTP password, PagerDuty routing key, webhook auth value) are masked
 as `••••••••` in API responses; submit the mask to keep the stored value.
+Slack and Webex channels take `chat_channel` (the channel or room id); their
+token is the ChatOps bot's, stored with the bot.
 
 Meraki alerts (alert type `meraki_alert`, from the assurance-alert poll and
 the Meraki webhook receiver) go through the same channels: on the matching

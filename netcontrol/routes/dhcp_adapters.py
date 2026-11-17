@@ -13,13 +13,10 @@ firewall's topology collection creates it and replaces its leases (see
 
 from __future__ import annotations
 
-import asyncio
 import ipaddress
 from typing import Any
 
-import httpx
-
-from netcontrol.routes.net_guard import OutboundRequestError, validate_outbound_url
+from netcontrol.sync.transport import canonical_address, canonical_subnet, coerce_list, request_json
 
 _HTTP_TIMEOUT_SECONDS = 30.0
 _VALID_PROVIDERS = {"kea", "windows", "infoblox"}
@@ -59,14 +56,6 @@ class DhcpAdapterError(RuntimeError):
     """Raised when a DHCP provider config or response is invalid."""
 
 
-async def _guard_url(url: str) -> None:
-    """SSRF pre-check: reject metadata/link-local/loopback targets."""
-    try:
-        await asyncio.to_thread(validate_outbound_url, url)
-    except OutboundRequestError as exc:
-        raise DhcpAdapterError(f"target URL rejected: {exc}") from exc
-
-
 def normalize_dhcp_provider(raw: str | None) -> str:
     provider = str(raw or "").strip().lower()
     if provider not in _VALID_PROVIDERS:
@@ -96,42 +85,31 @@ async def _fetch_json(
     auth=None,
     verify: bool = True,
 ) -> Any:
-    await _guard_url(url)
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS, verify=verify) as client:
-        response = await client.request(
-            method.upper(),
-            url,
-            headers=headers,
-            params=params,
-            json=json_body,
-            auth=auth,
-        )
-        response.raise_for_status()
-        if not response.content:
-            return {}
-        return response.json()
+    return await request_json(
+        method,
+        url,
+        headers=headers,
+        params=params,
+        json_body=json_body,
+        auth=auth,
+        verify=verify,
+        timeout_s=_HTTP_TIMEOUT_SECONDS,
+        error_cls=DhcpAdapterError,
+    )
 
 
 def _normalize_subnet(value: str) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
     try:
-        return str(ipaddress.ip_network(raw, strict=False))
-    except Exception as exc:
-        raise DhcpAdapterError(f"Invalid subnet returned by DHCP provider: {raw}") from exc
+        return canonical_subnet(value)
+    except ValueError as exc:
+        raise DhcpAdapterError(f"Invalid subnet returned by DHCP provider: {str(value or '').strip()}") from exc
 
 
 def _normalize_address(value: str) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
     try:
-        if "/" in raw:
-            return str(ipaddress.ip_interface(raw).ip)
-        return str(ipaddress.ip_address(raw))
-    except Exception as exc:
-        raise DhcpAdapterError(f"Invalid IP returned by DHCP provider: {raw}") from exc
+        return canonical_address(value)
+    except ValueError as exc:
+        raise DhcpAdapterError(f"Invalid IP returned by DHCP provider: {str(value or '').strip()}") from exc
 
 
 def _normalize_mac(value: Any) -> str:
@@ -144,15 +122,7 @@ def _normalize_mac(value: Any) -> str:
     return ":".join(cleaned[i : i + 2] for i in range(0, 12, 2))
 
 
-def _coerce_list(payload: Any, *keys: str) -> list[dict]:
-    if isinstance(payload, list):
-        return [item for item in payload if isinstance(item, dict)]
-    if isinstance(payload, dict):
-        for key in keys or ("results", "data", "items"):
-            value = payload.get(key)
-            if isinstance(value, list):
-                return [item for item in value if isinstance(item, dict)]
-    return []
+_coerce_list = coerce_list
 
 
 def _build_auth(server: dict, auth_config: dict) -> tuple[dict[str, str], Any]:

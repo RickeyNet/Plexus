@@ -35,6 +35,7 @@ import { formatBackendDateTime } from '@/lib/datetime';
 import { AdvisoryModal } from './AdvisoryModal';
 import { DeviceHistoryModal } from './DeviceHistoryModal';
 import { ImportAdvisoriesModal } from './ImportAdvisoriesModal';
+import { LifecycleTab } from './LifecycleTab';
 import { SettingsModal } from './SettingsModal';
 import {
   type SoftwareTab,
@@ -59,6 +60,7 @@ const PLATFORM_FALLBACK = 'Other';
 const TABS: { key: SoftwareTab; label: string; feature: string }[] = [
   { key: 'versions', label: 'Versions', feature: 'software' },
   { key: 'upgrades', label: 'Upgrades', feature: 'upgrades' },
+  { key: 'lifecycle', label: 'Lifecycle', feature: 'lifecycle' },
 ];
 const TAB_KEYS = TABS.map((t) => t.key);
 
@@ -92,6 +94,7 @@ export function Software() {
           <UpgradesContent />
         </>
       )}
+      {shownTab === 'lifecycle' && <LifecycleTab />}
     </div>
   );
 }

@@ -6,10 +6,12 @@ platform, keeps a history of upgrades and downgrades, and raises an alert
 when a device runs a version a security advisory names. Advisories can be
 entered by hand, imported, or synced from Cisco PSIRT.
 
-The page has two tabs. **Versions** is described here; **Upgrades** is the
+The page has three tabs. **Versions** is described here; **Upgrades** is the
 firmware upgrade tool (campaigns, images, backups; the `upgrades` feature),
-described in [upgrade-tool-guide.md](upgrade-tool-guide.md). Each tab is
-shown only to users with its feature.
+described in [upgrade-tool-guide.md](upgrade-tool-guide.md); **Lifecycle**
+is the hardware lifecycle (end-of-life notices and support contracts; the
+`lifecycle` feature), described in [hardware-lifecycle.md](hardware-lifecycle.md).
+Each tab is shown only to users with its feature.
 
 - Permission: the `software` feature to view, `software.write` to refresh,
   acknowledge alerts and manage advisories, admin for the settings and the

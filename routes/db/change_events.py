@@ -104,6 +104,9 @@ _OBJECT_TABLES: dict[str, str] = {
     "routing_instance": "routing_instances",
     "bgp_peer_group": "bgp_peer_groups",
     "bgp_peering": "bgp_peerings",
+    # Hardware lifecycle (migration 0103).
+    "hardware_notice": "hardware_notices",
+    "support_contract": "support_contracts",
 }
 CHANGE_OBJECT_TYPES: tuple[str, ...] = tuple(_OBJECT_TABLES)
 CHANGE_ACTIONS: tuple[str, ...] = ("create", "update", "delete")

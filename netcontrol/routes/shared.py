@@ -94,6 +94,24 @@ def _corr_id(request) -> str:
     return getattr(request.state, "correlation_id", "") if hasattr(request, "state") else ""
 
 
+async def read_bounded_body(request, max_bytes: int) -> bytes | None:
+    """The request body, or ``None`` once it passes ``max_bytes`` (declared
+    or streamed). Inbound webhook receivers read unauthenticated bodies
+    before checking their signature, so they never buffer more than this."""
+    try:
+        declared = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        return None
+    if declared > max_bytes:
+        return None
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > max_bytes:
+            return None
+    return bytes(body)
+
+
 def _request_scheme(request) -> str:
     """The scheme the browser used: ``X-Forwarded-Proto`` from a reverse
     proxy, else the request's own scheme (direct TLS termination)."""
@@ -119,6 +137,14 @@ def _get_session(request) -> dict | None:
     if _verify_session_token_fn is None:
         return None
     return _verify_session_token_fn(token)
+
+
+def _session_user_id(request) -> int:
+    """The user id of the session making the request; 401 when there is none."""
+    user_id = (_get_session(request) or {}).get("user_id")
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return int(user_id)
 
 
 def _session_user(request) -> str:
@@ -289,12 +315,22 @@ async def require_credential_access(
             detail=f"credential_id={credential_id} owner_id={cred.get('owner_id')} "
             f"service={int(bool(cred.get('is_service')))}" + (f" override={override}" if override else ""),
         )
-        return cred
+        # An external reference is resolved only once access is granted
+        # (netcontrol/secrets_providers/service.py); a failure is a 502
+        # naming the provider, never a value.
+        from netcontrol.secrets_providers.service import SecretsProviderError, materialize_credential
+
+        try:
+            return await materialize_credential(cred, strict=True, actor=str(caller)) or cred
+        except SecretsProviderError as exc:
+            raise HTTPException(
+                status_code=502, detail=f"The credential's external secret could not be resolved: {exc.message}"
+            ) from exc
 
     if credential_id is None:
         raise await _deny(400, "credential_id is required")
 
-    cred = await db.get_credential_raw(credential_id)
+    cred = await db.get_credential_raw(credential_id, resolve_external=False)
     if not cred:
         raise await _deny(404, "Credential not found")
 

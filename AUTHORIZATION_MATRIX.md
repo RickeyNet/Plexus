@@ -28,6 +28,7 @@ All API endpoints and their required authentication/authorization levels.
 | GET | `/api/health` | Health check (uptime, metrics) |
 | GET | `/favicon.ico` | Static |
 | GET | `/static/*` | Static files |
+| POST | `/api/chatops/slack/commands`, `/api/chatops/slack/interactivity`, `/api/chatops/webex`, `/api/chatops/teams` | ChatOps bots. No session or CSRF; each request is checked against the platform's HMAC signature (Slack with a five-minute timestamp window and repeated signatures refused; Webex and Teams de-duplicated by message id). Answers 404 until an admin sets up the platform's bot; 401 on a bad signature. At most 64 KiB of body. Rate limited per source IP on the webhook budget. Commands run as the Plexus user the chat user is mapped to and need `chatops` plus each command's own feature (`ack` needs `monitoring.write`, `run` needs `jobs.write` and an admin-approved preset); unmapped users get only help. See `docs/chatops.md` |
 | POST | `/api/webhooks/meraki` | Meraki webhook receiver. No session or CSRF; authenticated by the shared secret in the body (constant-time compare). Answers 404 until an admin sets a secret and turns it on; 401 on a wrong secret. Rate limited per source IP on its own budget (600 per window). See `docs/meraki-alerts.md` |
 
 ### Auth-only (any authenticated user)
@@ -80,6 +81,11 @@ All API endpoints and their required authentication/authorization levels.
 | `ipam` | `GET /api/ipam/vrfs`, `GET /api/ipam/vrfs/{vrf_id}`, `GET /api/ipam/vlans`, `GET /api/ipam/vlans/{vlan_id}` (registered before the IPAM router) | network_objects (router) |
 | `reports` | `GET /api/hosts/{host_id}/interface-addresses` (gated like `GET /api/hosts/{host_id}/interface-inventory`) | network_objects (host_router) |
 | `virtualization` | `/api/virtualization/*` (cluster types, cluster groups, clusters and their hosts, virtual machines and VM interfaces; writes need `virtualization.write`, audited as `virtualization`). Not scope-enforced: members of access groups limited to selected inventory groups do not get it. See `docs/virtualization.md` | virtualization (router) |
+| `sync` | `/api/sync/catalog`, `/api/sync/connections` (GET), `/api/sync/jobs*`, `/api/sync/runs*` (job writes and `POST /api/sync/jobs/{id}/run` need `sync.write`; a job that writes into Plexus also needs admin, or `inventory.write` for devices only, when saved and when run for real; a dry run needs `sync.write` only; audited as `sync`). Not scope-enforced, so users limited to selected inventory groups are refused | sync |
+| `lifecycle` | `/api/lifecycle/*` (end-of-life notices, support contracts, device lifecycle status and CSV report, alert settings, `POST /api/lifecycle/check`; writes need `lifecycle.write`, audited as `lifecycle`). Not scope-enforced: members of access groups limited to selected inventory groups do not get it. See `docs/hardware-lifecycle.md` | hardware_lifecycle (router) |
+| `secrets-providers` | `/api/secrets-providers/*` (HashiCorp Vault, AWS Secrets Manager and Azure Key Vault providers; writes and `POST /api/secrets-providers/{id}/test` need `secrets-providers.write`, audited as `secrets_providers`; provider secrets are write-only and no route returns a resolved value). Not scope-enforced: members of access groups limited to selected inventory groups do not get it. See `docs/secrets-providers.md` | secrets_providers (router) |
+| `credentials` | `GET /api/credentials/secrets-providers` (the providers the caller may reference: admins all, others those allowing personal credentials; names and types only). An `external` reference on a user credential needs the provider to allow personal credentials unless the caller is an admin | credentials |
+| `chatops` | No HTTP route of its own: lets the user's mapped chat identity run ChatOps commands, each also needing its own feature (see the ChatOps public paths above and `docs/chatops.md`). Not scope-enforced, so users limited to selected inventory groups are refused | chatops (inbound_router) |
 | `graphql` | `POST /api/graphql` (read-only queries; CSRF applies to session callers), `GET /api/graphql` (GraphiQL, `404` unless the admin setting `graphiql` is on). Each field also needs the feature of its REST counterpart (`inventory`; `reports` for interfaces, interface addresses and device VLANs; `ipam` for prefixes, addresses, VLAN and VRF records; `config-backups` for backup metadata) and leaves out hosts and groups outside the caller's object scope. `graphql` is scope-enforced, so scoped users see only their groups' hosts. See `docs/graphql-api.md` | graphql (router) |
 | `plugin:<name>` | `/api/plugins/<name>/*`, every route of an enabled plugin (writes need `plugin:<name>.write`; CSRF applies; `503` while the plugin is not active). The keys exist only while the plugin is loaded. Members of access groups limited to selected inventory groups do not get plugin features (fail closed), since plugins do not enforce device scope. See `docs/plugin-development.md` | plugin router (mounted by `netcontrol/routes/plugins.py`) |
 
@@ -90,6 +96,7 @@ All API endpoints and their required authentication/authorization levels.
 | `/api/admin/*` | admin |
 | `GET/PUT /api/admin/auth-config` (now with `oidc`; the client secret is write-only), `POST /api/admin/auth-config/oidc/test` | admin (OIDC single sign-on settings and connection test) |
 | `/api/admin/mcp/settings`, `/api/admin/mcp/tokens*` | mcp_tokens (AI access settings and MCP token create, list, revoke) |
+| `GET /api/admin/chatops`, `PUT/DELETE /api/admin/chatops/bots/{platform}`, `GET/POST /api/admin/chatops/mappings`, `DELETE /api/admin/chatops/mappings/{id}`, `GET/POST /api/admin/chatops/presets`, `PUT/DELETE /api/admin/chatops/presets/{id}`, `GET /api/admin/chatops/log` (writes audited as `chatops` / `bot.*`, `mapping.*`, `preset.*`; signing secrets and bot tokens are write-only) | chatops (admin_router, `require_admin` in `app.py`) |
 | `GET/PUT /api/admin/graphql/settings` (GraphiQL, introspection and query limits; writes audited as `graphql` / `settings_update`) | graphql (admin_router) |
 | `GET/POST /api/admin/webhooks`, `GET/PUT/DELETE /api/admin/webhooks/{id}`, `POST /api/admin/webhooks/{id}/test`, `GET /api/admin/webhooks/{id}/deliveries`, `POST /api/admin/webhooks/{id}/deliveries/{delivery_row_id}/redeliver` (writes, tests and redeliveries audited as `system` / `webhook.*`; the signing secret and header values are write-only) | webhooks (router, `require_admin` in `app.py`) |
 | `POST /api/custom-fields`, `PUT/DELETE /api/custom-fields/{field_id}`, `PUT/DELETE /api/tags/{tag_id}` | custom_fields (admin_router) |
@@ -98,6 +105,7 @@ All API endpoints and their required authentication/authorization levels.
 | `POST /api/virtualization/sync-cloud` (mirror the discovered AWS, Azure and GCP instances as virtual machines; audited as `virtualization` / `sync_cloud`) | virtualization (admin_router) |
 | `POST /api/intended-config/templates`, `PUT/DELETE /api/intended-config/templates/{id}`, `POST /api/intended-config/contexts`, `PUT/DELETE /api/intended-config/contexts/{id}`, `POST /api/intended-config/preview` (writes audited as `config`; the preview stores nothing) | intended_config (admin_router) |
 | `GET/POST /api/git-sources`, `GET/PUT/DELETE /api/git-sources/{id}`, `GET /api/git-sources/{id}/objects`, `POST /api/git-sources/{id}/sync` (writes and syncs audited as `config` / `git_source_*`; credentials are service credentials, never returned). Templates, playbooks and intended configuration contexts a Git source owns answer `409` to `PUT` and `DELETE` on their own routes | git_sources (router, `require_admin` in `app.py`) |
+| `POST /api/sync/connections`, `PUT/DELETE /api/sync/connections/{id}`, `POST /api/sync/connections/{id}/test` (a connection binds a service credential; audited as `sync` / `connection_*`) | sync (admin_router) |
 | `/api/secret-variables/*` | (admin enforced in handlers; reads and writes both) |
 | `/api/inventory/admin/*` | inventory_admin |
 | `/api/topology/admin/*` | topology_admin |
@@ -121,9 +129,10 @@ All API endpoints and their required authentication/authorization levels.
 All `POST/PUT/PATCH/DELETE` requests to `/api/*` require a valid `X-CSRF-Token`
 header when authenticated via session cookie. API-token authenticated requests
 are exempt (not susceptible to CSRF). The webhook receivers in
-`WEBHOOK_PATHS` (`netcontrol/app.py`, only `/api/webhooks/meraki` today)
-are exempt by exact path: the sender cannot carry a session or a CSRF
-token, and the shared secret in the body authenticates each delivery.
+`WEBHOOK_PATHS` (`netcontrol/app.py`: `/api/webhooks/meraki` and the four
+ChatOps paths) are exempt by exact path: the sender cannot carry a session
+or a CSRF token, and the shared secret in the body (Meraki) or the request
+signature (ChatOps) authenticates each delivery.
 
 ### Credential Access (IDOR protection)
 

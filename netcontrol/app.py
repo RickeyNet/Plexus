@@ -105,6 +105,11 @@ from netcontrol.routes.bulk_import import (
 )
 from netcontrol.routes.cato_egress_check import router as cato_egress_check_router
 from netcontrol.routes.cdef_engine import router as cdef_router
+from netcontrol.routes.chatops import (
+    WEBHOOK_PATHS as CHATOPS_WEBHOOK_PATHS,
+    admin_router as chatops_admin_router,
+    inbound_router as chatops_inbound_router,
+)
 from netcontrol.routes.circuits import router as circuits_router
 from netcontrol.routes.cloud_flow_pullers import pull_flow_logs_all_accounts
 from netcontrol.routes.cloud_metric_pullers import pull_traffic_metrics_all_accounts
@@ -198,6 +203,10 @@ from netcontrol.routes.git_sources import git_sources_loop, router as git_source
 from netcontrol.routes.graph_export import router as graph_export_router
 from netcontrol.routes.graph_templates import router as graph_templates_router
 from netcontrol.routes.graphql import admin_router as graphql_admin_router, router as graphql_router
+from netcontrol.routes.hardware_lifecycle import (
+    _lifecycle_check_loop,
+    router as hardware_lifecycle_router,
+)
 from netcontrol.routes.help_docs import router as help_docs_router
 from netcontrol.routes.intended_config import (
     admin_router as intended_config_admin_router,
@@ -320,6 +329,7 @@ from netcontrol.routes.risk_analysis import (
 )
 from netcontrol.routes.routing import router as routing_router
 from netcontrol.routes.secret_variables import router as secret_variables_router
+from netcontrol.routes.secrets_providers import router as secrets_providers_router
 from netcontrol.routes.snmp import (
     PYSMNP_AVAILABLE,
     _build_snmp_auth,
@@ -332,6 +342,7 @@ from netcontrol.routes.snmp import (
 )
 from netcontrol.routes.software import _software_refresh_loop, init_software, router as software_router
 from netcontrol.routes.source_import import router as source_import_router
+from netcontrol.routes.sync import admin_router as sync_admin_router, router as sync_router
 from netcontrol.routes.templates import TemplateCreate, TemplateUpdate, router as templates_router
 from netcontrol.routes.topology import (
     _calc_interface_utilization,
@@ -354,6 +365,7 @@ from netcontrol.routes.virtualization import (
     admin_router as virtualization_admin_router,
     router as virtualization_router,
 )
+from netcontrol.sync.runner import sync_jobs_loop
 
 # Ensure project root is on path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -808,7 +820,7 @@ PUBLIC_PATHS = {
 # Inbound webhook receivers: no session and no CSRF (the sender can do
 # neither; each authenticates its body itself). Unlike PUBLIC_PATHS they stay
 # rate limited, under their own per-IP budget (``api_rate_limit_middleware``).
-WEBHOOK_PATHS = frozenset({MERAKI_WEBHOOK_PATH})
+WEBHOOK_PATHS = frozenset({MERAKI_WEBHOOK_PATH}) | CHATOPS_WEBHOOK_PATHS
 # Webhook deliveries per rate-limit window per source IP. Meraki bursts when
 # many devices alert at once, so this is above the anonymous write limit.
 WEBHOOK_RATE_LIMIT_MAX = 600
@@ -1686,6 +1698,8 @@ async def lifespan(app: FastAPI):
             _interface_addresses_backfill,
             intended_config_loop,
             git_sources_loop,
+            _lifecycle_check_loop,
+            sync_jobs_loop,
         )
     ]
     for task in background_tasks:
@@ -2391,6 +2405,27 @@ app.include_router(
     dcim_router,
     dependencies=[Depends(require_auth), Depends(require_feature_method("dcim"))],
 )
+# Sync framework (NetBox, Nautobot, ServiceNow): read with sync, jobs changed
+# and run with sync.write; connections (service credentials) admin only
+# (docs/sync-framework.md).
+app.include_router(
+    sync_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("sync"))],
+)
+app.include_router(sync_admin_router, dependencies=[Depends(require_admin)])
+# External secrets providers (Vault, AWS Secrets Manager, Azure Key Vault):
+# read with secrets-providers, changed and tested with
+# secrets-providers.write (docs/secrets-providers.md).
+app.include_router(
+    secrets_providers_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("secrets-providers"))],
+)
+# Hardware lifecycle (end-of-life notices, support contracts): read with
+# lifecycle, changed with lifecycle.write (docs/hardware-lifecycle.md).
+app.include_router(
+    hardware_lifecycle_router,
+    dependencies=[Depends(require_auth), Depends(require_feature_method("lifecycle"))],
+)
 # Dynamic groups (saved host filters): read with inventory access, changed
 # with inventory.write; members are resolved within the caller's scope.
 app.include_router(
@@ -2574,6 +2609,11 @@ app.include_router(
     dependencies=[Depends(require_admin)],
 )
 app.include_router(meraki_webhook_router)
+# ChatOps (docs/chatops.md): the Slack, Webex and Teams endpoints check each
+# platform's request signature (404 until a bot is set up); bots, user
+# mappings, job presets and the command log are admin-only.
+app.include_router(chatops_inbound_router)
+app.include_router(chatops_admin_router, dependencies=[Depends(require_admin)])
 # AI access (MCP): endpoint settings and token management, admin-only. The
 # /mcp endpoint itself is mounted separately and authenticates by MCP token.
 app.include_router(

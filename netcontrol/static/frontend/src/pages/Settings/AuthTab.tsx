@@ -29,6 +29,18 @@ import { LoadingState } from '@/components/LoadingState';
 import { Modal } from '@/components/Modal';
 import { ModalActions } from '@/components/ModalActions';
 import { QueryError } from '@/components/QueryError';
+import { useReferenceProviders } from '@/api/secretsProviders';
+import { ExternalReferenceFields, ValueSourceToggle, type ValueSource } from '@/components/ExternalReferenceFields';
+import {
+  hasReference,
+  referenceDraft,
+  referenceLabel,
+  referencePayload,
+  sameReference,
+  validateReference,
+  type ReferenceDraft,
+  type ReferenceErrors,
+} from '@/lib/secretsProviders';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 
 import { CheckboxField, CheckboxRow, FormRow, NumberField, TextField } from './FormFields';
@@ -943,6 +955,13 @@ function ServiceCredentialModal({
   const isEdit = cred !== null;
   const create = useCreateServiceCredential();
   const updateMut = useUpdateServiceCredential();
+  const providers = useReferenceProviders();
+  const wasExternal = hasReference(cred);
+  const [source, setSource] = useState<ValueSource>(wasExternal ? 'external' : 'stored');
+  const [initialRef] = useState<ReferenceDraft>(() => referenceDraft(cred));
+  const [reference, setReference] = useState<ReferenceDraft>(initialRef);
+  const [refErrors, setRefErrors] = useState<ReferenceErrors>({});
+  const external = source === 'external';
   const [initial] = useState<ServiceCredentialPayload>(() =>
     cred
       ? { name: cred.name, username: cred.username || '', password: '', secret: '' }
@@ -955,22 +974,30 @@ function ServiceCredentialModal({
     form.name !== initial.name ||
     form.username !== initial.username ||
     !!form.password ||
-    !!form.secret;
+    !!form.secret ||
+    source !== (wasExternal ? 'external' : 'stored') ||
+    !sameReference(reference, initialRef);
   useReportUnsaved('Service Credential', touched);
 
   const missing: string[] = [];
   if (!form.name.trim()) missing.push('a name');
   if (!form.username.trim()) missing.push('a username');
-  if (!isEdit && !form.password) missing.push('a password');
+  if (!external && (!isEdit || wasExternal) && !form.password) missing.push('a password');
 
   const submitting = create.isPending || updateMut.isPending;
   const name = form.name.trim();
 
   const onSubmit = () => {
     if (missing.length > 0) return;
+    const nextRef = external ? validateReference(reference) : {};
+    setRefErrors(nextRef);
+    if (Object.keys(nextRef).length > 0) return;
     setError(null);
     if (!isEdit) {
-      create.mutate(form, {
+      const body = external
+        ? { name: form.name, username: form.username, password: '', external: referencePayload(reference, true) }
+        : form;
+      create.mutate(body, {
         onSuccess: () => onSaved(`Service credential “${name}” created`),
         onError: (err) => setError(`Failed to create service credential: ${(err as Error).message}`),
       });
@@ -981,8 +1008,12 @@ function ServiceCredentialModal({
       name: form.name,
       username: form.username,
     };
-    if (form.password) data.password = form.password;
-    if (form.secret) data.secret = form.secret;
+    if (external) {
+      if (!wasExternal || !sameReference(reference, initialRef)) data.external = referencePayload(reference, true);
+    } else {
+      if (form.password) data.password = form.password;
+      if (form.secret) data.secret = form.secret;
+    }
     updateMut.mutate(
       { id: cred.id, data },
       {
@@ -1029,24 +1060,42 @@ function ServiceCredentialModal({
             autoComplete="off"
           />
         </FormRow>
-        <FormRow>
-          <TextField
-            label={isEdit ? 'Password (blank = unchanged)' : 'Password'}
-            type="password"
-            value={form.password}
-            onChange={(v) => setForm({ ...form, password: v })}
-            flex="1 1 200px"
-            autoComplete="new-password"
+        {(wasExternal || (providers.data?.length ?? 0) > 0) && (
+          <ValueSourceToggle value={source} onChange={setSource} />
+        )}
+        {external ? (
+          <ExternalReferenceFields
+            idPrefix={`service-cred-${cred?.id ?? 'new'}`}
+            value={reference}
+            onChange={(next) => {
+              setReference(next);
+              setRefErrors({});
+            }}
+            providers={providers.data ?? []}
+            errors={refErrors}
+            withSecretKey
+            keyLabel="Password key"
           />
-          <TextField
-            label={isEdit ? 'Enable Secret (blank = unchanged)' : 'Enable Secret (optional)'}
-            type="password"
-            value={form.secret ?? ''}
-            onChange={(v) => setForm({ ...form, secret: v })}
-            flex="1 1 200px"
-            autoComplete="new-password"
-          />
-        </FormRow>
+        ) : (
+          <FormRow>
+            <TextField
+              label={isEdit && !wasExternal ? 'Password (blank = unchanged)' : 'Password'}
+              type="password"
+              value={form.password}
+              onChange={(v) => setForm({ ...form, password: v })}
+              flex="1 1 200px"
+              autoComplete="new-password"
+            />
+            <TextField
+              label={isEdit && !wasExternal ? 'Enable Secret (blank = unchanged)' : 'Enable Secret (optional)'}
+              type="password"
+              value={form.secret ?? ''}
+              onChange={(v) => setForm({ ...form, secret: v })}
+              flex="1 1 200px"
+              autoComplete="new-password"
+            />
+          </FormRow>
+        )}
         {/* Lets Enter submit; the visible button is in the modal footer. */}
         <button type="submit" hidden />
       </form>
@@ -1140,7 +1189,14 @@ function ServiceCredentialsSection() {
           <tbody>
             {list.data.map((c) => (
               <tr key={c.id}>
-                <td>{c.name}</td>
+                <td>
+                  {c.name}
+                  {hasReference(c) && (
+                    <div className="form-help" style={{ margin: 0 }}>
+                      External: {referenceLabel(c)}
+                    </div>
+                  )}
+                </td>
                 <td>{c.username || '-'}</td>
                 <td>
                   <div className="table-actions">

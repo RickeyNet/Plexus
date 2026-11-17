@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
+import type { ExternalReferenceBody, ReferencedRow } from '@/lib/secretsProviders';
+
 import { apiRequest } from './client';
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -276,7 +278,9 @@ export interface InventoryGroupSummary {
   name: string;
 }
 
-export interface CredentialSummary {
+/** `ext_*`: the external secrets provider reference of the credential, if
+ *  any (docs/secrets-providers.md). */
+export interface CredentialSummary extends ReferencedRow {
   id: number;
   name: string;
   username?: string;
@@ -585,7 +589,7 @@ export function useTestSiemSink() {
 
 // ── Alert notification channels ─────────────────────────────────────────────
 
-export type NotificationChannelType = 'email' | 'pagerduty' | 'webhook' | 'teams';
+export type NotificationChannelType = 'email' | 'pagerduty' | 'webhook' | 'teams' | 'slack' | 'webex';
 
 export interface NotificationChannel {
   id: string;
@@ -615,6 +619,8 @@ export interface NotificationChannel {
   verify_tls: boolean;
   // teams
   teams_webhook_url: string;
+  // slack / webex: channel or room id the ChatOps bot posts to
+  chat_channel?: string;
 }
 
 export interface NotificationChannelStats {
@@ -976,6 +982,7 @@ export interface ServiceCredentialPayload {
   username: string;
   password: string;
   secret?: string;
+  external?: ExternalReferenceBody;
 }
 
 export interface ServiceCredentialUpdatePayload {
@@ -983,6 +990,7 @@ export interface ServiceCredentialUpdatePayload {
   username?: string;
   password?: string;
   secret?: string;
+  external?: ExternalReferenceBody;
 }
 
 export function useServiceCredentialsList(enabled = true) {

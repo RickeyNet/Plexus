@@ -14,7 +14,21 @@ import {
   useJobCredentials,
   useUpdateCredential,
   type Credential,
+  type CredentialPayload,
 } from '@/api/jobs';
+import { useReferenceProviders } from '@/api/secretsProviders';
+import { ExternalReferenceFields, ValueSourceToggle, type ValueSource } from '@/components/ExternalReferenceFields';
+import { SecretInput } from '@/components/SecretInput';
+import {
+  hasReference,
+  referenceDraft,
+  referenceLabel,
+  referencePayload,
+  sameReference,
+  validateReference,
+  type ReferenceDraft,
+  type ReferenceErrors,
+} from '@/lib/secretsProviders';
 import { usePendingKeys } from '@/lib/usePendingKeys';
 
 export function CredentialsList() {
@@ -97,6 +111,7 @@ function CredentialRow({
         <div style={{ fontWeight: 600 }}>{credential.name}</div>
         <div className="text-muted" style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>
           Username: {credential.username}
+          {hasReference(credential) && <> · External: {referenceLabel(credential)}</>}
         </div>
       </div>
       <div style={{ display: 'flex', gap: '0.4rem' }}>
@@ -107,19 +122,29 @@ function CredentialRow({
   );
 }
 
-/** Creates a credential, or edits `credential` when one is given. */
+/** Creates a credential, or edits `credential` when one is given. The
+ *  password and enable secret are stored encrypted, or read from an
+ *  external secrets provider when the credential is used. */
 function CredentialFormModal({ credential, onClose }: { credential: Credential | null; onClose: () => void }) {
   const createMut = useCreateCredential();
   const updateMut = useUpdateCredential();
+  const providers = useReferenceProviders();
   const formId = useId();
+  const wasExternal = hasReference(credential);
   const [name, setName] = useState(credential?.name ?? '');
   const [username, setUsername] = useState(credential?.username ?? '');
+  const [source, setSource] = useState<ValueSource>(wasExternal ? 'external' : 'stored');
   const [password, setPassword] = useState('');
   const [secret, setSecret] = useState('');
+  const [initialRef] = useState<ReferenceDraft>(() => referenceDraft(credential));
+  const [reference, setReference] = useState<ReferenceDraft>(initialRef);
   const [errors, setErrors] = useState<{ name?: string; username?: string; password?: string }>({});
+  const [refErrors, setRefErrors] = useState<ReferenceErrors>({});
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const pending = createMut.isPending || updateMut.isPending;
+  const canReference = wasExternal || (providers.data?.length ?? 0) > 0;
+  const external = source === 'external';
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -127,24 +152,33 @@ function CredentialFormModal({ credential, onClose }: { credential: Credential |
     const next = {
       name: name.trim() ? undefined : 'Name is required',
       username: username.trim() ? undefined : 'Username is required',
-      // An edit keeps the stored password when the field is left blank.
-      password: password || credential ? undefined : 'Password is required',
+      // An edit keeps the stored password when the field is left blank; a
+      // switch from a reference to a stored value needs one.
+      password: external || password || (credential && !wasExternal) ? undefined : 'Password is required',
     };
     setErrors(next);
-    if (next.name || next.username || next.password) return;
+    const nextRef = external ? validateReference(reference) : {};
+    setRefErrors(nextRef);
+    if (next.name || next.username || next.password || Object.keys(nextRef).length > 0) return;
     const onError = (err: unknown) => { setSaveError((err as Error).message); };
     if (!credential) {
       createMut.mutate(
-        { name: name.trim(), username: username.trim(), password, secret: secret || undefined },
+        external
+          ? { name: name.trim(), username: username.trim(), external: referencePayload(reference, true) }
+          : { name: name.trim(), username: username.trim(), password, secret: secret || undefined },
         { onSuccess: onClose, onError },
       );
       return;
     }
-    const data: Partial<{ name: string; username: string; password: string; secret: string }> = {};
+    const data: Partial<CredentialPayload> = {};
     if (name.trim() !== credential.name) data.name = name.trim();
     if (username.trim() !== credential.username) data.username = username.trim();
-    if (password) data.password = password;
-    if (secret) data.secret = secret;
+    if (external) {
+      if (!wasExternal || !sameReference(reference, initialRef)) data.external = referencePayload(reference, true);
+    } else {
+      if (password) data.password = password;
+      if (secret) data.secret = secret;
+    }
     if (Object.keys(data).length === 0) {
       onClose();
       return;
@@ -192,33 +226,40 @@ function CredentialFormModal({ credential, onClose }: { credential: Credential |
           />
           <FieldError>{errors.username}</FieldError>
         </div>
-        <div className="form-group">
-          <label className="form-label" htmlFor={`${formId}-password`}>Password</label>
-          <input
-            id={`${formId}-password`}
-            className="form-input"
-            type="password"
-            autoComplete="new-password"
-            value={password}
-            onChange={(e) => { setPassword(e.target.value); setErrors((p) => ({ ...p, password: undefined })); }}
-            aria-invalid={!!errors.password}
-            required={!credential}
+        {canReference && <ValueSourceToggle value={source} onChange={setSource} />}
+        {external ? (
+          <ExternalReferenceFields
+            idPrefix={`${formId}-ref`}
+            value={reference}
+            onChange={(next) => { setReference(next); setRefErrors({}); }}
+            providers={providers.data ?? []}
+            errors={refErrors}
+            withSecretKey
+            keyLabel="Password key"
           />
-          {credential && <small className="text-muted">Leave blank to keep the current password.</small>}
-          <FieldError>{errors.password}</FieldError>
-        </div>
-        <div className="form-group">
-          <label className="form-label" htmlFor={`${formId}-secret`}>Secret (Enable Password)</label>
-          <input
-            id={`${formId}-secret`}
-            className="form-input"
-            type="password"
-            autoComplete="new-password"
-            value={secret}
-            onChange={(e) => setSecret(e.target.value)}
-          />
-          {credential && <small className="text-muted">Leave blank to keep the current secret.</small>}
-        </div>
+        ) : (
+          <>
+            <div className="form-group">
+              <label className="form-label" htmlFor={`${formId}-password`}>Password</label>
+              <SecretInput
+                id={`${formId}-password`}
+                label="password"
+                value={password}
+                onChange={(v) => { setPassword(v); setErrors((p) => ({ ...p, password: undefined })); }}
+                invalid={!!errors.password}
+                required={!credential || wasExternal}
+              />
+              {credential && !wasExternal && <small className="text-muted">Leave blank to keep the current password.</small>}
+              {wasExternal && <small className="text-muted">Replaces the external reference with a stored password.</small>}
+              <FieldError>{errors.password}</FieldError>
+            </div>
+            <div className="form-group">
+              <label className="form-label" htmlFor={`${formId}-secret`}>Secret (Enable Password)</label>
+              <SecretInput id={`${formId}-secret`} label="enable secret" value={secret} onChange={setSecret} />
+              {credential && !wasExternal && <small className="text-muted">Leave blank to keep the current secret.</small>}
+            </div>
+          </>
+        )}
       </form>
     </Modal>
   );

@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-import asyncio
 import ipaddress
 from typing import Any
 
-import httpx
-
-from netcontrol.routes.net_guard import OutboundRequestError, validate_outbound_url
+from netcontrol.sync.transport import (
+    canonical_address,
+    canonical_subnet,
+    coerce_list,
+    host_prefix_address,
+    nested_text,
+    request_json,
+)
 
 _HTTP_TIMEOUT_SECONDS = 20.0
 _VALID_PROVIDERS = {"netbox", "phpipam", "infoblox"}
@@ -34,17 +38,6 @@ _PROVIDER_INFO = {
 
 class IpamAdapterError(RuntimeError):
     """Raised when a provider config or API response is invalid."""
-
-
-async def _guard_url(url: str) -> None:
-    """SSRF pre-check: reject metadata/link-local/loopback targets.
-
-    DNS resolution can block, so it runs in a worker thread.
-    """
-    try:
-        await asyncio.to_thread(validate_outbound_url, url)
-    except OutboundRequestError as exc:
-        raise IpamAdapterError(f"target URL rejected: {exc}") from exc
 
 
 def normalize_ipam_provider(raw: str | None) -> str:
@@ -74,11 +67,16 @@ async def _fetch_json(
     auth=None,
     verify: bool = True,
 ) -> Any:
-    await _guard_url(url)
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS, verify=verify) as client:
-        response = await client.get(url, headers=headers, params=params, auth=auth)
-        response.raise_for_status()
-        return response.json()
+    return await request_json(
+        "GET",
+        url,
+        headers=headers,
+        params=params,
+        auth=auth,
+        verify=verify,
+        timeout_s=_HTTP_TIMEOUT_SECONDS,
+        error_cls=IpamAdapterError,
+    )
 
 
 async def _request_json(
@@ -91,70 +89,39 @@ async def _request_json(
     auth=None,
     verify: bool = True,
 ) -> Any:
-    await _guard_url(url)
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS, verify=verify) as client:
-        response = await client.request(
-            method.upper(),
-            url,
-            headers=headers,
-            params=params,
-            json=json_body,
-            auth=auth,
-        )
-        response.raise_for_status()
-        if not response.content:
-            return {}
-        content_type = (response.headers.get("content-type") or "").lower()
-        if "json" in content_type:
-            return response.json()
-        return {}
+    return await request_json(
+        method,
+        url,
+        headers=headers,
+        params=params,
+        json_body=json_body,
+        auth=auth,
+        verify=verify,
+        timeout_s=_HTTP_TIMEOUT_SECONDS,
+        error_cls=IpamAdapterError,
+        json_content_only=True,
+    )
 
 
 def _normalize_address(value: str) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
     try:
-        if "/" in raw:
-            return str(ipaddress.ip_interface(raw).ip)
-        return str(ipaddress.ip_address(raw))
-    except Exception as exc:  # pragma: no cover - defensive
-        raise IpamAdapterError(f"Invalid IP address returned by provider: {raw}") from exc
+        return canonical_address(value)
+    except ValueError as exc:  # pragma: no cover - defensive
+        raise IpamAdapterError(f"Invalid IP address returned by provider: {str(value or '').strip()}") from exc
 
 
 def _normalize_subnet(value: str) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
     try:
-        return str(ipaddress.ip_network(raw, strict=False))
-    except Exception as exc:  # pragma: no cover - defensive
-        raise IpamAdapterError(f"Invalid subnet returned by provider: {raw}") from exc
+        return canonical_subnet(value)
+    except ValueError as exc:  # pragma: no cover - defensive
+        raise IpamAdapterError(f"Invalid subnet returned by provider: {str(value or '').strip()}") from exc
 
 
-def _nested_text(value: Any, *keys: str) -> str:
-    current = value
-    for key in keys:
-        if isinstance(current, dict):
-            current = current.get(key)
-        else:
-            current = None
-    if isinstance(current, (dict, list)) or current is None:
-        return ""
-    return str(current).strip()
+_nested_text = nested_text
 
 
 def _coerce_list(payload: Any) -> list[dict]:
-    if isinstance(payload, list):
-        return [item for item in payload if isinstance(item, dict)]
-    if isinstance(payload, dict):
-        data = payload.get("results")
-        if isinstance(data, list):
-            return [item for item in data if isinstance(item, dict)]
-        data = payload.get("data")
-        if isinstance(data, list):
-            return [item for item in data if isinstance(item, dict)]
-    return []
+    return coerce_list(payload, "results", "data")
 
 
 def _best_matching_prefix(
@@ -418,11 +385,7 @@ async def collect_ipam_snapshot(
     return snapshot
 
 
-def _address_with_host_prefix(address: str) -> str:
-    ip_obj = ipaddress.ip_address(address)
-    if ip_obj.version == 6:
-        return f"{address}/128"
-    return f"{address}/32"
+_address_with_host_prefix = host_prefix_address
 
 
 def _ip_to_int_text(address: str) -> str:

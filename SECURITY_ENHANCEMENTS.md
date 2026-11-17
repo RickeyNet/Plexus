@@ -59,6 +59,7 @@
 ### Verified secure (no action needed)
 
 - [x] **Encryption** - AES-256-GCM (`AESGCM`) with random 96-bit nonce per message (`routes/crypto.py:118-131`). Legacy Fernet-encrypted values (AES-128-CBC + HMAC-SHA256) are transparently decrypted on read for backward compatibility.
+- [x] **External secret storage** - Credentials, service credentials and secret variables may hold a reference to HashiCorp Vault, AWS Secrets Manager or Azure Key Vault instead of a stored value (`docs/secrets-providers.md`). Resolution happens in one place (`netcontrol/secrets_providers/service.py`, called by `get_credential_raw`, `require_credential_access` after the ownership check, and `routes/secret_resolver.py`); values live only in server memory for the provider's cache TTL and are never stored, logged, audited or returned by the API. Provider auth secrets are encrypted with `routes/crypto.py` and write-only. Requests go through the outbound SSRF guard with no redirects. Non-admins may reference only providers an admin opened to personal credentials. Resolution failures are audited (`secrets_provider.resolve_failed`, throttled per reference).
 - [x] **Session tokens** - `itsdangerous.URLSafeTimedSerializer` uses HMAC-SHA1 with `hmac.compare_digest()` internally (timing-safe). 24h expiry enforced.
 - [x] **API token comparison** - Uses `secrets.compare_digest()` (constant-time).
 - [x] **CSRF protection** - Signed, time-limited, user-bound tokens on all state-changing cookie-auth requests.

@@ -2,24 +2,18 @@
 
 from __future__ import annotations
 
-import ipaddress
-
 import routes.database as db
 
 from netcontrol.routes.ipam_adapters import IpamAdapterError, push_allocation_to_provider
+from netcontrol.sync.transport import canonical_address
 from netcontrol.telemetry import configure_logging
 
 LOGGER = configure_logging("plexus.ipam.push")
 
 
 def _normalize_host_ip(ip_address: str) -> str:
-    raw = str(ip_address or "").strip()
-    if not raw:
-        return ""
     try:
-        if "/" in raw:
-            return str(ipaddress.ip_interface(raw).ip)
-        return str(ipaddress.ip_address(raw))
+        return canonical_address(ip_address)
     except ValueError:
         return ""
 
