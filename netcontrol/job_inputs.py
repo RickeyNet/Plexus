@@ -24,7 +24,8 @@ secret          the decrypted value (run time only)  a secret variable name
 
 ``min``/``max`` bound an integer's value, a string's or text's length, and a
 multichoice's or list's item count. ``regex`` (string and text) must match
-the whole value. The legacy code types ``int``, ``bool`` and ``str`` are
+the whole value; it runs on RE2 (``routes.user_regex``), so it matches in
+linear time and lookarounds and backreferences are refused. The legacy code types ``int``, ``bool`` and ``str`` are
 read as ``integer``, ``boolean`` and ``string``.
 
 A secret field stores ``{{secret.NAME}}`` on the job record; the value is
@@ -48,6 +49,7 @@ import re
 from typing import Any, Literal, get_args
 
 from routes.secret_resolver import has_secret_references, normalize_secret_name
+from routes.user_regex import compile_whole_value_regex as _whole_value_regex
 
 from netcontrol.custom_fields import CustomFieldError, canonical_value
 from netcontrol.routes.host_identity import host_ip_problem
@@ -75,6 +77,8 @@ FIELD_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 # The name part of secret_resolver's ``{{secret.NAME}}`` pattern.
 SECRET_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]{0,63}$")
 MAX_FIELDS = 50
+
+
 STRING_MAX = 1000
 TEXT_MAX = 20000
 LABEL_MAX = 100
@@ -200,8 +204,13 @@ def coerce_value(field: dict, raw: object) -> Any:
             raise _Invalid(f"{label} must be at most {limit} characters.")
         _check_bounds(field, len(text), label, " character(s)")
         pattern = field.get("regex")
-        if pattern and not re.fullmatch(pattern, text):
-            raise _Invalid(f"{label} does not match the required format.")
+        if pattern:
+            try:
+                matcher = _whole_value_regex(pattern)
+            except ValueError as exc:
+                raise _Invalid(f"{label} has a pattern Plexus cannot use: {exc}.") from exc
+            if not matcher.search(text):
+                raise _Invalid(f"{label} does not match the required format.")
         return text
     if ftype == "choice":
         if text not in field.get("choices", []):
@@ -397,9 +406,9 @@ def normalize_field(raw: object, index: int, errors: dict[str, str]) -> dict | N
                 errors[f"{at}.regex"] = f"Pattern must be at most {REGEX_MAX} characters."
             else:
                 try:
-                    re.compile(pattern)
+                    _whole_value_regex(pattern)
                     field["regex"] = pattern
-                except re.error as exc:
+                except ValueError as exc:
                     errors[f"{at}.regex"] = f"Pattern is not a valid regular expression: {exc}."
 
     default = raw.get("default")

@@ -141,6 +141,10 @@ drawn and how cloud entities join availability tracking is in
 [Azure in the Topology Map](azure-topology.md) and
 [GCP in the Topology Map](gcp-topology.md).
 
+Each stored discovery also mirrors the account's compute instances (AWS
+EC2, Azure VMs, GCP Compute Engine) as virtual machines under **Assets >
+Virtualization**; see [Virtualization](virtualization.md#cloud-instances-as-virtual-machines).
+
 ## Rules worth knowing
 
 - **One entry per account.** One entry reads one AWS account, one Azure

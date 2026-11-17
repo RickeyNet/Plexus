@@ -201,6 +201,10 @@ class AuthConfigRequest(BaseModel):
     default_credential_id: int | None = None
     service_credential_id: int | None = None
     job_retention_days: int = Field(default=30, ge=30)
+    # Omitted = keep the saved change log retention (older clients do not send it).
+    change_log_retention_days: int | None = Field(
+        default=None, ge=state.CHANGE_LOG_RETENTION_MIN_DAYS, le=state.CHANGE_LOG_RETENTION_MAX_DAYS
+    )
     radius: RadiusConfigRequest = RadiusConfigRequest()
     tacacs: TacacsConfigRequest = TacacsConfigRequest()
     ldap: LdapConfigRequest = LdapConfigRequest()
@@ -795,6 +799,8 @@ async def admin_update_auth_config(body: AuthConfigRequest):
         data["tacacs"]["secret"] = state.AUTH_CONFIG.get("tacacs", {}).get("secret", "")
     if data.get("ldap", {}).get("bind_password") == _SECRET_MASK:
         data["ldap"]["bind_password"] = state.AUTH_CONFIG.get("ldap", {}).get("bind_password", "")
+    if data.get("change_log_retention_days") is None:
+        data["change_log_retention_days"] = state._effective_change_log_retention_days()
     submitted_oidc = data.pop("oidc", None)
     if submitted_oidc is None:
         data["oidc"] = dict(state.AUTH_CONFIG.get("oidc") or {})

@@ -185,6 +185,20 @@ Limits: only IPv4 can be typed in Path Mode. Hierarchical firewall policies
 are not collected, and the rules of global network firewall policies are not
 evaluated. Private Service Connect, load balancers, Network Connectivity
 Center hubs and the custom routes a peering exchanges are not collected.
+Cloud SQL and Memorystore for Redis are collected and listed (see above),
+but neither is a path trace destination; Memorystore for Redis Cluster,
+Memorystore for Memcached and Valkey are not collected.
+
+## Virtual machines
+
+Every Compute Engine instance of a discovered project (resource type
+`instance`) is also mirrored as a virtual machine under **Assets >
+Virtualization**, in a cluster of type *GCP* per project and region, with
+one interface per network interface (`nic0`...) and its internal and
+external addresses (alias ranges are not stored). RUNNING is active,
+PROVISIONING and STAGING staged, STOPPING, SUSPENDED and TERMINATED
+offline. vCPUs and memory are not collected. See
+[Virtualization](virtualization.md#cloud-instances-as-virtual-machines).
 
 ## Availability tracking
 

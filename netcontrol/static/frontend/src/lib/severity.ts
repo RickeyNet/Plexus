@@ -12,6 +12,14 @@ export function toneColor(tone: Tone): string {
   return tone === 'neutral' ? 'var(--text-muted)' : `var(--${tone})`;
 }
 
+/** Address-space utilization (IPAM subnets): danger from 90%, warning from 75%, else success. */
+export function utilizationTone(pct: number | null | undefined): Exclude<Tone, 'neutral'> {
+  const value = pct ?? 0;
+  if (value >= 90) return 'danger';
+  if (value >= 75) return 'warning';
+  return 'success';
+}
+
 // Lower-cased, trimmed, with '_' and spaces folded to '-', so "In Progress",
 // "in_progress" and "in-progress" are one key.
 function normalize(value: string | null | undefined): string {

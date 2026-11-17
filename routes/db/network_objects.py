@@ -82,6 +82,7 @@ _ADDRESS_COLUMNS = (
     "collected_at",
 )
 from routes.db.change_events import tracks_changes
+from routes.db.organization import TENANT_UNCHANGED, TenantArg, _Unchanged
 
 _ADDRESS_SELECT = """
     SELECT a.host_id, h.hostname, a.interface, a.address, a.prefix_length, a.network, a.vrf_name,
@@ -119,10 +120,11 @@ def _limited(rows: list[dict], limit: int) -> tuple[list[dict], bool]:
 # ── VRFs ─────────────────────────────────────────────────────────────────────
 
 _VRF_SELECT = """
-    SELECT v.id, v.name, v.rd, v.description, v.origin, v.created_at,
+    SELECT v.id, v.name, v.rd, v.description, v.origin, v.created_at, v.tenant_id, tn.name AS tenant_name,
            COALESCE(hc.n, 0) AS host_count, COALESCE(dc.n, 0) AS device_count,
            COALESCE(pc.n, 0) + COALESCE(ic.n, 0) AS prefix_count, COALESCE(ac.n, 0) AS address_count
     FROM vrfs v
+    LEFT JOIN tenants tn ON tn.id = v.tenant_id
     LEFT JOIN (SELECT vrf_name, COUNT(*) AS n FROM hosts GROUP BY vrf_name) hc ON hc.vrf_name = v.name
     LEFT JOIN (SELECT vrf_name, COUNT(*) AS n FROM host_vrfs GROUP BY vrf_name) dc ON dc.vrf_name = v.name
     LEFT JOIN (SELECT vrf, COUNT(*) AS n FROM ipam_prefixes GROUP BY vrf) pc ON pc.vrf = v.name
@@ -133,6 +135,18 @@ _VRF_SELECT = """
 """
 
 
+def _tenant_of(row: dict) -> dict:
+    tenant = row.get("tenant_id")
+    return {"tenant_id": int(tenant) if tenant is not None else None, "tenant_name": row.get("tenant_name")}
+
+
+def _tenant_set(exprs: list[str], params: list, tenant_id: TenantArg) -> None:
+    """Add ``tenant_id = ?`` to an update unless the tenant is left alone."""
+    if not isinstance(tenant_id, _Unchanged):
+        exprs.append("tenant_id = ?")
+        params.append(tenant_id)
+
+
 def _vrf(row: dict) -> dict:
     return {
         "id": int(row["id"]),
@@ -141,6 +155,7 @@ def _vrf(row: dict) -> dict:
         "description": row["description"] or "",
         "origin": row["origin"],
         "created_at": row["created_at"] or "",
+        **_tenant_of(row),
         "host_count": int(row["host_count"]),
         "device_count": int(row["device_count"]),
         "prefix_count": int(row["prefix_count"]),
@@ -159,7 +174,9 @@ async def get_vrf(vrf_id: int) -> dict | None:
 
 
 @tracks_changes("vrf", "create")
-async def create_vrf(*, name: str, rd: str = "", description: str = "", origin: str = "manual") -> dict:
+async def create_vrf(
+    *, name: str, rd: str = "", description: str = "", origin: str = "manual", tenant_id: int | None = None
+) -> dict:
     """Raises ``ValueError`` when a VRF has the name, ignoring case."""
     taken = ValueError(f"A VRF named '{name}' already exists.")
     db = await _dbcore.get_db()
@@ -168,8 +185,9 @@ async def create_vrf(*, name: str, rd: str = "", description: str = "", origin: 
         if await cursor.fetchone() is not None:
             raise taken
         cursor = await db.execute(
-            "INSERT INTO vrfs (name, rd, description, origin, created_at) VALUES (?, ?, ?, ?, ?) RETURNING id",
-            (name, rd, description, origin, _now()),
+            "INSERT INTO vrfs (name, rd, description, origin, created_at, tenant_id) "
+            "VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+            (name, rd, description, origin, _now(), tenant_id),
         )
         new_id = int(cursor.lastrowid)
         await db.commit()
@@ -184,10 +202,14 @@ async def create_vrf(*, name: str, rd: str = "", description: str = "", origin: 
 
 
 @tracks_changes("vrf", "update", id_arg="vrf_id")
-async def update_vrf(vrf_id: int, *, rd: str, description: str) -> dict | None:
-    """Change the route distinguisher and description (the name never
-    changes). ``None`` when the VRF does not exist."""
-    sql, params = _safe_dynamic_update("vrfs", ["rd = ?", "description = ?"], [rd, description], "id = ?", int(vrf_id))
+async def update_vrf(
+    vrf_id: int, *, rd: str, description: str, tenant_id: TenantArg = TENANT_UNCHANGED
+) -> dict | None:
+    """Change the route distinguisher, description and (when given) tenant;
+    the name never changes. ``None`` when the VRF does not exist."""
+    exprs, values = ["rd = ?", "description = ?"], [rd, description]
+    _tenant_set(exprs, values, tenant_id)
+    sql, params = _safe_dynamic_update("vrfs", exprs, values, "id = ?", int(vrf_id))
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(sql, params)
@@ -312,8 +334,9 @@ async def ensure_vrfs(names: Iterable[str], origin: str = "discovered") -> int:
 # ── VLANs ────────────────────────────────────────────────────────────────────
 
 _VLAN_SELECT = """
-    SELECT v.id, v.vid, v.name, v.site_id, s.name AS site_name, v.description, v.origin, v.created_at
-    FROM vlans v LEFT JOIN geo_sites s ON s.id = v.site_id
+    SELECT v.id, v.vid, v.name, v.site_id, s.name AS site_name, v.description, v.origin, v.created_at,
+           v.tenant_id, tn.name AS tenant_name
+    FROM vlans v LEFT JOIN geo_sites s ON s.id = v.site_id LEFT JOIN tenants tn ON tn.id = v.tenant_id
 """
 _VLAN_ORDER = " ORDER BY lower(s.name) ASC NULLS FIRST, v.site_id NULLS FIRST, v.vid, v.id"
 
@@ -388,6 +411,7 @@ def _vlan(row: dict, counts: dict) -> dict:
         "description": row["description"] or "",
         "origin": row["origin"],
         "created_at": row["created_at"] or "",
+        **_tenant_of(row),
         **counts,
     }
 
@@ -425,16 +449,22 @@ def _vlan_taken(vid: int) -> ValueError:
 
 @tracks_changes("vlan", "create")
 async def create_vlan(
-    *, vid: int, name: str = "", site_id: int | None = None, description: str = "", origin: str = "manual"
+    *,
+    vid: int,
+    name: str = "",
+    site_id: int | None = None,
+    description: str = "",
+    origin: str = "manual",
+    tenant_id: int | None = None,
 ) -> dict:
     """Raises ``ValueError`` when the site (or no site) has the VLAN id. The
     caller checks that the site exists."""
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(
-            """INSERT INTO vlans (vid, name, site_id, description, origin, created_at)
-               VALUES (?, ?, ?, ?, ?, ?) RETURNING id""",
-            (int(vid), name, site_id, description, origin, _now()),
+            """INSERT INTO vlans (vid, name, site_id, description, origin, created_at, tenant_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id""",
+            (int(vid), name, site_id, description, origin, _now(), tenant_id),
         )
         new_id = int(cursor.lastrowid)
         await db.commit()
@@ -449,13 +479,15 @@ async def create_vlan(
 
 
 @tracks_changes("vlan", "update", id_arg="vlan_id")
-async def update_vlan(vlan_id: int, *, name: str, site_id: int | None, description: str) -> dict | None:
-    """Change the name, site and description (the VLAN id never changes).
-    ``None`` when it does not exist; ``ValueError`` when the new site has
-    the VLAN id already."""
-    sql, params = _safe_dynamic_update(
-        "vlans", ["name = ?", "site_id = ?", "description = ?"], [name, site_id, description], "id = ?", int(vlan_id)
-    )
+async def update_vlan(
+    vlan_id: int, *, name: str, site_id: int | None, description: str, tenant_id: TenantArg = TENANT_UNCHANGED
+) -> dict | None:
+    """Change the name, site, description and (when given) tenant (the VLAN
+    id never changes). ``None`` when it does not exist; ``ValueError`` when
+    the new site has the VLAN id already."""
+    exprs, values = ["name = ?", "site_id = ?", "description = ?"], [name, site_id, description]
+    _tenant_set(exprs, values, tenant_id)
+    sql, params = _safe_dynamic_update("vlans", exprs, values, "id = ?", int(vlan_id))
     db = await _dbcore.get_db()
     try:
         cursor = await db.execute(sql, params)

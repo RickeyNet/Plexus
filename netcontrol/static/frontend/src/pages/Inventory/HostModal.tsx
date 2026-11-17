@@ -27,6 +27,7 @@ import {
 import { DEFAULT_DEVICE_TYPE, DEVICE_TYPES } from '@/lib/deviceTypes';
 import { hostNetworkBody } from '@/lib/networkObjects';
 import { useObjectScope } from '@/lib/objectScope';
+import { pickFieldErrors } from '@/lib/serverFieldErrors';
 import { saveCustomDataDraft, useCustomDataDraft } from '@/lib/useCustomDataDraft';
 
 import { type DeviceFieldErrors, DeviceModelFields } from './DeviceModelFields';
@@ -37,6 +38,26 @@ import {
   snmpTestOutcome,
 } from './helpers';
 import { SnmpTestResultCard } from './SnmpTestResultCard';
+
+interface HostFormErrors {
+  hostname?: string;
+  ip?: string;
+  deviceType?: string;
+  awsInstanceId?: string;
+  vrf?: string;
+  vlan?: string;
+  save?: string;
+}
+
+// Host fields the server names in a 422 (data validation rules) -> the form's error keys.
+const HOST_FIELD_ERRORS: Record<string, keyof HostFormErrors> = {
+  hostname: 'hostname',
+  ip_address: 'ip',
+  device_type: 'deviceType',
+  aws_instance_id: 'awsInstanceId',
+  vrf_name: 'vrf',
+  vlan_id: 'vlan',
+};
 
 interface Props {
   /** When set, edit mode. When null, create mode (groupId required). */
@@ -96,12 +117,7 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
   };
   const vrfsQ = useVrfs();
   const vlansQ = useVlans();
-  const [errors, setErrors] = useState<{
-    hostname?: string;
-    ip?: string;
-    awsInstanceId?: string;
-    save?: string;
-  }>({});
+  const [errors, setErrors] = useState<HostFormErrors>({});
   // Device model values: what the user changed on top of the host's own (a
   // new host starts on the default lifecycle status). Only changed keys are
   // sent, so saving does not lock a value discovery set.
@@ -171,11 +187,13 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
         hostId = created.id;
       }
     } catch (err) {
-      // A 400 names the device model values the server rejected (an id that no longer exists).
+      // A 400 names the device model values the server rejected (an id that no longer exists);
+      // a 422 the host values a data validation rule refused.
       const failure = toCustomDataError(err);
       if (failure instanceof CustomDataError && Object.keys(failure.fields).length > 0) {
-        setDeviceErrors(failure.fields as DeviceFieldErrors);
-        setErrors({ save: `The host was not saved: ${failure.message} Fix the marked fields and save again.` });
+        const { picked, rest } = pickFieldErrors(failure.fields, HOST_FIELD_ERRORS);
+        setDeviceErrors(rest as DeviceFieldErrors);
+        setErrors({ ...picked, save: `The host was not saved: ${failure.message} Fix the marked fields and save again.` });
       } else {
         setErrors({ save: (err as Error).message });
       }
@@ -253,8 +271,12 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
               id={`${formId}-device-type`}
               className="form-select"
               value={deviceType ?? DEFAULT_DEVICE_TYPE}
-              onChange={(e) => setDeviceType(e.target.value)}
+              onChange={(e) => {
+                setDeviceType(e.target.value);
+                setErrors((prev) => ({ ...prev, deviceType: undefined }));
+              }}
               aria-describedby={`${formId}-device-type-help`}
+              aria-invalid={!!errors.deviceType}
             >
               {DEVICE_TYPES.map((t) => (
                 <option key={t.value} value={t.value}>
@@ -265,6 +287,7 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
             <div className="form-help" id={`${formId}-device-type-help`}>
               The driver Plexus uses to connect to the host.
             </div>
+            <FieldError>{errors.deviceType}</FieldError>
           </div>
           <div className="form-group">
             <label className="form-label" htmlFor={`${formId}-aws-instance`}>AWS instance ID</label>
@@ -296,11 +319,15 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
               id={`${formId}-vrf`}
               className="form-input"
               value={vrfName}
-              onChange={(e) => setVrfName(e.target.value)}
+              onChange={(e) => {
+                setVrfName(e.target.value);
+                setErrors((prev) => ({ ...prev, vrf: undefined }));
+              }}
               list={`${formId}-vrf-options`}
               spellCheck={false}
               autoComplete="off"
               aria-describedby={`${formId}-vrf-help`}
+              aria-invalid={!!errors.vrf}
             />
             <datalist id={`${formId}-vrf-options`}>
               {(vrfsQ.data ?? []).map((v) => (
@@ -310,6 +337,7 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
             <div className="form-help" id={`${formId}-vrf-help`}>
               Optional. The VRF the host&apos;s address is in; empty is the global VRF.
             </div>
+            <FieldError>{errors.vrf}</FieldError>
           </div>
           <div className="form-group">
             <label className="form-label" htmlFor={`${formId}-vlan`}>VLAN ID</label>
@@ -317,10 +345,14 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
               id={`${formId}-vlan`}
               className="form-input"
               value={vlanId}
-              onChange={(e) => setVlanId(e.target.value)}
+              onChange={(e) => {
+                setVlanId(e.target.value);
+                setErrors((prev) => ({ ...prev, vlan: undefined }));
+              }}
               list={`${formId}-vlan-options`}
               inputMode="numeric"
               autoComplete="off"
+              aria-invalid={!!errors.vlan}
             />
             <datalist id={`${formId}-vlan-options`}>
               {(vlansQ.data ?? []).map((v) => (
@@ -329,6 +361,7 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
                 </option>
               ))}
             </datalist>
+            <FieldError>{errors.vlan}</FieldError>
           </div>
           <div className="form-group">
             <label className="form-label" htmlFor={`${formId}-snmp-profile`}>SNMP profile</label>
@@ -403,6 +436,7 @@ export function HostModal({ host, groupId, groups, onClose }: Props) {
                 role_id: idToSelect(device.role_id),
                 lifecycle_status_id: idToSelect(device.lifecycle_status_id),
                 site_id: idToSelect(device.site_id),
+                tenant_id: idToSelect(device.tenant_id),
               }}
               onIdChange={(key, value) => editDevice(key, selectToId(value))}
               location={device.location_detail}

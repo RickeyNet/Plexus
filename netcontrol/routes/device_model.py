@@ -61,6 +61,7 @@ class HostDeviceValues(BaseModel):
     role_id: int | None = None
     lifecycle_status_id: int | None = None
     site_id: int | None = None
+    tenant_id: int | None = None
     location_detail: str | None = Field(default=None, max_length=LOCATION_DETAIL_MAX)
 
 
@@ -155,13 +156,16 @@ _DISPLAY = (
     ("role_id", "role", ("id", "name", "color")),
     ("lifecycle_status_id", "lifecycle_status", ("id", "name", "color")),
     ("site_id", "site", ("id", "name")),
+    ("tenant_id", "tenant", ("id", "name")),
 )
 
 
 async def attach_device_data(rows: list[dict]) -> None:
-    """Set the display objects ``hardware``, ``role``, ``lifecycle_status``
-    and ``site`` on every host row (``None`` when not set), from one lookup
-    per catalogue. Rows missing the stored keys get them as unset."""
+    """Set the display objects ``hardware``, ``role``, ``lifecycle_status``,
+    ``site`` and ``tenant`` on every host row (``None`` when not set), from
+    one lookup per catalogue, and ``region_ids``: the region of the host's
+    site and that region's ancestors (nearest first; empty for none). Rows
+    missing the stored keys get them as unset."""
     if not rows:
         return
     for row in rows:
@@ -173,12 +177,16 @@ async def attach_device_data(rows: list[dict]) -> None:
         for field, name, keys in _DISPLAY:
             record = lookup[name].get(int(row[field])) if row[field] is not None else None
             row[name] = {k: record[k] for k in keys} if record else None
+    chains = await db.site_region_chains(int(r["site_id"]) for r in rows if r["site_id"] is not None)
+    for row in rows:
+        row["region_ids"] = chains.get(int(row["site_id"]), []) if row["site_id"] is not None else []
 
 
 async def matching_host_ids(query_params) -> dict[int, int] | None:
     """The hosts matching the request's device filters (``manufacturer_id=``,
     ``device_type_id=``, ``role_id=``, ``lifecycle_status_id=``,
-    ``site_id=``; each repeatable, ``none`` for no value), as host id to
+    ``site_id=``, ``tenant_id=``, ``region_id=`` (the region or any region
+    under it); each repeatable, ``none`` for no value), as host id to
     group id. ``None`` when there are none; 400 on a value that is neither an
     id nor ``none``."""
     filters, errors = parse_device_filters(query_params.multi_items())

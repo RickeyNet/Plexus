@@ -35,9 +35,11 @@ from netcontrol.custom_fields import (
     ObjectType,
     TagColor,
     canonical_value,
+    check_object_values,
     clean_tag_name,
     typed_value,
 )
+from netcontrol.data_validation import CUSTOM_FIELD_PREFIX, enforce as enforce_validation_rules
 from netcontrol.object_scope import require_group, require_host, require_hosts, scope_exempt, scoped
 from netcontrol.routes.shared import _audit, _corr_id, _session_user
 
@@ -209,8 +211,22 @@ async def matching_keys(object_type: str, query_params) -> set[str] | None:
     wanted = [(k[3:], v) for k, v in query_params.multi_items() if k.startswith("cf.")]
     if not tags and not wanted:
         return None
+    canonical, errors = await canonical_filter_values(object_type, wanted)
+    if errors:
+        raise _invalid("Filter not valid: " + ", ".join(sorted(errors)), errors)
+    filters = {int(field["id"]): value for field, value in canonical}
+    return await db.find_object_keys(object_type, tags, filters)
+
+
+async def canonical_filter_values(
+    object_type: str, wanted: list[tuple[str, object]]
+) -> tuple[list[tuple[dict, str]], dict[str, str]]:
+    """Custom field filter values (``(field key, raw value)`` pairs) as
+    ``(field, canonical text)`` pairs, plus a message per key that names no
+    field of ``object_type`` or whose value the field rejects (an empty value
+    is rejected too). Shared by the list filters and dynamic groups."""
     by_key = {f["key"]: f for f in await db.list_custom_fields(object_type)}
-    filters: dict[int, str] = {}
+    canonical: list[tuple[dict, str]] = []
     errors: dict[str, str] = {}
     for key, raw in wanted:
         field = by_key.get(key)
@@ -225,10 +241,8 @@ async def matching_keys(object_type: str, query_params) -> set[str] | None:
         if not value:
             errors[key] = f"{field['label']} filter needs a value."
             continue
-        filters[int(field["id"])] = value
-    if errors:
-        raise _invalid("Filter not valid: " + ", ".join(sorted(errors)), errors)
-    return await db.find_object_keys(object_type, tags, filters)
+        canonical.append((field, value))
+    return canonical, errors
 
 
 # ── Definitions (read) ───────────────────────────────────────────────────────
@@ -387,27 +401,7 @@ async def _save_object(object_type: str, key: str, body: ObjectDataPut, request:
     """Validate the whole body, then replace the object's tags and values.
     Every problem is reported in one 400 and nothing is written."""
     all_fields = await db.list_custom_fields()
-    applicable = {f["key"]: f for f in all_fields if object_type in f["object_types"]}
-    known = {f["key"] for f in all_fields}
-    errors: dict[str, str] = {}
-    values: dict[int, str] = {}
-    for field_key, raw in body.fields.items():
-        field = applicable.get(field_key)
-        if field is None:
-            errors[field_key] = (
-                f"{field_key} does not apply to {object_type}s."
-                if field_key in known
-                else f"{field_key} is not a custom field (it may have been deleted)."
-            )
-            continue
-        try:
-            values[int(field["id"])] = canonical_value(field, raw)
-        except CustomFieldError as exc:
-            errors[field_key] = str(exc)
-    for field in applicable.values():
-        if field["required"] and not field["default_value"] and field["key"] not in errors:
-            if not values.get(int(field["id"])):
-                errors[field["key"]] = f"{field['label']} is required."
+    values, errors = check_object_values(all_fields, object_type, body.fields)
 
     problems: list[str] = []
     tag_ids = list(dict.fromkeys(body.tag_ids))
@@ -419,12 +413,20 @@ async def _save_object(object_type: str, key: str, body: ObjectDataPut, request:
         problems.append("Check these fields: " + ", ".join(sorted(errors)) + ".")
     if problems:
         raise _invalid(" ".join(problems), errors)
+    # Data validation rules on custom fields: every field of the type (a
+    # cleared one as ""), and a 422 naming the field key.
+    applicable = [f for f in all_fields if object_type in f["object_types"]]
+    await enforce_validation_rules(
+        object_type,
+        {CUSTOM_FIELD_PREFIX + f["key"]: values.get(int(f["id"]), "") for f in applicable},
+        field_names={CUSTOM_FIELD_PREFIX + f["key"]: f["key"] for f in applicable},
+    )
 
     try:
         await db.set_object_data(object_type, key, tag_ids, values)
     except ValueError as exc:  # a tag or field deleted since the checks above
         raise _invalid(str(exc)) from exc
-    stored = sorted(f["key"] for f in applicable.values() if values.get(int(f["id"])))
+    stored = sorted(f["key"] for f in all_fields if values.get(int(f["id"])))
     await _audit_write(
         request, "object_update", f"{object_type}={key} tags={len(tag_ids)} fields={','.join(stored) or '-'}"
     )

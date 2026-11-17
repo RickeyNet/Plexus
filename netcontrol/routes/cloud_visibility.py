@@ -136,6 +136,17 @@ async def _availability_changed(provider: str | None) -> None:
     await cloud_availability_changed(str(provider or ""))
 
 
+async def _virtualization_changed(account_id: int) -> None:
+    """A discovery was stored: mirror its compute instances as virtual
+    machines (docs/virtualization.md). Best-effort; never raises."""
+    try:
+        from netcontrol.routes.virtualization import sync_cloud_virtual_machines
+
+        await sync_cloud_virtual_machines(account_id)
+    except Exception:
+        LOGGER.warning("virtual machine sync failed after discovery account_id=%s", account_id, exc_info=True)
+
+
 def _normalize_provider(raw: str | None) -> str:
     provider = str(raw or "").strip().lower()
     if provider not in _VALID_PROVIDERS:
@@ -1203,6 +1214,7 @@ async def run_scheduled_discovery() -> dict:
             refreshed += 1
             _topology_changed()
             await _availability_changed(account.get("provider"))
+            await _virtualization_changed(account_id)
         except CloudCollectorError as exc:
             message = getattr(exc, "user_message", "") or str(exc) or type(exc).__name__
             LOGGER.warning(
@@ -1690,6 +1702,7 @@ async def _discover_cloud_account(
         )
         _topology_changed()
         await _availability_changed(account.get("provider"))
+        await _virtualization_changed(account_id)
     except HTTPException:
         raise
     except Exception:

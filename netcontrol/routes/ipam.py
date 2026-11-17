@@ -6,10 +6,12 @@ import ipaddress
 
 import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 import netcontrol.routes.state as state
+from netcontrol.data_validation import enforce as enforce_validation_rules
 from netcontrol.routes.custom_fields import attach_custom_data, matching_keys
+from netcontrol.routes.device_model import check_device_values
 from netcontrol.routes.ipam_adapters import (
     IpamAdapterError,
     collect_ipam_snapshot,
@@ -74,12 +76,22 @@ class IpamPrefixCreate(BaseModel):
     description: str = ""
     vrf: str = ""
     notes: str = ""
+    tenant_id: int | None = None
 
 
 class IpamAllocationCreate(BaseModel):
     address: str
     hostname: str = ""
     description: str = ""
+    tenant_id: int | None = None
+
+
+class IpamTenantSet(BaseModel):
+    """The tenant of a prefix or allocation; ``null`` clears it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tenant_id: int | None
 
 
 class IpamReconciliationResolve(BaseModel):
@@ -514,6 +526,10 @@ async def create_ipam_prefix_api(body: IpamPrefixCreate, request: Request):
         _ip.ip_network(body.subnet, strict=False)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid subnet CIDR") from None
+    await enforce_validation_rules(
+        "prefix", {"subnet": body.subnet, "vrf": body.vrf, "description": body.description, "notes": body.notes}
+    )
+    await check_device_values({"tenant_id": body.tenant_id})
 
     builtin = await db.get_or_create_builtin_ipam_source()
     prefix = await db.create_ipam_prefix(
@@ -522,6 +538,7 @@ async def create_ipam_prefix_api(body: IpamPrefixCreate, request: Request):
         description=body.description,
         vrf=body.vrf,
         notes=body.notes,
+        tenant_id=body.tenant_id,
     )
     if not prefix:
         raise HTTPException(status_code=409, detail="Subnet already defined")
@@ -569,6 +586,10 @@ async def create_ipam_allocation_api(subnet: str, body: IpamAllocationCreate, re
             raise HTTPException(status_code=400, detail="Address is not within the specified subnet")
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid subnet or IP address") from None
+    await enforce_validation_rules(
+        "ip_address", {"address": body.address, "hostname": body.hostname, "description": body.description}
+    )
+    await check_device_values({"tenant_id": body.tenant_id})
 
     builtin = await db.get_or_create_builtin_ipam_source()
     session = _get_session(request) or {}
@@ -579,6 +600,7 @@ async def create_ipam_allocation_api(subnet: str, body: IpamAllocationCreate, re
         hostname=body.hostname,
         description=body.description,
         created_by=session.get("user", ""),
+        tenant_id=body.tenant_id,
     )
     if not alloc:
         raise HTTPException(status_code=409, detail="IP address already allocated in this source")
@@ -590,6 +612,40 @@ async def create_ipam_allocation_api(subnet: str, body: IpamAllocationCreate, re
         correlation_id=_corr_id(request),
     )
     return {"ok": True, "allocation": alloc}
+
+
+@router.patch("/api/ipam/prefixes/{prefix_id}", dependencies=[Depends(_require_admin_dep)])
+async def set_ipam_prefix_tenant_api(prefix_id: int, body: IpamTenantSet, request: Request):
+    """Set or clear the tenant of a prefix (of any source)."""
+    await check_device_values({"tenant_id": body.tenant_id})
+    if not await db.set_prefix_tenant(prefix_id, body.tenant_id):
+        raise HTTPException(status_code=404, detail="IPAM prefix not found")
+    session = _get_session(request) or {}
+    await _audit(
+        "ipam",
+        "set_prefix_tenant",
+        user=session.get("user", ""),
+        detail=f"prefix_id={prefix_id},tenant_id={body.tenant_id or '-'}",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True, "prefix": await db.get_ipam_prefix(prefix_id)}
+
+
+@router.patch("/api/ipam/allocations/{allocation_id}", dependencies=[Depends(_require_admin_dep)])
+async def set_ipam_allocation_tenant_api(allocation_id: int, body: IpamTenantSet, request: Request):
+    """Set or clear the tenant of an IP allocation (of any source)."""
+    await check_device_values({"tenant_id": body.tenant_id})
+    if not await db.set_allocation_tenant(allocation_id, body.tenant_id):
+        raise HTTPException(status_code=404, detail="IPAM allocation not found")
+    session = _get_session(request) or {}
+    await _audit(
+        "ipam",
+        "set_allocation_tenant",
+        user=session.get("user", ""),
+        detail=f"allocation_id={allocation_id},tenant_id={body.tenant_id or '-'}",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True}
 
 
 @router.delete("/api/ipam/allocations/{allocation_id}", dependencies=[Depends(_require_admin_dep)])

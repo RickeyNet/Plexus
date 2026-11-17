@@ -53,10 +53,11 @@ async def get_all_jobs(limit: int = 50) -> list[dict]:
     try:
         cursor = await db.execute(
             """
-            SELECT j.*, p.name AS playbook_name, g.name AS group_name
+            SELECT j.*, p.name AS playbook_name, g.name AS group_name, dg.name AS dynamic_group_name
             FROM jobs j
             JOIN playbooks p ON p.id = j.playbook_id
             LEFT JOIN inventory_groups g ON g.id = j.inventory_group_id
+            LEFT JOIN dynamic_groups dg ON dg.id = j.dynamic_group_id
             ORDER BY j.id DESC LIMIT ?
         """,
             (limit,),
@@ -71,10 +72,11 @@ async def get_job(job_id: int) -> dict | None:
     try:
         cursor = await db.execute(
             """
-            SELECT j.*, p.name AS playbook_name, g.name AS group_name
+            SELECT j.*, p.name AS playbook_name, g.name AS group_name, dg.name AS dynamic_group_name
             FROM jobs j
             JOIN playbooks p ON p.id = j.playbook_id
             LEFT JOIN inventory_groups g ON g.id = j.inventory_group_id
+            LEFT JOIN dynamic_groups dg ON dg.id = j.dynamic_group_id
             WHERE j.id = ?
         """,
             (job_id,),
@@ -97,6 +99,7 @@ async def create_job(
     host_ids: list[int] | None = None,
     ad_hoc_ips: list[str] | None = None,
     parameters: dict | None = None,
+    dynamic_group_id: int | None = None,
 ) -> int:
     db = await _dbcore.get_db()
     try:
@@ -109,8 +112,8 @@ async def create_job(
             """INSERT INTO jobs
                (playbook_id, inventory_group_id, credential_id, template_id,
                 dry_run, status, priority, depends_on, queued_at, launched_by,
-                host_ids, ad_hoc_ips, parameters)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                host_ids, ad_hoc_ips, parameters, dynamic_group_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 playbook_id,
                 inventory_group_id,
@@ -125,6 +128,7 @@ async def create_job(
                 host_ids_json,
                 ad_hoc_json,
                 params_json,
+                dynamic_group_id,
             ),
         )
         await db.commit()

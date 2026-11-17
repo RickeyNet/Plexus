@@ -27,7 +27,9 @@ from netcontrol.device_model import (
 
 import routes.database as _dbcore
 from routes.database import _LOGGER, _is_unique_violation, _safe_dynamic_update, row_to_dict, rows_to_list
+from routes.db.change_events import tracks_changes
 from routes.db.custom_fields import _IN_LIMIT, _chunks, _marks, _now
+from routes.db.organization import region_subtree_sql
 
 __all__ = [
     "CATALOGUE_KINDS",
@@ -78,6 +80,7 @@ _REF_TABLES: dict[str, str] = {
     "role_id": "device_roles",
     "lifecycle_status_id": "host_statuses",
     "site_id": "geo_sites",
+    "tenant_id": "tenants",
 }
 # Host id column to the lock it sets when a person writes it.
 _LOCKS: dict[str, str] = {"device_type_id": "hardware_locked", "role_id": "role_locked"}
@@ -472,6 +475,7 @@ def _set_clause(values: dict, lock: bool) -> tuple[list[str], list]:
     return exprs, params
 
 
+@tracks_changes("host", "update", id_arg="host_id")
 async def set_host_device_fields(host_id: int, values: dict, lock: bool = True) -> bool:
     """Write the given keys of ``HOST_DEVICE_FIELDS`` on one host; other
     keys are ignored. With ``lock`` a device type or role sets its lock and
@@ -496,6 +500,7 @@ async def _host_exists(host_id: int) -> bool:
     return bool(await _select("SELECT 1 FROM hosts WHERE id = ?", (int(host_id),)))
 
 
+@tracks_changes("host", "update", ids_arg="host_ids")
 async def bulk_set_host_device_fields(host_ids: Iterable[int], values: dict, lock: bool = True) -> int:
     """Like ``set_host_device_fields`` on many hosts in one transaction;
     returns how many hosts exist among ``host_ids`` and were written."""
@@ -534,6 +539,16 @@ async def find_host_ids_by_device_filters(filters: dict[str, list[int | None]]) 
         ids = [int(v) for v in values if v is not None]
         column = "device_type_id" if key == "manufacturer_id" else key
         alternatives: list[str] = []
+        if key == "region_id":
+            # A region matches the hosts of its sites and of its descendants'
+            # sites; "none" matches hosts with no site or a site in no region.
+            subtree = f"site_id IN (SELECT id FROM geo_sites WHERE region_id IN {region_subtree_sql()})"
+            alternatives.extend(subtree for _ in ids)
+            if None in values:
+                alternatives.append("site_id IS NULL OR site_id IN (SELECT id FROM geo_sites WHERE region_id IS NULL)")
+            clauses.append("(" + " OR ".join(alternatives) + ")")
+            params.extend(ids)
+            continue
         if ids and key == "manufacturer_id":
             alternatives.append(
                 f"device_type_id IN (SELECT id FROM device_types WHERE manufacturer_id IN ({_marks(ids)}))"
@@ -563,7 +578,8 @@ async def get_device_display_objects(rows: list[dict]) -> dict[str, dict[int, di
         ),
         "role_id": ("role", "SELECT id, name, color FROM device_roles", "id"),
         "lifecycle_status_id": ("lifecycle_status", "SELECT id, name, color FROM host_statuses", "id"),
-        "site_id": ("site", "SELECT id, name, description, address FROM geo_sites", "id"),
+        "site_id": ("site", "SELECT id, name, description, address, region_id FROM geo_sites", "id"),
+        "tenant_id": ("tenant", "SELECT id, name FROM tenants", "id"),
     }
     out: dict[str, dict[int, dict]] = {name: {} for name, _sql, _col in queries.values()}
     db = await _dbcore.get_db(read_only=True)

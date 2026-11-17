@@ -269,6 +269,7 @@ async def test_display_objects():
         "role": {},
         "lifecycle_status": {},
         "site": {},
+        "tenant": {},
     }
 
 

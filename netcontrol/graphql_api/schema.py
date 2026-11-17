@@ -7,7 +7,7 @@ and IPAM ``metadata_json`` are never declared, so no query can reach them.
 Fields check the feature the matching REST route needs (``Access denied for
 feature 'X'`` in ``errors``, the rest of the query still answers):
 
-* hosts, groups, their tags and custom fields: ``inventory``
+* hosts, groups, their tags and custom fields, dynamic groups: ``inventory``
 * interfaces, interface addresses, device VLANs: ``reports``
 * prefixes, IP addresses, VLAN and VRF records: ``ipam``
 * a host's latest configuration backup (metadata only): ``config-backups``
@@ -21,10 +21,12 @@ from __future__ import annotations
 import ipaddress
 from typing import Any
 
+import routes.database as db
 import strawberry
 from strawberry.extensions import MaskErrors
 from strawberry.types import Info
 
+from netcontrol.dynamic_groups import resolve_hosts
 from netcontrol.graphql_api.context import GraphQLClientError, GraphQLContext, network_of
 
 DEFAULT_LIMIT = 100
@@ -654,8 +656,42 @@ def _network_arg(text: str, name: str) -> Any:
 # ── Root ─────────────────────────────────────────────────────────────────────
 
 
+@strawberry.type(description="A dynamic group: a saved host filter, resolved when it is read.")
+class DynamicGroup:
+    row: strawberry.Private[dict]
+
+    @strawberry.field
+    def id(self) -> int:
+        return int(self.row["id"])
+
+    @strawberry.field
+    def name(self) -> str:
+        return _text(self.row, "name")
+
+    @strawberry.field
+    def description(self) -> str:
+        return _text(self.row, "description")
+
+    @strawberry.field(description="The hosts the filter matches now, among those you may read.")
+    async def members(self, info: Info, limit: int | None = None, offset: int = 0) -> list[Host]:
+        ctx = _ctx(info)
+        rows = await resolve_hosts(self.row.get("filter") or {}, ctx.scope)
+        return [Host(row=r) for r in ctx.page(rows, limit, offset, bounded=False)]
+
+
 @strawberry.type
 class Query:
+    @strawberry.field(description="Dynamic groups (saved host filters), by name.")
+    async def dynamic_groups(
+        self, info: Info, name: str | None = None, limit: int = DEFAULT_LIMIT, offset: int = 0
+    ) -> list[DynamicGroup] | None:
+        ctx = _ctx(info)
+        ctx.require("inventory")
+        rows = await db.list_dynamic_groups()
+        if name:
+            rows = [g for g in rows if name.lower() in _text(g, "name").lower()]
+        return [DynamicGroup(row=r) for r in ctx.page(rows, limit, offset)]
+
     @strawberry.field(description="Hosts you may read, by hostname. Filters combine (AND).")
     async def hosts(
         self,

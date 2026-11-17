@@ -46,6 +46,40 @@ DEFAULT_RULES = {
     # land a change.
     "netcontrol/network_objects.py": 95.0,
     "netcontrol/routes/network_objects.py": 85.0,
+    # Routing objects (intended BGP state): the rules and compliance, the
+    # storage and the API. Measured by tests/test_routing.py (99%, 93%,
+    # 82%+); do not lower them to land a change.
+    "netcontrol/routing.py": 95.0,
+    "routes/db/routing.py": 88.0,
+    "netcontrol/routes/routing.py": 80.0,
+    # Circuits: the rules, storage and API. Measured by
+    # tests/test_circuits.py; do not lower them to land a change.
+    "netcontrol/circuits.py": 95.0,
+    "netcontrol/routes/circuits.py": 90.0,
+    "routes/db/circuits.py": 90.0,
+    # Physical DCIM: the rules (fit, elevation, trace, power), storage and
+    # API. Measured by tests/test_dcim.py; do not lower them to land a
+    # change.
+    "netcontrol/dcim.py": 95.0,
+    "netcontrol/routes/dcim.py": 90.0,
+    "routes/db/dcim.py": 88.0,
+    "routes/db/dcim_cables.py": 88.0,
+    # Locations and tenancy: the rules, storage and API. Measured by
+    # tests/test_organization.py; do not lower them to land a change.
+    "netcontrol/organization.py": 95.0,
+    "netcontrol/routes/organization.py": 90.0,
+    "routes/db/organization.py": 90.0,
+    # Virtualization: the rules and cloud mapping, storage and API with the
+    # cloud sync. Measured by tests/test_virtualization.py; do not lower
+    # them to land a change.
+    "netcontrol/virtualization.py": 90.0,
+    "netcontrol/routes/virtualization.py": 90.0,
+    "routes/db/virtualization.py": 90.0,
+    # Bulk import: the parser, adapters and commit, and the routes.
+    # Measured by tests/test_bulk_import.py; do not lower them to land a
+    # change.
+    "netcontrol/bulk_import.py": 90.0,
+    "netcontrol/routes/bulk_import.py": 90.0,
     # Intended configuration generation: the rules (sandboxed render,
     # comparison) and the API. Measured by tests/test_intended_config_*.py;
     # do not lower them to land a change.
@@ -77,6 +111,11 @@ DEFAULT_RULES = {
     # do not lower them to land a change.
     "netcontrol/routes/webhooks.py": 85.0,
     "routes/db/change_events.py": 75.0,
+    # Per-object change log: the recorder, access rules per type and scope,
+    # filters and retention. Measured by tests/test_object_changes.py; do
+    # not lower them to land a change.
+    "netcontrol/routes/object_changes.py": 85.0,
+    "routes/db/object_changes.py": 92.0,
     # Git data sources: remote/branch rules, the git runner's credential
     # handling, checkout parsing, sync/import and the API. Measured by
     # tests/test_git_sources.py; do not lower them to land a change.

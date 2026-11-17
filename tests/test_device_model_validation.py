@@ -110,4 +110,12 @@ def test_parse_device_filters_accepts_the_largest_id():
 
 
 def test_filter_keys():
-    assert DEVICE_FILTER_KEYS == ("manufacturer_id", "device_type_id", "role_id", "lifecycle_status_id", "site_id")
+    assert DEVICE_FILTER_KEYS == (
+        "manufacturer_id",
+        "device_type_id",
+        "role_id",
+        "lifecycle_status_id",
+        "site_id",
+        "tenant_id",
+        "region_id",
+    )

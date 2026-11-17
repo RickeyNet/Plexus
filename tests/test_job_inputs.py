@@ -103,6 +103,36 @@ def test_schema_rejects_non_list_and_too_many_fields():
     assert job_inputs.normalize_schema('[{"name": "a"}]')[0]["type"] == "string"
 
 
+def test_regex_runs_on_re2_in_linear_time():
+    import time
+
+    schema = job_inputs.normalize_schema([{"name": "p", "type": "text", "regex": "(a+)+b"}])
+    started = time.monotonic()
+    with pytest.raises(JobInputError) as exc:
+        job_inputs.validate_inputs(schema, {"p": "a" * 5000 + "c"})
+    assert time.monotonic() - started < 2
+    assert "required format" in exc.value.fields["p"]
+
+
+def test_regex_matches_the_whole_value_case_sensitively():
+    schema = job_inputs.normalize_schema([{"name": "p", "type": "text", "regex": "[a-z]+|x"}])
+    assert job_inputs.validate_inputs(schema, {"p": "abc"})["p"] == "abc"
+    for bad in ("abc\n", "ABC", "abc1", "x-"):
+        with pytest.raises(JobInputError):
+            job_inputs.validate_inputs(schema, {"p": bad})
+
+
+def test_regex_without_re2_support_is_refused():
+    with pytest.raises(JobInputError) as exc:
+        job_inputs.normalize_schema([{"name": "p", "type": "string", "regex": "(?=a)a"}])
+    assert set(exc.value.fields) == {"0.regex"}
+    # A pattern stored before this rule is reported on the field, not raised.
+    stored = [{"name": "p", "type": "string", "label": "P", "regex": r"(a)\1"}]
+    with pytest.raises(JobInputError) as exc:
+        job_inputs.validate_inputs(stored, {"p": "aa"})
+    assert "cannot use" in exc.value.fields["p"]
+
+
 def test_builtin_code_schemas_are_valid():
     import templates.playbooks  # noqa: F401 - registers the built-ins
 

@@ -2,9 +2,18 @@ import type { ReactNode } from 'react';
 
 import { useDeviceRoles, useDeviceTypes, useHostStatuses } from '@/api/deviceModel';
 import { useGeoSites } from '@/api/floorPlan';
+import { useTenants } from '@/api/organization';
 import { FieldError } from '@/components/FieldError';
 import { QueryError } from '@/components/QueryError';
-import { type DeviceIdKey, deviceTypeOptionGroups, KEEP, LOCATION_DETAIL_MAX } from '@/lib/deviceModel';
+import { TenantSelect } from '@/components/TenantSelect';
+import {
+  type DeviceIdKey,
+  deviceTypeOptionGroups,
+  idToSelect,
+  KEEP,
+  LOCATION_DETAIL_MAX,
+  selectToId,
+} from '@/lib/deviceModel';
 
 export type DeviceFieldErrors = Partial<Record<DeviceIdKey | 'location_detail', string>>;
 
@@ -40,6 +49,8 @@ export function DeviceModelFields({
   const rolesQ = useDeviceRoles();
   const statusesQ = useHostStatuses();
   const sitesQ = useGeoSites();
+  // The bulk edit offers "Leave unchanged", which the shared tenant select has not.
+  const tenantsQ = useTenants(allowKeep);
 
   const failed = [
     { what: 'device types', query: typesQ },
@@ -130,7 +141,25 @@ export function DeviceModelFields({
             {s.name}
           </option>
         )),
-        allowKeep ? undefined : 'Sites are managed on the Geolocation page.',
+        allowKeep ? undefined : 'Sites, regions and tenants are managed on the Organization page.',
+      )}
+      {allowKeep ? (
+        select(
+          'tenant_id',
+          'Tenant',
+          (tenantsQ.data ?? []).map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          )),
+        )
+      ) : (
+        <TenantSelect
+          id={`${idPrefix}-tenant_id`}
+          value={selectToId(ids.tenant_id)}
+          onChange={(v) => onIdChange('tenant_id', idToSelect(v))}
+          error={errors.tenant_id}
+        />
       )}
       <div className="form-group">
         {allowKeep && (

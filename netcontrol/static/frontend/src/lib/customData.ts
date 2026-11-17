@@ -168,7 +168,7 @@ export function formatCustomValue(field: Pick<CustomField, 'field_type'>, value:
 // ── Tag picker ─────────────────────────────────────────────────────────────
 
 /** `value` with `id` added, or removed when it is already there. */
-export function toggleTag(value: number[], id: number): number[] {
+export function toggleTag<T = number>(value: T[], id: T): T[] {
   return value.includes(id) ? value.filter((v) => v !== id) : [...value, id];
 }
 

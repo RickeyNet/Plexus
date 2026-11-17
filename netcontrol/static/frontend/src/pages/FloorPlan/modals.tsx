@@ -1,70 +1,125 @@
-import { useState, useRef } from 'react';
+import { useId, useState, useRef } from 'react';
 
+import { useAuthStatus } from '@/api/auth';
 import { Callout } from '@/components/Callout';
+import { FieldError } from '@/components/FieldError';
 import { Modal } from '@/components/Modal';
 import { ModalActions } from '@/components/ModalActions';
+import { TenantSelect } from '@/components/TenantSelect';
 import {
   GeoFloor,
   useCreateGeoFloor,
-  useCreateGeoSite,
   useUpdateGeoFloor,
   useUploadFloorImage,
 } from '@/api/floorPlan';
+import { SITE_STATUSES, useRegions, useSaveSite } from '@/api/organization';
+import { idToSelect, selectToId } from '@/lib/deviceModel';
+import { siteStatusLabel, timeZoneOptions, treeOptions } from '@/lib/organization';
+import { serverFieldErrors } from '@/lib/serverFieldErrors';
+import { canUseFeature } from '@/lib/tabGating';
 
-// ── Add Site ────────────────────────────────────────────────────────────────
+// ── Add / Edit Site ─────────────────────────────────────────────────────────
 
-export function AddSiteModal({ onClose }: { onClose: () => void }) {
-  const [name, setName] = useState('');
-  const [address, setAddress] = useState('');
-  const [lat, setLat] = useState('');
-  const [lng, setLng] = useState('');
+/** The fields of a site the dialog edits (an `OrgSite` or a `GeoSiteSummary`). */
+export interface EditableSite {
+  id: number;
+  name: string;
+  address?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+  region_id?: number | null;
+  status?: string | null;
+  facility?: string | null;
+  time_zone?: string | null;
+  tenant_id?: number | null;
+}
+
+/**
+ * Creates a site (`site` null) or edits one: name, address, coordinates and
+ * its place in the location hierarchy (region, status, facility, time zone)
+ * and tenant. Shared by the Floor Plans page and the Organization page.
+ */
+export function SiteModal({ site, onClose }: { site: EditableSite | null; onClose: () => void }) {
+  const id = useId();
+  const [name, setName] = useState(site?.name ?? '');
+  const [address, setAddress] = useState(site?.address ?? '');
+  const [lat, setLat] = useState(site?.lat != null ? String(site.lat) : '');
+  const [lng, setLng] = useState(site?.lng != null ? String(site.lng) : '');
+  const [regionId, setRegionId] = useState<number | null>(site?.region_id ?? null);
+  const [status, setStatus] = useState(site?.status || 'active');
+  const [facility, setFacility] = useState(site?.facility ?? '');
+  const [timeZone, setTimeZone] = useState(site?.time_zone ?? '');
+  const [tenantId, setTenantId] = useState<number | null>(site?.tenant_id ?? null);
   const [err, setErr] = useState<string | null>(null);
-  const create = useCreateGeoSite();
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const auth = useAuthStatus().data;
+  const regionsQ = useRegions(auth === undefined || canUseFeature('organization', auth));
+  const save = useSaveSite();
+  const regionChoices = treeOptions(regionsQ.data ?? []);
+  const clearError = (key: string) => setFieldErrors((prev) => ({ ...prev, [key]: '' }));
+
+  const submit = async () => {
+    setErr(null);
+    setFieldErrors({});
+    if (!name.trim()) {
+      setFieldErrors({ name: 'Site name is required.' });
+      return;
+    }
+    try {
+      await save.mutateAsync({
+        id: site?.id ?? null,
+        data: {
+          name: name.trim(),
+          address: address.trim(),
+          lat: lat ? parseFloat(lat) : null,
+          lng: lng ? parseFloat(lng) : null,
+          region_id: regionId,
+          status,
+          facility: facility.trim(),
+          time_zone: timeZone.trim(),
+          tenant_id: tenantId,
+        },
+      });
+      onClose();
+    } catch (e) {
+      const fields = serverFieldErrors(e);
+      setFieldErrors(fields);
+      if (Object.keys(fields).length === 0) setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   return (
     <Modal
       isOpen
       onClose={onClose}
-      title="Add Site"
+      title={site ? `Edit site ${site.name}` : 'Add Site'}
       footer={
         <ModalActions
           onClose={onClose}
-          primaryLabel="Create Site"
-          primaryDisabled={!name.trim() || create.isPending}
-          onPrimary={async () => {
-            setErr(null);
-            if (!name.trim()) {
-              setErr('Site name is required');
-              return;
-            }
-            try {
-              await create.mutateAsync({
-                name: name.trim(),
-                address: address.trim() || undefined,
-                lat: lat ? parseFloat(lat) : null,
-                lng: lng ? parseFloat(lng) : null,
-              });
-              onClose();
-            } catch (e) {
-              setErr(e instanceof Error ? e.message : String(e));
-            }
-          }}
+          primaryLabel={site ? 'Save Site' : 'Create Site'}
+          primaryDisabled={!name.trim() || save.isPending}
+          onPrimary={() => void submit()}
         />
       }
     >
-      <FieldRow label="Name *" htmlFor="geo-site-name">
+      <FieldRow label="Name *" htmlFor={`${id}-name`}>
         <input
-          id="geo-site-name"
+          id={`${id}-name`}
           className="form-input"
           placeholder="Site name"
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          aria-invalid={!!fieldErrors.name}
+          onChange={(e) => {
+            setName(e.target.value);
+            clearError('name');
+          }}
           autoFocus
         />
+        <FieldError>{fieldErrors.name}</FieldError>
       </FieldRow>
-      <FieldRow label="Address" htmlFor="geo-site-address">
+      <FieldRow label="Address" htmlFor={`${id}-address`}>
         <input
-          id="geo-site-address"
+          id={`${id}-address`}
           className="form-input"
           placeholder="Street address or description"
           value={address}
@@ -72,9 +127,9 @@ export function AddSiteModal({ onClose }: { onClose: () => void }) {
         />
       </FieldRow>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
-        <FieldRow label="Latitude" htmlFor="geo-site-lat">
+        <FieldRow label="Latitude" htmlFor={`${id}-lat`}>
           <input
-            id="geo-site-lat"
+            id={`${id}-lat`}
             className="form-input"
             type="number"
             step="any"
@@ -83,9 +138,9 @@ export function AddSiteModal({ onClose }: { onClose: () => void }) {
             onChange={(e) => setLat(e.target.value)}
           />
         </FieldRow>
-        <FieldRow label="Longitude" htmlFor="geo-site-lng">
+        <FieldRow label="Longitude" htmlFor={`${id}-lng`}>
           <input
-            id="geo-site-lng"
+            id={`${id}-lng`}
             className="form-input"
             type="number"
             step="any"
@@ -95,9 +150,102 @@ export function AddSiteModal({ onClose }: { onClose: () => void }) {
           />
         </FieldRow>
       </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+        <FieldRow label="Region" htmlFor={`${id}-region`}>
+          <select
+            id={`${id}-region`}
+            className="form-select"
+            value={idToSelect(regionId)}
+            aria-invalid={!!fieldErrors.region_id}
+            onChange={(e) => {
+              setRegionId(selectToId(e.target.value));
+              clearError('region_id');
+            }}
+          >
+            <option value="">No region</option>
+            {regionChoices.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <FieldError>{fieldErrors.region_id}</FieldError>
+        </FieldRow>
+        <FieldRow label="Status" htmlFor={`${id}-status`}>
+          <select
+            id={`${id}-status`}
+            className="form-select"
+            value={status}
+            aria-invalid={!!fieldErrors.status}
+            onChange={(e) => {
+              setStatus(e.target.value);
+              clearError('status');
+            }}
+          >
+            {SITE_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {siteStatusLabel(s)}
+              </option>
+            ))}
+          </select>
+          <FieldError>{fieldErrors.status}</FieldError>
+        </FieldRow>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+        <FieldRow label="Facility" htmlFor={`${id}-facility`}>
+          <input
+            id={`${id}-facility`}
+            className="form-input"
+            placeholder="Data center or building"
+            value={facility}
+            maxLength={100}
+            aria-invalid={!!fieldErrors.facility}
+            onChange={(e) => {
+              setFacility(e.target.value);
+              clearError('facility');
+            }}
+          />
+          <FieldError>{fieldErrors.facility}</FieldError>
+        </FieldRow>
+        <FieldRow label="Time zone" htmlFor={`${id}-tz`}>
+          <input
+            id={`${id}-tz`}
+            className="form-input"
+            placeholder="Europe/Amsterdam"
+            list={`${id}-tz-list`}
+            value={timeZone}
+            maxLength={64}
+            spellCheck={false}
+            aria-invalid={!!fieldErrors.time_zone}
+            onChange={(e) => {
+              setTimeZone(e.target.value);
+              clearError('time_zone');
+            }}
+          />
+          <datalist id={`${id}-tz-list`}>
+            {timeZoneOptions().map((z) => (
+              <option key={z} value={z} />
+            ))}
+          </datalist>
+          <FieldError>{fieldErrors.time_zone}</FieldError>
+        </FieldRow>
+      </div>
+      <TenantSelect
+        id={`${id}-tenant`}
+        value={tenantId}
+        error={fieldErrors.tenant_id}
+        onChange={(v) => {
+          setTenantId(v);
+          clearError('tenant_id');
+        }}
+      />
       {err && <ErrorBox message={err} />}
     </Modal>
   );
+}
+
+export function AddSiteModal({ onClose }: { onClose: () => void }) {
+  return <SiteModal site={null} onClose={onClose} />;
 }
 
 // ── Add Floor ───────────────────────────────────────────────────────────────

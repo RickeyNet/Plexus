@@ -75,6 +75,7 @@ export function BulkEditModal({ hostIds, onClose }: Props) {
           role_id: bulkChoiceToSelect(form.role_id),
           lifecycle_status_id: bulkChoiceToSelect(form.lifecycle_status_id),
           site_id: bulkChoiceToSelect(form.site_id),
+          tenant_id: bulkChoiceToSelect(form.tenant_id),
         }}
         onIdChange={(key, value) => setForm((prev) => ({ ...prev, [key]: selectToBulkChoice(value) }))}
         location={form.location_detail}

@@ -26,6 +26,14 @@ export function canUseFeature(feature: string, auth: AuthStatus | undefined): bo
   return isNavItemVisible({ feature }, visibilityContext(auth));
 }
 
+/**
+ * Whether this user may change the records of `feature`: an admin, or a user
+ * holding `<feature>.write` (the server's `require_feature_method`).
+ */
+export function canWriteFeature(feature: string, auth: AuthStatus | undefined): boolean {
+  return auth?.role === 'admin' || (auth?.feature_access ?? []).includes(`${feature}.write`);
+}
+
 function visibilityContext(auth: AuthStatus | undefined): NavVisibilityContext {
   return {
     isAdmin: auth?.role === 'admin',

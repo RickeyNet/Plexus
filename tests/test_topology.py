@@ -400,6 +400,8 @@ async def test_discover_neighbors_bgp(monkeypatch):
     assert n["protocol"] == "bgp"
     assert n["remote_ip"] == "172.16.0.2"
     assert n["remote_device_name"] == "AS65001"
+    # Two peers in one AS stay two stored links (unique per interface pair).
+    assert n["remote_interface"] == "172.16.0.2"
     assert "AS 65001" in n["remote_platform"]
 
 

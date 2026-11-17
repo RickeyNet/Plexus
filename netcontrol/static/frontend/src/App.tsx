@@ -33,6 +33,9 @@ const ChangeManagement = lazy(() => pageLoaders.changeManagement().then(m => ({ 
 const CloudVisibility = lazy(() => pageLoaders.cloudVisibility().then(m => ({ default: m.CloudVisibility })));
 const Inventory = lazy(() => pageLoaders.inventory().then(m => ({ default: m.Inventory })));
 const Ipam = lazy(() => pageLoaders.ipam().then(m => ({ default: m.Ipam })));
+const Routing = lazy(() => pageLoaders.routing().then(m => ({ default: m.Routing })));
+const Circuits = lazy(() => pageLoaders.circuits().then(m => ({ default: m.Circuits })));
+const Dcim = lazy(() => pageLoaders.dcim().then(m => ({ default: m.Dcim })));
 const Software = lazy(() => pageLoaders.software().then(m => ({ default: m.Software })));
 const Jobs = lazy(() => pageLoaders.jobs().then(m => ({ default: m.Jobs })));
 const Lab = lazy(() => pageLoaders.lab().then(m => ({ default: m.Lab })));
@@ -42,6 +45,8 @@ const PluginPage = lazy(() => pageLoaders.pluginPage().then(m => ({ default: m.P
 const Reports = lazy(() => pageLoaders.reports().then(m => ({ default: m.Reports })));
 const Settings = lazy(() => pageLoaders.settings().then(m => ({ default: m.Settings })));
 const Topology = lazy(() => pageLoaders.topology().then(m => ({ default: m.TopologyPage })));
+const Virtualization = lazy(() => pageLoaders.virtualization().then(m => ({ default: m.Virtualization })));
+const Organization = lazy(() => pageLoaders.organization().then(m => ({ default: m.Organization })));
 
 function Breadcrumb() {
   const { pathname } = useLocation();
@@ -188,6 +193,11 @@ export function App() {
           <Route path="/floor-plan" element={<FloorPlan />} />
           <Route path="/inventory" element={<Inventory />} />
           <Route path="/ipam/:tab?" element={<Ipam />} />
+          <Route path="/virtualization/:tab?" element={<Virtualization />} />
+          <Route path="/organization/:tab?" element={<Organization />} />
+          <Route path="/routing/:tab?" element={<Routing />} />
+          <Route path="/circuits/:tab?" element={<Circuits />} />
+          <Route path="/dcim/:tab?" element={<Dcim />} />
           {/* Software: one page renders the Versions and Upgrades tabs.
               /upgrades is the upgrade tool's old path (it was a Delegator
               tab); bookmarks to it are sent to the Upgrades tab. */}

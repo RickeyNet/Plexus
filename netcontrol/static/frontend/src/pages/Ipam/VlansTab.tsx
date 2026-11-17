@@ -5,9 +5,11 @@ import { useGeoSites } from '@/api/floorPlan';
 import { type Vlan, useDeleteVlan, useVlan, useVlans } from '@/api/networkObjects';
 import { Badge } from '@/components/Badge';
 import { CardHeader, CatalogueBody, Dash, RowActions } from '@/components/CatalogueParts';
+import { ChangelogPanel } from '@/components/ChangelogPanel';
 import { DataTable } from '@/components/DataTable';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { EmptyState } from '@/components/EmptyState';
+import { ImportDialog } from '@/components/ImportDialog';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
 import { clickableProps } from '@/lib/clickable';
@@ -30,12 +32,18 @@ export function VlansTab() {
   const { confirm, alert } = useDialogs();
   const deleting = usePendingKeys<number>();
   const [editing, setEditing] = useState<Vlan | 'new' | null>(null);
+  const [importing, setImporting] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const rows = q.data ?? [];
 
   const addButton = isAdmin && (
     <button type="button" className="btn btn-sm btn-primary" onClick={() => setEditing('new')}>
       Add VLAN
+    </button>
+  );
+  const importButton = isAdmin && (
+    <button type="button" className="btn btn-sm btn-secondary" onClick={() => setImporting(true)}>
+      Import
     </button>
   );
 
@@ -88,6 +96,7 @@ export function VlansTab() {
         actions={
           <>
             {siteFilter}
+            {importButton}
             {rows.length > 0 && addButton}
           </>
         }
@@ -127,6 +136,7 @@ export function VlansTab() {
               <th style={RIGHT}>Devices</th>
               <th style={RIGHT}>Ports</th>
               <th style={RIGHT}>Prefixes</th>
+              <th>Tenant</th>
               <th>Description</th>
               {isAdmin && <th style={RIGHT}>Actions</th>}
             </tr>
@@ -160,6 +170,7 @@ export function VlansTab() {
                   <td style={RIGHT}>{v.device_count.toLocaleString()}</td>
                   <td style={RIGHT}>{v.interface_count.toLocaleString()}</td>
                   <td style={RIGHT}>{v.prefix_count.toLocaleString()}</td>
+                  <td>{v.tenant_name || <Dash />}</td>
                   <td>{v.description || <Dash />}</td>
                   {isAdmin && (
                     // The row opens the detail panel; the buttons do their own thing.
@@ -179,6 +190,7 @@ export function VlansTab() {
         </DataTable>
       </CatalogueBody>
       {editing && <VlanModal vlan={editing === 'new' ? null : editing} onClose={() => setEditing(null)} />}
+      {importing && <ImportDialog types={['vlans']} onClose={() => setImporting(false)} />}
     </>
   );
 
@@ -297,6 +309,7 @@ export function VlanDetailPanel({ id }: { id: number | null }) {
           </tbody>
         </DataTable>
       </DetailSection>
+      <ChangelogPanel objectType="vlan" objectId={v.id} pageSize={10} />
     </div>
   );
 }

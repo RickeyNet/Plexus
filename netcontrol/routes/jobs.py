@@ -26,6 +26,8 @@ from routes.secret_resolver import (
 
 import netcontrol.routes.state as state
 from netcontrol import job_inputs
+from netcontrol.dynamic_groups import resolve_group, scope_for_launcher
+from netcontrol.object_scope import request_scope
 from netcontrol.routes.host_identity import host_ip_problem
 from netcontrol.routes.playbooks import effective_input_schema, playbook_permissions, playbook_supports_dry_run
 from netcontrol.routes.shared import (
@@ -237,6 +239,9 @@ class JobLaunch(BaseModel):
     playbook_id: int
     inventory_group_id: int | None = None  # Optional for backward compatibility
     host_ids: list[int] | None = None  # List of specific host IDs to target
+    # A dynamic group (saved host filter): its hosts are resolved when the
+    # queue starts the job, within the launcher's object scope.
+    dynamic_group_id: int | None = None
     ad_hoc_ips: list[str] | None = None  # Free-form IP addresses not in inventory
     credential_id: int | None = None
     template_id: int | None = None
@@ -364,6 +369,29 @@ async def _reprobe_hosts_after_job(hosts: list[dict], credentials: dict, dry_run
 _queue_dispatch_lock = asyncio.Lock()
 
 
+async def _resolve_job_hosts(job: dict) -> list[dict]:
+    """The inventory hosts a queued job targets, read when it starts: the
+    stored host selection, else its dynamic group (resolved now, within the
+    object scope of the user who launched it), else its inventory group.
+    Ad-hoc addresses are added by the caller."""
+    stored_host_ids = None
+    if job.get("host_ids"):
+        try:
+            stored_host_ids = json.loads(job["host_ids"])
+        except (json.JSONDecodeError, TypeError) as exc:
+            LOGGER.warning("job %s: failed to parse stored host_ids: %s", job.get("id"), exc)
+    if stored_host_ids:
+        return await db.get_hosts_by_ids(stored_host_ids)
+    if job.get("dynamic_group_id"):
+        scope = await scope_for_launcher(job.get("launched_by"))
+        hosts = await resolve_group(int(job["dynamic_group_id"]), scope) or []
+        LOGGER.info("job %s: dynamic group %s resolved to %d hosts", job.get("id"), job["dynamic_group_id"], len(hosts))
+        return hosts
+    if job.get("inventory_group_id"):
+        return await db.get_hosts_for_group(job["inventory_group_id"])
+    return []
+
+
 async def _process_job_queue():
     """Dequeue and run the next eligible job if concurrency allows."""
     try:
@@ -471,19 +499,7 @@ async def _process_job_queue_inner():
         await db.add_job_event(job_id, "error", "Playbook not found")
         return
 
-    # Get hosts - use stored host_ids (specific selection) or fall back to full group
-    hosts = []
-    stored_host_ids = None
-    if next_job.get("host_ids"):
-        try:
-            stored_host_ids = json.loads(next_job["host_ids"])
-        except (json.JSONDecodeError, TypeError) as exc:
-            LOGGER.warning("job %s: failed to parse stored host_ids: %s", job_id, exc)
-
-    if stored_host_ids:
-        hosts = await db.get_hosts_by_ids(stored_host_ids)
-    elif next_job.get("inventory_group_id"):
-        hosts = await db.get_hosts_for_group(next_job["inventory_group_id"])
+    hosts = await _resolve_job_hosts(next_job)
 
     # Reconstruct ad-hoc host dicts from stored IPs
     if next_job.get("ad_hoc_ips"):
@@ -971,6 +987,15 @@ async def launch_job(body: JobLaunch, request: Request):
         if not hosts:
             raise HTTPException(400, "No hosts in inventory group")
         inventory_group_id = body.inventory_group_id
+    elif body.dynamic_group_id:
+        # Checked now so the caller hears about an unknown or empty group;
+        # the hosts are resolved again when the job starts.
+        resolved = await resolve_group(body.dynamic_group_id, await request_scope(request))
+        if resolved is None:
+            raise HTTPException(404, "Dynamic group not found")
+        if not resolved:
+            raise HTTPException(400, "The dynamic group matches no hosts")
+        hosts = resolved
 
     # Build synthetic host dicts for ad-hoc IPs
     if body.ad_hoc_ips:
@@ -990,7 +1015,7 @@ async def launch_job(body: JobLaunch, request: Request):
         hosts = hosts + ad_hoc_hosts
 
     if not hosts:
-        raise HTTPException(400, "Must specify host_ids, ad_hoc_ips, or inventory_group_id")
+        raise HTTPException(400, "Must specify host_ids, ad_hoc_ips, inventory_group_id or dynamic_group_id")
 
     # Get credentials - use job-specific, then app-wide default.  The default
     # credential is only usable by callers who actually own it (or are admin);
@@ -1061,8 +1086,10 @@ async def launch_job(body: JobLaunch, request: Request):
 
     launched_by = session["user"] if session else "admin"
     priority = max(0, min(4, body.priority))
-    # Store specific host_ids so the queue processor targets only selected hosts
-    selected_host_ids = [h["id"] for h in hosts if h.get("id") is not None] or None
+    # Store specific host_ids so the queue processor targets only selected
+    # hosts; a dynamic group stores the group instead (resolved at run time).
+    dynamic_group_id = body.dynamic_group_id if not body.host_ids and not body.inventory_group_id else None
+    selected_host_ids = None if dynamic_group_id else [h["id"] for h in hosts if h.get("id") is not None] or None
     # Store ad-hoc IPs separately so the queue processor can reconstruct them
     stored_ad_hoc = [ip.strip() for ip in body.ad_hoc_ips if ip.strip()] if body.ad_hoc_ips else None
     job_id = await db.create_job(
@@ -1077,6 +1104,7 @@ async def launch_job(body: JobLaunch, request: Request):
         host_ids=selected_host_ids,
         ad_hoc_ips=stored_ad_hoc,
         parameters=coerced_params,
+        dynamic_group_id=dynamic_group_id,
     )
 
     # Trigger queue processor to potentially start this job immediately
@@ -1184,6 +1212,7 @@ async def retry_job_endpoint(job_id: int, request: Request):
         host_ids=retry_host_ids,
         ad_hoc_ips=retry_ad_hoc,
         parameters=retry_params,
+        dynamic_group_id=job.get("dynamic_group_id"),
     )
 
     asyncio.ensure_future(_process_job_queue())
@@ -1248,6 +1277,7 @@ async def rerun_job_endpoint(job_id: int, request: Request):
         host_ids=rerun_host_ids,
         ad_hoc_ips=rerun_ad_hoc,
         parameters=rerun_params,
+        dynamic_group_id=job.get("dynamic_group_id"),
     )
 
     asyncio.ensure_future(_process_job_queue())

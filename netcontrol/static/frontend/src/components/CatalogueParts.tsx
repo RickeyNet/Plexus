@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 
 import { Callout } from './Callout';
 import { DeleteButton } from './DeleteButton';
+import { FieldError } from './FieldError';
 import { LoadingState } from './LoadingState';
 import { QueryError } from './QueryError';
 
@@ -87,7 +88,18 @@ export function RowActions({
   );
 }
 
-export function DescriptionInput({ id, value, onChange }: { id: string; value: string; onChange: (v: string) => void }) {
+export function DescriptionInput({
+  id,
+  value,
+  onChange,
+  error,
+}: {
+  id: string;
+  value: string;
+  onChange: (v: string) => void;
+  /** A message the server gave for the description (a data validation rule). */
+  error?: string;
+}) {
   return (
     <div className="form-group">
       <label className="form-label" htmlFor={`${id}-description`}>
@@ -98,8 +110,11 @@ export function DescriptionInput({ id, value, onChange }: { id: string; value: s
         className="form-input"
         value={value}
         maxLength={CATALOGUE_DESCRIPTION_MAX}
+        aria-invalid={!!error}
+        aria-describedby={error ? `${id}-description-error` : undefined}
         onChange={(e) => onChange(e.target.value)}
       />
+      <FieldError id={`${id}-description-error`}>{error}</FieldError>
     </div>
   );
 }

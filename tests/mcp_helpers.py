@@ -29,6 +29,9 @@ class CsrfClient:
     def put(self, url, **kw):
         return self.raw.put(url, **self._headers(kw))
 
+    def patch(self, url, **kw):
+        return self.raw.patch(url, **self._headers(kw))
+
     def delete(self, url, **kw):
         return self.raw.delete(url, **self._headers(kw))
 

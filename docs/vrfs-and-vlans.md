@@ -65,6 +65,10 @@ A VLAN record lists:
 A record shows a name mismatch when a device names the VLAN differently
 (ignoring case; a device that gives no name never differs).
 
+VRFs and VLANs can each belong to a tenant (the **Tenant** field of their
+dialogs and the **Tenant** column of the lists); see
+[locations-and-tenancy.md](locations-and-tenancy.md).
+
 ## How the records are filled
 
 Plexus creates missing records from what it already collects. It never

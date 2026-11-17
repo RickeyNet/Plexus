@@ -126,6 +126,31 @@ def _session_user(request) -> str:
     return (_get_session(request) or {}).get("user", "")
 
 
+async def caller_features(request) -> frozenset[str] | None:
+    """The feature keys of the caller of an HTTP request, ``None`` for an
+    admin or the server API token (every feature). Reads what the feature
+    gate resolved for this request (``request.state``); resolves it the same
+    way when it is not there. No session: no features."""
+    session = getattr(request.state, "auth_session", None)
+    if not isinstance(session, dict):
+        return frozenset()
+    if session.get("auth_mode") == "token":
+        return None
+    user = getattr(request.state, "auth_user", None)
+    if not isinstance(user, dict):
+        user = await db.get_user_by_id(int(session.get("user_id") or 0))
+    if not user:
+        return frozenset()
+    if user.get("role") == "admin":
+        return None
+    features = getattr(request.state, "auth_features", None)
+    if not isinstance(features, list):
+        from netcontrol.routes.auth import _get_user_features
+
+        features = await _get_user_features(user)
+    return frozenset(features)
+
+
 async def verify_ws_session(token: str) -> dict | None:
     """Validate a WebSocket session token the same way require_auth does.
 

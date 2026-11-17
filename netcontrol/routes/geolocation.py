@@ -12,6 +12,14 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from netcontrol.organization import (
+    FACILITY_MAX,
+    TIME_ZONE_MAX,
+    OrganizationValueError,
+    clean_site_status,
+    clean_text,
+    clean_time_zone,
+)
 from netcontrol.routes.shared import _audit, _corr_id, _get_session
 from netcontrol.telemetry import configure_logging
 
@@ -49,14 +57,62 @@ class GeoSiteCreate(BaseModel):
     address: str = ""
     lat: float | None = Field(default=None, ge=-90.0, le=90.0)
     lng: float | None = Field(default=None, ge=-180.0, le=180.0)
+    # Location hierarchy and tenancy (docs/locations-and-tenancy.md).
+    region_id: int | None = None
+    status: str = Field(default="active", max_length=40)
+    facility: str = Field(default="", max_length=FACILITY_MAX + 50)
+    time_zone: str = Field(default="", max_length=TIME_ZONE_MAX + 50)
+    tenant_id: int | None = None
 
 
 class GeoSiteUpdate(BaseModel):
+    """A key left out keeps its value; ``region_id`` or ``tenant_id``
+    ``null`` clears it."""
+
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = None
     address: str | None = None
     lat: float | None = Field(default=None, ge=-90.0, le=90.0)
     lng: float | None = Field(default=None, ge=-180.0, le=180.0)
+    region_id: int | None = None
+    status: str | None = Field(default=None, max_length=40)
+    facility: str | None = Field(default=None, max_length=FACILITY_MAX + 50)
+    time_zone: str | None = Field(default=None, max_length=TIME_ZONE_MAX + 50)
+    tenant_id: int | None = None
+
+
+def _site_invalid(fields: dict[str, str]) -> HTTPException:
+    return HTTPException(
+        status_code=422, detail={"message": "Site not valid: " + ", ".join(sorted(fields)), "fields": fields}
+    )
+
+
+async def _org_values(body: BaseModel) -> dict:
+    """The location and tenancy values a site body sent, cleaned; 422 naming
+    each bad field (an unknown status or time zone, a region or tenant id
+    that names nothing)."""
+    sent = body.model_fields_set
+    values: dict = {}
+    errors: dict[str, str] = {}
+    cleaners = {"status": clean_site_status, "time_zone": clean_time_zone}
+    for key in ("status", "facility", "time_zone"):
+        raw = getattr(body, key)
+        if raw is None or (key not in sent and not isinstance(body, GeoSiteCreate)):
+            continue
+        try:
+            values[key] = cleaners[key](raw) if key in cleaners else clean_text(raw, key, FACILITY_MAX)
+        except OrganizationValueError as exc:
+            errors[exc.field] = exc.message
+    for key, lookup, what in (("region_id", db.get_region, "region"), ("tenant_id", db.get_tenant, "tenant")):
+        if key not in sent:
+            continue
+        ref = getattr(body, key)
+        if ref is not None and (ref <= 0 or await lookup(ref) is None):
+            errors[key] = f"No {what} with id {ref}."
+        values[key] = ref
+    if errors:
+        raise _site_invalid(errors)
+    return values
 
 
 class GeoFloorCreate(BaseModel):
@@ -94,6 +150,7 @@ async def list_geo_sites_api():
 async def create_geo_site_api(body: GeoSiteCreate, request: Request):
     session = _get_session(request)
     user = session.get("user", "unknown") if session else "unknown"
+    org = await _org_values(body)
     try:
         site = await db.create_geo_site(
             name=body.name,
@@ -102,6 +159,7 @@ async def create_geo_site_api(body: GeoSiteCreate, request: Request):
             lat=body.lat,
             lng=body.lng,
             created_by=user,
+            **org,
         )
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from None
@@ -124,6 +182,7 @@ async def update_geo_site_api(site_id: int, body: GeoSiteUpdate, request: Reques
     if not existing:
         raise HTTPException(404, "Site not found")
     updates = body.model_dump(exclude_none=True)
+    updates.update(await _org_values(body))
     try:
         site = await db.update_geo_site(site_id, **updates)
     except ValueError as exc:
@@ -137,6 +196,11 @@ async def delete_geo_site_api(site_id: int, request: Request):
     existing = await db.get_geo_site(site_id)
     if not existing:
         raise HTTPException(404, "Site not found")
+    # Racks and power panels (DCIM) keep their site: delete them first.
+    dcim_records = await db.count_site_dcim_records(site_id)
+    if dcim_records:
+        held = ", ".join(f"{n} {kind.replace('_', ' ')}" for kind, n in dcim_records.items())
+        raise HTTPException(409, f"The site still has {held}; delete or move them first.")
     # Clean up floor plan images for all floors in this site
     floors = await db.list_geo_floors(site_id)
     for floor in floors:

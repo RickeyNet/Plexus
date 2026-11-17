@@ -65,8 +65,10 @@ SCOPE_ENFORCED_FEATURES: frozenset[str] = frozenset(
 # ``@scope_exempt``. Admin routers are not listed: admins are unrestricted.
 SCOPE_ENFORCED_ROUTERS: tuple[str, ...] = (
     "netcontrol.routes.inventory:router",
+    "netcontrol.routes.bulk_import:router",
     "netcontrol.routes.custom_fields:inventory_router",
     "netcontrol.routes.device_model:inventory_router",
+    "netcontrol.routes.dynamic_groups:router",
     "netcontrol.routes.ansible_inventory:router",
     "netcontrol.routes.config_backups:router",
     "netcontrol.routes.opnsense_rules:router",
@@ -75,6 +77,9 @@ SCOPE_ENFORCED_ROUTERS: tuple[str, ...] = (
     "netcontrol.routes.intended_config:router",
     "netcontrol.routes.credentials:router",
     "netcontrol.routes.graphql:router",
+    # The change log is open to every signed-in user; it filters by feature
+    # per object type and by the caller's inventory groups itself.
+    "netcontrol.routes.object_changes:router",
 )
 
 READ_ONLY_DETAIL = "Read-only access to this inventory group"

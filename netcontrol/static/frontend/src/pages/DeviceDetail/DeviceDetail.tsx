@@ -4,8 +4,13 @@ import { useNavigate, useParams } from 'react-router';
 import { useAuthStatus } from '@/api/auth';
 import { SeverityBadge } from '@/components/Badge';
 import { Callout } from '@/components/Callout';
+import { ChangelogPanel } from '@/components/ChangelogPanel';
 import { EmptyState } from '@/components/EmptyState';
 import { InterfaceAddressesTable } from '@/components/InterfaceAddressesTable';
+import { DeviceCircuits } from '@/pages/Circuits/DeviceCircuits';
+import { DeviceDcim } from '@/pages/Dcim/DeviceDcim';
+import { useCanReadRouting } from '@/pages/Routing/routingHooks';
+import { HostClusters } from '@/pages/Virtualization/HostClusters';
 import { LoadingState } from '@/components/LoadingState';
 import { PageHelp } from '@/components/PageHelp';
 import { TabBar } from '@/components/TabBar';
@@ -25,6 +30,7 @@ import {
 } from '@/api/deviceDetail';
 
 import { AlertCorrelationModal } from './AlertCorrelationModal';
+import { BgpIntentSection } from './BgpIntentSection';
 import { ErrorTrendingTab } from './ErrorTrendingTab';
 import { FlowTab } from './FlowTab';
 import { InterfaceTab } from './InterfaceTab';
@@ -38,6 +44,7 @@ const ALL_TABS = [
   { id: 'alerts', label: 'Alerts' },
   { id: 'compliance', label: 'Compliance' },
   { id: 'syslog', label: 'Syslog' },
+  { id: 'changelog', label: 'Changelog' },
 ] as const;
 type TabId = (typeof ALL_TABS)[number]['id'];
 
@@ -70,6 +77,10 @@ const TAB_HELP: Record<TabId, { title: string; text: string }> = {
     title: 'Syslog from This Device',
     text: 'Recent syslog entries received from this device, in chronological order. Useful when an alert points here and you want to see what the device itself logged.',
   },
+  changelog: {
+    title: 'Changes to This Host',
+    text: 'Every edit of this host record in Plexus - who changed which field, from what to what, and when. Newest first.',
+  },
 };
 
 export function DeviceDetail() {
@@ -81,6 +92,7 @@ export function DeviceDetail() {
   const { range } = useTimeRange();
 
   const auth = useAuthStatus();
+  const canReadRouting = useCanReadRouting();
   const flowHidden = useMemo(
     () => new Set(auth.data?.feature_visibility_hidden ?? []).has('traffic-analysis'),
     [auth.data?.feature_visibility_hidden],
@@ -146,6 +158,8 @@ export function DeviceDetail() {
       <div className="stack stack-sm" style={{ marginBottom: 'var(--space-4)' }}>
         <DeviceInfoBar poll={latestPoll} hostId={hostId} />
         {ipamCtx.data && <IpamContext ctx={ipamCtx.data} vrf={vrf} />}
+        <HostClusters hostId={hostId} />
+        <DeviceDcim hostId={hostId} />
       </div>
 
       {/* One help banner only: the per-tab one inside the card below. */}
@@ -167,6 +181,14 @@ export function DeviceDetail() {
             <div className="card-inset" style={{ minWidth: 0 }}>
               <InterfaceAddressesTable hostId={hostId} />
             </div>
+            {canReadRouting && (
+              <div className="card-inset" style={{ minWidth: 0 }}>
+                <BgpIntentSection hostId={hostId} />
+              </div>
+            )}
+            <div className="card-inset" style={{ minWidth: 0 }}>
+              <DeviceCircuits hostId={hostId} />
+            </div>
           </div>
         )}
         {tab === 'errors' && <ErrorTrendingTab hostId={hostId} range={range} />}
@@ -183,6 +205,7 @@ export function DeviceDetail() {
         {tab === 'syslog' && (
           <SyslogTab events={syslog.data?.events || []} loading={syslog.isLoading} />
         )}
+        {tab === 'changelog' && <ChangelogPanel objectType="host" objectId={hostId} title={null} />}
       </div>
     </div>
   );

@@ -1102,7 +1102,9 @@ async def _discover_neighbors(
                 "local_interface": "",
                 "remote_device_name": f"AS{remote_as}" if remote_as else peer_ip,
                 "remote_ip": peer_ip,
-                "remote_interface": "",
+                # The peer address keeps two peers of one AS apart: the
+                # stored link is unique per device, interfaces and name.
+                "remote_interface": peer_ip,
                 "protocol": "bgp",
                 "remote_platform": f"AS {remote_as}, state={state_val}" if remote_as else "",
             }

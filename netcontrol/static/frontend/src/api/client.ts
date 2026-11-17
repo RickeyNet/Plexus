@@ -199,3 +199,17 @@ export async function apiRequest<T = unknown>(
 
   return parsed as T;
 }
+
+/**
+ * A `?a=1&b=x` query string from `params`, leaving out undefined, null and
+ * empty values; '' when nothing is left.
+ */
+export function queryString(params: object): string {
+  const cleaned: Record<string, string> = {};
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === '') continue;
+    cleaned[k] = String(v);
+  }
+  const search = new URLSearchParams(cleaned).toString();
+  return search ? `?${search}` : '';
+}

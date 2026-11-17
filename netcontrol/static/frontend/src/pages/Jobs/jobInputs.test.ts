@@ -60,10 +60,11 @@ describe('validateInputValue', () => {
     expect(validateInputValue(vlan, '120')).toBeNull();
   });
 
-  it('checks string length and pattern', () => {
+  it('checks string length and leaves the pattern to the server', () => {
     const s = f({ name: 'descr', type: 'string', regex: '[a-z-]+', max: 10 });
     expect(validateInputValue(s, 'uplink')).toBeNull();
-    expect(validateInputValue(s, 'Uplink')).toMatch(/required format/);
+    expect(validateInputValue(s, 'Uplink')).toBeNull();
+    expect(validateInputValue(f({ name: 'p', type: 'string', regex: '(a+)+$' }), `${'a'.repeat(40)}b`)).toBeNull();
     expect(validateInputValue(s, 'aaaaaaaaaaa')).toMatch(/at most 10/);
   });
 

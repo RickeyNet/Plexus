@@ -5,9 +5,11 @@ import { CustomDataError } from '@/api/customData';
 import { type Vrf, useDeleteVrf, useRebuildInterfaceAddresses, useVrf, useVrfs } from '@/api/networkObjects';
 import { BusyButton } from '@/components/BusyButton';
 import { CardHeader, CatalogueBody, Dash, RowActions } from '@/components/CatalogueParts';
+import { ChangelogPanel } from '@/components/ChangelogPanel';
 import { DataTable } from '@/components/DataTable';
 import { useDialogs } from '@/components/DialogProvider-context';
 import { EmptyState } from '@/components/EmptyState';
+import { ImportDialog } from '@/components/ImportDialog';
 import { LoadingState } from '@/components/LoadingState';
 import { QueryError } from '@/components/QueryError';
 import { clickableProps } from '@/lib/clickable';
@@ -28,12 +30,18 @@ export function VrfsTab() {
   const { confirm, alert } = useDialogs();
   const deleting = usePendingKeys<number>();
   const [editing, setEditing] = useState<Vrf | 'new' | null>(null);
+  const [importing, setImporting] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const rows = q.data ?? [];
 
   const addButton = isAdmin && (
     <button type="button" className="btn btn-sm btn-primary" onClick={() => setEditing('new')}>
       Add VRF
+    </button>
+  );
+  const importButton = isAdmin && (
+    <button type="button" className="btn btn-sm btn-secondary" onClick={() => setImporting(true)}>
+      Import
     </button>
   );
 
@@ -82,6 +90,7 @@ export function VrfsTab() {
               <BusyButton className="btn btn-sm btn-secondary" busy={rebuild.isPending} busyLabel="Rebuilding…" onClick={() => void handleRebuild()}>
                 Rebuild interface addresses
               </BusyButton>
+              {importButton}
               {rows.length > 0 && addButton}
             </>
           )
@@ -110,6 +119,7 @@ export function VrfsTab() {
               <th style={RIGHT}>Hosts</th>
               <th style={RIGHT}>Prefixes</th>
               <th style={RIGHT}>Addresses</th>
+              <th>Tenant</th>
               <th>Description</th>
               {isAdmin && <th style={RIGHT}>Actions</th>}
             </tr>
@@ -134,6 +144,7 @@ export function VrfsTab() {
                   <td style={RIGHT}>{v.host_count.toLocaleString()}</td>
                   <td style={RIGHT}>{v.prefix_count.toLocaleString()}</td>
                   <td style={RIGHT}>{v.address_count.toLocaleString()}</td>
+                  <td>{v.tenant_name || <Dash />}</td>
                   <td>{v.description || <Dash />}</td>
                   {isAdmin && (
                     // The row opens the detail panel; the buttons do their own thing.
@@ -153,6 +164,7 @@ export function VrfsTab() {
         </DataTable>
       </CatalogueBody>
       {editing && <VrfModal vrf={editing === 'new' ? null : editing} onClose={() => setEditing(null)} />}
+      {importing && <ImportDialog types={['vrfs']} onClose={() => setImporting(false)} />}
     </>
   );
 
@@ -253,6 +265,7 @@ export function VrfDetailPanel({ id }: { id: number | null }) {
           </tbody>
         </DataTable>
       </DetailSection>
+      <ChangelogPanel objectType="vrf" objectId={v.id} pageSize={10} />
     </div>
   );
 }
