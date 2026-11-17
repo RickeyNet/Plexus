@@ -8,7 +8,57 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same pull request cancels the run still going. Pushes
+# to main are never cancelled: each one may publish the edge image.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # Decides which jobs a change needs. backend: any file outside the frontend
+  # that is not Markdown. frontend: any file under netcontrol/static/frontend.
+  # Both are true when the workflow itself changes or when there is no base
+  # commit available to compare with.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.diff.outputs.backend }}
+      frontend: ${{ steps.diff.outputs.frontend }}
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed files
+        id: diff
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE" ] || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            echo "No base commit to compare with; running everything."
+            echo "backend=true" >> "$GITHUB_OUTPUT"
+            echo "frontend=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files="$(git diff --name-only "$BASE" HEAD)"
+          echo "$files"
+          backend=false
+          frontend=false
+          if printf '%s\n' "$files" | grep -qx '.github/workflows/ci.yml'; then
+            backend=true
+            frontend=true
+          fi
+          if printf '%s\n' "$files" | grep -q '^netcontrol/static/frontend/'; then
+            frontend=true
+          fi
+          if printf '%s\n' "$files" | grep -v '^netcontrol/static/frontend/' | grep -v '\.md$' | grep -q .; then
+            backend=true
+          fi
+          echo "backend=$backend frontend=$frontend"
+          echo "backend=$backend" >> "$GITHUB_OUTPUT"
+          echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
+
   secret-scan:
     runs-on: ubuntu-latest
     steps:
@@ -26,7 +76,11 @@ jobs:
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz | tar -xz gitleaks
           ./gitleaks git --no-banner --redact .
 
+  # On a change with no backend files (Markdown or frontend only) this job
+  # runs only the wiki check and the tests that read docs/ and the frontend
+  # sources; everything else is skipped.
   build-test:
+    needs: changes
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -90,12 +144,15 @@ jobs:
       # tests here but is missing from the image (the in-app update's new
       # container then fails to start).
       - name: Requirements lock covers requirements.txt
+        if: needs.changes.outputs.backend == 'true'
         run: python tools/check_requirements_lock.py
 
       - name: Lint (ruff)
+        if: needs.changes.outputs.backend == 'true'
         run: ruff check .
 
       - name: Type check (mypy)
+        if: needs.changes.outputs.backend == 'true'
         run: mypy netcontrol templates
 
       # Every document under docs/ is a wiki page (or listed as not
@@ -104,27 +161,59 @@ jobs:
         run: python tools/build_wiki.py --check
 
       - name: Security audit (pip-audit)
+        if: needs.changes.outputs.backend == 'true'
         run: pip-audit --progress-spinner off
 
       - name: Generate SBOM (CycloneDX)
+        if: needs.changes.outputs.backend == 'true'
         run: pip-audit -r requirements-lock.txt -f cyclonedx-json -o sbom.cdx.json --progress-spinner off --no-deps
 
       - name: Upload SBOM artifact
+        if: needs.changes.outputs.backend == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: sbom-cyclonedx-py${{ matrix.python-version }}
           path: sbom.cdx.json
 
       - name: Static security checks (bandit)
+        if: needs.changes.outputs.backend == 'true'
         run: bandit -q -c bandit.yaml -r netcontrol routes templates -ll -ii
 
+      # pytest-xdist workers each clone the template database at the same
+      # time; on Postgres defaults that runs out of shared lock memory
+      # ("out of shared memory"). Service containers take no command line,
+      # so set it with ALTER SYSTEM and restart the container.
+      - name: Size Postgres for parallel test workers
+        if: needs.changes.outputs.backend == 'true'
+        run: |
+          pg=${{ job.services.postgres.id }}
+          docker exec "$pg" psql -U plexus -d plexus -c "ALTER SYSTEM SET max_locks_per_transaction = 1024"
+          docker exec "$pg" psql -U plexus -d plexus -c "ALTER SYSTEM SET max_connections = 300"
+          docker restart "$pg"
+          for _ in $(seq 1 30); do
+            docker exec "$pg" pg_isready -U plexus -d plexus && break
+            sleep 1
+          done
+          docker exec "$pg" psql -U plexus -d plexus -tAc "SHOW max_locks_per_transaction"
+
       - name: Tests with coverage gate
-        run: pytest --cov=netcontrol --cov=routes --cov-report=term-missing --cov-report=json:coverage.json --cov-fail-under=30
+        if: needs.changes.outputs.backend == 'true'
+        run: pytest -n auto --cov=netcontrol --cov=routes --cov-report=term-missing --cov-report=json:coverage.json --cov-fail-under=30
 
       - name: Critical module regression gate
+        if: needs.changes.outputs.backend == 'true'
         run: python tools/coverage_gate.py coverage.json
 
+      # Markdown or frontend only: the tests that read docs/ or the frontend
+      # sources (wiki pages, in-app help and the guides pages link to, the
+      # AWS doc's service table).
+      - name: Tests that read docs and frontend sources
+        if: needs.changes.outputs.backend != 'true'
+        run: pytest tests/test_build_wiki.py tests/test_help_docs.py tests/test_aws_services.py
+
   frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -164,8 +253,10 @@ jobs:
   # keep it fast; tagged releases (release.yml) build multi-arch and run the
   # trivy gate.
   publish-edge:
-    needs: [secret-scan, build-test, frontend]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [changes, secret-scan, build-test, frontend]
+    # !failure() so a frontend job skipped for a backend-only change does
+    # not skip the publish; any failed or cancelled job still blocks it.
+    if: ${{ !failure() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
