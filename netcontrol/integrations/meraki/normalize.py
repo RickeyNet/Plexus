@@ -275,43 +275,57 @@ class InventoryIndex:
         self._by_name: dict[str, dict] = {}
         by_id = {h.get("id"): h for h in hosts or []}
         for host in hosts or []:
-            instance = str(host.get("aws_instance_id") or "").strip().lower()
-            if instance:
-                self._by_instance.setdefault(instance, host)
-            serial = str(host.get("serial_number") or "").strip().upper()
-            if serial:
-                self._by_serial.setdefault(serial, host)
-            ip = str(host.get("ip_address") or "").strip()
-            if ip:
-                self._by_ip.setdefault(ip, host)
-            name = _short_name(host.get("hostname"))
-            if name:
-                self._by_name.setdefault(name, host)
+            self.add(host)
         for alias in aliases or []:
             owner = by_id.get(alias.get("host_id"))
             ip = str(alias.get("ip_address") or "").strip()
             if owner and ip:
                 self._by_ip.setdefault(ip, owner)
 
-    def match(
+    def add(self, host: dict) -> None:
+        """Index one more host (``aws_instance_id``, ``serial_number``,
+        ``ip_address``, ``hostname``); a key already taken keeps its host."""
+        instance = str(host.get("aws_instance_id") or "").strip().lower()
+        if instance:
+            self._by_instance.setdefault(instance, host)
+        serial = str(host.get("serial_number") or "").strip().upper()
+        if serial:
+            self._by_serial.setdefault(serial, host)
+        ip = str(host.get("ip_address") or "").strip()
+        if ip:
+            self._by_ip.setdefault(ip, host)
+        name = _short_name(host.get("hostname"))
+        if name:
+            self._by_name.setdefault(name, host)
+
+    def match_key(
         self, *, serial: str = "", ips: list[str] | None = None, name: str = "", instance_id: str = ""
-    ) -> dict | None:
+    ) -> tuple[dict | None, str]:
+        """The host a device is, and what matched it: ``"instance"``,
+        ``"serial"``, ``"ip"`` (its address or one of its interfaces) or
+        ``"name"``; ``(None, "")`` when none."""
         # A host that names the instance outright wins over any address match.
         instance = instance_id.strip().lower()
         if instance and instance in self._by_instance:
-            return self._by_instance[instance]
-        if serial and serial.upper() in self._by_serial:
-            return self._by_serial[serial.upper()]
+            return self._by_instance[instance], "instance"
+        serial = serial.strip().upper()
+        if serial and serial in self._by_serial:
+            return self._by_serial[serial], "serial"
         for ip in ips or []:
             host = self._by_ip.get(ip) if ip else None
             # ...and is not some other instance that happens to share an address.
             claimed = str((host or {}).get("aws_instance_id") or "").strip().lower()
             if host and not (instance and claimed and claimed != instance):
-                return host
+                return host, "ip"
         short = _short_name(name)
         if short and short in self._by_name:
-            return self._by_name[short]
-        return None
+            return self._by_name[short], "name"
+        return None, ""
+
+    def match(
+        self, *, serial: str = "", ips: list[str] | None = None, name: str = "", instance_id: str = ""
+    ) -> dict | None:
+        return self.match_key(serial=serial, ips=ips, name=name, instance_id=instance_id)[0]
 
 
 def _inventory_ref(host: dict) -> dict:

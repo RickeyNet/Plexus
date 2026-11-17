@@ -29,6 +29,19 @@ export interface InventoryAddRow {
   deviceType: string;
   /** A cloud-managed device (Meraki hardware) with no CLI to SSH to. */
   managed: boolean;
+  /** The serial the map reported, or ''. */
+  serial: string;
+  /** The EC2 instance the node is, or ''. */
+  instanceId: string;
+}
+
+// An EC2 instance ID the backend accepts (inventory's _AWS_INSTANCE_ID_RE).
+const AWS_INSTANCE_ID = /^i-[0-9a-f]{1,17}$/i;
+
+/** The EC2 instance a node is, when the map knows one. */
+function nodeInstanceId(node: Pick<TopologyNode, 'instance' | 'meraki'>): string {
+  const id = (node.instance?.provider === 'aws' ? node.instance.id : node.meraki?.instance_id) ?? '';
+  return AWS_INSTANCE_ID.test(id.trim()) ? id.trim() : '';
 }
 
 /** The integrations whose own devices are cloud-managed and have no CLI. */
@@ -173,6 +186,8 @@ export function buildInventoryAddRows(
       group: groupPath.join(GROUP_PATH_SEPARATOR),
       deviceType: guessDeviceType(node, types),
       managed,
+      serial: (node.meraki?.serial ?? '').trim(),
+      instanceId: nodeInstanceId(node),
     });
   }
   return [...byIp.values()].sort((a, b) => a.label.localeCompare(b.label) || a.ip.localeCompare(b.ip));
@@ -227,7 +242,9 @@ export function suggestedGroups(
  * holds the per-row choices the user changed (by IP); other rows keep their
  * suggested type. In automatic mode each host names its group path (the
  * backend creates each missing level); in single mode the body names the one
- * group.
+ * group. A row's serial and EC2 instance go with it, so the backend skips a
+ * device inventory already has under another address and links a new host
+ * to its map node.
  */
 export function buildBulkAddBody(
   rows: readonly InventoryAddRow[],
@@ -241,6 +258,8 @@ export function buildBulkAddBody(
       hostname: r.label,
       ip_address: r.ip,
       device_type: deviceTypes[r.ip] ?? r.deviceType,
+      ...(r.serial ? { serial_number: r.serial } : {}),
+      ...(r.instanceId ? { aws_instance_id: r.instanceId } : {}),
       ...(grouping.mode === 'auto' ? { group_path: resolvedGroupPath(r, grouping.renames) } : {}),
     }));
   return grouping.mode === 'single' ? { group_id: grouping.groupId, hosts } : { hosts };

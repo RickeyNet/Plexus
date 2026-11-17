@@ -366,8 +366,10 @@ device on the current map that is not in inventory and has an IP address
 discovery, cloud instances), one row per address. Each row suggests a device
 type from the model or platform the map reported (`cisco C9410R` is IOS-XE,
 NX-OS is NX-OS, an unknown device is ICMP-only) that can be changed before
-adding. Tick the devices (the search box filters them; **Select all shown**
-ticks every row shown) and choose where they go:
+adding. Tick the devices (the search box filters them; **Select all N
+matching** ticks every row the filter matches, including rows not drawn yet:
+the table draws 250 rows at a time, with **Show more** for the next ones)
+and choose where they go:
 
 - **Automatic by source and site** (the default) puts each device in a
   sub-group per site under a group per source (see *Group hierarchy* in
@@ -388,16 +390,31 @@ ticks every row shown) and choose where they go:
   its own.
 - **One group** puts every ticked device in one group you pick or create.
 
-An address that is already a host in any group is skipped and reported with
-that host's group; the summary lists the groups created (by path) and how
-many devices went into each group. The added devices turn into inventory
+There is no limit on how many devices one add takes. The dialog sends them
+500 at a time, one request after another, with a progress bar; **Stop after
+this batch** ends the run once the request in flight is answered. Devices
+not sent (stopped, or a request failed) stay ticked, so **Review the other
+N** picks up where the run ended.
+
+Nothing is added twice. A device is skipped, and reported with the host and
+group it already is, when an inventory host in any group has its AWS
+instance ID, its serial number, its address (as the host's own address or
+one of its interface addresses) or its hostname (without the domain,
+ignoring case). That is the same match the map uses to put a snapshot
+device and its inventory host on one node, and it includes the hosts added
+earlier in the same run. A device's serial (Meraki and other snapshot
+devices) and EC2 instance ID go with it and are stored on the new host, so
+later collections link the node to it by those too. The summary lists the
+groups created (by path) and how many devices went into each group, with
+the first 100 entries of each list. The added devices turn into inventory
 nodes on the map, so route captures, config backups, path tracing and the
 SSH data above can use them. The dialog calls `POST /api/inventory/hosts/bulk`
-with `{"hosts": [...]}` (up to 500), where each entry names its group by
+with `{"hosts": [...]}` (up to 500 per request), where each entry names its group by
 `group_id`, by `group_path` (the names from the top, `["Meraki", "HQ"]`; each
 missing level is created) or by `group_name` (a top-level group, created when
 missing) - at most one; a body-level `group_id` is the default for entries
-that name none. The answer lists `added` (with each host's `group_id`,
+that name none. An entry may also carry `serial_number` and
+`aws_instance_id`, matched before adding and stored on the new host. The answer lists `added` (with each host's `group_id`,
 `group_name` and `group_path`), `skipped`, `errors` and `groups_created`
 (every level created, parents first, with `id`, `name`, `parent_id` and
 `path`). `POST /api/inventory/{group_id}/hosts/bulk` still adds every entry

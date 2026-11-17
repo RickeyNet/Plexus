@@ -113,8 +113,8 @@ describe('buildInventoryAddRows', () => {
   it('keeps nodes outside inventory that have an IP, one per IP, sorted by label', () => {
     const rows = buildInventoryAddRows(NODES);
     expect(rows).toEqual([
-      { ip: '10.0.0.1', nodeId: 'ext_core-a', label: 'core-a', platform: 'Cisco NX-OS', site: 'Core', groupPath: [DISCOVERED_NEIGHBORS_GROUP, 'Core'], group: 'Discovered neighbors / Core', deviceType: 'cisco_nxos', managed: false },
-      { ip: '10.0.0.2', nodeId: 'meraki:1:x:N_1:aa', label: 'dist-b', platform: 'cisco C9410R', site: 'HQ', groupPath: ['Meraki', 'HQ'], group: 'Meraki / HQ', deviceType: 'cisco_xe', managed: false },
+      { ip: '10.0.0.1', nodeId: 'ext_core-a', label: 'core-a', platform: 'Cisco NX-OS', site: 'Core', groupPath: [DISCOVERED_NEIGHBORS_GROUP, 'Core'], group: 'Discovered neighbors / Core', deviceType: 'cisco_nxos', managed: false, serial: '', instanceId: '' },
+      { ip: '10.0.0.2', nodeId: 'meraki:1:x:N_1:aa', label: 'dist-b', platform: 'cisco C9410R', site: 'HQ', groupPath: ['Meraki', 'HQ'], group: 'Meraki / HQ', deviceType: 'cisco_xe', managed: false, serial: '', instanceId: '' },
     ]);
   });
 
@@ -201,5 +201,45 @@ describe('buildBulkAddBody', () => {
       { group: 'Meraki / HQ', path: ['Meraki', 'HQ'], count: 2 },
     ]);
     expect(resolvedGroupPath(rows[1], { 'Meraki / HQ': 'Renamed' })).toEqual(['Meraki', 'Renamed']);
+  });
+});
+
+describe('serial and EC2 instance', () => {
+  const merakiSwitch = node({
+    id: 'meraki:1:d:Q2AB',
+    label: 'sw-1',
+    ip: '192.0.2.5',
+    model: 'MS250',
+    meraki: { ...MERAKI_HQ, node_id: 'd:Q2AB', serial: ' Q2AB-CDEF-0001 ' },
+  });
+  const instance = node({
+    id: 'aws:i-0abc1234',
+    label: 'app-1',
+    ip: '198.51.100.7',
+    instance: { provider: 'aws', id: 'i-0abc1234', subnet: '', vpc: '', org_ref: 2, node_id: 'i-0abc1234' },
+  });
+  const badInstance = node({
+    id: 'aws:bad',
+    label: 'odd',
+    ip: '198.51.100.8',
+    meraki: { ...MERAKI_HQ, node_id: 'bad', provider: 'aws', instance_id: 'not-an-instance' },
+  });
+
+  it('carries them on the row, dropping an instance ID the backend would refuse', () => {
+    const rows = buildInventoryAddRows([merakiSwitch, instance, badInstance], DEVICE_TYPES, true);
+    expect(rows.map((r) => [r.label, r.serial, r.instanceId])).toEqual([
+      ['app-1', '', 'i-0abc1234'],
+      ['odd', '', ''],
+      ['sw-1', 'Q2AB-CDEF-0001', ''],
+    ]);
+  });
+
+  it('sends them with the host so inventory can match it', () => {
+    const rows = buildInventoryAddRows([merakiSwitch, instance], DEVICE_TYPES, true);
+    const body = buildBulkAddBody(rows, new Set(['192.0.2.5', '198.51.100.7']), {}, { mode: 'single', groupId: 1 });
+    expect(body.hosts.map((h) => [h.hostname, h.serial_number, h.aws_instance_id])).toEqual([
+      ['app-1', undefined, 'i-0abc1234'],
+      ['sw-1', 'Q2AB-CDEF-0001', undefined],
+    ]);
   });
 });
