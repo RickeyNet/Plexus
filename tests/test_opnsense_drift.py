@@ -294,6 +294,16 @@ def test_unparsable_config_is_still_masked_and_loses_its_revision():
 def test_doctype_is_refused_not_parsed():
     text = '<?xml version="1.0"?><!DOCTYPE x [<!ENTITY e "boom">]><opnsense><a>&e;</a></opnsense>'
     assert secrets.normalize_config_xml(text) == text  # left as text, never expanded
+    # A root tag inside a comment does not let a DOCTYPE after it through.
+    hidden = '<!-- <opnsense> --><!DOCTYPE x [<!ENTITY e "boom">]><opnsense><a>&e;</a></opnsense>'
+    assert secrets.normalize_config_xml(hidden) == hidden
+
+
+def test_unparsable_config_loses_only_its_first_revision_block():
+    text = "<opnsense>\n  <revision><time>1</time></revision>  \r\n  <a>\n<revision>2</revision>\n"
+    assert secrets.normalize_config_xml(text) == "<opnsense>\n  <a>\n<revision>2</revision>\n"
+    unclosed = "<opnsense>\n  <revision><time>1</time>\n"
+    assert secrets.normalize_config_xml(unclosed) == unclosed
 
 
 def test_mcp_redaction_covers_config_xml():

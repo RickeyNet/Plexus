@@ -72,7 +72,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
-import xml.etree.ElementTree as ElementTree
+import xml.etree.ElementTree as ElementTree  # nosec B405 - types and ParseError only; parsing goes through safe_xml
 from dataclasses import dataclass, field
 
 from netcontrol.integrations.meraki.forwarding import ANY, INTERFACE, canonical, is_address, nat
@@ -84,6 +84,7 @@ from netcontrol.integrations.pathtrace.device_config import (
     VirtualAddress,
 )
 from netcontrol.integrations.pathtrace.ios_config import ROUTING_PROTOCOLS, add_note as _note
+from netcontrol.integrations.safe_xml import DoctypeRefused, parse_xml as parse_untrusted_xml
 
 __all__ = [
     "AUTOMATIC_NAT",
@@ -177,17 +178,11 @@ def parse_xml(text: str) -> ElementTree.Element | None:
     is not one. A document type declaration (and so any entity declaration)
     is refused: ``config.xml`` never has one."""
     raw = str(text or "")
-    start = raw.find("<opnsense")
-    if start < 0:
-        return None
-    prolog = raw[:start].lower()
-    if "<!doctype" in prolog or "<!entity" in prolog:
+    if "<opnsense" not in raw:
         return None
     try:
-        # A stored backup Plexus downloaded; DTDs refused above, and expat
-        # expands no external entities.
-        root = ElementTree.fromstring(raw)  # nosec B314
-    except ElementTree.ParseError:
+        root = parse_untrusted_xml(raw)
+    except DoctypeRefused, ElementTree.ParseError:
         return None
     return root if root.tag == "opnsense" else None
 

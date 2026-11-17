@@ -15,8 +15,8 @@ Answers are XML (``<response status="success|error" code="...">``) and are
 turned into plain JSON-safe values by :func:`xml_to_data`, which is what the
 collector stores, so a saved capture can be re-normalised without calling
 Panorama. The XML comes from the operator-configured management server;
-``xml.etree.ElementTree`` parses it (defusedxml is not a dependency), and a
-body that declares a DTD or entities is refused before parsing.
+``netcontrol.integrations.safe_xml`` parses it, and a body that declares a
+DTD or entities is refused by the parser.
 
 Scope
 -----
@@ -34,12 +34,13 @@ from __future__ import annotations
 
 import asyncio
 import time
-import xml.etree.ElementTree as ElementTree
+import xml.etree.ElementTree as ElementTree  # nosec B405 - types and ParseError only; parsing goes through safe_xml
 from typing import Any
 
 import httpx
 
 from netcontrol.integrations.http_common import validate_https_host
+from netcontrol.integrations.safe_xml import DoctypeRefused, parse_xml
 
 DEFAULT_TIMEOUT_SECONDS = 60.0
 # Panorama's management plane serves the XML API alongside the web UI; a
@@ -156,12 +157,10 @@ def result_value(result: ElementTree.Element | None) -> Any:
 
 
 def _parse(body: bytes) -> ElementTree.Element:
-    # A DTD (and so any entity declaration) can only come before the root element.
-    prolog = body.split(b"<response", 1)[0].lower()
-    if b"<!doctype" in prolog or b"<!entity" in prolog:
-        raise PanoramaApiError("Panorama answered with a document type declaration, which is refused")
     try:
-        return ElementTree.fromstring(body)  # nosec B314 - HTTPS answer from the operator-set Panorama, DTDs refused above; expat expands no external entities
+        return parse_xml(body)
+    except DoctypeRefused:
+        raise PanoramaApiError("Panorama answered with a document type declaration, which is refused") from None
     except ElementTree.ParseError:
         raise PanoramaApiError("Panorama answered with a body that is not XML") from None
 

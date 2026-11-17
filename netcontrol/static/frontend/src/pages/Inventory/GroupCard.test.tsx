@@ -59,7 +59,7 @@ function render(canWrite: boolean, selected: number[] = []): string {
 
 /** The opening tag of the first button whose text is ``label``. */
 function button(html: string, label: string): string {
-  const m = new RegExp(`<button[^>]*>${label.replace(/[+.]/g, '\\$&')}</button>`).exec(html);
+  const m = new RegExp(`<button[^>]*>${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}</button>`).exec(html);
   return m?.[0] ?? '';
 }
 

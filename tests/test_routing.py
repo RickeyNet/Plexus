@@ -101,7 +101,7 @@ def test_field_rules():
     assert clean_asn("AS64512") == 64512
     assert clean_asn("1.10") == 65546
     assert clean_asn(4294967295) == 4294967295
-    for bad in (0, -1, 4294967296, "x", True, None, "70000.1", 1.5):
+    for bad in (0, -1, 4294967296, "x", True, None, "70000.1", 1.5, "1.", ".1", "1.2.3", "\u0661\u0662", "\u00b2"):
         with pytest.raises(CustomFieldError):
             clean_asn(bad)
     assert clean_address(" 2001:DB8::1 ", "Remote") == "2001:db8::1"

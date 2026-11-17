@@ -47,7 +47,9 @@ import hashlib
 import hmac
 import html
 import re
-import xml.etree.ElementTree as ElementTree  # nosec B405 - DTDs refused before parsing; expat expands no external entities
+import xml.etree.ElementTree as ElementTree  # nosec B405 - types and ParseError only; parsing goes through safe_xml
+
+from netcontrol.integrations.safe_xml import DoctypeRefused, parse_xml
 
 MASKED = "[masked]"
 _MARKER = re.compile(r"\[masked(?: blob)?(?::[0-9a-f]{8})?\]")
@@ -310,8 +312,6 @@ _LOOKS_LIKE = re.compile(
     re.DOTALL | re.IGNORECASE,
 )
 _SNIFF_CHARS = 4096
-_REVISION = re.compile(r"[ \t]*<revision>.*?</revision>[ \t]*\r?\n?", re.DOTALL)
-_DTD = re.compile(r"<!(?:doctype|entity)", re.IGNORECASE)
 
 
 def looks_like_config_xml(text: str | None) -> bool:
@@ -323,16 +323,32 @@ def _top_revision(root: ElementTree.Element) -> ElementTree.Element | None:
     return next((child for child in root if child.tag == "revision"), None)
 
 
+def _without_revision_text(text: str) -> str:
+    """``text`` with its first ``<revision>`` block, the blanks before it and
+    the line break after it taken out (for a config that does not parse)."""
+    start = text.find("<revision>")
+    end = text.find("</revision>", start) if start >= 0 else -1
+    if end < 0:
+        return text
+    end += len("</revision>")
+    while start and text[start - 1] in " \t":
+        start -= 1
+    while end < len(text) and text[end] in " \t":
+        end += 1
+    if text.startswith("\r", end):
+        end += 1
+    if text.startswith("\n", end):
+        end += 1
+    return text[:start] + text[end:]
+
+
 def _parse(text: str) -> ElementTree.Element | None:
-    root_at = re.search(r"<(?:" + "|".join(_ROOTS) + r")[\s>/]", text, re.IGNORECASE)
-    if root_at is None or _DTD.search(text[: root_at.start()]):
-        return None
     body = text.lstrip("﻿")
     # A str with an encoding declaration is parsed as the str it is.
     body = re.sub(r"\A\s*<\?xml[^>]*\?>", "", body, count=1)
     try:
-        return ElementTree.fromstring(body)  # nosec B314 - DTDs refused above; expat expands no external entities
-    except ElementTree.ParseError:
+        return parse_xml(body)
+    except DoctypeRefused, ElementTree.ParseError:
         return None
 
 
@@ -344,7 +360,7 @@ def normalize_config_xml(text: str) -> str:
         return text
     root = _parse(text)
     if root is None:
-        return _REVISION.sub("", text, count=1)
+        return _without_revision_text(text)
     revision = _top_revision(root)
     if revision is not None:
         root.remove(revision)

@@ -108,10 +108,13 @@ def clean_asn(raw: object, label: str = "ASN") -> int:
         text = raw.strip()
         if text.upper().startswith("AS"):
             text = text[2:].strip()
-        if text.isdigit():
+        high_text, dot, low_text = text.partition(".")
+        if not text.isascii():
+            value = None
+        elif text.isdigit():
             value = int(text)
-        elif re.fullmatch(r"\d+\.\d+", text):
-            high, low = (int(p) for p in text.split("."))
+        elif dot and high_text.isdigit() and low_text.isdigit():
+            high, low = int(high_text), int(low_text)
             value = high * 65536 + low if high <= 65535 and low <= 65535 else None
     if value is None or not ASN_MIN <= value <= ASN_MAX:
         raise CustomFieldError(f"{label} must be a number from {ASN_MIN} to {ASN_MAX}.")
