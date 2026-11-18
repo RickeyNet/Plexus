@@ -70,6 +70,56 @@ export function bootModeDisplay(mode: string | null | undefined): {
   };
 }
 
+// APC Smart-UPS firmware file: <prefix><UPS ID>UPS_<major>-<minor>.enc,
+// e.g. SRT1025UPS_15-0.enc. Mirrors netcontrol/integrations/apc/firmware.py.
+const UPS_FIRMWARE_RE = /^[A-Za-z]{2,8}\d{4}UPS_\d{1,3}-\d{1,3}\.enc$/i;
+
+export function isUpsFirmwareFile(name: string | null | undefined): boolean {
+  return UPS_FIRMWARE_RE.test((name || '').split('/').pop() || '');
+}
+
+// A campaign holds either UPS devices or other devices (the backend refuses
+// a mix). It is a UPS campaign when a device has a UPS ID read from its NMC,
+// or every mapped image is UPS firmware.
+export function isUpsCampaign(
+  imageMap: Record<string, string>,
+  devices: { ups_id?: string | null }[],
+): boolean {
+  if (devices.some((d) => Boolean(d.ups_id))) return true;
+  const images = Object.values(imageMap);
+  return images.length > 0 && images.every(isUpsFirmwareFile);
+}
+
+export interface UpgradeStepCopy {
+  prestage: string;
+  transfer: string;
+  activate: string;
+  activateNow: string;
+  verify: string;
+}
+
+// What each campaign step does, for a switch campaign or a UPS campaign.
+export function upgradeStepCopy(ups: boolean): UpgradeStepCopy {
+  if (ups) {
+    return {
+      prestage:
+        'Pre-checks only: UPS ID and firmware, NMC firmware, active alarms, and the image for this UPS ID. Nothing changes on the UPS.',
+      transfer: 'Copy the .enc firmware to /tmp on each NMC (SCP) and confirm it is there. No change to the UPS yet.',
+      activate:
+        'Install the firmware through the NMC and wait for it to finish (up to 30 min, 45 for SRYL). The UPS output stays on.',
+      activateNow: 'Install now',
+      verify: 'Reconnect and confirm each UPS reports the target firmware.',
+    };
+  }
+  return {
+    prestage: 'Health-check each device, back up its config, and free flash space. Safe — no reboot.',
+    transfer: 'Copy the image to each device, verify it, and expand it ready to boot. Still no reboot.',
+    activate: 'Reboot devices into the new image. Causes downtime — run now or schedule it.',
+    activateNow: 'Activate now (reload)',
+    verify: 'Reconnect and confirm each device is running the target version.',
+  };
+}
+
 // scp-style clock for transfer ETA/elapsed: "00:54", "12:07", "1:02:33".
 // Unknown (null/negative/non-finite) renders as scp's "--:--".
 export function formatEta(seconds: number | null | undefined): string {

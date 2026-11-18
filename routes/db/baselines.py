@@ -609,6 +609,10 @@ async def update_upgrade_device(device_id, **kwargs):
             "error_message",
             "started_at",
             "completed_at",
+            # APC Smart-UPS devices (netcontrol.integrations.apc.upgrade)
+            "ups_id",
+            "logic_reset_confirmed_by",
+            "logic_reset_confirmed_at",
         }
         sets, vals = [], []
         for k, v in kwargs.items():

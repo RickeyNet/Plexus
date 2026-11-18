@@ -199,6 +199,56 @@ def _netgear_device_type(sys_descr: str) -> str:
     return ""
 
 
+# sysDescr of an APC Network Management Card (NMC2 AP9630 / AP9631 / AP9635,
+# NMC3 AP9640 / AP9641 / AP9643). It names the card, not the UPS behind it:
+#   "APC Web/SNMP Management Card (MB:v4.1.0 PF:v6.8.2 PN:apc_hw05_aos_682.bin
+#    AF1:v6.8.2 AN1:apc_hw05_sumx_682.bin MN:AP9631 HR:05 SN: ZA0000000001
+#    MD:01/01/2015) (Embedded PowerNet SNMP Agent SW v2.2 compatible)"
+# PF is the card's operating system (AOS) firmware, AF1 / AN1 the firmware
+# and file of its application module, which tells a UPS card (``sumx``,
+# ``su``, ``sy``) from a PDU (``rpdu``), transfer switch (``ats``) or
+# cooling unit card. The UPS model, firmware and serial are read from
+# PowerNet-MIB by the monitoring poll (``netcontrol/integrations/apc/snmp.py``).
+_APC_NMC = re.compile(r"APC Web/SNMP Management Card|Embedded PowerNet SNMP Agent", re.IGNORECASE)
+_APC_NMC_FIELD = re.compile(r"\b(MB|PF|PN|AF1|AN1|MN|HR|SN|MD):\s*([^\s)]+)")
+_APC_NMC_APPLICATION = re.compile(r"^apc_hw[0-9a-z]+_([a-z0-9]+)_", re.IGNORECASE)
+_APC_UPS_APPLICATIONS = ("su", "sy", "smx", "ups")
+_APC_OS_NAMES = {"apc_ups": "apc-nmc"}
+
+
+def parse_apc_nmc_sys_descr(sys_descr: str) -> dict[str, str]:
+    """The card facts of an APC Network Management Card sysDescr (format
+    above), ``{}`` for any other text: ``nmc_model`` (MN), ``nmc_firmware``
+    (PF, the AOS release without its ``v``), ``nmc_application`` (the
+    application module, ``sumx``), ``nmc_application_firmware`` (AF1),
+    ``nmc_serial`` (SN) and ``nmc_hardware`` (HR)."""
+    text = sys_descr or ""
+    if not _APC_NMC.search(text):
+        return {}
+    fields = {key: value for key, value in _APC_NMC_FIELD.findall(text)}
+    application = _APC_NMC_APPLICATION.match(fields.get("AN1", ""))
+    return {
+        "nmc_model": fields.get("MN", ""),
+        "nmc_firmware": fields.get("PF", "").lstrip("vV"),
+        "nmc_application": application.group(1).lower() if application else "",
+        "nmc_application_firmware": fields.get("AF1", "").lstrip("vV"),
+        "nmc_serial": fields.get("SN", ""),
+        "nmc_hardware": fields.get("HR", ""),
+    }
+
+
+def _apc_device_type(sys_descr: str) -> str:
+    """``apc_ups`` for the card of a UPS, ``""`` for any other text (a PDU
+    or transfer switch card is APC too, but not a type Plexus has)."""
+    facts = parse_apc_nmc_sys_descr(sys_descr)
+    if not facts:
+        return ""
+    application = facts["nmc_application"]
+    if application:
+        return "apc_ups" if application.startswith(_APC_UPS_APPLICATIONS) else ""
+    return "apc_ups" if re.search(r"\bups\b", sys_descr, re.IGNORECASE) else ""
+
+
 def _infer_vendor_os_from_text(raw_text: str) -> tuple[str, str, str]:
     lowered = (raw_text or "").lower()
     vendor = "unknown"
@@ -236,11 +286,17 @@ def _infer_vendor_os_from_text(raw_text: str) -> tuple[str, str, str]:
     elif _NETGEAR.search(raw_text or ""):
         # A Netgear device of a line Plexus does not tell: the type stays unknown.
         vendor = "netgear"
+    elif _APC_NMC.search(raw_text or ""):
+        # An APC card: a UPS is ``apc_ups``; a PDU or transfer switch stays unknown.
+        vendor = "apc"
+        detected_type = _apc_device_type(raw_text or "") or "unknown"
 
     if detected_type in _ARUBA_OS_NAMES:
         os_name = _ARUBA_OS_NAMES[detected_type]
     elif detected_type in _NETGEAR_OS_NAMES:
         os_name = _NETGEAR_OS_NAMES[detected_type]
+    elif detected_type in _APC_OS_NAMES:
+        os_name = _APC_OS_NAMES[detected_type]
     elif "ios-xe" in lowered or "iosxe" in lowered or "ios xe" in lowered:
         os_name = "ios-xe"
     elif "ios-xr" in lowered or "iosxr" in lowered or "ios xr" in lowered:
@@ -325,6 +381,12 @@ def _parse_model_and_version(sys_descr: str) -> tuple[str, str]:
         model = m.group(1) if m else ""
         m = _NETGEAR_VERSION.search(sys_descr)
         version = m.group(1) if m else ""
+
+    # APC UPS card: the version is the card's (AOS) firmware. The model is
+    # left empty: the sysDescr names the card (AP9631), the host is the UPS,
+    # whose model the monitoring poll reads from PowerNet-MIB.
+    if _apc_device_type(sys_descr):
+        model, version = "", parse_apc_nmc_sys_descr(sys_descr)["nmc_firmware"]
 
     return model, version
 

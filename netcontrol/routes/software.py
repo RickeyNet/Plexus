@@ -33,10 +33,12 @@ import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from netcontrol.integrations.apc.snmp import STATUS_KIND as UPS_STATUS_KIND
 from netcontrol.integrations.software.psirt import OS_TYPES, PsirtApiError, PsirtClient
 from netcontrol.integrations.software.versions import (
     PLATFORMS,
     SEVERITIES,
+    UPS_FIRMWARE_PLATFORM,
     classify_host,
     find_advisory_matches,
     normalize_severity,
@@ -262,6 +264,29 @@ async def collect_software_entries() -> list[dict[str, Any]]:
                 "platform": platform,
                 "version": version,
                 "raw_version": host.get("software_version") or "",
+            }
+        )
+    # An APC UPS host: the UPS behind the card is a device of its own, with
+    # the firmware the monitoring poll last read (the host is the card).
+    for row in await db.list_host_vendor_status(UPS_STATUS_KIND):
+        status = row.get("status") or {}
+        version = str(status.get("firmware_version") or "")
+        if row["host_id"] in claimed_hosts or not version:
+            continue
+        entries.append(
+            {
+                "device_key": f"host:{row['host_id']}:ups",
+                "source": "inventory",
+                "org_ref": 0,
+                "host_id": row["host_id"],
+                "name": f"{row.get('hostname') or row.get('ip_address') or 'host ' + str(row['host_id'])} (UPS)",
+                "model": str(status.get("model") or ""),
+                "serial": str(status.get("serial") or ""),
+                "site": row.get("group_name") or "",
+                "org_name": "",
+                "platform": UPS_FIRMWARE_PLATFORM,
+                "version": version,
+                "raw_version": str(status.get("firmware") or ""),
             }
         )
     return entries

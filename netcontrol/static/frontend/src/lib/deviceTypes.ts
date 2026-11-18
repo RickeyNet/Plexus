@@ -20,6 +20,7 @@ export const DEVICE_TYPES: readonly { value: string; label: string }[] = [
   { value: 'netgear_prosafe', label: 'Netgear managed switch (M4250, M4300, M4350, M4500)' },
   { value: 'netgear_smart', label: 'Netgear smart switch (SNMP only, the switch has no SSH)' },
   { value: 'netgear_ap', label: 'Netgear access point (SNMP only)' },
+  { value: 'apc_ups', label: 'APC Smart-UPS (NMC, SNMP only)' },
   { value: 'icmp_only', label: 'ICMP-only (ping liveness, no SNMP/SSH)' },
 ];
 

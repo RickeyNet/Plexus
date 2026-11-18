@@ -29,6 +29,7 @@ from routes.crypto import decrypt
 import netcontrol.routes.state as state
 from netcontrol.drivers import DriverCapabilityError, get_driver
 from netcontrol.drivers.show_version import classify_show_version_os, parse_show_version
+from netcontrol.integrations.apc import upgrade as apc_upgrade
 from netcontrol.routes.device_config import store_device_config
 from netcontrol.routes.shared import (
     _audit,
@@ -840,6 +841,7 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
         raise HTTPException(503, _storage_unavailable_detail("store"))
 
     md5_hash = md5.hexdigest()
+    original_name = filename
 
     # Auto-detect version from filename
     ver_match = re.search(r"(\d+\.\d+\.\d+)", filename)
@@ -851,17 +853,36 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
         model_pattern = "9200"
     elif "cat9k" in filename.lower():
         model_pattern = "9300"
+    platform, notes = "iosxe", ""
+
+    # APC Smart-UPS firmware: an .enc file, or a vendor .zip holding one
+    # (extracted here). Its UPS ID is the model pattern a UPS matches on.
+    try:
+        ups = await asyncio.to_thread(apc_upgrade.prepare_uploaded_image, dest, filename, SOFTWARE_IMAGES_DIR)
+    except (ValueError, OSError) as exc:
+        os.remove(dest)
+        raise HTTPException(400, str(exc)) from exc
+    if ups is not None:
+        if ups.filename != filename and await db.get_upgrade_image_by_filename(ups.filename):
+            ups.discard()
+            raise HTTPException(
+                409, f'An image named "{ups.filename}" already exists. Delete it first or rename the file.'
+            )
+        ups.commit()
+        dest, filename, size, md5_hash = ups.final_path, ups.filename, ups.size, ups.md5_hash
+        version, model_pattern = ups.image.version, ups.image.ups_id
+        platform, notes = apc_upgrade.IMAGE_PLATFORM, ups.notes
 
     try:
         image_id = await db.create_upgrade_image(
             filename=filename,
-            original_name=filename,
+            original_name=original_name,
             file_size=size,
             md5_hash=md5_hash,
             model_pattern=model_pattern,
             version=version,
-            platform="iosxe",
-            notes="",
+            platform=platform,
+            notes=notes,
             uploaded_by=user,
         )
     except Exception as exc:
@@ -888,6 +909,7 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
         "md5_hash": md5_hash,
         "version": version,
         "model_pattern": model_pattern,
+        "platform": platform,
     }
 
 
@@ -957,6 +979,9 @@ async def create_campaign(body: CampaignCreate, request: Request):
     """Create a new upgrade campaign with target devices."""
     session = _get_session(request)
     user = session.get("user", "unknown") if session else "unknown"
+    mix_error = await apc_upgrade.campaign_mix_error(body.host_ids, body.ad_hoc_ips)
+    if mix_error:
+        raise HTTPException(400, mix_error)
 
     # Bind-time IDOR gate: if a credential is specified, the creator must own
     # it (or be an admin for a service credential). When omitted, the campaign
@@ -1077,6 +1102,9 @@ async def update_campaign(campaign_id: int, body: CampaignUpdate, request: Reque
 
     if campaign_id in _running_campaigns:
         raise HTTPException(409, "Cannot edit a running campaign")
+    mix_error = await apc_upgrade.campaign_mix_error(body.host_ids, body.ad_hoc_ips)
+    if mix_error:
+        raise HTTPException(400, mix_error)
 
     # Bind-time IDOR gate (see create_campaign). Omitting the credential keeps
     # the campaign on the configured service-credential default.
@@ -1564,6 +1592,36 @@ async def cancel_campaign_devices(
     }
 
 
+@router.post("/api/upgrades/campaigns/{campaign_id}/devices/{device_id}/logic-reset-confirm")
+async def confirm_device_logic_reset(campaign_id: int, device_id: int, request: Request):
+    """Record that the manual Logic Reset a Smart-UPS Ultra (UPS ID 1226 /
+    1227) needs was done, so Transfer and Activate may run on it."""
+    session = _get_session(request)
+    user = session.get("user", "unknown") if session else "unknown"
+
+    campaign = await db.get_upgrade_campaign(campaign_id)
+    if not campaign:
+        raise HTTPException(404, "Campaign not found")
+    if campaign_id in _running_campaigns:
+        raise HTTPException(409, "Wait for the running step to finish before confirming a Logic Reset")
+    device = await db.get_upgrade_device(device_id)
+    if not device or device.get("campaign_id") != campaign_id:
+        raise HTTPException(404, "Device not found in this campaign")
+    try:
+        result = await apc_upgrade.confirm_logic_reset(campaign_id, device, user)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    await _audit(
+        "upgrades",
+        "logic_reset_confirm",
+        user=user,
+        detail=f"Confirmed the UPS Logic Reset for {device.get('ip_address', '')} in campaign {campaign_id}",
+        correlation_id=_corr_id(request),
+    )
+    return {"ok": True, **result}
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # WEBSOCKET - Real-time upgrade streaming
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1710,7 +1768,10 @@ async def _run_phase(
                         host=dev["ip_address"],
                     )
                     return
-                if phase == "prestage":
+                if await apc_upgrade.is_ups_device(dev):
+                    # APC Smart-UPS: same phases through the NMC CLI + SCP.
+                    await apc_upgrade.run_device_phase(phase, campaign_id, dev, credentials, image_map, options)
+                elif phase == "prestage":
                     await _device_prestage(campaign_id, dev, credentials, image_map, options)
                 elif phase == "transfer":
                     await _device_transfer(campaign_id, dev, credentials, image_map, options)

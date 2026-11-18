@@ -25,6 +25,7 @@ import routes.database as db
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 import netcontrol.routes.state as state
+from netcontrol.integrations.apc.snmp import UPS_METRICS, ups_metric_samples
 from netcontrol.telemetry import configure_logging, redact_value
 
 router = APIRouter()
@@ -166,6 +167,19 @@ VENDOR_OID_DEFAULTS: dict[str, dict] = {
     "aruba_osswitch": _AOS_SWITCH_OIDS,
     "hp_procurve": {**_AOS_SWITCH_OIDS, "device_type": "hp_procurve"},
     "aruba_procurve": {**_AOS_SWITCH_OIDS, "device_type": "aruba_procurve"},
+    # APC Smart-UPS (Network Management Card): no CPU or memory to read, so
+    # the HOST-RESOURCES fallback is not walked; the UPS state (battery,
+    # output, runtime) is read by netcontrol/integrations/apc/snmp.py.
+    "apc_ups": {
+        "vendor": "APC",
+        "device_type": "apc_ups",
+        "cpu_oid": "",
+        "cpu_walk": 0,
+        "mem_used_oid": "",
+        "mem_free_oid": "",
+        "mem_total_oid": "",
+        "uptime_oid": "1.3.6.1.2.1.1.3",
+    },
     # Universal fallback - HOST-RESOURCES-MIB works on most Linux/SNMP agents
     "_fallback": {
         "vendor": "Generic",
@@ -645,6 +659,8 @@ async def emit_metric_samples_from_poll(poll_result: dict) -> int:
     rows.append((host_id, "vpn_tunnels_up", "{}", float(poll_result.get("vpn_tunnels_up", 0))))
     rows.append((host_id, "vpn_tunnels_down", "{}", float(poll_result.get("vpn_tunnels_down", 0))))
     rows.append((host_id, "route_count", "{}", float(poll_result.get("route_count", 0))))
+    # A UPS: battery, runtime, load and the output / battery state codes.
+    rows.extend(ups_metric_samples(host_id, poll_result.get("ups") or {}))
 
     return await db.create_metric_samples_batch(rows)
 
@@ -675,6 +691,7 @@ _DOWNSAMPLE_METRICS = [
     "if_out_errors_rate",
     "if_in_discards_rate",
     "if_out_discards_rate",
+    *UPS_METRICS,
 ]
 
 

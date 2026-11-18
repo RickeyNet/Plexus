@@ -81,12 +81,12 @@ export function NewImageModal({ isOpen, onClose }: Props) {
     >
       <form id={formId} onSubmit={handleSubmit}>
         <div className="form-group">
-          <label className="form-label" htmlFor={`${formId}-file`}>IOS-XE Image File (.bin)</label>
+          <label className="form-label" htmlFor={`${formId}-file`}>Image file (.bin, or APC Smart-UPS .enc / .zip)</label>
           <input
             id={`${formId}-file`}
             type="file"
             className="form-input"
-            accept=".bin,.SPA.bin"
+            accept=".bin,.SPA.bin,.enc,.zip"
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             required
           />
@@ -94,7 +94,9 @@ export function NewImageModal({ isOpen, onClose }: Props) {
         <p style={{ fontSize: '0.85em', opacity: 0.7 }}>
           Image will be stored on the server and MD5 hash will be computed
           automatically. Model pattern and version will be auto-detected from
-          the filename.
+          the filename. APC Smart-UPS firmware keeps its vendor name
+          (e.g. SRT1025UPS_15-0.enc): the UPS ID becomes the model pattern. A
+          vendor .zip holding one .enc is unpacked.
         </p>
         {progress !== null && (
           <div style={{ marginTop: '0.75rem' }}>

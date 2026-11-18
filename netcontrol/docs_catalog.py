@@ -62,6 +62,7 @@ PAGES: list[tuple[str, list[tuple[str, str]]]] = [
             ("Locations-and-Tenancy", "docs/locations-and-tenancy.md"),
             ("HPE-Aruba-and-HP-Switches", "docs/aruba-switches.md"),
             ("Netgear-Switches-and-Access-Points", "docs/netgear.md"),
+            ("APC-Smart-UPS", "docs/apc-ups.md"),
             ("Custom-Fields-and-Tags", "docs/custom-fields-and-tags.md"),
             ("Dynamic-Groups", "docs/dynamic-groups.md"),
             ("Data-Validation-Rules", "docs/validation-rules.md"),

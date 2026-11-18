@@ -30,6 +30,9 @@ const METRIC_OPTIONS: { value: string; label: string }[] = [
   { value: 'vpn_down', label: 'VPN Tunnels Down' },
   { value: 'route_count', label: 'Route Count' },
   { value: 'uptime', label: 'Uptime (seconds)' },
+  { value: 'ups_battery_capacity_pct', label: 'UPS battery capacity %' },
+  { value: 'ups_runtime_minutes', label: 'UPS runtime left (minutes)' },
+  { value: 'ups_output_load_pct', label: 'UPS output load %' },
 ];
 const OPERATOR_OPTIONS = ['>=', '>', '<=', '<', '==', '!='];
 const SEVERITY_OPTIONS: { value: string; label: string }[] = [

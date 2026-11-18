@@ -393,6 +393,8 @@ Latency, jitter and loss reported by an integration for an entity (OPNsense gate
 
 `GET /api/availability/topology/summary` marks each entity with `muted` and `mute` (`id`, `scope`, `site`, `reason`, `created_by`, `created_at`, or null) and returns a `muted` total; its `up`, `degraded`, `down`, `unknown`, `avg_uptime_pct` and `total_outages` leave muted entities out. In `GET /api/dashboard`, `topology.entity_counts`, `by_provider` and `by_source` count a muted down or degraded entity under `muted`, and `problems` and `problem_count` leave it out.
 
+`GET /api/monitoring/hosts/{host_id}/vendor-status` (`monitoring` feature, follows the host's object scope) returns the newest vendor-specific state the poll read from the host: `kind` (`apc_ups` for an APC Smart-UPS), `status` and `polled_at` (UTC), or `kind` `""` and an empty `status` when there is none. For a UPS, `status` has `model`, `firmware` (as the UPS reports it), `firmware_version`, `serial`, `output_status` / `output_status_label`, `battery_status` / `battery_status_label`, `battery_capacity_pct`, `runtime_minutes`, `output_load_pct`, `battery_needs_replacing` and the card's `nmc_model`, `nmc_firmware`, `nmc_application`, `nmc_application_firmware`, `nmc_serial`, `nmc_hardware`. See [apc-ups.md](apc-ups.md).
+
 ### Meraki alerts
 Near-real-time Meraki alerts from the assurance-alert poll and the webhook receiver. See [meraki-alerts.md](meraki-alerts.md).
 

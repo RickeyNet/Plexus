@@ -76,7 +76,10 @@ function LivenessPill({ poll }: { poll: MonitoringPoll }) {
   // than imply the host is down.
   const icmpRan = poll.icmp_alive !== undefined && poll.icmp_alive !== null;
   const icmpUp = icmpRan && Boolean(poll.icmp_alive);
-  const snmpOk = poll.poll_status === 'ok' && poll.cpu_percent != null;
+  // SNMP answered: a CPU reading, or sysUpTime for a device with no CPU to
+  // read (an APC UPS card).
+  const snmpOk =
+    poll.poll_status === 'ok' && (poll.cpu_percent != null || poll.uptime_seconds != null);
   if (!icmpRan) {
     return <span className="text-muted">ICMP disabled</span>;
   }
@@ -100,7 +103,7 @@ function LivenessPill({ poll }: { poll: MonitoringPoll }) {
   return <span className="badge badge-danger">Unreachable (no ICMP reply)</span>;
 }
 
-function Item({ label, value }: { label: string; value: string }) {
+export function Item({ label, value }: { label: string; value: string }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
       <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{label}</span>
@@ -109,7 +112,7 @@ function Item({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ItemNode({ label, node }: { label: string; node: ReactNode }) {
+export function ItemNode({ label, node }: { label: string; node: ReactNode }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
       <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{label}</span>

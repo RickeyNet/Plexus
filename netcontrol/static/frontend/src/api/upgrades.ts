@@ -64,6 +64,8 @@ export interface UploadImageResult {
   md5_hash: string;
   version: string;
   model_pattern: string;
+  // 'apc_ups' for APC Smart-UPS firmware (model_pattern is then the UPS ID).
+  platform?: string;
 }
 
 export function useUpgradeImages() {
@@ -208,6 +210,11 @@ export interface UpgradeDevice {
   activate_status?: string | null;
   verify_status?: string | null;
   error_message?: string | null;
+  // APC Smart-UPS devices: the UPS ID read from the NMC, and who confirmed
+  // the manual Logic Reset a Smart-UPS Ultra (UPS ID 1226/1227) needs.
+  ups_id?: string | null;
+  logic_reset_confirmed_by?: string | null;
+  logic_reset_confirmed_at?: string | null;
 }
 
 export interface UpgradeOperation {
@@ -392,6 +399,22 @@ export function useCancelUpgradeDevices() {
       qc.invalidateQueries({
         queryKey: ['upgrade-campaign', vars.campaignId],
       });
+    },
+  });
+}
+
+// Record that the manual Logic Reset was done on a Smart-UPS Ultra device,
+// so Transfer and Activate may run on it.
+export function useConfirmUpgradeLogicReset() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ campaignId, deviceId }: { campaignId: number; deviceId: number }) =>
+      apiRequest<{ ok: boolean; confirmed_by: string; confirmed_at: string }>(
+        `/upgrades/campaigns/${campaignId}/devices/${deviceId}/logic-reset-confirm`,
+        { method: 'POST' },
+      ),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ['upgrade-campaign', vars.campaignId] });
     },
   });
 }

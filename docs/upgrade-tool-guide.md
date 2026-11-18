@@ -19,6 +19,7 @@
   - [Physical System Drawings](#physical-system-drawings)
   - [Detailed Technical Drawings](#detailed-technical-drawings)
 - [Appendices](#appendices)
+- [APC Smart-UPS (Network Management Card)](#apc-smart-ups-network-management-card)
 - [External Documentation](#external-documentation)
 
 ---
@@ -575,6 +576,67 @@ Use **Schedule…** on the Activate step and pick a future date and time. The re
 - The Plexus server must be running when the window arrives. Scheduled reloads survive a server restart, but if the server is down over the window the campaign is marked "Reload missed - reschedule" and nothing reloads.
 
 Use **Cancel scheduled reload** to cancel a pending schedule before it fires.
+
+---
+
+## APC Smart-UPS (Network Management Card)
+
+The same campaigns update APC Smart-UPS firmware through the UPS's Network Management Card (NMC2 or NMC3), following Schneider Electric FAQ000242942 / FA170679. A UPS is an inventory host with device type `apc_ups` (see [APC Smart-UPS](apc-ups.md) for adding it and for monitoring). Scheduling, batches (selected devices), approval, cancel and the live log work as they do for switches.
+
+### Prerequisites
+
+- SSH and SCP enabled on the NMC (Configuration > Network > Console > Access). Plexus logs in to the NMC command line (`apc>` prompt) over SSH and copies the file with SCP, using the legacy SCP protocol (the equivalent of `scp -O`).
+- A credential that logs in to the NMC as an administrator: the campaign's credential, or the service credential when the campaign has none.
+- NMC application firmware: NMC2 `sumx` v6.4.0 or later, NMC3 `su` v1.0 or later. A Smart-UPS Ultra (UPS ID 1226 or 1227) needs NMC firmware 2.5.4.4 or later.
+- The firmware file for the UPS in the image library (**Upgrades > Images > Upload**). Upload the vendor `.enc` file with its original name, `<prefix><UPS ID>UPS_<major>-<minor>.enc` (for example `SRT1025UPS_15-0.enc`), or the vendor `.zip` that holds it; Plexus unpacks the one `.enc` (a zip with several `.enc` files, unsafe paths or an oversize file is refused). The library shows the UPS ID as the model pattern and the version (`15.0`). Plexus never downloads firmware from the vendor.
+
+### Campaigns
+
+A campaign holds either UPS devices or other devices, not both (create and edit refuse a mix, and ad-hoc addresses count as switches). Add the UPS firmware files to the image map; by convention the pattern is the UPS ID. Each UPS takes the mapped file whose UPS ID matches the ID the NMC reports, the newest one when there are several.
+
+| Step | What it does on a UPS |
+|---|---|
+| Prestage | Pre-checks only: reads `upsabout` (UPS ID, firmware), `about` (NMC generation and application firmware) and `alarmcount`. Nothing changes on the UPS. |
+| Transfer | Repeats the pre-checks, copies the file to `/tmp/<file>` on the NMC with SCP and confirms it with `cd /tmp` and `dir`. |
+| Activate (**Install now** or scheduled) | Repeats the pre-checks, runs `upsfwupdate -install -file "/tmp/<file>"` (copying the file first if it is no longer in `/tmp`), polls `upsfwupdate -status` every 20 seconds until it reports `No firmware update is in progress`, then reads `upsabout` again and requires the new version. The UPS output stays on. |
+| Verify | Reads `upsabout` and compares it with the target. |
+| Check status | Read only: already on the target (every step done), an update in progress, or whether the file is in `/tmp`. |
+
+There is no commit step for a UPS.
+
+### Pre-checks
+
+A device is stopped with the reason shown in its status when:
+
+- the UPS or NMC has active alarms (`alarmcount` is not 0, or cannot be read);
+- the NMC firmware is below the minimum, or the NMC cannot be identified from `about`;
+- no image in the campaign is for the UPS's ID (the NMC would refuse it);
+- the image is older than the running firmware (Plexus never downgrades). An image at the running version means the UPS is already up to date: every step is marked done and nothing is installed.
+
+### Special UPS IDs
+
+- **1001** updates twice: `SRT1001UPS_02-9.enc` (which changes the UPS ID to 1013), then the newest UPS ID 1013 file (for example `SRT1013UPS_15-0.enc`). Activate runs both back to back when both are in the image library; otherwise the device is stopped naming the missing file.
+- **1226 / 1227** (Smart-UPS Ultra, SRTL) need a manual Logic Reset ("brain dead" reset) before the update. Prestage passes them to **Waiting for Logic Reset**; Transfer and Activate wait too. Do the reset, then press **Confirm Logic Reset** on the device in the campaign. The confirmation is recorded with your name in the campaign log and the audit log (`logic_reset_confirm`). Do the reset before Transfer: it can restart the NMC, which empties `/tmp` (Activate copies the file again if it is gone).
+- **1225** (Smart-UPS Modular Ultra) needs the extra steps in Schneider FAQ000261838 and is marked **Manual**.
+
+### Manual updates
+
+Plexus never turns the UPS output off. When a model needs its output off for the update (the NMC refuses the install with a message about the output being off, or the UPS ID is listed in `OUTPUT_OFF_REQUIRED_IDS` in `netcontrol/integrations/apc/firmware.py`, which is filled in from Schneider's model table) the device is marked **Manual** with the reason, and a person updates it.
+
+### Timeouts and cancel
+
+An install may take several minutes. Plexus waits up to 30 minutes per UPS, 45 minutes for a Smart-UPS Modular Ultra (SRYL), then fails the device. Cancelling the campaign or the device stops Plexus from watching between two status polls, but an install already started on the UPS cannot be aborted: it continues on its own, and the log says so. Use **Check status** later to see the result.
+
+### Verification
+
+After the install Plexus reads `upsabout` again. When the firmware is unchanged the device fails with "Firmware file was transferred but not installed" (Schneider FAQ000258690); check the NMC event log and that the file was for this UPS ID.
+
+### Gaps
+
+- FTP transfer is not supported: it is cleartext and needs enabling plus an NMC reboot. Use SCP.
+- No automated UPS output control (see Manual updates).
+- The `OUTPUT_OFF_REQUIRED_IDS` table starts empty; until it is filled, such a model is caught by the NMC's refusal.
+- The layout of `upsabout`, `about`, `alarmcount` and `upsfwupdate` output has not been checked on every NMC firmware. Plexus reads `Key: value` lines without regard to case and ignores lines it does not know; when a value cannot be read the device is stopped with a reason (for example "Could not read the UPS ID") rather than guessed. If that happens, send a sample of the command output (with serial numbers and addresses removed) so the parser can be extended.
 
 ---
 

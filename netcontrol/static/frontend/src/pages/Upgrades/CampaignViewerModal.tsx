@@ -7,6 +7,7 @@ import {
   type UpgradePhase,
   useCancelUpgradeCampaign,
   useCancelUpgradeDevices,
+  useConfirmUpgradeLogicReset,
   useUpgradeCampaign,
 } from '@/api/upgrades';
 import { Badge } from '@/components/Badge';
@@ -29,9 +30,11 @@ import {
   formatBytes,
   formatEta,
   formatScheduledTime,
+  isUpsCampaign,
   type LiveStreamState,
   liveStreamStatus,
   phaseLabel,
+  upgradeStepCopy,
 } from './helpers';
 
 interface Props {
@@ -174,6 +177,18 @@ function statusIcon(s: string | null | undefined) {
           ∅
         </span>
       );
+    case 'manual':
+      return (
+        <span title="Manual: a person has to do this update (see the status)" style={{ color: 'var(--warning)' }}>
+          ✋
+        </span>
+      );
+    case 'waiting':
+      return (
+        <span title="Waiting for a confirmation (see the status)" style={{ color: 'var(--warning)' }}>
+          ⏸
+        </span>
+      );
     default:
       return (
         <span title="Pending" style={{ opacity: 0.3 }}>
@@ -184,13 +199,20 @@ function statusIcon(s: string | null | undefined) {
 }
 
 // Inline legend for the per-phase status glyphs rendered by statusIcon().
-function PhaseIconLegend() {
+// Manual and Waiting only occur on APC Smart-UPS devices.
+function PhaseIconLegend({ ups }: { ups: boolean }) {
   const items: Array<[string, string]> = [
     ['completed', 'Completed'],
     ['running', 'Running'],
     ['failed', 'Failed'],
     ['cancelled', 'Cancelled'],
     ['pending', 'Pending'],
+    ...(ups
+      ? ([
+          ['manual', 'Manual'],
+          ['waiting', 'Waiting for Logic Reset'],
+        ] as Array<[string, string]>)
+      : []),
   ];
   return (
     <div
@@ -393,6 +415,8 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
   const query = useUpgradeCampaign(campaignId);
   const cancel = useCancelUpgradeCampaign();
   const cancelDevices = useCancelUpgradeDevices();
+  const confirmLogicReset = useConfirmUpgradeLogicReset();
+  const [logicResetTarget, setLogicResetTarget] = useState<UpgradeDevice | null>(null);
 
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [phaseReq, setPhaseReq] = useState<PhaseRequest | null>(null);
@@ -428,6 +452,8 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
     () => parseObject(campaign?.image_map) as Record<string, string>,
     [campaign],
   );
+  const upsCampaign = isUpsCampaign(imageMap, devices);
+  const steps = upgradeStepCopy(upsCampaign);
 
   const status = campaign?.status || 'created';
   const hasActiveTask = Boolean(campaign?.is_actively_running);
@@ -711,6 +737,28 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
     );
   };
 
+  const handleLogicResetConfirm = () => {
+    if (!logicResetTarget) return;
+    confirmLogicReset.mutate(
+      { campaignId, deviceId: logicResetTarget.id },
+      {
+        onSuccess: () => {
+          setLiveStatuses((prev) => {
+            if (!(logicResetTarget.id in prev)) return prev;
+            const next = { ...prev };
+            delete next[logicResetTarget.id];
+            return next;
+          });
+          setLogicResetTarget(null);
+        },
+        onError: (e) => {
+          setLogicResetTarget(null);
+          setAlert({ title: 'Logic Reset confirmation failed', message: (e as Error).message });
+        },
+      },
+    );
+  };
+
   // Rescheduling means clearing the armed task (cancel) and immediately
   // reopening the schedule dialog so the operator can pick a new time. The
   // backend rejects /execute while a task is armed, so the cancel must land
@@ -911,7 +959,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                 <PhaseStep
                   n={1}
                   title="Prestage"
-                  desc="Health-check each device, back up its config, and free flash space. Safe — no reboot."
+                  desc={steps.prestage}
                   status={<StepStatus c={phaseCounts.prestage} />}
                 >
                   <button
@@ -926,7 +974,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                 <PhaseStep
                   n={2}
                   title="Transfer"
-                  desc="Copy the image to each device, verify it, and expand it ready to boot. Still no reboot."
+                  desc={steps.transfer}
                   status={<StepStatus c={phaseCounts.transfer} />}
                 >
                   <button
@@ -952,7 +1000,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                 <PhaseStep
                   n={3}
                   title="Activate"
-                  desc="Reboot devices into the new image. Causes downtime — run now or schedule it."
+                  desc={steps.activate}
                   status={<StepStatus c={phaseCounts.activate} />}
                 >
                   <button
@@ -960,7 +1008,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                     onClick={() => requestPhase('activate')}
                     disabled={isRunning}
                   >
-                    Activate now (reload)
+                    {steps.activateNow}
                   </button>
                   <button
                     className="btn btn-sm btn-secondary"
@@ -974,7 +1022,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                 <PhaseStep
                   n={4}
                   title="Verify"
-                  desc="Reconnect and confirm each device is running the target version."
+                  desc={steps.verify}
                   status={<StepStatus c={phaseCounts.verify} />}
                 >
                   <button
@@ -988,7 +1036,7 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
               </div>
             </div>
 
-            <PhaseIconLegend />
+            <PhaseIconLegend ups={upsCampaign} />
 
             <div className="table-scroll">
               <table
@@ -1019,6 +1067,11 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                         ? live.error_message
                         : d.error_message;
                     const progress = transferProgress[d.id];
+                    // A Smart-UPS Ultra waits for its Logic Reset in whichever
+                    // step found it (Prestage, or Transfer/Activate run first).
+                    const awaitingLogicReset = (['prestage', 'transfer', 'activate'] as const).some(
+                      (p) => ((live?.[`${p}_status`] as string | undefined) ?? d[`${p}_status`]) === 'waiting',
+                    );
                     return (
                       <tr
                         key={d.id}
@@ -1091,6 +1144,25 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
                             <span style={{ opacity: 0.5 }}>
                               {d.phase || 'pending'}
                             </span>
+                          )}
+                          {awaitingLogicReset && (
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-secondary"
+                              style={{ marginTop: '0.35rem' }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setLogicResetTarget(d);
+                              }}
+                              disabled={isRunning || confirmLogicReset.isPending}
+                            >
+                              Confirm Logic Reset
+                            </button>
+                          )}
+                          {d.logic_reset_confirmed_by && !awaitingLogicReset && (
+                            <div style={{ opacity: 0.6, fontSize: '0.85em' }}>
+                              Logic Reset confirmed by {d.logic_reset_confirmed_by}
+                            </div>
                           )}
                         </td>
                       </tr>
@@ -1205,6 +1277,20 @@ export function CampaignViewerModal({ campaignId, onClose }: Props) {
           if (!cancelDevices.isPending) setConfirmDeviceCancelOpen(false);
         }}
         onConfirm={handleDeviceCancelConfirm}
+      />
+      <ConfirmDialog
+        isOpen={logicResetTarget !== null}
+        title="Confirm Logic Reset"
+        message={`Confirm that the manual Logic Reset was done on ${
+          logicResetTarget?.hostname || logicResetTarget?.ip_address || 'this UPS'
+        }, as the Smart-UPS Ultra firmware procedure requires. Transfer and Activate can then run on it. Your name is recorded in the campaign log.`}
+        confirmLabel="Confirm Logic Reset"
+        cancelLabel="Not yet"
+        loading={confirmLogicReset.isPending}
+        onCancel={() => {
+          if (!confirmLogicReset.isPending) setLogicResetTarget(null);
+        }}
+        onConfirm={handleLogicResetConfirm}
       />
       <AlertDialog
         isOpen={alert !== null}

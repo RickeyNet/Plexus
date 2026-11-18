@@ -20,7 +20,9 @@ from pydantic import BaseModel, Field
 
 import netcontrol.routes.state as state
 from netcontrol.drivers import supports_cli
+from netcontrol.integrations.apc import snmp as apc_snmp
 from netcontrol.integrations.availability import ENTITY_TYPES as TOPOLOGY_ENTITY_TYPES
+from netcontrol.object_scope import HOST_NOT_FOUND, require_object_host, scoped
 from netcontrol.routes import topology_availability as topology_tracking
 from netcontrol.routes.icmp import ICMP_AVAILABLE, ping_host
 from netcontrol.routes.maintenance_windows import _parse_iso
@@ -502,6 +504,10 @@ async def _poll_host_monitoring(host: dict, cred: dict, snmp_cfg: dict) -> dict:
 
             result["if_details"] = if_details
 
+            # An APC UPS: its battery, output and identity (PowerNet-MIB).
+            if device_type == apc_snmp.STATUS_KIND:
+                result["ups"] = await apc_snmp.read_ups_status(_walk)
+
         except Exception as exc:
             LOGGER.warning(
                 "monitoring: SNMP poll failed for %s: %s",
@@ -691,6 +697,8 @@ def _metric_value_from_poll(res: dict, metric: str) -> float | None:
         "if_up": float(res.get("if_up_count", 0)),
         "uptime": float(res.get("uptime_seconds") or 0),
     }
+    if metric in apc_snmp.UPS_METRICS:
+        return apc_snmp.ups_metric_value(res.get("ups"), metric)
     return metric_map.get(metric)
 
 
@@ -816,6 +824,17 @@ async def _evaluate_alerts_for_poll(
                 "threshold": None,
             }
         )
+
+    # An APC UPS: on battery, battery low / failed / to replace, output off or
+    # on bypass. Each clears its open alert once the UPS reports it gone.
+    ups_status = res.get("ups") or {}
+    ups_checks = apc_snmp.ups_alert_checks(ups_status)
+    built_in_checks.extend(ups_checks)
+    if ups_status:
+        raised = {chk["metric"] for chk in ups_checks}
+        for metric in apc_snmp.ALERT_METRICS:
+            if metric not in raised:
+                await db.resolve_monitoring_alerts(f"{host_id}:{metric}:status")
 
     # Fire built-in checks with dedup + suppression
     for chk in built_in_checks:
@@ -1016,6 +1035,15 @@ async def _process_poll_result(
         icmp_rtt_ms=res.get("icmp_rtt_ms"),
     )
 
+    # ── Vendor state: an APC UPS's newest state and identity ──
+    if res.get("ups"):
+        try:
+            await _store_ups_status(h, res["ups"])
+        except Exception as exc:
+            LOGGER.warning(
+                "monitoring: storing UPS state failed for host %s: %s", res["host_id"], redact_value(str(exc))
+            )
+
     # ── Availability Tracking: detect state transitions ──
     try:
         await _track_availability_from_poll(
@@ -1070,6 +1098,23 @@ async def _process_poll_result(
                     alerts_created += 1
 
     return alerts_created
+
+
+async def _store_ups_status(h: dict, ups: dict) -> None:
+    """Keep a UPS's newest state as its vendor status, and its identity on
+    the host: the UPS model and serial (the card's sysDescr names only the
+    card) and the card's firmware as the software version. A field is
+    written only when the UPS reported it and it changed."""
+    await db.set_host_vendor_status(h["id"], apc_snmp.STATUS_KIND, ups)
+    model = str(ups.get("model") or "").strip()
+    version = str(ups.get("nmc_firmware") or "").strip()
+    if (model and model != (h.get("model") or "")) or (version and version != (h.get("software_version") or "")):
+        await db.update_host_device_info(
+            h["id"], model or h.get("model") or "", version or h.get("software_version") or ""
+        )
+    serial = str(ups.get("serial") or "").strip()
+    if serial and serial != (h.get("serial_number") or ""):
+        await db.update_host_serial(h["id"], serial)
 
 
 async def _run_monitoring_poll_once(*, force: bool = False) -> dict:
@@ -1521,6 +1566,19 @@ async def get_alert_correlation(alert_id: int):
 @router.get("/api/monitoring/routes/{host_id}")
 async def monitoring_route_snapshots(host_id: int, limit: int = Query(default=50, ge=1, le=10000)):
     return await db.get_route_snapshots(host_id, limit)
+
+
+@router.get("/api/monitoring/hosts/{host_id}/vendor-status")
+@scoped("host")
+async def monitoring_vendor_status(request: Request, host_id: int):
+    """The newest vendor-specific state the poll read from the host (an APC
+    UPS's battery, output and identity): ``{"kind": "", "status": {}}`` when
+    there is none."""
+    await require_object_host(request, host_id, not_found=HOST_NOT_FOUND)
+    row = await db.get_host_vendor_status(host_id)
+    if not row:
+        return {"host_id": host_id, "kind": "", "status": {}, "polled_at": ""}
+    return row
 
 
 @router.post("/api/monitoring/poll-now")
