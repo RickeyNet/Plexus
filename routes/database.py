@@ -2968,6 +2968,7 @@ from routes.db.dcim import *  # noqa: E402,F403
 from routes.db.dcim_cables import *  # noqa: E402,F403
 from routes.db.device_model import *  # noqa: E402,F403
 from routes.db.dynamic_groups import *  # noqa: E402,F403
+from routes.db.export_templates import *  # noqa: E402,F403
 from routes.db.flows import *  # noqa: E402,F403
 from routes.db.geolocation import *  # noqa: E402,F403
 from routes.db.git_sources import *  # noqa: E402,F403

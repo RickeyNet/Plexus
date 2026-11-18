@@ -18,6 +18,7 @@ import { AuthTab } from './AuthTab';
 import { CustomDataTab } from './CustomDataTab';
 import { DeviceModelTab } from './DeviceModelTab';
 import { DiscoveryTab } from './DiscoveryTab';
+import { ExportTemplatesTab } from './ExportTemplatesTab';
 import { FeaturesTab } from './FeaturesTab';
 import { GitSourcesTab } from './GitSourcesTab';
 import { ChangeLogRetentionSection, JobRetentionSection } from './JobRetentionSection';
@@ -52,6 +53,7 @@ type Tab =
   | 'git-sources'
   | 'secrets-providers'
   | 'validation-rules'
+  | 'export-templates'
   | 'ai-access'
   | 'chatops'
   | 'plugins'
@@ -118,6 +120,10 @@ const TAB_HELP: Record<Tab, { title: string; text: string }> = {
   'validation-rules': {
     title: 'Data Validation Rules',
     text: 'Require values to follow your conventions: a pattern, a length, a number range or a value at all. Rules are checked on the server whenever a host, group, IPAM prefix or address, VLAN, VRF or custom field value is saved in Plexus; discovery and syncs are not checked. Check existing data lists the stored objects that break a rule.',
+  },
+  'export-templates': {
+    title: 'Export Templates',
+    text: 'Write Jinja2 templates that turn a list of hosts, IPAM prefixes or IP addresses, VLANs, circuits or sites into a file: a CSV for another tool, a configuration snippet, anything text. Each template appears in the Export menu of its list and renders only the objects the user may see, with the list\'s filters.',
   },
   'git-sources': {
     title: 'Git Sources',
@@ -192,6 +198,7 @@ const ADMIN_GROUPS: { title: string; tabs: TabItem[] }[] = [
       { key: 'custom-data', label: 'Custom Fields & Tags' },
       { key: 'device-model', label: 'Device Model' },
       { key: 'validation-rules', label: 'Validation Rules' },
+      { key: 'export-templates', label: 'Export Templates' },
       { key: 'git-sources', label: 'Git Sources' },
     ],
   },
@@ -306,6 +313,7 @@ export function Settings() {
             {tab === 'custom-data' && <CustomDataTab />}
             {tab === 'device-model' && <DeviceModelTab />}
             {tab === 'validation-rules' && <ValidationRulesTab />}
+            {tab === 'export-templates' && <ExportTemplatesTab />}
             {tab === 'git-sources' && <GitSourcesTab />}
             {tab === 'secrets-providers' && <SecretsProvidersTab />}
             {tab === 'ai-access' && <AiAccessTab />}

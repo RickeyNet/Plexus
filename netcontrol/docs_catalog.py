@@ -73,6 +73,7 @@ PAGES: list[tuple[str, list[tuple[str, str]]]] = [
             ("Sync-NetBox-Nautobot-ServiceNow", "docs/sync-framework.md"),
             ("Virtualization", "docs/virtualization.md"),
             ("Bulk-Import", "docs/bulk-import.md"),
+            ("Export-Templates", "docs/export-templates.md"),
             ("IPAM", "docs/ipam.md"),
             ("Floor-Plan", "docs/floor-plan.md"),
             ("Network-Tools", "docs/network-tools.md"),

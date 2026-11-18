@@ -7,6 +7,7 @@ import { DeleteButton } from '@/components/DeleteButton';
 import { EmptyState } from '@/components/EmptyState';
 import { ImportDialog } from '@/components/ImportDialog';
 import { LoadingState } from '@/components/LoadingState';
+import { ExportTemplatesMenu } from '@/components/ExportTemplatesMenu';
 import { PageHeader } from '@/components/PageHeader';
 import { PageHelp } from '@/components/PageHelp';
 import { QueryError } from '@/components/QueryError';
@@ -336,6 +337,7 @@ export function Inventory() {
         <a className="btn btn-sm btn-secondary" href={inventoryYamlExportUrl()} download>
           Export YAML
         </a>
+        <ExportTemplatesMenu objectType="host" label="Export template" />
         <button
           type="button"
           className="btn btn-sm btn-secondary"

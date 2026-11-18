@@ -50,6 +50,7 @@ All API endpoints and their required authentication/authorization levels.
 | CRUD | `/api/baseline-alerting/*` | baseline_alerting |
 | GET | `/api/custom-fields` (`?object_type=`), `/api/tags` (with usage counts) | custom_fields |
 | GET | `/api/dcim/manufacturers`, `/api/dcim/device-types` (`?manufacturer_id=`), `/api/dcim/roles`, `/api/dcim/statuses` (with host counts) | device_model |
+| GET | `/api/export-templates` (`?object_type=`), `/api/export-templates/object-types`, `/api/export-templates/{id}`, `/api/export-templates/{id}/render`: only templates of object types whose feature the caller holds (`inventory`, `ipam`, `circuits`, `organization`; others answer `404`); a render loads the objects through the type's own list or export, so object scope applies, and refuses scoped callers for IPAM prefixes and IP addresses (`403`). Renders audited as `export_templates` / `export_template_render` | export_templates (router) |
 | GET | `/api/plugins` (the plugin manifest: users see only active plugins whose `plugin:<name>` feature they hold; admins and the API token see every plugin with status, source and errors) | plugins |
 
 ### Feature-gated (auth + feature flag)
@@ -106,6 +107,7 @@ All API endpoints and their required authentication/authorization levels.
 | `POST /api/ipam/vrfs`, `PUT/DELETE /api/ipam/vrfs/{vrf_id}`, `POST /api/ipam/vlans`, `PUT/DELETE /api/ipam/vlans/{vlan_id}`, `POST /api/ipam/interface-addresses/rebuild` (audited as `network_objects`) | network_objects (admin_router) |
 | `POST /api/virtualization/sync-cloud` (mirror the discovered AWS, Azure and GCP instances as virtual machines; audited as `virtualization` / `sync_cloud`) | virtualization (admin_router) |
 | `POST /api/intended-config/templates`, `PUT/DELETE /api/intended-config/templates/{id}`, `POST /api/intended-config/contexts`, `PUT/DELETE /api/intended-config/contexts/{id}`, `POST /api/intended-config/preview` (writes audited as `config`; the preview stores nothing) | intended_config (admin_router) |
+| `POST /api/export-templates`, `PUT/DELETE /api/export-templates/{id}`, `POST /api/export-templates/preview` (writes audited as `export_templates`; the preview stores nothing) | export_templates (admin_router) |
 | `GET/POST /api/git-sources`, `GET/PUT/DELETE /api/git-sources/{id}`, `GET /api/git-sources/{id}/objects`, `POST /api/git-sources/{id}/sync` (writes and syncs audited as `config` / `git_source_*`; credentials are service credentials, never returned). Templates, playbooks and intended configuration contexts a Git source owns answer `409` to `PUT` and `DELETE` on their own routes | git_sources (router, `require_admin` in `app.py`) |
 | `POST /api/sync/connections`, `PUT/DELETE /api/sync/connections/{id}`, `POST /api/sync/connections/{id}/test` (a connection binds a service credential; audited as `sync` / `connection_*`) | sync (admin_router) |
 | `/api/secret-variables/*` | (admin enforced in handlers; reads and writes both) |

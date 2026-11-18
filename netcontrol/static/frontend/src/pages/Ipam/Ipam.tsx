@@ -7,6 +7,7 @@ import { StatusBadge } from '@/components/Badge';
 import { BusyButton } from '@/components/BusyButton';
 import { CustomDataFilter } from '@/components/CustomDataFilter';
 import { EmptyState } from '@/components/EmptyState';
+import { ExportTemplatesMenu } from '@/components/ExportTemplatesMenu';
 import { ImportDialog } from '@/components/ImportDialog';
 import { LoadingState } from '@/components/LoadingState';
 import { PageHeader } from '@/components/PageHeader';
@@ -274,6 +275,8 @@ function SubnetsView({ tabBar }: { tabBar: ReactNode }) {
           Include Topology Subnets
         </label>
         <CustomDataFilter objectType="prefix" value={dataFilter} onChange={setDataFilter} />
+        <ExportTemplatesMenu objectType="prefix" label="Export prefixes" />
+        <ExportTemplatesMenu objectType="ip_address" label="Export addresses" />
         <button
           type="button"
           className="btn btn-secondary"
