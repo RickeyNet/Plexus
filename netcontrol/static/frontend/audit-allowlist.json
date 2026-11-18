@@ -1,0 +1,11 @@
+{
+  "_comment": "Advisories the npm audit gate (scripts/audit-gate.mjs) excuses. Each entry needs id, package, reason and recheck_by. It stops excusing once recheck_by passes, once the package publishes a version outside the vulnerable range, or once npm audit no longer reports it.",
+  "advisories": [
+    {
+      "id": "GHSA-fc5q-39xc-vjpf",
+      "package": "picomatch",
+      "reason": "No patched release (4.0.7 is the latest, inside <=4.0.7). Dev-only: reached through vite, vitest and tinyglobby, not shipped in dist/ (npm ls picomatch --omit=dev is empty). Triggering it needs a crafted glob pattern, and the only patterns are the repo's own build and test config.",
+      "recheck_by": "2027-01-31"
+    }
+  ]
+}

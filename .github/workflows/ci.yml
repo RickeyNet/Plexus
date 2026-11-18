@@ -233,8 +233,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # npm audit at --audit-level=high, minus the advisories in
+      # audit-allowlist.json (no fix published, dev-only, recheck date).
       - name: Dependency audit (npm audit)
-        run: npm audit --audit-level=high
+        run: npm run audit:gate
 
       - name: Lint (eslint)
         run: npm run lint
