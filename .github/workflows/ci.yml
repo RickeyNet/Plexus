@@ -160,13 +160,15 @@ jobs:
       - name: Wiki build check
         run: python tools/build_wiki.py --check
 
+      # pip-audit queries pypi.org per package; a slow or dropped response is
+      # retried (tools/retry_on_network_error.sh), a reported vulnerability is not.
       - name: Security audit (pip-audit)
         if: needs.changes.outputs.backend == 'true'
-        run: pip-audit --progress-spinner off
+        run: bash tools/retry_on_network_error.sh pip-audit --progress-spinner off --timeout 60
 
       - name: Generate SBOM (CycloneDX)
         if: needs.changes.outputs.backend == 'true'
-        run: pip-audit -r requirements-lock.txt -f cyclonedx-json -o sbom.cdx.json --progress-spinner off --no-deps
+        run: bash tools/retry_on_network_error.sh pip-audit -r requirements-lock.txt -f cyclonedx-json -o sbom.cdx.json --progress-spinner off --no-deps --timeout 60
 
       - name: Upload SBOM artifact
         if: needs.changes.outputs.backend == 'true'
